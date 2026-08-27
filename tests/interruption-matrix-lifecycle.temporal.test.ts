@@ -125,13 +125,7 @@ test("a worktree is deleted outside forge while active and while terminal", asyn
     const activeId = "lifecycle-missing-active";
     const activeWorkflow = await start(h, activeId, "delivery_blocked");
     await recordWorktree(h, activeId, activeWorkflow, join(h.config.worktreeRoot, activeId), join(h.root, "repo"));
-    let activeReconciliation;
-    try { activeReconciliation = await reconcileWorktrees(h.database, h.config, { taskId: activeId, exists: async () => false }); }
-    catch (error) {
-      // BUG: src/worktree-reconciliation.ts:39 — the bespoke report_worktree_missing update is sent through executeIssueCommand.
-      expect.soft(error).toBeUndefined();
-      return;
-    }
+    const activeReconciliation = await reconcileWorktrees(h.database, h.config, { taskId: activeId, exists: async () => false });
     expect(activeReconciliation.outcomes).toEqual([expect.objectContaining({ status: "removed_externally_active" })]);
     const active = await queryIssueWorkflow(h.config, activeWorkflow);
     expect(active).toMatchObject({ worktreeState: "removed_externally", blocker: { actions: expect.arrayContaining([expect.objectContaining({ label: "Recreate worktree and resume" })]) } });

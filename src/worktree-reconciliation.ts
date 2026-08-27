@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
-import { durableCommand, executeIssueCommand } from "./temporal/service.js";
+import { connectTemporal, durableCommand, executeIssueCommand } from "./temporal/service.js";
+import { issueUpdates } from "./temporal/issue-updates.js";
 
 export interface WorktreeReconciliationResult {
   inspected: number;
@@ -13,6 +14,16 @@ export interface WorktreeReconciliationResult {
 }
 
 type Candidate = { taskId: string; companyId: string; workflowId: string; worktreePath: string; phase: string; revision: number };
+
+async function reportWorktreeMissing(config: ForgeConfig, workflowId: string, input: { expectedRevision: number; actorUserId: string; commandId: string; worktreePath: string }): Promise<void> {
+  const temporal = await connectTemporal(config);
+  try {
+    const handle = temporal.client.workflow.getHandle(workflowId);
+    await handle.executeUpdate(issueUpdates.report_worktree_missing, { args: [input], updateId: input.commandId });
+  } finally {
+    await temporal.connection.close();
+  }
+}
 
 export async function reconcileWorktrees(database: ForgeDatabase, config: ForgeConfig, options: { taskId?: string; exists?: (path: string) => Promise<boolean>; execute?: typeof executeIssueCommand } = {}): Promise<WorktreeReconciliationResult> {
   const rows = database.authQuery((db) => db.prepare(`SELECT w.task_id AS taskId, w.company_id AS companyId, w.workflow_id AS workflowId, w.worktree_path AS worktreePath, p.phase, p.revision
@@ -36,7 +47,8 @@ export async function reconcileWorktrees(database: ForgeDatabase, config: ForgeC
       continue;
     }
     const input = durableCommand(row.workflowId, "report-worktree-missing", { expectedRevision: row.revision, actorUserId: "worktree-reconciler", commandId: undefined, worktreePath: row.worktreePath });
-    await execute(config, row.workflowId, "report_worktree_missing" as never, input as never);
+    if (options.execute) await execute(config, row.workflowId, "report_worktree_missing" as never, input as never);
+    else await reportWorktreeMissing(config, row.workflowId, input);
     reported += 1;
     outcomes.push({ taskId: row.taskId, phase: row.phase, status: "removed_externally_active" });
   }

@@ -1,9 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { CheckCircle2, ChevronDown, LoaderCircle } from "lucide-react";
+import { Brain, CheckCircle2, ChevronDown, ChevronRight, LoaderCircle, Terminal, Wrench } from "lucide-react";
 
 import { Collapsible } from "../../ui/collapsible.js";
 import { Badge } from "../../ui/badge.js";
-import { Button } from "../../ui/button.js";
 import { Markdown } from "../markdown.js";
 import { ProfileAvatar } from "../profile-avatar.js";
 import type { ChatEvent, ChatItem } from "../../../lib/task-chat.js";
@@ -14,26 +13,31 @@ function AgentBubble({ children, message = false }: { children: ReactNode; messa
   return <div data-task-chat-agent-bubble data-task-chat-agent-message={message || undefined} className="max-w-[85%] rounded-[6px] border bg-muted/40 px-2.5 py-2 text-[13px]">{children}</div>;
 }
 
-function ReasoningEvent({ event, running }: { event: ChatEvent; running: boolean }) {
-  const [open, setOpen] = useState(running);
-  useEffect(() => setOpen(running), [running]);
-  return <li data-task-chat-reasoning className="relative before:absolute before:-left-[17px] before:top-1.5 before:size-1.5 before:rounded-full before:bg-muted-foreground/50"><Collapsible.Root open={open} onOpenChange={setOpen}><Collapsible.Trigger className="flex items-center gap-1 text-[12px] text-muted-foreground"><ChevronDown className="size-3" />Reasoning</Collapsible.Trigger><Collapsible.Panel><div className="mt-1 border-l pl-2 text-[12px] text-muted-foreground"><Markdown source={event.text} /></div></Collapsible.Panel></Collapsible.Root></li>;
+function ReasoningEvent({ event }: { event: ChatEvent }) {
+  return <li data-task-chat-reasoning className="text-[12px] text-muted-foreground"><div className="flex items-center gap-1.5 text-foreground"><Brain className="size-3.5 text-muted-foreground" />Thinking</div><div className="mt-1 space-y-3 text-muted-foreground"><Markdown source={event.text} /></div></li>;
+}
+
+function CommandEvent({ event, running }: { event: ChatEvent; running: boolean }) {
+  const isCommand = event.kind === "command";
+  const defaultOpen = running && event.status === "running";
+  const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => setOpen(defaultOpen), [defaultOpen]);
+  const failed = event.exitCode !== null && event.exitCode !== undefined && event.exitCode !== 0;
+  const preview = isCommand ? event.text : event.detail;
+  const output = isCommand ? `$ ${event.text}${event.output ? `\n${event.output}` : ""}` : event.output;
+  const hasDetails = Boolean(output);
+  const label = isCommand ? "Command" : event.text || "Tool";
+  const row = <><span className="flex min-w-0 flex-1 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">{isCommand ? <Terminal className="size-3.5" /> : <Wrench className="size-3.5" />}</span><span className="truncate text-foreground">{label}{event.count && event.count > 1 ? ` ×${event.count}` : ""}</span></span>{preview ? <code className="min-w-0 flex-1 truncate text-right text-[12px] text-muted-foreground">{preview}</code> : null}{failed ? <Badge variant="destructive">exit {event.exitCode}</Badge> : null}</>;
+  if (!hasDetails) return <li data-task-chat-tool-call className="flex min-w-0 items-center gap-2 py-0.5">{row}</li>;
+  return <li data-task-chat-command><Collapsible.Root open={open} onOpenChange={setOpen}><Collapsible.Trigger className="flex w-full min-w-0 items-center gap-2 py-0.5 text-left text-[12px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{row}{open ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}</Collapsible.Trigger><Collapsible.Panel><pre className="mt-1 overflow-x-auto rounded-[6px] border border-border bg-muted/30 p-2 font-mono text-[12px] whitespace-pre">{output}</pre></Collapsible.Panel></Collapsible.Root></li>;
 }
 
 function EventLine({ event, onOpenDiff, running }: { event: ChatEvent; onOpenDiff: () => void; running: boolean }) {
-  const className = "relative break-words text-[12px] text-muted-foreground before:absolute before:-left-[17px] before:top-1.5 before:size-1.5 before:rounded-full before:bg-muted-foreground/50";
-  if (event.kind === "thinking_summary") return <ReasoningEvent event={event} running={running} />;
-  if (event.kind === "command") {
-    const [expanded, setExpanded] = useState(false);
-    const failed = event.exitCode !== null && event.exitCode !== undefined && event.exitCode !== 0;
-    const label = event.status === "running" ? "…" : event.exitCode === null || event.exitCode === undefined ? "exit —" : `exit ${event.exitCode}`;
-    const lines = event.output?.split("\n") ?? [];
-    const preview = expanded ? lines : lines.slice(0, 3);
-    return <li data-task-chat-command className={`font-mono ${className}`}><div className="flex flex-wrap items-center gap-1.5"><code className="break-all">$ {event.text}</code><Badge variant={failed ? "destructive" : "secondary"}>{label}</Badge></div>{preview.length ? <pre className="mt-1 whitespace-pre-wrap break-words text-muted-foreground">{preview.join("\n")}</pre> : null}{lines.length > 3 ? <Button type="button" variant="ghost" size="xs" onClick={() => setExpanded((current) => !current)}>{expanded ? "Show less" : `… +${lines.length - 3} lines`}</Button> : null}</li>;
-  }
-  if (event.kind === "tool_call") return <li data-task-chat-tool-call className={className}><span className="font-medium text-foreground">{event.text}</span>{event.detail ? <span> · {event.detail}</span> : null}{event.toolStatus ? <span> ({event.toolStatus})</span> : null}{event.count && event.count > 1 ? ` ×${event.count}` : ""}</li>;
-  if (event.kind === "file_change") return <li className={className}><span className="font-medium text-foreground">Edited </span>{event.files?.map((file) => <button type="button" className="underline underline-offset-2" onClick={onOpenDiff} key={file}>{file}</button>)} {event.text}</li>;
-  return <li className={className}>{event.kind === "test_result" ? <span className="font-medium text-foreground">Tests: </span> : null}{event.text}{event.count && event.count > 1 ? ` ×${event.count}` : ""}</li>;
+  const className = "flex min-w-0 items-center gap-2 py-0.5 text-[12px] text-muted-foreground";
+  if (event.kind === "thinking_summary") return <ReasoningEvent event={event} />;
+  if (event.kind === "command" || event.kind === "tool_call") return <CommandEvent event={event} running={running} />;
+  if (event.kind === "file_change") return <li className={className}><span className="font-medium text-foreground">Edited </span><span className="truncate">{event.files?.map((file) => <button type="button" className="underline underline-offset-2" onClick={onOpenDiff} key={file}>{file}</button>)} {event.text}</span></li>;
+  return <li className={className}>{event.kind === "test_result" ? <span className="font-medium text-foreground">Tests: </span> : null}<span className="truncate">{event.text}{event.count && event.count > 1 ? ` ×${event.count}` : ""}</span></li>;
 }
 
 function NarrationStream({ events }: { events: ChatEvent[] }) {
@@ -43,7 +47,7 @@ function NarrationStream({ events }: { events: ChatEvent[] }) {
 function ExecutionChain({ events, onOpenDiff, running, open, onOpenChange, durationLabel, statsText }: { events: ChatEvent[]; onOpenDiff: () => void; running: boolean; open: boolean; onOpenChange: (open: boolean) => void; durationLabel: string; statsText: string | undefined }) {
   const executionEvents = events.filter((event) => event.kind !== "message" && event.kind !== "agent_update");
   if (executionEvents.length === 0) return <p className="text-xs text-muted-foreground">{durationLabel}{statsText}</p>;
-  return <Collapsible.Root open={open} onOpenChange={onOpenChange} data-task-chat-execution-chain><Collapsible.Trigger className="flex items-center gap-1 text-xs text-muted-foreground"><ChevronDown className="size-3" />{running ? <LoaderCircle className="size-3 motion-safe:animate-spin" /> : <CheckCircle2 className="size-3" />}<span data-task-chat-duration>{durationLabel}</span><span data-task-chat-step-count> · {executionEvents.length} {executionEvents.length === 1 ? "step" : "steps"}</span>{statsText}</Collapsible.Trigger><Collapsible.Panel><ol data-task-chat-execution-group className="mt-1 space-y-1 border-l border-border pl-3">{executionEvents.map((event) => <EventLine event={event} onOpenDiff={onOpenDiff} running={running} key={event.id} />)}</ol></Collapsible.Panel></Collapsible.Root>;
+  return <Collapsible.Root open={open} onOpenChange={onOpenChange} data-task-chat-execution-chain><Collapsible.Trigger className="flex items-center gap-1 text-xs text-muted-foreground"><ChevronDown className="size-3" />{running ? <LoaderCircle className="size-3 motion-safe:animate-spin" /> : <CheckCircle2 className="size-3" />}<span data-task-chat-duration>{durationLabel}</span><span data-task-chat-step-count> · {executionEvents.length} {executionEvents.length === 1 ? "step" : "steps"}</span>{statsText}</Collapsible.Trigger><Collapsible.Panel><ol data-task-chat-execution-group className="mt-1 space-y-1">{executionEvents.map((event) => <EventLine event={event} onOpenDiff={onOpenDiff} running={running} key={event.id} />)}</ol></Collapsible.Panel></Collapsible.Root>;
 }
 export function ChatAgentTurn({ item, onOpenDiff, onLoadEvents }: { item: Extract<ChatItem, { kind: "agent_turn" }>; onOpenDiff: () => void; onLoadEvents: () => Promise<void> }) {
   const [now, setNow] = useState(Date.now());

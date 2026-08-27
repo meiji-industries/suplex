@@ -39,6 +39,7 @@ describe("task chat UI", () => {
     expect(html.match(/data-task-chat-execution-group/g)).toHaveLength(1);
     expect(html).toContain("3 steps");
     expect(html).toMatch(/data-task-chat-execution-chain[^>]*>.*data-task-chat-execution-group[^>]*>.*git status.*read.*pnpm test/s);
+    expect(html).not.toContain("border-l");
     expect(html.match(/<ol data-task-chat-execution-group[^]*?<\/ol>/)?.[0]).not.toContain("data-task-chat-agent-bubble");
   });
 
@@ -55,13 +56,21 @@ describe("task chat UI", () => {
     expect(renderToStaticMarkup(createElement(ChatMemberMessage, { item: { kind: "member", id: "message", at: "2026-08-23T00:00:00.000Z", actor: { name: "Mara", avatarSeed: "mara" }, markdown: "**Hello**" } }))).toContain("<strong>Hello</strong>");
   });
 
-  it("shows collapsed command results and repeated event counts", () => {
+  it("keeps completed command output hidden in an independently collapsed row", () => {
     const item = { ...completed, finishedAt: null, status: "running" as const, events: [{ id: "command", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "Inspecting Git state", output: "one\ntwo\nthree\nfour", exitCode: 0, status: "completed" as const }, { id: "repeat", at: "2026-08-23T00:00:11.000Z", kind: "agent_update", text: "Checking files", count: 4 }] };
     const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
     expect(html).toContain("Inspecting Git state");
-    expect(html).toContain("exit 0");
-    expect(html).toContain("… +1 lines");
+    expect(html).toContain("data-task-chat-command");
+    expect(html).not.toContain("one\ntwo\nthree\nfour");
+    expect(html).toMatch(/aria-expanded="true"[^]*aria-expanded="false"/);
     expect(html).toContain("×4");
+  });
+
+  it("opens running command rows with their full terminal output", () => {
+    const item = { ...completed, finishedAt: null, status: "running" as const, events: [{ id: "command", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "pnpm test", output: "one\ntwo\nthree\nfour", exitCode: null, status: "running" as const }] };
+    const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    expect(html).toContain("$ pnpm test\none\ntwo\nthree\nfour");
+    expect(html.match(/aria-expanded="true"/g)).toHaveLength(2);
   });
 
   it("renders typed reasoning, command, and tool-call events", () => {
@@ -73,13 +82,16 @@ describe("task chat UI", () => {
     ] };
     const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
     expect(html).toContain("data-task-chat-reasoning");
-    expect(html).toContain("Reasoning");
-    expect(html.match(/aria-expanded="true"/g)).toHaveLength(2);
+    expect(html).toContain("Thinking");
+    expect(html).toMatch(/one<br\/>\s*two<br\/>\s*three<br\/>\s*four<br\/>\s*five/);
+    expect(html).not.toContain("Reasoning");
+    expect(html.match(/aria-expanded="true"/g)).toHaveLength(1);
     expect(html).toContain("exit 1");
     expect(html).toContain("data-variant=\"destructive\"");
     expect(html).toContain("exec");
-    expect(html).toContain("call-123");
     expect(html).toContain("×3");
+    expect(html).toContain("call-123");
+    expect(html.match(/<li data-task-chat-tool-call[^]*?<\/li>/)?.[0]).not.toContain("aria-expanded");
     expect(html).toContain("<strong>Done</strong>");
   });
 });

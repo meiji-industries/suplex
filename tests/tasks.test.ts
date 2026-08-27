@@ -10,6 +10,8 @@ import { createTestConfig, type ForgeConfig } from "../src/config.js";
 import { ForgeDatabase, projectionStateHash } from "../src/database.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
+import type { GithubReleasePort } from "../src/github-release.js";
+import { loadTaskConfiguration } from "../src/task-project-configuration.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
 import { jsonRequired } from "../src/task-utils.js";
@@ -21,7 +23,7 @@ function projectState(database: ForgeDatabase, state: IssueWorkflowState, runId 
   database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId, eventId: state.lastEventId, state }));
 }
 
-async function fixture(): Promise<{ root: string; config: ForgeConfig; database: ForgeDatabase; auth: AuthService; projects: ProjectService; tasks: TaskService; workflow: IssueWorkflowPort; stateByTask: Map<string, IssueWorkflowState>; workflowInputsByTask: Map<string, IssueWorkflowInput>; adminId: string; companyId: string; projectId: string; profileId: string }> {
+async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listOpenPullRequests" | "getPullRequest"> } = {}): Promise<{ root: string; config: ForgeConfig; database: ForgeDatabase; auth: AuthService; projects: ProjectService; tasks: TaskService; workflow: IssueWorkflowPort; stateByTask: Map<string, IssueWorkflowState>; workflowInputsByTask: Map<string, IssueWorkflowInput>; adminId: string; companyId: string; projectId: string; profileId: string }> {
   const root = await mkdtemp(join(tmpdir(), "forge-task-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
@@ -31,7 +33,7 @@ async function fixture(): Promise<{ root: string; config: ForgeConfig; database:
   database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin-1', 'Admin', 'admin@forge.local', 'admin', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run());
   const config = createTestConfig(root, { repositoryRoot, worktreeRoot, reachableAddress: "https://forge.tailnet.ts.net:4111" });
   const auth = new AuthService(database, config);
-  const projects = new ProjectService(database, auth, config, { localRepository, github });
+  const projects = new ProjectService(database, auth, config, { localRepository, github, ...(options.githubRelease ? { githubRelease: options.githubRelease } : {}) });
   const company = auth.createCompany("admin-1", "Acme");
   const profile = projects.createProfile("admin-1", { name: "Default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const planner = projects.createAgent("admin-1", { name: "Planner", role: "planner", profileId: profile.id });
@@ -616,4 +618,16 @@ test("pins versioned resolved prompt artifacts at task creation", async () => {
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }
+});
+
+test("re-resolves a pull request selector and pins source and PR base coordinates", async () => {
+  let requestedNumber: number | undefined;
+  const pull = { number: 17, url: "https://github.com/acme/forge/pull/17", repository: "acme/forge", headBranch: "feature/source", baseBranch: "release", headSha: "c".repeat(40), baseSha: "d".repeat(40), isDraft: false, state: "open" as const, mergedAt: null };
+  const value = await fixture({ githubRelease: { async listOpenPullRequests() { return [pull]; }, async getPullRequest(input) { requestedNumber = input.number; return pull; } } });
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Continue source PR", description: "Use the selected pull request.", idempotencyKey: "source-pr-create-0001", images: [], source: { kind: "pull_request", number: 17 } });
+    expect(requestedNumber).toBe(17);
+    const configuration = value.database.authQuery((db) => loadTaskConfiguration(db, new ArtifactStore(value.config.artifactRoot, value.database), { taskId: created.task.id, companyId: value.companyId }));
+    expect(configuration).toMatchObject({ baseBranch: "release", baseSha: "d".repeat(40), targetBranch: "main", targetSha: "b".repeat(40), source: { kind: "pull_request", number: 17, headBranch: "feature/source", baseBranch: "release", headSha: "c".repeat(40), baseSha: "d".repeat(40) } });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

@@ -100,17 +100,21 @@ test("converts non-retryable Herdr session failures at the turn boundary", async
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("binds a preassigned Claude transcript and streams its timeline", async () => {
+test("follows a preassigned Claude transcript after its cwd changes", async () => {
   const setup = await fixture();
   const configDir = join(setup.root, "claude");
   const worktree = join(setup.root, "tmp", "x");
   const sessionId = "f9fbc9cf-5bbf-46dd-81d1-740ba276db64";
   const transcriptTurnId = "f1d7a8e8-9915-4bf5-ae24-5b2836797c4c";
   const transcriptPath = join(configDir, "projects", "-tmp-x", `${sessionId}.jsonl`);
+  const relocatedPath = join(configDir, "projects", "-other-cwd", `${sessionId}.jsonl`);
   const previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  let expectedTurnId = "";
+  const previous = `${JSON.stringify({ type: "assistant", sessionId, timestamp: "2026-08-26T00:00:00.000Z", message: { content: [{ type: "text", text: "Earlier turn." }] } })}\n`;
   try {
-    await mkdir(dirname(transcriptPath), { recursive: true });
-    await mkdir(worktree, { recursive: true });
+    await Promise.all([mkdir(dirname(transcriptPath), { recursive: true }), mkdir(dirname(relocatedPath), { recursive: true }), mkdir(worktree, { recursive: true })]);
+    await writeFile(transcriptPath, previous);
+    await utimes(transcriptPath, new Date("2026-08-27T00:00:00.000Z"), new Date("2026-08-27T00:00:00.000Z"));
     process.env.CLAUDE_CONFIG_DIR = configDir;
     setup.input = {
       ...setup.input,
@@ -121,24 +125,26 @@ test("binds a preassigned Claude transcript and streams its timeline", async () 
       ...setup.session,
       provider: "claude",
       codexSessionId: sessionId,
-      rolloutPath: undefined,
+      rolloutPath: transcriptPath,
       live: { ...setup.session.live, agentSession: sessionId },
     };
     setup.database.authQuery((db) =>
-      db.prepare("UPDATE forge_herdr_role_sessions SET provider_kind = 'claude', codex_session_id = ?, rollout_path = NULL WHERE id = 'session'").run(sessionId),
+      db.prepare("UPDATE forge_herdr_role_sessions SET provider_kind = 'claude', codex_session_id = ?, rollout_path = ? WHERE id = 'session'").run(sessionId, transcriptPath),
     );
     const herdr = {
       prompt: async (_name: string, prompt: string) => {
-        await writeFile(transcriptPath, [
-          {
+        expectedTurnId = marker(prompt).slice("[forge-turn:".length, -1);
+        await writeFile(relocatedPath, [
+          previous,
+          JSON.stringify({
             type: "user",
             uuid: transcriptTurnId,
             sessionId,
             timestamp: "2026-08-27T00:00:00.000Z",
             cwd: worktree,
             message: { role: "user", content: marker(prompt) },
-          },
-          {
+          }),
+          JSON.stringify({
             type: "assistant",
             sessionId,
             timestamp: "2026-08-27T00:00:01.000Z",
@@ -146,16 +152,18 @@ test("binds a preassigned Claude transcript and streams its timeline", async () 
               content: [{ type: "text", text: "Done." }],
               usage: { input_tokens: 1, cache_creation_input_tokens: 2, cache_read_input_tokens: 3, output_tokens: 4 },
             },
-          },
-          {
+          }),
+          JSON.stringify({
             type: "system",
             subtype: "turn_duration",
             sessionId,
             timestamp: "2026-08-27T00:00:02.000Z",
             durationMs: 1,
-          },
-        ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
-        setTimeout(() => void writeFile(resultPath(prompt), JSON.stringify({ status: "ok" })), 10);
+          }),
+          "",
+        ].join("\n"));
+        await utimes(relocatedPath, new Date("2026-08-27T00:01:00.000Z"), new Date("2026-08-27T00:01:00.000Z"));
+        await writeFile(resultPath(prompt), JSON.stringify({ status: "ok" }));
         return setup.session.live;
       },
       getAgent: async () => setup.session.live,
@@ -170,10 +178,13 @@ test("binds a preassigned Claude transcript and streams its timeline", async () 
     await expect(runner.run(setup.input)).resolves.toMatchObject({ sessionId, result: { status: "ok" } });
     expect(setup.database.authQuery((db) =>
       db.prepare("SELECT codex_session_id, rollout_path FROM forge_herdr_role_sessions WHERE id = 'session'").get(),
-    )).toEqual({ codex_session_id: sessionId, rollout_path: transcriptPath });
+    )).toEqual({ codex_session_id: sessionId, rollout_path: relocatedPath });
     expect(setup.database.authQuery((db) =>
-      db.prepare("SELECT session_id FROM forge_issue_timeline WHERE session_id = ?").all(sessionId),
-    )).toHaveLength(5);
+      db.prepare("SELECT rollout_start_offset, rollout_cursor_offset FROM forge_herdr_turns WHERE task_id = 'task'").get(),
+    )).toEqual({ rollout_start_offset: Buffer.byteLength(`${previous}\n`), rollout_cursor_offset: expect.any(Number) });
+    expect(setup.database.authQuery((db) =>
+      db.prepare("SELECT forge_turn_id FROM forge_issue_timeline WHERE session_id = ?").all(sessionId),
+    )).toEqual(Array.from({ length: 5 }, () => ({ forge_turn_id: expectedTurnId })));
   } finally {
     if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;

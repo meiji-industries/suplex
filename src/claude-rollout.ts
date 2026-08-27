@@ -16,11 +16,10 @@ const numericUsage = (usage: Record<string, unknown>) => Object.fromEntries([["i
 export const claudeCandidatePaths = claudeTranscriptCandidates;
 export async function discoverClaudeTranscript(candidates: readonly string[], expected: { sessionId?: string; cwd: string }): Promise<RolloutCandidate> {
   if (!expected.sessionId) throw new Error("Claude transcript identity requires a session id");
-  const path = candidates.find((candidate) => basename(candidate) === `${expected.sessionId}.jsonl`);
-  if (!path) throw new Error("Claude transcript was not found");
-  const expectedCwd = await fs.realpath(expected.cwd);
-  const first = (await fs.readFile(path, "utf8").catch(() => "")).split("\n").flatMap((row) => { try { return [jsonRequired(row) as Record<string, unknown>]; } catch { return []; } }).find((line) => typeof line.cwd === "string");
-  if (typeof first?.cwd === "string" && await fs.realpath(first.cwd).catch(() => first.cwd) !== expectedCwd) throw new Error("Claude transcript cwd does not match");
+  const matches = candidates.filter((candidate) => basename(candidate) === `${expected.sessionId}.jsonl`);
+  if (!matches.length) throw new Error("Claude transcript was not found");
+  const path = (await Promise.all(matches.map(async (candidate) => ({ candidate, mtimeMs: (await fs.stat(candidate).catch(() => undefined))?.mtimeMs ?? 0 }))))
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)[0]!.candidate;
   return { path, sessionId: expected.sessionId, cwd: expected.cwd };
 }
 

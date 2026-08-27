@@ -1,7 +1,11 @@
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { expect, test } from "vitest";
 
 import { NeutralTimelineEventSchema } from "../src/codex-rollout.js";
-import { parseClaudeChunk, sanitizeClaudeLine } from "../src/claude-rollout.js";
+import { discoverClaudeTranscript, parseClaudeChunk, sanitizeClaudeLine } from "../src/claude-rollout.js";
 
 const input = { offset: 0, sessionId: "session", forgeTurnId: "turn", executionId: "execution", executionRole: "reviewer" } as const;
 const userId = "00000000-0000-4000-8000-000000000001";
@@ -31,4 +35,20 @@ test("frames split Claude rows and ignores non-timeline records", () => {
   expect([...first.events, ...second.events].map((event) => event.kind)).toEqual([...whole.events.map((event) => event.kind), "message"]);
   expect(second.events.at(-1)?.data).toMatchObject({ role: "system", level: "error", text: "Malformed Claude transcript line" });
   expect(sanitizeClaudeLine(JSON.stringify(rows[1]))).toBe(JSON.stringify({ type: "assistant" }));
+});
+
+test("discovers the newest matching Claude transcript across cwd directories", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-claude-rollout-"));
+  const sessionId = "f9fbc9cf-5bbf-46dd-81d1-740ba276db64";
+  const older = join(root, "-repository", `${sessionId}.jsonl`);
+  const newer = join(root, "-worktree", `${sessionId}.jsonl`);
+  try {
+    await Promise.all([mkdir(join(root, "-repository"), { recursive: true }), mkdir(join(root, "-worktree"), { recursive: true })]);
+    await Promise.all([writeFile(older, ""), writeFile(newer, "")]);
+    await utimes(older, new Date("2026-08-27T00:00:00.000Z"), new Date("2026-08-27T00:00:00.000Z"));
+    await utimes(newer, new Date("2026-08-27T00:01:00.000Z"), new Date("2026-08-27T00:01:00.000Z"));
+    await expect(discoverClaudeTranscript([older, newer], { sessionId, cwd: join(root, "other-cwd") })).resolves.toMatchObject({ path: newer, sessionId });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

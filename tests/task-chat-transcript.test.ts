@@ -14,6 +14,12 @@ describe("buildChatTranscript", () => {
     expect(chatEventFromTimelineEvent({ streamId: 1, id: "timeline", eventType: "file_change", metadata: { kind: "file_change", data: { path: "src/app.ts", status: "modified" } }, createdAt: at(1), executionId: "execution", executionRole: "builder", sessionId: "session", forgeTurnId: "turn" })).toEqual({ id: "timeline", at: at(1), kind: "file_change", text: "src/app.ts", files: ["src/app.ts"], exitCode: null });
   });
 
+  it("preserves only the recognized final-answer phase", () => {
+    const event = (phase: unknown) => chatEventFromTimelineEvent({ streamId: 1, id: "timeline", eventType: "message", metadata: { kind: "message", data: { role: "agent", phase, text: "Done" } }, createdAt: at(1), executionId: "execution", executionRole: "builder", sessionId: "session", forgeTurnId: "turn" });
+    expect(event("final_answer")).toMatchObject({ phase: "final_answer" });
+    expect(event("progress")).not.toHaveProperty("phase");
+  });
+
   it("retains validated patches through timeline conversion and hides their empty acknowledgement", () => {
     const event = (id: string, kind: string, data: Record<string, unknown>) => chatEventFromTimelineEvent({ streamId: 1, id, eventType: kind, metadata: { kind, data }, createdAt: at(1), executionId: "execution", executionRole: "builder", sessionId: "session", forgeTurnId: "turn" })!;
     const patch = { files: [{ path: "src/a.ts", operation: "Edit", additions: 1, deletions: 1, rows: [{ kind: "deletion", text: "old", oldLine: 1 }, { kind: "addition", text: "new", newLine: 1 }] }] };

@@ -103,7 +103,7 @@ function EventLine({ event, onOpenDiff, running }: { event: ChatEvent; onOpenDif
 }
 
 function ExecutionChain({ events, intro, onOpenDiff, running, open, onOpenChange, durationLabel, statsText }: { events: ChatEvent[]; intro: string | undefined; onOpenDiff: () => void; running: boolean; open: boolean; onOpenChange: (open: boolean) => void; durationLabel: string; statsText: string | undefined }) {
-  const executionEvents = (intro ? [{ id: "intro", at: "", kind: "thinking_summary", text: intro }, ...events] : events).filter((event) => !isStructuredResult(event));
+  const executionEvents = (intro ? [{ id: "intro", at: "", kind: "thinking_summary", text: intro }, ...events] : events).filter((event) => event.phase !== "final_answer" && !isStructuredResult(event));
   if (executionEvents.length === 0) return <p className="text-xs text-muted-foreground">{durationLabel}{statsText}</p>;
   return <Collapsible.Root open={open} onOpenChange={onOpenChange} data-task-chat-execution-chain><Collapsible.Trigger className="flex w-full items-center gap-1 text-xs text-muted-foreground">{running ? <LoaderCircle className="size-3 motion-safe:animate-spin" /> : <CheckCircle2 className="size-3" />}<span data-task-chat-duration>{durationLabel}</span><span data-task-chat-step-count> · {executionEvents.length} {executionEvents.length === 1 ? "step" : "steps"}</span>{statsText}{open ? <ChevronDown className="ml-auto size-3 shrink-0" /> : <ChevronRight className="ml-auto size-3 shrink-0" />}</Collapsible.Trigger><Collapsible.Panel><ol data-task-chat-execution-group className="mt-1 space-y-1">{executionEvents.map((event) => <EventLine event={event} onOpenDiff={onOpenDiff} running={running} key={event.id} />)}</ol></Collapsible.Panel></Collapsible.Root>;
 }
@@ -116,7 +116,9 @@ export function ChatAgentTurn({ item, onOpenDiff, onLoadEvents }: { item: Extrac
   const toggleExecution = (open: boolean): void => { setExecutionOpen(open); if (open) void onLoadEvents(); };
   const durationLabel = running ? `Working for ${duration(item.startedAt, null, now)}` : `Worked for ${duration(item.startedAt, item.finishedAt, now)}`;
   const statsText = item.stats ? ` · +${item.stats.additions} −${item.stats.deletions}` : undefined;
-  const fallbackSummary = item.events.filter(isStructuredResult).map((event) => structuredResultSummary(event.text)).find((summary): summary is string => Boolean(summary));
+  const finalAnswer = [...item.events].reverse().find((event) => event.phase === "final_answer");
+  const finalAnswerSummary = finalAnswer && (isStructuredResult(finalAnswer) ? structuredResultSummary(finalAnswer.text) : finalAnswer.text.trim());
+  const fallbackSummary = finalAnswerSummary || item.events.filter(isStructuredResult).map((event) => structuredResultSummary(event.text)).find((summary): summary is string => Boolean(summary));
   const summary = item.summary ?? fallbackSummary;
   return <div className="flex gap-2" data-task-chat-agent-turn data-task-chat-status={item.status}><ProfileAvatar name={item.agent.name} seed={item.agent.avatarSeed} size="xs" /><div className="min-w-0 flex-1 space-y-1"><div className="flex flex-wrap items-baseline gap-x-2 text-xs"><span className="font-medium">{item.agent.name}</span><time className="text-[11px] text-muted-foreground" dateTime={item.startedAt}>{new Date(item.startedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></div><ExecutionChain events={item.events} intro={item.intro} onOpenDiff={onOpenDiff} running={running} open={executionOpen} onOpenChange={toggleExecution} durationLabel={durationLabel} statsText={statsText} />{summary ? <AgentBubble><Markdown source={summary} /></AgentBubble> : null}{item.status === "failed" || item.status === "blocked" ? <p className="text-xs text-destructive">{item.agent.name} is {item.status}</p> : item.finishedAt ? <CompletionMarker name={item.agent.name} /> : null}</div></div>;
 }

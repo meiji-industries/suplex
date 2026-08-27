@@ -69,6 +69,32 @@ describe("task chat UI", () => {
     expect(html).not.toContain("delivery_review");
   });
 
+  it("renders a terminal final answer in the summary bubble instead of Thinking", () => {
+    const item = { ...withoutResult, events: [{ id: "progress", at: "2026-08-23T00:00:10.000Z", kind: "message", text: "Still working" }, { id: "final", at: "2026-08-23T00:00:11.000Z", kind: "message", text: "**Final answer**", phase: "final_answer" as const }] };
+    const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    expect(html).toContain("<strong>Final answer</strong>");
+    expect(html).toContain("1 step");
+    expect(html).not.toContain("Thinking");
+  });
+
+  it("prefers durable summaries over terminal final-answer fallbacks", () => {
+    const item = { ...withoutIntro, events: [{ id: "final", at: "2026-08-23T00:00:11.000Z", kind: "message", text: "Fallback response", phase: "final_answer" as const }] };
+    const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    expect(html).toContain("The work is complete.");
+    expect(html).not.toContain("Fallback response");
+    expect(html.match(/data-task-chat-agent-bubble/g)).toHaveLength(1);
+  });
+
+  it("promotes final answers independent of agent role without completing running turns", () => {
+    for (const role of ["planner", "reviewer", "builder", "integrator"] as const) {
+      const item = { ...withoutResult, role, finishedAt: null, status: "running" as const, events: [{ id: "final", at: "2026-08-23T00:00:11.000Z", kind: "message", text: `${role} result`, phase: "final_answer" as const }] };
+      const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+      expect(html).toContain(`${role} result`);
+      expect(html).toContain('data-task-chat-status="running"');
+      expect(html).not.toContain("has finished");
+    }
+  });
+
   it("renders intro and every progress event as ordered flat thinking blocks", () => {
     const item = { ...completed, finishedAt: null, status: "running" as const, events: [
       { id: "command-one", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "git status", exitCode: 0, status: "completed" as const },

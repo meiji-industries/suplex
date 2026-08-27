@@ -4,7 +4,7 @@ import type { AgentTimelineEvent } from "../../http/contracts/agent-events.js";
 import type { Patch, PatchFile, PatchRow } from "../../codex-patch.js";
 
 export type ChatActor = { name: string; avatarSeed: string };
-export type ChatEvent = { id: string; at: string; kind: string; text: string; files?: string[]; exitCode?: number | null; stepNumber?: number | null; status?: "running" | "completed"; detail?: string; toolStatus?: string; output?: string; outputLines?: number; callId?: string; count?: number; patch?: Patch };
+export type ChatEvent = { id: string; at: string; kind: string; text: string; phase?: "final_answer"; files?: string[]; exitCode?: number | null; stepNumber?: number | null; status?: "running" | "completed"; detail?: string; toolStatus?: string; output?: string; outputLines?: number; callId?: string; count?: number; patch?: Patch };
 export type ChatItem =
   | { kind: "member"; id: string; at: string; actor: ChatActor; markdown: string }
   | { kind: "agent_turn"; id: string; role: ApiTask["agentInvocations"][number]["role"]; agent: ChatActor; startedAt: string; finishedAt: string | null; status: "running" | "completed" | "failed" | "blocked"; intro?: string; events: ChatEvent[]; summary?: string; stats?: { filesChanged: number; additions: number; deletions: number } }
@@ -67,10 +67,11 @@ export function chatEventFromTimelineEvent(event: AgentTimelineEvent): ChatEvent
   const callId = typeof record.id === "string" ? record.id : undefined;
   const output = typeof record.output === "string" ? record.output : undefined;
   const patch = patchFromData(record.patch);
+  const phase = kind === "message" && record.phase === "final_answer" ? "final_answer" : undefined;
   if (kind === "tool_call" && output && callId) return { id: event.id, at: event.createdAt, kind: "command_output", text: "", output, outputLines: output.split("\n").length, callId, exitCode };
   const detail = kind === "tool_call" && callId ? callId : undefined;
   const toolStatus = kind === "tool_call" && typeof record.status === "string" ? record.status : undefined;
-  return { id: event.id, at: event.createdAt, kind, text, ...(files ? { files } : {}), exitCode, ...(callId ? { callId } : {}), ...(detail ? { detail } : {}), ...(toolStatus ? { toolStatus } : {}), ...(patch ? { patch } : {}) };
+  return { id: event.id, at: event.createdAt, kind, text, ...(phase ? { phase } : {}), ...(files ? { files } : {}), exitCode, ...(callId ? { callId } : {}), ...(detail ? { detail } : {}), ...(toolStatus ? { toolStatus } : {}), ...(patch ? { patch } : {}) };
 }
 
 function systemItem(entry: ApiTask["activity"][number]): ChatItem | undefined {

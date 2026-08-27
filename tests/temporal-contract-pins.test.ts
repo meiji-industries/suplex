@@ -7,7 +7,7 @@ import { issueUpdates } from "../src/temporal/issue-updates.js";
 // clients. If this test fails, the change breaks replay — revert it; never edit this list.
 const FROZEN_UPDATE_NAMES = [
   "acceptDelivery", "approvePlan", "cancelDevelopment", "cancelIssue", "continueWork", "deleteWorktree",
-  "finalReview", "publishDraft", "reconcileAcceptance", "reconcileCI", "reconcileMerge",
+  "finalReview", "integrateRemoteConflict", "publishDraft", "reconcileAcceptance", "reconcileCI", "reconcileMerge",
   "recordDeliveryDecision", "recordProgress", "recreateWorktree", "rejectPlan", "repairCI", "repairDelivery", "reportWorktreeMissing",
   "requestDeliveryChanges", "requestPlanRevision", "requestSupplementalReview",
   "resolveDecisionBlocker", "resolveMergeConflict", "respondPlanBlocker", "resumePreservedWork", "resyncProjection", "retryCapacity", "retryDevelopment",

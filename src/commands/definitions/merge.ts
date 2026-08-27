@@ -1,7 +1,29 @@
 import { ExpectedRevisionBodySchema } from "../../http/contracts/common.js";
+import { ArtifactReferenceSchema } from "../../temporal/contracts/primitives.js";
+import { z } from "zod";
 import { defineIssueCommand } from "../kit.js";
 
 export const mergeCommands = {
+  integrate_remote_conflict: defineIssueCommand({
+    name: "integrate_remote_conflict",
+    slug: "integrate-remote-conflict",
+    updateName: "integrateRemoteConflict",
+    label: "Resolve remote branch conflict",
+    family: "bespoke",
+    durableCommandKind: "integrate-remote-conflict",
+    payloadLabel: "integrateRemoteConflict command",
+    body: z.object({
+      expectedRevision: ExpectedRevisionBodySchema.shape.expectedRevision,
+      forwardMergeId: z.string(),
+      priorHead: z.string(),
+      priorTree: z.string(),
+      remoteHead: z.string(),
+      conflictArtifact: ArtifactReferenceSchema,
+      conflictFileCount: z.number().int().nonnegative(),
+    }).strict(),
+    note: "none",
+    idempotency: "none",
+  }),
   resolve_merge_conflict: defineIssueCommand({
     name: "resolve_merge_conflict",
     slug: "resolve-merge-conflict",

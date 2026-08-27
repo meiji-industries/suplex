@@ -5,6 +5,7 @@ import * as stateTransitions from "./state-transitions.js";
 import { applyTargetBaseRevalidation } from "../target-base.js";
 import { developerExecutionId } from "../deterministic-id.js";
 import { issueUpdates } from "../issue-updates.js";
+import { mergeCommands } from "../../commands/definitions/merge.js";
 import type { IssueWorkflowContext } from "./context.js";
 export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
@@ -53,6 +54,37 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (ctx.state.phase !== "merge_conflict_required" || !ctx.state.allowedCommands.includes("resolve_merge_conflict")) throw new Error("Merge-conflict resolution is not available in the current phase");
+  } });
+
+  setHandler(issueUpdates.integrate_remote_conflict, ctx.guarded(async (rawInput) => {
+    const rawCommand = mergeCommands.integrate_remote_conflict.body!.extend({ actorUserId: contracts.durableId, commandId: contracts.durableId }).parse(rawInput);
+    const command = mergeCommands.integrate_remote_conflict.body!.parse(rawCommand);
+    if (ctx.commandAlreadyProcessed(rawCommand.commandId)) return ctx.state;
+    if (!ctx.patched("forge-merge-resolution-loop-v1")) return ctx.state;
+    ctx.markCommandProcessed(rawCommand.commandId);
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({
+      ...ctx.state,
+      revision: ctx.state.revision + 1,
+      phase: "merge_conflict_required",
+      owner: "lead",
+      allowedCommands: ["resolve_merge_conflict", "cancel_issue"],
+      pendingAction: "Resolving a conflict with commits pushed to the branch",
+      forwardMergeId: command.forwardMergeId,
+      forwardMergePriorHead: command.priorHead,
+      forwardMergePriorTree: command.priorTree,
+      forwardMergeTargetBaseSha: command.remoteHead,
+      forwardMergeConflictArtifact: command.conflictArtifact,
+      forwardMergeConflictFileCount: command.conflictFileCount,
+      mergeResolutionPlanArtifactId: null,
+      mergeDecision: null,
+      lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
+    });
+    await ctx.project();
+    return ctx.state;
+  }), { validator(rawInput) {
+    const command = mergeCommands.integrate_remote_conflict.body!.extend({ actorUserId: contracts.durableId, commandId: contracts.durableId }).parse(rawInput);
+    if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
+    if (!["ci_waiting", "manual_merge", "delivery_ready", "delivery_blocked", "accepted"].includes(ctx.state.phase) || ctx.state.activeOperation !== null) throw new Error("Remote conflict integration is not available in the current phase");
   } });
 
   ctx.reconcileMergeTurn = reconcileMergeTurn;

@@ -42,5 +42,6 @@ test("task command descriptors project every routed command", () => {
     { name: "delete_worktree", label: "Delete worktree", endpoint: "delete-worktree", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "recreate_worktree", label: "Recreate worktree and resume", endpoint: "recreate-worktree", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "resume_preserved_work", label: "Resume from preserved work", endpoint: "resume-preserved-work", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
+    { name: "integrate_remote_conflict", label: "Resolve remote branch conflict", endpoint: "integrate-remote-conflict", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
   ]);
 });

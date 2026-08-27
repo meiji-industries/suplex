@@ -41,6 +41,7 @@ type CommandInput<K extends IssueCommand> = {
   recreate_worktree: { expectedRevision: number };
   resume_preserved_work: { expectedRevision: number };
   report_worktree_missing: { expectedRevision: number; worktreePath: string };
+  integrate_remote_conflict: { expectedRevision: number; actorUserId: string; commandId: string; forwardMergeId: string; priorHead: string; priorTree: string; remoteHead: string; conflictArtifact: { id: string; kind: "forward-merge-conflict" }; conflictFileCount: number };
 }[K];
 
 type IssueUpdates = { [K in IssueCommand]: ReturnType<typeof defineUpdate<IssueWorkflowState, [CommandInput<K>]>> };

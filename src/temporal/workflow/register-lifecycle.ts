@@ -1,10 +1,11 @@
 import { condition, setHandler } from "@temporalio/workflow";
+import { z } from "zod";
 
 import { TERMINAL_PHASES } from "../../issue-phases.js";
 import { assertPayloadWithinLimit } from "../policy.js";
 import { ContinueWorkCommandSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, StartPlanningInputSchema } from "../issue-contracts.js";
 import { issueUpdates } from "../issue-updates.js";
-import { acceptDelivery, cancelCapacity, cancelCapacityExecution, cancelDeveloperExecution, createSuccessor, finalizeCapacity, inspectCapacity, recordDeliveryDecision } from "./activity-proxies.js";
+import { acceptDelivery, cancelCapacity, cancelCapacityExecution, cancelDeveloperExecution, cleanupTaskWorktree, createSuccessor, finalizeCapacity, inspectCapacity, recreateTaskWorktree, recordDeliveryDecision } from "./activity-proxies.js";
 import type { IssueWorkflowContext } from "./context.js";
 
 export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
@@ -82,7 +83,8 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       const decision = await recordDeliveryDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, actorUserId: command.actorUserId, note: command.note });
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, deliveryDecisionArtifactId: decision.artifactId });
     }
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: ctx.reviseContinueEnabled ? ["continue_work"] : [], pendingAction: "Issue cancelled", acceptanceStatus, acceptanceReasonArtifactId, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    const resume = ctx.patched("forge-recoverable-cancellation-v1") && ctx.state.branchName ? ["resume_preserved_work" as const] : [];
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: [...(ctx.reviseContinueEnabled ? ["continue_work" as const] : []), ...resume], pendingAction: "Issue cancelled", acceptanceStatus, acceptanceReasonArtifactId, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     return ctx.state;
   }));
@@ -178,6 +180,25 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
   } });
   ctx.cancelCurrentCapacity = cancelCurrentCapacity;
   ctx.settleCancelledCapacity = settleCancelledCapacity;
+  const expected = z.object({ expectedRevision: z.number().int().nonnegative() });
+  setHandler(issueUpdates.delete_worktree, ctx.guarded(async (raw) => {
+    const command = expected.extend({ confirmDiscardDirty: z.boolean().optional() }).parse(raw);
+    const result = await cleanupTaskWorktree({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, ...(command.confirmDiscardDirty !== undefined ? { confirmDiscardDirty: command.confirmDiscardDirty } : {}) });
+    if (result.outcome === "cleaned") ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, worktreeState: "cleaned", pendingAction: "Worktree deleted", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    else if (result.outcome === "dirty_confirmation_required") ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "human", allowedCommands: ctx.addRevisionCommand(["delete_worktree", "continue_work"]), pendingAction: `Worktree has ${result.dirtyFileCount} uncommitted changes — confirm to discard`, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    await ctx.project(); return ctx.state;
+  }), { validator(raw) { const command = expected.extend({ confirmDiscardDirty: z.boolean().optional() }).parse(raw); if (command.expectedRevision !== ctx.state.revision || ctx.state.activeOperation) throw new Error("Worktree deletion was superseded"); } });
+  setHandler(issueUpdates.recreate_worktree, ctx.guarded(async (raw) => {
+    expected.parse(raw); const result = await recreateTaskWorktree({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName!, targetBaseSha: ctx.state.targetBaseSha! });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Worktree recreated; resuming Developer", worktreePath: result.worktreePath, worktreeState: "present", blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }); await ctx.project(); return ctx.state;
+  }), { validator(raw) { const command = expected.parse(raw); if (command.expectedRevision !== ctx.state.revision || ctx.state.worktreeState !== "removed_externally" || !ctx.state.branchName || !ctx.state.targetBaseSha) throw new Error("Worktree recreation is not available"); } });
+  setHandler(issueUpdates.resume_preserved_work, ctx.guarded(async (raw) => {
+    expected.parse(raw); ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: `Resuming from preserved branch ${ctx.state.branchName}`, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }); await ctx.project(); return ctx.state;
+  }), { validator(raw) { const command = expected.parse(raw); if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "cancelled" || !ctx.state.branchName) throw new Error("Preserved work is unavailable"); } });
+  setHandler(issueUpdates.report_worktree_missing, ctx.guarded(async (raw) => {
+    const command = expected.extend({ worktreePath: z.string().min(1) }).parse(raw); if (["done", "cancelled", "failed"].includes(ctx.state.phase)) return ctx.state;
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "human", allowedCommands: ctx.addRevisionCommand(["recreate_worktree", "cancel_issue"]), pendingAction: "Local worktree is missing", worktreeState: "removed_externally", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }); await ctx.project(); void command; return ctx.state;
+  }), { validator(raw) { const command = expected.extend({ worktreePath: z.string().min(1) }).parse(raw); if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision"); } });
 }
 
 export function registerLifecycleHandlersContinuation(ctx: IssueWorkflowContext): void {

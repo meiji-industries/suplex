@@ -37,6 +37,10 @@ type CommandInput<K extends IssueCommand> = {
   continue_work: ContinueWorkCommand;
   retry_capacity: StartPlanningInput;
   resync_projection: StartPlanningInput;
+  delete_worktree: { expectedRevision: number; confirmDiscardDirty?: boolean };
+  recreate_worktree: { expectedRevision: number };
+  resume_preserved_work: { expectedRevision: number };
+  report_worktree_missing: { expectedRevision: number; worktreePath: string };
 }[K];
 
 type IssueUpdates = { [K in IssueCommand]: ReturnType<typeof defineUpdate<IssueWorkflowState, [CommandInput<K>]>> };

@@ -20,6 +20,7 @@ import { createPlanningActivities } from "../src/temporal/activities/planning.js
 import { createProjectionActivities } from "../src/temporal/activities/projection.js";
 import { createReleaseActivities } from "../src/temporal/activities/release.js";
 import { createTargetBaseActivities } from "../src/temporal/activities/target-base.js";
+import { createWorktreeActivities } from "../src/temporal/activities/worktree.js";
 
 const expectedActivityKeys = [
   "acceptDelivery",
@@ -27,6 +28,7 @@ const expectedActivityKeys = [
   "authorizePlanRevision",
   "cancelDeveloperExecution",
   "consolidateLeadPlan",
+  "cleanupTaskWorktree",
   "createSuccessor",
   "finalReview",
   "findActiveDeveloperExecution",
@@ -51,6 +53,7 @@ const expectedActivityKeys = [
   "recordPlanDecision",
   "recordPlannerNote",
   "recordProbeStarted",
+  "recreateTaskWorktree",
   "rerunCi",
   "resolveMergeConflict",
   "resolveMergeConflictSupervised",
@@ -62,6 +65,7 @@ const expectedActivityKeys = [
   "runDeveloperRepairSupervised",
   "runLeadPlanning",
   "runSupplementalReview",
+  "inspectTaskWorktree",
   "updateCiFromBase",
 ].sort();
 
@@ -84,7 +88,8 @@ test("activity factories compose the frozen activity key set without overlap", a
       createCiActivities(context),
       createFinalReviewActivities(context),
       createAcceptanceActivities(context),
-      createMergeConflictActivities(context),
+    createMergeConflictActivities(context),
+    createWorktreeActivities(context),
     ];
     const factoryKeys = factoryResults.flatMap((factory) => Object.keys(factory));
     const activities = createActivities(database, config);

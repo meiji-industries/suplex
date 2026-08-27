@@ -1,4 +1,5 @@
 import type { ForgeDatabase } from "./database.js";
+import { json } from "./task-utils.js";
 
 export type OperationKind = "turn" | "repair" | "merge" | "push";
 
@@ -17,7 +18,7 @@ export function claimOperation(database: ForgeDatabase, input: { key: string; ta
     if (inserted.changes === 1) return { claimed: true };
     const existing = db.prepare("SELECT status, result_json AS resultJson FROM forge_operation_claims WHERE operation_key = ?").get(input.key) as { status: "claimed" | "settled" | "failed"; resultJson: string | null } | undefined;
     if (!existing) throw new Error("Operation claim disappeared during lookup");
-    return { claimed: false, status: existing.status, result: existing.resultJson ? JSON.parse(existing.resultJson) : null };
+    return { claimed: false, status: existing.status, result: existing.resultJson ? json(existing.resultJson, null) : null };
   });
 }
 

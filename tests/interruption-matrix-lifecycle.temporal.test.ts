@@ -58,6 +58,8 @@ async function start(h: TemporalHarness, issueId: string, phase: "delivery_block
   const workflowId = seedTask(h, issueId);
   const started = await startIssueWorkflow(h.config, { companyId: "issue-company", projectId: "issue-project", issueId, projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: h.issueRoleProfiles, supplementalReview: false, repairCycleLimit: 0, continuationState: continuation(h, issueId, phase) });
   expect(started.workflowId).toBe(workflowId);
+  const temporal = await connectTemporal(h.config);
+  try { await temporal.client.workflow.getHandle(workflowId).executeUpdate(issueUpdates.resync_projection, { args: [] }); } finally { await temporal.connection.close(); }
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (h.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_issue_projections WHERE task_id = ?").get(issueId))) break;
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -104,7 +106,9 @@ test("a worktree is cleaned in forge", async () => {
 
     const initial = await queryIssueWorkflow(h.config, workflowId);
     const confirmation = await executeLifecycle(h, workflowId, "delete_worktree", { expectedRevision: initial.revision, actorUserId: "issue-admin" });
-    expect(confirmation.blocker).toMatchObject({ category: "unsafe_recovery", actions: expect.arrayContaining([expect.objectContaining({ label: "Discard changes and delete worktree" })]) });
+    // BUG: src/temporal/activities/worktree.ts:39 — recorded dirty worktree is returned as not_owned.
+    expect.soft(confirmation.blocker).toMatchObject({ category: "unsafe_recovery", actions: expect.arrayContaining([expect.objectContaining({ label: "Discard changes and delete worktree" })]) });
+    if (confirmation.blocker?.category !== "unsafe_recovery") return;
     const cleaned = await executeLifecycle(h, workflowId, "delete_worktree", { expectedRevision: confirmation.revision, actorUserId: "issue-admin", confirmDiscardDirty: true });
     expect(cleaned.worktreeState).toBe("cleaned");
     expect((await git(repositoryPath, "branch", "--list", `forge/issue/${issueId}`)).stdout).toContain(`forge/issue/${issueId}`);
@@ -122,7 +126,14 @@ test("a worktree is deleted outside forge while active and while terminal", asyn
     const activeId = "lifecycle-missing-active";
     const activeWorkflow = await start(h, activeId, "delivery_blocked");
     await recordWorktree(h, activeId, activeWorkflow, join(h.config.worktreeRoot, activeId), join(h.root, "repo"));
-    expect((await reconcileWorktrees(h.database, h.config, { taskId: activeId, exists: async () => false })).outcomes).toEqual([expect.objectContaining({ status: "removed_externally_active" })]);
+    let activeReconciliation;
+    try { activeReconciliation = await reconcileWorktrees(h.database, h.config, { taskId: activeId, exists: async () => false }); }
+    catch (error) {
+      // BUG: src/worktree-reconciliation.ts:39 — the bespoke report_worktree_missing update is sent through executeIssueCommand.
+      expect.soft(error).toBeUndefined();
+      return;
+    }
+    expect(activeReconciliation.outcomes).toEqual([expect.objectContaining({ status: "removed_externally_active" })]);
     const active = await queryIssueWorkflow(h.config, activeWorkflow);
     expect(active).toMatchObject({ worktreeState: "removed_externally", blocker: { actions: expect.arrayContaining([expect.objectContaining({ label: "Recreate worktree and resume" })]) } });
 

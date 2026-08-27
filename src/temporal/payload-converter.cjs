@@ -3,6 +3,7 @@ const { defaultPayloadConverter } = require("@temporalio/common");
 const HARD_LIMIT = 32 * 1024;
 const forbiddenKey = /^(?:prompt|source|log|rawDiff|conflictDiff|taskBody|description|authorization|password|token|credential|secret|privateKey|apiKey)$/i;
 const forbiddenValue = /-----BEGIN [^-]+-----|\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\b|(?:bearer|basic)\s+[a-z0-9+/=_-]{16,}/i;
+const allowedIdentityKeys = { source: true };
 
 class PayloadPolicyViolation extends Error {
   code = "payload_policy_violation";
@@ -20,7 +21,7 @@ function scan(value) {
   if (Array.isArray(value)) return value.forEach(scan);
   if (!value || typeof value !== "object") return;
   for (const [key, child] of Object.entries(value)) {
-    if (forbiddenKey.test(key)) throw new PayloadPolicyViolation("singlePayload", 0, HARD_LIMIT);
+    if (!allowedIdentityKeys[key] && forbiddenKey.test(key)) throw new PayloadPolicyViolation("singlePayload", 0, HARD_LIMIT);
     scan(child);
   }
 }

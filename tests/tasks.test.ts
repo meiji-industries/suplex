@@ -637,6 +637,10 @@ test("re-resolves a pull request selector and pins source and PR base coordinate
     expect(configuration).toMatchObject({ baseBranch: "release", baseSha: "d".repeat(40), targetBranch: "main", targetSha: "b".repeat(40), source: { kind: "pull_request", number: 17, headBranch: "feature/source", baseBranch: "release", headSha: "c".repeat(40), baseSha: "d".repeat(40) } });
     expect(value.tasks.getTask(value.adminId, created.task.id).source).toEqual({ kind: "pull_request", number: 17, url: pull.url, headBranch: "feature/source", baseBranch: "release" });
     expect(TaskResponseSchema.parse(value.tasks.getTask(value.adminId, created.task.id)).source).toEqual({ kind: "pull_request", number: 17, url: pull.url, headBranch: "feature/source", baseBranch: "release" });
+    const duplicate = await value.tasks.duplicateTask(value.adminId, created.task.id, "source-pr-duplicate-0001");
+    expect(duplicate.source).toEqual({ kind: "pull_request", number: 17, url: pull.url, headBranch: "feature/source", baseBranch: "release" });
+    expect(value.workflowInputsByTask.get(duplicate.id)).toMatchObject({ repository: "acme/forge", source: { kind: "pull_request", number: 17, url: pull.url, headBranch: "feature/source", baseBranch: "release", headSha: "c".repeat(40), baseSha: "d".repeat(40) } });
+
 
     const capturedConfiguration = structuredClone(configuration) as Record<string, unknown>;
     delete capturedConfiguration.artifactId;

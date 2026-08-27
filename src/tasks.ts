@@ -12,7 +12,7 @@ import { ForgeDatabase, projectionStateHash } from "./database.js";
 import { redact } from "./logging.js";
 import { configureCommandActivityStore } from "./command-runner.js";
 import { ProjectFailure, ProjectService, resolveAgentProfiles, type Project, type ProjectRole, type RoleAssignments } from "./projects.js";
-import { loadTaskConfiguration, TaskProjectConfigurationSchema } from "./task-project-configuration.js";
+import { loadTaskConfiguration, TaskProjectConfigurationSchema, type TaskProjectConfiguration } from "./task-project-configuration.js";
 import { PromptOverrideService, type ResolvedPromptSet } from "./prompt-overrides.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
 import { acceptIssueDevelopment, acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, resyncIssueProjection, reviseIssuePlan, startIssueWorkflow } from "./temporal/service.js";
@@ -1084,6 +1084,7 @@ export class TaskService {
       supplementalReview: source.supplementalReview,
       autoApprovePlan: source.autoApprovePlan,
       deliveryTarget: source.deliveryTarget,
+      source: source.source?.kind === "pull_request" ? { kind: "pull_request", number: source.source.number } : source.source?.kind === "branch" ? { kind: "branch", branch: source.source.branch } : undefined,
       runProjectTests: source.executionControls.runProjectTests,
       visualEvidence: source.executionControls.visualEvidence,
     });
@@ -1249,7 +1250,7 @@ export class TaskService {
         }
       });
       await this.maybeFault("after_task_committed", { intentId: reserved.intent.id, taskId });
-      await this.startCreationWorkflow(reserved.intent.id, reserved.intent.lease_token, taskId, companyId, input.projectId, configurationArtifact.id, briefArtifact, imageArtifacts, roleAgents, supplementalReview, autoApprovePlan, autoApprovePlanActorUserId, pullRequestMode, autoMergeActorUserId, deliveryTarget, runProjectTests, visualEvidence, requestHash, workflowId);
+      await this.startCreationWorkflow(reserved.intent.id, reserved.intent.lease_token, taskId, companyId, input.projectId, configurationArtifact.id, briefArtifact, imageArtifacts, roleAgents, supplementalReview, autoApprovePlan, autoApprovePlanActorUserId, pullRequestMode, autoMergeActorUserId, deliveryTarget, runProjectTests, visualEvidence, requestHash, workflowId, taskConfiguration.repository, taskConfiguration.source);
       const task = this.getTaskByIdInternal(taskId);
       await this.maybeFault("before_response", { intentId: reserved.intent.id, taskId });
       return { task, created: true };
@@ -1364,7 +1365,8 @@ export class TaskService {
         const autoApprovePlan = input.autoApprovePlan === true && authority.kind === "user";
         const deliveryTarget = input.deliveryTarget ?? legacyDeliveryTarget(input.pullRequestMode ?? "draft");
         const pullRequestMode = deliveryTarget === "pull_request_ready" ? "ready" : deliveryTarget === "merged" ? "auto_merge" : "draft";
-        await this.startCreationWorkflow(intent.id, intent.lease_token, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), jsonRequired(task.role_agents_json) as RoleAssignments, task.supplemental_review === 1, autoApprovePlan, authority.kind === "user" && autoApprovePlan ? authority.userId : undefined, pullRequestMode, authority.kind === "user" && deliveryTarget === "merged" ? authority.userId : undefined, deliveryTarget, input.runProjectTests !== false, input.visualEvidence ?? "off", task.request_hash, task.workflow_id);
+        const configuration = this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, { taskId: task.id, companyId: task.company_id }));
+        await this.startCreationWorkflow(intent.id, intent.lease_token, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), jsonRequired(task.role_agents_json) as RoleAssignments, task.supplemental_review === 1, autoApprovePlan, authority.kind === "user" && autoApprovePlan ? authority.userId : undefined, pullRequestMode, authority.kind === "user" && deliveryTarget === "merged" ? authority.userId : undefined, deliveryTarget, input.runProjectTests !== false, input.visualEvidence ?? "off", task.request_hash, task.workflow_id, configuration.repository, configuration.source);
         const updated = this.getTaskByIdInternal(task.id);
         return { task: updated, created: false };
       }
@@ -1386,13 +1388,12 @@ export class TaskService {
     this.updateCreationIntent(intent.id, { state: "failed_before_start", errorCode: "staging-interrupted" }, claimed.lease_token);
     return this.createTaskInternal(authority, intent.company_id, input);
   }
-
-  private async startCreationWorkflow(intentId: string, leaseToken: string | null, taskId: string, companyId: string, projectId: string, projectRevisionId: string, briefArtifact: Pick<StoredArtifact, "id" | "sha256">, imageArtifacts: Array<Pick<StoredArtifact, "id" | "sha256">>, roleAgents: RoleAssignments, supplementalReview: boolean, autoApprovePlan: boolean, autoApprovePlanActorUserId: string | undefined, pullRequestMode: "draft" | "ready" | "auto_merge", autoMergeActorUserId: string | undefined, deliveryTarget: DeliveryTarget, runProjectTests: boolean, visualEvidence: VisualEvidence, requestHash: string, workflowId: string): Promise<void> {
+  private async startCreationWorkflow(intentId: string, leaseToken: string | null, taskId: string, companyId: string, projectId: string, projectRevisionId: string, briefArtifact: Pick<StoredArtifact, "id" | "sha256">, imageArtifacts: Array<Pick<StoredArtifact, "id" | "sha256">>, roleAgents: RoleAssignments, supplementalReview: boolean, autoApprovePlan: boolean, autoApprovePlanActorUserId: string | undefined, pullRequestMode: "draft" | "ready" | "auto_merge", autoMergeActorUserId: string | undefined, deliveryTarget: DeliveryTarget, runProjectTests: boolean, visualEvidence: VisualEvidence, requestHash: string, workflowId: string, repository: string, source: TaskProjectConfiguration["source"]): Promise<void> {
     let accepted = false;
     try {
       await this.maybeFault("before_workflow_start", { intentId, taskId });
       const roleProfiles = this.database.authQuery((db) => resolveAgentProfiles(db, roleAgents));
-      await this.workflow.start({ companyId, projectId, issueId: taskId, projectRevisionId, briefArtifactId: briefArtifact.id, briefSha256: briefArtifact.sha256, imageArtifactIds: imageArtifacts.map((artifact) => artifact.id), requestHash, roleProfiles, supplementalReview, autoApprovePlan, ...(autoApprovePlanActorUserId ? { autoApprovePlanActorUserId } : {}), pullRequestMode, ...(autoMergeActorUserId ? { autoMergeActorUserId } : {}), deliveryTarget, runProjectTests, visualEvidence, repairCycleLimit: this.config.deliveryRepairCycleLimit, workflowId });
+      await this.workflow.start({ companyId, projectId, issueId: taskId, projectRevisionId, briefArtifactId: briefArtifact.id, briefSha256: briefArtifact.sha256, imageArtifactIds: imageArtifacts.map((artifact) => artifact.id), requestHash, roleProfiles, supplementalReview, autoApprovePlan, ...(autoApprovePlanActorUserId ? { autoApprovePlanActorUserId } : {}), pullRequestMode, ...(autoMergeActorUserId ? { autoMergeActorUserId } : {}), deliveryTarget, runProjectTests, visualEvidence, repairCycleLimit: this.config.deliveryRepairCycleLimit, workflowId, repository, ...(source ? { source } : {}) });
       accepted = true;
       await this.maybeFault("after_workflow_accepted", { intentId, taskId });
       await this.waitForProjection(taskId, 0);

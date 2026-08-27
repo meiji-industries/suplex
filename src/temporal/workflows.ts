@@ -4,6 +4,7 @@ import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkfl
 import { assertContinuationStateWithinLimit, assertPayloadWithinLimit, WORKFLOW_HISTORY_EVENT_LIMIT } from "./policy.js";
 import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "./target-base.js";
 import { applyLegacyGithubObservation } from "./github-observation.js";
+import { advanceSourcePullRequestState, isSourcePullRequestPreDelivery, sourcePullRequestState } from "./github-source-pull-request.js";
 import { githubPullRequestObservationFields } from "../github-pull-request-observation.js";
 import { reconcile, type PullRequestTarget } from "../pull-request-reconciler.js";
 import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, recordProbeStarted, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
@@ -28,7 +29,6 @@ async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkfl
 const MAX_RECONCILIATION_ATTEMPTS = 20;
 function sleepUntil(retryAt: string | null | undefined): Promise<void> { return retryAt ? sleep(Math.max(1, Date.parse(retryAt) - Date.now())) : sleep("1 second"); }
 export const probeStateQuery = defineQuery<ProbeWorkflowState>("probeState");
-
 export async function probeWorkflow(input: ProbeWorkflowInput): Promise<ProbeWorkflowState> {
   const validatedInput = ProbeWorkflowInputSchema.parse(input);
   let state: ProbeWorkflowState = {
@@ -79,15 +79,15 @@ const adoptObservedHeadPatch = "forge-adopt-observed-head-v1";
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);
-  const continuation = validatedInput.continuationState;
-  const continueAfter = validatedInput.continueAsNewAfter ?? 0;
-  const reviseContinueEnabled = patched(reviseContinuePatch);
-  const guardedHandlersEnabled = patched(guardedHandlersPatch);
+  const continuation = validatedInput.continuationState, continueAfter = validatedInput.continueAsNewAfter ?? 0;
+  const reviseContinueEnabled = patched(reviseContinuePatch), guardedHandlersEnabled = patched(guardedHandlersPatch);
   const failedRetryEnabled = patched(failedRetryPatch);
   const herdrExecutionSubstrateEnabled = patched(herdrExecutionSubstratePatch);
+  const sourcePullRequest = sourcePullRequestState(validatedInput, patched("forge-adopt-source-pull-request-v1"));
   const addRevisionCommand = (commands: IssueCommand[]): IssueCommand[] => reviseContinueEnabled && !commands.includes("revise_plan") ? [...commands, "revise_plan"] : commands;
   let state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState(validatedInput),
+    ...sourcePullRequest,
     activeOperation: null,
     processedCommandIds: [],
     ...(continuation ?? {}),
@@ -226,11 +226,12 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(issueStateQuery, () => state);
   setHandler(syncGithubPullRequestSignal, () => { githubSyncRequested = true; });
   const syncGithubPullRequest = async (): Promise<void> => {
+    if (!state.releaseRepository && sourcePullRequest) { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, sourcePullRequest)); await projectIssueState(state); }
     if (!state.releaseRepository || !state.branchName) return;
-    // GitHub is polled every 60s; a provider hiccup must never fail the workflow — the next poll retries.
     const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch(() => null);
     if (!observed) return;
     const number = state.pullRequestNumber, wasDraft = state.githubPullRequestDraft, common = githubPullRequestObservationFields(observed, new Date().toISOString());
+    if (isSourcePullRequestPreDelivery(state, sourcePullRequest) && observed.state !== "merged") { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, common)); await projectIssueState(state); return; }
     if (patched("forge-pr-reconciler-v1")) {
       const target: PullRequestTarget = validatedInput.deliveryTarget === "merged" ? "merged" : validatedInput.deliveryTarget === "pull_request_ready" ? "ready" : "draft";
       const checks = observed.checks.failing > 0 ? "failed" : observed.checks.pending > 0 ? "pending" : observed.checks.total > 0 && observed.checks.successful === observed.checks.total ? "success" : "none";
@@ -373,8 +374,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   registerCapacityHandlers(workflowContext);
   void patched("forge-capacity-ownership-clear-v1");
   assertPayloadWithinLimit("Issue Workflow result", state);
-  // Continue-As-New carries the last business revision into a fresh run; the previous run already projected it,
-  // so re-emitting it with a new continuationCount would read as conflicting authoritative history.
+  // Continue-As-New carries the last business revision into a fresh run; re-emitting it would read as conflicting authoritative history.
   try {
     if (workflowContext.exactPlanAuthorityEnabled) await workflowContext.initialProjection;
     else {
@@ -437,8 +437,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     }
   } catch (error) {
     if (!isCancellation(error)) throw error;
-    // External `temporal workflow cancel` surfaces as a CancelledFailure from whatever the loop awaited. Project the same
-    // cancelled phase cancel_issue produces, in a non-cancellable scope so the ambient cancellation can't abort the projection.
+    // External cancellation projects the same cancelled phase as cancel_issue in a non-cancellable scope.
     await CancellationScope.nonCancellable(async () => {
       if (state.phase === "cancelled" || state.phase === "done") return;
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Issue cancelled externally", blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });

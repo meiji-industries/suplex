@@ -22,6 +22,7 @@ import { scenario as developerLinkedRetry } from "./developer-linked-retry.js";
 import { scenario as developerResultClaim } from "./developer-result-claim.js";
 import { scenario as developerBlockedCancellation } from "./developer-blocked-cancellation.js";
 import { scenario as developerReconciliationRecovery } from "./developer-reconciliation-recovery.js";
+import { scenario as sourcePullRequestMerged } from "./source-pull-request-merged.js";
 
 export const replayScenarios = [
   normalSuccess,
@@ -47,4 +48,5 @@ export const replayScenarios = [
   developerResultClaim,
   developerReconciliationRecovery,
   developerBlockedCancellation,
+  sourcePullRequestMerged,
 ] as const satisfies readonly ReplayScenarioDefinition[];

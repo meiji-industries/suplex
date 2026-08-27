@@ -36,7 +36,8 @@ export type ReplayScenario =
   | "developer_ownership_ambiguous"
   | "developer_result_claim"
   | "developer_reconciliation_recovery"
-  | "developer_blocked_cancellation";
+  | "developer_blocked_cancellation"
+  | "source_pull_request_merged";
 
 export interface Deferred<T = void> {
   promise: Promise<T>;
@@ -85,7 +86,7 @@ export interface ReplayScenarioScriptHelpers {
 export interface ReplayScenarioDefinition<Name extends string = string> {
   name: Name;
   captureId: string;
-  workflowInput?: Pick<IssueWorkflowInput, "continueAsNewAfter">;
+  workflowInput?: Pick<IssueWorkflowInput, "continueAsNewAfter" | "continuationState" | "repository" | "source">;
   activityOverrides?: Partial<IssueActivities> | ((context: ReplayScenarioActivityContext, shared: Partial<IssueActivities>) => Partial<IssueActivities>);
   script(handle: WorkflowHandle<typeof issueWorkflow>, helpers: ReplayScenarioScriptHelpers): Promise<IssueWorkflowState>;
 }

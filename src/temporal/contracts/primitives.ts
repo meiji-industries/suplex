@@ -284,9 +284,20 @@ export type CiRepairPlan = z.infer<typeof CiRepairPlanSchema>;
 export const MergeConflictPlanSchema = z.object({
   kind: z.literal("merge_conflict_plan"),
   summary: z.string().min(1),
-  resolutions: z.array(z.object({ file: z.string().min(1), resolution: z.string().min(1), number: z.number().int().positive().optional(), intendedResult: z.string().min(1).optional(), issueInvariant: z.string().min(1).optional(), baseInvariant: z.string().min(1).optional(), compatibilityConcern: z.string().min(1).optional() })).min(1),
+  resolutions: z.array(z.object({ file: z.string().min(1), resolution: z.string().min(1), number: z.number().int().positive().optional(), intendedResult: z.string().min(1).optional(), issueInvariant: z.string().min(1).optional(), baseInvariant: z.string().min(1).optional(), compatibilityConcern: z.string().min(1).optional() })),
   verificationStrategy: z.string().min(1),
   unresolvedQuestions: z.array(z.string()).length(0),
+  disposition: z.enum(["mechanical", "product_decision"]).default("mechanical"),
+  question: z.string().min(1).optional(),
+  choices: z.array(z.object({ id: z.string().min(1), label: z.string().min(1), description: z.string().min(1) }).strict()).min(2).max(3).optional(),
+  recommendedChoiceId: z.string().min(1).optional(),
+}).superRefine((value, context) => {
+  if (value.disposition === "mechanical" && !value.resolutions.length) context.addIssue({ code: "custom", path: ["resolutions"], message: "Mechanical plans require resolutions" });
+  if (value.disposition === "product_decision") {
+    if (!value.question) context.addIssue({ code: "custom", path: ["question"], message: "A product decision requires a question" });
+    if (!value.choices?.length) context.addIssue({ code: "custom", path: ["choices"], message: "A product decision requires choices" });
+    if (!value.recommendedChoiceId || !value.choices?.some((choice) => choice.id === value.recommendedChoiceId)) context.addIssue({ code: "custom", path: ["recommendedChoiceId"], message: "The recommendation must name a choice" });
+  }
 });
 
 export type MergeConflictPlan = z.infer<typeof MergeConflictPlanSchema>;

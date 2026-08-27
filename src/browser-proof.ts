@@ -1,0 +1,255 @@
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { lstat, open, realpath, rmdir, unlink } from "node:fs/promises";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+
+import { z } from "zod";
+
+import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
+import type { ForgeDatabase } from "./database.js";
+import { runCommand } from "./command-runner.js";
+
+const MAX_IMAGES = 8;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
+const hashSchema = z.string().regex(/^[a-f0-9]{40,64}$/i);
+const viewportSchema = z.object({ width: z.number().int().min(1).max(10_000), height: z.number().int().min(1).max(10_000), deviceScaleFactor: z.number().min(0.25).max(8).optional() }).strict();
+const captureSchema = z.object({ path: z.string().min(1), caption: z.string().max(500).optional(), viewport: viewportSchema.optional(), capturedAt: z.string().datetime().optional() }).strict();
+export const BrowserProofInputSchema = z.object({ captured: z.boolean(), summary: z.string().max(1_000).optional(), paths: z.array(z.string().min(1)).max(MAX_IMAGES).optional(), captures: z.array(captureSchema).max(MAX_IMAGES).optional() }).strict();
+export type BrowserProofInput = z.infer<typeof BrowserProofInputSchema>;
+
+const imageSchema = z.object({ artifactId: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/), filename: z.string(), mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]), byteSize: z.number().int().positive(), caption: z.string().nullable(), viewport: z.object({ width: z.number().int(), height: z.number().int(), deviceScaleFactor: z.number().nullable() }).nullable(), capturedAt: z.string().datetime().nullable() }).strict();
+export const BrowserProofManifestSchema = z.object({ version: z.literal(1), taskId: z.string(), companyId: z.string(), developerExecutionId: z.string(), resultCommit: hashSchema, resultTree: hashSchema, summary: z.string().nullable(), createdAt: z.string().datetime(), images: z.array(imageSchema).min(1).max(MAX_IMAGES) }).strict();
+export type BrowserProofManifest = z.infer<typeof BrowserProofManifestSchema>;
+export type BrowserProofProjection = BrowserProofManifest & { manifestArtifactId: string };
+export type DurableBrowserProof = { captured: true; manifestArtifactId: string; artifactIds: string[]; summary?: string };
+export type BrowserProofDownload = { kind: "browser-proof-image" | "browser-proof-manifest"; filename: string; mimeType: string; bytes: Buffer };
+
+export class BrowserProofFailure extends Error {
+  constructor(readonly code: "invalid-proof" | "proof-too-large" | "proof-required" | "proof-identity-conflict", message: string) { super(message); this.name = "BrowserProofFailure"; }
+}
+
+type ArtifactRow = { id: string; companyId: string; taskId: string; kind: string; filename: string; mimeType: string; byteSize: number; sha256: string; storagePath: string; createdAt: string };
+const rowSelect = "id, company_id AS companyId, task_id AS taskId, kind, filename, mime_type AS mimeType, byte_size AS byteSize, sha256, storage_path AS storagePath, created_at AS createdAt";
+const sha256 = (value: Buffer | string): string => createHash("sha256").update(value).digest("hex");
+const deterministicId = (prefix: string, parts: unknown[]): string => `${prefix}_${sha256(JSON.stringify(parts)).slice(0, 48)}`;
+const inside = (root: string, target: string): boolean => { const value = relative(root, target); return value === "" || (!value.startsWith(`..${sep}`) && value !== ".." && !isAbsolute(value)); };
+
+function detectedImage(bytes: Buffer): { mimeType: "image/png" | "image/jpeg" | "image/webp"; extension: "png" | "jpg" | "webp" } {
+  if (bytes.length >= 45 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && bytes.readUInt32BE(8) === 13 && bytes.toString("ascii", 12, 16) === "IHDR" && bytes.readUInt32BE(bytes.length - 12) === 0 && bytes.toString("ascii", bytes.length - 8, bytes.length - 4) === "IEND") return { mimeType: "image/png", extension: "png" };
+  if (bytes.length >= 16 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9) {
+    let frame = false, scan = false;
+    for (let index = 2; index + 3 < bytes.length - 2;) {
+      if (bytes[index] !== 0xff) { index++; continue; }
+      const marker = bytes[index + 1]!;
+      if (marker === 0xda) { scan = true; break; }
+      if ((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7) || (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf)) frame = true;
+      if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) { index += 2; continue; }
+      const length = bytes.readUInt16BE(index + 2); if (length < 2 || index + 2 + length > bytes.length) break; index += 2 + length;
+    }
+    if (frame && scan) return { mimeType: "image/jpeg", extension: "jpg" };
+  }
+  if (bytes.length >= 20 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP" && bytes.readUInt32LE(4) + 8 === bytes.length && ["VP8 ", "VP8L", "VP8X"].includes(bytes.toString("ascii", 12, 16)) && bytes.readUInt32LE(16) <= bytes.length - 20) return { mimeType: "image/webp", extension: "webp" };
+  throw new BrowserProofFailure("invalid-proof", "Browser proof must be a valid PNG, JPEG, or WebP image");
+}
+
+function safeFilename(reportedPath: string, ordinal: number, extension: string): string {
+  const stem = basename(reportedPath).normalize("NFKC").replace(/\.[^.]*$/, "").replace(/[\u0000-\u001f\u007f<>:"/\\|?*]+/g, "-").replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/[-_.]{2,}/g, "-").replace(/^[-_.]+|[-_.]+$/g, "").slice(0, 110);
+  return `${stem || `proof-${ordinal + 1}`}.${extension}`;
+}
+
+function normalizedCaptures(input: BrowserProofInput): z.infer<typeof captureSchema>[] {
+  const parsed = BrowserProofInputSchema.parse(input);
+  const captures = [...(parsed.captures ?? []), ...(parsed.paths ?? []).map((path) => ({ path }))];
+  if (!parsed.captured && captures.length) throw new BrowserProofFailure("invalid-proof", "Browser proof report is contradictory");
+  const unique = new Map<string, z.infer<typeof captureSchema>>();
+  for (const capture of captures) if (!unique.has(capture.path)) unique.set(capture.path, capture);
+  if (unique.size > MAX_IMAGES) throw new BrowserProofFailure("invalid-proof", `At most ${MAX_IMAGES} browser proof images are allowed`);
+  return [...unique.values()];
+}
+
+async function readCapture(worktreePath: string, reportedPath: string): Promise<Buffer> {
+  if (isAbsolute(reportedPath) || reportedPath.includes("\\") || reportedPath.includes("\0") || reportedPath.split("/").some((part) => !part || part === "." || part === "..") || (reportedPath !== ".forge-proof" && !reportedPath.startsWith(".forge-proof/"))) throw new BrowserProofFailure("invalid-proof", "Browser proof source is outside the allowed staging directory");
+  let worktree: string, proofRoot: string, source: string;
+  try {
+    worktree = await realpath(worktreePath);
+    proofRoot = await realpath(resolve(worktree, ".forge-proof"));
+    source = await realpath(resolve(worktree, reportedPath));
+  } catch { throw new BrowserProofFailure("invalid-proof", "Browser proof source is unavailable"); }
+  if (!inside(worktree, proofRoot) || !inside(proofRoot, source)) throw new BrowserProofFailure("invalid-proof", "Browser proof source is outside the allowed staging directory");
+  const link = await lstat(resolve(worktree, reportedPath));
+  if (link.isSymbolicLink() || !link.isFile()) throw new BrowserProofFailure("invalid-proof", "Browser proof source must be a regular file");
+  let handle;
+  try {
+    handle = await open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size <= 0) throw new BrowserProofFailure("invalid-proof", "Browser proof source must be a non-empty regular file");
+    if (stat.size > MAX_IMAGE_BYTES) throw new BrowserProofFailure("proof-too-large", "A browser proof image exceeds the 5 MiB limit");
+    const bytes = Buffer.allocUnsafe(Math.min(stat.size + 1, MAX_IMAGE_BYTES + 1));
+    let offset = 0;
+    while (offset < bytes.length) { const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset); if (bytesRead === 0) break; offset += bytesRead; }
+    if (offset > MAX_IMAGE_BYTES || (await handle.stat()).size > MAX_IMAGE_BYTES) throw new BrowserProofFailure("proof-too-large", "A browser proof image exceeds the 5 MiB limit");
+    return bytes.subarray(0, offset);
+  } catch (error) {
+    if (error instanceof BrowserProofFailure) throw error;
+    throw new BrowserProofFailure("invalid-proof", "Browser proof source could not be read safely");
+  } finally { await handle?.close(); }
+}
+
+function stored(row: ArtifactRow): StoredArtifact { return { id: row.id, companyId: row.companyId, kind: row.kind, filename: row.filename, mimeType: row.mimeType, byteSize: row.byteSize, sha256: row.sha256, storagePath: row.storagePath, createdAt: row.createdAt }; }
+
+async function putOrVerify(database: ForgeDatabase, artifacts: ArtifactStore, input: { id: string; companyId: string; taskId: string; kind: string; filename: string; mimeType: string; bytes: Buffer }): Promise<StoredArtifact> {
+  const lookup = (): ArtifactRow | undefined => database.authQuery((db) => db.prepare(`SELECT ${rowSelect} FROM forge_artifacts WHERE id = ?`).get(input.id) as ArtifactRow | undefined);
+  const verify = (row: ArtifactRow): StoredArtifact => {
+    if (row.companyId !== input.companyId || row.taskId !== input.taskId || row.kind !== input.kind || row.filename !== input.filename || row.mimeType !== input.mimeType || row.byteSize !== input.bytes.length || row.sha256 !== sha256(input.bytes)) throw new BrowserProofFailure("proof-identity-conflict", "Browser proof identity is already bound to different content");
+    return stored(row);
+  };
+  const existing = lookup();
+  if (existing) return verify(existing);
+  try { return await artifacts.putArtifact(input.companyId, input.kind, { filename: input.filename, mimeType: input.mimeType, bytes: input.bytes, taskId: input.taskId }, input.id); }
+  catch (error) { const raced = lookup(); if (raced) return verify(raced); throw error; }
+}
+
+export class BrowserProofService {
+  constructor(private readonly database: ForgeDatabase, private readonly artifacts: ArtifactStore) {}
+
+  async ingest(input: { taskId: string; companyId: string; developerExecutionId: string; resultCommit: string; resultTree: string; worktreePath: string; control: "off" | "capture" | "required"; evidence?: BrowserProofInput }): Promise<DurableBrowserProof | undefined> {
+    if (input.control === "off") return undefined;
+    const evidence = input.evidence ? BrowserProofInputSchema.parse(input.evidence) : undefined;
+    const captures = evidence ? normalizedCaptures(evidence) : [];
+    if (!captures.length) {
+      if (input.control === "required") throw new BrowserProofFailure("proof-required", "Valid durable browser proof is required");
+      return undefined;
+    }
+    await this.assertUntracked(input.worktreePath, captures.map((capture) => capture.path));
+    let total = 0;
+    const images: BrowserProofManifest["images"] = [];
+    for (const [ordinal, capture] of captures.entries()) {
+      const bytes = await readCapture(input.worktreePath, capture.path);
+      total += bytes.length;
+      if (total > MAX_TOTAL_BYTES) throw new BrowserProofFailure("proof-too-large", "Browser proof exceeds the 25 MiB aggregate limit");
+      const type = detectedImage(bytes), contentHash = sha256(bytes), filename = safeFilename(capture.path, ordinal, type.extension);
+      const id = deterministicId("proof_image", [1, input.companyId, input.taskId, input.developerExecutionId, input.resultCommit.toLowerCase(), ordinal, capture.path, contentHash]);
+      const artifact = await putOrVerify(this.database, this.artifacts, { id, companyId: input.companyId, taskId: input.taskId, kind: "browser-proof-image", filename, mimeType: type.mimeType, bytes });
+      images.push({ artifactId: artifact.id, sha256: artifact.sha256, filename, mimeType: type.mimeType, byteSize: artifact.byteSize, caption: capture.caption?.trim() || null, viewport: capture.viewport ? { width: capture.viewport.width, height: capture.viewport.height, deviceScaleFactor: capture.viewport.deviceScaleFactor ?? null } : null, capturedAt: capture.capturedAt ?? null });
+    }
+    const manifestId = deterministicId("proof_manifest", [1, input.companyId, input.taskId, input.developerExecutionId, input.resultCommit.toLowerCase()]);
+    const existing = await this.loadManifestArtifact(manifestId, input.taskId, input.companyId);
+    const comparable = { version: 1 as const, taskId: input.taskId, companyId: input.companyId, developerExecutionId: input.developerExecutionId, resultCommit: input.resultCommit.toLowerCase(), resultTree: input.resultTree.toLowerCase(), summary: evidence?.summary?.trim() || null, images };
+    if (existing) {
+      const { createdAt: _createdAt, ...persisted } = existing.manifest;
+      if (JSON.stringify(persisted) !== JSON.stringify(comparable)) throw new BrowserProofFailure("proof-identity-conflict", "Browser proof identity is already bound to different content");
+      await this.verify(existing.manifest, manifestId);
+      return { captured: true, manifestArtifactId: manifestId, artifactIds: images.map((image) => image.artifactId), ...(comparable.summary ? { summary: comparable.summary } : {}) };
+    }
+    const manifest: BrowserProofManifest = { ...comparable, createdAt: new Date().toISOString() };
+    await putOrVerify(this.database, this.artifacts, { id: manifestId, companyId: input.companyId, taskId: input.taskId, kind: "browser-proof-manifest", filename: `${input.developerExecutionId.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 96) || "developer"}-browser-proof.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(manifest), "utf8") });
+    const persisted = await this.loadManifestArtifact(manifestId, input.taskId, input.companyId);
+    if (!persisted) throw new BrowserProofFailure("invalid-proof", "Browser proof manifest failed persistence verification");
+    await this.verify(persisted.manifest, manifestId);
+    return { captured: true, manifestArtifactId: manifestId, artifactIds: images.map((image) => image.artifactId), ...(comparable.summary ? { summary: comparable.summary } : {}) };
+  }
+
+  async assertReportedProofUntracked(worktreePath: string, evidence?: BrowserProofInput): Promise<void> {
+    if (!evidence) return;
+    await this.assertUntracked(worktreePath, normalizedCaptures(evidence).map((capture) => capture.path));
+  }
+
+  async cleanupPersisted(worktreePath: string, evidence: BrowserProofInput, durable: DurableBrowserProof): Promise<void> {
+    const captures = normalizedCaptures(evidence);
+    if (captures.length !== durable.artifactIds.length) throw new BrowserProofFailure("invalid-proof", "Browser proof cleanup coordinates do not match persisted proof");
+    const worktree = await realpath(worktreePath), proofRoot = await realpath(resolve(worktree, ".forge-proof"));
+    if (!inside(worktree, proofRoot) || relative(worktree, proofRoot) !== ".forge-proof") throw new BrowserProofFailure("invalid-proof", "Browser proof staging directory is unsafe to clean");
+    for (const capture of captures) {
+      const reported = resolve(worktree, capture.path), source = await realpath(reported), link = await lstat(reported);
+      if (!inside(proofRoot, source) || link.isSymbolicLink() || !link.isFile()) throw new BrowserProofFailure("invalid-proof", "Browser proof source is unsafe to clean");
+      await unlink(source);
+      let parent = dirname(source);
+      while (parent !== proofRoot && inside(proofRoot, parent)) { try { await rmdir(parent); } catch { break; } parent = dirname(parent); }
+    }
+  }
+
+  async verifyDurableReference(input: { taskId: string; companyId: string; developerExecutionId: string; resultCommit: string; resultTree: string; manifestArtifactId: string }): Promise<boolean> {
+    const loaded = await this.loadManifestArtifact(input.manifestArtifactId, input.taskId, input.companyId);
+    if (!loaded) return false;
+    const manifest = loaded.manifest;
+    if (manifest.developerExecutionId !== input.developerExecutionId || manifest.resultCommit.toLowerCase() !== input.resultCommit.toLowerCase() || manifest.resultTree.toLowerCase() !== input.resultTree.toLowerCase()) return false;
+    try { await this.verify(manifest, input.manifestArtifactId); return true; } catch { return false; }
+  }
+
+  async project(taskId: string, companyId: string): Promise<BrowserProofProjection[]> {
+    const ids = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_artifacts WHERE task_id = ? AND company_id = ? AND kind = 'browser-proof-manifest' ORDER BY created_at DESC, id DESC").all(taskId, companyId) as Array<{ id: string }>);
+    const projected: BrowserProofProjection[] = [];
+    for (const { id } of ids) { const loaded = await this.loadManifestArtifact(id, taskId, companyId); if (loaded) try { await this.verify(loaded.manifest, id); projected.push({ ...loaded.manifest, manifestArtifactId: id }); } catch { /* Invalid manifests are not durable proof. */ } }
+    return projected;
+  }
+
+  projectSync(taskId: string, companyId: string): BrowserProofProjection[] {
+    const rows = this.database.authQuery((db) => db.prepare(`SELECT ${rowSelect} FROM forge_artifacts WHERE task_id = ? AND company_id = ? AND kind = 'browser-proof-manifest' ORDER BY created_at DESC, id DESC`).all(taskId, companyId) as ArtifactRow[]);
+    const projected: BrowserProofProjection[] = [];
+    for (const artifact of rows) {
+      try {
+        const bytes = this.artifacts.getArtifactSync(stored(artifact));
+        if (sha256(bytes) !== artifact.sha256) continue;
+        const manifest = BrowserProofManifestSchema.parse(JSON.parse(bytes.toString("utf8")));
+        if (manifest.taskId !== taskId || manifest.companyId !== companyId || !this.verifyRowsSync(manifest)) continue;
+        projected.push({ ...manifest, manifestArtifactId: artifact.id });
+      } catch { /* Invalid manifests are not durable proof. */ }
+    }
+    return projected;
+  }
+
+  readForDownload(taskId: string, companyId: string, artifactId: string): BrowserProofDownload | undefined {
+    const row = this.database.authQuery((db) => db.prepare(`SELECT ${rowSelect} FROM forge_artifacts WHERE id = ? AND task_id = ? AND company_id = ? AND kind IN ('browser-proof-image', 'browser-proof-manifest')`).get(artifactId, taskId, companyId) as ArtifactRow | undefined);
+    if (!row) return undefined;
+    const bytes = this.artifacts.getArtifactSync(stored(row));
+    if (sha256(bytes) !== row.sha256) throw new BrowserProofFailure("invalid-proof", "Browser proof content failed integrity verification");
+    if (row.kind === "browser-proof-manifest") {
+      const manifest = BrowserProofManifestSchema.parse(JSON.parse(bytes.toString("utf8")));
+      if (manifest.taskId !== taskId || manifest.companyId !== companyId || !this.verifyRowsSync(manifest)) throw new BrowserProofFailure("invalid-proof", "Browser proof manifest failed integrity verification");
+    } else {
+      if (detectedImage(bytes).mimeType !== row.mimeType) throw new BrowserProofFailure("invalid-proof", "Browser proof content failed integrity verification");
+      const manifests = this.projectSync(taskId, companyId);
+      if (!manifests.some((manifest) => manifest.images.some((image) => image.artifactId === artifactId && image.sha256 === row.sha256))) throw new BrowserProofFailure("invalid-proof", "Browser proof content is not linked to a valid manifest");
+    }
+    return { kind: row.kind as BrowserProofDownload["kind"], filename: row.filename, mimeType: row.mimeType, bytes };
+  }
+
+  private async loadManifestArtifact(id: string, taskId: string, companyId: string): Promise<{ artifact: ArtifactRow; manifest: BrowserProofManifest } | undefined> {
+    const artifact = this.database.authQuery((db) => db.prepare(`SELECT ${rowSelect} FROM forge_artifacts WHERE id = ? AND task_id = ? AND company_id = ? AND kind = 'browser-proof-manifest'`).get(id, taskId, companyId) as ArtifactRow | undefined);
+    if (!artifact) return undefined;
+    try { const bytes = await this.artifacts.getArtifact(stored(artifact)); if (sha256(bytes) !== artifact.sha256) return undefined; const manifest = BrowserProofManifestSchema.parse(JSON.parse(bytes.toString("utf8"))); if (manifest.taskId !== taskId || manifest.companyId !== companyId) return undefined; return { artifact, manifest }; } catch { return undefined; }
+  }
+
+  private async verify(manifest: BrowserProofManifest, manifestArtifactId: string): Promise<void> {
+    if (!manifest.images.length) throw new BrowserProofFailure("invalid-proof", "Browser proof manifest is empty");
+    for (const image of manifest.images) {
+      const row = this.database.authQuery((db) => db.prepare(`SELECT ${rowSelect} FROM forge_artifacts WHERE id = ? AND task_id = ? AND company_id = ? AND kind = 'browser-proof-image'`).get(image.artifactId, manifest.taskId, manifest.companyId) as ArtifactRow | undefined);
+      if (!row || row.sha256 !== image.sha256 || row.filename !== image.filename || row.mimeType !== image.mimeType || row.byteSize !== image.byteSize) throw new BrowserProofFailure("invalid-proof", "Browser proof manifest references unavailable content");
+      const bytes = await this.artifacts.getArtifact(stored(row));
+      if (sha256(bytes) !== row.sha256 || detectedImage(bytes).mimeType !== row.mimeType) throw new BrowserProofFailure("invalid-proof", "Browser proof content failed integrity verification");
+    }
+    void manifestArtifactId;
+  }
+
+  private verifyRowsSync(manifest: BrowserProofManifest): boolean {
+    for (const image of manifest.images) {
+      const row = this.database.authQuery((db) => db.prepare(`SELECT ${rowSelect} FROM forge_artifacts WHERE id = ? AND task_id = ? AND company_id = ? AND kind = 'browser-proof-image'`).get(image.artifactId, manifest.taskId, manifest.companyId) as ArtifactRow | undefined);
+      if (!row || row.sha256 !== image.sha256 || row.filename !== image.filename || row.mimeType !== image.mimeType || row.byteSize !== image.byteSize) return false;
+      try { const bytes = this.artifacts.getArtifactSync(stored(row)); if (sha256(bytes) !== row.sha256 || detectedImage(bytes).mimeType !== row.mimeType) return false; } catch { return false; }
+    }
+    return manifest.images.length > 0;
+  }
+
+  private async assertUntracked(worktreePath: string, paths: string[]): Promise<void> {
+    if (!paths.length) return;
+    const repository = await runCommand({ taskId: null, stepId: null, command: "git", args: ["rev-parse", "--is-inside-work-tree"], cwd: worktreePath, timeout: 8_000 });
+    if (repository.exitCode !== 0 || repository.stdout.trim() !== "true") throw new BrowserProofFailure("invalid-proof", "Browser proof Git boundary could not be verified");
+    for (const path of paths) {
+      const indexed = await runCommand({ taskId: null, stepId: null, command: "git", args: ["ls-files", "--error-unmatch", "--", path], cwd: worktreePath, timeout: 8_000 });
+      const inHead = await runCommand({ taskId: null, stepId: null, command: "git", args: ["cat-file", "-e", `HEAD:${path}`], cwd: worktreePath, timeout: 8_000 });
+      if (indexed.exitCode !== 0 && indexed.exitCode !== 1) throw new BrowserProofFailure("invalid-proof", "Browser proof Git boundary could not be verified");
+      if (indexed.exitCode === 0 || inHead.exitCode === 0) throw new BrowserProofFailure("invalid-proof", "Browser proof must not be staged, tracked, or committed");
+    }
+  }
+}

@@ -25,6 +25,7 @@ import { isVersionedPromptSet } from "./prompt-resolution.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { jsonRequired } from "./task-utils.js";
 import { WorktreeManager } from "./worktrees.js";
+import { BrowserProofService } from "./browser-proof.js";
 
 const execFileAsync = promisify(execFile);
 type MergeConflictPlanInput = MergeConflictPlanActivityInput;
@@ -225,12 +226,14 @@ export interface AgentServiceOptions {
 
 export class AgentService {
   private readonly artifacts: ArtifactStore;
+  private readonly browserProof: BrowserProofService;
   private readonly now: () => Date;
   private readonly turnRunner: { run<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T>> };
   private readonly worktrees: WorktreeManager;
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: AgentServiceOptions = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot, database);
+    this.browserProof = new BrowserProofService(database, this.artifacts);
     this.now = options.now ?? (() => new Date());
     const herdr = new CliHerdrClient();
     this.turnRunner = options.turnRunner ?? new HerdrTurnRunner(database, herdr, new HerdrSessionStore(database, herdr), new IssueTimelineEvents(database), this.artifacts);
@@ -795,12 +798,13 @@ export class AgentService {
       }
     }
     const reviewRole: "planner" | "reviewer" = isFinalReview && input.roleProfiles.reviewer ? "reviewer" : "planner";
-    const visualEvidenceMissing = !isFinalReview && input.visualEvidence === "required" && (() => {
+    const visualEvidenceMissing = !isFinalReview && input.visualEvidence === "required" && !(await (async () => {
       try {
-        const report = jsonRequired(delivery) as { visualEvidence?: { captured?: unknown; paths?: unknown } };
-        return report.visualEvidence?.captured !== true || !Array.isArray(report.visualEvidence.paths) || report.visualEvidence.paths.length === 0;
-      } catch { return true; }
-    })();
+        const report = jsonRequired(delivery) as { visualEvidence?: { manifestArtifactId?: unknown } };
+        if (typeof report.visualEvidence?.manifestArtifactId !== "string") return false;
+        return await this.browserProof.verifyDurableReference({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: subject.developerExecutionId, resultCommit: subjectCommit, resultTree: subjectTree, manifestArtifactId: report.visualEvidence.manifestArtifactId });
+      } catch { return false; }
+    })());
     let leadProfile: Awaited<ReturnType<AgentService["resolveTurnProfile"]>>;
     try {
       leadProfile = await this.resolveTurnProfile(input.roleProfiles[reviewRole], leadSessionRef, reviewRole === "reviewer" ? "Final reviewer" : "Lead review", reviewRole);
@@ -835,7 +839,7 @@ export class AgentService {
           ...review,
           outcome: "blocking",
           summary: `${review.summary} Visual evidence is required before delivery can continue.`,
-          findings: [...review.findings, { findingId: `visual_evidence_${randomBytes(12).toString("hex")}`, severity: "blocking", rationale: "The task requires visual evidence, but the Developer delivery did not provide captured evidence paths.", evidenceRef: "developer-delivery:visualEvidence", disposition: "open", repairInstruction: "Capture relevant visual evidence and include its paths in the Developer delivery report." }],
+          findings: [...review.findings, { findingId: `visual_evidence_${randomBytes(12).toString("hex")}`, severity: "blocking", rationale: "The task requires visual evidence, but the Developer delivery has no valid durable browser-proof manifest.", evidenceRef: "developer-delivery:visualEvidence", disposition: "open", repairInstruction: "Capture relevant browser proof under .forge-proof/ so Forge can ingest and attach it to the delivery." }],
         });
       }
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);

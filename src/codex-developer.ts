@@ -30,6 +30,7 @@ import { jsonRequired } from "./task-utils.js";
 import { ensureResultSchema } from "./result-schema-files.js";
 import { claimDeveloperResult, DeveloperResultConflict } from "./developer-result-claims.js";
 import { runCommand } from "./command-runner.js";
+import { BrowserProofFailure, BrowserProofInputSchema, BrowserProofService, type DurableBrowserProof } from "./browser-proof.js";
 
 export function isDeveloperExecutionActiveLeaseCollision(error: unknown): boolean {
   const sqliteError = error as { code?: unknown; message?: unknown };
@@ -42,6 +43,23 @@ async function git(args: string[], cwd: string, timeout = 8_000): Promise<string
   const result = await runCommand({ taskId: null, stepId: null, command: "git", args, cwd, timeout });
   if (result.exitCode !== 0 || result.timedOut) throw new Error(result.stderr || `git ${args[0] ?? "command"} failed`);
   return result.stdout.trim();
+}
+
+function proofPaths(evidence?: { paths?: string[] | undefined; captures?: Array<{ path: string }> | undefined }): string[] { return [...new Set([...(evidence?.captures ?? []).map((capture) => capture.path), ...(evidence?.paths ?? [])])]; }
+
+export async function finalizeDeveloperSourceCommit(worktreePath: string, targetBaseSha: string, reportedPaths: string[]): Promise<{ headSha: string; treeSha: string }> {
+  for (const path of reportedPaths) {
+    const indexed = await runCommand({ taskId: null, stepId: null, command: "git", args: ["ls-files", "--error-unmatch", "--", path], cwd: worktreePath, timeout: 8_000 });
+    if (indexed.exitCode !== 0) continue;
+    const existedAtBase = await runCommand({ taskId: null, stepId: null, command: "git", args: ["cat-file", "-e", `${targetBaseSha}:${path}`], cwd: worktreePath, timeout: 8_000 });
+    if (existedAtBase.exitCode !== 0) await git(["rm", "--cached", "--ignore-unmatch", "--", path], worktreePath, 30_000);
+  }
+  await git(["add", "-A", "--", ".", ":(exclude).forge-proof", ":(exclude).forge-proof/**"], worktreePath, 30_000);
+  const sourcePathspec = [".", ":(exclude).forge-proof", ":(exclude).forge-proof/**"];
+  const staged = await runCommand({ taskId: null, stepId: null, command: "git", args: ["diff", "--cached", "--quiet", "--", ...sourcePathspec], cwd: worktreePath, timeout: 30_000 });
+  if (staged.exitCode === 1) await git(["-c", "user.name=Forge Builder", "-c", "user.email=builder@forge.invalid", "commit", "-m", "wip: builder", "--", ...sourcePathspec], worktreePath, 30_000);
+  else if (staged.exitCode !== 0) throw new AgentFailure("developer-git-state-invalid", "Developer staged state could not be inspected");
+  return { headSha: await git(["rev-parse", "HEAD"], worktreePath), treeSha: await git(["rev-parse", "HEAD^{tree}"], worktreePath) };
 }
 
 export function buildDeveloperExecutionPrompt(input: { executionId: string; reuseWorktree: boolean; startingSha: string; verificationSteps: string; operatorNote?: string }): string {
@@ -93,12 +111,13 @@ export const DeveloperDeliveryReportSchema = z.object({
   resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
   dirtyState: z.enum(["clean", "dirty"]),
   blocker: z.string().nullable(),
-  visualEvidence: z.object({ captured: z.boolean(), paths: z.array(z.string().min(1)), summary: z.string().optional() }).optional(),
+  visualEvidence: BrowserProofInputSchema.optional(),
 });
 
 export const DeveloperRepairReportSchema = z.object({
   summary: z.string().min(1),
   blocker: z.string().nullable(),
+  visualEvidence: BrowserProofInputSchema.optional(),
 }).strict();
 
 export const DeveloperMergeConflictResolutionReportSchema = z.object({
@@ -183,6 +202,7 @@ export async function rollbackUnpushedRepairCommits(worktreePath: string, branch
 
 export class DeveloperService {
   private readonly artifacts: ArtifactStore;
+  private readonly browserProof: BrowserProofService;
   private readonly provider: AgentProvider;
   private readonly turnRunner: { run<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T>> };
   private readonly roleSessions: HerdrSessionStore;
@@ -194,6 +214,7 @@ export class DeveloperService {
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: DeveloperServiceOptions = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot, database);
+    this.browserProof = new BrowserProofService(database, this.artifacts);
     this.provider = options.provider ?? resolveAgentProvider();
     const herdr = new CliHerdrClient();
     this.roleSessions = new HerdrSessionStore(database, herdr);
@@ -314,17 +335,19 @@ export class DeveloperService {
         sessionRef = turn.roleSessionId;
         const execution = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined);
         if (!execution || !["starting", "running"].includes(execution.status)) throw new AgentFailure(execution?.status === "cancelled" ? "developer-cancelled" : "developer-superseded", "Developer execution was cancelled before completion");
-        let gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
-        if (gitState.dirtyState === "dirty") {
-          await git(["add", "-A"], worktree.worktreePath, 30_000);
-          await git(["-c", "user.name=Forge Builder", "-c", "user.email=builder@forge.invalid", "commit", "-m", "wip: builder"], worktree.worktreePath, 30_000);
-          gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
-        }
         const parsedReport = turn.result;
-        const delivery = { ...parsedReport, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, branchName: worktree.branchName, worktreePath: worktree.worktreePath, targetBaseSha: worktree.targetBaseSha };
-        const deliveryArtifact = await this.artifacts.putArtifact(input.companyId, "developer-delivery", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(delivery, null, 2), "utf8") });
+        let durableProof: DurableBrowserProof | undefined, proofBlocker: string | null = null;
+        try { await this.browserProof.assertReportedProofUntracked(worktree.worktreePath, parsedReport.visualEvidence); }
+        catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
+        const source = await finalizeDeveloperSourceCommit(worktree.worktreePath, worktree.targetBaseSha, proofPaths(parsedReport.visualEvidence));
+        try { if (!proofBlocker) durableProof = await this.browserProof.ingest({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: executionId, resultCommit: source.headSha, resultTree: source.treeSha, worktreePath: worktree.worktreePath, control: input.visualEvidence ?? "off", ...(parsedReport.visualEvidence ? { evidence: parsedReport.visualEvidence } : {}) }); }
+        catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
+        if (durableProof && parsedReport.visualEvidence) await this.browserProof.cleanupPersisted(worktree.worktreePath, parsedReport.visualEvidence, durableProof);
+        const gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
+        const delivery = { ...parsedReport, blocker: parsedReport.blocker ?? proofBlocker, visualEvidence: durableProof, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, branchName: worktree.branchName, worktreePath: worktree.worktreePath, targetBaseSha: worktree.targetBaseSha };
+        const deliveryArtifact = await this.artifacts.putArtifact(input.companyId, "developer-delivery", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(delivery, null, 2), "utf8"), taskId: input.taskId });
         const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
-        const blocked = parsedReport.blocker !== null;
+        const blocked = delivery.blocker !== null;
         const activityResult = { developerExecutionId: executionId, developerSessionRef: sessionRef ?? executionId, worktreePath: worktree.worktreePath, branchName: worktree.branchName, targetBaseSha: worktree.targetBaseSha, currentStep: null, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, deliveryArtifactId: deliveryArtifact.id, evidenceArtifactId: evidence.id, deliverySummary: parsedReport.summary, outcome: blocked ? "blocked" as const : "completed" as const };
         let claimed: typeof activityResult;
         try {
@@ -494,26 +517,35 @@ export class DeveloperService {
       this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET worktree_path = ? WHERE id = ?").run(worktreePath, executionId));
       this.database.authQuery((db) => db.prepare("UPDATE forge_delivery_repairs SET worktree_path = ? WHERE id = ?").run(worktreePath, repairAttemptId));
       this.requireDeveloperSession(input.developerSessionRef);
-      const repairPrompt = this.repairPrompt(input.blockingFindings, { branchName: input.branchName, worktreePath, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree }, this.projectTestControl(input.taskId, input.companyId));
+      const visualEvidence = this.visualEvidenceControl(input.taskId, input.companyId);
+      const repairPrompt = this.repairPrompt(input.blockingFindings, { branchName: input.branchName, worktreePath, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree }, `${this.projectTestControl(input.taskId, input.companyId)} ${this.visualEvidenceInstruction(visualEvidence)}`);
       evidenceLines.push(JSON.stringify({ type: "forge.prompt", text: redact(repairPrompt) }));
       const task = this.taskContext(input);
       const turn = await this.turnRunner.run({ task: { ...task, worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "developer", executionRole: "builder", ledger: "developer", executionId, promptKind: "delivery-repair", prompt: repairPrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperRepairReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-repair", DeveloperRepairReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision });
       const report = turn.result;
+      let durableProof: DurableBrowserProof | undefined, proofBlocker: string | null = null;
+      try { await this.browserProof.assertReportedProofUntracked(worktreePath, report.visualEvidence); }
+      catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
+      const source = await finalizeDeveloperSourceCommit(worktreePath, input.targetBaseSha, proofPaths(report.visualEvidence));
+      try { if (!proofBlocker) durableProof = await this.browserProof.ingest({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: executionId, resultCommit: source.headSha, resultTree: source.treeSha, worktreePath, control: visualEvidence, ...(report.visualEvidence ? { evidence: report.visualEvidence } : {}) }); }
+      catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
+      if (durableProof && report.visualEvidence) await this.browserProof.cleanupPersisted(worktreePath, report.visualEvidence, durableProof);
       const gitState = await this.worktrees.inspectDelivery(worktreePath);
-      const repairArtifact = await this.artifacts.putArtifact(input.companyId, "developer-repair", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, cycle: input.cycle, reviewId: input.reviewId, supersedesExecutionId: input.developerExecutionId }, null, 2), "utf8") });
+      const persistedReport = { ...report, blocker: report.blocker ?? proofBlocker, visualEvidence: durableProof, cycle: input.cycle, reviewId: input.reviewId, supersedesExecutionId: input.developerExecutionId };
+      const repairArtifact = await this.artifacts.putArtifact(input.companyId, "developer-repair", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(persistedReport, null, 2), "utf8"), taskId: input.taskId });
       const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
-      const blocked = report.blocker !== null;
+      const blocked = persistedReport.blocker !== null;
       const terminalStatus = this.database.authTransaction((db) => {
         const row = db.prepare("SELECT id FROM forge_delivery_repairs WHERE developer_execution_id = ? AND cycle = ?").get(executionId, input.cycle) as { id: string } | undefined;
         const failureCode = blocked ? "process-failed" : null;
-        const failureSummary = blocked ? report.blocker : null;
+        const failureSummary = blocked ? persistedReport.blocker : null;
         const updated = db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ? AND status IN ('starting', 'running')").run(blocked ? "blocked" : "completed", this.now().toISOString(), this.now().toISOString(), gitState.headSha, gitState.treeSha, gitState.dirtyState, repairArtifact.id, evidence.id, executionId);
         if (updated.changes === 1) db.prepare("UPDATE forge_delivery_repairs SET status = ?, result_commit = ?, result_tree = ?, delivery_artifact_id = ?, evidence_artifact_id = ?, failure_code = ?, failure_summary = ?, finished_at = ? WHERE id = ?").run(blocked ? "blocked" : "completed", gitState.headSha, gitState.treeSha, repairArtifact.id, evidence.id, failureCode, failureSummary, this.now().toISOString(), row?.id);
         return updated.changes === 1 ? blocked ? "blocked" : "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
       });
       if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "Developer execution was cancelled before completion");
       if (terminalStatus !== (blocked ? "blocked" : "completed")) throw new AgentFailure("developer-superseded", "Developer execution was superseded before completion");
-      if (blocked) return DeveloperRepairActivityResultSchema.parse({ outcome: "blocked", repairAttemptId, cycle: input.cycle, reviewId: input.reviewId, subject: priorSubject, code: "process-failed", summary: report.blocker!, evidenceArtifactId: evidence.id, developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, worktreePath, branchName: input.branchName, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState });
+      if (blocked) return DeveloperRepairActivityResultSchema.parse({ outcome: "blocked", repairAttemptId, cycle: input.cycle, reviewId: input.reviewId, subject: priorSubject, code: "process-failed", summary: persistedReport.blocker!, evidenceArtifactId: evidence.id, developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, worktreePath, branchName: input.branchName, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState });
       return DeveloperRepairActivityResultSchema.parse({ outcome: "completed", repairAttemptId, cycle: input.cycle, reviewId: input.reviewId, subject: priorSubject, developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, worktreePath, branchName: input.branchName, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: "clean", deliveryArtifactId: repairArtifact.id, evidenceArtifactId: evidence.id, summary: report.summary });
     } catch (error) {
       const expectedFailure = error instanceof AgentFailure;
@@ -633,7 +665,7 @@ export class DeveloperService {
   }
 
   private prompt(title: string, brief: string, plan: string, evidence: string, worktree: { branchName: string; worktreePath: string; targetBaseSha: string }, runProjectTests?: boolean, visualEvidence?: "off" | "capture" | "required", operatorNote?: string): string {
-    const controls = [this.testControl(runProjectTests), visualEvidence === "required" ? "Visual evidence is required: capture relevant visual evidence and report its paths in visualEvidence. Missing evidence will block delivery review." : visualEvidence === "capture" ? "Capture visual evidence when it helps demonstrate the change, and report any paths in visualEvidence." : "Do not spend time capturing visual evidence unless the work itself needs it."].join(" ");
+    const controls = [this.testControl(runProjectTests), this.visualEvidenceInstruction(visualEvidence ?? "off")].join(" ");
     return renderPrompt(this.prompts.get("developer/execution.md")!, { title, brief, plan, lead_evidence: evidence, branch_name: worktree.branchName, worktree_path: worktree.worktreePath, target_base_sha: worktree.targetBaseSha, controls, operator_note_section: operatorNote ? `\n\nOperator note (verbatim):\n${operatorNote}` : "" });
   }
 
@@ -641,6 +673,18 @@ export class DeveloperService {
     const task = this.database.authQuery((db) => db.prepare("SELECT run_project_tests AS runProjectTests FROM forge_tasks WHERE id = ? AND company_id = ?").get(taskId, companyId) as { runProjectTests: number | null } | undefined);
     return this.testControl(task?.runProjectTests === 0 ? false : undefined);
   }
+
+  private visualEvidenceControl(taskId: string, companyId: string): "off" | "capture" | "required" {
+    const task = this.database.authQuery((db) => db.prepare("SELECT visual_evidence AS visualEvidence FROM forge_tasks WHERE id = ? AND company_id = ?").get(taskId, companyId) as { visualEvidence: "off" | "capture" | "required" | null } | undefined);
+    return task?.visualEvidence ?? "off";
+  }
+
+  private visualEvidenceInstruction(value: "off" | "capture" | "required"): string {
+    if (value === "off") return "Do not spend time capturing browser proof and omit visualEvidence.";
+    const contract = "Write screenshots only under .forge-proof/ in this task worktree. Never stage or commit .forge-proof/ or any proof file. Report visualEvidence.captures entries with the relative path and, when known, caption, viewport {width,height,deviceScaleFactor}, and capturedAt. Forge ingests and removes these transient files; paths alone are not durable proof.";
+    return value === "required" ? `Browser proof is required. ${contract} Missing valid durable proof blocks delivery.` : `Capture browser proof when it helps demonstrate the change. ${contract} Delivery may continue with no proof.`;
+  }
+
 
   private testControl(runProjectTests?: boolean): string {
     return runProjectTests === false

@@ -9,6 +9,8 @@ renamed_from: []
 ---
 You are Forge's authenticated Developer continuing the same Developer session. Address the Lead's blocking findings below in the existing issue worktree. Do not redesign the authorized plan, modify another checkout, use GitHub or any provider, push, create a pull request, merge, rebase, amend, reset, clean, or rewrite history. {{controls}} Commit any changes you make. Use blocker only when the repair cannot be completed.
 
+When repairing missing browser proof, keep every screenshot under `.forge-proof/` in this worktree and never stage or commit it. Report structured `visualEvidence.captures` entries with worktree-relative path, optional caption, viewport, and capture time. Forge validates, durably ingests, and removes the transient files after your turn.
+
 Lead findings:
 {{findings}}
 

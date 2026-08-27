@@ -6,7 +6,7 @@ import { expect, test } from "vitest";
 
 import { ArtifactStore } from "../src/artifacts.js";
 import { AgentFailure } from "../src/agent-failure.js";
-import { DeveloperService } from "../src/codex-developer.js";
+import { DeveloperService, finalizeDeveloperSourceCommit } from "../src/codex-developer.js";
 import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
@@ -78,6 +78,47 @@ test("Developer delivery uses the fake turn role session and preserves delivery 
     expect(fake.calls[0]).toMatchObject({ promptKind: "implementation", sessionRole: "developer", executionRole: "builder", ledger: "developer" });
     expect(value.database.authQuery((db) => db.prepare("SELECT session_ref, status FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toEqual({ session_ref: "session_0123456789abcdef01234567", status: "completed" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("required Developer proof is ingested and persisted without local paths", async () => {
+  const value = await fixture(), worktree = join(value.root, "worktrees", "task_1");
+  const proof = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from([0, 0, 0, 13]), Buffer.from("IHDR"), Buffer.alloc(17), Buffer.from([0, 0, 0, 0]), Buffer.from("IEND"), Buffer.alloc(4)]);
+  const fake = fakeTurnRunner(async () => {
+    await mkdir(join(worktree, ".forge-proof"), { recursive: true }); await writeFile(join(worktree, ".forge-proof", "screen.png"), proof); await writeFile(join(worktree, "MARKER.md"), "done\n");
+    await command("git", ["add", "MARKER.md"], worktree); await command("git", ["commit", "-m", "deliver with proof"], worktree);
+    return { kind: "delivery", summary: "Proof delivered", steps: [{ number: 1, status: "completed", filesChanged: ["MARKER.md"], notes: "done" }], authorizedStepsNotCompleted: [], resultCommit: "a".repeat(40), resultTree: "b".repeat(40), dirtyState: "clean", blocker: null, visualEvidence: { captured: true, captures: [{ path: ".forge-proof/screen.png", caption: "Desktop", viewport: { width: 1440, height: 900 } }] } };
+  });
+  try {
+    const result = await new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run({ ...value.input, visualEvidence: "required" });
+    expect(result.outcome).toBe("completed");
+    const row = value.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ?").get(result.deliveryArtifactId) as { storage_path: string; sha256: string });
+    const delivery = JSON.parse(new ArtifactStore(value.config.artifactRoot).getArtifactSync({ companyId: "company_1", storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8"));
+    expect(delivery.visualEvidence).toMatchObject({ captured: true, manifestArtifactId: expect.stringMatching(/^proof_manifest_/), artifactIds: [expect.stringMatching(/^proof_image_/)] });
+    expect(JSON.stringify(delivery)).not.toContain(".forge-proof");
+    expect(await command("git", ["ls-tree", "-r", "--name-only", "HEAD", "--", ".forge-proof"], result.worktreePath)).toBe("");
+    expect(await command("git", ["diff", "--name-only", result.targetBaseSha, result.resultCommit!], result.worktreePath)).toBe("MARKER.md");
+    expect(await command("git", ["status", "--porcelain", "--untracked-files=all"], result.worktreePath)).toBe("");
+    const imageRow = value.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ?").get(delivery.visualEvidence.artifactIds[0]!) as { storage_path: string; sha256: string });
+    expect(new ArtifactStore(value.config.artifactRoot).getArtifactSync({ companyId: "company_1", storagePath: imageRow.storage_path, sha256: imageRow.sha256 })).toEqual(proof);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("source finalization preserves tracked staging content and excludes reported proof", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-proof-index-"));
+  try {
+    await mkdir(join(root, ".forge-proof"), { recursive: true }); await writeFile(join(root, ".forge-proof", "keep.txt"), "keep\n"); await writeFile(join(root, "README.md"), "base\n");
+    await command("git", ["init"], root); await command("git", ["config", "user.email", "forge@example.invalid"], root); await command("git", ["config", "user.name", "Forge"], root); await command("git", ["add", "README.md", ".forge-proof/keep.txt"], root); await command("git", ["commit", "-m", "base"], root);
+    const base = await command("git", ["rev-parse", "HEAD"], root);
+    await writeFile(join(root, ".forge-proof", "keep.txt"), "changed\n"); await command("git", ["add", ".forge-proof/keep.txt"], root);
+    await writeFile(join(root, ".forge-proof", "unreported.png"), "transient"); await writeFile(join(root, "CODE.md"), "code\n");
+    await finalizeDeveloperSourceCommit(root, base, []);
+    expect(await command("git", ["show", "HEAD:.forge-proof/keep.txt"], root)).toBe("keep"); expect(await command("git", ["ls-tree", "-r", "--name-only", "HEAD", "--", ".forge-proof/unreported.png"], root)).toBe("");
+    expect(await command("git", ["diff", "--cached", "--name-only", "--", ".forge-proof/keep.txt"], root)).toBe(".forge-proof/keep.txt");
+    await command("git", ["restore", "--staged", "--worktree", ".forge-proof/keep.txt"], root);
+    await rm(join(root, ".forge-proof", "unreported.png")); await writeFile(join(root, ".forge-proof", "reported.png"), "proof"); await writeFile(join(root, "CODE2.md"), "code2\n");
+    await finalizeDeveloperSourceCommit(root, base, [".forge-proof/reported.png"]);
+    expect(await command("git", ["show", "HEAD:.forge-proof/keep.txt"], root)).toBe("keep"); expect(await command("git", ["ls-tree", "-r", "--name-only", "HEAD", "--", ".forge-proof/reported.png"], root)).toBe("");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("implementation fails loudly when its frozen Builder profile no longer resolves", async () => {

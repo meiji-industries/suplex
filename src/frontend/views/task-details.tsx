@@ -30,6 +30,7 @@ import { SupplementalReviewPanel } from "../components/app/supplemental-review-p
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import { PullRequestCard as GithubPullRequestCard } from "../components/app/pull-request-card.js";
 import { TaskChat } from "../components/app/task-chat/task-chat.js";
+import { TaskBrowserProof } from "../components/app/task-browser-proof.js";
 import { CopyButton } from "../components/app/copy-button.js";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip.js";
 import { adminDate, type ApiAgent, type ApiCi, type ApiProject, type ApiTask } from "../lib/view-shared.js";
@@ -571,6 +572,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                   {workContent}
                   <TabsContent value="other" className="space-y-4">
                 <TaskConfigurationCard task={task} />
+                <TaskBrowserProof task={task} />
                 <DeliveryChecksCard task={task} />
                 {hasChecks ? <CiDiagnostics ci={task.ci!} /> : null}
                 {task.release ? <ReleasePanel task={task} /> : null}

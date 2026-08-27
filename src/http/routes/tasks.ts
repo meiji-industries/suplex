@@ -151,7 +151,9 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   });
   typed.get("/api/tasks/:taskId/artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
     const artifact = await tasks.getTaskArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
-    return reply.header("Cache-Control", "private, no-store").type(artifact.artifact.mimeType).send(artifact.bytes);
+    reply.header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff");
+    if (artifact.artifact.kind === "browser-proof-image" || artifact.artifact.kind === "browser-proof-manifest") reply.header("Content-Disposition", `${artifact.artifact.kind === "browser-proof-image" ? "inline" : "attachment"}; filename="${artifact.artifact.filename.replace(/["\\\r\n]/g, "-")}"`);
+    return reply.type(artifact.artifact.mimeType).send(artifact.bytes);
   });
   typed.get("/api/tasks/:taskId/release/artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
     const artifact = await tasks.getReleaseArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);

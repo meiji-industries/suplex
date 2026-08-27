@@ -26,6 +26,8 @@ export interface PullRequestCurrent {
   phase?: string | null;
   pullRequestNumber?: number | null;
   observedHeadSha?: string | null;
+  /** The delivery head last accepted by Forge. */
+  headSha?: string | null;
   /** Whether this repository supports GitHub auto-merge. */
   autoMergeAvailable?: boolean | null;
   /** Used solely to make external-change feed rows idempotent. */
@@ -39,6 +41,7 @@ export type PullRequestAction =
   | { kind: "enable_auto_merge"; number: number; headSha: string }
   | { kind: "merge"; number: number; headSha: string }
   | { kind: "repair_ci" }
+  | { kind: "review_delivery"; headSha: string }
   | { kind: "send_planner_note"; message: string }
   | { kind: "feed"; message: string };
 
@@ -75,6 +78,9 @@ export function reconcile(input: { observed: PullRequestObservation; target: Pul
   if (observed.isDraft) {
     if (target === "draft") return done(current, observed, "Draft PR open");
     return { phase: "Blocked", pendingAction: "Pull request is a draft on GitHub — mark it ready to continue", owner: "human", allowedCommands: ["mark_ready", "cancel_issue"], actions: feedOnce(current, observed, "Pull request was converted to a draft on GitHub") };
+  }
+  if (observed.headSha && current.headSha && observed.headSha.toLowerCase() !== current.headSha.toLowerCase()) {
+    return { phase: "Waiting for CI", pendingAction: "Reviewing the latest changes", owner: "lead", allowedCommands: ["review_delivery"], actions: [...feedOnce(current, observed, "Pull request head changed on GitHub"), { kind: "review_delivery", headSha: observed.headSha }] };
   }
   if (observed.reviewDecision === "CHANGES_REQUESTED") {
     const by = observed.reviewLogin ? ` by ${observed.reviewLogin}` : "";

@@ -341,10 +341,11 @@ export class AcceptanceService {
       const observation = await this.recordMergeObservation(context, "provider_invalid", "provider_unavailable", current, observedAt, null);
       return { outcome: "provider_unavailable", pullRequest: current, observationId: observation.id, completionReceiptId: null, observedAt, mergedAt: null, blocker: { code: "provider_invalid", owner: "human", summary: "GitHub reported merged without an authoritative merge time", retryAt: null, evidenceArtifactId: observation.evidenceArtifactId } };
     }
-    const outcome: MergeReconciliationOutcome = current.state === "merged" ? "merged" : current.state === "closed" ? "closed_without_merge" : "open";
-    const next = outcome === "open" ? retryAt(observedAt, this.nextObservationAttempt(context.acceptanceId)) : null;
+    const outcome: MergeReconciliationOutcome = current.state === "merged" ? "merged" : current.state === "closed" ? "closed_without_merge" : current.headSha.toLowerCase() !== context.headSha.toLowerCase() ? "changed_head" : "open";
+    const next = outcome === "open" || outcome === "changed_head" ? retryAt(observedAt, this.nextObservationAttempt(context.acceptanceId)) : null;
     const observation = await this.recordMergeObservation(context, current.state, outcome, current, observedAt, next);
     if (outcome !== "merged") {
+      if (outcome === "changed_head") return { outcome, pullRequest: current, observationId: observation.id, completionReceiptId: null, observedAt, mergedAt: null, retryAt: next };
       const blocker = outcome === "open" ? undefined : { code: outcome === "closed_without_merge" ? "closed_without_merge" : outcome, owner: "human" as const, summary: outcome === "closed_without_merge" ? "The pull request closed without merging" : "The pull request no longer matches the accepted identity", retryAt: null, evidenceArtifactId: observation.evidenceArtifactId };
       return { outcome, pullRequest: current, observationId: observation.id, completionReceiptId: null, observedAt, mergedAt: null, retryAt: next, ...(blocker ? { blocker } : {}) };
     }

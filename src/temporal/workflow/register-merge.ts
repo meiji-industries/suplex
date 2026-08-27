@@ -27,6 +27,12 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (exactAcceptanceReceipts && result.outcome === "merged" && (!result.mergeObservationId || !result.completionReceiptId || !result.mergedAt)) throw new Error("Merged reconciliation requires an immutable observation and completion receipt");
+    const liveHead = ctx.patched("forge-live-head-v1");
+    if (liveHead && result.outcome === "changed_head" && result.pullRequest?.state === "open") {
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: result.pullRequest.headSha, expectedHeadTree: null, resultCommit: result.pullRequest.headSha, resultTree: null, deliveryReviewId: null, finalReviewId: null, ciRunId: null, acceptanceId: null, mergeOutcome: result.outcome, mergeAttempt: attempt, mergeObservationId: result.observationId, completionReceiptId: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      await ctx.project();
+      return ctx.state;
+    }
     const nextPhase = result.outcome === "merged" ? "done" : result.outcome === "open" || result.outcome === "provider_unavailable" ? "manual_merge" : "delivery_blocked";
     if (!exactAcceptanceReceipts) {
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: nextPhase, owner: "human", allowedCommands: nextPhase === "manual_merge" ? ["reconcile_merge", "cancel_issue"] : nextPhase === "delivery_blocked" ? ["request_delivery_changes", "reconcile_merge", "cancel_issue"] : [], pendingAction: nextPhase === "manual_merge" ? "Waiting for your merge" : nextPhase === "done" ? "Merged" : "Pull request changed or closed without merge", mergeOutcome: result.outcome, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });

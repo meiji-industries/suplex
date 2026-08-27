@@ -82,7 +82,7 @@ const PATCH_IDS = [
   "forge-adopt-observed-head-v1", "forge-adopt-source-pull-request-v1", "forge-auto-chain-halt-v1", "forge-auto-chain-lead-phases-v1", "forge-auto-retry-blockers-v1",
   "forge-auto-start-development-v1", "forge-auto-start-routine-v1", "forge-capacity-ownership-clear-v1", "forge-ci-rerun-v1",
   "forge-ci-update-from-base-v1", "forge-content-hash-contracts-v1", "forge-developer-auto-retry-v1",
-  "forge-developer-start-failure-blocked-v1", "forge-failed-retry-v1",
+  "forge-developer-start-failure-auto-retry-v1", "forge-developer-start-failure-blocked-v1", "forge-failed-retry-v1",
   "forge-simple-capacity-v1", "forge-unique-developer-execution-id-v1",
 ].sort();
 

@@ -92,11 +92,11 @@ test("a worktree is cleaned in forge", async () => {
     const initial = await queryIssueWorkflow(h.config, workflowId);
     const confirmation = await executeIssueCommand(h.config, workflowId, "delete_worktree", { expectedRevision: initial.revision, actorUserId: "issue-admin" });
     expect(confirmation.blocker).toMatchObject({ category: "unsafe_recovery", actions: expect.arrayContaining([expect.objectContaining({ label: "Discard changes and delete worktree" })]) });
-    const cleaned = await executeIssueCommand(h.config, workflowId, "delete_worktree", { expectedRevision: confirmation.revision, actorUserId: "issue-admin", confirmDiscardDirty: true });
+    const cleaned = await executeIssueCommand(h.config, workflowId, "delete_worktree", { expectedRevision: confirmation.revision, actorUserId: "issue-admin", confirmDiscardDirty: true } as never);
     expect(cleaned.worktreeState).toBe("cleaned");
     expect((await git(repositoryPath, "branch", "--list", `forge/issue/${issueId}`)).stdout).toContain(`forge/issue/${issueId}`);
     expect(h.database.authQuery((db) => db.prepare("SELECT event_hash AS eventHash FROM forge_issue_timeline WHERE task_id = ? AND event_type = 'worktree_cleaned'").get(issueId))).toEqual({ eventHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
-    const again = await executeIssueCommand(h.config, workflowId, "delete_worktree", { expectedRevision: cleaned.revision, actorUserId: "issue-admin", confirmDiscardDirty: true });
+    const again = await executeIssueCommand(h.config, workflowId, "delete_worktree", { expectedRevision: cleaned.revision, actorUserId: "issue-admin", confirmDiscardDirty: true } as never);
     expect(again.revision).toBe(cleaned.revision);
     expect(await queryIssueWorkflow(h.config, workflowId)).toEqual(cleaned);
   } finally { await h.stop(); }
@@ -143,7 +143,7 @@ test("cancellation races a late agent result and a webhook", async () => {
     const afterLateResult = await queryIssueWorkflow(h.config, workflowId);
     expect(afterLateResult).toMatchObject({ phase: "cancelled", branchName: cancelled.branchName, worktreePath: cancelled.worktreePath });
     const execute = async () => { throw new Error("cancelled workflows must not receive GitHub observations"); };
-    await reconcileGithubObservations(h.database, h.config, { taskId: issueId, observe: async () => ({ state: "merged", headSha: "c".repeat(40), checks: { total: 1, successful: true, failing: false, pending: false } }), execute });
+    await reconcileGithubObservations(h.database, h.config, { taskId: issueId, observe: async () => ({ exists: true, number: 42, url: "https://github.com/acme/forge/pull/42", state: "merged", isDraft: false, headSha: "c".repeat(40), baseSha: "a".repeat(40), mergeable: "MERGEABLE", checks: { total: 1, successful: 1, failing: 0, pending: 0 }, autoMergeEnabled: false, reviewDecision: null }), execute });
     const afterWebhook = await queryIssueWorkflow(h.config, workflowId);
     expect(afterWebhook.revision).toBe(afterLateResult.revision);
     expect(afterWebhook.allowedCommands).toContain("resume_preserved_work");

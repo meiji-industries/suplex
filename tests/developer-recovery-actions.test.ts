@@ -291,6 +291,14 @@ test("labels a sourced pull request publication as a push without a new-PR previ
   expect(render(false, true)).toContain(">Retry Push<");
 });
 
+test("keeps later action titles after publish draft", () => {
+  const task = { phase: "accepted", allowedCommands: ["reconcile_merge"], commands: [], pendingAction: "Check merge", projection: { status: "current" } } as unknown as ApiTask;
+  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
+    task, busy: false, onStartPlanning: async () => undefined, onPlanAction: async () => undefined, onRevisePlan: async () => undefined, onContinueWork: async () => undefined,
+  }) }));
+  expect(html).toContain("Check merge");
+});
+
 test("hides a task-actions card with only a planning status label", () => {
   const task = {
     phase: "planning",

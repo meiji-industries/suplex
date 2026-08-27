@@ -56,6 +56,11 @@ export interface GithubPullRequest {
   state: "open" | "closed" | "merged";
   mergedAt: string | null;
   autoMergeEnabled?: boolean;
+  title?: string;
+  body?: string;
+  author?: string;
+  updatedAt?: string;
+  isCrossRepository?: boolean;
 }
 
 /** The provider truth used by Forge when reconciling an externally changed PR. */
@@ -104,6 +109,7 @@ export interface GithubReleasePort {
   pushNormal(input: { cwd: string; branch: string }): Promise<void>;
   reconcileBranch?(input: { cwd: string; repository: string; branch: string }): Promise<LocalRevision>;
   listPullRequests(input: ExactPullRequestIdentity): Promise<GithubPullRequest[]>;
+  listOpenPullRequests?(input: { repository: string; limit: number }): Promise<GithubPullRequest[]>;
   createDraftPullRequest(input: DraftPullRequestCreate): Promise<GithubPullRequest>;
   updateDraftPullRequest(input: DraftPullRequestUpdate): Promise<GithubPullRequest>;
   getPullRequest(input: { repository: string; number: number }): Promise<GithubPullRequest>;
@@ -153,6 +159,10 @@ const PullResponseSchema = z.object({
   auto_merge: z.object({}).nullable().optional(),
   head: z.object({ ref: z.string().min(1).max(256), sha: z.string().regex(shaPattern), repo: z.object({ full_name: RepositorySchema }) }),
   base: z.object({ ref: z.string().min(1).max(256), sha: z.string().regex(shaPattern), repo: z.object({ full_name: RepositorySchema }) }),
+  title: z.string().optional(),
+  body: z.string().nullable().optional(),
+  user: z.object({ login: z.string() }).optional(),
+  updated_at: z.string().datetime().optional(),
 });
 const PullListResponseSchema = z.array(z.object({
   number: z.number().int().positive(),
@@ -163,6 +173,11 @@ const PullListResponseSchema = z.array(z.object({
   headRefOid: z.string().regex(shaPattern),
   baseRefName: z.string().min(1).max(256),
   baseRefOid: z.string().regex(shaPattern),
+  title: z.string().default(""),
+  body: z.string().default(""),
+  author: z.object({ login: z.string() }).nullable().default(null),
+  updatedAt: z.string().datetime().optional(),
+  isCrossRepository: z.boolean().default(false),
 }));
 const PullViewResponseSchema = z.object({
   number: z.number().int().positive(),
@@ -223,7 +238,7 @@ function normalizeGithubPull(value: unknown): GithubPullRequest {
   const row = parsed.data;
   const headRepository = row.head.repo.full_name.toLowerCase();
   const state = row.state === "closed" && row.merged_at !== null ? "merged" : row.state;
-  return { number: row.number, url: row.html_url, repository: headRepository, headBranch: row.head.ref, baseBranch: row.base.ref, headSha: row.head.sha, baseSha: row.base.sha, isDraft: row.draft, state, mergedAt: row.merged_at, ...(row.auto_merge ? { autoMergeEnabled: true } : {}) };
+  return { number: row.number, url: row.html_url, repository: headRepository, headBranch: row.head.ref, baseBranch: row.base.ref, headSha: row.head.sha, baseSha: row.base.sha, isDraft: row.draft, state, mergedAt: row.merged_at, isCrossRepository: headRepository !== row.base.repo.full_name.toLowerCase(), ...(row.title !== undefined ? { title: row.title } : {}), ...(row.body !== undefined ? { body: row.body ?? "" } : {}), ...(row.user ? { author: row.user.login } : {}), ...(row.updated_at ? { updatedAt: row.updated_at } : {}), ...(row.auto_merge ? { autoMergeEnabled: true } : {}) };
 }
 
 function summarizeChecks(checks: z.infer<typeof PullViewResponseSchema>["statusCheckRollup"]): GithubPullRequestObservation["checks"] {
@@ -425,7 +440,14 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       try { value = parseJson((await runGh(["pr", "list", "--repo", input.repository, "--head", input.headBranch, "--state", "open", "--limit", "100", "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid"])).stdout); } catch (error) { throw error instanceof GithubReleaseFailure ? error : classifyCommandFailure(error, "pull request list"); }
       const rows = PullListResponseSchema.safeParse(value);
       if (!rows.success) throw providerFailure("invalid-provider-response", "GitHub pull request list could not be parsed");
-      return rows.data.map((row) => ({ number: row.number, url: row.url, repository: normalizeRepository(input.repository), headBranch: row.headRefName, baseBranch: row.baseRefName, headSha: row.headRefOid, baseSha: row.baseRefOid, isDraft: row.isDraft, state: row.state.toLowerCase() as GithubPullRequest["state"], mergedAt: null }));
+      return rows.data.map((row) => ({ number: row.number, url: row.url, repository: normalizeRepository(input.repository), headBranch: row.headRefName, baseBranch: row.baseRefName, headSha: row.headRefOid, baseSha: row.baseRefOid, isDraft: row.isDraft, state: row.state.toLowerCase() as GithubPullRequest["state"], mergedAt: null, title: row.title, body: row.body, author: row.author?.login ?? "", updatedAt: row.updatedAt, isCrossRepository: row.isCrossRepository }));
+    },
+    async listOpenPullRequests(input) {
+      let value: unknown;
+      try { value = parseJson((await runGh(["pr", "list", "--repo", input.repository, "--state", "open", "--limit", String(Math.min(100, Math.max(1, input.limit))), "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid,title,body,author,updatedAt,isCrossRepository"])).stdout); } catch (error) { throw error instanceof GithubReleaseFailure ? error : classifyCommandFailure(error, "pull request list"); }
+      const rows = PullListResponseSchema.safeParse(value);
+      if (!rows.success) throw providerFailure("invalid-provider-response", "GitHub pull request list could not be parsed");
+      return rows.data.map((row) => ({ number: row.number, url: row.url, repository: normalizeRepository(input.repository), headBranch: row.headRefName, baseBranch: row.baseRefName, headSha: row.headRefOid, baseSha: row.baseRefOid, isDraft: row.isDraft, state: row.state.toLowerCase() as GithubPullRequest["state"], mergedAt: null, title: row.title, body: row.body, author: row.author?.login ?? "", updatedAt: row.updatedAt, isCrossRepository: row.isCrossRepository }));
     },
     async createDraftPullRequest(input) {
       const value = await api(["api", "--method", "POST", `repos/${input.repository}/pulls`, "-f", `title=${input.title}`, "-f", `head=${input.headBranch}`, "-f", `base=${input.baseBranch}`, "-f", `body=${input.body}`, "-F", "draft=true"], "draft pull request creation", false, `Branch ${input.headBranch} is not on GitHub yet`);

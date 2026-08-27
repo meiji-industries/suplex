@@ -96,6 +96,7 @@ export const TaskBodySchema = z.object({
   deliveryTarget: DeliveryTargetSchema.default("pull_request_draft"),
   runProjectTests: z.boolean().default(true),
   visualEvidence: VisualEvidenceSchema.default("off"),
+  source: z.discriminatedUnion("kind", [z.object({ kind: z.literal("pull_request"), number: z.number().int().positive() }).strict(), z.object({ kind: z.literal("branch"), branch: z.string().min(1).max(240) }).strict()]).optional(),
 });
 export const TaskAgentsBodySchema = z.object({ planner: z.string().optional(), builder: z.string().optional(), reviewer: z.string().optional(), integrator: z.string().optional() });
 export const TaskDetailsBodySchema = z.object({

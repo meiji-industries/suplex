@@ -268,12 +268,13 @@ export class DeveloperService {
     const claimedResult = this.database.authQuery((db) => db.prepare("SELECT activity_result_json AS activityResultJson FROM forge_developer_result_claims WHERE execution_id = ?").get(executionId) as { activityResultJson: string } | undefined);
     if (claimedResult) return jsonRequired(claimedResult.activityResultJson) as DeveloperExecutionResult;
     const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; planRevision: number; attempt: number; status: string; branchName: string; worktreePath: string; targetBaseSha: string; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
+    const sourceBranch = taskConfiguration.source?.kind === "pull_request" ? taskConfiguration.source.headBranch : taskConfiguration.source?.kind === "branch" ? taskConfiguration.source.branch : undefined;
     const pinnedBase = existing?.targetBaseSha ?? prior?.target_base_sha ?? (revisionAuthorization?.disposition === "new" ? revisionAuthorization.exactBaseSha : revisionAuthorization?.baseSha);
     // Build on the base branch as it is right now: the project-revision snapshot goes stale
     // the moment another task merges. A recorded execution base stays authoritative on retry.
     const targetBaseSha = pinnedBase ?? await this.worktrees.currentBaseSha(repositoryPath, projectRevision.data.baseBranch).catch(() => projectRevision.data.targetSha);
     if (!/^[a-f0-9]{40,64}$/i.test(targetBaseSha)) throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain an exact target SHA");
-    let branchName = prior?.branch_name ?? buildGitBranchName({ branchSlug: fallbackGitPresentation(context.title).branchSlug, taskId: input.taskId });
+    let branchName = sourceBranch ?? prior?.branch_name ?? buildGitBranchName({ branchSlug: fallbackGitPresentation(context.title).branchSlug, taskId: input.taskId });
     const worktreeRoot = await scopedRepository(this.config.worktreeRoot, projectRevision.data.worktreeRoot);
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
     if (existing && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== branchName || existing.targetBaseSha !== targetBaseSha || existing.supersedesExecutionId !== (prior?.id ?? null) || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic Developer execution ID is already bound to different coordinates", { nonRetryable: true });
@@ -281,6 +282,8 @@ export class DeveloperService {
     try {
       if (existing) {
         worktree = { branchName: existing.branchName, worktreePath: await scopedRepository(this.config.worktreeRoot, existing.worktreePath), targetBaseSha: existing.targetBaseSha };
+      } else if (sourceBranch) {
+        worktree = await this.worktrees.adopt({ repositoryPath, worktreeRoot, taskId: input.taskId, branchName: sourceBranch, baseBranch: projectRevision.data.baseBranch });
       } else if (revisionAuthorization?.disposition === "reuse") {
         if (!revisionAuthorization.worktreePath || !revisionAuthorization.branchName || !revisionAuthorization.baseSha || !revisionAuthorization.headSha || !revisionAuthorization.treeSha) throw new AgentFailure("revision-coordinates-missing", "Authorized preserved worktree coordinates are incomplete");
         const inspected = await this.worktrees.inspectForPlanRevision({ repositoryPath, worktreeRoot, worktreePath: revisionAuthorization.worktreePath, branchName: revisionAuthorization.branchName, baseSha: revisionAuthorization.baseSha, resultCommit: revisionAuthorization.headSha, resultTree: revisionAuthorization.treeSha });

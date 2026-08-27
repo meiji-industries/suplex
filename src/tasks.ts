@@ -28,6 +28,7 @@ import { IssueTimelineEvents } from "./issue-timeline-events.js";
 import type { TaskActivityEvent } from "./task-activity.js";
 import type { HermesPrincipal } from "./hermes-agents.js";
 import type { HermesSafeTaskProjection } from "./http/contracts/hermes.js";
+import { TaskSourceFailure, type TaskSourceSelector } from "./task-sources.js";
 import { creationRequestHash, duplicateTitle, finding, id, json, normalizeText, parseImageIds, parseMetadata, parseRoleAgents, shaAbbrev, type TaskFinding, jsonRequired } from "./task-utils.js";
 
 export { creationRequestHash, type TaskFinding } from "./task-utils.js";
@@ -108,6 +109,7 @@ export interface TaskInput {
   visualEvidence?: VisualEvidence;
   /** Legacy workflow input retained solely for in-flight histories. */
   pullRequestMode?: "draft" | "ready" | "auto_merge";
+  source?: TaskSourceSelector | undefined;
 }
 
 export interface TaskDetailsInput {
@@ -1096,6 +1098,9 @@ export class TaskService {
 
     const roleAgents = this.resolveRoleAgents(project.roleDefaults, input.roleAgents ?? {});
     const roleProfiles = this.database.authQuery((db) => resolveAgentProfiles(db, roleAgents));
+    let source;
+    try { source = input.source ? await this.projects.resolveTaskSource(project, input.source) : undefined; }
+    catch (error) { if (error instanceof TaskSourceFailure) throw new TaskFailure(error.message, [finding(error.code, "source", error.message)], error.statusCode); throw error; }
     const branchHeads = await this.projects.captureTaskConfiguration(project);
     let promptSet: ResolvedPromptSet;
     try {
@@ -1104,7 +1109,7 @@ export class TaskService {
       throw new TaskFailure("Task creation failed", [finding("prompt_overrides_unavailable", "prompts", "Prompt overrides are unavailable")], 503);
     }
     const capturedAt = this.now().toISOString();
-    let taskConfiguration = TaskProjectConfigurationSchema.parse({ projectId: project.id, projectName: project.name, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot, repository: project.repository, baseBranch: project.baseBranch, targetBranch: project.targetBranch, baseSha: branchHeads.baseSha, targetSha: branchHeads.targetSha, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand, requiredChecks: project.requiredChecks, roleAgents, roleProfiles, capturedAt });
+    let taskConfiguration = TaskProjectConfigurationSchema.parse({ projectId: project.id, projectName: project.name, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot, repository: project.repository, baseBranch: source?.kind === "pull_request" ? source.baseBranch : project.baseBranch, targetBranch: project.targetBranch, baseSha: source?.kind === "pull_request" ? source.baseSha : branchHeads.baseSha, targetSha: branchHeads.targetSha, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand, requiredChecks: project.requiredChecks, roleAgents, roleProfiles, capturedAt, ...(source ? { source } : {}) });
     // Capability decisions are made from the configuration captured for this
     // task, never from a project revision that may change while it is created.
     const hasProjectTests = taskConfiguration.verificationCommand.trim().length > 0;
@@ -1137,6 +1142,7 @@ export class TaskService {
       projectRevisionId: "", // replaced with the task-owned artifact once it is stored
       authorityKind: authority.kind,
       creatorId,
+      ...(input.source ? { source: input.source } : {}),
     });
     const idempotencyKey = input.idempotencyKey.trim();
     // The legacy column/input is retained for old Temporal histories. New tasks

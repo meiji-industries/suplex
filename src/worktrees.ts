@@ -36,6 +36,11 @@ export interface WorktreeRecord {
   targetBaseSha: string;
 }
 
+export interface AdoptWorktreeInput extends Omit<WorktreeInput, "targetBaseSha"> {
+  branchName: string;
+  baseBranch: string;
+}
+
 export interface SyncBaseResult {
   synced: boolean;
   reason?: "dirty" | "other-branch";
@@ -280,6 +285,48 @@ export class WorktreeManager {
       if (error instanceof WorktreeFailure) throw error;
       throw new WorktreeFailure("worktree-create-failed", "Git could not create the isolated issue worktree");
     }
+  }
+
+  async adopt(input: AdoptWorktreeInput): Promise<WorktreeRecord> {
+    if (!taskIdPattern.test(input.taskId)) throw new WorktreeFailure("unsafe-task-id", "Issue identity is not safe for a worktree coordinate");
+    if (!branchPattern.test(input.branchName) || input.branchName.includes("..") || !branchPattern.test(input.baseBranch)) throw new WorktreeFailure("unsafe-branch", "Source branch name is unsafe");
+    const repositoryPath = await canonicalDirectory(input.repositoryPath, "repository-unavailable");
+    const worktreeRoot = await canonicalDirectory(input.worktreeRoot, "worktree-root-unavailable");
+    const worktreePath = resolve(worktreeRoot, input.pathSegment ?? input.taskId);
+    if (!withinRoot(worktreeRoot, worktreePath)) throw new WorktreeFailure("worktree-escape", "Source worktree escaped the configured root");
+    const remoteRef = `refs/remotes/origin/${input.branchName}`;
+    const activity = { taskId: input.taskId, stepId: input.stepId ?? input.taskId };
+    try { await this.git.run(["fetch", "--no-tags", "origin", `refs/heads/${input.branchName}:${remoteRef}`], repositoryPath, activity); }
+    catch { throw new WorktreeFailure("source-branch-deleted", "The source branch no longer exists on origin"); }
+    const remoteHead = await this.git.run(["rev-parse", "--verify", `${remoteRef}^{commit}`], repositoryPath, activity);
+    await this.git.run(["fetch", "--no-tags", "origin", `refs/heads/${input.baseBranch}:refs/remotes/origin/${input.baseBranch}`], repositoryPath, activity).catch(() => { throw new WorktreeFailure("source-base-unavailable", "The source base branch is unavailable"); });
+    const mergeBase = await this.git.run(["merge-base", `refs/remotes/origin/${input.baseBranch}`, remoteRef], repositoryPath, activity);
+    let localExists = true;
+    try { await this.git.run(["show-ref", "--verify", "--quiet", `refs/heads/${input.branchName}`], repositoryPath, activity); } catch { localExists = false; }
+    if (localExists) {
+      try { await this.git.run(["merge-base", "--is-ancestor", input.branchName, remoteRef], repositoryPath, activity); }
+      catch { throw new WorktreeFailure("source-branch-diverged", "The local source branch has diverged from origin"); }
+    }
+    const registrations = await this.git.run(["worktree", "list", "--porcelain"], repositoryPath, activity);
+    const registered = registrations.split("\n\n").find((entry) => entry.includes(`branch refs/heads/${input.branchName}`));
+    if (registered) {
+      const registeredPath = registered.match(/^worktree (.+)$/m)?.[1];
+      if (registeredPath && resolve(registeredPath) !== worktreePath) throw new WorktreeFailure("source-branch-checked-out", "The source branch is already checked out in another worktree");
+      if (registeredPath) {
+        const status = await this.git.run(["status", "--porcelain=v1", "--untracked-files=all"], registeredPath, activity);
+        if (status) throw new WorktreeFailure("worktree-dirty", "The source worktree has uncommitted changes");
+        await this.git.run(["merge", "--ff-only", remoteRef], registeredPath, activity);
+        return { branchName: input.branchName, worktreePath: registeredPath, targetBaseSha: mergeBase };
+      }
+    }
+    if (localExists) await this.git.run(["branch", "-f", input.branchName, remoteRef], repositoryPath, activity);
+    else await this.git.run(["branch", "--track", input.branchName, remoteRef], repositoryPath, activity);
+    await assertWorktreeDiskHeadroom(worktreeRoot);
+    try { await this.git.run(["worktree", "add", worktreePath, input.branchName], repositoryPath, activity); }
+    catch { throw new WorktreeFailure("source-branch-checked-out", "The source branch could not be checked out because it is already in use"); }
+    const head = await this.git.run(["rev-parse", "HEAD"], worktreePath, activity);
+    if (head !== remoteHead) throw new WorktreeFailure("source-branch-diverged", "The source branch did not adopt the current origin head");
+    return { branchName: input.branchName, worktreePath, targetBaseSha: mergeBase };
   }
 
   async inspectDelivery(worktreePath: string): Promise<DeliveryGitState> {

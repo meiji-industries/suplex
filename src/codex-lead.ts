@@ -345,6 +345,15 @@ export class AgentService {
     if (completed) return completed;
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
     await this.worktrees.syncBase(repositoryPath, configuration.baseBranch);
+    let sourceGuidance = "";
+    if (configuration.source) {
+      const sourceBranch = configuration.source.kind === "pull_request" ? configuration.source.headBranch : configuration.source.branch;
+      try {
+        await execFileAsync("git", ["fetch", "--no-tags", "origin", `refs/heads/${sourceBranch}:refs/remotes/origin/${sourceBranch}`], { cwd: repositoryPath, timeout: 30_000, maxBuffer: 64 * 1024 });
+        const mergeBase = (await execFileAsync("git", ["merge-base", `refs/remotes/origin/${configuration.baseBranch}`, `refs/remotes/origin/${sourceBranch}`], { cwd: repositoryPath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
+        sourceGuidance = `\n\nThis task continues the existing source branch \`${sourceBranch}\` at \`origin/${sourceBranch}\`. Before planning, inspect its commits and complete diff from merge-base \`${mergeBase}\` with \`git log ${mergeBase}..origin/${sourceBranch}\` and \`git diff ${mergeBase}..origin/${sourceBranch}\`. Plan against the source changes, not only the base checkout.`;
+      } catch { throw new AgentFailure("source-branch-unavailable", "The selected source branch could not be inspected for planning"); }
+    }
     const brief = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
     const revisionNote = input.revisionNoteArtifactId
       ? this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'plan-decision'").get(input.revisionNoteArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined)
@@ -477,7 +486,7 @@ export class AgentService {
       const prompt = revisionPrompt
         ? this.revisionPrompt(input.operatorNotes?.length ? input.operatorNotes.map((note) => `The operator asked: ${note}`).join("\n") : revisionNoteText ?? `Human blocker answer:\n${memberResponseText}`)
         : `${this.initialPrompt(input, row.title, brief, row.normalized_json, profileSettings, repositoryEvidence, revisionContext)}\n\nPlan only work that can be completed and verified inside an isolated git worktree. Do not add steps for deployment, rollout, physical device checks or production verification — mention them in a 'Follow-up outside Forge' note instead.`;
-      const result = await this.turnRunner.run({ task: { taskId: input.taskId, projectId: input.projectId, projectSlug: row.project_slug, ...(row.issue_key ? { issueKey: row.issue_key } : {}), worktreePath: repositoryPath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "lead", executionRole: "planner", ledger: "agent", executionId, promptKind: revisionPrompt ? "lead-plan-revision" : "lead-plan", prompt: `${prompt}${resumeInstruction ? `\n\nMember instruction for this ${input.resume?.reason ?? "revision"}:\n${resumeInstruction}` : ""}`, profile: leadProfile, resultSchema: LeadOutputSchema, schemaPath: await this.ensureResultSchema("lead-plan", LeadOutputSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.revision, signal: runtime.signal });
+      const result = await this.turnRunner.run({ task: { taskId: input.taskId, projectId: input.projectId, projectSlug: row.project_slug, ...(row.issue_key ? { issueKey: row.issue_key } : {}), worktreePath: repositoryPath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "lead", executionRole: "planner", ledger: "agent", executionId, promptKind: revisionPrompt ? "lead-plan-revision" : "lead-plan", prompt: `${prompt}${sourceGuidance}${resumeInstruction ? `\n\nMember instruction for this ${input.resume?.reason ?? "revision"}:\n${resumeInstruction}` : ""}`, profile: leadProfile, resultSchema: LeadOutputSchema, schemaPath: await this.ensureResultSchema("lead-plan", LeadOutputSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.revision, signal: runtime.signal });
       sessionRef = result.roleSessionId;
       const artifacts = await this.persistOutput(input, executionId, sessionRef, evidenceLines, result.result, { id: manifestArtifact.id, sha256: manifestArtifact.sha256 });
       await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', session_ref = ?, process_pid = NULL, process_group_id = NULL, finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), this.now().toISOString(), artifacts.evidence.id, executionId));

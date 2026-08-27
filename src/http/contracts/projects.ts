@@ -55,6 +55,10 @@ export const ProjectResponseSchema = z.object({
   id: z.string(), companyId: z.string(), name: z.string(), repositoryPath: z.string(), worktreeRoot: z.string(), repository: z.string().optional(), baseBranch: z.string(), targetBranch: z.string(), setupCommand: z.string(), verificationCommand: z.string(), requiredChecks: z.array(z.string()), roleDefaults: ProjectRoleDefaultsSchema, createdAt: z.string(), updatedAt: z.string(),
 });
 export const ProjectListResponseSchema = z.object({ projects: z.array(ProjectResponseSchema) });
+export const TaskSourceQuerySchema = z.object({ kind: z.enum(["pull_request", "branch"]) }).strict();
+const PullRequestTaskSourceSchema = z.object({ kind: z.literal("pull_request"), number: z.number().int().positive(), url: z.string().url(), title: z.string(), body: z.string(), author: z.string(), headBranch: z.string(), baseBranch: z.string(), headSha: z.string(), updatedAt: z.string().optional(), isDraft: z.boolean() });
+const BranchTaskSourceSchema = z.object({ kind: z.literal("branch"), branch: z.string(), headSha: z.string(), subject: z.string(), author: z.string(), updatedAt: z.string() });
+export const TaskSourceListResponseSchema = z.object({ available: z.boolean(), reason: z.string().optional(), sources: z.array(z.discriminatedUnion("kind", [PullRequestTaskSourceSchema, BranchTaskSourceSchema])) });
 export type ProfileResponse = z.infer<typeof ProfileResponseSchema>;
 export type ModelResponse = z.infer<typeof ModelResponseSchema>;
 export type ProjectCheckResponse = z.infer<typeof ProjectCheckListResponseSchema>["checks"][number];

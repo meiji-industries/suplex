@@ -31,6 +31,10 @@ export const TaskProjectConfigurationSchema = z.object({
     sha256: z.string().regex(/^[a-f0-9]{64}$/i),
     overrides: z.array(z.string().min(1)),
   }).strict().optional(),
+  source: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("pull_request"), number: z.number().int().positive(), url: z.string().url(), headBranch: z.string().min(1), baseBranch: z.string().min(1), headSha: z.string().regex(/^[a-f0-9]{40,64}$/i), baseSha: z.string().regex(/^[a-f0-9]{40,64}$/i) }).strict(),
+    z.object({ kind: z.literal("branch"), branch: z.string().min(1), headSha: z.string().regex(/^[a-f0-9]{40,64}$/i) }).strict(),
+  ]).optional(),
 }).strict();
 
 export type TaskProjectConfiguration = z.infer<typeof TaskProjectConfigurationSchema>;

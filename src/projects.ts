@@ -11,6 +11,8 @@ import type { ForgeConfig } from "./config.js";
 import { GithubFailure, createGithubAdapter, type GithubAdapter } from "./github.js";
 import { ForgeDatabase } from "./database.js";
 import { jsonRequired } from "./task-utils.js";
+import { createGithubReleasePort, type GithubReleasePort } from "./github-release.js";
+import { TaskSourceService, type TaskSourceSelector } from "./task-sources.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -146,6 +148,7 @@ interface ProjectServiceOptions {
   repositoryProvisioner?: RepositoryProvisioner;
   now?: () => Date;
   validateProjectConfiguration?: boolean;
+  githubRelease?: Pick<GithubReleasePort, "listOpenPullRequests" | "getPullRequest">;
 }
 
 interface ProjectRow {
@@ -557,6 +560,7 @@ export class ProjectService {
   private readonly localRepository: LocalRepositoryAdapter | undefined;
   private readonly repositoryProvisioner: RepositoryProvisioner;
   private readonly validateProjectConfiguration: boolean;
+  private readonly taskSources: TaskSourceService;
 
   constructor(
     private readonly database: ForgeDatabase,
@@ -572,6 +576,7 @@ export class ProjectService {
     // They opt out without performing network work; production keeps the
     // save-time guard unless an explicit test fake supplies a value.
     this.validateProjectConfiguration = options.validateProjectConfiguration ?? process.env.VITEST === undefined;
+    this.taskSources = new TaskSourceService(options.githubRelease ?? createGithubReleasePort());
   }
 
   private validateProfileInput(input: ProfileInput): Required<ProfileInput> {
@@ -863,6 +868,14 @@ export class ProjectService {
     } catch {
       throw new ProjectFailure("Project configuration could not be captured", [finding("repository-unavailable", "projectId", "Forge could not resolve the configured branches for this new task")], 422);
     }
+  }
+
+  async discoverTaskSources(actorUserId: string, projectId: string, kind: TaskSourceSelector["kind"]): Promise<Awaited<ReturnType<TaskSourceService["discover"]>>> {
+    return this.taskSources.discover(this.getProject(actorUserId, projectId), kind);
+  }
+
+  async resolveTaskSource(project: Project, selector: TaskSourceSelector): Promise<Awaited<ReturnType<TaskSourceService["resolve"]>>> {
+    return this.taskSources.resolve(project, selector);
   }
 
 

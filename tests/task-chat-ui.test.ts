@@ -6,13 +6,35 @@ import { ChatAgentTurn } from "../src/frontend/components/app/task-chat/chat-age
 import { ChatComposer } from "../src/frontend/components/app/task-chat/chat-composer.js";
 import { ChatMemberMessage } from "../src/frontend/components/app/task-chat/chat-member-message.js";
 
-const completed = { kind: "agent_turn" as const, id: "turn", role: "builder" as const, agent: { name: "Builder", avatarSeed: "builder" }, startedAt: "2026-08-23T00:00:00.000Z", finishedAt: "2026-08-23T00:00:40.000Z", status: "completed" as const, events: [{ id: "file", at: "2026-08-23T00:00:10.000Z", kind: "file_change", text: "Updated task-chat.ts", files: ["src/task-chat.ts"] }], stats: { filesChanged: 1, additions: 12, deletions: 3 } };
+const completed = { kind: "agent_turn" as const, id: "turn", role: "builder" as const, agent: { name: "Builder", avatarSeed: "builder" }, startedAt: "2026-08-23T00:00:00.000Z", finishedAt: "2026-08-23T00:00:40.000Z", status: "completed" as const, intro: "I will inspect the exact delivered commit.", events: [{ id: "file", at: "2026-08-23T00:00:10.000Z", kind: "file_change", text: "Updated task-chat.ts", files: ["src/task-chat.ts"] }], summary: "The work is complete.", stats: { filesChanged: 1, additions: 12, deletions: 3 } };
 
 describe("task chat UI", () => {
   it("renders collapsed completed work with change stats", () => {
     const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item: completed, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
     expect(html).toContain("Worked for 40s");
     expect(html).toContain("+12 −3");
+  });
+
+  it("separates interleaved narration bubbles from execution groups", () => {
+    const item = { ...completed, finishedAt: null, status: "running" as const, events: [
+      { id: "command-one", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "git status", exitCode: 0, status: "completed" as const },
+      { id: "message", at: "2026-08-23T00:00:11.000Z", kind: "message", text: "I found three in-scope blocking gaps." },
+      { id: "tool", at: "2026-08-23T00:00:12.000Z", kind: "tool_call", text: "read" },
+      { id: "update", at: "2026-08-23T00:00:13.000Z", kind: "agent_update", text: "The service now gathers all campaign routes." },
+      { id: "command-two", at: "2026-08-23T00:00:14.000Z", kind: "command", text: "pnpm test", exitCode: 0, status: "completed" as const },
+    ] };
+    const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    expect(html.match(/data-task-chat-agent-bubble/g)).toHaveLength(4);
+    expect(html.match(/data-task-chat-execution-group/g)).toHaveLength(3);
+    expect(html.indexOf("I will inspect the exact delivered commit.")).toBeLessThan(html.indexOf("git status"));
+    expect(html.indexOf("git status")).toBeLessThan(html.indexOf("I found three in-scope blocking gaps."));
+    expect(html.indexOf("I found three in-scope blocking gaps.")).toBeLessThan(html.indexOf("read"));
+    expect(html.indexOf("read")).toBeLessThan(html.indexOf("The service now gathers all campaign routes."));
+    expect(html.indexOf("The service now gathers all campaign routes.")).toBeLessThan(html.indexOf("pnpm test"));
+    expect(html.indexOf("pnpm test")).toBeLessThan(html.indexOf("The work is complete."));
+    expect(html).toMatch(/data-task-chat-execution-group[^>]*>.*git status.*<\/ol><div[^>]*data-task-chat-agent-bubble/);
+    expect(html).toMatch(/data-task-chat-agent-bubble[^>]*>.*I found three in-scope blocking gaps.*<\/div><ol[^>]*data-task-chat-execution-group/);
+    expect(html).not.toMatch(/data-task-chat-execution-group[^>]*>[^<]*<div[^>]*data-task-chat-agent-bubble/);
   });
 
   it("renders a running header, composer reason, and markdown member body", () => {

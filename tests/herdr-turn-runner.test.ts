@@ -1,4 +1,5 @@
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -236,6 +237,21 @@ test("binds the Forge marker to its following Codex task_started turn", async ()
   } finally { outcome.database.close(); await rm(outcome.root, { recursive: true, force: true }); }
 });
 
+test("styles the effective dispatched prompt and records its identity", async () => {
+  let sent = "";
+  const outcome = await runScenario(async (prompt, session) => {
+    sent = prompt;
+    await complete(session, prompt, { status: "ok" });
+  });
+  try {
+    expect(sent).toContain("Plan this");
+    expect(sent.match(/Forge response style/g)).toHaveLength(1);
+    expect(sent).toContain("ASD-STE100 Simplified Technical English");
+    expect(sent).toContain("Do not alter required JSON keys, enum values, identifiers, paths, commands, code, quoted text, or schema-required formats.");
+    expect(outcome.database.authQuery((db) => db.prepare("SELECT prompt_sha256 FROM forge_herdr_turns").get())).toEqual({ prompt_sha256: createHash("sha256").update(sent).digest("hex") });
+  } finally { outcome.database.close(); await rm(outcome.root, { recursive: true, force: true }); }
+});
+
 test("re-sends an unobserved prompt before recording awaiting-human attention", async () => {
   const setup = await fixture();
   let now = new Date();
@@ -274,6 +290,7 @@ test("re-sends an unobserved prompt before recording awaiting-human attention", 
     await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toBe(prompts[0]);
+    for (const prompt of prompts) expect(prompt.match(/Forge response style/g)).toHaveLength(1);
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
@@ -451,6 +468,7 @@ test("sends one format correction to a fresh result path", async () => {
     expect(paths[0]).not.toBe(paths[1]);
     expect(prompts[1]).toContain("previous result file failed schema validation");
     expect(prompts[1]).toContain("status");
+    for (const prompt of prompts) expect(prompt.match(/Forge response style/g)).toHaveLength(1);
     expect(outcome.value).toEqual({ status: "ok" });
   } finally { outcome.database.close(); await rm(outcome.root, { recursive: true, force: true }); }
 });
@@ -531,11 +549,16 @@ test("records blocked agent attention while the turn stays alive", async () => {
 test("does not reset attention activation for an unchanged waiting turn", async () => {
   const setup = await fixture();
   const runner = new HerdrTurnRunner(setup.database, {} as never, {} as never, new IssueTimelineEvents(setup.database));
+  // Exercise durable state transitions without a live Herdr client.
+  const runnerInternals = runner as unknown as {
+    create: (turnId: string, input: HerdrTurnInput<z.infer<typeof ResultSchema>>, session: FakeSession, path: string, correction: number, prompt: string) => void;
+    updateAttention: (session: FakeSession, turnId: string, status: "awaiting_human", excerpt: string) => Promise<void>;
+  };
   try {
-    (runner as any).create("turn", setup.input, setup.session, join(setup.root, "turn.json"), 0);
-    await (runner as any).updateAttention(setup.session, "turn", "awaiting_human", "Which target?");
+    runnerInternals.create("turn", setup.input, setup.session, join(setup.root, "turn.json"), 0, setup.input.prompt);
+    await runnerInternals.updateAttention(setup.session, "turn", "awaiting_human", "Which target?");
     const first = setup.database.authQuery((db) => db.prepare("SELECT attention_activated_at FROM forge_herdr_role_sessions WHERE id = 'session'").get()) as { attention_activated_at: string };
-    await (runner as any).updateAttention(setup.session, "turn", "awaiting_human", "Which target?");
+    await runnerInternals.updateAttention(setup.session, "turn", "awaiting_human", "Which target?");
     expect(setup.database.authQuery((db) => db.prepare("SELECT attention_activated_at FROM forge_herdr_role_sessions WHERE id = 'session'").get())).toEqual(first);
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
@@ -684,7 +707,7 @@ test("re-prompts once for each newly interrupted session generation", async () =
   const herdr = {
     prompt: async (_name: string, prompt: string) => {
       prompts.push(prompt);
-      if (prompt.includes("You were interrupted") && generation === 3) await complete(session(), prompts[0]!, { status: "ok" });
+      if (prompts.length === 3 && generation === 3) await complete(session(), prompts[0]!, { status: "ok" });
       return session().live;
     },
     getAgent: async () => {
@@ -697,7 +720,11 @@ test("re-prompts once for each newly interrupted session generation", async () =
   const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => session() } as never, new IssueTimelineEvents(setup.database));
   try {
     await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
-    expect(prompts.filter((prompt) => prompt.includes("You were interrupted"))).toHaveLength(2);
+    expect(prompts).toHaveLength(3);
+    for (const prompt of prompts) {
+      expect(prompt).toContain("Plan this");
+      expect(prompt.match(/Forge response style/g)).toHaveLength(1);
+    }
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 

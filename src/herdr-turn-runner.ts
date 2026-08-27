@@ -24,6 +24,11 @@ type Role = RoleSessionRole;
 type ExecutionRole = "planner" | "reviewer" | "builder" | "integrator";
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const iso = () => new Date().toISOString();
+const responseStyleBlock = `Forge response style
+- Use ASD-STE100 Simplified Technical English for all human-readable prose.
+- In normal prose fields and public progress messages, write short, direct, unambiguous sentences and use consistent terms.
+- Do not alter required JSON keys, enum values, identifiers, paths, commands, code, quoted text, or schema-required formats.
+- Do not claim ASD-STE100 certification or force vocabulary that makes accurate technical output impossible.`;
 
 export interface HerdrTurnInput<T> {
   task: { taskId: string; projectId: string; projectSlug: string; issueKey?: string; worktreePath: string; runtimeRoot: string };
@@ -64,10 +69,10 @@ export class HerdrTurnRunner {
           ? undefined
           : [...(await this.candidates())];
         const start = await this.offset(session.rolloutPath);
-        this.create(turnId, input, session, resultPath, correction);
-        this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', updated_at = ? WHERE turn_id = ?", start, start, iso(), turnId);
         const marker = `[forge-turn:${turnId}]`;
-        const prompt = `${this.completionBlock(marker, resultPath, input.schemaPath)}${validationIssues ? `\n\nYour previous result file failed schema validation. Correct these issues:\n${validationIssues}` : ""}\n\n${input.prompt}`;
+        const prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
+        this.create(turnId, input, session, resultPath, correction, prompt);
+        this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', updated_at = ? WHERE turn_id = ?", start, start, iso(), turnId);
         await this.herdr.prompt(session.agentName, prompt);
         session = await this.resolveIdentity(session, input, turnId, candidates);
         const promptSentAt = this.now().toISOString();
@@ -154,7 +159,7 @@ export class HerdrTurnRunner {
       if (!live) {
         session = await this.ensure(input);
         if (!signal?.aborted && executionActive && this.interruptedGeneration(turnId) !== session.generation) {
-          await this.herdr.prompt(session.agentName, `[forge-turn:${turnId}] You were interrupted. Continue the current task and atomically write ${resultPath}.`);
+          await this.herdr.prompt(session.agentName, prompt);
           this.update("UPDATE forge_herdr_turns SET interrupted_generation = ?, interrupted_prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", session.generation, iso(), iso(), turnId);
         }
         continue;
@@ -286,9 +291,12 @@ export class HerdrTurnRunner {
 
   private turnId(input: HerdrTurnInput<unknown>, correction: number): string { return `turn_${hash(`${input.executionId}\0${input.promptKind}\0${correction}`).slice(0, 32)}`; }
   private resultPath(input: HerdrTurnInput<unknown>, turnId: string): string { return join(input.task.runtimeRoot, "herdr-results", input.task.taskId, input.sessionRole, `result-${turnId}.json`); }
+  private dispatchPrompt(marker: string, path: string, schema: string, taskPrompt: string, validationIssues?: string): string {
+    return `${this.completionBlock(marker, path, schema)}${validationIssues ? `\n\nYour previous result file failed schema validation. Correct these issues:\n${validationIssues}` : ""}\n\n${responseStyleBlock}\n\n${taskPrompt}`;
+  }
   private completionBlock(marker: string, path: string, schema: string): string { return `${marker}\n\nForge completion contract\n- Atomically write exactly one JSON object to ${path} (write a sibling temp file, then rename).\n- The object must satisfy ${schema}; no Markdown fence or commentary belongs in the file.\n- Do not say the task is complete until the result file exists.`; }
   private async ensure(input: HerdrTurnInput<unknown>): Promise<EnsuredRoleSession> { return this.sessions.ensureRoleSession(input.task, input.sessionRole, { model: input.profile.model, reasoningLevel: input.profile.reasoningLevel, serviceTier: input.profile.servicePriority === "fast" ? "fast" : input.profile.servicePriority === "priority" ? "priority" : "default" }); }
-  private create(turnId: string, input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, path: string, correction: number): void { this.update("INSERT OR IGNORE INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, correction_index, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?)", turnId, input.task.taskId, session.id, input.executionRole, input.ledger, input.executionId, input.promptKind, hash(input.prompt), relative(input.task.runtimeRoot, path), session.rolloutPath ?? null, correction, iso(), iso()); }
+  private create(turnId: string, input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, path: string, correction: number, prompt: string): void { this.update("INSERT OR IGNORE INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, correction_index, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?)", turnId, input.task.taskId, session.id, input.executionRole, input.ledger, input.executionId, input.promptKind, hash(prompt), relative(input.task.runtimeRoot, path), session.rolloutPath ?? null, correction, iso(), iso()); }
   private update(sql: string, ...values: unknown[]): void { this.database.authQuery((db) => db.prepare(sql).run(...values)); }
   private heartbeat(input: HerdrTurnInput<unknown>): boolean {
     const table = input.ledger === "agent" ? "forge_agent_executions" : "forge_developer_executions";

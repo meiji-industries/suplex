@@ -96,7 +96,7 @@ export class AttentionService {
           const snapshot = db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision DESC LIMIT 1").get(row.task_id) as { state_json?: string } | undefined;
           try { return snapshot?.state_json ? jsonRequired(snapshot.state_json) as { blocker?: Blocker; mergeDecision?: unknown } : undefined; } catch { return undefined; }
         });
-        const card = attentionCardFromBlocker(snapshot?.blocker, { summary: row.pane_id ? row.attention_excerpt : undefined, pendingAction: row.pane_id ? "Agent is waiting for you" : row.pending_action, actions: actionList, mergeDecision: snapshot?.mergeDecision });
+        const card = attentionCardFromBlocker(snapshot?.blocker, { ...(row.pane_id ? { summary: row.attention_excerpt } : {}), pendingAction: row.pane_id ? "Agent is waiting for you" : row.pending_action, actions: actionList, ...(snapshot?.mergeDecision ? { mergeDecision: snapshot.mergeDecision } : {}) });
         return { companyId: row.company_id, taskId: row.task_id, issueKey: row.issue_key, taskTitle: row.task_title, summary, sourceRevision: row.revision, activatedAt: row.activated_at, actions: actionList, card };
       });
       return { companyId: company.id, companyName: company.name, companyStatus: company.status, attentionCount: attention.length, attention };

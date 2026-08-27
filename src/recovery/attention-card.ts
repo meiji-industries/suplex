@@ -29,7 +29,7 @@ function genericCard(summary: string | null | undefined, context: AttentionCardC
   const primary = context.actions?.find((action) => !action.destructive);
   const cancel = context.actions?.find((action) => action.command === "cancel_issue");
   const explanation = summary || context.pendingAction || "This task needs your input.";
-  return { kind: "generic", title: shortTitle(context.pendingAction || "Needs attention"), explanation, evidence: [{ kind: "text", ref: explanation }], primaryAction: primary ? { command: primary.command, label: primary.label, requiresNote: primary.requiresNote } : { command: "continue_work", label: "Open the pane and answer" }, ...(cancel ? { secondaryAction: { command: cancel.command, label: cancel.label, destructive: true } } : {}) };
+  return { kind: "generic", title: shortTitle(context.pendingAction || "Needs attention"), explanation, evidence: [{ kind: "text", ref: explanation }], primaryAction: primary ? { command: primary.command, label: primary.label, ...(primary.requiresNote ? { requiresNote: true } : {}) } : { command: "continue_work", label: "Open the pane and answer" }, ...(cancel ? { secondaryAction: { command: cancel.command, label: cancel.label, destructive: true } } : {}) };
 }
 
 function decision(value: unknown): AttentionCondition | undefined {

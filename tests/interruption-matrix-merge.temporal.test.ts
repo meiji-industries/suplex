@@ -62,15 +62,6 @@ async function startConflict(h: TemporalHarness, issueId: string) {
   });
 }
 
-async function waitForPhase(h: TemporalHarness, workflowId: string, phase: string) {
-  let state = await queryIssueWorkflow(h.config, workflowId);
-  for (let attempt = 0; attempt < 100 && state.phase !== phase; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    state = await queryIssueWorkflow(h.config, workflowId);
-  }
-  return state;
-}
-
 async function waitFor(h: TemporalHarness, workflowId: string, predicate: (state: Awaited<ReturnType<typeof queryIssueWorkflow>>) => boolean) {
   let state = await queryIssueWorkflow(h.config, workflowId);
   for (let attempt = 0; attempt < 100 && !predicate(state); attempt += 1) {
@@ -201,7 +192,7 @@ test("planner note answers a merge decision on the same lead session", { timeout
       note,
       commandId: "merge-planner-note-choice",
     });
-    const settled = await waitFor(h, started.workflowId, () => projectedPhases.includes("delivery_ready"));
+    await waitFor(h, started.workflowId, () => projectedPhases.includes("delivery_ready"));
 
     expect(projectedPhases).toContain("delivery_ready");
     expect(planInputs).toHaveLength(2);

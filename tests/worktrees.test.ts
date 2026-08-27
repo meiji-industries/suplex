@@ -1,18 +1,21 @@
-import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import { expect, test } from "vitest";
 
 import { asNonRetryableApplicationFailure } from "../src/temporal/activities/context.js";
+import { runCommand } from "../src/command-runner.js";
 import { createGitCommandGuard, reserveOwnedWorktree, withWorktreeBuildCaches, WorktreeFailure, WorktreeManager } from "../src/worktrees.js";
 
-const execFileAsync = promisify(execFile);
+async function command(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
+  const result = await runCommand({ taskId: null, stepId: null, command, args, cwd, ...(env ? { env } : {}) });
+  if (result.exitCode !== 0 || result.timedOut) throw Object.assign(new Error(result.stderr || `${command} failed`), result);
+  return result.stdout.trim();
+}
 
 async function git(args: string[], cwd: string): Promise<string> {
-  return (await execFileAsync("git", args, { cwd })).stdout.trim();
+  return command("git", args, cwd);
 }
 
 async function fixture() {
@@ -99,10 +102,60 @@ test("creates a deterministic exact-base worktree and guards prohibited Git/prov
     expect(await manager.inspectDelivery(record.worktreePath)).toMatchObject({ branchName: record.branchName, headSha: value.baseSha, dirtyState: "clean" });
     const guard = await createGitCommandGuard(join(value.root, "runtime"));
     try {
-      await expect(execFileAsync("git", ["push"], { cwd: record.worktreePath, env: guard.env })).rejects.toThrow();
-      await expect(execFileAsync("gh", ["pr", "create"], { cwd: record.worktreePath, env: guard.env })).rejects.toThrow();
+      await expect(command("git", ["push"], record.worktreePath, guard.env)).rejects.toThrow();
+      await expect(command("gh", ["pr", "create"], record.worktreePath, guard.env)).rejects.toThrow();
     } finally { await guard.cleanup(); }
   } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("re-attaches a detached Developer delivery to its expected branch", async () => {
+  const value = await fixture();
+  try {
+    const manager = new WorktreeManager();
+    const record = await manager.create({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_detached_delivery", targetBaseSha: value.baseSha, branchName: "work/x" });
+    await writeFile(join(record.worktreePath, "DELIVERY.md"), "delivered\n");
+    await git(["add", "DELIVERY.md"], record.worktreePath);
+    await git(["commit", "-m", "detached delivery"], record.worktreePath);
+    const deliveredSha = await git(["rev-parse", "HEAD"], record.worktreePath);
+    await git(["switch", "--detach"], record.worktreePath);
+    expect(await git(["status", "--porcelain=v1", "--untracked-files=all"], record.worktreePath)).toBe("");
+
+    await expect(manager.inspectDelivery(record.worktreePath, "work/x")).resolves.toMatchObject({ branchName: "work/x", headSha: deliveredSha, dirtyState: "clean" });
+    expect(await git(["symbolic-ref", "--short", "HEAD"], record.worktreePath)).toBe("work/x");
+    expect(await git(["rev-parse", "work/x"], record.worktreePath)).toBe(deliveredSha);
+    expect(await git(["status", "--porcelain=v1", "--untracked-files=all"], record.worktreePath)).toBe("");
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("reports the Git error when inspecting a detached delivery without an expected branch", async () => {
+  const value = await fixture();
+  try {
+    const manager = new WorktreeManager();
+    const record = await manager.create({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_detached_failure", targetBaseSha: value.baseSha, branchName: "work/x" });
+    await git(["switch", "--detach"], record.worktreePath);
+    await expect(manager.inspectDelivery(record.worktreePath)).rejects.toMatchObject({
+      code: "delivery-inspection-failed",
+      message: expect.stringContaining("fatal: ref HEAD is not a symbolic ref"),
+    });
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("the Developer guard blocks detached Git checkouts", async () => {
+  const value = await fixture();
+  const guard = await createGitCommandGuard(join(value.root, "runtime"));
+  const runGuard = async (args: string[]): Promise<number> => {
+    const result = await runCommand({ taskId: null, stepId: null, command: "/bin/sh", args: [join(guard.directory, "git"), ...args], env: { ...guard.env, FORGE_GIT_REAL_BIN: "/usr/bin/true" } });
+    return result.exitCode ?? -1;
+  };
+  try {
+    expect(await runGuard(["switch", "--detach", "abc1234"])).toBe(125);
+    expect(await runGuard(["checkout", "7af40fe7"])).toBe(125);
+    expect(await runGuard(["checkout", "work/x"])).toBe(0);
+    expect(await runGuard(["commit", "-m", "x"])).toBe(0);
+  } finally {
+    await guard.cleanup();
+    await rm(value.root, { recursive: true, force: true });
+  }
 });
 
 test("the Developer guard blocks every prohibited mutation family", async () => {
@@ -114,15 +167,14 @@ test("the Developer guard blocks every prohibited mutation family", async () => 
       ["cherry-pick", "HEAD"], ["revert", "HEAD"], ["worktree", "remove", "other"], ["update-ref", "refs/heads/main", "HEAD"],
       ["filter-repo"], ["gc"], ["prune"], ["branch", "-D", "old"], ["branch", "-d", "old"], ["commit", "--amend", "--no-edit"],
     ]) {
-      await expect(execFileAsync("git", args, { cwd: value.repositoryPath, env: guard.env })).rejects.toThrow();
+      await expect(command("git", args, value.repositoryPath, guard.env)).rejects.toThrow();
     }
-    await expect(execFileAsync("gh", ["pr", "create"], { cwd: value.repositoryPath, env: guard.env })).rejects.toThrow();
+    await expect(command("gh", ["pr", "create"], value.repositoryPath, guard.env)).rejects.toThrow();
   } finally {
     await guard.cleanup();
     await rm(value.root, { recursive: true, force: true });
   }
 });
-
 test("rejects dirty, reused, colliding, symlinked, and unsafe worktree coordinates", async () => {
   const value = await fixture();
   try {

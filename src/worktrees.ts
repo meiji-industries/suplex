@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-restricted-imports -- synchronous Git probes run inside transaction paths.
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -339,18 +340,29 @@ export class WorktreeManager {
     return { branchName: input.branchName, worktreePath, targetBaseSha: mergeBase };
   }
 
-  async inspectDelivery(worktreePath: string): Promise<DeliveryGitState> {
+  async inspectDelivery(worktreePath: string, expectedBranch?: string): Promise<DeliveryGitState> {
     const canonical = await canonicalDirectory(worktreePath, "worktree-unavailable");
     try {
-      const [branchName, headSha, treeSha, status] = await Promise.all([
-        this.git.run(["symbolic-ref", "--short", "HEAD"], canonical),
+      const [headSha, treeSha, status] = await Promise.all([
         this.git.run(["rev-parse", "HEAD"], canonical),
         this.git.run(["rev-parse", "HEAD^{tree}"], canonical),
         this.git.run(["status", "--porcelain=v1", "--untracked-files=all"], canonical),
       ]);
+      let branchName: string;
+      try {
+        branchName = await this.git.run(["symbolic-ref", "--short", "HEAD"], canonical);
+      } catch (error) {
+        if (!expectedBranch || !branchPattern.test(expectedBranch)) throw error;
+        await this.git.run(["branch", "-f", expectedBranch, "HEAD"], canonical);
+        await this.git.run(["symbolic-ref", "HEAD", `refs/heads/${expectedBranch}`], canonical);
+        console.warn(`Re-attached detached Developer delivery worktree ${canonical} to branch ${expectedBranch}`);
+        branchName = expectedBranch;
+      }
       return { branchName, headSha, treeSha, dirtyState: status ? "dirty" : "clean" };
-    } catch {
-      throw new WorktreeFailure("delivery-inspection-failed", "Git could not inspect the exact Developer delivery");
+    } catch (error) {
+      const stderr = error && typeof error === "object" && "stderr" in error ? error.stderr : undefined;
+      const detail = String(stderr ?? (error instanceof Error ? error.message : error)).trim().split(/\r?\n/, 1)[0];
+      throw new WorktreeFailure("delivery-inspection-failed", `Git could not inspect the exact Developer delivery: ${detail}`);
     }
   }
 
@@ -694,14 +706,24 @@ export async function withWorktreeBuildCaches(input: WorktreeBuildCacheInput): P
 export async function createGitCommandGuard(runtimeRoot: string, name = "developer-guard"): Promise<GitCommandGuard> {
   const directory = join(resolve(runtimeRoot), name);
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const gitBin = process.env.FORGE_GIT_BIN?.trim() || execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const configuredGitBin = process.env.FORGE_GIT_BIN?.trim();
+  const resolvedGitBin = configuredGitBin ? undefined : await runCommand({ taskId: null, stepId: null, command: "which", args: ["git"] });
+  const gitBin = configuredGitBin || (resolvedGitBin?.exitCode === 0 ? resolvedGitBin.stdout.trim() : "");
   if (!gitBin) throw new WorktreeFailure("git-unavailable", "Git is unavailable for guarded Developer execution");
   const gitGuard = `#!/bin/sh
+command=
 for arg in "$@"; do
   case "$arg" in
     push|rebase|clean|reset|merge|cherry-pick|revert|worktree|update-ref|filter-repo|gc|prune) echo "Forge Developer policy blocked git $arg" >&2; exit 125 ;;
+    --detach|--orphan) echo "Forge Developer policy blocked git detach" >&2; exit 125 ;;
     --amend|-D|-d|--force|-f) echo "Forge Developer policy blocked destructive git option $arg" >&2; exit 125 ;;
   esac
+  case "$arg" in -*) continue ;; esac
+  if [ -z "$command" ]; then
+    case "$arg" in checkout|switch) command="$arg" ;; esac
+  elif [ "$command" = checkout ] || [ "$command" = switch ]; then
+    case "$arg" in *[!0-9a-f]*|'') ;; *) if [ "\${#arg}" -ge 7 ] && [ "\${#arg}" -le 40 ]; then echo "Forge Developer policy blocked git detach" >&2; exit 125; fi ;; esac
+  fi
 done
 exec "$FORGE_GIT_REAL_BIN" "$@"
 `;

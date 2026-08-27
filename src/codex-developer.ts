@@ -339,7 +339,7 @@ export class DeveloperService {
         try { if (!proofBlocker && source) durableProof = await this.browserProof.ingest({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: executionId, resultCommit: source.headSha, resultTree: source.treeSha, worktreePath: worktree.worktreePath, control: input.visualEvidence ?? "off", ...(parsedReport.visualEvidence ? { evidence: parsedReport.visualEvidence } : {}) }); }
         catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
         if (durableProof && parsedReport.visualEvidence) await this.browserProof.cleanupPersisted(worktree.worktreePath, parsedReport.visualEvidence, durableProof);
-        const gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
+        const gitState = await this.worktrees.inspectDelivery(worktree.worktreePath, worktree.branchName);
         const delivery = { ...parsedReport, blocker: parsedReport.blocker ?? proofBlocker, visualEvidence: durableProof, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, branchName: worktree.branchName, worktreePath: worktree.worktreePath, targetBaseSha: worktree.targetBaseSha };
         const deliveryArtifact = await this.artifacts.putArtifact(input.companyId, "developer-delivery", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(delivery, null, 2), "utf8"), taskId: input.taskId });
         const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
@@ -418,7 +418,7 @@ export class DeveloperService {
       const report = turn.result;
       const missingFiles = conflict.conflictFiles.filter((file) => !report.resolvedFiles.includes(file));
       if (missingFiles.length || report.blocker !== null) throw new AgentFailure("merge-resolution-incomplete", missingFiles.length ? `The Developer did not resolve: ${missingFiles.join(", ")}` : report.blocker ?? "Merge-conflict resolution is blocked");
-      const gitState = await this.worktrees.inspectDelivery(input.worktreePath);
+      const gitState = await this.worktrees.inspectDelivery(input.worktreePath, input.branchName);
       completedMerge = { headSha: gitState.headSha, treeSha: gitState.treeSha };
       const parents = (await git(["rev-list", "--parents", "-n", "1", "HEAD"], input.worktreePath)).split(/\s+/);
       if (gitState.branchName !== input.branchName || gitState.dirtyState !== "clean" || gitState.headSha.toLowerCase() !== report.resultCommit.toLowerCase() || gitState.treeSha.toLowerCase() !== report.resultTree.toLowerCase() || parents.length !== 3 || (parents[1] ?? "").toLowerCase() !== input.priorHead.toLowerCase() || (parents[2] ?? "").toLowerCase() !== input.targetBaseSha.toLowerCase()) {
@@ -430,7 +430,7 @@ export class DeveloperService {
       const verification = await runPinnedVerification({ taskId: input.taskId, stepId: executionId, worktreePath: input.worktreePath, setupCommand: parsed.setupCommand, verificationCommand: parsed.verificationCommand }, { guard });
       const verificationArtifactRecord = await this.artifacts.putArtifact(input.companyId, "forward-merge-verification", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(verification), "utf8") });
       verificationArtifact = verificationArtifactRecord;
-      const afterVerification = await this.worktrees.inspectDelivery(input.worktreePath);
+      const afterVerification = await this.worktrees.inspectDelivery(input.worktreePath, input.branchName);
       const afterParents = (await git(["rev-list", "--parents", "-n", "1", "HEAD"], input.worktreePath)).split(/\s+/);
       if (afterVerification.branchName !== input.branchName || afterVerification.headSha.toLowerCase() !== gitState.headSha.toLowerCase() || afterVerification.treeSha.toLowerCase() !== gitState.treeSha.toLowerCase() || afterVerification.dirtyState !== "clean" || afterParents.length !== 3 || afterParents[1]?.toLowerCase() !== input.priorHead.toLowerCase() || afterParents[2]?.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new AgentFailure("merge_state_ownership_mismatch", "Pinned verification changed the forward-merge delivery");
       if (verification.outcome !== "passed") throw new AgentFailure(verification.code ?? "verification_failed", verification.summary);
@@ -525,7 +525,7 @@ export class DeveloperService {
       try { if (!proofBlocker && source) durableProof = await this.browserProof.ingest({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: executionId, resultCommit: source.headSha, resultTree: source.treeSha, worktreePath, control: visualEvidence, ...(report.visualEvidence ? { evidence: report.visualEvidence } : {}) }); }
       catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
       if (durableProof && report.visualEvidence) await this.browserProof.cleanupPersisted(worktreePath, report.visualEvidence, durableProof);
-      const gitState = await this.worktrees.inspectDelivery(worktreePath);
+      const gitState = await this.worktrees.inspectDelivery(worktreePath, input.branchName);
       const persistedReport = { ...report, blocker: report.blocker ?? proofBlocker, visualEvidence: durableProof, cycle: input.cycle, reviewId: input.reviewId, supersedesExecutionId: input.developerExecutionId };
       const repairArtifact = await this.artifacts.putArtifact(input.companyId, "developer-repair", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(persistedReport, null, 2), "utf8"), taskId: input.taskId });
       const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
@@ -551,7 +551,7 @@ export class DeveloperService {
       let observed: { headSha: string; treeSha: string; dirtyState: "clean" | "dirty" } | undefined;
       try {
         const observedPath = await scopedRepository(this.config.worktreeRoot, worktreePath);
-        const gitState = await this.worktrees.inspectDelivery(observedPath);
+        const gitState = await this.worktrees.inspectDelivery(observedPath, input.branchName);
         observed = { headSha: gitState.headSha, treeSha: gitState.treeSha, dirtyState: gitState.dirtyState };
       } catch { /* Preserve the typed blocker even when the worktree can no longer be inspected. */ }
       const effectiveCode = code;
@@ -586,10 +586,10 @@ export class DeveloperService {
     // Draft is not part of the pull request identity: acceptance marks a delivery ready for review while CI is still observed, so CI repair must still run on the exact head.
     if (pullRequest.state !== "open" || pullRequest.repository.toLowerCase() !== plan.repository.toLowerCase() || pullRequest.number !== plan.pullRequestNumber || pullRequest.url.replace(/\/$/, "").toLowerCase() !== plan.pullRequestUrl.replace(/\/$/, "").toLowerCase() || pullRequest.headBranch !== plan.headBranch || pullRequest.baseBranch !== plan.baseBranch || pullRequest.baseSha.toLowerCase() !== plan.baseSha.toLowerCase() || pullRequest.headSha.toLowerCase() !== input.failedHeadSha.toLowerCase()) throw new AgentFailure("ci-repair-pull-request-changed", "The pull request changed before CI repair");
     const worktreePath = await scopedRepository(this.config.worktreeRoot, input.worktreePath);
-    let current = await this.worktrees.inspectDelivery(worktreePath);
+    let current = await this.worktrees.inspectDelivery(worktreePath, input.branchName);
     // A previously failed repair attempt can leave its own unpushed commit on HEAD.
     // Discard it and retry the same exact repair instead of refusing forever.
-    if (current.headSha.toLowerCase() !== input.priorCommit.toLowerCase() && await rollbackUnpushedRepairCommits(worktreePath, input.branchName, input.priorCommit)) current = await this.worktrees.inspectDelivery(worktreePath);
+    if (current.headSha.toLowerCase() !== input.priorCommit.toLowerCase() && await rollbackUnpushedRepairCommits(worktreePath, input.branchName, input.priorCommit)) current = await this.worktrees.inspectDelivery(worktreePath, input.branchName);
     if (current.branchName !== input.branchName || current.dirtyState !== "clean") throw new AgentFailure("ci-repair-subject-changed", "The CI repair worktree is not a clean task branch");
     this.requireDeveloperSession(input.priorDeveloperSessionRef);
     const planText = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: plan.planStoragePath, sha256: plan.planSha256 })).toString("utf8");
@@ -615,7 +615,7 @@ export class DeveloperService {
       const task = this.taskContext(input);
       const turn = await this.turnRunner.run({ task: { ...task, worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "developer", executionRole: "integrator", ledger: "developer", executionId, promptKind: "ci-repair", prompt: ciRepairPrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperRepairReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-repair", DeveloperRepairReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: 0 });
       const report = turn.result;
-      const gitState = await this.worktrees.inspectDelivery(worktreePath);
+      const gitState = await this.worktrees.inspectDelivery(worktreePath, input.branchName);
       if (gitState.branchName !== input.branchName || gitState.dirtyState !== "clean" || report.blocker !== null) throw new AgentFailure("ci-repair-revision-invalid", "CI repair did not leave a clean task branch");
       const delivery = await this.artifacts.putArtifact(input.companyId, "developer-repair", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, priorCommit: input.priorCommit, priorTree: input.priorTree }, null, 2), "utf8") });
       const evidence = await this.artifacts.putArtifact(input.companyId, "ci-repair-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });

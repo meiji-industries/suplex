@@ -385,10 +385,10 @@ export class AgentService {
     });
     if (!input.roleProfiles.planner) throw new AgentFailure("profile-unavailable", "Lead planning requires a configured Lead profile");
     const resumeSessionRef = input.resume?.leadSessionRef ?? input.leadSessionRef ?? input.resumeLeadSessionRef;
-    const pinned = resumeSessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, provider, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND company_id = ? AND role = 'planner' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(resumeSessionRef, input.companyId) as { profileId: string | null; provider: "codex" | "claude"; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
+    const pinned = resumeSessionRef ? this.database.authQuery((db) => db.prepare("SELECT e.profile_id AS profileId, COALESCE(e.provider, p.provider, 'codex') AS provider, e.resolved_model AS model, e.resolved_reasoning_level AS reasoningLevel, e.resolved_service_priority AS servicePriority FROM forge_agent_executions e LEFT JOIN forge_profiles p ON p.id = e.profile_id WHERE e.session_ref = ? AND e.company_id = ? AND e.role = 'planner' AND e.resolved_model IS NOT NULL ORDER BY e.started_at DESC LIMIT 1").get(resumeSessionRef, input.companyId) as { profileId: string | null; provider: string; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const persisted = pinned;
     let leadProfile = persisted
-      ? { id: persisted.profileId ?? input.roleProfiles.planner ?? "pinned-lead", name: "Pinned Lead", provider: persisted.provider, model: persisted.model, reasoningLevel: persisted.reasoningLevel, servicePriority: persisted.servicePriority, capacity: 0 }
+      ? { id: persisted.profileId ?? input.roleProfiles.planner ?? "pinned-lead", name: "Pinned Lead", provider: persisted.provider as "codex" | "claude", model: persisted.model, reasoningLevel: persisted.reasoningLevel, servicePriority: persisted.servicePriority, capacity: 0 }
       : profileSettings.find((profile) => profile.id === input.roleProfiles.planner);
     if (!leadProfile) throw new AgentFailure("profile-unavailable", "The configured Lead profile is unavailable");
     const revisionRequest = input.revisionRequestId ? this.database.authQuery((db) => db.prepare(`SELECT r.disposition, r.worktree_path AS worktreePath, r.branch_name AS branchName, r.base_sha AS baseSha, r.head_sha AS headSha, r.tree_sha AS treeSha, r.exact_base_sha AS exactBaseSha, a.storage_path AS reasonPath, a.sha256 AS reasonSha
@@ -396,7 +396,7 @@ export class AgentService {
       WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { disposition: "reuse" | "new"; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null; reasonPath: string; reasonSha: string } | undefined) : undefined;
     if (input.revisionRequestId && !revisionRequest) throw new AgentFailure("revision-request-missing", "The plan revision request is unavailable");
     const revisionContext = revisionRequest ? { ...revisionRequest, reason: (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: revisionRequest.reasonPath, sha256: revisionRequest.reasonSha })).toString("utf8") } : undefined;
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(leadProfile.model) || !["low", "medium", "high", "xhigh"].includes(leadProfile.reasoningLevel) || !["standard", "priority", "fast"].includes(leadProfile.servicePriority)) {
+    if (!["codex", "claude"].includes(leadProfile.provider) || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(leadProfile.model) || !["low", "medium", "high", "xhigh"].includes(leadProfile.reasoningLevel) || !["standard", "priority", "fast"].includes(leadProfile.servicePriority)) {
       throw new AgentFailure("scope_configuration", "The configured Lead profile has invalid turn settings", { nonRetryable: true });
     }
     const repositoryEvidence = await this.repositoryEvidence(repositoryPath);
@@ -469,7 +469,7 @@ export class AgentService {
           sessionRef = existing.session_ref ?? sessionRef;
           return;
         }
-        db.prepare(`INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, heartbeat_at, event_offset) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?, 'planning', ?, ?, ?, ?, ?, ?, ?, 0)`).run(executionId, input.taskId, input.companyId, input.workflowId, turnKey, input.revision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, sessionRef ?? null, startedAt, startedAt);
+        db.prepare(`INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, provider, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, heartbeat_at, event_offset) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?, 'planning', ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(executionId, input.taskId, input.companyId, input.workflowId, turnKey, input.revision, leadProfile.id, leadProfile.provider, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, sessionRef ?? null, startedAt, startedAt);
       });
     } catch (error) {
       if (error instanceof AgentFailure) throw error;
@@ -550,7 +550,7 @@ export class AgentService {
     const executionId = `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, ?, 'starting', 1, ?, ?, 'merge-conflict-planning', ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, executionRole, `${input.workflowId}:merge-conflict:${input.priorHead}:${input.targetBaseSha}:${input.capacityRequestId ?? executionId}`, input.planRevision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, input.leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, provider, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, ?, 'starting', 1, ?, ?, 'merge-conflict-planning', ?, ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, executionRole, `${input.workflowId}:merge-conflict:${input.priorHead}:${input.targetBaseSha}:${input.capacityRequestId ?? executionId}`, input.planRevision, leadProfile.id, leadProfile.provider, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, input.leadSessionRef, startedAt);
     });
     const evidenceLines: string[] = [];
     try {
@@ -635,7 +635,7 @@ export class AgentService {
     const profile = await this.resolveTurnProfile(input.roleProfiles?.[executionRole] ?? input.roleProfiles?.planner, input.leadSessionRef, "Integrator", executionRole);
     const executionId = `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at) VALUES (?, ?, ?, ?, ?, 'starting', 1, ?, ?, ?, ?, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, executionRole, profile.id, profile.model, profile.reasoningLevel, profile.servicePriority, input.leadSessionRef, startedAt));
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, profile_id, provider, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at) VALUES (?, ?, ?, ?, ?, 'starting', 1, ?, ?, ?, ?, ?, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, executionRole, profile.id, profile.provider, profile.model, profile.reasoningLevel, profile.servicePriority, input.leadSessionRef, startedAt));
     // Actions check-run summaries are empty; the failing job log tail recorded with the CI evidence is the real signal.
     const evidenceRow = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(input.evidenceArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined);
     const failedLogs = evidenceRow ? await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: evidenceRow.storagePath, sha256: evidenceRow.sha256 }).then((bytes) => (jsonRequired(bytes.toString("utf8")) as { failedCheckLogs?: Array<{ name: string; runId: string; log: string }> }).failedCheckLogs ?? []).catch(() => []) : [];
@@ -809,7 +809,7 @@ export class AgentService {
     try {
       leadProfile = await this.resolveTurnProfile(input.roleProfiles[reviewRole], leadSessionRef, reviewRole === "reviewer" ? "Final reviewer" : "Lead review", reviewRole);
     } catch (error) {
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
+      const failure = error instanceof AgentFailure ? error : new AgentFailure("invalid-session-reference", `Lead session reference is invalid: ${error instanceof Error ? error.message : String(error)}`);
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
       throw failure;
     }
@@ -818,7 +818,7 @@ export class AgentService {
     const startedAt = this.now().toISOString();
     const attemptId = `review_attempt_${randomBytes(12).toString("hex")}`;
     this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, ?, 'starting', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, reviewRole, `${input.workflowId}:delivery-review:${subjectCommit}:${attemptId}`, input.planRevision, isFinalReview ? "final-delivery-review" : "delivery-review", leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, provider, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, ?, 'starting', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, reviewRole, `${input.workflowId}:delivery-review:${subjectCommit}:${attemptId}`, input.planRevision, isFinalReview ? "final-delivery-review" : "delivery-review", leadProfile.id, leadProfile.provider, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, leadSessionRef, startedAt);
       if (!isFinalReview) db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id, lead_execution_id, lead_session_ref, developer_session_ref, status, correction_attempts, supersedes_review_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 0, ?, ?)").run(attemptId, input.taskId, input.companyId, input.workflowId, subject.planRevision, targetBaseSha, subjectCommit, subjectTree, subject.developerExecutionId, subject.deliveryArtifactId, subject.developerEvidenceArtifactId, executionId, leadSessionRef, context.developerSessionRef ?? subject.developerSessionRef, input.supersedesReviewId, startedAt);
     });
     const evidenceLines: string[] = [];
@@ -918,7 +918,7 @@ export class AgentService {
     const executionId = `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, started_at, event_offset) VALUES (?, ?, ?, ?, 'reviewer', 'starting', 1, ?, ?, 'supplemental-review', ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:supplemental-review:${input.revision}`, input.revision, reviewerProfile.id, reviewerProfile.model, reviewerProfile.reasoningLevel, reviewerProfile.servicePriority, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, provider, resolved_model, resolved_reasoning_level, resolved_service_priority, started_at, event_offset) VALUES (?, ?, ?, ?, 'reviewer', 'starting', 1, ?, ?, 'supplemental-review', ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:supplemental-review:${input.revision}`, input.revision, reviewerProfile.id, reviewerProfile.provider, reviewerProfile.model, reviewerProfile.reasoningLevel, reviewerProfile.servicePriority, startedAt);
     });
     const lines: string[] = [];
     try {
@@ -964,7 +964,7 @@ export class AgentService {
     const executionId = `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?, 'lead-consolidation', ?, ?, ?, ?, ?, ?, 0)").run(executionId, rawInput.taskId, rawInput.companyId, rawInput.workflowId, `${rawInput.workflowId}:lead-consolidation:${rawInput.revision}`, rawInput.revision, lead.id, lead.model, lead.reasoningLevel, lead.servicePriority, rawInput.leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, provider, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?, 'lead-consolidation', ?, ?, ?, ?, ?, ?, ?, 0)").run(executionId, rawInput.taskId, rawInput.companyId, rawInput.workflowId, `${rawInput.workflowId}:lead-consolidation:${rawInput.revision}`, rawInput.revision, lead.id, lead.provider, lead.model, lead.reasoningLevel, lead.servicePriority, rawInput.leadSessionRef, startedAt);
     });
     const lines: string[] = [];
     try {
@@ -1026,7 +1026,7 @@ export class AgentService {
   }
 
   private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string, role: "planner" | "reviewer" | "integrator" = "planner"): Promise<{ id: string; provider: "codex" | "claude"; model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }> {
-    const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, provider, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND role = ? AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(sessionRef, role) as { profileId: string | null; provider: "codex" | "claude"; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
+    const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT e.profile_id AS profileId, COALESCE(e.provider, p.provider, 'codex') AS provider, e.resolved_model AS model, e.resolved_reasoning_level AS reasoningLevel, e.resolved_service_priority AS servicePriority FROM forge_agent_executions e LEFT JOIN forge_profiles p ON p.id = e.profile_id WHERE e.session_ref = ? AND e.role = ? AND e.resolved_model IS NOT NULL ORDER BY e.started_at DESC LIMIT 1").get(sessionRef, role) as { profileId: string | null; provider: string; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const profile = pinned ? undefined : this.database.authQuery((db) => (profileId
       ? db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId)
       : db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE provider = ? ORDER BY id LIMIT 1").get("codex")) as { id: string; provider: "codex" | "claude"; model: string; reasoningLevel: string; servicePriority: string } | undefined);
@@ -1034,10 +1034,11 @@ export class AgentService {
     const model = pinned?.model ?? profile!.model;
     const reasoningLevel = pinned?.reasoningLevel ?? profile!.reasoningLevel;
     const servicePriority = pinned?.servicePriority ?? profile!.servicePriority;
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(model) || !["low", "medium", "high", "xhigh"].includes(reasoningLevel) || !["standard", "priority", "fast"].includes(servicePriority)) {
+    const provider = pinned?.provider ?? profile!.provider;
+    if (!["codex", "claude"].includes(provider) || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(model) || !["low", "medium", "high", "xhigh"].includes(reasoningLevel) || !["standard", "priority", "fast"].includes(servicePriority)) {
       throw new AgentFailure("scope_configuration", `${label} profile has invalid pinned turn settings`, { nonRetryable: true });
     }
-    return { id: pinned?.profileId ?? profile!.id, provider: pinned?.provider ?? profile!.provider, model, reasoningLevel: reasoningLevel as "low" | "medium" | "high" | "xhigh", servicePriority: servicePriority as "standard" | "priority" | "fast" };
+    return { id: pinned?.profileId ?? profile!.id, provider: provider as "codex" | "claude", model, reasoningLevel: reasoningLevel as "low" | "medium" | "high" | "xhigh", servicePriority: servicePriority as "standard" | "priority" | "fast" };
   }
 
   private async ensureResultSchema(name: string, schema: z.ZodType): Promise<string> {

@@ -182,6 +182,7 @@ test("Lead planning persists a fake turn result and reuses the Lead role session
   const value = await fixture();
   const fake = fakeTurnRunner({ "lead-plan": () => routinePlan(), "lead-plan-revision": () => routinePlan("A revised fixture plan") });
   try {
+    value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET provider = 'claude' WHERE id = 'profile_1'").run());
     const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
     const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
     expect(result.leadSessionRef).toBe("session_0123456789abcdef01234567");
@@ -193,12 +194,21 @@ test("Lead planning persists a fake turn result and reuses the Lead role session
     const resumed = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 2, resume: { leadSessionRef: result.leadSessionRef, reason: "member_revision", instructionArtifactId: value.briefId, instructionSha256: briefSha } });
     expect(resumed.leadSessionRef).toBe(result.leadSessionRef);
     expect(fake.calls[1]).toMatchObject({ promptKind: "lead-plan", profile: { model: "gpt-5-codex" } });
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, session_ref, process_pid, process_group_id FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ status: "completed", session_ref: result.leadSessionRef, process_pid: null, process_group_id: null });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, provider, session_ref, process_pid, process_group_id FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ status: "completed", provider: "claude", session_ref: result.leadSessionRef, process_pid: null, process_group_id: null });
     const evidence = value.database.authQuery((db) => db.prepare("SELECT a.storage_path, a.sha256 FROM forge_artifacts a WHERE a.id = ?").get(result.leadEvidenceArtifactId) as { storage_path: string; sha256: string });
     const evidenceText = await new ArtifactStore(value.config.artifactRoot).read({ companyId: "company_1", storagePath: evidence.storage_path, sha256: evidence.sha256 });
     expect(evidenceText).toEqual(Buffer.from("\n"));
     expect(value.database.authQuery((db) => db.prepare("SELECT output_kind AS kind, output_revision AS revision, session_ref FROM forge_agent_executions WHERE task_id = 'task_1' AND output_artifact_id IS NOT NULL").get())).toEqual({ kind: "plan", revision: 1, session_ref: result.leadSessionRef });
-    expect(fake.calls).toHaveLength(2);
+    value.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET provider = NULL WHERE session_ref = ?").run(result.leadSessionRef));
+    const pinnedClaude = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 3, resume: { leadSessionRef: result.leadSessionRef, reason: "member_revision", instructionArtifactId: value.briefId, instructionSha256: briefSha } });
+    expect(fake.calls[2]).toMatchObject({ promptKind: "lead-plan", profile: { provider: "claude" } });
+    value.database.authQuery((db) => {
+      db.prepare("DELETE FROM forge_profiles WHERE id = 'profile_1'").run();
+      db.prepare("UPDATE forge_agent_executions SET provider = NULL WHERE session_ref = ?").run(result.leadSessionRef);
+    });
+    await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 4, resume: { leadSessionRef: pinnedClaude.leadSessionRef, reason: "member_revision", instructionArtifactId: value.briefId, instructionSha256: briefSha } });
+    expect(fake.calls[3]).toMatchObject({ promptKind: "lead-plan", profile: { provider: "codex" } });
+    expect(fake.calls).toHaveLength(4);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

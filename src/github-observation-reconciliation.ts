@@ -5,23 +5,26 @@ import { json } from "./task-utils.js";
 import { durableCommand, executeIssueCommand } from "./temporal/service.js";
 import { IssueWorkflowStateSchema, type IssueWorkflowState } from "./temporal/issue-contracts.js";
 import type { IssueCommand } from "./commands/registry.js";
+import { integrateRemoteBranch, type RemoteIntegration } from "./remote-branch-integration.js";
 
 export type GithubObservation = "merged" | "closed" | "checks_passed" | "checks_failed" | "checks_pending" | "head_changed" | "unchanged";
-type Outcome = { taskId: string; workflowId: string; observation: GithubObservation; commandKind: string | null; commandId: string | null; deduplicated: boolean };
+type Outcome = { taskId: string; workflowId: string; observation: GithubObservation; commandKind: string | null; commandId: string | null; deduplicated: boolean; integration?: RemoteIntegration["kind"] };
 export interface GithubReconciliationResult { inspected: number; signalled: number; skipped: number; errors: number; outcomes: Outcome[] }
-type Candidate = { taskId: string; companyId: string; workflowId: string; revision: number; phase: string; repository: string; branch: string; pullRequestNumber: number | null; state: IssueWorkflowState };
+type Candidate = { taskId: string; companyId: string; workflowId: string; revision: number; phase: string; repository: string; branch: string; pullRequestNumber: number | null; worktreePath: string | null; targetBaseSha: string | null; state: IssueWorkflowState };
 type ReconciliationOptions = {
   taskId?: string;
   observe?: (input: { repository: string; branch: string; pullRequestNumber?: number | null }) => Promise<GithubPullRequestObservation>;
   execute?: typeof executeIssueCommand;
+  integrate?: typeof integrateRemoteBranch;
 };
 
 const IGNORED_PHASES = new Set(["backlog", "planning", "development", "reviewing_delivery", "repair_required", "done", "cancelled"]);
 
 function candidates(database: ForgeDatabase, taskId?: string): Candidate[] {
-  const rows = database.authQuery((db) => db.prepare(`SELECT p.task_id AS taskId, p.company_id AS companyId, p.workflow_id AS workflowId, p.revision, p.phase, r.repository, r.head_branch AS branch, r.pr_number AS pullRequestNumber, s.state_json AS stateJson
+  const rows = database.authQuery((db) => db.prepare(`SELECT p.task_id AS taskId, p.company_id AS companyId, p.workflow_id AS workflowId, p.revision, p.phase, r.repository, r.head_branch AS branch, r.pr_number AS pullRequestNumber, w.worktree_path AS worktreePath, w.starting_sha AS targetBaseSha, s.state_json AS stateJson
     FROM forge_issue_projections p JOIN forge_workflow_snapshots s ON s.task_id = p.task_id AND s.revision = p.revision
     JOIN forge_releases r ON r.task_id = p.task_id AND r.superseded_at IS NULL
+    LEFT JOIN forge_issue_worktrees w ON w.task_id = p.task_id AND w.company_id = p.company_id AND w.workflow_id = p.workflow_id AND w.status <> 'released'
     WHERE (? IS NULL OR p.task_id = ?) AND r.repository IS NOT NULL AND r.head_branch IS NOT NULL ORDER BY p.task_id`).all(taskId ?? null, taskId ?? null) as Array<Omit<Candidate, "state"> & { stateJson: string }>);
   return rows.flatMap((row) => {
     if (IGNORED_PHASES.has(row.phase)) return [];
@@ -55,6 +58,7 @@ export async function reconcileGithubObservations(database: ForgeDatabase, confi
   const rows = candidates(database, options.taskId);
   const observe = options.observe ?? createGithubReleasePort().observePullRequest;
   const execute = options.execute ?? executeIssueCommand;
+  const integrate = options.integrate ?? integrateRemoteBranch;
   const outcomes: Outcome[] = [];
   let signalled = 0, skipped = 0, errors = 0;
   if (!observe) return { inspected: rows.length, signalled, skipped: rows.length, errors, outcomes };
@@ -62,13 +66,19 @@ export async function reconcileGithubObservations(database: ForgeDatabase, confi
     try {
       const observed = await observe({ repository: candidate.repository, branch: candidate.branch, pullRequestNumber: candidate.pullRequestNumber });
       const observation = classify(candidate, observed);
+      let integration: RemoteIntegration["kind"] | undefined;
+      if (observation === "head_changed" && observed.headSha && candidate.worktreePath) {
+        const result = await integrate(database, config, { taskId: candidate.taskId, companyId: candidate.companyId, workflowId: candidate.workflowId, repository: candidate.repository, branchName: candidate.branch, remoteHead: observed.headSha, worktreePath: candidate.worktreePath, targetBaseSha: candidate.targetBaseSha });
+        integration = result.kind;
+        if (result.kind === "skipped_active_turn") { skipped += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: null, commandId: null, deduplicated: false, integration }); continue; }
+      }
       const command = commandFor(candidate, observation);
-      if (!command) { skipped += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: null, commandId: null, deduplicated: false }); continue; }
+      if (!command) { skipped += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: null, commandId: null, deduplicated: false, ...(integration ? { integration } : {}) }); continue; }
       const input = durableCommand(candidate.workflowId, command, { expectedRevision: candidate.revision, actorUserId: "github-reconciler", headSha: observed.headSha, observation });
       const deduplicated = candidate.state.processedCommandIds?.includes(input.commandId) ?? false;
       if (!deduplicated) { await execute(config, candidate.workflowId, command, input); signalled += 1; }
       else skipped += 1;
-      outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: command, commandId: input.commandId, deduplicated });
+      outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: command, commandId: input.commandId, deduplicated, ...(integration ? { integration } : {}) });
     } catch (error) {
       errors += 1;
       console.warn("GitHub observation reconciliation failed", { taskId: candidate.taskId, error: error instanceof Error ? error.message : String(error) });

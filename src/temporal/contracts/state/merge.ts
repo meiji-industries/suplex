@@ -8,7 +8,7 @@ export const mergeStateFields = {
   mergeResolutionLeadSessionRef: durableId.nullable().optional(),
   mergeResolutionDeveloperExecutionId: durableId.nullable().optional(),
   mergeResolutionDeveloperSessionRef: durableId.nullable().optional(),
-  mergeDecision: z.object({ question: z.string().min(1), choices: z.array(z.object({ id: z.string().min(1), label: z.string().min(1), detail: z.string().min(1).max(200) })), recommendedChoiceId: z.string().min(1) }).nullable().optional(),
+  mergeDecision: z.object({ question: z.string().min(1), choices: z.array(z.object({ id: z.string().min(1), label: z.string().min(1), detail: z.string().min(1).max(200) })), recommendedChoiceId: z.string().min(1) }).nullable().optional(), // bound: choice detail is short product-copy metadata
 };
 
 export const mergeStateFields2 = {

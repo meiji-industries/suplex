@@ -20,6 +20,7 @@ export interface MergeConflictPlanActivityInput {
   targetBaseSha: string;
   conflictArtifact: ArtifactReference;
   conflictFileCount: number;
+  operatorNotes?: string[];
   capacityRequestId?: string;
 }
 
@@ -34,6 +35,10 @@ export interface MergeConflictPlanActivityResult {
   leadExecutionId: string;
   leadSessionRef: string;
   summary: string;
+  disposition?: "mechanical" | "product_decision";
+  question?: string;
+  choices?: Array<{ id: string; label: string; description: string }>;
+  recommendedChoiceId?: string;
 }
 
 export interface MergeConflictResolutionActivityInput {

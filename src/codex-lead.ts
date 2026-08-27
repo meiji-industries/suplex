@@ -538,7 +538,7 @@ export class AgentService {
     const existingPlan = this.database.authQuery((db) => db.prepare("SELECT r.plan_artifact_id AS planArtifactId, r.plan_evidence_artifact_id AS evidenceArtifactId, r.lead_execution_id AS leadExecutionId, r.lead_session_ref AS leadSessionRef, p.storage_path AS planStoragePath, p.sha256 AS planSha256 FROM forge_merge_conflict_resolutions r JOIN forge_artifacts p ON p.id = r.plan_artifact_id WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ? AND r.status = 'planned'").get(planId, input.taskId, input.companyId, input.workflowId) as { planArtifactId: string; evidenceArtifactId: string; leadExecutionId: string; leadSessionRef: string; planStoragePath: string; planSha256: string } | undefined);
     if (existingPlan) {
       const output = MergeConflictPlanSchema.parse(jsonRequired((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: existingPlan.planStoragePath, sha256: existingPlan.planSha256 })).toString("utf8")));
-      return { planId, planArtifactId: existingPlan.planArtifactId, evidenceArtifactId: existingPlan.evidenceArtifactId, leadExecutionId: existingPlan.leadExecutionId, leadSessionRef: existingPlan.leadSessionRef, summary: output.summary };
+      return { planId, planArtifactId: existingPlan.planArtifactId, evidenceArtifactId: existingPlan.evidenceArtifactId, leadExecutionId: existingPlan.leadExecutionId, leadSessionRef: existingPlan.leadSessionRef, summary: output.summary, disposition: output.disposition, ...(output.question ? { question: output.question } : {}), ...(output.choices ? { choices: output.choices } : {}), ...(output.recommendedChoiceId ? { recommendedChoiceId: output.recommendedChoiceId } : {}) };
     }
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
     const [brief, plan] = await Promise.all([
@@ -556,11 +556,13 @@ export class AgentService {
     try {
       const turn = await this.turnRunner.run({ task: { taskId: input.taskId, projectId: input.projectId, projectSlug: context.projectSlug, ...(context.issueKey ? { issueKey: context.issueKey } : {}), worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "lead", executionRole, ledger: "agent", executionId, promptKind: "merge-conflict-plan", prompt: this.mergeConflictPlanPrompt(context.title, brief, plan, input, conflict, pinnedCommands), profile: leadProfile, resultSchema: MergeConflictPlanSchema, schemaPath, companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision, signal: runtime.signal });
       const output = turn.result;
-      if (output.resolutions.some((resolution) => resolution.number === undefined || !resolution.intendedResult || !resolution.issueInvariant || !resolution.baseInvariant || !resolution.compatibilityConcern) || output.resolutions.some((resolution, index) => resolution.number !== index + 1)) throw new AgentFailure("invalid-merge-conflict-plan", "The Lead conflict plan must number each resolution and state both invariants plus compatibility concerns");
-      const plannedFiles = new Set(output.resolutions.map((resolution) => resolution.file));
-      const missingFiles = conflict.conflictFiles.filter((file) => !plannedFiles.has(file));
-      const extraFiles = output.resolutions.filter((resolution) => !conflict.conflictFiles.includes(resolution.file));
-      if (missingFiles.length || extraFiles.length || plannedFiles.size !== output.resolutions.length) throw new AgentFailure("incomplete-merge-conflict-plan", "The Lead plan must cover each conflict file exactly once");
+      if (output.disposition === "mechanical") {
+        if (output.resolutions.some((resolution) => resolution.number === undefined || !resolution.intendedResult || !resolution.issueInvariant || !resolution.baseInvariant || !resolution.compatibilityConcern) || output.resolutions.some((resolution, index) => resolution.number !== index + 1)) throw new AgentFailure("invalid-merge-conflict-plan", "The Lead conflict plan must number each resolution and state both invariants plus compatibility concerns");
+        const plannedFiles = new Set(output.resolutions.map((resolution) => resolution.file));
+        const missingFiles = conflict.conflictFiles.filter((file) => !plannedFiles.has(file));
+        const extraFiles = output.resolutions.filter((resolution) => !conflict.conflictFiles.includes(resolution.file));
+        if (missingFiles.length || extraFiles.length || plannedFiles.size !== output.resolutions.length) throw new AgentFailure("incomplete-merge-conflict-plan", "The Lead plan must cover each conflict file exactly once");
+      }
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const planArtifact = await this.artifacts.putArtifact(input.companyId, "merge-conflict-plan", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(output, null, 2), "utf8") });
       const now = this.now().toISOString();
@@ -568,7 +570,7 @@ export class AgentService {
         db.prepare("INSERT INTO forge_merge_conflict_resolutions (id, task_id, company_id, workflow_id, forward_merge_id, prior_head, target_base_sha, conflict_files_json, plan_artifact_id, plan_evidence_artifact_id, lead_execution_id, lead_session_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?) ON CONFLICT(workflow_id, prior_head, target_base_sha) DO UPDATE SET plan_artifact_id = excluded.plan_artifact_id, plan_evidence_artifact_id = excluded.plan_evidence_artifact_id, lead_execution_id = excluded.lead_execution_id, lead_session_ref = excluded.lead_session_ref, status = 'planned', updated_at = excluded.updated_at").run(planId, input.taskId, input.companyId, input.workflowId, input.forwardMergeId, input.priorHead, input.targetBaseSha, JSON.stringify(conflict.conflictFiles), planArtifact.id, evidence.id, executionId, turn.roleSessionId, now, now);
         db.prepare("UPDATE forge_agent_executions SET status = 'completed', session_ref = ?, finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(turn.roleSessionId, now, now, evidence.id, executionId);
       });
-      return { planId, planArtifactId: planArtifact.id, evidenceArtifactId: evidence.id, leadExecutionId: executionId, leadSessionRef: turn.roleSessionId, summary: output.summary };
+      return { planId, planArtifactId: planArtifact.id, evidenceArtifactId: evidence.id, leadExecutionId: executionId, leadSessionRef: turn.roleSessionId, summary: output.summary, disposition: output.disposition, ...(output.question ? { question: output.question } : {}), ...(output.choices ? { choices: output.choices } : {}), ...(output.recommendedChoiceId ? { recommendedChoiceId: output.recommendedChoiceId } : {}) };
     } catch (error) {
       const failure = runtime.signal?.aborted ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("merge-conflict-plan-failed", "Codex Lead merge-conflict planning failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
@@ -1001,7 +1003,7 @@ export class AgentService {
   }
 
   private mergeConflictPlanPrompt(title: string, brief: string, plan: string, input: MergeConflictPlanInput, conflict: ForwardMergeConflictArtifact, pinnedCommands: { setupCommand: string; verificationCommand: string }): string {
-    return this.renderTaskPrompt(input, "lead/merge-conflict-plan.md", { title, brief, plan, forward_merge_identity: JSON.stringify({ branchName: input.branchName, priorHead: input.priorHead, targetBaseSha: input.targetBaseSha }), conflict_files: conflict.conflictFiles.join("\n"), combined_diff: conflict.combinedDiff, pinned_commands: JSON.stringify(pinnedCommands) });
+    return this.renderTaskPrompt(input, "lead/merge-conflict-plan.md", { title, brief, plan, forward_merge_identity: JSON.stringify({ branchName: input.branchName, priorHead: input.priorHead, targetBaseSha: input.targetBaseSha }), conflict_files: conflict.conflictFiles.join("\n"), combined_diff: conflict.combinedDiff, pinned_commands: JSON.stringify(pinnedCommands), operator_decision: input.operatorNotes?.join("\n") || "None." });
   }
 
   private ciRepairPrompt(title: string, input: CiRepairPlanActivityInput, failedChecks: Array<{ name: string; conclusion: string; summary: string | null }>, failedLogs: Array<{ name: string; runId: string; log: string }> = []): string {

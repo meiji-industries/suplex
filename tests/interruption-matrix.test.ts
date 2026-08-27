@@ -1,8 +1,15 @@
 import { readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { expect, test } from "vitest";
+import { afterEach, expect, test } from "vitest";
 
+import { runCommand } from "../src/command-runner.js";
+import { createTestConfig } from "../src/config.js";
+import { ForgeDatabase } from "../src/database.js";
 import { classifyRecovery, type DurableTaskFacts, type LiveObservations } from "../src/recovery/convergence.js";
+import { integrateRemoteBranch } from "../src/remote-branch-integration.js";
 
 const facts = (overrides: Partial<DurableTaskFacts> = {}): DurableTaskFacts => ({ taskId: "task", phase: "development", revision: 1, terminal: false, cancelled: false, branchName: "forge/task", worktreePath: "/worktree", lastReviewedCommit: "a".repeat(40), turn: { turnId: "turn", role: "developer", status: "waiting", resultPresent: false, resultValid: false, resumeRequestsSent: 0 }, failure: null, ...overrides });
 const live = (overrides: Partial<LiveObservations> = {}): LiveObservations => ({ herdr: { session: "terminal", stalledBeyondPolicy: false }, git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "a".repeat(40) }, github: null, ...overrides });
@@ -11,6 +18,43 @@ const twice = (input: DurableTaskFacts, observation: LiveObservations) => {
   expect(classifyRecovery(input, observation)).toEqual(first);
   return first;
 };
+
+const remoteRoots: string[] = [];
+afterEach(async () => { await Promise.all(remoteRoots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const result = await runCommand({ taskId: null, stepId: null, command: "git", args, cwd });
+  if (result.exitCode !== 0) throw new Error(result.stderr);
+  return result.stdout.trim();
+}
+
+async function remoteFixture() {
+  const root = await mkdtemp(join(tmpdir(), "forge-matrix-remote-"));
+  remoteRoots.push(root);
+  const origin = join(root, "origin.git");
+  const source = join(root, "source");
+  const worktreePath = join(root, "worktrees", "task");
+  const peer = join(root, "peer");
+  await git(root, "init", "--bare", origin);
+  await git(root, "init", "-b", "main", source);
+  for (const path of [source]) { await git(path, "config", "user.email", "test@example.invalid"); await git(path, "config", "user.name", "Forge Test"); }
+  await writeFile(join(source, "README.md"), "base\n"); await git(source, "add", "README.md"); await git(source, "commit", "-m", "base");
+  await git(source, "remote", "add", "origin", origin); await git(source, "switch", "-c", "forge/task"); await git(source, "push", "-u", "origin", "forge/task");
+  for (const path of [worktreePath, peer]) { await git(root, "clone", origin, path); await git(path, "switch", "forge/task"); await git(path, "config", "user.email", "test@example.invalid"); await git(path, "config", "user.name", "Forge Test"); }
+  const config = createTestConfig(root, { worktreeRoot: join(root, "worktrees") });
+  const database = new ForgeDatabase(config.databasePath);
+  database.authQuery((db) => db.pragma("foreign_keys = OFF"));
+  database.authTransaction((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES ('worktree', 'task', 'company', 'project', 'workflow', ?, ?, ?, 'forge/task', ?, 'lease', 'active', ?)").run(source, config.worktreeRoot, worktreePath, "a".repeat(40), new Date().toISOString()));
+  return { config, database, peer, worktreePath };
+}
+
+async function integrateRemote(value: Awaited<ReturnType<typeof remoteFixture>>, remoteHead: string, gitCalls?: string[][]) {
+  return integrateRemoteBranch(value.database, value.config, { taskId: "task", companyId: "company", workflowId: "workflow", repository: "acme/forge", branchName: "forge/task", remoteHead, worktreePath: value.worktreePath, targetBaseSha: "a".repeat(40) }, gitCalls ? { git: async (args, cwd, taskId) => {
+    gitCalls.push(args);
+    const result = await runCommand({ taskId, stepId: null, command: "git", args, cwd });
+    return { ok: result.exitCode === 0, stdout: result.stdout.trim(), stderr: result.stderr };
+  } } : undefined);
+}
 
 test("developer commits, then its completion message is lost", () => {
   const outcome = twice(facts(), live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "b".repeat(40) } }));
@@ -51,9 +95,24 @@ test("another user pushes a clean head change to an imported pr", () => {
   expect(outcome).toMatchObject({ action: "no_change" });
 });
 
-test("remote branch integration is clean", () => {
-  const outcome = twice(facts({ turn: null }), live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "b".repeat(40) } }));
-  expect(outcome).toMatchObject({ action: "no_change" });
+test("remote branch integration is clean", async () => {
+  const fastForward = await remoteFixture();
+  await writeFile(join(fastForward.peer, "REMOTE.md"), "remote\n"); await git(fastForward.peer, "add", "REMOTE.md"); await git(fastForward.peer, "commit", "-m", "remote");
+  const remoteHead = await git(fastForward.peer, "rev-parse", "HEAD"); await git(fastForward.peer, "push", "origin", "forge/task");
+  expect(await integrateRemote(fastForward, remoteHead)).toMatchObject({ kind: "fast_forwarded", to: remoteHead });
+  const fastForwardCalls: string[][] = [];
+  await expect(integrateRemote(fastForward, remoteHead, fastForwardCalls)).resolves.toMatchObject({ kind: "fast_forwarded", to: remoteHead });
+  expect(fastForwardCalls).toEqual([]);
+
+  const merged = await remoteFixture();
+  await writeFile(join(merged.worktreePath, "LOCAL.md"), "local\n"); await git(merged.worktreePath, "add", "LOCAL.md"); await git(merged.worktreePath, "commit", "-m", "local");
+  await writeFile(join(merged.peer, "REMOTE.md"), "remote\n"); await git(merged.peer, "add", "REMOTE.md"); await git(merged.peer, "commit", "-m", "remote");
+  const divergedHead = await git(merged.peer, "rev-parse", "HEAD"); await git(merged.peer, "push", "origin", "forge/task");
+  const first = await integrateRemote(merged, divergedHead);
+  expect(first).toMatchObject({ kind: "merged", remoteHead: divergedHead });
+  const mergeCalls: string[][] = [];
+  await expect(integrateRemote(merged, divergedHead, mergeCalls)).resolves.toEqual(first);
+  expect(mergeCalls).toEqual([]);
 });
 
 test("remote branch integration conflicts and auto-enters resolution", () => {

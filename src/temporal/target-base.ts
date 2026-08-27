@@ -67,7 +67,7 @@ export function applyTargetBaseRevalidation(
     acceptanceId: null,
     acceptedHeadSha: null,
     mergeOutcome: null,
-    expectedHeadSha: null,
-    expectedHeadTree: null,
+    expectedHeadSha: result.headSha,
+    expectedHeadTree: result.headTree,
   });
 }

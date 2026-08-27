@@ -160,6 +160,8 @@ describe("target-base reconciliation contracts", () => {
       acceptanceId: "accept-old",
       releaseId: "release-1",
       pullRequestNumber: 12,
+      expectedHeadSha: sha("f"),
+      expectedHeadTree: sha("9"),
       pullRequestUrl: "https://github.com/acme/repo/pull/12",
     });
     const next = applyTargetBaseRevalidation(IssueWorkflowStateSchema.parse({ ...state, deliveryReviewSupersedesId: "review-blocking", repairCycle: 1 }), {

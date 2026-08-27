@@ -79,16 +79,19 @@ export function reviewBlockedState(state: IssueWorkflowState, result: { attemptI
   });
 }
 
-export function repairRequiredState(state: IssueWorkflowState, result: CompletedReview, repairCycleLimit: number): IssueWorkflowState {
+export function repairRequiredState(state: IssueWorkflowState, result: CompletedReview, repairCycleLimit: number, noProgressEnabled = false): IssueWorkflowState {
   const openBlocking = result.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
-  const canRepair = result.review.opinion === "blocking" && openBlocking.length > 0 && (state.repairCycle ?? 0) < repairCycleLimit;
+  const firstFinding = openBlocking[0];
+  const progress = withRepairProgress(state, { signature: repairSignature({ source: "review", code: firstFinding ? `${firstFinding.findingId}:${firstFinding.rationale}` : null }), commit: state.resultCommit ?? null, diagnosticHash: result.review.reviewArtifact?.artifactId ?? null });
+  const exhausted = noProgressEnabled && noProgress(state.repairProgress, progress.repairProgress!);
+  const canRepair = !exhausted && result.review.opinion === "blocking" && openBlocking.length > 0 && (state.repairCycle ?? 0) < repairCycleLimit;
   const phase = result.review.opinion === "approved" ? "delivery_reviewed" : canRepair ? "repair_required" : "delivery_blocked";
   const owner = phase === "repair_required" ? "lead" : "human";
-  const allowedCommands: IssueWorkflowState["allowedCommands"] = phase === "repair_required" ? ["record_delivery_decision", "repair_delivery", "cancel_issue"] : phase === "delivery_blocked" ? ["record_delivery_decision", "cancel_issue"] : ["publish_draft", "cancel_issue"];
+  const allowedCommands: IssueWorkflowState["allowedCommands"] = phase === "repair_required" ? ["record_delivery_decision", "repair_delivery", "cancel_issue"] : exhausted ? ["retry_development", "cancel_issue"] : phase === "delivery_blocked" ? ["record_delivery_decision", "cancel_issue"] : ["publish_draft", "cancel_issue"];
   const pendingAction = phase === "repair_required" ? "Builder is fixing review findings" : phase === "delivery_blocked" ? "Needs your call" : "Opening the pull request";
   return IssueWorkflowStateSchema.parse({
-    ...revisioned(state, phase, owner, allowedCommands, pendingAction),
-    blocker: phase === "delivery_blocked" ? humanBlocker("agent_exhausted", result.review.summary, [{ command: "record_delivery_decision", label: "Continue anyway", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], result.review.reviewArtifact ? evidencePointer(result.review.reviewArtifact.artifactId, "delivery-review") : undefined) : null,
+    ...revisioned(progress, phase, owner, allowedCommands, pendingAction),
+    blocker: exhausted ? humanBlocker("agent_exhausted", `Automatic repair is not making progress: ${result.review.summary}`, [{ command: "retry_development", label: "Resume Developer turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.review.reviewArtifact?.artifactId ?? result.review.evidenceArtifactId, "delivery-review")) : phase === "delivery_blocked" ? humanBlocker("agent_exhausted", result.review.summary, [{ command: "record_delivery_decision", label: "Continue anyway", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.review.reviewArtifact?.artifactId ?? result.review.evidenceArtifactId, "delivery-review")) : null,
     deliveryReviewId: result.review.reviewId,
     deliveryReviewAttemptId: result.attemptId,
     deliveryReviewOutcome: result.review.opinion,

@@ -72,7 +72,7 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
       }
       ctx.state = exactResult.outcome === "blocked"
         ? stateTransitions.reviewBlockedState(ctx.state, exactResult)
-        : stateTransitions.repairRequiredState(ctx.state, exactResult, ctx.repairCycleLimit);
+        : stateTransitions.repairRequiredState(ctx.state, exactResult, ctx.repairCycleLimit, ctx.patched("forge-repair-no-progress-v1"));
     }
     if (ctx.state.phase === "delivery_reviewed" && ctx.input.deliveryTarget === "remote_branch") {
       await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName!, commitSha: ctx.state.resultCommit! });

@@ -18,7 +18,7 @@ const ResultSchema = z.object({ status: z.enum(["ok", "blocked"]) }).strict();
 const task = { taskId: "task", projectId: "project", projectSlug: "project", worktreePath: "/worktree", runtimeRoot: "" };
 const line = (payload: Record<string, unknown>) => `${JSON.stringify({ timestamp: "2026-08-24T00:00:00.000Z", type: "event_msg", payload })}\n`;
 
-interface FakeSession { id: string; agentName: string; paneId: string; codexSessionId: string | null; generation: number; rolloutPath: string | undefined; live: { name: string; paneId: string; agentSession?: string; status: string }; }
+interface FakeSession { id: string; provider: "codex" | "claude"; agentName: string; paneId: string; codexSessionId: string | null; generation: number; rolloutPath: string | undefined; live: { name: string; paneId: string; agentSession?: string; status: string }; }
 
 async function fixture(): Promise<{ root: string; database: ForgeDatabase; input: HerdrTurnInput<z.infer<typeof ResultSchema>>; session: FakeSession }> {
   const root = await mkdtemp(join(tmpdir(), "forge-herdr-turn-"));
@@ -37,7 +37,7 @@ async function fixture(): Promise<{ root: string; database: ForgeDatabase; input
   return {
     root,
     database,
-    session: { id: "session", agentName: "lead", paneId: "pane", codexSessionId: "codex-session", generation: 1, rolloutPath, live: { name: "lead", paneId: "pane", agentSession: "codex-session", status: "working" } },
+    session: { id: "session", provider: "codex", agentName: "lead", paneId: "pane", codexSessionId: "codex-session", generation: 1, rolloutPath, live: { name: "lead", paneId: "pane", agentSession: "codex-session", status: "working" } },
     input: { task: { ...task, runtimeRoot: root }, sessionRole: "lead", executionRole: "planner", ledger: "agent", executionId: "execution", promptKind: "plan", prompt: "Plan this", profile: { model: "gpt", reasoningLevel: "high", servicePriority: "priority" }, resultSchema: ResultSchema, schemaPath: "schema.json", companyId: "company", workflowId: "workflow", revision: 1 },
   };
 }
@@ -98,6 +98,88 @@ test("converts non-retryable Herdr session failures at the turn boundary", async
   try {
     await expect(runner.run(setup.input)).rejects.toEqual(expect.objectContaining<Partial<AgentFailure>>({ code: "guard_invalid", nonRetryable: true }));
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
+test("binds a preassigned Claude transcript and streams its timeline", async () => {
+  const setup = await fixture();
+  const configDir = join(setup.root, "claude");
+  const worktree = join(setup.root, "tmp", "x");
+  const sessionId = "f9fbc9cf-5bbf-46dd-81d1-740ba276db64";
+  const transcriptTurnId = "f1d7a8e8-9915-4bf5-ae24-5b2836797c4c";
+  const transcriptPath = join(configDir, "projects", "-tmp-x", `${sessionId}.jsonl`);
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  try {
+    await mkdir(dirname(transcriptPath), { recursive: true });
+    await mkdir(worktree, { recursive: true });
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    setup.input = {
+      ...setup.input,
+      task: { ...setup.input.task, worktreePath: worktree },
+      profile: { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", servicePriority: "standard" },
+    };
+    setup.session = {
+      ...setup.session,
+      provider: "claude",
+      codexSessionId: sessionId,
+      rolloutPath: undefined,
+      live: { ...setup.session.live, agentSession: sessionId },
+    };
+    setup.database.authQuery((db) =>
+      db.prepare("UPDATE forge_herdr_role_sessions SET provider_kind = 'claude', codex_session_id = ?, rollout_path = NULL WHERE id = 'session'").run(sessionId),
+    );
+    const herdr = {
+      prompt: async (_name: string, prompt: string) => {
+        await writeFile(transcriptPath, [
+          {
+            type: "user",
+            uuid: transcriptTurnId,
+            sessionId,
+            timestamp: "2026-08-27T00:00:00.000Z",
+            cwd: worktree,
+            message: { role: "user", content: marker(prompt) },
+          },
+          {
+            type: "assistant",
+            sessionId,
+            timestamp: "2026-08-27T00:00:01.000Z",
+            message: {
+              content: [{ type: "text", text: "Done." }],
+              usage: { input_tokens: 1, cache_creation_input_tokens: 2, cache_read_input_tokens: 3, output_tokens: 4 },
+            },
+          },
+          {
+            type: "system",
+            subtype: "turn_duration",
+            sessionId,
+            timestamp: "2026-08-27T00:00:02.000Z",
+            durationMs: 1,
+          },
+        ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+        setTimeout(() => void writeFile(resultPath(prompt), JSON.stringify({ status: "ok" })), 10);
+        return setup.session.live;
+      },
+      getAgent: async () => setup.session.live,
+    };
+    const runner = new HerdrTurnRunner(
+      setup.database,
+      herdr as never,
+      { ensureRoleSession: async () => setup.session } as never,
+      new IssueTimelineEvents(setup.database),
+    );
+
+    await expect(runner.run(setup.input)).resolves.toMatchObject({ sessionId, result: { status: "ok" } });
+    expect(setup.database.authQuery((db) =>
+      db.prepare("SELECT codex_session_id, rollout_path FROM forge_herdr_role_sessions WHERE id = 'session'").get(),
+    )).toEqual({ codex_session_id: sessionId, rollout_path: transcriptPath });
+    expect(setup.database.authQuery((db) =>
+      db.prepare("SELECT session_id FROM forge_issue_timeline WHERE session_id = ?").all(sessionId),
+    )).toHaveLength(5);
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
+    setup.database.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
 });
 
 test("keeps retryable Herdr client failures retryable at the turn boundary", async () => {

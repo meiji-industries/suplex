@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { expect, test, vi } from "vitest";
 
@@ -697,6 +698,73 @@ test("Claude sessions preassign identities and launch through Herdr as Claude", 
     expect(session.provider).toBe("claude");
     expect(session.codexSessionId).toMatch(/^[0-9a-f-]{36}$/);
     expect(herdr.startInputs).toContainEqual(expect.objectContaining({ kind: "claude", args: ["--model", "claude-fable-5", "--effort", "high", "--permission-mode", "bypassPermissions", "--session-id", session.codexSessionId] }));
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("Claude resumes when its preassigned transcript already exists", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  const configDir = join(value.root, "claude");
+  const sessionId = randomUUID();
+  const runtime = { ...claudeRuntime, prepareLaunch: async () => {} };
+  try {
+    await mkdir(join(configDir, "projects", "-tmp-x"), { recursive: true });
+    await writeFile(
+      join(configDir, "projects", "-tmp-x", `${sessionId}.jsonl`),
+      `${JSON.stringify({ type: "user", cwd: value.root })}\n`,
+    );
+    const store = new HerdrSessionStore(
+      value.database,
+      herdr as never,
+      { ...process.env, CLAUDE_CONFIG_DIR: configDir },
+      async () => {},
+      () => runtime,
+    );
+    const task = { ...taskFor(value.root), worktreePath: value.root };
+    const row = (store as unknown as {
+      reserve(task: RoleSessionTask, role: "lead", settings: { provider: "claude"; model: string; reasoningLevel: string; serviceTier: "default" }): { id: string };
+    }).reserve(task, "lead", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
+    value.database.authQuery((db) =>
+      db.prepare("UPDATE forge_herdr_role_sessions SET codex_session_id = ? WHERE id = ?").run(sessionId, row.id),
+    );
+
+    await store.ensureRoleSession(task, "lead", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
+
+    expect(herdr.startInputs).toContainEqual(expect.objectContaining({
+      kind: "claude",
+      args: ["--model", "claude-fable-5", "--effort", "high", "--permission-mode", "bypassPermissions", "--resume", sessionId],
+    }));
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("switching providers retires the old role session and closes its pane", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  const runtime = { ...claudeRuntime, candidatePaths: async () => [], prepareLaunch: async () => {} };
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {}, () => runtime);
+    const old = (store as unknown as {
+      reserve(task: RoleSessionTask, role: "lead", settings: { provider: "codex"; model: string; reasoningLevel: string; serviceTier: "priority" }): { id: string };
+    }).reserve(taskFor(value.root), "lead", { provider: "codex", model: "gpt", reasoningLevel: "high", serviceTier: "priority" });
+    value.database.authQuery((db) =>
+      db.prepare("UPDATE forge_herdr_role_sessions SET pane_id = 'old-pane', agent_name = 'old-lead', status = 'ready' WHERE id = ?").run(old.id),
+    );
+
+    const current = await store.ensureRoleSession(taskFor(value.root), "lead", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
+
+    expect(herdr.closed).toEqual(["old-pane"]);
+    expect(value.database.authQuery((db) =>
+      db.prepare("SELECT is_current, status, pane_id, agent_name FROM forge_herdr_role_sessions WHERE id = ?").get(old.id),
+    )).toEqual({ is_current: 0, status: "closed", pane_id: null, agent_name: null });
+    expect(value.database.authQuery((db) =>
+      db.prepare("SELECT provider_kind, is_current FROM forge_herdr_role_sessions WHERE id = ?").get(current.id),
+    )).toEqual({ provider_kind: "claude", is_current: 1 });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

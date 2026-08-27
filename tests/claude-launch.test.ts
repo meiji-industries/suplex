@@ -26,7 +26,7 @@ test("Claude preparation creates and preserves its config idempotently", async (
     await prepareClaudeLaunch({ cwd, env });
     const configFile = join(configDir, ".claude.json");
     const config = JSON.parse(await readFile(configFile, "utf8"));
-    expect(config).toMatchObject({ bypassPermissionsModeAccepted: true, projects: { [await realpath(cwd)]: { hasTrustDialogAccepted: true } } });
+    expect(config).toMatchObject({ projects: { [await realpath(cwd)]: { hasTrustDialogAccepted: true } } });
     const before = await stat(configFile);
     await prepareClaudeLaunch({ cwd, env });
     expect((await stat(configFile)).mtimeMs).toBe(before.mtimeMs);

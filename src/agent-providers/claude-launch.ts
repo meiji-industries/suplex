@@ -15,10 +15,9 @@ export async function prepareClaudeLaunch({ cwd, env }: { cwd: string; env: Node
   try { config = jsonRequired(await fs.readFile(configFile, "utf8")) as Record<string, unknown>; } catch { /* missing or corrupt config is replaced */ }
   const projects = typeof config.projects === "object" && config.projects ? config.projects as Record<string, Record<string, unknown>> : {};
   const project = projects[await fs.realpath(cwd)] ?? {};
-  if (project.hasTrustDialogAccepted === true && config.bypassPermissionsModeAccepted === true) return;
+  if (project.hasTrustDialogAccepted === true) return;
   projects[await fs.realpath(cwd)] = { ...project, hasTrustDialogAccepted: true };
   config.projects = projects;
-  config.bypassPermissionsModeAccepted = true;
   await fs.mkdir(join(configFile, ".."), { recursive: true });
   const temporary = `${configFile}.${randomUUID()}.tmp`;
   await fs.writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });

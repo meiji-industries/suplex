@@ -13,6 +13,8 @@ describe("task chat UI", () => {
     const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item: completed, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
     expect(html).toContain("Worked for 40s");
     expect(html).toContain("+12 −3");
+    expect(html).toContain("4 steps");
+    expect(html).toContain("data-task-chat-execution-chain");
     expect(html).toMatch(/aria-expanded="false"/);
     expect(html).toContain("I will inspect the exact delivered commit.");
     expect(html).toContain("I found three in-scope blocking gaps.");
@@ -24,7 +26,7 @@ describe("task chat UI", () => {
     expect(html).not.toContain("data-task-chat-execution-group");
   });
 
-  it("separates interleaved narration bubbles from execution groups", () => {
+  it("renders a compact execution chain apart from narration bubbles", () => {
     const item = { ...completed, finishedAt: null, status: "running" as const, events: [
       { id: "command-one", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "git status", exitCode: 0, status: "completed" as const },
       { id: "message", at: "2026-08-23T00:00:11.000Z", kind: "message", text: "I found three in-scope blocking gaps." },
@@ -34,16 +36,10 @@ describe("task chat UI", () => {
     ] };
     const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
     expect(html.match(/data-task-chat-agent-bubble/g)).toHaveLength(4);
-    expect(html.match(/data-task-chat-execution-group/g)).toHaveLength(3);
-    expect(html.indexOf("I will inspect the exact delivered commit.")).toBeLessThan(html.indexOf("git status"));
-    expect(html.indexOf("git status")).toBeLessThan(html.indexOf("I found three in-scope blocking gaps."));
-    expect(html.indexOf("I found three in-scope blocking gaps.")).toBeLessThan(html.indexOf("read"));
-    expect(html.indexOf("read")).toBeLessThan(html.indexOf("The service now gathers all campaign routes."));
-    expect(html.indexOf("The service now gathers all campaign routes.")).toBeLessThan(html.indexOf("pnpm test"));
-    expect(html.indexOf("pnpm test")).toBeLessThan(html.indexOf("The work is complete."));
-    expect(html).toMatch(/data-task-chat-execution-group[^>]*>.*git status.*<\/ol><div[^>]*data-task-chat-agent-bubble/);
-    expect(html).toMatch(/data-task-chat-agent-bubble[^>]*>.*I found three in-scope blocking gaps.*<\/div><ol[^>]*data-task-chat-execution-group/);
-    expect(html).not.toMatch(/data-task-chat-execution-group[^>]*>[^<]*<div[^>]*data-task-chat-agent-bubble/);
+    expect(html.match(/data-task-chat-execution-group/g)).toHaveLength(1);
+    expect(html).toContain("3 steps");
+    expect(html).toMatch(/data-task-chat-execution-chain[^>]*>.*data-task-chat-execution-group[^>]*>.*git status.*read.*pnpm test/s);
+    expect(html.match(/<ol data-task-chat-execution-group[^]*?<\/ol>/)?.[0]).not.toContain("data-task-chat-agent-bubble");
   });
 
   it("renders a running header, execution groups, composer reason, and markdown member body", () => {
@@ -55,6 +51,7 @@ describe("task chat UI", () => {
     expect(runningHtml).toContain("read");
     expect(runningHtml).toContain("src/task-chat.ts");
     expect(renderToStaticMarkup(createElement(ChatComposer, { disabled: true, disabledReason: "Planner feedback is unavailable.", onSubmit: async () => undefined }))).toContain("Planner feedback is unavailable.");
+    expect(runningHtml).toContain("motion-safe:animate-spin");
     expect(renderToStaticMarkup(createElement(ChatMemberMessage, { item: { kind: "member", id: "message", at: "2026-08-23T00:00:00.000Z", actor: { name: "Mara", avatarSeed: "mara" }, markdown: "**Hello**" } }))).toContain("<strong>Hello</strong>");
   });
 
@@ -76,7 +73,8 @@ describe("task chat UI", () => {
     ] };
     const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
     expect(html).toContain("data-task-chat-reasoning");
-    expect(html).toContain("Show more");
+    expect(html).toContain("Reasoning");
+    expect(html.match(/aria-expanded="true"/g)).toHaveLength(2);
     expect(html).toContain("exit 1");
     expect(html).toContain("data-variant=\"destructive\"");
     expect(html).toContain("exec");

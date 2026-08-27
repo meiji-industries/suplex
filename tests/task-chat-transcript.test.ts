@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildChatTranscript, chatEventFromTimelineEvent, compactChatEvents, type ChatEvent } from "../src/frontend/lib/task-chat.js";
+import { buildChatTranscript, chatEventFromTimelineEvent, compactChatEvents, type ChatEvent, type ChatItem } from "../src/frontend/lib/task-chat.js";
 import type { ApiTask } from "../src/frontend/lib/view-shared.js";
 
 const at = (second: number) => `2026-08-23T00:00:${String(second).padStart(2, "0")}.000Z`;
@@ -63,6 +63,50 @@ describe("buildChatTranscript", () => {
   it("removes legacy materiality suffixes from planner turn summaries", () => {
     const value = buildChatTranscript(task({ activity: [{ id: "summary", revision: 1, eventType: "planner_note_revised", metadata: { summary: "Plan A (Routine plan)" }, createdAt: at(20), kind: "workflow" }], agentInvocations: [planner("one", at(10), at(20))] }));
     expect(value.find((item) => item.kind === "agent_turn")).toMatchObject({ summary: "Plan A" });
+  });
+
+  it("promotes the completed Planner recap despite its preceding planning marker", () => {
+    const invocations = [planner("planner-62be", at(10), at(20)), planner("wrong-planner", at(30), at(40))];
+    const value = buildChatTranscript(task({
+      activity: [{ id: "planning-started", revision: 1, eventType: "planning_started", metadata: {}, createdAt: at(9), kind: "workflow" }],
+      agentInvocations: invocations,
+      leadOutput: { executionId: "planner-62be", summary: "Durable plan" } as ApiTask["leadOutput"],
+      planHistory: [{ revision: 1, kind: "plan", summary: "Durable plan", executionId: "planner-62be", outputArtifactId: "output", evidenceArtifactId: "evidence", createdAt: at(20) }],
+    }), new Map([["planner-62be", [
+      { id: "progress-one", at: at(11), kind: "message", text: "Inspecting requirements" },
+      { id: "progress-two", at: at(12), kind: "message", text: "Preparing the plan" },
+      { id: "recap", at: at(19), kind: "message", text: "**Recap**\n\nThe final plan." },
+    ]], ["wrong-planner", [{ id: "wrong-progress", at: at(31), kind: "message", text: "Other work" }]]]));
+    const turns = value.filter((item): item is Extract<ChatItem, { kind: "agent_turn" }> => item.kind === "agent_turn");
+    expect(turns[0]).toMatchObject({ id: "agent-planner-62be", events: [
+      { id: "progress-one" },
+      { id: "progress-two" },
+      { id: "recap", phase: "final_answer", text: "**Recap**\n\nThe final plan." },
+    ] });
+    expect(turns[0]!.summary).toBeUndefined();
+    expect(turns[0]!.events.filter((event) => event.phase === "final_answer")).toHaveLength(1);
+    expect(turns[1]).toMatchObject({ id: "agent-wrong-planner", events: [{ id: "wrong-progress", phase: "final_answer" }] });
+    expect(turns[1]!.summary).toBeUndefined();
+  });
+
+  it("uses a matching plan-history summary without a planning marker", () => {
+    const value = buildChatTranscript(task({ agentInvocations: [planner("matching", at(10), at(20)), planner("wrong", at(30), at(40))], planHistory: [
+      { revision: 1, kind: "plan", summary: "Matching plan", executionId: "matching", outputArtifactId: "output", evidenceArtifactId: "evidence", createdAt: at(20) },
+    ] }));
+    expect(value.filter((item) => item.kind === "agent_turn").map((item) => item.summary)).toEqual(["Matching plan", undefined]);
+  });
+
+  it("does not promote plain messages for incomplete terminal turns", () => {
+    const failed = { ...planner("failed", at(10), at(20)), status: "failed" };
+    const blocked = { ...planner("blocked", at(30), at(40)), status: "blocked" };
+    const running = planner("running", at(50), null);
+    const eventsByExecution = new Map<string, ChatEvent[]>([
+      ["failed", [{ id: "failed-message", at: at(19), kind: "message", text: "Failed response" }]],
+      ["blocked", [{ id: "blocked-message", at: at(39), kind: "message", text: "Blocked response" }]],
+      ["running", [{ id: "running-message", at: at(51), kind: "message", text: "Running response" }]],
+    ]);
+    const value = buildChatTranscript(task({ agentInvocations: [failed, blocked, running] }), eventsByExecution);
+    expect(value.filter((item): item is Extract<ChatItem, { kind: "agent_turn" }> => item.kind === "agent_turn").map((item) => item.events[0]?.phase)).toEqual([undefined, undefined, undefined]);
   });
 
   it("orders equal timestamps as member, turn, then system", () => {

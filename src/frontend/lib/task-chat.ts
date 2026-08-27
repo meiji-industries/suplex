@@ -107,10 +107,11 @@ function turnSummary(task: ApiTask, invocation: ApiTask["agentInvocations"][numb
     return createdAt >= startedAt && createdAt <= endsAt;
   });
   if (invocation.role === "planner") {
-    if (!matching.some((entry) => entry.eventType === "planning_started" || entry.eventType === "planner_note_revised" || /(?:^|_)plan_approved$/.test(entry.eventType))) return undefined;
-    const summary = matching.find((entry) => entry.eventType === "planner_note_revised")?.metadata.summary as string | undefined
-      ?? (task.leadOutput?.executionId === invocation.id ? task.leadOutput.summary : undefined);
-    return summary ? withoutLegacyMaterialitySummary(summary) : storedSummary;
+    const summary = task.leadOutput?.executionId === invocation.id ? task.leadOutput.summary
+      : task.planHistory.find((plan) => plan.executionId === invocation.id)?.summary
+        ?? matching.find((entry) => entry.eventType === "planner_note_revised")?.metadata.summary as string | undefined;
+    if (summary) return withoutLegacyMaterialitySummary(summary);
+    return matching.some((entry) => entry.eventType === "planning_started" || entry.eventType === "planner_note_revised" || /(?:^|_)plan_approved$/.test(entry.eventType)) ? storedSummary : undefined;
   }
   if (invocation.role === "builder") {
     if (task.developerExecution?.id === invocation.id) return task.developerExecution.deliverySummary ?? task.developerExecution.summary ?? undefined;
@@ -126,6 +127,16 @@ function turnSummary(task: ApiTask, invocation: ApiTask["agentInvocations"][numb
   const finalReview = task.deliveryGate?.finalReview;
   if (finalReview && (finalReview.leadExecutionId === invocation.id || (Date.parse(finalReview.createdAt) >= startedAt && Date.parse(finalReview.createdAt) <= endsAt))) return summaryForReview(finalReview);
   return storedSummary;
+}
+
+function isStructuredResult(event: ChatEvent): boolean {
+  return (event.kind === "message" || event.kind === "agent_update") && /^\{\s*"(?:kind|verdict|version)"\s*:/.test(event.text.trim());
+}
+
+function promoteTerminalResponse(events: ChatEvent[], invocation: ApiTask["agentInvocations"][number]): ChatEvent[] {
+  if (invocation.status !== "completed" || events.some((event) => event.phase === "final_answer")) return events;
+  const terminal = [...events].reverse().find((event) => event.kind === "message" && !isStructuredResult(event));
+  return terminal ? events.map((event) => event.id === terminal.id ? { ...event, phase: "final_answer" } : event) : events;
 }
 
 function turnStats(events: ChatEvent[]): { filesChanged: number; additions: number; deletions: number } | undefined {
@@ -204,12 +215,12 @@ export function buildChatTranscript(task: ApiTask, liveEventsByExecution: Map<st
   const renderedSummaries = new Set<string>();
   const invocations = [...task.agentInvocations].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt) || left.id.localeCompare(right.id));
   for (const invocation of invocations) {
-    const events = liveEventsByExecution.get(invocation.id) ?? [];
+    const events = promoteTerminalResponse(liveEventsByExecution.get(invocation.id) ?? [], invocation);
     const introEvent = events.find((event) => event.kind === "agent_update");
     const intro = introEvent?.text;
     const status: Extract<ChatItem, { kind: "agent_turn" }>["status"] = invocation.finishedAt ? (terminalStatuses.has(invocation.status) ? invocation.status as "completed" | "failed" | "blocked" : "completed") : "running";
     const candidate = turnSummary(task, invocation, invocations);
-    const summary = candidate && !renderedSummaries.has(candidate) ? candidate : undefined;
+    const summary = !events.some((event) => event.phase === "final_answer") && candidate && !renderedSummaries.has(candidate) ? candidate : undefined;
     if (summary) renderedSummaries.add(summary);
     const stats = turnStats(events);
     items.push({ kind: "agent_turn", id: `agent-${invocation.id}`, role: invocation.role, agent: { name: invocation.agentName ?? `${invocation.role[0]!.toUpperCase()}${invocation.role.slice(1)}`, avatarSeed: invocation.avatarSeed ?? invocation.role }, startedAt: invocation.startedAt, finishedAt: invocation.finishedAt, status, ...(intro ? { intro } : {}), events: compactChatEvents(events, introEvent), ...(summary ? { summary } : {}), ...(stats ? { stats } : {}) });

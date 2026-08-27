@@ -77,6 +77,14 @@ describe("task chat UI", () => {
     expect(html).not.toContain("Thinking");
   });
 
+  it("renders a flat agent response container", () => {
+    const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item: completed, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    const responseClass = html.match(/<div[^>]*data-task-chat-agent-bubble[^>]*class="([^"]*)"/)?.[1];
+    expect(html).toContain("The work is complete.");
+    expect(responseClass).toBeDefined();
+    expect(responseClass).not.toMatch(/\bborder\b|\bbg-muted\/40\b/);
+  });
+
   it("prefers durable summaries over terminal final-answer fallbacks", () => {
     const item = { ...withoutIntro, events: [{ id: "final", at: "2026-08-23T00:00:11.000Z", kind: "message", text: "Fallback response", phase: "final_answer" as const }] };
     const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
@@ -190,12 +198,18 @@ describe("task chat UI", () => {
     expect(html).toContain('>2</span><code');
   });
 
-  it("uses checkpoint markers only for completed turns", () => {
-    const render = (status: "completed" | "failed" | "blocked") => renderToStaticMarkup(createElement(ChatAgentTurn, { item: { ...completed, status, finishedAt: "2026-08-23T00:00:40.000Z" }, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
-    expect(render("completed")).toContain("data-task-chat-completion-marker");
-    expect(render("completed")).toContain("lucide-bookmark");
-    expect(render("completed")).toContain("Builder has finished");
-    expect(render("failed")).not.toContain("data-task-chat-completion-marker");
-    expect(render("blocked")).not.toContain("data-task-chat-completion-marker");
+  it("uses checkpoint markers for terminal agent statuses", () => {
+    const completedHtml = renderToStaticMarkup(createElement(ChatAgentTurn, { item: { ...completed, status: "completed", finishedAt: "2026-08-23T00:00:40.000Z" }, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    const failedHtml = renderToStaticMarkup(createElement(ChatAgentTurn, { item: { ...completed, status: "failed", finishedAt: "2026-08-23T00:00:40.000Z" }, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    const blockedHtml = renderToStaticMarkup(createElement(ChatAgentTurn, { item: { ...completed, status: "blocked", finishedAt: "2026-08-23T00:00:40.000Z" }, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    expect(completedHtml).toContain('data-task-chat-checkpoint-status="completed"');
+    expect(completedHtml).toContain("Builder has finished");
+    expect(failedHtml).toContain('data-task-chat-checkpoint-status="failed"');
+    expect(failedHtml).toContain("Builder has failed");
+    expect(failedHtml).toContain("text-destructive");
+    expect(blockedHtml).toContain('data-task-chat-checkpoint-status="blocked"');
+    expect(blockedHtml).toContain("Builder is blocked");
+    expect(blockedHtml).toContain("text-amber-700");
+    expect([completedHtml, failedHtml, blockedHtml].every((html) => html.includes("lucide-bookmark") && html.includes("h-px flex-1 bg-border"))).toBe(true);
   });
 });

@@ -58,8 +58,13 @@ async function start(h: TemporalHarness, issueId: string, phase: "delivery_block
   const workflowId = seedTask(h, issueId);
   const started = await startIssueWorkflow(h.config, { companyId: "issue-company", projectId: "issue-project", issueId, projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: h.issueRoleProfiles, supplementalReview: false, repairCycleLimit: 0, continuationState: continuation(h, issueId, phase) });
   expect(started.workflowId).toBe(workflowId);
-  const temporal = await connectTemporal(h.config);
-  try { await temporal.client.workflow.getHandle(workflowId).executeUpdate(issueUpdates.resync_projection, { args: [{ expectedRevision: 20, actorUserId: "issue-admin" }] }); } finally { await temporal.connection.close(); }
+  if (phase !== "done") {
+    const temporal = await connectTemporal(h.config);
+    try { await temporal.client.workflow.getHandle(workflowId).executeUpdate(issueUpdates.resync_projection, { args: [{ expectedRevision: 20, actorUserId: "issue-admin" }] }); } finally { await temporal.connection.close(); }
+  } else {
+    const now = new Date().toISOString();
+    h.database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, authoritative_event_hash, projected_at) VALUES (?, 'issue-company', 'issue-project', ?, 20, 'done', 'lead', '[]', 'Done', ?, ?, 'terminal', 20, 'terminal', ?)").run(issueId, workflowId, now, `${workflowId}:20`, now));
+  }
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (h.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_issue_projections WHERE task_id = ?").get(issueId))) break;
     await new Promise((resolve) => setTimeout(resolve, 25));

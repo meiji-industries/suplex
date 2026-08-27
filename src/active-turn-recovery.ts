@@ -8,6 +8,7 @@ import { detectGitHandoff } from "./git-handoff.js";
 import { type HerdrClient, CliHerdrClient } from "./herdr-client.js";
 import { reconcileHerdrSessions } from "./herdr-recovery.js";
 import { classifyRecovery, type DurableTaskFacts, type LiveObservations } from "./recovery/convergence.js";
+import { json } from "./task-utils.js";
 
 export interface ActiveTurnOutcome {
   taskId: string;
@@ -20,7 +21,9 @@ export interface ActiveTurnOutcome {
 
 type Turn = { turnId: string; taskId: string; role: "lead" | "developer"; status: DurableTaskFacts["turn"] extends infer T ? T extends { status: infer S } ? S : never : never; resultRelativePath: string; executionId: string; ledger: "agent" | "developer"; executionRole: string; revision: number; phase: string; agentName: string | null; branchName: string | null; worktreePath: string | null; lastReviewedCommit: string | null; correctionIndex: number };
 
-const activeStatuses = "'dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating'";
+// Keep completed turns with a durable result in the scan so an unchanged second
+// reconciliation reports the same idempotent outcome without writing again.
+const activeStatuses = "'dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed'";
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
 async function resultAt(runtimeRoot: string, value: string): Promise<Buffer | null> {
@@ -29,7 +32,7 @@ async function resultAt(runtimeRoot: string, value: string): Promise<Buffer | nu
   const bytes = await readFile(path).catch(() => null);
   if (!bytes) return null;
   try {
-    const parsed: unknown = JSON.parse(bytes.toString("utf8"));
+    const parsed: unknown = json(bytes.toString("utf8"), null);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? bytes : null;
   } catch { return null; }
 }

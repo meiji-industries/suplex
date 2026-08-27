@@ -6,7 +6,8 @@ import { expect, test } from "vitest";
 import { reconcileGithubObservations } from "../src/github-observation-reconciliation.js";
 import { runCommand } from "../src/command-runner.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
-import { executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/temporal/service.js";
+import { connectTemporal, executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/temporal/service.js";
+import { issueUpdates } from "../src/temporal/issue-updates.js";
 import { reconcileWorktrees } from "../src/worktree-reconciliation.js";
 import { createTemporalHarness, type TemporalHarness } from "./helpers/temporal-harness.js";
 
@@ -57,7 +58,19 @@ async function start(h: TemporalHarness, issueId: string, phase: "delivery_block
   const workflowId = seedTask(h, issueId);
   const started = await startIssueWorkflow(h.config, { companyId: "issue-company", projectId: "issue-project", issueId, projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: h.issueRoleProfiles, supplementalReview: false, repairCycleLimit: 0, continuationState: continuation(h, issueId, phase) });
   expect(started.workflowId).toBe(workflowId);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (h.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_issue_projections WHERE task_id = ?").get(issueId))) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
   return workflowId;
+}
+
+async function executeLifecycle(h: TemporalHarness, workflowId: string, command: "delete_worktree" | "resume_preserved_work", input: { expectedRevision: number; actorUserId: string; confirmDiscardDirty?: boolean }) {
+  const temporal = await connectTemporal(h.config);
+  try {
+    const handle = temporal.client.workflow.getHandle(workflowId);
+    return await handle.executeUpdate(issueUpdates[command], { args: [input] });
+  } finally { await temporal.connection.close(); }
 }
 
 async function git(cwd: string, ...args: string[]) {
@@ -90,13 +103,13 @@ test("a worktree is cleaned in forge", async () => {
     await recordWorktree(h, issueId, workflowId, worktreePath, repositoryPath);
 
     const initial = await queryIssueWorkflow(h.config, workflowId);
-    const confirmation = await executeIssueCommand(h.config, workflowId, "delete_worktree", { expectedRevision: initial.revision, actorUserId: "issue-admin" });
+    const confirmation = await executeLifecycle(h, workflowId, "delete_worktree", { expectedRevision: initial.revision, actorUserId: "issue-admin" });
     expect(confirmation.blocker).toMatchObject({ category: "unsafe_recovery", actions: expect.arrayContaining([expect.objectContaining({ label: "Discard changes and delete worktree" })]) });
-    const cleaned = await executeIssueCommand(h.config, workflowId, "delete_worktree", { expectedRevision: confirmation.revision, actorUserId: "issue-admin", confirmDiscardDirty: true } as never);
+    const cleaned = await executeLifecycle(h, workflowId, "delete_worktree", { expectedRevision: confirmation.revision, actorUserId: "issue-admin", confirmDiscardDirty: true });
     expect(cleaned.worktreeState).toBe("cleaned");
     expect((await git(repositoryPath, "branch", "--list", `forge/issue/${issueId}`)).stdout).toContain(`forge/issue/${issueId}`);
     expect(h.database.authQuery((db) => db.prepare("SELECT event_hash AS eventHash FROM forge_issue_timeline WHERE task_id = ? AND event_type = 'worktree_cleaned'").get(issueId))).toEqual({ eventHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
-    const again = await executeIssueCommand(h.config, workflowId, "delete_worktree", { expectedRevision: cleaned.revision, actorUserId: "issue-admin", confirmDiscardDirty: true } as never);
+    const again = await executeLifecycle(h, workflowId, "delete_worktree", { expectedRevision: cleaned.revision, actorUserId: "issue-admin", confirmDiscardDirty: true });
     expect(again.revision).toBe(cleaned.revision);
     expect(await queryIssueWorkflow(h.config, workflowId)).toEqual(cleaned);
   } finally { await h.stop(); }
@@ -148,7 +161,7 @@ test("cancellation races a late agent result and a webhook", async () => {
     expect(afterWebhook.revision).toBe(afterLateResult.revision);
     expect(afterWebhook.allowedCommands).toContain("resume_preserved_work");
     expect(h.database.authQuery((db) => db.prepare("SELECT count(*) AS count FROM forge_operation_claims WHERE task_id = ? AND kind = 'push'").get(issueId))).toEqual({ count: 0 });
-    const resumed = await executeIssueCommand(h.config, workflowId, "resume_preserved_work", { expectedRevision: afterWebhook.revision, actorUserId: "issue-admin" });
+    const resumed = await executeLifecycle(h, workflowId, "resume_preserved_work", { expectedRevision: afterWebhook.revision, actorUserId: "issue-admin" });
     expect(resumed.phase).toBe("ready_for_development");
   } finally { await h.stop(); }
 });

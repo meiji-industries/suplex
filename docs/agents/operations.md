@@ -1,5 +1,7 @@
 # Operations
 
+See [recovery hardening](../recovery-hardening.md) for convergence, attention, and reconciliation operations.
+
 ## Logs
 
 `mise run logs` prints the latest 200 merged API and worker records from

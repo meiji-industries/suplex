@@ -24,11 +24,12 @@ import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/
 import { invalidateTaskList, readTaskList } from ".././lib/task-list.js";
 import { navigate } from ".././lib/navigation.js";
 import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES as blockedTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
-import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, Filter, FolderKanban, Layers3, ListFilter, Plus, UserRound } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, Filter, FolderKanban, Layers3, ListFilter, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type ReactElement } from "react";
 import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiProject, type ApiTask, type ApiTaskSummary, type TaskPhase } from "../lib/view-shared.js";
 import { TaskDetailsPage, TaskDetailsNotFound, TaskDetailsSkeleton, type PlanRevisionInput, type TaskPlanAction } from "./task-details.js";
 import { prefillForTaskSource, preserveEditedPrefill, TaskSourcePicker, type TaskSourceSelector, type TaskSourceSummary } from "../components/app/task-source-picker.js";
+import { TaskRoleSelectors } from "../components/app/task-role-selectors.js";
 
 async function fileAsImage(file: File): Promise<{ filename: string; mimeType: string; base64: string }> {
   return await new Promise((resolve, reject) => {
@@ -83,7 +84,6 @@ function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId,
   onSubmit: () => Promise<void>;
 }): ReactElement {
   const active = companyStatus === "active";
-  const agentRoles = ["planner", "reviewer", "builder", "integrator"] as const;
   const project = projects.find((candidate) => candidate.id === projectId);
   const hasProjectTests = Boolean(project?.verificationCommand.trim());
   const canSupplementalReview = Boolean(project?.roleDefaults.reviewer && roleAgents.reviewer);
@@ -126,12 +126,7 @@ function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId,
             {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
             <div className="mt-auto flex flex-wrap items-end gap-2 px-5 pb-4">
               <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={onAddImages} onRemove={onRemoveImage} disabled={busy} />
-              <DropdownMenu>
-                <DropdownMenuTrigger render={<Button type="button" variant="outline" size="sm" className="rounded-full px-2.5" aria-label="Assignee"><UserRound className="size-3.5 text-muted-foreground" />Assignee</Button>} />
-                <DropdownMenuContent align="start" className="w-64">
-                  {agentRoles.flatMap((role) => [...(role === "builder" ? [] : [<DropdownMenuItem key={`${role}-none`} onClick={() => onRoleAgentChange(role, "")}><span className="min-w-0 flex-1 truncate text-muted-foreground">None</span><span className="text-[11px] text-muted-foreground">{role}</span>{roleAgents[role] ? null : <span aria-label="Selected">✓</span>}</DropdownMenuItem>]), ...agents.filter((agent) => agent.role === role).map((agent) => <DropdownMenuItem key={`${role}-${agent.id}`} onClick={() => onRoleAgentChange(role, agent.id)}><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><span className="min-w-0 flex-1 truncate">{agent.name}</span><span className="text-[11px] text-muted-foreground">{role}</span>{roleAgents[role] === agent.id ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)])}
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <TaskRoleSelectors agents={agents} assignments={roleAgents} deliveryTarget={deliveryTarget} supplementalReview={supplementalReview} busy={busy} onChange={onRoleAgentChange} />
               <Button type="button" variant="outline" size="icon-sm" className="rounded-full" aria-label="More task properties"><Ellipsis className="size-3.5" /></Button>
               <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">
                 <Button type="submit" size="sm" disabled={busy || !projectId || !title.trim() || !description.trim()} title="Create task (⌘Enter)">{busy ? "Saving…" : "Create task"}</Button>

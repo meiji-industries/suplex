@@ -4,6 +4,7 @@ import * as capacityContracts from "../../capacity-contracts.js";
 import { assertPayloadWithinLimit } from "../policy.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
+import { classifyRepairFailure } from "./runtime.js";
 import { issueUpdates } from "../issue-updates.js";
 import { applyTargetBaseRevalidation } from "../target-base.js";
 import type { WorkflowDeliveryReviewResult } from "../issue-contracts.js";
@@ -87,7 +88,10 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
         let evidenceArtifactId: string | null = null;
         try { evidenceArtifactId = (await activityProxies.recordDeliveryBlocker({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, operation: "repair" })).artifactId; } catch { /* Keep the fixed state transition if blocker recording itself is unavailable. */ }
         const summary = error instanceof Error ? error.message : "The repair infrastructure did not complete; retry the repair.";
-        ctx.state = stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, ctx.repairCycleLimit, evidenceArtifactId, summary, noProgressEnabled);
+        const failure = ctx.permanentActivityFailure(error, true);
+        const failureClass = noProgressEnabled ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary, source: "local_check" }) : "code_failure";
+        const evidence = stateTransitions.evidencePointer(evidenceArtifactId ?? failure?.evidenceArtifactId ?? undefined, "developer-repair");
+        ctx.state = failureClass === "credential_missing" ? stateTransitions.credentialBlockedState(ctx.state, "repair_delivery", evidence) : failureClass === "transient_infrastructure" || failureClass === "rate_limited" ? stateTransitions.transientRetryState(ctx.state, "repair_delivery", summary) : stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, ctx.repairCycleLimit, evidenceArtifactId, summary, noProgressEnabled);
         await ctx.project();
         return ctx.state;
       }

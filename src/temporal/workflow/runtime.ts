@@ -6,6 +6,7 @@ import {
   IssueWorkflowStateSchema,
   type IssueWorkflowState,
   type LeadPlanningResult,
+  type StartPlanningInput,
 } from "../issue-contracts.js";
 import { cancelCapacityExecution, finalizeCapacity, inspectCapacity, rateLimitCapacity, requestCapacity, requeueCapacity, tryAcquireCapacity } from "./activity-proxies.js";
 import { repairDelivery, reviewDelivery } from "./register-delivery-review.js";
@@ -291,7 +292,7 @@ const AUTO_CHAINED_COMMANDS = { delivery_ready: "review_delivery", delivery_revi
 // (plan conflict -> required -> resolve throws -> plan conflict ...) and each pass has a new revision.
 const haltedChains = new Set<string>();
 const AUTO_RETRY_BLOCKER_DELAYS = [30_000, 120_000, 300_000] as const;
-const AUTO_RETRY_BLOCKER_COMMANDS = new Set(["review_delivery", "repair_delivery", "final_review", "accept_delivery", "reconcile_acceptance", "reconcile_merge", "retry_target_base_reconciliation"]);
+const AUTO_RETRY_BLOCKER_COMMANDS = new Set(["review_delivery", "repair_delivery", "repair_ci", "final_review", "accept_delivery", "reconcile_acceptance", "reconcile_merge", "retry_target_base_reconciliation"]);
 
 // Human decision gates: the member is choosing, not handing work to an agent, so a failure inside one of
 // these is retried in place by the guarded fallback below.
@@ -328,16 +329,17 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   }
 }
 
-function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" | "repair_delivery" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation" | null {
+function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" | "repair_delivery" | "repair_ci" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation" | null {
   if (ctx.state.phase !== "delivery_blocked") return null;
   const nonDestructive = ctx.state.allowedCommands.filter((command) => command !== "cancel_issue");
   const command = nonDestructive[0];
   if (nonDestructive.length !== 1 || !command || !AUTO_RETRY_BLOCKER_COMMANDS.has(command)) return null;
-  return command as "review_delivery" | "repair_delivery" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation";
+  return command as "review_delivery" | "repair_delivery" | "repair_ci" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation";
 }
 
 function retryScope(ctx: IssueWorkflowContext, command: string): string | null {
   if (command === "review_delivery") return ctx.state.resultCommit ?? null;
+  if (command === "repair_delivery" || command === "repair_ci") return ctx.state.resultCommit ?? null;
   if (command === "retry_target_base_reconciliation") return ctx.state.targetBaseCheckId ?? null;
   return ctx.state.acceptanceId ?? ctx.state.releaseId ?? null;
 }
@@ -353,7 +355,25 @@ export function canAutoRetryDeliveryBlocker(ctx: IssueWorkflowContext): boolean 
 }
 
 export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promise<boolean> {
-  if (!canAutoRetryDeliveryBlocker(ctx)) return false;
+  if (!canAutoRetryDeliveryBlocker(ctx)) {
+    const command = retryOnlyBlockerCommand(ctx);
+    if (command && ctx.patched("forge-repair-no-progress-v1")) {
+      const summary = ctx.state.deliveryRepairBlockerSummary ?? "Temporary provider failure persisted after automatic retries.";
+      ctx.state = IssueWorkflowStateSchema.parse({
+        ...ctx.state,
+        revision: ctx.state.revision + 1,
+        owner: "human",
+        allowedCommands: [command, "cancel_issue"],
+        pendingAction: summary,
+        blocker: humanBlocker("provider_connectivity_exhausted", summary, [{ command, label: "Retry now", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(ctx.state.deliveryRepairBlockerEvidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? undefined, "attention-evidence")),
+        stateChangedAt: new Date().toISOString(),
+        lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
+      });
+      await ctx.project();
+      return true;
+    }
+    return false;
+  }
   const command = retryOnlyBlockerCommand(ctx)!;
   const scope = retryScope(ctx, command)!;
   const prefix = `${ctx.state.workflowId}:auto-retry:${command}:${scope}:`;
@@ -366,6 +386,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
   const input = { expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId ?? ctx.input.autoApprovePlanActorUserId ?? "forge-auto-retry", commandId };
   if (command === "review_delivery") await reviewDelivery(ctx, input);
   else if (command === "repair_delivery") await repairDelivery(ctx, input);
+  else if (command === "repair_ci") await (ctx as IssueWorkflowContext & { retryCiRepair?: (input: StartPlanningInput) => Promise<IssueWorkflowState> }).retryCiRepair?.(input);
   else if (command === "final_review") await ctx.runFinalReviewTurn();
   else if (command === "accept_delivery") await ctx.retryAcceptDelivery(input);
   else if (command === "reconcile_acceptance") await ctx.reconcileAcceptanceTurn();

@@ -131,6 +131,22 @@ export function repairInfrastructureBlockedState(state: IssueWorkflowState, cycl
   });
 }
 
+export function transientRetryState(state: IssueWorkflowState, command: IssueWorkflowState["allowedCommands"][number], summary: string): IssueWorkflowState {
+  return IssueWorkflowStateSchema.parse({
+    ...revisioned(state, "delivery_blocked", "lead", [command, "cancel_issue"], "Retrying after a temporary failure"),
+    blocker: null,
+    deliveryRepairBlockerSummary: summary,
+  });
+}
+
+export function credentialBlockedState(state: IssueWorkflowState, command: IssueWorkflowState["allowedCommands"][number], evidence: ArtifactPointer | undefined): IssueWorkflowState {
+  const summary = "GitHub sign-in is required to continue.";
+  return IssueWorkflowStateSchema.parse({
+    ...revisioned(state, "delivery_blocked", "human", [command, "cancel_issue"], summary),
+    blocker: humanBlocker("provider_authentication", summary, [{ command, label: "Sign in to GitHub and retry", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidence),
+  });
+}
+
 export function repairedDeliveryAwaitingFreshReviewState(state: IssueWorkflowState, result: CompletedRepair): IssueWorkflowState {
   return IssueWorkflowStateSchema.parse({
     ...revisioned(state, "delivery_ready", "lead", ["review_delivery", "cancel_issue"], "Fresh Lead delivery review required"),

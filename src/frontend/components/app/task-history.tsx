@@ -129,7 +129,7 @@ function ActivityRow({ row, onViewChanges }: { row: FeedRow; onViewChanges?: () 
   const [expanded, setExpanded] = useState(false);
   const failed = row.commands?.some((command) => command.exitCode !== null && command.exitCode !== 0) ?? false;
   return <div className={`min-w-0 py-2 text-xs${row.command ? " items-start" : ""}`} data-task-activity-kind={row.role} {...(row.revision === undefined ? {} : { "data-task-activity-revision": row.revision })}>
-    <div className="flex min-w-0 items-center gap-2">
+    <div className="flex min-w-0 items-start gap-2">
       <ProfileAvatar name={activityRoleLabel(row.role)} seed={row.role} size="xs" />
       <span className="shrink-0 font-medium">{activityRoleLabel(row.role)}</span>
       {row.automatic ? <Badge variant="secondary">auto</Badge> : null}

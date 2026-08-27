@@ -89,3 +89,14 @@ test("shows Planner and Reviewer responses in the Activity section", () => {
   expect(html).toContain("Reviewer");
   expect(html).toContain("Revise the plan before implementation.");
 });
+
+test("top-aligns ordinary and command activity row columns", () => {
+  const command = { command: "pnpm test", exitCode: 0, durationMs: 10, stdout: "", stderr: "", at: "2026-08-27T02:20:39.745Z" };
+  const html = renderToStaticMarkup(createElement(TaskActivity, { timeline: [], optimisticRows: [
+    { id: "summary", at: "2026-08-27T02:20:39.745Z", role: "planner", text: "A long summary that wraps across the row." },
+    { id: "command", at: "2026-08-27T02:20:39.745Z", role: "builder", text: "Builder ran a command.", command },
+  ] }));
+
+  expect(html.match(/class="flex min-w-0 items-start gap-2"/g)).toHaveLength(2);
+  expect(html).not.toContain('class="flex min-w-0 items-center gap-2"');
+});

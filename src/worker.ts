@@ -28,8 +28,37 @@ export function deploymentVersionOptions(installationId: string, buildId: string
 
 export function reclaimOrphanedHerdrExecutions(database: ForgeDatabase, now = new Date().toISOString()): { agentExecutions: number; developerExecutions: number } {
   return database.authTransaction((db) => ({
-    agentExecutions: db.prepare("UPDATE forge_agent_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = COALESCE(finished_at, ?) WHERE status IN ('starting', 'running', 'cancelling')").run(now).changes,
-    developerExecutions: db.prepare("UPDATE forge_developer_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = COALESCE(finished_at, ?) WHERE status IN ('starting', 'running', 'cancelling')").run(now).changes,
+    agentExecutions: db.prepare(`UPDATE forge_agent_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = COALESCE(finished_at, ?)
+      WHERE status IN ('starting', 'running', 'cancelling') AND NOT EXISTS (
+        SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id
+        WHERE turn.ledger = 'agent' AND turn.execution_id = forge_agent_executions.id AND turn.task_id = forge_agent_executions.task_id
+          AND session.is_current = 1 AND session.status IN ('ready', 'working', 'blocked')
+      )`).run(now).changes,
+    developerExecutions: db.prepare(`UPDATE forge_developer_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = COALESCE(finished_at, ?)
+      WHERE status IN ('starting', 'running', 'cancelling') AND NOT EXISTS (
+        SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id
+        WHERE turn.ledger = 'developer' AND turn.execution_id = forge_developer_executions.id AND turn.task_id = forge_developer_executions.task_id
+          AND session.is_current = 1 AND session.status IN ('ready', 'working', 'blocked')
+      )`).run(now).changes,
+  }));
+}
+
+export function recoverOrphanedHerdrExecutions(database: ForgeDatabase): { agentExecutions: number; developerExecutions: number } {
+  return database.authTransaction((db) => ({
+    agentExecutions: db.prepare(`UPDATE forge_agent_executions SET status = 'running', failure_code = NULL, finished_at = NULL
+      WHERE status = 'failed' AND failure_code = 'worker-restart-orphan' AND EXISTS (
+        SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id
+        WHERE turn.ledger = 'agent' AND turn.execution_id = forge_agent_executions.id AND turn.task_id = forge_agent_executions.task_id
+          AND session.is_current = 1 AND session.status IN ('ready', 'working', 'blocked')
+          AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed')
+      )`).run().changes,
+    developerExecutions: db.prepare(`UPDATE forge_developer_executions SET status = 'running', failure_code = NULL, finished_at = NULL
+      WHERE status = 'failed' AND failure_code = 'worker-restart-orphan' AND EXISTS (
+        SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id
+        WHERE turn.ledger = 'developer' AND turn.execution_id = forge_developer_executions.id AND turn.task_id = forge_developer_executions.task_id
+          AND session.is_current = 1 AND session.status IN ('ready', 'working', 'blocked')
+          AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed')
+      )`).run().changes,
   }));
 }
 
@@ -124,8 +153,8 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       db.prepare(`UPDATE forge_developer_executions SET status = 'failed', failure_code = 'legacy-session-unresolved', finished_at = ? WHERE id IN (${placeholders}) AND status IN ('starting', 'running', 'cancelling')`).run(now, ...legacySessions.unresolved);
     });
   }
-  const reclaimed = reclaimOrphanedHerdrExecutions(database);
-  logger.info("Worker startup: reclaimed orphaned execution ledgers", reclaimed as never);
+  const reclaimed = { agentExecutions: 0, developerExecutions: 0 };
+  logger.info("Worker startup: deferred orphaned execution reconciliation until Herdr sessions are inspected", reclaimed as never);
   const identifiers = runtimeIdentifiers(config.installationId);
   const workerId = `${identifiers.workerPrefix}-${process.pid}`;
   let connection: NativeConnection | undefined;
@@ -191,7 +220,12 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
     };
     refreshRegistration();
     reconcileTaskCreation();
-    void runReconciliation(logger, "herdr-session-reconciliation", () => reconcileHerdrSessions(database), (result) => result.filter((outcome) => outcome.status === "failed").length, (result) => ({ inspected: result.length, failed: result.filter((outcome) => outcome.status === "failed").length }));
+    void runReconciliation(logger, "herdr-session-reconciliation", async () => {
+      const sessions = await reconcileHerdrSessions(database);
+      const recovered = recoverOrphanedHerdrExecutions(database);
+      const reclaimed = reclaimOrphanedHerdrExecutions(database);
+      return { sessions, recovered, reclaimed };
+    }, (result) => result.sessions.filter((outcome) => outcome.status === "failed").length + result.reclaimed.agentExecutions + result.reclaimed.developerExecutions, (result) => ({ inspected: result.sessions.length, recoveredAgentExecutions: result.recovered.agentExecutions, recoveredDeveloperExecutions: result.recovered.developerExecutions, reclaimedAgentExecutions: result.reclaimed.agentExecutions, reclaimedDeveloperExecutions: result.reclaimed.developerExecutions }));
     const reconcileWorkflowStall = (): void => {
       if (workflowStallRecovery || !connection) return;
       workflowStallRecovery = runReconciliation(

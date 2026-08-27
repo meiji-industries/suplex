@@ -12,6 +12,7 @@ import {
   discoverRollout,
   parseRolloutChunk,
   rolloutCandidatePaths,
+  type NeutralTimelineEvent,
 } from "./codex-rollout.js";
 import type { ForgeDatabase } from "./database.js";
 import { HerdrFailure, type HerdrClient } from "./herdr-client.js";
@@ -62,28 +63,36 @@ export class HerdrTurnRunner {
       session = await this.ensure(input);
       for (;;) {
         turnId = this.turnId(input, correction);
-        const resultPath = this.resultPath(input, turnId);
-        await mkdir(dirname(resultPath), { recursive: true, mode: 0o700 });
-        await this.quarantine(resultPath);
-        const candidates = session.codexSessionId
-          ? undefined
-          : [...(await this.candidates())];
-        const start = await this.offset(session.rolloutPath);
+        const existing = this.existingTurn(input, correction);
+        const resumed = existing?.promptSentAt ? existing : undefined;
+        const resultPath = existing
+          ? this.existingResultPath(input, existing.resultRelativePath)
+          : this.resultPath(input, turnId);
         const marker = `[forge-turn:${turnId}]`;
         const prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
-        this.create(turnId, input, session, resultPath, correction, prompt);
-        this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', updated_at = ? WHERE turn_id = ?", start, start, iso(), turnId);
-        await this.herdr.prompt(session.agentName, prompt);
-        session = await this.resolveIdentity(session, input, turnId, candidates);
-        const promptSentAt = this.now().toISOString();
-        this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, status = 'waiting', updated_at = ? WHERE turn_id = ?", promptSentAt, promptSentAt, turnId);
-        const completion = await this.wait(input, session, turnId, marker, resultPath, prompt, input.signal);
-        const bytes = await this.stableResult(
-          resultPath,
-          completion.resultVersion,
-          this.promptSentAt(turnId),
-          completion.steeredAfterCompletion,
-        );
+        if (resumed?.status === "completed") {
+          const bytes = await this.stableResult(resultPath, undefined, resumed.promptSentAt, false);
+          if (!bytes) throw new AgentFailure("recovery-result-invalid", "The completed Forge turn has no stable schema-valid result", { nonRetryable: true });
+          const parsed = input.resultSchema.safeParse(jsonRequired(bytes.toString("utf8")));
+          if (!parsed.success) throw new AgentFailure("recovery-result-invalid", "The completed Forge turn has no stable schema-valid result", { nonRetryable: true });
+          return { turnId, sessionId: session.codexSessionId!, roleSessionId: session.id, result: parsed.data, resultHash: resumed.resultHash ?? hash(bytes) };
+        }
+        if (!resumed) {
+          if (!existing) {
+            await mkdir(dirname(resultPath), { recursive: true, mode: 0o700 });
+            await this.quarantine(resultPath);
+            this.create(turnId, input, session, resultPath, correction, prompt);
+          }
+          const candidates = session.codexSessionId ? undefined : [...(await this.candidates())];
+          const start = await this.offset(session.rolloutPath);
+          this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', updated_at = ? WHERE turn_id = ?", start, start, iso(), turnId);
+          await this.herdr.prompt(session.agentName, prompt);
+          session = await this.resolveIdentity(session, input, turnId, candidates);
+          const promptSentAt = this.now().toISOString();
+          this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, status = 'waiting', updated_at = ? WHERE turn_id = ?", promptSentAt, promptSentAt, turnId);
+        }
+        const completion = await this.wait(input, session, turnId, marker, resultPath, prompt, input.signal, resumed && await this.recoverCompletion(input, session, turnId, marker, resultPath));
+        const bytes = await this.stableResult(resultPath, completion.resultVersion, this.promptSentAt(turnId), completion.steeredAfterCompletion);
         if (!bytes) continue;
         const parsed = input.resultSchema.safeParse(jsonRequired(bytes.toString("utf8")));
         if (parsed.success) {
@@ -99,8 +108,7 @@ export class HerdrTurnRunner {
         correction += 1;
       }
     } catch (error) {
-      if (error instanceof HerdrFailure)
-        throw new AgentFailure(error.code, error.message, { nonRetryable: !error.retryable });
+      if (error instanceof HerdrFailure) throw new AgentFailure(error.code, error.message, { nonRetryable: !error.retryable });
       throw error;
     } finally {
       if (input.sessionRole === "reviewer" && session) await this.closeReviewer(session).catch(() => undefined);
@@ -108,8 +116,8 @@ export class HerdrTurnRunner {
     }
   }
 
-  private async wait(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, marker: string, resultPath: string, prompt: string, signal?: AbortSignal): Promise<Completion> {
-    const completion: Completion = { marker: false, completed: false, steeredAfterCompletion: false };
+  private async wait(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, marker: string, resultPath: string, prompt: string, signal?: AbortSignal, recovered?: Completion): Promise<Completion> {
+    const completion: Completion = recovered ?? { marker: false, completed: false, steeredAfterCompletion: false };
     let activeTurnId: string | undefined;
     let polls = 0;
     let idlePolls = 0;
@@ -120,45 +128,11 @@ export class HerdrTurnRunner {
         throw new AgentFailure("cancelled", "The interactive Codex turn was cancelled.", { nonRetryable: true });
       polls += 1;
       const drained = await this.drain(input, session, turnId);
-      for (const event of drained.events) {
-        const data = event.data;
-        if (event.kind === "turn_started" && typeof data.turnId === "string") {
-          activeTurnId = data.turnId;
-          if (completion.marker) {
-            completion.codexTurnId = data.turnId;
-            completion.completed = false;
-            completion.resultVersion = undefined;
-          }
-        }
-        if (event.kind === "message" && data.role === "human" && typeof data.text === "string" && data.text.includes(marker)) {
-          completion.marker = true;
-          completion.steeredAfterCompletion = false;
-          if (activeTurnId) completion.codexTurnId = activeTurnId;
-        }
-        if (completion.codexTurnId && event.kind === "turn_finished" && data.turnId === completion.codexTurnId) {
-          if (data.error === true) throw new AgentFailure("turn-failed", "The interactive Codex turn completed with an error");
-          completion.completed = true;
-          completion.steeredAfterCompletion = false;
-          completion.resultVersion = await this.resultVersion(resultPath);
-          completion.rolloutEndOffset = event.sourceOffset;
-        }
-        if (event.kind === "turn_finished" && data.turnId === activeTurnId) activeTurnId = undefined;
-        if (
-          completion.completed &&
-          event.kind === "message" &&
-          data.role === "human" &&
-          (typeof data.text !== "string" || !data.text.includes(marker))
-        ) {
-          completion.steeredAfterCompletion = true;
-          delete completion.codexTurnId;
-          completion.completed = false;
-          completion.resultVersion = undefined;
-        }
-      }
+      for (const event of drained.events) activeTurnId = await this.reduceCompletion(completion, activeTurnId, event, marker, resultPath);
       const live = await this.herdr.getAgent(session.agentName);
       if (!live) {
         session = await this.ensure(input);
-        if (!signal?.aborted && executionActive && this.interruptedGeneration(turnId) !== session.generation) {
+        if (!completion.marker && !signal?.aborted && executionActive && this.interruptedGeneration(turnId) !== session.generation) {
           await this.herdr.prompt(session.agentName, prompt);
           this.update("UPDATE forge_herdr_turns SET interrupted_generation = ?, interrupted_prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", session.generation, iso(), iso(), turnId);
         }
@@ -296,6 +270,61 @@ export class HerdrTurnRunner {
   }
   private completionBlock(marker: string, path: string, schema: string): string { return `${marker}\n\nForge completion contract\n- Atomically write exactly one JSON object to ${path} (write a sibling temp file, then rename).\n- The object must satisfy ${schema}; no Markdown fence or commentary belongs in the file.\n- Do not say the task is complete until the result file exists.`; }
   private async ensure(input: HerdrTurnInput<unknown>): Promise<EnsuredRoleSession> { return this.sessions.ensureRoleSession(input.task, input.sessionRole, { model: input.profile.model, reasoningLevel: input.profile.reasoningLevel, serviceTier: input.profile.servicePriority === "fast" ? "fast" : input.profile.servicePriority === "priority" ? "priority" : "default" }); }
+  private existingTurn(input: HerdrTurnInput<unknown>, correction: number): { resultRelativePath: string; status: string; promptSentAt: string | undefined; resultHash: string | undefined } | undefined {
+    return this.database.authQuery((db) => db.prepare(
+      "SELECT result_relative_path AS resultRelativePath, status, prompt_sent_at AS promptSentAt, result_sha256 AS resultHash FROM forge_herdr_turns WHERE ledger = ? AND execution_id = ? AND prompt_kind = ? AND correction_index = ? AND task_id = ? AND role_session_id = ?",
+    ).get(input.ledger, input.executionId, input.promptKind, correction, input.task.taskId, this.roleSessionId(input)) as { resultRelativePath: string; status: string; promptSentAt: string | undefined; resultHash: string | undefined } | undefined);
+  }
+  private roleSessionId(input: HerdrTurnInput<unknown>): string {
+    const session = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(input.task.taskId, input.sessionRole) as { id: string } | undefined);
+    if (!session) throw new AgentFailure("recovery-session-missing", "The durable role session is missing", { nonRetryable: true });
+    return session.id;
+  }
+  private existingResultPath(input: HerdrTurnInput<unknown>, value: string): string {
+    const path = join(input.task.runtimeRoot, value);
+    if (relative(input.task.runtimeRoot, path).startsWith("..")) throw new AgentFailure("recovery-result-path-invalid", "The durable result path is outside the Forge runtime", { nonRetryable: true });
+    return path;
+  }
+  private async recoverCompletion(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, marker: string, resultPath: string): Promise<Completion> {
+    const row = this.database.authQuery((db) => db.prepare("SELECT rollout_start_offset FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { rollout_start_offset: number } | undefined);
+    const source = session.rolloutPath ? await readFile(session.rolloutPath).catch(() => Buffer.alloc(0)) : Buffer.alloc(0);
+    const parsed = parseRolloutChunk({ sessionId: session.codexSessionId!, forgeTurnId: turnId, executionId: input.executionId, executionRole: input.executionRole, offset: row?.rollout_start_offset ?? 0 }, source.subarray(row?.rollout_start_offset ?? 0).toString("utf8"));
+    const completion: Completion = { marker: false, completed: false, steeredAfterCompletion: false };
+    let activeTurnId: string | undefined;
+    for (const event of parsed.events) activeTurnId = await this.reduceCompletion(completion, activeTurnId, event, marker, resultPath);
+    return completion;
+  }
+  private async reduceCompletion(completion: Completion, activeTurnId: string | undefined, event: NeutralTimelineEvent, marker: string, resultPath: string): Promise<string | undefined> {
+    const data = event.data;
+    if (event.kind === "turn_started" && typeof data.turnId === "string") {
+      activeTurnId = data.turnId;
+      if (completion.marker) {
+        completion.codexTurnId = data.turnId;
+        completion.completed = false;
+        completion.resultVersion = undefined;
+      }
+    }
+    if (event.kind === "message" && data.role === "human" && typeof data.text === "string" && data.text.includes(marker)) {
+      completion.marker = true;
+      completion.steeredAfterCompletion = false;
+      if (activeTurnId) completion.codexTurnId = activeTurnId;
+    }
+    if (completion.codexTurnId && event.kind === "turn_finished" && data.turnId === completion.codexTurnId) {
+      if (data.error === true) throw new AgentFailure("turn-failed", "The interactive Codex turn completed with an error");
+      completion.completed = true;
+      completion.steeredAfterCompletion = false;
+      completion.resultVersion = await this.resultVersion(resultPath);
+      completion.rolloutEndOffset = event.sourceOffset;
+    }
+    if (event.kind === "turn_finished" && data.turnId === activeTurnId) activeTurnId = undefined;
+    if (completion.completed && event.kind === "message" && data.role === "human" && (typeof data.text !== "string" || !data.text.includes(marker))) {
+      completion.steeredAfterCompletion = true;
+      delete completion.codexTurnId;
+      completion.completed = false;
+      completion.resultVersion = undefined;
+    }
+    return activeTurnId;
+  }
   private create(turnId: string, input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, path: string, correction: number, prompt: string): void { this.update("INSERT OR IGNORE INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, correction_index, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?)", turnId, input.task.taskId, session.id, input.executionRole, input.ledger, input.executionId, input.promptKind, hash(prompt), relative(input.task.runtimeRoot, path), session.rolloutPath ?? null, correction, iso(), iso()); }
   private update(sql: string, ...values: unknown[]): void { this.database.authQuery((db) => db.prepare(sql).run(...values)); }
   private heartbeat(input: HerdrTurnInput<unknown>): boolean {

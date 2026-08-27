@@ -4,7 +4,7 @@ import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { TERMINAL_PHASES } from "./issue-phases.js";
 import type { IssueCommand } from "./commands/registry.js";
-import { connectTemporal } from "./temporal/service.js";
+import { connectTemporal, reconcileIssueDeveloperDelivery } from "./temporal/service.js";
 import { issueStateQuery } from "./temporal/workflows.js";
 import { IssueWorkflowStateSchema } from "./temporal/issue-contracts.js";
 import { routeWorkflowToCurrentDeployment } from "./worker-deployment.js";
@@ -71,6 +71,15 @@ export class TaskRescueService {
     }
     task = this.task(actorUserId, taskId);
     if (TERMINAL_PHASES.has(task.phase)) return { steps: [...steps, this.record(task, "Rescue", "skipped", "Task is already terminal.")] };
+    if (task.phase === "development" || task.phase === "delivery_blocked") {
+      try {
+        const state = await reconcileIssueDeveloperDelivery(this.config, task.workflowId, { expectedRevision: task.revision, actorUserId, commandId: `rescue-reconcile-${randomUUID()}`, reconcileOnly: true });
+        steps.push(this.record(task, "Reconcile Developer delivery", state.phase === "delivery_ready" ? "completed" : "skipped", state.phase === "delivery_ready" ? "Recovered the existing Developer delivery." : "No recoverable Developer execution exists."));
+        if (state.phase === "delivery_ready") return { steps };
+      } catch (error) {
+        steps.push(this.record(task, "Reconcile Developer delivery", "failed", error instanceof Error ? error.message.slice(0, 300) : "Could not reconcile the Developer execution."));
+      }
+    } else steps.push(this.record(task, "Reconcile Developer delivery", "skipped", "Task is not in a Developer recovery phase."));
     const diagnostics = await this.diagnostics(actorUserId, taskId);
     const needsReset = diagnostics.workflow.lastWorkflowTaskFailure !== null || (diagnostics.workflow.pendingWorkflowTaskAgeSeconds ?? 0) > 60;
     if (needsReset) {

@@ -698,6 +698,26 @@ test("surfaces a completed idle turn that did not write its result file", async 
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
+test("adopts a persisted waiting turn after marker-start-completion without prompting again", async () => {
+  const setup = await fixture();
+  const turnId = "turn_01b63006007efef685185032a0737895";
+  const path = join(setup.root, "herdr-results", "task", "lead", `result-${turnId}.json`);
+  const promptSentAt = new Date(Date.now() - 1_000).toISOString();
+  const rollout = `${line({ type: "user_message", message: `[forge-turn:${turnId}]` })}${line({ type: "task_started", turn_id: "codex-turn" })}${line({ type: "task_complete", turn_id: "codex-turn", duration_ms: 1 })}`;
+  let prompts = 0;
+  try {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify({ status: "ok" }));
+    await appendFile(setup.session.rolloutPath!, rollout);
+    setup.database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, rollout_start_offset, rollout_cursor_offset, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, ?, 0, ?, ?, 'waiting', ?, ?)").run(turnId, "c".repeat(64), join("herdr-results", "task", "lead", `result-${turnId}.json`), setup.session.rolloutPath, Buffer.byteLength(rollout), promptSentAt, promptSentAt, promptSentAt));
+    const runner = new HerdrTurnRunner(setup.database, { prompt: async () => { prompts += 1; return setup.session.live; }, getAgent: async () => setup.session.live } as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
+    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
+    expect(prompts).toBe(0);
+    expect((await readdir(dirname(path))).filter((name) => name.includes(".quarantine-"))).toEqual([]);
+    expect(setup.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = ?").get(turnId))).toEqual({ status: "completed" });
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
 test("re-prompts once for each newly interrupted session generation", async () => {
   const setup = await fixture();
   let generation = 1;

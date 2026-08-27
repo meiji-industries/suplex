@@ -30,6 +30,7 @@ const expectedActivityKeys = [
   "createSuccessor",
   "finalReview",
   "findActiveDeveloperExecution",
+  "findRecoverableDeveloperExecution",
   "observeGithubPullRequest",
   "planCiRepair",
   "planDeliveryRepair",

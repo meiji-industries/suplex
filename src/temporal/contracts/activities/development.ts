@@ -210,6 +210,7 @@ export type WorkflowDeveloperRepairActivityInput = Omit<DeveloperRepairActivityI
 
 export interface DevelopmentActivities {
   findActiveDeveloperExecution(input: { taskId: string; companyId: string; workflowId: string }): Promise<{ executionId: string; sessionRef: string } | null>;
+  findRecoverableDeveloperExecution(input: { taskId: string; companyId: string; workflowId: string }): Promise<{ executionId: string; planRevision: number; attempt: number; sessionRef: string; worktreePath: string; branchName: string; targetBaseSha: string } | null>;
   cancelDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<DeveloperCancellationResult>;
   runDeveloperExecution(input: DeveloperExecutionActivityInput): Promise<WorkflowDeveloperExecutionResult>;
   runDeveloperExecutionSupervised(input: SupervisedDeveloperExecutionActivityInput): Promise<DeveloperTurnActivityOutcome<WorkflowDeveloperExecutionResult>>;

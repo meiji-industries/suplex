@@ -8,6 +8,33 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
     async findActiveDeveloperExecution(input) {
       return database.authQuery((db) => db.prepare("SELECT id AS executionId, session_ref AS sessionRef FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status IN ('starting', 'running', 'cancelling') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId) as { executionId: string; sessionRef: string } | undefined) ?? null;
     },
+    async findRecoverableDeveloperExecution(input) {
+      const rows = database.authQuery((db) => db.transaction(() => {
+        const executions = db.prepare(`SELECT execution.id AS executionId, execution.plan_revision AS planRevision, execution.attempt, session.id AS sessionRef, execution.worktree_path AS worktreePath, execution.branch_name AS branchName, execution.target_base_sha AS targetBaseSha
+          FROM forge_developer_executions execution
+          JOIN forge_herdr_turns turn ON turn.ledger = 'developer' AND turn.execution_id = execution.id AND turn.task_id = execution.task_id
+          JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.task_id = execution.task_id
+          WHERE execution.task_id = ? AND execution.company_id = ? AND execution.workflow_id = ?
+            AND execution.status IN ('starting', 'running', 'failed', 'completed', 'blocked')
+            AND (execution.status <> 'failed' OR execution.failure_code = 'worker-restart-orphan')
+            AND (execution.status NOT IN ('completed', 'blocked') OR EXISTS (SELECT 1 FROM forge_developer_result_claims claim WHERE claim.execution_id = execution.id))
+            AND session.session_role = 'developer' AND session.is_current = 1
+            AND (session.status IN ('ready', 'working', 'blocked') OR (session.status = 'missing' AND session.codex_session_id IS NOT NULL))
+            AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed')
+            AND NOT EXISTS (SELECT 1 FROM forge_developer_result_conflicts conflict WHERE conflict.execution_id = execution.id)
+          ORDER BY execution.started_at DESC LIMIT 2`).all(input.taskId, input.companyId, input.workflowId) as Array<{ executionId: string; planRevision: number; attempt: number; sessionRef: string; worktreePath: string; branchName: string; targetBaseSha: string }>;
+        if (executions.length !== 1) return [];
+        const candidate = executions[0]!;
+        const reopened = db.prepare(`UPDATE forge_developer_executions SET status = 'running', failure_code = NULL, finished_at = NULL
+          WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND status = 'failed' AND failure_code = 'worker-restart-orphan'`).run(candidate.executionId, input.taskId, input.companyId, input.workflowId);
+        if (reopened.changes === 0) {
+          const current = db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(candidate.executionId) as { status: string } | undefined;
+          if (!current || !["starting", "running", "completed", "blocked"].includes(current.status)) return [];
+        }
+        return [candidate];
+      })());
+      return rows[0] ?? null;
+    },
     async runDeveloperExecution(input) {
       const operation = developer.run ? developer.run.bind(developer) : defaultDeveloper.run.bind(defaultDeveloper);
       const result = await invokeAgent(input, () => operation(input));

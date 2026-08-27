@@ -89,7 +89,7 @@ export const { cancelDeveloperExecution } = proxyActivities<IssueActivities>({
   retry: { maximumAttempts: 1 },
 });
 
-export const { findActiveDeveloperExecution } = proxyActivities<IssueActivities>({ startToCloseTimeout: "1 minute", retry: { maximumAttempts: 3, initialInterval: "1 second", maximumInterval: "5 seconds" } });
+export const { findActiveDeveloperExecution, findRecoverableDeveloperExecution } = proxyActivities<IssueActivities>({ startToCloseTimeout: "1 minute", retry: { maximumAttempts: 3, initialInterval: "1 second", maximumInterval: "5 seconds" } });
 
 export const { cancelCapacityExecution } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",

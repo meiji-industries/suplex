@@ -28,6 +28,7 @@ export const { projectIssueState: projectIssueStateActivity } = proxyActivities<
   startToCloseTimeout: "1 minute",
   retry: BOOKKEEPING_RETRY_POLICY,
 });
+export const { inspectTaskWorktree, cleanupTaskWorktree, recreateTaskWorktree } = proxyActivities<IssueActivities>({ startToCloseTimeout: "2 minutes", retry: BOOKKEEPING_RETRY_POLICY });
 const EXTERNAL_AGENT_RETRY_POLICY: RetryPolicy = {
   maximumAttempts: 3,
   initialInterval: "1 second",

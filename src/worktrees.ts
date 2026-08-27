@@ -216,6 +216,12 @@ async function canonicalDirectory(raw: string, code: string): Promise<string> {
 export class WorktreeManager {
   constructor(private readonly git: GitAdapter = defaultGit) {}
 
+  async remove(repositoryPath: string, worktreePath: string): Promise<void> {
+    const repository = await canonicalDirectory(repositoryPath, "repository-unavailable");
+    await this.git.run(["worktree", "remove", "--force", worktreePath], repository);
+    await this.git.run(["worktree", "prune"], repository);
+  }
+
   // The base a task builds on must be the branch as it is now, not the snapshot pinned
   // when the project revision was accepted.
   async currentBaseSha(repositoryPath: string, baseBranch: string): Promise<string> {

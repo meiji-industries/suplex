@@ -11,8 +11,9 @@ import type { PlanningActivities } from "./planning.js";
 import type { ProjectionActivities } from "./projection.js";
 import type { ReleaseActivities } from "./release.js";
 import type { TargetBaseActivities } from "./target-base.js";
+import type { WorktreeActivities } from "./worktree.js";
 
-export interface IssueActivities extends ProjectionActivities, PlanningActivities, GovernanceActivities, GithubSyncActivities, CapacityActivities, DevelopmentActivities, DeliveryReviewActivities, ReleaseActivities, TargetBaseActivities, CiActivities, FinalReviewActivities, AcceptanceActivities, MergeConflictActivities {}
+export interface IssueActivities extends ProjectionActivities, PlanningActivities, GovernanceActivities, GithubSyncActivities, CapacityActivities, DevelopmentActivities, DeliveryReviewActivities, ReleaseActivities, TargetBaseActivities, CiActivities, FinalReviewActivities, AcceptanceActivities, MergeConflictActivities, WorktreeActivities {}
 
 export * from "./acceptance.js";
 export * from "./ci.js";
@@ -26,3 +27,4 @@ export * from "./planning.js";
 export * from "./projection.js";
 export * from "./release.js";
 export * from "./target-base.js";
+export * from "./worktree.js";

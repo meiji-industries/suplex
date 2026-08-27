@@ -17,6 +17,7 @@ import { createCiActivities } from "./ci.js";
 import { createFinalReviewActivities } from "./final-review.js";
 import { createAcceptanceActivities } from "./acceptance.js";
 import { createMergeConflictActivities } from "./merge-conflict.js";
+import { createWorktreeActivities } from "./worktree.js";
 
 export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): ProbeActivities & IssueActivities & DeliveryBlockerActivities {
   const ctx = createActivityContext(database, config, options);
@@ -33,6 +34,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     ...createFinalReviewActivities(ctx),
     ...createAcceptanceActivities(ctx),
     ...createMergeConflictActivities(ctx),
+    ...createWorktreeActivities(ctx),
   } as unknown as ProbeActivities & IssueActivities & DeliveryBlockerActivities;
 }
 

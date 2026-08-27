@@ -30,9 +30,10 @@ export function parseClaudeChunk(input: RolloutParserInput, chunk: string, remai
   let offset = input.offset, unknown = 0, taskComplete = false, activeTurnId = state.activeTurnId;
   const events: NeutralTimelineEvent[] = [];
   for (const row of rows) {
-    const lineOffset = offset;
     offset += Buffer.byteLength(`${row}\n`);
+    const lineOffset = offset;
     let emitted = 0;
+    // sourceOffset is line end offset plus its event index: timelineEventId hashes (sessionId, sourceOffset), while turn_finished is alone and retains the snapshot byte offset.
     const emit = (timestamp: string, kind: NeutralTimelineEvent["kind"], data: Record<string, unknown>) =>
       events.push(event(input, lineOffset + emitted++, timestamp, kind, data));
     let line: Record<string, unknown>;

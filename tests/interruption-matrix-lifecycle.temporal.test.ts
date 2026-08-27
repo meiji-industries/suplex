@@ -59,7 +59,7 @@ async function start(h: TemporalHarness, issueId: string, phase: "delivery_block
   const started = await startIssueWorkflow(h.config, { companyId: "issue-company", projectId: "issue-project", issueId, projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: h.issueRoleProfiles, supplementalReview: false, repairCycleLimit: 0, continuationState: continuation(h, issueId, phase) });
   expect(started.workflowId).toBe(workflowId);
   const temporal = await connectTemporal(h.config);
-  try { await temporal.client.workflow.getHandle(workflowId).executeUpdate(issueUpdates.resync_projection, { args: [] }); } finally { await temporal.connection.close(); }
+  try { await temporal.client.workflow.getHandle(workflowId).executeUpdate(issueUpdates.resync_projection, { args: [{ expectedRevision: 20, actorUserId: "issue-admin" }] }); } finally { await temporal.connection.close(); }
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (h.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_issue_projections WHERE task_id = ?").get(issueId))) break;
     await new Promise((resolve) => setTimeout(resolve, 25));

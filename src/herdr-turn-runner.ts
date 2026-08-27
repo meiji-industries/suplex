@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, stat } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { gzipSync } from "node:zlib";
 
 import type { z } from "zod";
 
 import { AgentFailure } from "./agent-failure.js";
+import { detectGitHandoff } from "./git-handoff.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { type NeutralTimelineEvent, type RolloutParseResult } from "./codex-rollout.js";
 import type { ForgeDatabase } from "./database.js";
@@ -163,6 +164,35 @@ export class HerdrTurnRunner {
             await this.updateAttention(session, turnId, "awaiting_human", "Prompt was not accepted by the agent after 4 attempts");
           }
         } else {
+          if (input.executionRole === "builder") {
+            const execution = this.database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha FROM forge_developer_executions WHERE id = ?").get(input.executionId) as { worktreePath: string; branchName: string; targetBaseSha: string } | undefined);
+            const previousCommit = this.database.authQuery((db) => db.prepare("SELECT subject_commit FROM forge_delivery_reviews WHERE workflow_id = ? ORDER BY created_at DESC, id DESC LIMIT 1").get(input.workflowId) as { subject_commit: string } | undefined)?.subject_commit ?? execution?.targetBaseSha ?? null;
+            const handoff = execution && await detectGitHandoff({ worktreePath: execution.worktreePath, branchName: execution.branchName, previousCommit, taskId: input.task.taskId, database: this.database });
+            if (handoff?.kind === "clean_commit") {
+              const summary = `Delivery taken from Git commit ${handoff.headSha.slice(0, 7)}; the Developer's completion message was not received.`;
+              const result = JSON.stringify({ kind: "delivery", summary, steps: [{ number: 1, status: "completed", filesChanged: [], notes: "Git handoff." }], authorizedStepsNotCompleted: [], resultCommit: handoff.headSha, resultTree: handoff.treeSha, dirtyState: "clean", blocker: null });
+              const temporary = `${resultPath}.git-handoff-${randomUUID()}`;
+              await mkdir(dirname(resultPath), { recursive: true, mode: 0o700 });
+              await writeFile(temporary, result, { mode: 0o600 });
+              await rename(temporary, resultPath);
+              const now = iso();
+              this.database.authTransaction((db) => {
+                const sequence = (db.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS value FROM forge_developer_execution_events WHERE execution_id = ?").get(input.executionId) as { value: number }).value;
+                db.prepare("INSERT OR IGNORE INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, occurred_at, summary, idempotency_key) VALUES (?, ?, 0, ?, 'git_handoff', ?, ?, ?)").run(randomUUID(), input.executionId, sequence, now, summary, `git-handoff:${handoff.headSha}`);
+                db.prepare("UPDATE forge_herdr_turns SET result_sha256 = ?, task_complete_seen_at = ?, status = 'completed', finished_at = ?, updated_at = ? WHERE turn_id = ?").run(hash(result), now, now, now, turnId);
+              });
+              return { marker: true, completed: true, steeredAfterCompletion: false, session };
+            }
+            const description = handoff?.kind === "dirty" ? `Developer pane ended with ${handoff.dirtyFileCount} uncommitted files and no delivery result` : `Developer pane ended with ${handoff?.kind ?? "no new commit"} and no delivery result`;
+            throw new AgentFailure("turn_outcome_missing", description, { nonRetryable: true });
+          }
+          const row = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { status: string } | undefined);
+          if (row?.status !== "resume_requested") {
+            await this.herdr.prompt(session.agentName, `Your previous turn ended without writing the required result file at ${resultPath}. Write it now using the exact schema you were given, then reply with the completion marker ${marker}.`);
+            this.update("UPDATE forge_herdr_turns SET status = 'resume_requested', updated_at = ? WHERE turn_id = ?", iso(), turnId);
+          } else if (++idlePolls >= 2) {
+            throw new AgentFailure("turn_outcome_missing", `Agent remained ${live.status} without writing ${resultPath}`, { nonRetryable: true });
+          }
           const excerpt = completion.completed
             ? `Finished without writing ${resultPath}`
             : ++idlePolls >= 2

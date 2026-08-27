@@ -163,11 +163,12 @@ test("planner note answers a merge decision on the same lead session", { timeout
       leadSessionRef: input.leadSessionRef,
       summary: "Choose which behavior should win.",
       question: "Which behavior should win?",
-      choices: [{ id: "preserve-local", label: "Preserve local behavior", description: "Keep Forge's existing behavior." }, { id: "accept-remote", label: "Accept remote behavior", description: "Adopt the behavior from the remote branch." }],
+      choices: [{ id: "preserve-local", label: "Preserve local behavior", detail: "Keep Forge's existing behavior." }, { id: "accept-remote", label: "Accept remote behavior", detail: "Adopt the behavior from the remote branch." }],
       recommendedChoiceId: "preserve-local",
     };
   });
   h.activityOverrides.set("resolveMergeConflictSupervised", async () => completedResolution());
+  h.activityOverrides.set("recordPlannerNote", async (input) => ({ noteId: `planner_note_${input.commandId}`, createdAt: new Date().toISOString() }));
   h.activityOverrides.set("projectIssueState", async (event) => {
     projectedPhases.push(event.state.phase);
     return event.state;
@@ -176,8 +177,7 @@ test("planner note answers a merge decision on the same lead session", { timeout
   try {
     const started = await startConflict(h, "merge-planner-note");
     const decision = await waitFor(h, started.workflowId, (state) => state.phase === "merge_conflict_required" && state.owner === "human");
-    // BUG: src/temporal/policy.ts:68 — a product-decision choice's required `description` is rejected at the activity boundary.
-    expect.soft(decision).toMatchObject({
+    expect(decision).toMatchObject({
       owner: "human",
       mergeDecision: { question: "Which behavior should win?", choices: [{ id: "preserve-local" }, { id: "accept-remote" }], recommendedChoiceId: "preserve-local" },
       blocker: { category: "member_decision", actions: expect.arrayContaining([expect.objectContaining({ label: "Choose a behavior" })]) },
@@ -192,12 +192,19 @@ test("planner note answers a merge decision on the same lead session", { timeout
       note,
       commandId: "merge-planner-note-choice",
     });
+    await executeIssueCommand(h.config, started.workflowId, "send_planner_note", {
+      expectedRevision: decision.revision,
+      actorUserId: "issue-admin",
+      note,
+      commandId: "merge-planner-note-choice",
+    });
     await waitFor(h, started.workflowId, () => projectedPhases.includes("delivery_ready"));
 
     expect(projectedPhases).toContain("delivery_ready");
     expect(planInputs).toHaveLength(2);
     expect(planInputs[1]).toMatchObject({ leadSessionRef: planInputs[0]!.leadSessionRef, operatorNotes: [note] });
-    expect(await stableState(h, started.workflowId)).toEqual(await stableState(h, started.workflowId));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(planInputs).toHaveLength(2);
   } finally {
     await h.stop();
   }

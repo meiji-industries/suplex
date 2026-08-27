@@ -36,7 +36,7 @@ function decision(value: unknown): AttentionCondition | undefined {
   if (!value || typeof value !== "object") return undefined;
   const input = value as { question?: unknown; choices?: unknown; recommendedChoiceId?: unknown };
   if (typeof input.question !== "string" || !Array.isArray(input.choices) || input.choices.length < 2 || typeof input.recommendedChoiceId !== "string") return undefined;
-  const choices = input.choices.flatMap((choice): AttentionChoice[] => typeof choice === "object" && choice !== null && typeof (choice as { id?: unknown }).id === "string" && typeof (choice as { label?: unknown }).label === "string" && typeof (choice as { description?: unknown }).description === "string" ? [choice as AttentionChoice] : []);
+  const choices = input.choices.flatMap((choice): AttentionChoice[] => typeof choice === "object" && choice !== null && typeof (choice as { id?: unknown }).id === "string" && typeof (choice as { label?: unknown }).label === "string" && typeof (choice as { detail?: unknown }).detail === "string" ? [{ id: (choice as { id: string }).id, label: (choice as { label: string }).label, description: (choice as { detail: string }).detail }] : []);
   return choices.length >= 2 ? { kind: "product_decision", question: input.question, choices: choices as [AttentionChoice, AttentionChoice, ...AttentionChoice[]], recommendedChoiceId: input.recommendedChoiceId } : undefined;
 }
 

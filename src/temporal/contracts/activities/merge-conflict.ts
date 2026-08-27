@@ -37,7 +37,7 @@ export interface MergeConflictPlanActivityResult {
   summary: string;
   disposition?: "mechanical" | "product_decision";
   question?: string;
-  choices?: Array<{ id: string; label: string; description: string }>;
+  choices?: Array<{ id: string; label: string; detail: string }>;
   recommendedChoiceId?: string;
 }
 

@@ -289,7 +289,7 @@ export const MergeConflictPlanSchema = z.object({
   unresolvedQuestions: z.array(z.string()).length(0),
   disposition: z.enum(["mechanical", "product_decision"]).default("mechanical"),
   question: z.string().min(1).optional(),
-  choices: z.array(z.object({ id: z.string().min(1), label: z.string().min(1), description: z.string().min(1) }).strict()).min(2).max(3).optional(),
+  choices: z.array(z.object({ id: z.string().min(1), label: z.string().min(1), detail: z.string().min(1).max(200) }).strict()).min(2).max(3).optional(),
   recommendedChoiceId: z.string().min(1).optional(),
 }).superRefine((value, context) => {
   if (value.disposition === "mechanical" && !value.resolutions.length) context.addIssue({ code: "custom", path: ["resolutions"], message: "Mechanical plans require resolutions" });

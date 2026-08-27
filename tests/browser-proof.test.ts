@@ -96,6 +96,19 @@ test("off and empty capture preserve staging while successful cleanup removes on
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("reuses verified durable proof after cleanup and rejects report metadata drift", async () => {
+  const value = await fixture();
+  try {
+    await writeFile(join(value.proof, "retry.png"), png);
+    const evidence = { captured: true, summary: "Retry proof", captures: [{ path: ".forge-proof/retry.png", caption: "Desktop", viewport: { width: 1440, height: 900, deviceScaleFactor: 2 }, capturedAt: "2026-08-26T12:00:00.000Z" }] };
+    const first = await value.ingest(evidence), before = value.database.authQuery((db) => (db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts WHERE kind LIKE 'browser-proof-%'").get() as { count: number }).count);
+    await value.service.cleanupPersisted(value.worktree, evidence, first!);
+    const retry = await value.ingest(evidence), after = value.database.authQuery((db) => (db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts WHERE kind LIKE 'browser-proof-%'").get() as { count: number }).count);
+    expect(retry).toEqual(first); expect(after).toBe(before);
+    await expect(value.ingest({ ...evidence, captures: [{ ...evidence.captures[0]!, caption: "Changed" }] })).rejects.toMatchObject({ code: "proof-identity-conflict" });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("rejects wrong embedded bindings and tampered bytes from projection and download", async () => {
   const value = await fixture();
   try {

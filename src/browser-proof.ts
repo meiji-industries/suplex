@@ -110,6 +110,17 @@ async function readCapture(worktreePath: string, reportedPath: string): Promise<
 
 function stored(row: ArtifactRow): StoredArtifact { return { id: row.id, companyId: row.companyId, kind: row.kind, filename: row.filename, mimeType: row.mimeType, byteSize: row.byteSize, sha256: row.sha256, storagePath: row.storagePath, createdAt: row.createdAt }; }
 
+function reusableManifestMatches(manifest: BrowserProofManifest, input: { taskId: string; companyId: string; developerExecutionId: string; resultCommit: string; resultTree: string }, evidence: BrowserProofInput, captures: z.infer<typeof captureSchema>[]): boolean {
+  if (manifest.taskId !== input.taskId || manifest.companyId !== input.companyId || manifest.developerExecutionId !== input.developerExecutionId || manifest.resultCommit.toLowerCase() !== input.resultCommit.toLowerCase() || manifest.resultTree.toLowerCase() !== input.resultTree.toLowerCase() || manifest.summary !== (evidence.summary?.trim() || null) || manifest.images.length !== captures.length) return false;
+  return captures.every((capture, ordinal) => {
+    const image = manifest.images[ordinal];
+    if (!image) return false;
+    const extension = image.mimeType === "image/png" ? "png" : image.mimeType === "image/jpeg" ? "jpg" : "webp";
+    const viewport = capture.viewport ? { width: capture.viewport.width, height: capture.viewport.height, deviceScaleFactor: capture.viewport.deviceScaleFactor ?? null } : null;
+    return image.filename === safeFilename(capture.path, ordinal, extension) && image.caption === (capture.caption?.trim() || null) && JSON.stringify(image.viewport) === JSON.stringify(viewport) && image.capturedAt === (capture.capturedAt ?? null);
+  });
+}
+
 async function putOrVerify(database: ForgeDatabase, artifacts: ArtifactStore, input: { id: string; companyId: string; taskId: string; kind: string; filename: string; mimeType: string; bytes: Buffer }): Promise<StoredArtifact> {
   const lookup = (): ArtifactRow | undefined => database.authQuery((db) => db.prepare(`SELECT ${rowSelect} FROM forge_artifacts WHERE id = ?`).get(input.id) as ArtifactRow | undefined);
   const verify = (row: ArtifactRow): StoredArtifact => {
@@ -133,6 +144,13 @@ export class BrowserProofService {
       if (input.control === "required") throw new BrowserProofFailure("proof-required", "Valid durable browser proof is required");
       return undefined;
     }
+    const manifestId = deterministicId("proof_manifest", [1, input.companyId, input.taskId, input.developerExecutionId, input.resultCommit.toLowerCase()]);
+    const existing = await this.loadManifestArtifact(manifestId, input.taskId, input.companyId);
+    if (existing) {
+      await this.verify(existing.manifest, manifestId);
+      if (!reusableManifestMatches(existing.manifest, input, evidence!, captures)) throw new BrowserProofFailure("proof-identity-conflict", "Browser proof identity is already bound to different content");
+      return { captured: true, manifestArtifactId: manifestId, artifactIds: existing.manifest.images.map((image) => image.artifactId), ...(existing.manifest.summary ? { summary: existing.manifest.summary } : {}) };
+    }
     await this.assertUntracked(input.worktreePath, captures.map((capture) => capture.path));
     let total = 0;
     const images: BrowserProofManifest["images"] = [];
@@ -145,15 +163,7 @@ export class BrowserProofService {
       const artifact = await putOrVerify(this.database, this.artifacts, { id, companyId: input.companyId, taskId: input.taskId, kind: "browser-proof-image", filename, mimeType: type.mimeType, bytes });
       images.push({ artifactId: artifact.id, sha256: artifact.sha256, filename, mimeType: type.mimeType, byteSize: artifact.byteSize, caption: capture.caption?.trim() || null, viewport: capture.viewport ? { width: capture.viewport.width, height: capture.viewport.height, deviceScaleFactor: capture.viewport.deviceScaleFactor ?? null } : null, capturedAt: capture.capturedAt ?? null });
     }
-    const manifestId = deterministicId("proof_manifest", [1, input.companyId, input.taskId, input.developerExecutionId, input.resultCommit.toLowerCase()]);
-    const existing = await this.loadManifestArtifact(manifestId, input.taskId, input.companyId);
     const comparable = { version: 1 as const, taskId: input.taskId, companyId: input.companyId, developerExecutionId: input.developerExecutionId, resultCommit: input.resultCommit.toLowerCase(), resultTree: input.resultTree.toLowerCase(), summary: evidence?.summary?.trim() || null, images };
-    if (existing) {
-      const { createdAt: _createdAt, ...persisted } = existing.manifest;
-      if (JSON.stringify(persisted) !== JSON.stringify(comparable)) throw new BrowserProofFailure("proof-identity-conflict", "Browser proof identity is already bound to different content");
-      await this.verify(existing.manifest, manifestId);
-      return { captured: true, manifestArtifactId: manifestId, artifactIds: images.map((image) => image.artifactId), ...(comparable.summary ? { summary: comparable.summary } : {}) };
-    }
     const manifest: BrowserProofManifest = { ...comparable, createdAt: new Date().toISOString() };
     await putOrVerify(this.database, this.artifacts, { id: manifestId, companyId: input.companyId, taskId: input.taskId, kind: "browser-proof-manifest", filename: `${input.developerExecutionId.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 96) || "developer"}-browser-proof.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(manifest), "utf8") });
     const persisted = await this.loadManifestArtifact(manifestId, input.taskId, input.companyId);

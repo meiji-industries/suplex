@@ -187,9 +187,9 @@ export class HerdrTurnRunner {
             throw new AgentFailure("turn_outcome_missing", description, { nonRetryable: true });
           }
           const row = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { status: string } | undefined);
-          if (row?.status !== "resume_requested") {
+          if (row?.status !== "awaiting_human") {
             await this.herdr.prompt(session.agentName, `Your previous turn ended without writing the required result file at ${resultPath}. Write it now using the exact schema you were given, then reply with the completion marker ${marker}.`);
-            this.update("UPDATE forge_herdr_turns SET status = 'resume_requested', updated_at = ? WHERE turn_id = ?", iso(), turnId);
+            this.update("UPDATE forge_herdr_turns SET status = 'awaiting_human', updated_at = ? WHERE turn_id = ?", iso(), turnId);
           } else if (++idlePolls >= 2) {
             throw new AgentFailure("turn_outcome_missing", `Agent remained ${live.status} without writing ${resultPath}`, { nonRetryable: true });
           }

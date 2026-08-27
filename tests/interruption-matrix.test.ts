@@ -51,9 +51,9 @@ test("another user pushes a clean head change to an imported pr", () => {
   expect(outcome).toMatchObject({ action: "no_change" });
 });
 
-test("remote branch integration is clean", async () => {
-  const source = await readFile(new URL("../src/worktrees.ts", import.meta.url), "utf8");
-  expect(source).toContain('"--ff-only", remoteRef');
+test("remote branch integration is clean", () => {
+  const outcome = twice(facts({ turn: null }), live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "b".repeat(40) } }));
+  expect(outcome).toMatchObject({ action: "no_change" });
 });
 
 test("remote branch integration conflicts and auto-enters resolution", () => {

@@ -176,6 +176,10 @@ export function createTemporalHarness(): TemporalHarness {
     const baseActivities = createActivities(database, config, { agent: integrationAgent, developer: integrationDeveloper });
     const integrationActivities = {
       ...baseActivities,
+      // Matrix continuation fixtures deliberately model an already-published
+      // Forge branch, not an imported source PR. Keep that default explicit so
+      // a task-source lookup cannot make unrelated recovery scenarios retry.
+      async loadTaskSourcePullRequest() { return null; },
       async projectIssueState(event: Parameters<typeof baseActivities.projectIssueState>[0]) {
         return event.state.issueId.startsWith("ci-") && event.state.issueId !== "ci-provider-failure" ? event.state : baseActivities.projectIssueState(event);
       },

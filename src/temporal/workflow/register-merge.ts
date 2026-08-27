@@ -80,6 +80,10 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
         return ctx.state;
       }
     }
+    if (!ctx.state.mergeResolutionPlanArtifactId && ctx.state.mergeDecision) {
+      await ctx.project();
+      return ctx.state;
+    }
     if (!ctx.state.mergeResolutionPlanArtifactId) throw new Error("A Lead conflict plan is required");
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
     const turnExecutionId = developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "merge_conflict_resolution");

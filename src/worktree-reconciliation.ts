@@ -1,4 +1,5 @@
 import { access } from "node:fs/promises";
+import { createHash } from "node:crypto";
 
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
@@ -28,7 +29,9 @@ export async function reconcileWorktrees(database: ForgeDatabase, config: ForgeC
     if (!marked.changes) { outcomes.push({ taskId: row.taskId, phase: row.phase, status: "already_recorded" }); continue; }
     removedExternally += 1;
     if (["done", "cancelled"].includes(row.phase)) {
-      database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, source, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, ?, 'workflow', 'worktree_removed_externally', ?, ?, ?)").run(`${row.workflowId}:worktree_removed_externally`, row.taskId, row.companyId, row.workflowId, row.revision, JSON.stringify({ path: row.worktreePath }), new Date().toISOString(), ""));
+      const metadataJson = JSON.stringify({ path: row.worktreePath });
+      const eventHash = createHash("sha256").update(metadataJson).digest("hex");
+      database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, source, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, ?, 'workflow', 'worktree_removed_externally', ?, ?, ?)").run(row.workflowId + ":worktree_removed_externally", row.taskId, row.companyId, row.workflowId, row.revision, metadataJson, new Date().toISOString(), eventHash));
       outcomes.push({ taskId: row.taskId, phase: row.phase, status: "removed_externally_terminal" });
       continue;
     }

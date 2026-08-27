@@ -5,8 +5,9 @@ import { TERMINAL_PHASES } from "../../issue-phases.js";
 import { assertPayloadWithinLimit } from "../policy.js";
 import { ContinueWorkCommandSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, StartPlanningInputSchema } from "../issue-contracts.js";
 import { issueUpdates } from "../issue-updates.js";
-import { acceptDelivery, cancelCapacity, cancelCapacityExecution, cancelDeveloperExecution, cleanupTaskWorktree, createSuccessor, finalizeCapacity, inspectCapacity, recreateTaskWorktree, recordDeliveryDecision } from "./activity-proxies.js";
+import { acceptDelivery, cancelCapacity, cancelCapacityExecution, cancelDeveloperExecution, cleanupTaskWorktree, createSuccessor, finalizeCapacity, inspectCapacity, inspectTaskWorktree, recreateTaskWorktree, recordDeliveryDecision } from "./activity-proxies.js";
 import type { IssueWorkflowContext } from "./context.js";
+import * as stateTransitions from "./state-transitions.js";
 
 export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
   const cancelQueuedCapacity = async (): Promise<void> => {
@@ -185,7 +186,8 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     const command = expected.extend({ confirmDiscardDirty: z.boolean().optional() }).parse(raw);
     const result = await cleanupTaskWorktree({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, ...(command.confirmDiscardDirty !== undefined ? { confirmDiscardDirty: command.confirmDiscardDirty } : {}) });
     if (result.outcome === "cleaned") ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, worktreeState: "cleaned", pendingAction: "Worktree deleted", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
-    else if (result.outcome === "dirty_confirmation_required") ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "human", allowedCommands: ctx.addRevisionCommand(["delete_worktree", "continue_work"]), pendingAction: `Worktree has ${result.dirtyFileCount} uncommitted changes — confirm to discard`, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    else if (result.outcome === "dirty_confirmation_required") ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "human", allowedCommands: ctx.addRevisionCommand(["delete_worktree", "continue_work"]), pendingAction: `Worktree has ${result.dirtyFileCount} uncommitted changes — confirm to discard`, blocker: stateTransitions.humanBlocker("unsafe_recovery", "Worktree has uncommitted changes that require confirmation before deletion.", [{ command: "delete_worktree", label: "Discard changes and delete worktree", requiresNote: false, destructive: true }, { command: "continue_work", label: "Keep worktree", requiresNote: false, destructive: false }], stateTransitions.evidencePointer(result.evidenceArtifactId, "attention-evidence")), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    else if (result.outcome === "not_owned") await ctx.recordHandlerNoop("delete_worktree", "Forge does not own the requested worktree.");
     await ctx.project(); return ctx.state;
   }), { validator(raw) { const command = expected.extend({ confirmDiscardDirty: z.boolean().optional() }).parse(raw); if (command.expectedRevision !== ctx.state.revision || ctx.state.activeOperation) throw new Error("Worktree deletion was superseded"); } });
   setHandler(issueUpdates.recreate_worktree, ctx.guarded(async (raw) => {
@@ -196,8 +198,9 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     expected.parse(raw); ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: `Resuming from preserved branch ${ctx.state.branchName}`, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }); await ctx.project(); return ctx.state;
   }), { validator(raw) { const command = expected.parse(raw); if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "cancelled" || !ctx.state.branchName) throw new Error("Preserved work is unavailable"); } });
   setHandler(issueUpdates.report_worktree_missing, ctx.guarded(async (raw) => {
-    const command = expected.extend({ worktreePath: z.string().min(1) }).parse(raw); if (["done", "cancelled", "failed"].includes(ctx.state.phase)) return ctx.state;
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "human", allowedCommands: ctx.addRevisionCommand(["recreate_worktree", "cancel_issue"]), pendingAction: "Local worktree is missing", worktreeState: "removed_externally", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }); await ctx.project(); void command; return ctx.state;
+    const command = expected.extend({ worktreePath: z.string().min(1) }).parse(raw); if (["done", "cancelled", "failed"].includes(ctx.state.phase)) { await ctx.recordHandlerNoop("report_worktree_missing", "The terminal task's missing worktree was recorded as history only."); return ctx.state; }
+    const inspected = await inspectTaskWorktree({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "human", allowedCommands: ctx.addRevisionCommand(["recreate_worktree", "cancel_issue"]), pendingAction: "Local worktree is missing", worktreeState: "removed_externally", blocker: stateTransitions.humanBlocker("unsafe_recovery", "The local worktree at " + command.worktreePath + " no longer exists.", [{ command: "recreate_worktree", label: "Recreate worktree and resume", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(inspected.evidenceArtifactId, "attention-evidence")), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }); await ctx.project(); return ctx.state;
   }), { validator(raw) { const command = expected.extend({ worktreePath: z.string().min(1) }).parse(raw); if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision"); } });
 }
 

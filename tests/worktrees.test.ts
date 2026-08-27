@@ -34,6 +34,48 @@ async function fixture() {
   return { root, repositoryPath, worktreeRoot, baseSha: await git(["rev-parse", "HEAD"], repositoryPath) };
 }
 
+type RemoteFixture = {
+  root: string;
+  repositoryPath: string;
+  worktreeRoot: string;
+  baseSha: string;
+  remotePath: string;
+};
+
+
+async function remoteFixture() {
+  const value = await fixture();
+  const remotePath = join(value.root, "origin.git");
+  await git(["init", "--bare", remotePath], value.root);
+  await git(["remote", "add", "origin", remotePath], value.repositoryPath);
+  await git(["push", "-u", "origin", "main"], value.repositoryPath);
+  return { ...value, remotePath };
+}
+
+async function createSourceBranch(value: RemoteFixture, branchName: string) {
+  await git(["switch", "-c", branchName], value.repositoryPath);
+  await writeFile(join(value.repositoryPath, "SOURCE.md"), "original\n");
+  await git(["add", "SOURCE.md"], value.repositoryPath);
+  await git(["commit", "-m", "source"], value.repositoryPath);
+  await git(["push", "-u", "origin", branchName], value.repositoryPath);
+  await git(["switch", "main"], value.repositoryPath);
+}
+
+async function rewriteSourceBranch(value: RemoteFixture, branchName: string) {
+  const rewritePath = join(value.root, "rewrite");
+  await git(["clone", value.remotePath, rewritePath], value.root);
+  await git(["config", "user.name", "Forge Test"], rewritePath);
+  await git(["config", "user.email", "forge-test@example.invalid"], rewritePath);
+  await git(["switch", branchName], rewritePath);
+  await git(["reset", "--hard", value.baseSha], rewritePath);
+  await writeFile(join(rewritePath, "SOURCE.md"), "rewritten\n");
+  await git(["add", "SOURCE.md"], rewritePath);
+  await git(["commit", "-m", "rewritten source"], rewritePath);
+  const remoteHead = await git(["rev-parse", "HEAD"], rewritePath);
+  await git(["push", "--force", "origin", branchName], rewritePath);
+  return remoteHead;
+}
+
 test("assigns Cargo task worktrees a mode-0700 shared per-project target directory", async () => {
   const value = await fixture();
   const worktreePath = join(value.worktreeRoot, "cargo-task");
@@ -44,6 +86,58 @@ test("assigns Cargo task worktrees a mode-0700 shared per-project target directo
     const target = join(value.worktreeRoot, ".cache", "project_1", "cargo-target");
     expect(env.CARGO_TARGET_DIR).toBe(target);
     expect(await stat(target).then((entry) => entry.mode & 0o777)).toBe(0o700);
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("adopts a force-pushed source branch without local commits", async () => {
+  const value = await remoteFixture();
+  const branchName = "feat/source";
+  try {
+    await createSourceBranch(value, branchName);
+    const manager = new WorktreeManager();
+    const initial = await manager.adopt({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_rewritten", branchName, baseBranch: "main", preserveLocal: true });
+    const remoteHead = await rewriteSourceBranch(value, branchName);
+
+    await expect(manager.adopt({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_rewritten", branchName, baseBranch: "main", preserveLocal: true })).resolves.toMatchObject({ worktreePath: initial.worktreePath });
+    expect(await git(["rev-parse", "HEAD"], initial.worktreePath)).toBe(remoteHead);
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("rebases local source commits onto a force-pushed source branch", async () => {
+  const value = await remoteFixture();
+  const branchName = "feat/source";
+  try {
+    await createSourceBranch(value, branchName);
+    const manager = new WorktreeManager();
+    const initial = await manager.adopt({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_rebased", branchName, baseBranch: "main", preserveLocal: true });
+    await writeFile(join(initial.worktreePath, "LOCAL.md"), "local\n");
+    await git(["add", "LOCAL.md"], initial.worktreePath);
+    await git(["commit", "-m", "local delivery"], initial.worktreePath);
+    const remoteHead = await rewriteSourceBranch(value, branchName);
+
+    await manager.adopt({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_rebased", branchName, baseBranch: "main", preserveLocal: true });
+    expect(await git(["rev-parse", "HEAD^"], initial.worktreePath)).toBe(remoteHead);
+    expect(await git(["show", "HEAD:LOCAL.md"], initial.worktreePath)).toBe("local");
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("distinguishes deleted source branches from unavailable fetches", async () => {
+  const value = await fixture();
+  const failure = new Error("fetch failed");
+  const deleted = new WorktreeManager({ async run(args) {
+    if (args[0] === "fetch") throw failure;
+    if (args[0] === "ls-remote") return "";
+    throw failure;
+  } });
+  const unavailable = new WorktreeManager({ async run(args) {
+    if (args[0] === "fetch") throw failure;
+    if (args[0] === "ls-remote") return "a".repeat(40);
+    throw failure;
+  } });
+  const input = { repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_fetch_failure", branchName: "feat/source", baseBranch: "main" };
+  try {
+    await expect(deleted.adopt(input)).rejects.toMatchObject({ code: "source-branch-deleted" });
+    await expect(unavailable.adopt(input)).rejects.toMatchObject({ code: "source-branch-unavailable" });
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
 

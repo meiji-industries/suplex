@@ -37,6 +37,18 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
         await ctx.recordHandlerNoop("start_development", "Development was superseded before the Developer result could be applied.");
         return ctx.state;
       }
+      const failedToStart = ctx.supervisedDeveloperTurns && ctx.patched("forge-developer-start-failure-blocked-v1") && ctx.state.developerExecutionId === executionId && !ctx.state.developerOutcome;
+      if (failedToStart) {
+        const summary = `Developer could not start: ${error instanceof Error ? error.message : String(error)}`;
+        const blocked = await ctx.withStateMutation(() => {
+          if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;
+          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("failed", null, summary, null), activeOperation: null });
+          if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
+          return true;
+        });
+        if (blocked) await ctx.project();
+        return ctx.state;
+      }
       if (ctx.supervisedDeveloperTurns || !recoverDeveloperFailures) throw error;
       const recovered = await ctx.withStateMutation(() => {
         if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;

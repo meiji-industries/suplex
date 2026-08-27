@@ -298,10 +298,16 @@ export class WorktreeManager {
     if (!withinRoot(worktreeRoot, worktreePath)) throw new WorktreeFailure("worktree-escape", "Source worktree escaped the configured root");
     const remoteRef = `refs/remotes/origin/${input.branchName}`;
     const activity = { taskId: input.taskId, stepId: input.stepId ?? input.taskId };
-    try { await this.git.run(["fetch", "--no-tags", "origin", `refs/heads/${input.branchName}:${remoteRef}`], repositoryPath, activity); }
-    catch { throw new WorktreeFailure("source-branch-deleted", "The source branch no longer exists on origin"); }
+    let previousRemoteHead: string | undefined;
+    try { previousRemoteHead = await this.git.run(["rev-parse", "--verify", `${remoteRef}^{commit}`], repositoryPath, activity); } catch {}
+    try { await this.git.run(["fetch", "--no-tags", "origin", `+refs/heads/${input.branchName}:${remoteRef}`], repositoryPath, activity); }
+    catch {
+      const source = await this.git.run(["ls-remote", "--heads", "origin", input.branchName], repositoryPath, activity).catch(() => "");
+      if (!source) throw new WorktreeFailure("source-branch-deleted", "The source branch no longer exists on origin");
+      throw new WorktreeFailure("source-branch-unavailable", "Could not fetch the source branch from origin");
+    }
     const remoteHead = await this.git.run(["rev-parse", "--verify", `${remoteRef}^{commit}`], repositoryPath, activity);
-    await this.git.run(["fetch", "--no-tags", "origin", `refs/heads/${input.baseBranch}:refs/remotes/origin/${input.baseBranch}`], repositoryPath, activity).catch(() => { throw new WorktreeFailure("source-base-unavailable", "The source base branch is unavailable"); });
+    await this.git.run(["fetch", "--no-tags", "origin", `+refs/heads/${input.baseBranch}:refs/remotes/origin/${input.baseBranch}`], repositoryPath, activity).catch(() => { throw new WorktreeFailure("source-base-unavailable", "The source base branch is unavailable"); });
     const mergeBase = await this.git.run(["merge-base", `refs/remotes/origin/${input.baseBranch}`, remoteRef], repositoryPath, activity);
     let localExists = true;
     try { await this.git.run(["show-ref", "--verify", "--quiet", `refs/heads/${input.branchName}`], repositoryPath, activity); } catch { localExists = false; }
@@ -314,14 +320,24 @@ export class WorktreeManager {
     if (localExists) {
       try { await this.git.run(["merge-base", "--is-ancestor", input.branchName, remoteRef], repositoryPath, activity); localBehindOrEqual = true; } catch {}
       try { await this.git.run(["merge-base", "--is-ancestor", remoteRef, input.branchName], repositoryPath, activity); remoteBehindOrEqual = true; } catch {}
-      if (!localBehindOrEqual && !(input.preserveLocal && remoteBehindOrEqual)) throw new WorktreeFailure("source-branch-diverged", "The local source branch has diverged from origin");
+      if (!localBehindOrEqual && !input.preserveLocal) throw new WorktreeFailure("source-branch-diverged", "The local source branch has diverged from origin");
     }
+    const rebaseDivergedLocal = input.preserveLocal && !localBehindOrEqual && !remoteBehindOrEqual;
     if (registered) {
       if (registeredPath) {
         try {
           const status = await this.git.run(["status", "--porcelain=v1", "--untracked-files=all"], registeredPath, activity);
           if (status) throw new WorktreeFailure("worktree-dirty", "The source worktree has uncommitted changes");
-          if (localBehindOrEqual) await this.git.run(["merge", "--ff-only", remoteRef], registeredPath, activity);
+          if (rebaseDivergedLocal) {
+            let rebaseBase: string;
+            try { rebaseBase = await this.git.run(["merge-base", input.branchName, previousRemoteHead ?? remoteRef], repositoryPath, activity); }
+            catch { rebaseBase = await this.git.run(["merge-base", input.branchName, `refs/remotes/origin/${input.baseBranch}`], repositoryPath, activity); }
+            try { await this.git.run(["rebase", "--onto", remoteRef, rebaseBase, input.branchName], registeredPath, activity); }
+            catch {
+              await this.git.run(["rebase", "--abort"], registeredPath, activity).catch(() => {});
+              throw new WorktreeFailure("source-branch-diverged", "The local source branch has diverged from origin");
+            }
+          } else if (localBehindOrEqual) await this.git.run(["merge", "--ff-only", remoteRef], registeredPath, activity);
           return { branchName: input.branchName, worktreePath: registeredPath, targetBaseSha: mergeBase };
         } catch (error) {
           if (error instanceof WorktreeFailure) throw error;

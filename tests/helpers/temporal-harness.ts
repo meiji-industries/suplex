@@ -75,6 +75,7 @@ export type TemporalHarness = {
   readonly plannerInputs: Array<{ taskId: string; leadSessionRef?: string; operatorNotes?: string[] }>;
   readonly developerInputs: Array<{ taskId: string; executionId?: string; supersedesExecutionId?: string; reuseWorktree?: boolean; operatorNote?: string }>;
   readonly cancelledDeveloperIds: string[];
+  readonly activityOverrides: Map<string, (input: any) => Promise<any>>;
 };
 
 export function createTemporalHarness(): TemporalHarness {
@@ -98,6 +99,7 @@ export function createTemporalHarness(): TemporalHarness {
   const plannerInputs: Array<{ taskId: string; leadSessionRef?: string; operatorNotes?: string[] }> = [];
   const developerInputs: Array<{ taskId: string; executionId?: string; supersedesExecutionId?: string; reuseWorktree?: boolean; operatorNote?: string }> = [];
   const cancelledDeveloperIds: string[] = [];
+  const activityOverrides = new Map<string, (input: any) => Promise<any>>();
   const artifacts = {} as TemporalHarnessArtifacts;
 
   async function stop(): Promise<void> {
@@ -251,6 +253,13 @@ export function createTemporalHarness(): TemporalHarness {
       },
     };
     workerConnection = await NativeConnection.connect({ address: config.temporalAddress });
+    const overriddenActivities = new Proxy(integrationActivities, {
+      get(target, property, receiver) {
+        const override = typeof property === "string" ? activityOverrides.get(property) : undefined;
+        if (override) return override;
+        return Reflect.get(target, property, receiver);
+      },
+    });
     worker = await Worker.create({
       connection: workerConnection,
       namespace: config.temporalNamespace,
@@ -258,14 +267,20 @@ export function createTemporalHarness(): TemporalHarness {
       workflowBundle,
       dataConverter: temporalDataConverter,
       interceptors: { activity: activityPayloadInterceptors },
-      activities: integrationActivities,
+      activities: overriddenActivities,
     });
     workerRun = worker.run();
     api = await createForgeServer(config);
     if ((await api.app.inject({ method: "GET", url: "/api/auth/status" })).statusCode !== 200) throw new Error("Forge server health check failed");
 
 
-      restartActivitiesFactory = (reopenedDatabase) => createActivities(reopenedDatabase, config, { agent: integrationAgent, developer: integrationDeveloper });
+      restartActivitiesFactory = (reopenedDatabase) => new Proxy(createActivities(reopenedDatabase, config, { agent: integrationAgent, developer: integrationDeveloper }), {
+        get(target, property, receiver) {
+          const override = typeof property === "string" ? activityOverrides.get(property) : undefined;
+          if (override) return override;
+          return Reflect.get(target, property, receiver);
+        },
+      });
     database.authQuery((db) => {
       db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('issue-admin', 'Issue Admin', 'issue-admin@forge.local', 'admin', 'active', ?, ?)").run(new Date().toISOString(), new Date().toISOString());
       db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('issue-company', 'Issue Company', 'active', ?)").run(new Date().toISOString());
@@ -328,6 +343,6 @@ export function createTemporalHarness(): TemporalHarness {
     get config() { if (!config) throw new Error("Temporal harness is not started"); return config; },
     get database() { if (!database) throw new Error("Temporal harness is not started"); return database; },
     get workerConnection() { if (!workerConnection) throw new Error("Temporal harness is not started"); return workerConnection; },
-    state, artifacts, issueRoleProfiles, ciCalls, ciPlanInputs, ciRepairInputs, plannerInputs, developerInputs, cancelledDeveloperIds,
+    state, artifacts, issueRoleProfiles, ciCalls, ciPlanInputs, ciRepairInputs, plannerInputs, developerInputs, cancelledDeveloperIds, activityOverrides,
   };
 }

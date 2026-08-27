@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { expect, test } from "vitest";
@@ -23,6 +25,12 @@ test("picker search covers PR metadata and branch metadata", () => {
 test("selection produces only the stable selector payload", () => {
   expect(selectorForTaskSource(pull)).toEqual({ kind: "pull_request", number: 17 });
   expect(selectorForTaskSource(branch)).toEqual({ kind: "branch", branch: "feature/search" });
+});
+
+test("source menu rows use Base UI's activation event", () => {
+  const source = readFileSync(new URL("../src/frontend/components/app/task-source-picker.tsx", import.meta.url), "utf8");
+  expect(source).toContain("onClick={() => onSelect(row, selectorForTaskSource(row))}");
+  expect(source).not.toContain("onSelect={() => onSelect(row, selectorForTaskSource(row))}");
 });
 
 test("source prefill remains editable and only generated values are replaced", () => {

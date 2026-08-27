@@ -96,6 +96,7 @@ export interface ReconcileMergeActivityResult {
   outcome: "open" | "merged" | "closed_without_merge" | "changed_head" | "changed_base" | "provider_unavailable";
   pullRequestNumber: number;
   pullRequestUrl: string;
+  observedHeadSha?: string | null;
   mergeObservationId: string | null;
   completionReceiptId: string | null;
   observedAt: string;

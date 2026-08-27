@@ -7,7 +7,7 @@ export function createMergeConflictActivities(ctx: ActivityContext): MergeConfli
   return {
     async reconcileMerge(input: ReconcileMergeActivityInput) {
       const result = await acceptance.reconcileMerge(input);
-      return { outcome: result.outcome, pullRequestNumber: result.pullRequest?.number ?? 0, pullRequestUrl: result.pullRequest?.url ?? "", mergeObservationId: result.observationId, completionReceiptId: result.completionReceiptId, observedAt: result.observedAt, mergedAt: result.mergedAt, retryAt: result.retryAt ?? result.blocker?.retryAt ?? null, ...(result.blocker ? { blockerCode: result.blocker.code, blockerSummary: result.blocker.summary, evidenceArtifactId: result.blocker.evidenceArtifactId } : {}) };
+      return { outcome: result.outcome, pullRequestNumber: result.pullRequest?.number ?? 0, pullRequestUrl: result.pullRequest?.url ?? "", observedHeadSha: result.pullRequest?.headSha ?? null, mergeObservationId: result.observationId, completionReceiptId: result.completionReceiptId, observedAt: result.observedAt, mergedAt: result.mergedAt, retryAt: result.retryAt ?? result.blocker?.retryAt ?? null, ...(result.blocker ? { blockerCode: result.blocker.code, blockerSummary: result.blocker.summary, evidenceArtifactId: result.blocker.evidenceArtifactId } : {}) };
     },
     async planMergeConflict(input: WorkflowMergeConflictPlanActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input);

@@ -21,7 +21,7 @@ export interface TemporalClientConnection {
   client: Client;
 }
 
-function durableCommand<T extends { expectedRevision: number; actorUserId: string; commandId?: string | undefined }>(workflowId: string, kind: string, input: T): T & { commandId: string } {
+export function durableCommand<T extends { expectedRevision: number; actorUserId: string; commandId?: string | undefined }>(workflowId: string, kind: string, input: T): T & { commandId: string } {
   if (input.commandId) return { ...input, commandId: input.commandId };
   const digest = createHash("sha256").update(JSON.stringify([workflowId, kind, input])).digest("hex");
   return { ...input, commandId: `command_${digest}` };

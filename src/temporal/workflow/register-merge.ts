@@ -28,8 +28,8 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
     }
     if (exactAcceptanceReceipts && result.outcome === "merged" && (!result.mergeObservationId || !result.completionReceiptId || !result.mergedAt)) throw new Error("Merged reconciliation requires an immutable observation and completion receipt");
     const liveHead = ctx.patched("forge-live-head-v1");
-    if (liveHead && result.outcome === "changed_head" && result.pullRequest?.state === "open") {
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: result.pullRequest.headSha, expectedHeadTree: null, resultCommit: result.pullRequest.headSha, resultTree: null, deliveryReviewId: null, finalReviewId: null, ciRunId: null, acceptanceId: null, mergeOutcome: result.outcome, mergeAttempt: attempt, mergeObservationId: result.observationId, completionReceiptId: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    if (liveHead && result.outcome === "changed_head" && result.observedHeadSha) {
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: result.observedHeadSha, expectedHeadTree: null, resultCommit: result.observedHeadSha, resultTree: null, deliveryReviewId: null, finalReviewId: null, ciRunId: null, acceptanceId: null, mergeOutcome: result.outcome, mergeAttempt: attempt, mergeObservationId: result.mergeObservationId, completionReceiptId: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.state;
     }

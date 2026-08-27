@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 
+import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { checkArtifactRoot, checkDatabase, checkWorker } from "../src/host-health.js";
@@ -54,6 +55,35 @@ test("host readiness is false when an owned service is unavailable", async () =>
   });
 
   expect(snapshot.ready).toBe(false);
+});
+
+test("the API health probe is cached for ten seconds", async () => {
+  let now = 0;
+  let reads = 0;
+  const app = createApp({
+    config: createTestConfig("/tmp/forge-health-route-cache-test"),
+    health: {
+      temporal: async () => check("temporal", "healthy"),
+      database: async () => check("database", "healthy"),
+      artifactRoot: async () => check("artifact-root", "healthy"),
+      worker: async () => check("worker", "healthy"),
+      codexAuth: async () => check("codex-auth", "healthy"),
+      ghAuth: async () => check("gh-auth", "healthy"),
+    },
+    getHealth: async () => {
+      reads += 1;
+      return { generatedAt: new Date(now).toISOString(), reachableAddress: "http://127.0.0.1:4111", ready: true, checks: [] };
+    },
+    healthNow: () => now,
+  });
+  await app.inject({ method: "GET", url: "/api/health" });
+  await app.inject({ method: "GET", url: "/api/health" });
+  expect(reads).toBe(1);
+
+  now = 10_001;
+  await app.inject({ method: "GET", url: "/api/health" });
+  expect(reads).toBe(2);
+  await app.close();
 });
 
 test("health snapshot does not expose host paths or credentials", async () => {

@@ -11,6 +11,18 @@ Use `mise run logs -- --follow` to keep tailing, `--errors` for warnings and
 errors, `--task <id>` to match task IDs, workflow IDs, and request URLs, or
 `--since 10m` to restrict the time window. Filters can be combined.
 
+## Remote development
+
+For remote access over Tailscale, use `mise run dev:remote`. It builds the
+frontend once with Vite and serves the resulting `dist/web` files directly
+from Fastify, avoiding Vite's many development-module requests. It does not
+provide frontend HMR; rerun it after frontend changes. `mise run dev` remains
+the default local development mode with Vite HMR.
+
+`scripts/dev-restart.sh` waits up to three minutes for the worker's polling
+log signal, then confirms `/api/health`; its success output names the readiness
+signal used.
+
 ## Claude Code provider
 
 Create a profile with provider **Claude Code**, select a Claude model, then bind

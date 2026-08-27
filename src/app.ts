@@ -41,6 +41,7 @@ export interface AppDependencies {
   config: ForgeConfig;
   health: HostHealthDependencies;
   getHealth?: () => Promise<HealthSnapshot>;
+  healthNow?: () => number;
   auth?: AuthService;
   projects?: ProjectService;
   tasks?: TaskService;
@@ -113,7 +114,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
     config: dependencies.config,
     ...(dependencies.frontendDevelopment ? { transformHtml: dependencies.frontendDevelopment.transformIndexHtml } : {}),
   });
-  void app.register(health, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config });
+  void app.register(health, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config, ...(dependencies.healthNow ? { now: dependencies.healthNow } : {}) });
   if (auth) {
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
     if (dependencies.hermes) void app.register(hermesPairing, { hermes: dependencies.hermes });

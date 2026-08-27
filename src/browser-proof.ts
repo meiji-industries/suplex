@@ -8,6 +8,7 @@ import { z } from "zod";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import type { ForgeDatabase } from "./database.js";
 import { runCommand } from "./command-runner.js";
+import { jsonRequired } from "./task-utils.js";
 
 const MAX_IMAGES = 8;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -15,7 +16,7 @@ const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const hashSchema = z.string().regex(/^[a-f0-9]{40,64}$/i);
 const viewportSchema = z.object({ width: z.number().int().min(1).max(10_000), height: z.number().int().min(1).max(10_000), deviceScaleFactor: z.number().min(0.25).max(8).optional() }).strict();
 const captureSchema = z.object({ path: z.string().min(1), caption: z.string().max(500).optional(), viewport: viewportSchema.optional(), capturedAt: z.string().datetime().optional() }).strict();
-export const BrowserProofInputSchema = z.object({ captured: z.boolean(), summary: z.string().max(1_000).optional(), paths: z.array(z.string().min(1)).max(MAX_IMAGES).optional(), captures: z.array(captureSchema).max(MAX_IMAGES).optional() }).strict();
+export const BrowserProofInputSchema = z.object({ captured: z.boolean(), summary: z.string().optional(), paths: z.array(z.string().min(1)).max(MAX_IMAGES).optional(), captures: z.array(captureSchema).max(MAX_IMAGES).optional() }).strict();
 export type BrowserProofInput = z.infer<typeof BrowserProofInputSchema>;
 
 const imageSchema = z.object({ artifactId: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/), filename: z.string(), mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]), byteSize: z.number().int().positive(), caption: z.string().nullable(), viewport: z.object({ width: z.number().int(), height: z.number().int(), deviceScaleFactor: z.number().nullable() }).nullable(), capturedAt: z.string().datetime().nullable() }).strict();
@@ -212,7 +213,7 @@ export class BrowserProofService {
       try {
         const bytes = this.artifacts.getArtifactSync(stored(artifact));
         if (sha256(bytes) !== artifact.sha256) continue;
-        const manifest = BrowserProofManifestSchema.parse(JSON.parse(bytes.toString("utf8")));
+        const manifest = BrowserProofManifestSchema.parse(jsonRequired(bytes.toString("utf8")));
         if (manifest.taskId !== taskId || manifest.companyId !== companyId || !this.verifyRowsSync(manifest)) continue;
         projected.push({ ...manifest, manifestArtifactId: artifact.id });
       } catch { /* Invalid manifests are not durable proof. */ }
@@ -226,7 +227,7 @@ export class BrowserProofService {
     const bytes = this.artifacts.getArtifactSync(stored(row));
     if (sha256(bytes) !== row.sha256) throw new BrowserProofFailure("invalid-proof", "Browser proof content failed integrity verification");
     if (row.kind === "browser-proof-manifest") {
-      const manifest = BrowserProofManifestSchema.parse(JSON.parse(bytes.toString("utf8")));
+      const manifest = BrowserProofManifestSchema.parse(jsonRequired(bytes.toString("utf8")));
       if (manifest.taskId !== taskId || manifest.companyId !== companyId || !this.verifyRowsSync(manifest)) throw new BrowserProofFailure("invalid-proof", "Browser proof manifest failed integrity verification");
     } else {
       if (detectedImage(bytes).mimeType !== row.mimeType) throw new BrowserProofFailure("invalid-proof", "Browser proof content failed integrity verification");
@@ -239,7 +240,7 @@ export class BrowserProofService {
   private async loadManifestArtifact(id: string, taskId: string, companyId: string): Promise<{ artifact: ArtifactRow; manifest: BrowserProofManifest } | undefined> {
     const artifact = this.database.authQuery((db) => db.prepare(`SELECT ${rowSelect} FROM forge_artifacts WHERE id = ? AND task_id = ? AND company_id = ? AND kind = 'browser-proof-manifest'`).get(id, taskId, companyId) as ArtifactRow | undefined);
     if (!artifact) return undefined;
-    try { const bytes = await this.artifacts.getArtifact(stored(artifact)); if (sha256(bytes) !== artifact.sha256) return undefined; const manifest = BrowserProofManifestSchema.parse(JSON.parse(bytes.toString("utf8"))); if (manifest.taskId !== taskId || manifest.companyId !== companyId) return undefined; return { artifact, manifest }; } catch { return undefined; }
+    try { const bytes = await this.artifacts.getArtifact(stored(artifact)); if (sha256(bytes) !== artifact.sha256) return undefined; const manifest = BrowserProofManifestSchema.parse(jsonRequired(bytes.toString("utf8"))); if (manifest.taskId !== taskId || manifest.companyId !== companyId) return undefined; return { artifact, manifest }; } catch { return undefined; }
   }
 
   private async verify(manifest: BrowserProofManifest, manifestArtifactId: string): Promise<void> {

@@ -98,7 +98,7 @@ export const TaskBodySchema = z.object({
   deliveryTarget: DeliveryTargetSchema.default("pull_request_draft"),
   runProjectTests: z.boolean().default(true),
   visualEvidence: VisualEvidenceSchema.default("off"),
-  source: z.discriminatedUnion("kind", [z.object({ kind: z.literal("pull_request"), number: z.number().int().positive() }).strict(), z.object({ kind: z.literal("branch"), branch: z.string().min(1).max(240) }).strict()]).optional(),
+  source: z.discriminatedUnion("kind", [z.object({ kind: z.literal("pull_request"), number: z.number().int().positive() }), z.object({ kind: z.literal("branch"), branch: z.string().min(1).max(240) })]).optional(),
 });
 export const TaskAgentsBodySchema = z.object({ planner: z.string().optional(), builder: z.string().optional(), reviewer: z.string().optional(), integrator: z.string().optional() });
 export const TaskDetailsBodySchema = z.object({
@@ -112,8 +112,8 @@ export const TaskReleaseResponseSchema = z.object({
 });
 
 const TaskSourceResponseSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("pull_request"), number: z.number().int().positive(), url: z.string().url(), headBranch: z.string().min(1), baseBranch: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal("branch"), branch: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("pull_request"), number: z.number().int().positive(), url: z.string().url(), headBranch: z.string().min(1), baseBranch: z.string().min(1) }),
+  z.object({ kind: z.literal("branch"), branch: z.string().min(1) }),
 ]);
 const TaskResponseBaseSchema = z.object({
   prompts: z.object({ overrides: z.array(z.string()) }), source: TaskSourceResponseSchema.optional(),

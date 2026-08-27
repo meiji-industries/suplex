@@ -21,6 +21,16 @@ description = "Run Temporal, the Forge API, and the worker without hot reload (r
 env = { FORGE_PRETTY_LOGS = "1" }
 run = [{ tasks = ["temporal", "server", "worker"] }]
 
+[tasks."dev:remote"]
+description = "Build the frontend once, then serve it from Fastify for responsive remote access"
+depends = ["frontend:build"]
+env = { FORGE_PRETTY_LOGS = "1" }
+run = [{ tasks = ["temporal", "server:remote", "worker"] }]
+
+[tasks."frontend:build"]
+description = "Build the frontend files served by Fastify"
+run = "pnpm exec vite build"
+
 [tasks."dev:watch"]
 description = "Same as dev, but tsx watch restarts the API and worker on every src save"
 env = { FORGE_WATCH = "1", FORGE_PRETTY_LOGS = "1" }
@@ -104,6 +114,23 @@ exec tsx src/server.ts
 FORGE_TEMPORAL_TARGET = "local"
 FORGE_TEMPORAL_NAMESPACE = "forge-dev"
 FORGE_FRONTEND_DEV_SERVER = "1"
+FORGE_DEVELOPMENT_AUTO_LOGIN = "1"
+
+[tasks."server:remote"]
+description = "Forge API serving built frontend assets (waits for Temporal)"
+run = '''
+TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
+export PATH="$(dirname "$(mise which node)"):$PATH"
+[ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
+until nc -z 127.0.0.1 "$TP" 2>/dev/null; do sleep 0.5; done
+export FORGE_PORT=${CONDUCTOR_PORT:-4111}
+export FORGE_TEMPORAL_ADDRESS="127.0.0.1:$TP"
+exec tsx src/server.ts
+'''
+
+[tasks."server:remote".env]
+FORGE_TEMPORAL_TARGET = "local"
+FORGE_TEMPORAL_NAMESPACE = "forge-dev"
 FORGE_DEVELOPMENT_AUTO_LOGIN = "1"
 
 [tasks.worker]

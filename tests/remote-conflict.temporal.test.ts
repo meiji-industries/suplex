@@ -71,6 +71,7 @@ async function integrateRemoteConflict(h: TemporalHarness, workflowId: string, c
 
 test("remote conflict enters and completes merge resolution", { timeout: 120_000 }, async () => {
   const h = createTemporalHarness();
+  const projected: Array<Awaited<ReturnType<typeof queryIssueWorkflow>>> = [];
   h.activityOverrides.set("planMergeConflict", async (input) => ({
     disposition: "mechanical" as const,
     planId: "remote-merge-plan",
@@ -97,6 +98,10 @@ test("remote conflict enters and completes merge resolution", { timeout: 120_000
       summary: "Resolved the remote branch conflict.",
     },
   }));
+  h.activityOverrides.set("projectIssueState", async (event) => {
+    projected.push(event.state);
+    return event.state;
+  });
   await h.start();
   try {
     const issueId = "remote-conflict";
@@ -126,11 +131,10 @@ test("remote conflict enters and completes merge resolution", { timeout: 120_000
     };
 
     await integrateRemoteConflict(h, started.workflowId, command);
-    const conflicted = await waitForPhase(h, started.workflowId, "merge_conflict_required");
-    // BUG: src/temporal/workflow/register-merge.ts:61 — the strict command body is
-    // reparsed after actorUserId and commandId are added, so every durable update is
-    // rejected before it can enter the conflict-resolution loop.
-    expect.soft(conflicted).toMatchObject({
+    await waitForPhase(h, started.workflowId, "delivery_ready");
+    const conflicted = projected.find((state) => state.phase === "merge_conflict_required");
+    const settled = projected.find((state) => state.phase === "delivery_ready");
+    expect(conflicted).toMatchObject({
       phase: "merge_conflict_required",
       forwardMergeConflictArtifact: command.conflictArtifact,
       forwardMergeConflictFileCount: command.conflictFileCount,
@@ -139,12 +143,11 @@ test("remote conflict enters and completes merge resolution", { timeout: 120_000
       forwardMergePriorTree: tree,
       forwardMergeTargetBaseSha: remoteHead,
     });
-    if (conflicted.phase !== "merge_conflict_required") return;
-    const settled = await waitForPhase(h, started.workflowId, "delivery_ready");
     expect(settled).toMatchObject({ phase: "delivery_ready", resultCommit: resolvedHead, resultTree: resolvedTree });
 
-    await integrateRemoteConflict(h, started.workflowId, { ...command, expectedRevision: settled.revision });
-    expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(settled);
+    const current = await queryIssueWorkflow(h.config, started.workflowId);
+    await integrateRemoteConflict(h, started.workflowId, { ...command, expectedRevision: current.revision });
+    expect(projected.filter((state) => state.phase === "merge_conflict_required")).toHaveLength(1);
   } finally {
     await h.stop();
   }

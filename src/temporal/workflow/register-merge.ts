@@ -58,7 +58,7 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
 
   setHandler(issueUpdates.integrate_remote_conflict, ctx.guarded(async (rawInput) => {
     const rawCommand = mergeCommands.integrate_remote_conflict.body!.extend({ actorUserId: contracts.durableId, commandId: contracts.durableId }).parse(rawInput);
-    const command = mergeCommands.integrate_remote_conflict.body!.parse(rawCommand);
+    const command = rawCommand;
     if (ctx.commandAlreadyProcessed(rawCommand.commandId)) return ctx.state;
     if (!ctx.patched("forge-merge-resolution-loop-v1")) return ctx.state;
     ctx.markCommandProcessed(rawCommand.commandId);
@@ -83,6 +83,7 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
     return ctx.state;
   }), { validator(rawInput) {
     const command = mergeCommands.integrate_remote_conflict.body!.extend({ actorUserId: contracts.durableId, commandId: contracts.durableId }).parse(rawInput);
+    if (ctx.commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (!["ci_waiting", "manual_merge", "delivery_ready", "delivery_blocked", "accepted"].includes(ctx.state.phase) || ctx.state.activeOperation !== null) throw new Error("Remote conflict integration is not available in the current phase");
   } });

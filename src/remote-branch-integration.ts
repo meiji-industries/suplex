@@ -25,7 +25,7 @@ const shaPattern = /^[a-f0-9]{40,64}$/i;
 function inside(root: string, candidate: string): boolean { const path = relative(root, candidate); return path === "" || (!path.startsWith(`..${sep}`) && path !== ".."); }
 function active(database: ForgeDatabase, taskId: string): boolean {
   return database.authQuery((db) => db.prepare(`SELECT 1 FROM forge_developer_executions WHERE task_id = ? AND status IN ('starting', 'running', 'cancelling')
-    UNION ALL SELECT 1 FROM forge_herdr_turns WHERE task_id = ? AND role = 'developer' AND status IN ('dispatching', 'waiting', 'validating') LIMIT 1`).get(taskId, taskId)) !== undefined;
+    UNION ALL SELECT 1 FROM forge_herdr_turns WHERE task_id = ? AND ledger = 'developer' AND status IN ('dispatching', 'waiting', 'validating') LIMIT 1`).get(taskId, taskId)) !== undefined;
 }
 function stored(value: unknown): RemoteIntegration | undefined {
   return value && typeof value === "object" && "kind" in value ? value as RemoteIntegration : undefined;
@@ -83,7 +83,7 @@ export async function integrateRemoteBranch(database: ForgeDatabase, config: For
             const artifact = await new ArtifactStore(config.artifactRoot, database).putArtifact(input.companyId, "forward-merge-conflict", { taskId: input.taskId, filename: `${input.taskId}.json`, mimeType: "application/json", bytes: Buffer.from(payload) });
             const forwardMergeId = `merge_${createHash("sha256").update(`${input.workflowId}:remote:${input.remoteHead}`).digest("hex").slice(0, 32)}`;
             const now = (deps.now ?? (() => new Date().toISOString()))();
-            database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, checkpoint, operation_key, prior_tree, conflict_artifact_id, conflict_artifact_sha256, conflict_file_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'conflict', ?, ?, ?, ?, 'pre_release', ?, ?, ?, ?, ?, ?)").run(forwardMergeId, input.taskId, input.companyId, input.targetBaseSha ?? head.stdout, input.remoteHead, head.stdout, JSON.stringify(files), now, input.workflowId, key, tree.stdout, artifact.id, artifact.sha256, files.length, now));
+            database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, checkpoint, operation_key, prior_tree, conflict_artifact_id, conflict_artifact_sha256, conflict_file_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'conflict', ?, ?, ?, 'pre_release', ?, ?, ?, ?, ?, ?)").run(forwardMergeId, input.taskId, input.companyId, input.targetBaseSha ?? head.stdout, input.remoteHead, head.stdout, JSON.stringify(files), now, input.workflowId, key, tree.stdout, artifact.id, artifact.sha256, files.length, now));
             outcome = { kind: "conflict", remoteHead: input.remoteHead, forwardMergeId, conflictArtifactId: artifact.id, conflictFileCount: files.length };
           }
         }

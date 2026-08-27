@@ -106,8 +106,7 @@ test("a worktree is cleaned in forge", async () => {
 
     const initial = await queryIssueWorkflow(h.config, workflowId);
     const confirmation = await executeLifecycle(h, workflowId, "delete_worktree", { expectedRevision: initial.revision, actorUserId: "issue-admin" });
-    // BUG: src/temporal/activities/worktree.ts:39 — recorded dirty worktree is returned as not_owned.
-    expect.soft(confirmation.blocker).toMatchObject({ category: "unsafe_recovery", actions: expect.arrayContaining([expect.objectContaining({ label: "Discard changes and delete worktree" })]) });
+    expect(confirmation.blocker).toMatchObject({ category: "unsafe_recovery", actions: expect.arrayContaining([expect.objectContaining({ label: "Discard changes and delete worktree" })]) });
     if (confirmation.blocker?.category !== "unsafe_recovery") return;
     const cleaned = await executeLifecycle(h, workflowId, "delete_worktree", { expectedRevision: confirmation.revision, actorUserId: "issue-admin", confirmDiscardDirty: true });
     expect(cleaned.worktreeState).toBe("cleaned");

@@ -509,7 +509,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   const plannerFeedbackDisabledReason = plannerFeedbackEnded ? "Planner feedback is unavailable after this task has ended." : !tellPlannerCommand ? "Planner feedback is unavailable while the task refreshes." : undefined;
   const activityContent = <>
     <PhaseTimings activity={task.activity} phase={task.phase} updatedAt={task.updatedAt} />
-    <TaskActivity taskId={task.id} timeline={task.activity} release={task.release} ci={task.ci} githubPullRequest={task.githubPullRequest} deliveryTarget={task.deliveryTarget} optimisticRows={optimisticPlannerNotes} onViewChanges={openDiff} />
+    <TaskActivity taskId={task.id} timeline={task.activity} agentInvocations={task.agentInvocations} release={task.release} ci={task.ci} githubPullRequest={task.githubPullRequest} deliveryTarget={task.deliveryTarget} optimisticRows={optimisticPlannerNotes} onViewChanges={openDiff} />
     <TellPlannerForm disabled={busy || !tellPlannerCommand} disabledReason={plannerFeedbackDisabledReason} onSubmit={async (note, commandId) => {
       setOptimisticPlannerNotes((rows) => [...rows, { id: `optimistic-planner-note-${commandId}`, at: new Date().toISOString(), role: "you", text: `You told the Planner: ${note}`, revision: task.revision }]);
       await onPlanAction("tell-planner", note, { commandId });

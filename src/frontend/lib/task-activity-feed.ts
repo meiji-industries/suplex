@@ -42,6 +42,26 @@ export type ActivityFeedRow = {
   }>;
 };
 
+type AgentTurn = {
+  id: string;
+  role: Exclude<ActivityRole, "you" | "forge">;
+  status: string;
+  finishedAt: string | null;
+  summary?: string | null | undefined;
+  failureSummary: string | null;
+};
+
+export function agentTurnActivityRows(invocations: AgentTurn[]): ActivityFeedRow[] {
+  return invocations.flatMap((invocation) => {
+    if (!invocation.finishedAt) return [];
+    const storedSummary = invocation.summary?.trim() || invocation.failureSummary?.trim();
+    const fallback = invocation.status === "cancelled" ? "This turn was cancelled."
+      : invocation.status === "failed" || invocation.status === "blocked" ? "This turn did not complete."
+        : "Finished this turn.";
+    return [{ id: `agent-turn-${invocation.id}`, at: invocation.finishedAt, role: invocation.role, text: storedSummary || fallback }];
+  });
+}
+
 const legacyMaterialitySummary = / \((?:Material plan: [^)]+|Routine plan)\)$/;
 
 export function withoutLegacyMaterialitySummary(summary: string): string {

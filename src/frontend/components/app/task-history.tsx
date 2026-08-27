@@ -6,7 +6,7 @@ import { Markdown } from "./markdown.js";
 import { Badge } from "../ui/badge.js";
 import { relativeTime } from "../../lib/view-shared.js";
 import { readJson } from "../../lib/api.js";
-import { activityRole, activityRoleLabel, activitySentence, compactActivityRows, isAutomaticActivity, type ActivityFeedRow, type ActivityRole } from "../../lib/task-activity-feed.js";
+import { activityRole, activityRoleLabel, activitySentence, agentTurnActivityRows, compactActivityRows, isAutomaticActivity, type ActivityFeedRow, type ActivityRole } from "../../lib/task-activity-feed.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
 export type TaskActivityEntry = TaskResponse["activity"][number];
@@ -81,12 +81,12 @@ function useLiveActivity(taskId: string): ActivityFeed | null {
   return feed;
 }
 
-export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRows = [], githubPullRequest, onViewChanges, deliveryTarget }: {
+export function TaskActivity({ taskId = "", timeline, release, ci, agentInvocations = [], optimisticRows = [], githubPullRequest, onViewChanges, deliveryTarget }: {
   taskId?: string;
   timeline: TaskActivityEntry[];
   release?: { pullRequestUrl?: string | null; pullRequestNumber?: number | null } | null | undefined;
   ci?: unknown;
-  agentInvocations?: unknown;
+  agentInvocations?: TaskResponse["agentInvocations"];
   processing?: unknown;
   collapsePlan?: boolean;
   deliveryReviewTask?: unknown;
@@ -115,8 +115,8 @@ export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRow
     const githubRow = githubPullRequest?.exists && githubPullRequest.number !== null && githubPullRequest.observedAt
       ? [{ id: `github-${githubPullRequest.observedAt}`, at: githubPullRequest.observedAt, role: "forge" as const, text: activitySentence({ eventType: githubPullRequest.state === "merged" ? "github_pr_merged" : githubPullRequest.state === "closed" ? "github_pr_closed" : githubPullRequest.isDraft ? "github_pr_draft" : githubPullRequest.autoMergeEnabled ? "github_pr_auto_merge_enabled" : "github_pr_ready", metadata: { pullRequestNumber: githubPullRequest.number } }, "forge") }]
       : [];
-    return compactActivityRows([...durable, ...githubRow, ...live, ...optimisticRows]);
-  }, [ci, deliveryTarget, feed, githubPullRequest, optimisticRows, release, timeline]);
+    return compactActivityRows([...durable, ...agentTurnActivityRows(agentInvocations), ...githubRow, ...live, ...optimisticRows]);
+  }, [agentInvocations, ci, deliveryTarget, feed, githubPullRequest, optimisticRows, release, timeline]);
   return <section data-task-activity-feed className="space-y-1" aria-label="Activity">
     <div data-task-activity className="divide-y">
       {rows.map((row) => <ActivityRow key={row.id} row={row} {...(onViewChanges ? { onViewChanges } : {})} />)}

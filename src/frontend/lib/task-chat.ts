@@ -75,6 +75,7 @@ function summaryForReview(review: { outcome: "approved" | "blocking"; summary: s
 }
 
 function turnSummary(task: ApiTask, invocation: ApiTask["agentInvocations"][number], invocations: ApiTask["agentInvocations"]): string | undefined {
+  const storedSummary = invocation.summary?.trim() || invocation.failureSummary?.trim() || undefined;
   const startedAt = Date.parse(invocation.startedAt);
   const endsAt = invocationEnd(invocation, invocations);
   const matching = task.activity.filter((entry) => {
@@ -85,13 +86,13 @@ function turnSummary(task: ApiTask, invocation: ApiTask["agentInvocations"][numb
     if (!matching.some((entry) => entry.eventType === "planning_started" || entry.eventType === "planner_note_revised" || /(?:^|_)plan_approved$/.test(entry.eventType))) return undefined;
     const summary = matching.find((entry) => entry.eventType === "planner_note_revised")?.metadata.summary as string | undefined
       ?? (task.leadOutput?.executionId === invocation.id ? task.leadOutput.summary : undefined);
-    return summary ? withoutLegacyMaterialitySummary(summary) : undefined;
+    return summary ? withoutLegacyMaterialitySummary(summary) : storedSummary;
   }
   if (invocation.role === "builder") {
     if (task.developerExecution?.id === invocation.id) return task.developerExecution.deliverySummary ?? task.developerExecution.summary ?? undefined;
-    return undefined;
+    return storedSummary;
   }
-  if (invocation.role !== "reviewer") return undefined;
+  if (invocation.role !== "reviewer") return storedSummary;
   const delivery = task.deliveryReviewHistory.find((review) => review.leadExecutionId === invocation.id)
     ?? task.deliveryReviewHistory.find((review) => {
       const createdAt = Date.parse(review.createdAt);
@@ -100,7 +101,7 @@ function turnSummary(task: ApiTask, invocation: ApiTask["agentInvocations"][numb
   if (delivery) return summaryForReview({ ...delivery, findings: task.deliveryReview?.id === delivery.id ? task.deliveryReview.findings : [] });
   const finalReview = task.deliveryGate?.finalReview;
   if (finalReview && (finalReview.leadExecutionId === invocation.id || (Date.parse(finalReview.createdAt) >= startedAt && Date.parse(finalReview.createdAt) <= endsAt))) return summaryForReview(finalReview);
-  return undefined;
+  return storedSummary;
 }
 
 function turnStats(events: ChatEvent[]): { filesChanged: number; additions: number; deletions: number } | undefined {

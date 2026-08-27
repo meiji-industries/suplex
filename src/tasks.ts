@@ -153,6 +153,7 @@ export interface TaskAgentInvocation {
   finishedAt: string | null;
   failureCode: string | null;
   failureSummary: string | null;
+  summary?: string | null;
   evidenceArtifactId: string | null;
   profileId?: string | null;
   agentId?: string | null;
@@ -796,6 +797,8 @@ interface AgentInvocationRow {
   finished_at: string | null;
   failure_code: string | null;
   failure_summary: string | null;
+  summary: string | null;
+  delivery_artifact_id: string | null;
   evidence_artifact_id: string | null;
   profile_id: string | null;
   agent_id: string | null;
@@ -2108,6 +2111,11 @@ export class TaskService {
       .sort((left, right) => left.revision - right.revision || (left.kind === right.kind ? left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id) : left.kind === "member" ? -1 : 1));
     // ponytail: display agent resolved via current task assignment; add agent_id columns to execution tables if history fidelity ever matters
     const agentInvocations = this.database.authQuery((db) => db.prepare(`SELECT e.id, e.role, e.status, e.attempt, e.session_ref, e.started_at, e.finished_at, e.failure_code, e.failure_summary, e.evidence_artifact_id,
+        COALESCE(e.output_summary,
+          (SELECT r.summary FROM forge_plan_reviews r WHERE r.execution_id = e.id ORDER BY r.created_at DESC LIMIT 1),
+          (SELECT r.summary FROM forge_delivery_reviews r WHERE r.lead_execution_id = e.id ORDER BY r.created_at DESC LIMIT 1),
+          (SELECT r.summary FROM forge_final_reviews r WHERE r.lead_execution_id = e.id ORDER BY r.created_at DESC LIMIT 1)) AS summary,
+        NULL AS delivery_artifact_id,
         e.profile_id, ag.id AS agent_id, ag.name AS agent_name, ag.avatar_seed, p.name AS profile_name, COALESCE(e.resolved_model, e.model) AS resolved_model, COALESCE(e.resolved_reasoning_level, e.reasoning_level) AS resolved_reasoning_level, COALESCE(e.resolved_service_priority, e.service_priority) AS resolved_service_priority
       FROM forge_agent_executions e
       LEFT JOIN forge_agents ag ON ag.id = json_extract((SELECT role_agents_json FROM forge_tasks WHERE id = e.task_id), '$.' || e.role)
@@ -2115,6 +2123,7 @@ export class TaskService {
       WHERE e.task_id = ? AND e.company_id = ?
       UNION ALL
       SELECT d.id, 'builder' AS role, d.status, d.attempt, d.session_ref, d.started_at, d.finished_at, d.failure_code, d.failure_summary, d.evidence_artifact_id,
+        NULL AS summary, d.delivery_artifact_id,
         d.profile_id, ag.id AS agent_id, ag.name AS agent_name, ag.avatar_seed, p.name AS profile_name, NULL AS resolved_model, NULL AS resolved_reasoning_level, NULL AS resolved_service_priority
       FROM forge_developer_executions d
       LEFT JOIN forge_agents ag ON ag.id = json_extract((SELECT role_agents_json FROM forge_tasks WHERE id = d.task_id), '$.builder')
@@ -2131,6 +2140,7 @@ export class TaskService {
         finishedAt: invocation.finished_at,
         failureCode: invocation.failure_code,
         failureSummary: invocation.failure_summary,
+        summary: invocation.summary?.trim() || (invocation.delivery_artifact_id ? this.developerReportSummary(row.company_id, invocation.delivery_artifact_id) : null) || invocation.failure_summary,
         evidenceArtifactId: invocation.evidence_artifact_id,
         agentId: invocation.agent_id,
         profileId: invocation.profile_id,

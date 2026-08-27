@@ -334,7 +334,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
       expect.objectContaining({ kind: "workflow", eventType: "planning_started", revision: 1 }),
     ]);
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, profile_id, model, reasoning_level, service_priority, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'planner', 'failed', 1, ?, 'gpt-5.6-sol', 'medium', 'standard', '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId, value.profileId));
-    expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "planner", profileName: "Default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry." })]);
+    expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "planner", profileName: "Default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry.", summary: "Select a supported model, then retry." })]);
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }

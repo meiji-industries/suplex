@@ -1,6 +1,9 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 
-import { activityRole, activitySentence, compactActivityRows, withoutLegacyMaterialitySummary } from "../src/frontend/lib/task-activity-feed.js";
+import { TaskActivity } from "../src/frontend/components/app/task-history.js";
+import { activityRole, activitySentence, agentTurnActivityRows, compactActivityRows, withoutLegacyMaterialitySummary } from "../src/frontend/lib/task-activity-feed.js";
 
 test("compacts live heartbeats, duplicate activity, and command labels", () => {
   const rows = compactActivityRows([
@@ -56,4 +59,33 @@ test("renders GitHub-adopted pull request changes as durable feed rows", () => {
   expect(activitySentence(entry("github_pr_auto_merge_enabled"), activityRole(entry("github_pr_auto_merge_enabled")))).toBe("Auto-merge enabled on #42");
   const done = entry("phase_done", { deliveryTarget: "pull_request_draft" });
   expect(activitySentence(done, activityRole(done))).toBe("Integrator completed the task · Draft PR");
+});
+
+test("renders a durable response for every finished agent turn", () => {
+  expect(agentTurnActivityRows([
+    { id: "planner", role: "planner", status: "completed", finishedAt: "2026-08-27T02:20:39.745Z", summary: "Rated the pull request 6/10.", failureSummary: null },
+    { id: "reviewer", role: "reviewer", status: "completed", finishedAt: "2026-08-27T02:26:06.286Z", summary: "Revise the plan before implementation.", failureSummary: null },
+    { id: "failed", role: "planner", status: "failed", finishedAt: "2026-08-27T02:35:03.534Z", summary: null, failureSummary: "The review response was not pinned." },
+    { id: "running", role: "builder", status: "running", finishedAt: null, summary: null, failureSummary: null },
+  ])).toEqual([
+    { id: "agent-turn-planner", at: "2026-08-27T02:20:39.745Z", role: "planner", text: "Rated the pull request 6/10." },
+    { id: "agent-turn-reviewer", at: "2026-08-27T02:26:06.286Z", role: "reviewer", text: "Revise the plan before implementation." },
+    { id: "agent-turn-failed", at: "2026-08-27T02:35:03.534Z", role: "planner", text: "The review response was not pinned." },
+  ]);
+});
+
+test("shows Planner and Reviewer responses in the Activity section", () => {
+  const invocation = (id: string, role: "planner" | "reviewer", summary: string, finishedAt: string) => ({ id, role, summary, status: "completed", attempt: 1, sessionPresent: true, sessionRef: `${id}-session`, startedAt: "2026-08-27T02:10:00.000Z", finishedAt, failureCode: null, failureSummary: null, evidenceArtifactId: null });
+  const html = renderToStaticMarkup(createElement(TaskActivity, {
+    timeline: [],
+    agentInvocations: [
+      invocation("planner", "planner", "Rated the pull request 6/10.", "2026-08-27T02:20:39.745Z"),
+      invocation("reviewer", "reviewer", "Revise the plan before implementation.", "2026-08-27T02:26:06.286Z"),
+    ],
+  }));
+
+  expect(html).toContain("Planner");
+  expect(html).toContain("Rated the pull request 6/10.");
+  expect(html).toContain("Reviewer");
+  expect(html).toContain("Revise the plan before implementation.");
 });

@@ -1,7 +1,47 @@
 import { expect, test } from "vitest";
 
-// BUG: src/codex-lead.ts:851 starts a second review turn before checking
-// forge_delivery_reviews for the matching (workflow_id, subject_commit).
-test.skip("adopts an existing delivery review before starting another Lead turn", () => {
-  expect(true).toBe(true);
+import { AgentService } from "../src/codex-lead.js";
+
+test("adopts an existing delivery review before starting another Lead turn", async () => {
+  const subjectCommit = "b".repeat(40);
+  const review = {
+    id: "delivery_review_existing",
+    leadExecutionId: "agent_existing",
+    sessionRef: "session_lead",
+    opinionArtifactId: "artifact_opinion",
+    evidenceArtifactId: "artifact_evidence",
+    outcome: "approved" as const,
+    summary: "The existing review approved this commit.",
+    supersedesReviewId: null,
+  };
+  let turnCalls = 0;
+  let reviewRows = 0;
+  const database = {
+    authQuery<T>(query: (db: { prepare: (sql: string) => { get: (...args: unknown[]) => unknown; all: (...args: unknown[]) => unknown[] } }) => T): T {
+      return query({
+        prepare: (sql) => ({
+          get: () => sql.includes("FROM forge_delivery_reviews") ? (reviewRows += 1, review) : undefined,
+          all: () => [],
+        }),
+      });
+    },
+  };
+  const service = Object.create(AgentService.prototype) as AgentService;
+  Object.assign(service as object, {
+    database,
+    turnRunner: { run: async () => { turnCalls += 1; throw new Error("A duplicate review turn must not start"); } },
+  });
+  const input = {
+    taskId: "task_1", companyId: "company_1", workflowId: "workflow_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: "artifact_brief", leadOutputArtifactId: "artifact_plan", planRevision: 1,
+    roleProfiles: { planner: "profile_1" }, worktreePath: "/worktree", branchName: "forge/issue/task_1", supersedesReviewId: null,
+    subject: { planRevision: 1, targetBaseSha: "a".repeat(40), subjectCommit, subjectTree: "c".repeat(40), developerExecutionId: "developer_1", deliveryArtifactId: "artifact_delivery", developerEvidenceArtifactId: "artifact_evidence", leadSessionRef: "session_lead", developerSessionRef: "session_developer" },
+  };
+
+  const first = await service.reviewDelivery(input);
+  const second = await service.reviewDelivery(input);
+
+  expect(first).toEqual(second);
+  expect(first).toMatchObject({ outcome: "completed", review: { reviewId: review.id, summary: review.summary } });
+  expect(reviewRows).toBe(2);
+  expect(turnCalls).toBe(0);
 });

@@ -677,6 +677,13 @@ export class AgentService {
     const leadSessionRef = subject.leadSessionRef;
     const isFinalReview = input.reviewKind === "final";
     if (isFinalReview && (!input.releaseId || !input.ciRunId || !input.deliveryReviewId)) throw new AgentFailure("scoped-input-missing", "Final review requires the exact release, delivery review, and CI run");
+    const existingDelivery: { id: string; leadExecutionId: string; sessionRef: string; opinionArtifactId: string; evidenceArtifactId: string; outcome: "approved" | "blocking"; summary: string; supersedesReviewId: string | null } | undefined = !isFinalReview
+      ? this.database.authQuery((db) => db.prepare("SELECT id, lead_execution_id AS leadExecutionId, session_ref AS sessionRef, opinion_artifact_id AS opinionArtifactId, evidence_artifact_id AS evidenceArtifactId, outcome, summary, supersedes_review_id AS supersedesReviewId FROM forge_delivery_reviews WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND subject_commit = ? LIMIT 1").get(input.taskId, input.companyId, input.workflowId, subjectCommit) as { id: string; leadExecutionId: string; sessionRef: string; opinionArtifactId: string; evidenceArtifactId: string; outcome: "approved" | "blocking"; summary: string; supersedesReviewId: string | null } | undefined)
+      : undefined;
+    if (existingDelivery) {
+      const findings = this.database.authQuery((db) => db.prepare("SELECT id AS findingId, severity, rationale, evidence_ref AS evidenceRef, disposition, repair_instruction AS repairInstruction FROM forge_delivery_findings WHERE review_id = ? ORDER BY id").all(existingDelivery.id) as DeliveryReview["findings"]);
+      return DeliveryReviewActivityResultSchema.parse({ outcome: "completed", attemptId: `review_attempt_existing_${existingDelivery.id}`, correctionAttempts: 0, subject, review: { reviewId: existingDelivery.id, leadExecutionId: existingDelivery.leadExecutionId, leadSessionRef: existingDelivery.sessionRef, opinionArtifactId: existingDelivery.opinionArtifactId, evidenceArtifactId: existingDelivery.evidenceArtifactId, opinion: existingDelivery.outcome, summary: existingDelivery.summary, repairPlan: existingDelivery.outcome === "blocking" ? "Existing blocking review requires repair." : null, findings, supersedesReviewId: existingDelivery.supersedesReviewId } });
+    }
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.name AS projectSlug,
       CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issueKey,
       b.storage_path AS briefStoragePath, b.sha256 AS briefSha256,

@@ -6,11 +6,11 @@ import { issueUpdates } from "../src/temporal/issue-updates.js";
 // FROZEN: these names are pinned by persisted Temporal workflow histories and live
 // clients. If this test fails, the change breaks replay — revert it; never edit this list.
 const FROZEN_UPDATE_NAMES = [
-  "acceptDelivery", "approvePlan", "cancelDevelopment", "cancelIssue", "continueWork",
+  "acceptDelivery", "approvePlan", "cancelDevelopment", "cancelIssue", "continueWork", "deleteWorktree",
   "finalReview", "publishDraft", "reconcileAcceptance", "reconcileCI", "reconcileMerge",
-  "recordDeliveryDecision", "recordProgress", "rejectPlan", "repairCI", "repairDelivery",
+  "recordDeliveryDecision", "recordProgress", "recreateWorktree", "rejectPlan", "repairCI", "repairDelivery", "reportWorktreeMissing",
   "requestDeliveryChanges", "requestPlanRevision", "requestSupplementalReview",
-  "resolveDecisionBlocker", "resolveMergeConflict", "respondPlanBlocker", "resyncProjection", "retryCapacity", "retryDevelopment",
+  "resolveDecisionBlocker", "resolveMergeConflict", "respondPlanBlocker", "resumePreservedWork", "resyncProjection", "retryCapacity", "retryDevelopment",
   "retryForwardMergeVerification", "retryTargetBaseReconciliation", "reviewDelivery", "revisePlan",
   "startDevelopment", "startPlanning", "tellPlanner", "verifyDeveloperOwnership",
 ];

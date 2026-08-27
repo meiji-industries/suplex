@@ -30,26 +30,30 @@ export function parseClaudeChunk(input: RolloutParserInput, chunk: string, remai
   let offset = input.offset, unknown = 0, taskComplete = false, activeTurnId = state.activeTurnId;
   const events: NeutralTimelineEvent[] = [];
   for (const row of rows) {
+    const lineOffset = offset;
     offset += Buffer.byteLength(`${row}\n`);
+    let emitted = 0;
+    const emit = (timestamp: string, kind: NeutralTimelineEvent["kind"], data: Record<string, unknown>) =>
+      events.push(event(input, lineOffset + emitted++, timestamp, kind, data));
     let line: Record<string, unknown>;
-    try { line = jsonRequired(row) as Record<string, unknown>; } catch { events.push(event(input, offset, new Date(0).toISOString(), "message", { role: "system", level: "error", text: "Malformed Claude transcript line" })); continue; }
+    try { line = jsonRequired(row) as Record<string, unknown>; } catch { emit(new Date(0).toISOString(), "message", { role: "system", level: "error", text: "Malformed Claude transcript line" }); continue; }
     if (line.isSidechain === true || line.isMeta === true) continue;
     const when = stamp(line), message = record(line.message), content = message.content;
     if (line.type === "user") {
       const blocks = Array.isArray(content) ? content.map(record) : [];
       const results = blocks.filter((block) => block.type === "tool_result");
-      if (results.length) for (const block of results) events.push(event(input, offset, when, "tool_call", { id: block.tool_use_id, output: text(typeof block.content === "string" ? block.content : JSON.stringify(block.content)) }));
-      else { activeTurnId = typeof line.uuid === "string" ? line.uuid : undefined; events.push(event(input, offset, when, "turn_started", { turnId: activeTurnId }), event(input, offset, when, "message", { role: "human", text: text(contentText(content)) })); }
+      if (results.length) for (const block of results) emit(when, "tool_call", { id: block.tool_use_id, output: text(typeof block.content === "string" ? block.content : JSON.stringify(block.content)) });
+      else { activeTurnId = typeof line.uuid === "string" ? line.uuid : undefined; emit(when, "turn_started", { turnId: activeTurnId }); emit(when, "message", { role: "human", text: text(contentText(content)) }); }
     } else if (line.type === "assistant") {
       for (const raw of Array.isArray(content) ? content : []) {
         const block = record(raw);
-        if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) events.push(event(input, offset, when, "thinking_summary", { text: text(block.thinking) }));
-        else if (block.type === "text" && typeof block.text === "string") events.push(event(input, offset, when, "message", { role: "agent", text: text(block.text) }));
-        else if (block.type === "tool_use") { const inputValue = record(block.input); const name = typeof block.name === "string" ? block.name : "tool"; const id = block.id; if (name === "Bash") events.push(event(input, offset, when, "command", { id, command: text(inputValue.command), ...(typeof inputValue.description === "string" ? { description: text(inputValue.description) } : {}) })); else if (["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(name)) events.push(event(input, offset, when, "file_change", { path: inputValue.file_path ?? inputValue.notebook_path, kind: name === "Write" ? "add" : "update" })); else events.push(event(input, offset, when, "tool_call", { id, name, input: text(JSON.stringify(inputValue)) })); }
+        if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) emit(when, "thinking_summary", { text: text(block.thinking) });
+        else if (block.type === "text" && typeof block.text === "string") emit(when, "message", { role: "agent", text: text(block.text) });
+        else if (block.type === "tool_use") { const inputValue = record(block.input); const name = typeof block.name === "string" ? block.name : "tool"; const id = block.id; if (name === "Bash") emit(when, "command", { id, command: text(inputValue.command), ...(typeof inputValue.description === "string" ? { description: text(inputValue.description) } : {}) }); else if (["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(name)) emit(when, "file_change", { path: inputValue.file_path ?? inputValue.notebook_path, kind: name === "Write" ? "add" : "update" }); else emit(when, "tool_call", { id, name, input: text(JSON.stringify(inputValue)) }); }
       }
-      const usage = record(message.usage); if (Object.keys(usage).length) events.push(event(input, offset, when, "usage", numericUsage(usage)));
-      if (line.isApiErrorMessage === true) events.push(event(input, offset, when, "message", { role: "system", level: "error", text: text(contentText(content) || "Claude API error") }));
-    } else if (line.type === "system" && line.subtype === "turn_duration") { events.push(event(input, offset, when, "turn_finished", { turnId: activeTurnId, durationMs: line.durationMs })); taskComplete = true; activeTurnId = undefined; }
+      const usage = record(message.usage); if (Object.keys(usage).length) emit(when, "usage", numericUsage(usage));
+      if (line.isApiErrorMessage === true) emit(when, "message", { role: "system", level: "error", text: text(contentText(content) || "Claude API error") });
+    } else if (line.type === "system" && line.subtype === "turn_duration") { emit(when, "turn_finished", { turnId: activeTurnId, durationMs: line.durationMs }); taskComplete = true; activeTurnId = undefined; }
     else unknown += 1;
   }
   return { events, offset, remainder: tail, unknown, taskComplete, ...(activeTurnId ? { turnId: activeTurnId } : {}) };

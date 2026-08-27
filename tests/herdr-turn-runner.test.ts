@@ -659,8 +659,10 @@ test("does not reset attention activation for an unchanged waiting turn", async 
 test("marks a settled question as awaiting human and clears it when work resumes", async () => {
   const setup = await fixture();
   let state = "idle";
+  let prompts = 0;
   const herdr = {
     prompt: async (_name: string, prompt: string) => {
+      prompts += 1;
       await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(prompt) })}${line({ type: "task_started", turn_id: "question" })}${line({ type: "agent_message", message: "Which deployment target should I use?" })}`);
       return setup.session.live;
     },
@@ -671,6 +673,7 @@ test("marks a settled question as awaiting human and clears it when work resumes
     const running = runner.run(setup.input);
     await new Promise((resolve) => setTimeout(resolve, 75));
     expect(setup.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt FROM forge_herdr_turns").get())).toEqual({ status: "awaiting_human", attention_excerpt: "Which deployment target should I use?" });
+    expect(prompts).toBe(1);
     state = "working";
     await new Promise((resolve) => setTimeout(resolve, 1_050));
     expect(setup.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt FROM forge_herdr_turns").get())).toEqual({ status: "waiting", attention_excerpt: null });
@@ -773,8 +776,10 @@ test("does not surface a momentarily idle unbound turn that resumes work", async
 
 test("surfaces a completed idle turn that did not write its result file", async () => {
   const setup = await fixture();
+  let prompts = 0;
   const herdr = {
     prompt: async (_name: string, prompt: string) => {
+      prompts += 1;
       await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(prompt) })}${line({ type: "task_started", turn_id: "silent" })}${line({ type: "task_complete", turn_id: "silent", duration_ms: 1 })}`);
       return setup.session.live;
     },
@@ -786,6 +791,7 @@ test("surfaces a completed idle turn that did not write its result file", async 
     await new Promise((resolve) => setTimeout(resolve, 75));
     const row = setup.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt, result_relative_path FROM forge_herdr_turns").get() as { status: string; attention_excerpt: string; result_relative_path: string });
     expect(row).toMatchObject({ status: "awaiting_human", attention_excerpt: expect.stringContaining(`Finished without writing ${join(setup.root, row.result_relative_path)}`) });
+    expect(prompts).toBe(2);
     setTimeout(() => void writeFile(join(setup.root, row.result_relative_path), JSON.stringify({ status: "ok" })), 1_050);
     await expect(running).resolves.toMatchObject({ result: { status: "ok" } });
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }

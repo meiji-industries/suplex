@@ -71,8 +71,9 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (operation === "developer_repair") {
+      const noProgressEnabled = ctx.patched("forge-repair-no-progress-v1");
       const cycle = (ctx.state.repairCycle ?? 0) + 1;
-      if (ctx.state.phase !== "repair_required" || cycle > ctx.repairCycleLimit || !ctx.state.deliveryReviewId || (!ctx.state.deliveryReviewArtifact && (!ctx.state.deliveryRepairPlan || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open"))) || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.leadSessionRef || !ctx.input.roleProfiles.builder) throw new Error("Developer repair prerequisites changed; start delivery repair again");
+      if (ctx.state.phase !== "repair_required" || (ctx.input.repairCycleLimit !== undefined && cycle > ctx.repairCycleLimit) || !ctx.state.deliveryReviewId || (!ctx.state.deliveryReviewArtifact && (!ctx.state.deliveryRepairPlan || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open"))) || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.leadSessionRef || !ctx.input.roleProfiles.builder) throw new Error("Developer repair prerequisites changed; start delivery repair again");
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: `Developer repair cycle ${cycle}`, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       let result: contracts.WorkflowDeveloperRepairResult;
@@ -86,11 +87,11 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
         let evidenceArtifactId: string | null = null;
         try { evidenceArtifactId = (await activityProxies.recordDeliveryBlocker({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, operation: "repair" })).artifactId; } catch { /* Keep the fixed state transition if blocker recording itself is unavailable. */ }
         const summary = error instanceof Error ? error.message : "The repair infrastructure did not complete; retry the repair.";
-        ctx.state = stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, ctx.repairCycleLimit, evidenceArtifactId, summary);
+        ctx.state = stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, ctx.repairCycleLimit, evidenceArtifactId, summary, noProgressEnabled);
         await ctx.project();
         return ctx.state;
       }
-      ctx.state = result.outcome === "completed" ? stateTransitions.repairedDeliveryAwaitingFreshReviewState(ctx.state, result) : stateTransitions.repairBlockedState(ctx.state, result, ctx.repairCycleLimit);
+      ctx.state = result.outcome === "completed" ? stateTransitions.repairedDeliveryAwaitingFreshReviewState(ctx.state, result) : stateTransitions.repairBlockedState(ctx.state, result, ctx.repairCycleLimit, noProgressEnabled);
       await ctx.project();
       return ctx.state;
     }

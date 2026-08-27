@@ -108,7 +108,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
     if (ctx.state.phase !== "repair_required" && ctx.state.phase !== "delivery_blocked") throw new Error("Delivery repair is not available in the current phase");
     if (!ctx.state.deliveryReviewId || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open")) throw new Error("Open blocking findings are required");
     if (ctx.state.phase === "delivery_blocked" && !ctx.state.deliveryRepairBlockerCode) throw new Error("A repair blocker is required before retrying delivery repair");
-    if ((ctx.state.repairCycle ?? 0) >= ctx.repairCycleLimit) throw new Error("Delivery repair limit is exhausted");
+    if (ctx.input.repairCycleLimit !== undefined && (ctx.state.repairCycle ?? 0) >= ctx.repairCycleLimit) throw new Error("Delivery repair limit is exhausted");
     if (!ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.leadSessionRef) throw new Error("The prior Developer delivery must be preserved before repair");
   } });
   setHandler(issueUpdates.record_delivery_decision, ctx.guarded(async (rawInput) => {
@@ -130,6 +130,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
 
 export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+    const noProgressEnabled = ctx.patched("forge-repair-no-progress-v1");
     const cycle = ctx.state.targetBaseOutcome === "revalidated" ? 1 : (ctx.state.repairCycle ?? 0) + 1;
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
@@ -174,7 +175,7 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
       let evidenceArtifactId: string | null = null;
       try { evidenceArtifactId = (await activityProxies.recordDeliveryBlocker({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, operation: "repair" })).artifactId; } catch { /* Keep the fixed state transition if blocker recording itself is unavailable. */ }
       const summary = error instanceof Error ? error.message : "The repair infrastructure did not complete; retry the repair.";
-      ctx.state = stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, ctx.repairCycleLimit, evidenceArtifactId, summary);
+      ctx.state = stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, ctx.repairCycleLimit, evidenceArtifactId, summary, noProgressEnabled);
       await ctx.project();
       void command;
       return ctx.state;
@@ -192,7 +193,7 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
     if ("repairAttemptId" in result) {
       ctx.state = result.outcome === "completed"
         ? stateTransitions.repairedDeliveryAwaitingFreshReviewState(ctx.state, result)
-        : stateTransitions.repairBlockedState(ctx.state, result, ctx.repairCycleLimit);
+        : stateTransitions.repairBlockedState(ctx.state, result, ctx.repairCycleLimit, noProgressEnabled);
     } else {
       const nextPhase = result.outcome === "completed" ? "delivery_ready" : "delivery_blocked";
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...stateTransitions.revisioned(ctx.state, nextPhase, result.outcome === "completed" ? "lead" : "human", result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], result.outcome === "completed" ? "Reviewing the latest changes" : "Needs your call"), developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, worktreePath: result.worktreePath, branchName: result.branchName, targetBaseSha: result.targetBaseSha, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, repairCycle: result.cycle, deliveryReviewSupersedesId: result.outcome === "completed" ? ctx.state.deliveryReviewId : ctx.state.deliveryReviewSupersedesId, deliveryReviewId: result.outcome === "completed" ? null : ctx.state.deliveryReviewId, deliveryReviewOutcome: result.outcome === "completed" ? null : ctx.state.deliveryReviewOutcome, deliveryReviewSummary: result.outcome === "completed" ? null : ctx.state.deliveryReviewSummary, ...(result.outcome === "completed" ? { deliveryBlockingFindings: [], deliveryRepairPlan: null } : {}) });

@@ -17,6 +17,19 @@ type CompletedReview = Extract<DeliveryReviewActivityResult, { outcome: "complet
 type CompletedRepair = Omit<Extract<DeveloperRepairActivityResult, { outcome: "completed" }>, "worktreePath"> & { worktreePath?: string };
 type BlockedRepair = Omit<Extract<DeveloperRepairActivityResult, { outcome: "blocked" }>, "worktreePath">;
 
+export function repairSignature(input: { source: "local_check" | "ci" | "merge" | "review"; code: string | null; failingCommand?: string | null; firstFailingLine?: string | null }): string {
+  return [input.source, input.code ?? "", input.failingCommand ?? "", input.firstFailingLine ?? ""].join("|");
+}
+
+export function noProgress(previous: IssueWorkflowState["repairProgress"] | undefined, next: { signature: string; commit: string | null; diagnosticHash: string | null }): boolean {
+  return !!previous && previous.signature === next.signature && previous.commit === next.commit && previous.diagnosticHash === next.diagnosticHash;
+}
+
+export function withRepairProgress(state: IssueWorkflowState, next: { signature: string; commit: string | null; diagnosticHash: string | null }): IssueWorkflowState {
+  const repeated = noProgress(state.repairProgress, next);
+  return IssueWorkflowStateSchema.parse({ ...state, repairProgress: { ...next, repeats: repeated ? (state.repairProgress?.repeats ?? 0) + 1 : 0 } });
+}
+
 export function evidencePointer(artifactId: string | undefined, kind: ArtifactPointer["kind"]): ArtifactPointer | undefined {
   const pointer = artifactId ? { artifactId, kind } : undefined;
   return pointer && ArtifactPointerSchema.safeParse(pointer).success ? pointer : undefined;
@@ -90,11 +103,13 @@ export function repairRequiredState(state: IssueWorkflowState, result: Completed
   });
 }
 
-export function repairBlockedState(state: IssueWorkflowState, result: BlockedRepair, repairCycleLimit: number): IssueWorkflowState {
-  const retry = result.cycle <= repairCycleLimit;
+export function repairBlockedState(state: IssueWorkflowState, result: BlockedRepair, repairCycleLimit: number, noProgressEnabled = false): IssueWorkflowState {
+  const progressState = withRepairProgress(state, { signature: repairSignature({ source: "local_check", code: result.code }), commit: state.resultCommit ?? null, diagnosticHash: result.evidenceArtifactId ?? null });
+  const exhausted = noProgressEnabled ? (progressState.repairProgress?.repeats ?? 0) >= 1 : result.cycle > repairCycleLimit;
+  const retry = !exhausted;
   return IssueWorkflowStateSchema.parse({
-    ...revisioned(state, "delivery_blocked", "human", retry ? ["record_delivery_decision", "repair_delivery", "retry_development", "cancel_issue"] : ["record_delivery_decision", "retry_development", "cancel_issue"], retry ? result.summary : "Needs your call"),
-    blocker: retry ? null : humanBlocker("agent_exhausted", result.summary, [{ command: "record_delivery_decision", label: "Record delivery decision", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.evidenceArtifactId, "developer-repair")),
+    ...revisioned(progressState, "delivery_blocked", "human", retry ? ["record_delivery_decision", "repair_delivery", "retry_development", "cancel_issue"] : ["retry_development", "cancel_issue"], retry ? result.summary : "Needs your call"),
+    blocker: retry ? null : humanBlocker("agent_exhausted", `Automatic repair is not making progress: ${result.summary}`, [{ command: "retry_development", label: "Resume Developer turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.evidenceArtifactId, "developer-repair")),
     repairCycle: result.cycle,
     deliveryRepairAttemptId: result.repairAttemptId,
     deliveryRepairBlockerCode: result.code,
@@ -103,10 +118,12 @@ export function repairBlockedState(state: IssueWorkflowState, result: BlockedRep
   });
 }
 
-export function repairInfrastructureBlockedState(state: IssueWorkflowState, cycle: number, repairCycleLimit: number, evidenceArtifactId: string | null, summary = "The repair infrastructure did not complete; retry the repair."): IssueWorkflowState {
-  const retry = cycle < repairCycleLimit;
+export function repairInfrastructureBlockedState(state: IssueWorkflowState, cycle: number, repairCycleLimit: number, evidenceArtifactId: string | null, summary = "The repair infrastructure did not complete; retry the repair.", noProgressEnabled = false): IssueWorkflowState {
+  const progressState = withRepairProgress(state, { signature: repairSignature({ source: "local_check", code: "repair-infrastructure-failure" }), commit: state.resultCommit ?? null, diagnosticHash: evidenceArtifactId });
+  const retry = noProgressEnabled ? (progressState.repairProgress?.repeats ?? 0) < 1 : cycle < repairCycleLimit;
   return IssueWorkflowStateSchema.parse({
-    ...revisioned(state, "delivery_blocked", "human", retry ? ["repair_delivery", "retry_development", "cancel_issue"] : ["retry_development", "cancel_issue"], summary),
+    ...revisioned(progressState, "delivery_blocked", "human", retry ? ["repair_delivery", "cancel_issue"] : ["retry_development", "cancel_issue"], retry ? summary : "Needs your call"),
+    blocker: retry ? null : humanBlocker("agent_exhausted", `Automatic repair is not making progress: ${summary}`, [{ command: "retry_development", label: "Resume Developer turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(evidenceArtifactId ?? undefined, "developer-repair")),
     repairCycle: cycle,
     deliveryRepairBlockerCode: "repair-infrastructure-failure",
     deliveryRepairBlockerSummary: summary,

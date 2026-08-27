@@ -30,7 +30,7 @@ import { jsonRequired } from "./task-utils.js";
 import { ensureResultSchema } from "./result-schema-files.js";
 import { claimDeveloperResult, DeveloperResultConflict } from "./developer-result-claims.js";
 import { runCommand } from "./command-runner.js";
-import { BrowserProofFailure, BrowserProofInputSchema, BrowserProofService, type DurableBrowserProof } from "./browser-proof.js";
+import { BrowserProofFailure, BrowserProofInputSchema, BrowserProofService, normalizeBrowserProofPath, normalizeBrowserProofPaths, type DurableBrowserProof } from "./browser-proof.js";
 
 export function isDeveloperExecutionActiveLeaseCollision(error: unknown): boolean {
   const sqliteError = error as { code?: unknown; message?: unknown };
@@ -45,9 +45,8 @@ async function git(args: string[], cwd: string, timeout = 8_000): Promise<string
   return result.stdout.trim();
 }
 
-function proofPaths(evidence?: { paths?: string[] | undefined; captures?: Array<{ path: string }> | undefined }): string[] { return [...new Set([...(evidence?.captures ?? []).map((capture) => capture.path), ...(evidence?.paths ?? [])])]; }
-
 export async function finalizeDeveloperSourceCommit(worktreePath: string, targetBaseSha: string, reportedPaths: string[]): Promise<{ headSha: string; treeSha: string }> {
+  reportedPaths = [...new Set(reportedPaths.map(normalizeBrowserProofPath))];
   for (const path of reportedPaths) {
     const indexed = await runCommand({ taskId: null, stepId: null, command: "git", args: ["ls-files", "--error-unmatch", "--", path], cwd: worktreePath, timeout: 8_000 });
     if (indexed.exitCode !== 0) continue;
@@ -337,10 +336,11 @@ export class DeveloperService {
         if (!execution || !["starting", "running"].includes(execution.status)) throw new AgentFailure(execution?.status === "cancelled" ? "developer-cancelled" : "developer-superseded", "Developer execution was cancelled before completion");
         const parsedReport = turn.result;
         let durableProof: DurableBrowserProof | undefined, proofBlocker: string | null = null;
-        try { await this.browserProof.assertReportedProofUntracked(worktree.worktreePath, parsedReport.visualEvidence); }
+        let reportedPaths: string[] = [];
+        try { reportedPaths = normalizeBrowserProofPaths(parsedReport.visualEvidence); await this.browserProof.assertReportedProofUntracked(worktree.worktreePath, reportedPaths); }
         catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
-        const source = await finalizeDeveloperSourceCommit(worktree.worktreePath, worktree.targetBaseSha, proofPaths(parsedReport.visualEvidence));
-        try { if (!proofBlocker) durableProof = await this.browserProof.ingest({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: executionId, resultCommit: source.headSha, resultTree: source.treeSha, worktreePath: worktree.worktreePath, control: input.visualEvidence ?? "off", ...(parsedReport.visualEvidence ? { evidence: parsedReport.visualEvidence } : {}) }); }
+        const source = proofBlocker ? undefined : await finalizeDeveloperSourceCommit(worktree.worktreePath, worktree.targetBaseSha, reportedPaths);
+        try { if (!proofBlocker && source) durableProof = await this.browserProof.ingest({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: executionId, resultCommit: source.headSha, resultTree: source.treeSha, worktreePath: worktree.worktreePath, control: input.visualEvidence ?? "off", ...(parsedReport.visualEvidence ? { evidence: parsedReport.visualEvidence } : {}) }); }
         catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
         if (durableProof && parsedReport.visualEvidence) await this.browserProof.cleanupPersisted(worktree.worktreePath, parsedReport.visualEvidence, durableProof);
         const gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
@@ -524,10 +524,11 @@ export class DeveloperService {
       const turn = await this.turnRunner.run({ task: { ...task, worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "developer", executionRole: "builder", ledger: "developer", executionId, promptKind: "delivery-repair", prompt: repairPrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperRepairReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-repair", DeveloperRepairReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision });
       const report = turn.result;
       let durableProof: DurableBrowserProof | undefined, proofBlocker: string | null = null;
-      try { await this.browserProof.assertReportedProofUntracked(worktreePath, report.visualEvidence); }
+      let reportedPaths: string[] = [];
+      try { reportedPaths = normalizeBrowserProofPaths(report.visualEvidence); await this.browserProof.assertReportedProofUntracked(worktreePath, reportedPaths); }
       catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
-      const source = await finalizeDeveloperSourceCommit(worktreePath, input.targetBaseSha, proofPaths(report.visualEvidence));
-      try { if (!proofBlocker) durableProof = await this.browserProof.ingest({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: executionId, resultCommit: source.headSha, resultTree: source.treeSha, worktreePath, control: visualEvidence, ...(report.visualEvidence ? { evidence: report.visualEvidence } : {}) }); }
+      const source = proofBlocker ? undefined : await finalizeDeveloperSourceCommit(worktreePath, input.targetBaseSha, reportedPaths);
+      try { if (!proofBlocker && source) durableProof = await this.browserProof.ingest({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: executionId, resultCommit: source.headSha, resultTree: source.treeSha, worktreePath, control: visualEvidence, ...(report.visualEvidence ? { evidence: report.visualEvidence } : {}) }); }
       catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
       if (durableProof && report.visualEvidence) await this.browserProof.cleanupPersisted(worktreePath, report.visualEvidence, durableProof);
       const gitState = await this.worktrees.inspectDelivery(worktreePath);

@@ -121,6 +121,21 @@ test("source finalization preserves tracked staging content and excludes reporte
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("source finalization rejects agent-controlled proof pathspecs without repository mutation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-proof-pathspec-"));
+  try {
+    await writeFile(join(root, "README.md"), "base\n");
+    await command("git", ["init"], root); await command("git", ["config", "user.email", "forge@example.invalid"], root); await command("git", ["config", "user.name", "Forge"], root); await command("git", ["add", "README.md"], root); await command("git", ["commit", "-m", "base"], root);
+    const head = await command("git", ["rev-parse", "HEAD"], root), tree = await command("git", ["write-tree"], root), status = await command("git", ["status", "--porcelain=v1", "--untracked-files=all"], root);
+    for (const path of ["/tmp/proof.png", "../proof.png", ".forge-proof/../proof.png", ".forge-proof\\proof.png", ":(glob).forge-proof/*.png", ".forge-proof/:(glob)*", ".forge-proof", ".forge-proof/", ".forge-proof/bad\0.png"]) {
+      await expect(finalizeDeveloperSourceCommit(root, head, [path])).rejects.toMatchObject({ code: "invalid-proof" });
+      expect(await command("git", ["rev-parse", "HEAD"], root)).toBe(head);
+      expect(await command("git", ["write-tree"], root)).toBe(tree);
+      expect(await command("git", ["status", "--porcelain=v1", "--untracked-files=all"], root)).toBe(status);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("implementation fails loudly when its frozen Builder profile no longer resolves", async () => {
   const value = await fixture();
   const worktree = join(value.root, "worktrees", "task_1");

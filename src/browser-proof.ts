@@ -63,13 +63,25 @@ function normalizedCaptures(input: BrowserProofInput): z.infer<typeof captureSch
   const captures = [...(parsed.captures ?? []), ...(parsed.paths ?? []).map((path) => ({ path }))];
   if (!parsed.captured && captures.length) throw new BrowserProofFailure("invalid-proof", "Browser proof report is contradictory");
   const unique = new Map<string, z.infer<typeof captureSchema>>();
-  for (const capture of captures) if (!unique.has(capture.path)) unique.set(capture.path, capture);
+  for (const capture of captures) {
+    const path = normalizeBrowserProofPath(capture.path);
+    if (!unique.has(path)) unique.set(path, { ...capture, path });
+  }
   if (unique.size > MAX_IMAGES) throw new BrowserProofFailure("invalid-proof", `At most ${MAX_IMAGES} browser proof images are allowed`);
   return [...unique.values()];
 }
 
+export function normalizeBrowserProofPath(value: string): string {
+  if (isAbsolute(value) || value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value) || value.startsWith(":") || value.split("/").some((part) => !part || part === "." || part === ".." || part.startsWith(":")) || !value.startsWith(".forge-proof/") || value === ".forge-proof/") throw new BrowserProofFailure("invalid-proof", "Browser proof source is outside the allowed staging directory");
+  return value;
+}
+
+export function normalizeBrowserProofPaths(input?: BrowserProofInput): string[] {
+  return input ? normalizedCaptures(input).map((capture) => capture.path) : [];
+}
+
 async function readCapture(worktreePath: string, reportedPath: string): Promise<Buffer> {
-  if (isAbsolute(reportedPath) || reportedPath.includes("\\") || reportedPath.includes("\0") || reportedPath.split("/").some((part) => !part || part === "." || part === "..") || (reportedPath !== ".forge-proof" && !reportedPath.startsWith(".forge-proof/"))) throw new BrowserProofFailure("invalid-proof", "Browser proof source is outside the allowed staging directory");
+  reportedPath = normalizeBrowserProofPath(reportedPath);
   let worktree: string, proofRoot: string, source: string;
   try {
     worktree = await realpath(worktreePath);
@@ -150,9 +162,8 @@ export class BrowserProofService {
     return { captured: true, manifestArtifactId: manifestId, artifactIds: images.map((image) => image.artifactId), ...(comparable.summary ? { summary: comparable.summary } : {}) };
   }
 
-  async assertReportedProofUntracked(worktreePath: string, evidence?: BrowserProofInput): Promise<void> {
-    if (!evidence) return;
-    await this.assertUntracked(worktreePath, normalizedCaptures(evidence).map((capture) => capture.path));
+  async assertReportedProofUntracked(worktreePath: string, paths: string[]): Promise<void> {
+    await this.assertUntracked(worktreePath, paths.map(normalizeBrowserProofPath));
   }
 
   async cleanupPersisted(worktreePath: string, evidence: BrowserProofInput, durable: DurableBrowserProof): Promise<void> {

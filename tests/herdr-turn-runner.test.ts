@@ -13,6 +13,8 @@ import { ForgeDatabase } from "../src/database.js";
 import { HerdrFailure } from "../src/herdr-client.js";
 import { HerdrTurnRunner, type HerdrTurnInput } from "../src/herdr-turn-runner.js";
 import { IssueTimelineEvents } from "../src/issue-timeline-events.js";
+import { runCommand } from "../src/command-runner.js";
+import { DeveloperDeliverySchema } from "../src/developer-contracts.js";
 
 const ResultSchema = z.object({ status: z.enum(["ok", "blocked"]) }).strict();
 const task = { taskId: "task", projectId: "project", projectSlug: "project", worktreePath: "/worktree", runtimeRoot: "" };
@@ -88,6 +90,37 @@ async function freshRollout(
   await writeFile(path, `${JSON.stringify({ timestamp: "2026-08-24T00:00:00.000Z", type: "session_meta", payload: { session_id: sessionId, cwd: setup.input.task.worktreePath, originator: "codex-tui", cli_version: "0.149.1" } })}\n`);
   setup.candidates.push(path);
   return path;
+}
+
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const result = await runCommand({ taskId: null, stepId: null, command: "git", args, cwd });
+  if (result.exitCode !== 0) throw new Error(result.stderr);
+  return result.stdout.trim();
+}
+
+async function developerTurnFixture(dirty = false) {
+  const setup = await fixture();
+  const worktreePath = join(setup.root, "developer-worktree");
+  await mkdir(worktreePath);
+  await git(worktreePath, "init", "-b", "forge/issue/task");
+  await git(worktreePath, "config", "user.email", "test@example.com");
+  await git(worktreePath, "config", "user.name", "Test");
+  await writeFile(join(worktreePath, "delivery.txt"), "base\n");
+  await git(worktreePath, "add", "delivery.txt");
+  await git(worktreePath, "commit", "-m", "base");
+  const base = await git(worktreePath, "rev-parse", "HEAD");
+  await writeFile(join(worktreePath, "delivery.txt"), "delivered\n");
+  if (dirty) await writeFile(join(worktreePath, "dirty.txt"), "dirty\n");
+  else { await git(worktreePath, "add", "delivery.txt"); await git(worktreePath, "commit", "-m", "delivery"); }
+  const now = new Date().toISOString();
+  setup.database.authQuery((db) => {
+    db.prepare("UPDATE forge_agent_executions SET status = 'completed' WHERE id = 'execution'").run();
+    db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('developer', 'task', 'company', 'workflow', 1, 1, 'running', 'forge/issue/task', ?, ?, ?)").run(worktreePath, base, now);
+    db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES ('worktree', 'task', 'company', 'project', 'workflow', ?, ?, ?, 'forge/issue/task', ?, 'lease', 'active', ?)").run(worktreePath, setup.root, worktreePath, base, now);
+  });
+  const input = { ...setup.input, executionId: "developer", sessionRole: "developer" as const, executionRole: "builder" as const, ledger: "developer" as const, promptKind: "developer-delivery", resultSchema: DeveloperDeliverySchema };
+  setup.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET session_role = 'developer' WHERE id = 'session'").run());
+  return { ...setup, input };
 }
 
 test("converts non-retryable Herdr session failures at the turn boundary", async () => {
@@ -794,6 +827,54 @@ test("surfaces a completed idle turn that did not write its result file", async 
     expect(prompts).toBe(2);
     setTimeout(() => void writeFile(join(setup.root, row.result_relative_path), JSON.stringify({ status: "ok" })), 1_050);
     await expect(running).resolves.toMatchObject({ result: { status: "ok" } });
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
+test("synthesizes one Developer delivery from a clean Git handoff", async () => {
+  const setup = await developerTurnFixture();
+  let prompts = 0;
+  const herdr = {
+    prompt: async (_name: string, prompt: string) => {
+      prompts += 1;
+      await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(prompt) })}${line({ type: "task_started", turn_id: "developer" })}${line({ type: "task_complete", turn_id: "developer", duration_ms: 1 })}`);
+      return { ...setup.session.live, status: "idle" };
+    },
+    getAgent: async () => ({ ...setup.session.live, status: "idle" }),
+  };
+  const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
+  try {
+    const first = await runner.run(setup.input);
+    const second = await runner.run(setup.input);
+    expect(first.result.summary).toMatch(/^Delivery taken from Git commit/);
+    expect(second.resultHash).toBe(first.resultHash);
+    expect(prompts).toBe(1);
+    const event = setup.database.authQuery((db) => db.prepare("SELECT idempotency_key FROM forge_developer_execution_events WHERE execution_id = 'developer'").all());
+    expect(event).toEqual([{ idempotency_key: `git-handoff:${first.result.resultCommit}` }]);
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
+test("does not synthesize a Developer delivery from a dirty worktree", async () => {
+  const setup = await developerTurnFixture(true);
+  const herdr = {
+    prompt: async (_name: string, prompt: string) => {
+      await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(prompt) })}${line({ type: "task_started", turn_id: "developer" })}${line({ type: "task_complete", turn_id: "developer", duration_ms: 1 })}`);
+      return { ...setup.session.live, status: "idle" };
+    },
+    getAgent: async () => ({ ...setup.session.live, status: "idle" }),
+  };
+  const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
+  try {
+    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "turn_outcome_missing", message: expect.stringContaining("uncommitted files") });
+    expect(setup.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns").get())).not.toEqual({ status: "completed" });
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
+test("fails a live turn that does not make progress within the liveness bound", async () => {
+  const setup = await fixture();
+  const herdr = { prompt: async () => setup.session.live, getAgent: async () => ({ ...setup.session.live, status: "working" }) };
+  const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database), undefined, undefined, async () => {});
+  try {
+    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "turn_stalled" });
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 

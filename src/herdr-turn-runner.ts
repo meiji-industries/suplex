@@ -120,6 +120,7 @@ export class HerdrTurnRunner {
     let activeTurnId: string | undefined;
     let polls = 0;
     let idlePolls = 0;
+    let stalledPolls = 0;
     let resends = 0;
     let executionActive = true;
     for (;;) {
@@ -142,6 +143,8 @@ export class HerdrTurnRunner {
         await this.updateAttention(session, turnId, "blocked", await this.blockedExcerpt(session));
       } else if (live.status === "working") {
         idlePolls = 0;
+        if (drained.events.length > 0) stalledPolls = 0;
+        else if (++stalledPolls >= 5) throw new AgentFailure("turn_stalled", "Agent remained working without producing progress", { nonRetryable: true });
         this.clearAttention(session.id, turnId, "working");
       }
       const stable = completion.completed && await this.stableResult(
@@ -209,8 +212,9 @@ export class HerdrTurnRunner {
               : undefined;
           if (excerpt) await this.updateAttention(session, turnId, "awaiting_human", excerpt);
         }
-      } else {
+      } else if (live.status !== "working") {
         idlePolls = 0;
+        stalledPolls = 0;
       }
       await this.sleep(1_000);
     }

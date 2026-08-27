@@ -8,7 +8,7 @@ const pull: TaskSourceSummary = { kind: "pull_request", number: 17, title: "Impr
 const branch: TaskSourceSummary = { kind: "branch", branch: "feature/search", headSha: "a".repeat(40), subject: "Add search", author: "hubot" };
 
 test("the picker renders its compact source trigger", () => {
-  const html = renderToStaticMarkup(createElement(TaskSourcePicker, { projectId: "project-1", onSelect: () => {} }));
+  const html = renderToStaticMarkup(createElement(TaskSourcePicker, { projectId: "project-1", onSelect: () => {}, onClear: () => {} }));
   expect(html).toContain("Create from…"); expect(html).toContain('aria-label="Create from source"');
 });
 

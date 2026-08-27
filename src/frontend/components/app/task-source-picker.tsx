@@ -1,5 +1,6 @@
-import { GitBranch, GitPullRequest, Search } from "lucide-react";
+import { GitBranch, GitPullRequest, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { Badge } from "../ui/badge.js";
 import { Button } from "../ui/button.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
 import { Input } from "../ui/input.js";
@@ -31,7 +32,7 @@ export function preserveEditedPrefill(current: { title: string; description: str
   return { title: !current.title || current.title === previous.title ? next.title : current.title, description: !current.description || current.description === previous.description ? next.description : current.description };
 }
 
-export function TaskSourcePicker({ projectId, value, disabled, onSelect }: { projectId: string; value?: TaskSourceSummary | undefined; disabled?: boolean; onSelect: (source: TaskSourceSummary, selector: TaskSourceSelector) => void }): ReactElement {
+export function TaskSourcePicker({ projectId, value, disabled, onSelect, onClear }: { projectId: string; value?: TaskSourceSummary | undefined; disabled?: boolean; onSelect: (source: TaskSourceSummary, selector: TaskSourceSelector) => void; onClear: () => void }): ReactElement {
   const [kind, setKind] = useState<"pull_request" | "branch">("pull_request");
   const [query, setQuery] = useState("");
   const [rows, setRows] = useState<TaskSourceSummary[]>([]);
@@ -46,11 +47,15 @@ export function TaskSourcePicker({ projectId, value, disabled, onSelect }: { pro
     finally { setLoading(false); }
   };
   const filtered = useMemo(() => filterTaskSources(rows, query), [query, rows]);
-  const label = value?.kind === "pull_request" ? `PR #${value.number}` : value?.kind === "branch" ? value.branch : "Create from…";
   return <DropdownMenu onOpenChange={(open) => { if (open) void load(); }}>
-    <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={disabled || !projectId} aria-label="Create from source" />}>
-      {value?.kind === "pull_request" ? <GitPullRequest /> : <GitBranch />}{label}
-    </DropdownMenuTrigger>
+    {value ? <div className="flex items-center gap-2 text-sm">
+      <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={disabled || !projectId} aria-label="Create from source" />}>
+        {value.kind === "pull_request" ? <><Badge variant="outline">PR #{value.number}</Badge><span className="max-w-[24rem] truncate">{value.headBranch}</span></> : <><GitBranch /><span className="max-w-[24rem] truncate">{value.branch}</span></>}
+      </DropdownMenuTrigger>
+      <Button type="button" variant="ghost" size="icon-sm" aria-label="Clear source" onClick={onClear}><X className="size-3.5" /></Button>
+    </div> : <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={disabled || !projectId} aria-label="Create from source" />}>
+      <GitBranch />Create from…
+    </DropdownMenuTrigger>}
     <DropdownMenuContent align="end" className="w-[min(26rem,calc(100vw-2rem))] p-2">
       <Tabs value={kind} onValueChange={(next) => { const selected = next as typeof kind; setKind(selected); setRows([]); void load(selected); }}>
         <TabsList>{taskSourceTabs.map((tab) => <TabsTrigger key={tab.value} value={tab.value}>{tab.label}</TabsTrigger>)}</TabsList>

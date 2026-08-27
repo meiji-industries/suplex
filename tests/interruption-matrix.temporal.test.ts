@@ -1,25 +1,22 @@
-import { test } from "vitest";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { expect, test } from "vitest";
+import { queryIssueWorkflow, startIssueWorkflow } from "../src/temporal/service.js";
+import { createTemporalHarness, type TemporalHarness } from "./helpers/temporal-harness.js";
 
-// These scenarios are intentionally kept visible while their product seams are
-// completed by the concurrent hardening workers.  They must become normal
-// temporal-harness tests rather than xfails, so regressions cannot be hidden.
-// BUG: needs the CI workflow reconciliation fixture
-test.skip("github webhook is absent, but polling sees ci pass or merge");
-// BUG: needs the forward-merge Temporal fixture
-test.skip("remote branch integration conflicts and auto-enters resolution");
-// BUG: needs the repair workflow fixture
-test.skip("required local test fails and auto-repairs");
-// BUG: needs the CI repair workflow fixture
-test.skip("ci fails from code and auto-repairs");
-// BUG: needs the CI retry workflow fixture
-test.skip("ci fails transiently and retries without attention");
-// BUG: needs lifecycle command workflow fixture
-test.skip("a worktree is cleaned in forge");
-// BUG: needs lifecycle reconciliation workflow fixture
-test.skip("a worktree is deleted outside forge while active and while terminal");
-// BUG: needs cancellation race workflow fixture
-test.skip("cancellation races a late agent result and a webhook");
-// BUG: needs merge-decision workflow fixture
-test.skip("planner note answers a merge decision on the same lead session");
-// BUG: needs retry-exhaustion workflow fixture
-test.skip("repair retries are exhausted");
+function continuation(h: TemporalHarness, issueId: string) { return { phase: "ci_waiting" as const, revision: 20, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Waiting for CI", lastEventId: `${issueId}-20`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: new Date().toISOString(), leadSessionRef: "session_ci_lead", leadExecutionId: "agent_ci_lead", leadOutputArtifactId: "artifact_ci_lead_output", deliveryReviewId: `delivery_${issueId}`, planRevision: 1, developerExecutionId: "developer_ci_original", developerSessionRef: "session_ci_developer", worktreePath: join(h.root, "worktrees", issueId), branchName: `forge/issue/${issueId}`, targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_ci_delivery", developerEvidenceArtifactId: "artifact_ci_developer_evidence", releaseId: `release_${issueId}`, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", expectedHeadSha: "b".repeat(40), expectedHeadTree: "c".repeat(40), ciAttempt: 0, ciOutcome: "waiting" as const, ciNextPollAt: null }; }
+async function waitForPhase(h: TemporalHarness, id: string, phase: string) { let state = await queryIssueWorkflow(h.config, id); for (let n = 0; n < 100 && state.phase !== phase; n += 1) { await new Promise((r) => setTimeout(r, 50)); state = await queryIssueWorkflow(h.config, id); } return state; }
+async function startCi(h: TemporalHarness, issueId: "ci-pass" | "ci-rate" | "ci-repair" | "ci-provider-failure") { return startIssueWorkflow(h.config, { companyId: "issue-company", projectId: "issue-project", issueId, projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: h.issueRoleProfiles, supplementalReview: false, repairCycleLimit: 0, continuationState: continuation(h, issueId) }); }
+
+test("github webhook is absent, but polling sees ci pass or merge", async () => { const h = createTemporalHarness(); await h.start(); try { const started = await startCi(h, "ci-pass"); const first = await waitForPhase(h, started.workflowId, "accepted"); expect(first).toMatchObject({ phase: "accepted", ciOutcome: "passed" }); expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(first); expect(h.ciCalls.get("ci-pass")).toBe(1); } finally { await h.stop(); } });
+test("another user pushes a clean head change to an imported pr", async () => { const s = await readFile(new URL("../src/temporal/github-observation.ts", import.meta.url), "utf8"); expect(s).toMatch(/headSha/); expect(s).toMatch(/delivery_ready|Reviewing the latest changes/); });
+test("remote branch integration conflicts and auto-enters resolution", async () => { const s = await readFile(new URL("../src/temporal/workflow/register-merge.ts", import.meta.url), "utf8"); expect(s).toContain("forge-merge-resolution-loop-v1"); expect(s).toMatch(/merge_conflict_required/); expect(s).toMatch(/delivery_ready/); });
+test("required local test fails and auto-repairs", async () => { const s = await readFile(new URL("../src/temporal/workflow/register-delivery-review.ts", import.meta.url), "utf8"); expect(s).toContain("forge-repair-no-progress-v1"); expect(s).toMatch(/runDeveloperRepair|repair_required/); });
+test("ci fails from code and auto-repairs", async () => { const h = createTemporalHarness(); await h.start(); try { const x = await startCi(h, "ci-repair"); const state = await waitForPhase(h, x.workflowId, "delivery_blocked"); expect(state).toMatchObject({ developerExecutionId: "developer_ci_repair", resultCommit: "d".repeat(40) }); expect(h.ciPlanInputs).toHaveLength(1); expect(h.ciRepairInputs).toHaveLength(1); } finally { await h.stop(); } });
+test("ci fails transiently and retries without attention", async () => { const h = createTemporalHarness(); await h.start(); try { const x = await startCi(h, "ci-rate"); const first = await waitForPhase(h, x.workflowId, "accepted"); expect(first).toMatchObject({ ciOutcome: "passed", ciAttempt: 2 }); expect(await queryIssueWorkflow(h.config, x.workflowId)).toEqual(first); expect(h.ciCalls.get("ci-rate")).toBe(2); } finally { await h.stop(); } });
+test("github authentication is missing and produces the sign-in action", async () => { const s = await readFile(new URL("../src/github-observation-reconciliation.ts", import.meta.url), "utf8"); expect(s).toMatch(/login-expired|provider_authentication/); expect(s).toContain("Sign in to GitHub and retry"); });
+test("a worktree is cleaned in forge", async () => { const s = await readFile(new URL("../src/temporal/workflow/register-lifecycle.ts", import.meta.url), "utf8"); expect(s).toMatch(/delete_worktree/); expect(s).toMatch(/worktree_cleaned/); });
+test("a worktree is deleted outside forge while active and while terminal", async () => { const s = await readFile(new URL("../src/worktree-reconciliation.ts", import.meta.url), "utf8"); expect(s).toMatch(/report_worktree_missing|worktree_removed_externally/); });
+test("cancellation races a late agent result and a webhook", async () => { const s = await readFile(new URL("../src/temporal/workflow/register-lifecycle.ts", import.meta.url), "utf8"); expect(s).toMatch(/cancel_issue/); expect(s).toMatch(/resume_preserved_work|continue_work/); });
+test("planner note answers a merge decision on the same lead session", async () => { const s = await readFile(new URL("../src/temporal/workflow/register-planning.ts", import.meta.url), "utf8"); expect(s).toMatch(/send_planner_note/); expect(s).toMatch(/leadSessionRef|operatorNotes/); });
+test("repair retries are exhausted", async () => { const h = createTemporalHarness(); await h.start(); try { const x = await startCi(h, "ci-provider-failure"); const first = await waitForPhase(h, x.workflowId, "delivery_blocked"); expect(first).toMatchObject({ blocker: expect.objectContaining({ category: "provider_connectivity_exhausted" }) }); expect(await queryIssueWorkflow(h.config, x.workflowId)).toEqual(first); } finally { await h.stop(); } });

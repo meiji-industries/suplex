@@ -18,4 +18,5 @@ export const lifecycleStateFields = {
   processedCommandIds: z.array(durableId).max(64).optional(),
   // Appended last: workflow-state field order is part of the persisted contract.
   lastHandlerError: z.object({ command: z.string(), reason: z.string(), at: z.string().datetime() }).nullable().optional(),
+  worktreeState: z.enum(["present", "cleaned", "removed_externally"]).nullable().optional(),
 };

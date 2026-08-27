@@ -76,6 +76,33 @@ async function rewriteSourceBranch(value: RemoteFixture, branchName: string) {
   return remoteHead;
 }
 
+
+test("inspects local branch sync and pushes it to origin", async () => {
+  const value = await remoteFixture();
+  const branchName = "feat/sync";
+  try {
+    await git(["symbolic-ref", "HEAD", "refs/heads/main"], value.remotePath);
+    await git(["remote", "set-head", "origin", "-a"], value.repositoryPath);
+    await git(["switch", "-c", branchName], value.repositoryPath);
+    await writeFile(join(value.repositoryPath, "SYNC.md"), "local\n");
+    await git(["add", "SYNC.md"], value.repositoryPath);
+    await git(["commit", "-m", "local sync"], value.repositoryPath);
+    const manager = new WorktreeManager();
+    await expect(manager.inspectSync(value.repositoryPath, branchName)).resolves.toMatchObject({ remoteExists: false, ahead: 1, behind: 0, headSha: await git(["rev-parse", "HEAD"], value.repositoryPath) });
+    await manager.push(value.repositoryPath, branchName);
+    await expect(manager.inspectSync(value.repositoryPath, branchName)).resolves.toMatchObject({ remoteExists: true, ahead: 0, behind: 0 });
+    const peer = join(value.root, "peer");
+    await git(["clone", value.remotePath, peer], value.root);
+    await git(["config", "user.name", "Forge Test"], peer);
+    await git(["config", "user.email", "forge-test@example.invalid"], peer);
+    await git(["switch", branchName], peer);
+    await writeFile(join(peer, "REMOTE.md"), "remote\n");
+    await git(["add", "REMOTE.md"], peer);
+    await git(["commit", "-m", "remote sync"], peer);
+    await git(["push", "origin", branchName], peer);
+    await expect(manager.inspectSync(value.repositoryPath, branchName)).resolves.toMatchObject({ remoteExists: true, ahead: 0, behind: 1 });
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
 test("assigns Cargo task worktrees a mode-0700 shared per-project target directory", async () => {
   const value = await fixture();
   const worktreePath = join(value.worktreeRoot, "cargo-task");

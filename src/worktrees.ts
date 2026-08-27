@@ -81,6 +81,13 @@ export interface LiveWorktreeDiff extends WorktreeDiff {
   baseSha: string;
   etag: string;
 }
+export interface BranchSync {
+  remoteExists: boolean;
+  ahead: number;
+  behind: number;
+  headSha: string;
+}
+
 
 export interface PlanRevisionInspectionInput {
   repositoryPath: string;
@@ -392,6 +399,26 @@ export class WorktreeManager {
       const detail = String(stderr ?? (error instanceof Error ? error.message : error)).trim().split(/\r?\n/, 1)[0];
       throw new WorktreeFailure("delivery-inspection-failed", `Git could not inspect the exact Developer delivery: ${detail}`);
     }
+  }
+
+  async inspectSync(worktreePath: string, branchName: string): Promise<BranchSync> {
+    if (!branchPattern.test(branchName)) throw new WorktreeFailure("unsafe-branch", "Task branch is unsafe");
+    const canonical = await canonicalDirectory(worktreePath, "worktree-unavailable");
+    const headSha = await this.git.run(["rev-parse", "HEAD"], canonical);
+    const remoteRef = `refs/remotes/origin/${branchName}`;
+    try {
+      await this.git.run(["fetch", "--no-tags", "origin", `+refs/heads/${branchName}:${remoteRef}`], canonical);
+    } catch {
+      const ahead = await this.git.run(["rev-list", "--count", branchName, "^refs/remotes/origin/HEAD"], canonical).then(Number).catch(() => 0);
+      return { remoteExists: false, ahead, behind: 0, headSha };
+    }
+    const [behind = 0, ahead = 0] = (await this.git.run(["rev-list", "--left-right", "--count", `${remoteRef}...${branchName}`], canonical)).split(/\s+/).map(Number);
+    return { remoteExists: true, ahead, behind, headSha };
+  }
+
+  async push(worktreePath: string, branchName: string): Promise<void> {
+    if (!branchPattern.test(branchName)) throw new WorktreeFailure("unsafe-branch", "Task branch is unsafe");
+    await this.git.run(["push", "origin", branchName], await canonicalDirectory(worktreePath, "worktree-unavailable"));
   }
 
   async currentDiff(input: WorktreeDiffInput): Promise<WorktreeDiff> {

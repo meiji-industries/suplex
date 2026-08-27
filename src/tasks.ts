@@ -90,6 +90,16 @@ function legacyDeliveryTarget(mode: "draft" | "ready" | "auto_merge"): DeliveryT
   return mode === "ready" ? "pull_request_ready" : mode === "auto_merge" ? "merged" : "pull_request_draft";
 }
 
+export type TaskBranchSync = { available: false } | {
+  branchName: string;
+  worktreePath: string;
+  remoteExists: boolean;
+  ahead: number;
+  behind: number;
+  headSha: string;
+};
+
+
 export interface TaskImageInput {
   filename: string;
   mimeType: string;
@@ -1020,6 +1030,35 @@ export class TaskService {
       if (error instanceof WorktreeFailure) throw new TaskFailure(error.message, [finding(error.code, "developerExecution", error.message)], 409);
       throw error;
     }
+  }
+
+  async getBranchSync(actorUserId: string, taskId: string): Promise<TaskBranchSync> {
+    const context = this.taskBranchContext(actorUserId, taskId);
+    if (!context) return { available: false };
+    try {
+      return { branchName: context.branchName, worktreePath: context.worktreePath, ...await new WorktreeManager().inspectSync(context.worktreePath, context.branchName) };
+    } catch (error) {
+      if (error instanceof WorktreeFailure) throw new TaskFailure(error.message, [finding(error.code, "developerExecution", error.message)], 409);
+      throw error;
+    }
+  }
+
+  async pushBranch(actorUserId: string, taskId: string): Promise<TaskBranchSync> {
+    const context = this.taskBranchContext(actorUserId, taskId);
+    if (!context) return { available: false };
+    try {
+      await new WorktreeManager().push(context.worktreePath, context.branchName);
+    } catch (error) {
+      const stderr = error && typeof error === "object" && "stderr" in error ? error.stderr : undefined;
+      throw new TaskFailure(String(stderr ?? (error instanceof Error ? error.message : error)).trim().slice(0, 300), [], 409);
+    }
+    return this.getBranchSync(actorUserId, taskId);
+  }
+
+  private taskBranchContext(actorUserId: string, taskId: string): { branchName: string; worktreePath: string } | undefined {
+    const task = this.getTask(actorUserId, taskId);
+    const execution = this.database.authQuery((db) => db.prepare("SELECT branch_name AS branchName, worktree_path AS worktreePath FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND worktree_path IS NOT NULL ORDER BY attempt DESC, started_at DESC LIMIT 1").get(task.id, task.companyId) as { branchName: string; worktreePath: string } | undefined);
+    return execution;
   }
 
   async createTask(actorUserId: string, companyId: string, input: TaskInput): Promise<{ task: ForgeTask; created: boolean }> {

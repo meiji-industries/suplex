@@ -2,6 +2,9 @@ import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { serializerCompiler, validatorCompiler } from "@fastify/type-provider-zod";
+import Fastify from "fastify";
+
 import { expect, test } from "vitest";
 
 import { AuthService } from "../src/auth.js";
@@ -16,6 +19,8 @@ import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
 import { TaskResponseSchema } from "../src/http/contracts/tasks.js";
 import { jsonRequired } from "../src/task-utils.js";
+import taskBranch from "../src/http/routes/task-branch.js";
+
 
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
 const github: GithubAdapter = { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } };
@@ -649,4 +654,22 @@ test("re-resolves a pull request selector and pins source and PR base coordinate
     expect(value.tasks.getTask(value.adminId, scratch.task.id).source).toBeUndefined();
     expect(TaskResponseSchema.parse(value.tasks.getTask(value.adminId, scratch.task.id)).source).toBeUndefined();
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("branch sync route reports unavailable before a task has a worktree", async () => {
+  const value = await fixture();
+  const app = Fastify({ logger: false });
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
+  app.decorateRequest("forgeUser", undefined as never);
+  app.addHook("preHandler", (request, _reply, done) => { request.forgeUser = { id: value.adminId } as never; done(); });
+  await app.register(taskBranch, { tasks: value.tasks });
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "No worktree", description: "body", idempotencyKey: "branch-sync-no-worktree", images: [] });
+    const response = await app.inject({ method: "GET", url: `/api/tasks/${created.task.id}/branch-sync` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ available: false });
+  } finally {
+    await app.close(); value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
 });

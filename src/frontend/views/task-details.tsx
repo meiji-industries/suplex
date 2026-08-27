@@ -33,8 +33,8 @@ import { TaskChat } from "../components/app/task-chat/task-chat.js";
 import { TaskBrowserProof } from "../components/app/task-browser-proof.js";
 import { CopyButton } from "../components/app/copy-button.js";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip.js";
-import { adminDate, type ApiAgent, type ApiCi, type ApiProject, type ApiTask } from "../lib/view-shared.js";
-import { readJson, withCompany } from "../lib/api.js";
+import { adminDate, type ApiAgent, type ApiCi, type ApiProject, type ApiTask, type ApiTaskBranchSync } from "../lib/view-shared.js";
+import { isApiError, readJson, withCompany } from "../lib/api.js";
 import { materialityCriteria, materialityMode } from "../lib/plan-materiality.js";
 import type { IssueCommandSlug } from "../../commands/registry.js";
 import { BLOCKED_PHASES, TERMINAL_PHASES, phaseLabel } from "../../issue-phases.js";
@@ -60,6 +60,45 @@ function TaskMediaRow({ taskId, images }: { taskId: string; images: ApiTask["ima
       </DialogContent>
     </Dialog>
   </>;
+}
+
+function BranchSyncCard({ taskId, updatedAt, onRefresh }: { taskId: string; updatedAt: string; onRefresh: () => Promise<void> }): ReactElement | null {
+  const [sync, setSync] = useState<ApiTaskBranchSync | null>(null);
+  const [error, setError] = useState("");
+  const [pushing, setPushing] = useState(false);
+  useEffect(() => {
+    let ignore = false;
+    void readJson<ApiTaskBranchSync>(`/api/tasks/${taskId}/branch-sync`).then((value) => { if (!ignore) { setSync(value); setError(""); } }).catch((reason: unknown) => {
+      if (ignore) return;
+      if (isApiError(reason, 404)) setSync({ available: false });
+      else setError(reason instanceof Error ? reason.message : "Branch status could not be loaded");
+    });
+    return () => { ignore = true; };
+  }, [taskId, updatedAt]);
+  if (!sync || "available" in sync) return null;
+  const status = !sync.remoteExists ? "Not on origin yet" : sync.ahead > 0 ? `${sync.ahead} commits to push` : "Up to date";
+  const push = async (): Promise<void> => {
+    setPushing(true); setError("");
+    try {
+      setSync(await readJson<ApiTaskBranchSync>(`/api/tasks/${taskId}/push-branch`, { method: "POST" }));
+      await onRefresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Branch could not be pushed");
+    } finally {
+      setPushing(false);
+    }
+  };
+  return <Card data-task-branch-sync size="sm">
+    <CardHeader>
+      <CardTitle><h3>Branch</h3></CardTitle>
+      <CardDescription><code>{sync.branchName}</code></CardDescription>
+      <CardAction><Button size="sm" onClick={() => void push()} disabled={pushing || (sync.ahead === 0 && sync.remoteExists)}>{pushing ? "Pushing…" : "Push"}</Button></CardAction>
+    </CardHeader>
+    <CardContent>
+      <p className="text-xs text-muted-foreground">{status}{sync.behind > 0 ? ` · ${sync.behind} behind` : ""}</p>
+      {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+    </CardContent>
+  </Card>;
 }
 
 export function NextAction({ value }: { value: string | null }): ReactElement {
@@ -604,7 +643,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
             </div>
           </div>
           <aside data-task-properties className="border-border border-t bg-muted/20 px-4 py-6 sm:px-6 lg:sticky lg:top-0 lg:h-fit lg:border-t-0 lg:border-l">
-            <div className="mb-6 space-y-4">{pullRequestInMain ? null : <GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} />}<TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} agentInvocations={task.agentInvocations} activeCapacity={task.capacity?.status === "active" ? task.capacity : undefined} /></div>
+            <div className="mb-6 space-y-4">{pullRequestInMain ? null : <GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} />}<BranchSyncCard taskId={task.id} updatedAt={task.updatedAt} onRefresh={onRefresh} /><TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} agentInvocations={task.agentInvocations} activeCapacity={task.capacity?.status === "active" ? task.capacity : undefined} /></div>
             <TaskAgentAssignments task={task} onRefresh={onRefresh} />
             <h3 className="mb-5 text-xs font-semibold">Properties</h3>
             <dl className="space-y-4 text-xs">

@@ -16,7 +16,6 @@ import { getWorkerHealthFailure, useSystemHealth } from "../components/app/syste
 import { TaskActivity } from "../components/app/task-history.js";
 import { Markdown, type MarkdownImageSource } from "../components/app/markdown.js";
 import { TellPlannerForm } from "../components/app/tell-planner-form.js";
-import DeveloperDiff from "../components/app/developer-diff.js";
 import { TaskLeadPlan } from "../components/app/task-lead-plan.js";
 import { invocationActorLabel } from "../components/app/task-invocations.js";
 import { TaskProgress } from "../components/app/task-progress.js";
@@ -33,7 +32,7 @@ import { TaskChat } from "../components/app/task-chat/task-chat.js";
 import { TaskBrowserProof } from "../components/app/task-browser-proof.js";
 import { CopyButton } from "../components/app/copy-button.js";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip.js";
-import { adminDate, type ApiAgent, type ApiCi, type ApiProject, type ApiTask, type ApiTaskBranchSync } from "../lib/view-shared.js";
+import { adminDate, relativeTime, type ApiAgent, type ApiCi, type ApiProject, type ApiTask, type ApiTaskBranchSync } from "../lib/view-shared.js";
 import { isApiError, readJson, withCompany } from "../lib/api.js";
 import { materialityCriteria, materialityMode } from "../lib/plan-materiality.js";
 import type { IssueCommandSlug } from "../../commands/registry.js";
@@ -41,7 +40,9 @@ import { BLOCKED_PHASES, TERMINAL_PHASES, phaseLabel } from "../../issue-phases.
 import { releaseFailureCopy } from "../../release-failures.js";
 import type { ActivityFeedRow } from "../lib/task-activity-feed.js";
 import { Check, Circle, Ellipsis, GitPullRequest, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+
+const DeveloperDiff = lazy(async () => await import("../components/app/developer-diff.js"));
 
 
 function TaskMediaRow({ taskId, images }: { taskId: string; images: ApiTask["images"] }): ReactElement {
@@ -569,6 +570,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   const pollDeveloperDiff = ["development", "repair_required", "ci_repairing"].includes(task.phase);
   const hasChecks = Boolean(task.ci);
   const pullRequestInMain = Boolean(task.githubPullRequest?.exists && task.githubPullRequest.number !== null && task.githubPullRequest.url);
+  const showLastHandlerError = Boolean(task.lastHandlerError && (BLOCKED_PHASES.has(task.phase) || Date.parse(task.lastHandlerError.at) > Date.parse(task.updatedAt) - 60 * 60 * 1_000));
   const workContent = <>
     <TabsList variant="line" className="mb-4 w-full justify-start rounded-none border-b border-border p-0">
       <TabsTrigger value="chat">Chat</TabsTrigger>
@@ -582,7 +584,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
     </TabsList>
     <TabsContent value="chat"><TaskChat task={task} busy={busy || !tellPlannerCommand} onRefresh={onRefresh} onMarkReady={onMarkReady} onOpenDiff={openDiff} composerDisabledReason={plannerFeedbackDisabledReason} onSendPlannerNote={async (note, commandId) => onPlanAction("tell-planner", note, { commandId })} /></TabsContent>
     <TabsContent value="activity" className="space-y-7">{activityContent}</TabsContent>
-    {hasChanges ? <TabsContent value="diffs" keepMounted><div ref={diffPanelRef} data-task-diff-panel className="scroll-mt-24"><DeveloperDiff taskId={task.id} executionId={task.developerExecution!.id} poll={pollDeveloperDiff} onFileCount={setChangesFileCount} /></div></TabsContent> : null}
+    {hasChanges ? <TabsContent value="diffs" keepMounted><div ref={diffPanelRef} data-task-diff-panel className="scroll-mt-24"><Suspense fallback={<Skeleton className="h-48 w-full" />}><DeveloperDiff taskId={task.id} executionId={task.developerExecution!.id} poll={pollDeveloperDiff} onFileCount={setChangesFileCount} /></Suspense></div></TabsContent> : null}
     {hasChecks ? <TabsContent value="checks"><CiPanel ci={task.ci!} /></TabsContent> : null}
   </>;
   return (
@@ -602,6 +604,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                 <div data-task-current className="-mx-4 border-y border-border/70 bg-background px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10">
                   <div className="mx-auto max-w-4xl space-y-4">
                     <PlanningRunCard task={task} />
+                    {showLastHandlerError ? <Alert variant="destructive"><AlertDescription>Last action failed: {task.lastHandlerError!.reason} ({relativeTime(task.lastHandlerError!.at)})</AlertDescription></Alert> : null}
                     {pullRequestInMain ? <div data-active-pull-request><GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} decisionControls={decisionControls} />}
                     {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} executionStatus={task.developerExecution?.status} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)} /> : null}
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}

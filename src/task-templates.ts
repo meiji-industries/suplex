@@ -2,7 +2,9 @@ import type { AuthService } from "./auth.js";
 import type { ForgeDatabase } from "./database.js";
 import type { RoleAssignments } from "./projects.js";
 import { TaskFailure, type DeliveryTarget, type VisualEvidence, type TaskService } from "./tasks.js";
-import { finding, id, parseRoleAgents } from "./task-utils.js";
+import { finding, id, json, parseRoleAgents } from "./task-utils.js";
+
+export type TaskTemplateSource = { kind: "pull_request"; number: number } | { kind: "branch"; branch: string };
 
 export interface TaskTemplate {
   id: string;
@@ -15,6 +17,7 @@ export interface TaskTemplate {
   deliveryTarget: DeliveryTarget;
   runProjectTests: boolean;
   visualEvidence: VisualEvidence;
+  source?: TaskTemplateSource;
   createdAt: string;
 }
 
@@ -30,11 +33,22 @@ interface TaskTemplateRow {
   delivery_target: DeliveryTarget;
   run_project_tests: number;
   visual_evidence: VisualEvidence;
+  source_json: string | null;
   created_at: string;
 }
 
+function parseSource(value: string | null): TaskTemplateSource | undefined {
+  if (!value) return undefined;
+  const source = json<unknown>(value, {});
+  if (typeof source !== "object" || source === null || !("kind" in source)) return undefined;
+  if (source.kind === "pull_request" && "number" in source && typeof source.number === "number") return { kind: "pull_request", number: source.number };
+  if (source.kind === "branch" && "branch" in source && typeof source.branch === "string") return { kind: "branch", branch: source.branch };
+  return undefined;
+}
+
 function publicTemplate(row: TaskTemplateRow): TaskTemplate {
-  return { id: row.id, projectId: row.project_id, name: row.name, description: row.description, roleAgents: parseRoleAgents(row.role_agents), supplementalReview: Boolean(row.supplemental_review), autoApprovePlan: Boolean(row.auto_approve_plan), deliveryTarget: row.delivery_target, runProjectTests: Boolean(row.run_project_tests), visualEvidence: row.visual_evidence, createdAt: row.created_at };
+  const source = parseSource(row.source_json);
+  return { id: row.id, projectId: row.project_id, name: row.name, description: row.description, roleAgents: parseRoleAgents(row.role_agents), supplementalReview: Boolean(row.supplemental_review), autoApprovePlan: Boolean(row.auto_approve_plan), deliveryTarget: row.delivery_target, runProjectTests: Boolean(row.run_project_tests), visualEvidence: row.visual_evidence, ...(source ? { source } : {}), createdAt: row.created_at };
 }
 
 export class TaskTemplateService {
@@ -52,9 +66,10 @@ export class TaskTemplateService {
     const name = rawName.trim();
     if (!name || name.length > 80) throw new TaskFailure("Template name is invalid", [finding("invalid-template-name", "name", "Enter a name from 1 to 80 characters")], 422);
     this.auth.requireCompanyAccess(actorUserId, task.companyId);
-    const row: TaskTemplateRow = { id: id("template"), company_id: task.companyId, project_id: task.projectId, name, description: task.description, role_agents: JSON.stringify(task.roleAgents), supplemental_review: Number(task.supplementalReview), auto_approve_plan: Number(task.autoApprovePlan), delivery_target: task.deliveryTarget, run_project_tests: Number(task.executionControls.runProjectTests), visual_evidence: task.executionControls.visualEvidence, created_at: new Date().toISOString() };
+    const source = task.source?.kind === "pull_request" ? { kind: "pull_request" as const, number: task.source.number } : task.source?.kind === "branch" ? { kind: "branch" as const, branch: task.source.branch } : undefined;
+    const row: TaskTemplateRow = { id: id("template"), company_id: task.companyId, project_id: task.projectId, name, description: task.description, role_agents: JSON.stringify(task.roleAgents), supplemental_review: Number(task.supplementalReview), auto_approve_plan: Number(task.autoApprovePlan), delivery_target: task.deliveryTarget, run_project_tests: Number(task.executionControls.runProjectTests), visual_evidence: task.executionControls.visualEvidence, source_json: source ? JSON.stringify(source) : null, created_at: new Date().toISOString() };
     try {
-      this.database.authTransaction((db) => db.prepare("INSERT INTO forge_task_templates (id, company_id, project_id, name, description, role_agents, supplemental_review, auto_approve_plan, delivery_target, run_project_tests, visual_evidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(row.id, row.company_id, row.project_id, row.name, row.description, row.role_agents, row.supplemental_review, row.auto_approve_plan, row.delivery_target, row.run_project_tests, row.visual_evidence, row.created_at));
+      this.database.authTransaction((db) => db.prepare("INSERT INTO forge_task_templates (id, company_id, project_id, name, description, role_agents, supplemental_review, auto_approve_plan, delivery_target, run_project_tests, visual_evidence, source_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(row.id, row.company_id, row.project_id, row.name, row.description, row.role_agents, row.supplemental_review, row.auto_approve_plan, row.delivery_target, row.run_project_tests, row.visual_evidence, row.source_json, row.created_at));
     } catch (error) {
       if (error instanceof Error && error.message.includes("forge_task_templates.project_id, forge_task_templates.name")) throw new TaskFailure("Template name is already in use", [finding("duplicate-template-name", "name", "A template with this name already exists in the project")], 409);
       throw error;

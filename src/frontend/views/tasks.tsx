@@ -26,7 +26,7 @@ import { navigate } from ".././lib/navigation.js";
 import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES as blockedTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
 import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, FileText, Filter, FolderKanban, Layers3, ListFilter, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type ReactElement } from "react";
-import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiProject, type ApiTask, type ApiTaskSummary, type ApiTaskTemplate, type TaskPhase } from "../lib/view-shared.js";
+import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiCompanyBranchSync, type ApiProject, type ApiTask, type ApiTaskSummary, type ApiTaskTemplate, type TaskPhase } from "../lib/view-shared.js";
 import { TaskDetailsPage, TaskDetailsNotFound, TaskDetailsSkeleton, type PlanRevisionInput, type TaskPlanAction } from "./task-details.js";
 import { prefillForTaskSource, preserveEditedPrefill, TaskSourcePicker, type TaskSourceSelector, type TaskSourceSummary } from "../components/app/task-source-picker.js";
 import { TaskRoleSelectors } from "../components/app/task-role-selectors.js";
@@ -62,7 +62,7 @@ function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId,
   agents: ApiAgent[];
   roleAgents: { planner?: string | undefined; builder?: string | undefined; reviewer?: string | undefined; integrator?: string | undefined };
   onRoleAgentChange: (role: "planner" | "builder" | "reviewer" | "integrator", agentId: string) => void;
-  onApplyTemplate: (template: ApiTaskTemplate) => void;
+  onApplyTemplate: (template: ApiTaskTemplate) => Promise<void>;
   title: string;
   onTitleChange: (title: string) => void;
   description: string;
@@ -120,7 +120,7 @@ function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId,
               <BreadcrumbItem><DialogTitle className="font-normal">New task</DialogTitle></BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
-          <div className="flex items-center gap-1"><TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy} onSelect={onSourceSelect} onClear={onSourceClear} />{templates.length ? <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={busy} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.flatMap((template) => [<DropdownMenuItem key={template.id} onClick={() => onApplyTemplate(template)}>{template.name}</DropdownMenuItem>, <DropdownMenuItem key={`${template.id}-delete`} variant="destructive" onClick={() => void deleteTemplate(template)}>Delete {template.name}</DropdownMenuItem>])}</DropdownMenuContent></DropdownMenu> : null}</div>
+          <div className="flex items-center gap-1"><TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy} onSelect={onSourceSelect} onClear={onSourceClear} />{templates.length ? <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={busy} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.flatMap((template) => [<DropdownMenuItem key={template.id} onClick={() => void onApplyTemplate(template)}>{template.name}</DropdownMenuItem>, <DropdownMenuItem key={`${template.id}-delete`} variant="destructive" onClick={() => void deleteTemplate(template)}>Delete {template.name}</DropdownMenuItem>])}</DropdownMenuContent></DropdownMenu> : null}</div>
         </DialogHeader>
         {active ? (
           <form className="flex min-h-[310px] flex-col" onPaste={pasteImages} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.requestSubmit(); } }} onSubmit={(event) => { event.preventDefault(); void onSubmit(); }}>
@@ -188,6 +188,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const [createError, setCreateError] = useState("");
   const [createOpen, setCreateOpen] = useState(() => mode === "tasks" && new URLSearchParams(window.location.search).get("new") === "1");
   const [taskFilter, setTaskFilter] = useState<TaskListFilter>("all");
+  const [branchSync, setBranchSync] = useState<ApiCompanyBranchSync>({});
   const [busy, setBusy] = useState(false);
   const [detailNotFound, setDetailNotFound] = useState(false);
   const selectedRef = useRef<ApiTask | undefined>(undefined);
@@ -226,6 +227,12 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     }
   }, [companyId, loading, mode, reloadCompanies]);
   useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    if (!companyId || !loadedCompanyId || loadedCompanyId !== companyId) { setBranchSync({}); return; }
+    let cancelled = false;
+    void readJson<ApiCompanyBranchSync>(`/api/companies/${encodeURIComponent(companyId)}/branch-sync`).then((value) => { if (!cancelled) setBranchSync(value); }).catch(() => { if (!cancelled) setBranchSync({}); });
+    return () => { cancelled = true; };
+  }, [companyId, loadedCompanyId, tasks]);
   useEffect(() => {
     if (!companyId || !routeTaskId || !loadedCompanyId || detailNotFound) return;
     let cancelled = false;
@@ -307,6 +314,22 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
       navigate(taskPath);
     } catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setCreateError(reason instanceof Error ? reason.message : "Unable to create task"); }
     finally { setBusy(false); }
+  };
+  const selectSource = (summary: TaskSourceSummary, selector: TaskSourceSelector): void => {
+    const next = prefillForTaskSource(summary);
+    const preserved = preserveEditedPrefill({ title, description }, sourcePrefill.current, next);
+    setTitle(preserved.title); setDescription(preserved.description); sourcePrefill.current = next;
+    setSource(selector); setSourceSummary(summary);
+  };
+  const applyTemplate = async (template: ApiTaskTemplate): Promise<void> => {
+    setDescription(template.description); setDeliveryTarget(template.deliveryTarget); setRunProjectTests(template.runProjectTests); setVisualEvidence(template.visualEvidence); setSupplementalReview(template.supplementalReview); setAutoApprovePlan(template.autoApprovePlan); setRoleAgentOverrides({ ...template.roleAgents });
+    const templateSource = template.source;
+    if (!templateSource || !projectId) return;
+    try {
+      const result = await readJson<{ sources: TaskSourceSummary[] }>(`/api/projects/${encodeURIComponent(projectId)}/task-sources?kind=${templateSource.kind}`);
+      const source = result.sources.find((candidate) => templateSource.kind === "pull_request" ? candidate.kind === "pull_request" && candidate.number === templateSource.number : candidate.kind === "branch" && candidate.branch === templateSource.branch);
+      if (source) selectSource(source, templateSource);
+    } catch { /* The saved source was removed or cannot currently be discovered. */ }
   };
   const startPlanning = async (): Promise<void> => {
     if (!selected) return;
@@ -527,6 +550,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
                         <span className="flex min-w-0 items-center gap-2">
                           {task.issueKey ? <span className="shrink-0 text-xs text-muted-foreground">{task.issueKey}</span> : null}
                           <span className="truncate font-medium">{task.title}</span>
+                          {branchSync[task.id]?.ahead ? <ReuiBadge variant="secondary" size="sm" radius="full">↑{branchSync[task.id]?.ahead}</ReuiBadge> : null}
                           {project ? <><ChevronRight className="hidden size-3 shrink-0 text-muted-foreground/60 md:block" /><span className="hidden truncate text-xs text-muted-foreground md:block">{project.name}</span></> : null}
                         </span>
                         <span className="hidden sm:inline-flex"><ReuiBadge variant={appearance.badge} size="sm" radius="full">{taskStatusLabel(presentationPhase, task.deliveryTarget, task.githubPullRequest?.state)}</ReuiBadge></span>
@@ -540,7 +564,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
           })}
         </div> : null}
         {!currentCompany && scopeLoaded ? <div className="px-4 py-8 text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</div> : null}
-        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); else { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setAutoApprovePlan(false); setDeliveryTarget("pull_request_draft"); setRunProjectTests(true); setVisualEvidence("off"); setSupplementalReview(false); } }} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setRoleAgentOverrides({}); }} sourceSummary={sourceSummary} onSourceSelect={(summary, selector) => { const next = prefillForTaskSource(summary); const preserved = preserveEditedPrefill({ title, description }, sourcePrefill.current, next); setTitle(preserved.title); setDescription(preserved.description); sourcePrefill.current = next; setSource(selector); setSourceSummary(summary); }} onSourceClear={() => { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => { const next = { ...current, [role]: agentId }; if (role === "reviewer" && !agentId) setSupplementalReview(false); return next; })} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} autoApprovePlan={autoApprovePlan} onAutoApprovePlanChange={setAutoApprovePlan} deliveryTarget={deliveryTarget} onDeliveryTargetChange={setDeliveryTarget} runProjectTests={runProjectTests} onRunProjectTestsChange={setRunProjectTests} visualEvidence={visualEvidence} onVisualEvidenceChange={setVisualEvidence} supplementalReview={supplementalReview} onSupplementalReviewChange={setSupplementalReview} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} onApplyTemplate={(template) => { setDescription(template.description); setDeliveryTarget(template.deliveryTarget); setRunProjectTests(template.runProjectTests); setVisualEvidence(template.visualEvidence); setSupplementalReview(template.supplementalReview); setAutoApprovePlan(template.autoApprovePlan); setRoleAgentOverrides({ ...template.roleAgents }); }} />
+        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); else { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setAutoApprovePlan(false); setDeliveryTarget("pull_request_draft"); setRunProjectTests(true); setVisualEvidence("off"); setSupplementalReview(false); } }} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setRoleAgentOverrides({}); }} sourceSummary={sourceSummary} onSourceSelect={selectSource} onSourceClear={() => { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => { const next = { ...current, [role]: agentId }; if (role === "reviewer" && !agentId) setSupplementalReview(false); return next; })} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} autoApprovePlan={autoApprovePlan} onAutoApprovePlanChange={setAutoApprovePlan} deliveryTarget={deliveryTarget} onDeliveryTargetChange={setDeliveryTarget} runProjectTests={runProjectTests} onRunProjectTestsChange={setRunProjectTests} visualEvidence={visualEvidence} onVisualEvidenceChange={setVisualEvidence} supplementalReview={supplementalReview} onSupplementalReviewChange={setSupplementalReview} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} onApplyTemplate={applyTemplate} />
       </div>
     </ApplicationFrame>
   );

@@ -23,6 +23,7 @@ export type ApiTask = TaskResponse;
 export type ApiTaskSummary = TaskListTask;
 export type ApiTaskTemplate = TaskTemplateResponse;
 export type ApiTaskBranchSync = TaskBranchSyncResponse;
+export type ApiCompanyBranchSync = Record<string, { ahead: number; behind: number; remoteExists: boolean }>;
 export type TaskPhase = IssuePhase;
 export type ApiCi = NonNullable<ApiTask["ci"]>;
 export type ApiRelease = NonNullable<ApiTask["release"]>;

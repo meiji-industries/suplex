@@ -299,7 +299,7 @@ export class DeveloperService {
       if (existing) {
         worktree = { branchName: existing.branchName, worktreePath: await scopedRepository(this.config.worktreeRoot, existing.worktreePath), targetBaseSha: existing.targetBaseSha };
       } else if (sourceBranch) {
-        worktree = await this.worktrees.adopt({ repositoryPath, worktreeRoot, taskId: input.taskId, branchName: sourceBranch, baseBranch: projectRevision.data.baseBranch, preserveLocal: Boolean(prior || input.reuseWorktree) });
+        worktree = await this.worktrees.adopt({ repositoryPath, worktreeRoot, taskId: input.taskId, branchName: sourceBranch, baseBranch: projectRevision.data.baseBranch, ...(taskConfiguration.source?.headSha ? { sourceHeadSha: taskConfiguration.source.headSha } : {}), preserveLocal: Boolean(prior || input.reuseWorktree) });
       } else if (revisionAuthorization?.disposition === "reuse") {
         if (!revisionAuthorization.worktreePath || !revisionAuthorization.branchName || !revisionAuthorization.baseSha || !revisionAuthorization.headSha || !revisionAuthorization.treeSha) throw new AgentFailure("revision-coordinates-missing", "Authorized preserved worktree coordinates are incomplete");
         const inspected = await this.worktrees.inspectForPlanRevision({ repositoryPath, worktreeRoot, worktreePath: revisionAuthorization.worktreePath, branchName: revisionAuthorization.branchName, baseSha: revisionAuthorization.baseSha, resultCommit: revisionAuthorization.headSha, resultTree: revisionAuthorization.treeSha });

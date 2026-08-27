@@ -7,6 +7,28 @@ import { expect, test } from "vitest";
 import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 import { createTestConfig } from "../src/config.js";
 import { createForgeServer } from "../src/server.js";
+import { StartPlanningInputSchema, IssueWorkflowStateSchema, buildInitialIssueWorkflowState } from "../src/temporal/issue-contracts.js";
+import { blockFailedDeveloperStart } from "../src/temporal/workflow/register-development.js";
+
+test("blocks a supervised Developer retry that cannot start", async () => {
+  const command = StartPlanningInputSchema.parse({ expectedRevision: 1, commandId: "retry-start-failure", actorUserId: "user-development" });
+  const state = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId: "workflow-development", companyId: "company-development", projectId: "project-development", issueId: "issue-development", projectRevisionId: "revision-development", briefArtifactId: "brief-development", briefSha256: "a".repeat(64), imageArtifactIds: [], roleProfiles: { planner: "profile", builder: "profile" }, supplementalReview: false }), actorUserId: "user-development", revision: 1, phase: "development", owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer retry", lastEventId: "workflow-development:1", developerExecutionId: "developer_execution", activeOperation: { commandId: command.commandId, kind: "development", startedRevision: 1 } });
+  let projected = false;
+  const ctx = {
+    state,
+    supervisedDeveloperTurns: true,
+    patched: () => true,
+    withStateMutation: async (fn: () => boolean) => fn(),
+    addRevisionCommand: <T extends string[]>(commands: T) => commands,
+    recoveryFields: () => ({ developerRecoveryStatus: "failed" as const, developerRecoveryReasonCode: null, developerRecoverySummary: "Developer could not start: unavailable", developerLastHeartbeatAt: null }),
+    shouldContinueAsNew: () => false,
+    project: async () => { projected = true; },
+  } as unknown as Parameters<typeof blockFailedDeveloperStart>[0];
+
+  await expect(blockFailedDeveloperStart(ctx, command, "developer_execution", new Error("unavailable"))).resolves.toBe(true);
+  expect(ctx.state).toMatchObject({ phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer could not start: unavailable", developerRecoveryStatus: "failed", activeOperation: null });
+  expect(projected).toBe(true);
+});
 
 test("development startup seeds identity without requiring a Git repository root", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-development-test-"));

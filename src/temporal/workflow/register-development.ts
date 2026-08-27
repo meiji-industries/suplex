@@ -6,6 +6,19 @@ import * as stateTransitions from "./state-transitions.js";
 import { developerExecutionId } from "../deterministic-id.js";
 import { issueUpdates } from "../issue-updates.js";
 import type { IssueWorkflowContext } from "./context.js";
+export async function blockFailedDeveloperStart(ctx: IssueWorkflowContext, command: contracts.StartPlanningInput, executionId: string, error: unknown): Promise<boolean> {
+  if (!ctx.supervisedDeveloperTurns || !ctx.patched("forge-developer-start-failure-blocked-v1") || ctx.state.developerExecutionId !== executionId || ctx.state.developerOutcome) return false;
+  const summary = `Developer could not start: ${error instanceof Error ? error.message : String(error)}`;
+  const blocked = await ctx.withStateMutation(() => {
+    if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("failed", null, summary, null), activeOperation: null });
+    if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
+    return true;
+  });
+  if (blocked) await ctx.project();
+  return blocked;
+}
+
 export async function startDevelopment(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
     const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
     if (ctx.commandAlreadyProcessed(command.commandId)) {
@@ -39,14 +52,8 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
       }
       const failedToStart = ctx.supervisedDeveloperTurns && ctx.patched("forge-developer-start-failure-blocked-v1") && ctx.state.developerExecutionId === executionId && !ctx.state.developerOutcome;
       if (failedToStart) {
-        const summary = `Developer could not start: ${error instanceof Error ? error.message : String(error)}`;
-        const blocked = await ctx.withStateMutation(() => {
-          if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;
-          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("failed", null, summary, null), activeOperation: null });
-          if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
-          return true;
-        });
-        if (blocked) await ctx.project();
+        if (await blockFailedDeveloperStart(ctx, command, executionId, error)) return ctx.state;
+        await ctx.recordHandlerNoop("start_development", "Development was superseded before the Developer result could be applied.");
         return ctx.state;
       }
       if (ctx.supervisedDeveloperTurns || !recoverDeveloperFailures) throw error;
@@ -111,17 +118,32 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
   });
   await ctx.project();
   const legacyInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, ...(ctx.state.revisionRequestId ? { revisionRequestId: ctx.state.revisionRequestId } : {}), ...(reconcileOnly ? { reuseWorktree: true } : { supersedesExecutionId, reuseWorktree: true }), ...(operatorNote ? { operatorNote } : {}), ...(ctx.state.finalPlanSubject ? { finalPlanSubject: ctx.state.finalPlanSubject } : {}), ...(ctx.state.materialityEvidence ? { materialityEvidence: ctx.state.materialityEvidence } : {}), ...(ctx.state.planDecisionReceipt ? { approvalDecisionId: ctx.state.planDecisionReceipt.decisionId } : {}), ...(ctx.input.runProjectTests != null ? { runProjectTests: ctx.input.runProjectTests } : {}), ...(ctx.input.visualEvidence ? { visualEvidence: ctx.input.visualEvidence } : {}) };
-  const outcome = reconcileOnly
-    ? await (ctx.supervisedDeveloperTurns
-      ? activityProxies.runDeveloperExecutionSupervised({ ...legacyInput, developerTurnExecutionId: executionId, developerAttempt, turnKind: "implementation" })
-      : activityProxies.runDeveloperExecution({ ...legacyInput, executionId }).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })))
-    : await ctx.acquireExternalTurn(
-      { operation: "developer_execution", role: "builder", profileId: ctx.input.roleProfiles.builder, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
-      (capacityRequestId) => ctx.supervisedDeveloperTurns
-        ? activityProxies.runDeveloperExecutionSupervised({ ...legacyInput, developerTurnExecutionId: executionId, developerAttempt, turnKind: "implementation", ...(capacityRequestId ? { capacityRequestId } : {}) })
-        : activityProxies.runDeveloperExecution({ ...legacyInput, executionId, ...(capacityRequestId ? { capacityRequestId } : {}) }).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),
-      (value) => value.status === "completed" ? value.result.developerExecutionId : value.developerExecutionId,
-    );
+  let outcome: Awaited<ReturnType<typeof activityProxies.runDeveloperExecutionSupervised>> | { status: "completed"; result: Awaited<ReturnType<typeof activityProxies.runDeveloperExecution>>; resultHash: string };
+  try {
+    outcome = reconcileOnly
+      ? await (ctx.supervisedDeveloperTurns
+        ? activityProxies.runDeveloperExecutionSupervised({ ...legacyInput, developerTurnExecutionId: executionId, developerAttempt, turnKind: "implementation" })
+        : activityProxies.runDeveloperExecution({ ...legacyInput, executionId }).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })))
+      : await ctx.acquireExternalTurn(
+        { operation: "developer_execution", role: "builder", profileId: ctx.input.roleProfiles.builder, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
+        (capacityRequestId) => ctx.supervisedDeveloperTurns
+          ? activityProxies.runDeveloperExecutionSupervised({ ...legacyInput, developerTurnExecutionId: executionId, developerAttempt, turnKind: "implementation", ...(capacityRequestId ? { capacityRequestId } : {}) })
+          : activityProxies.runDeveloperExecution({ ...legacyInput, executionId, ...(capacityRequestId ? { capacityRequestId } : {}) }).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),
+        (value) => value.status === "completed" ? value.result.developerExecutionId : value.developerExecutionId,
+      );
+  } catch (error) {
+    if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") {
+      await ctx.recordHandlerNoop("retry_development", "Developer retry was superseded before the result could be applied.");
+      return ctx.state;
+    }
+    const failedToStart = ctx.supervisedDeveloperTurns && ctx.patched("forge-developer-start-failure-blocked-v1") && ctx.state.developerExecutionId === executionId && !ctx.state.developerOutcome;
+    if (failedToStart) {
+      if (await blockFailedDeveloperStart(ctx, command, executionId, error)) return ctx.state;
+      await ctx.recordHandlerNoop("retry_development", "Developer retry was superseded before the result could be applied.");
+      return ctx.state;
+    }
+    throw error;
+  }
   const applied = await ctx.withStateMutation(() => {
     if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;
     if (outcome.status === "completed") {

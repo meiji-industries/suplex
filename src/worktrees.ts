@@ -40,6 +40,7 @@ export interface WorktreeRecord {
 export interface AdoptWorktreeInput extends Omit<WorktreeInput, "targetBaseSha"> {
   branchName: string;
   baseBranch: string;
+  sourceHeadSha?: string;
   preserveLocal?: boolean;
 }
 
@@ -329,9 +330,20 @@ export class WorktreeManager {
           const status = await this.git.run(["status", "--porcelain=v1", "--untracked-files=all"], registeredPath, activity);
           if (status) throw new WorktreeFailure("worktree-dirty", "The source worktree has uncommitted changes");
           if (rebaseDivergedLocal) {
-            let rebaseBase: string;
-            try { rebaseBase = await this.git.run(["merge-base", input.branchName, previousRemoteHead ?? remoteRef], repositoryPath, activity); }
-            catch { rebaseBase = await this.git.run(["merge-base", input.branchName, `refs/remotes/origin/${input.baseBranch}`], repositoryPath, activity); }
+            const candidates = [
+              input.sourceHeadSha,
+              previousRemoteHead !== remoteHead ? previousRemoteHead : undefined,
+              await this.git.run(["rev-parse", "--verify", `${remoteRef}@{1}^{commit}`], repositoryPath, activity).catch(() => undefined),
+            ].filter((candidate): candidate is string => candidate !== undefined);
+            let rebaseBase: string | undefined;
+            for (const candidate of candidates) {
+              try {
+                await this.git.run(["merge-base", "--is-ancestor", candidate, input.branchName], repositoryPath, activity);
+                rebaseBase = candidate;
+                break;
+              } catch {}
+            }
+            rebaseBase ??= await this.git.run(["merge-base", input.branchName, `refs/remotes/origin/${input.baseBranch}`], repositoryPath, activity);
             try { await this.git.run(["rebase", "--onto", remoteRef, rebaseBase, input.branchName], registeredPath, activity); }
             catch {
               await this.git.run(["rebase", "--abort"], registeredPath, activity).catch(() => {});

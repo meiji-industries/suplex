@@ -110,12 +110,14 @@ test("rebases local source commits onto a force-pushed source branch", async () 
     await createSourceBranch(value, branchName);
     const manager = new WorktreeManager();
     const initial = await manager.adopt({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_rebased", branchName, baseBranch: "main", preserveLocal: true });
+    const sourceHeadSha = await git(["rev-parse", "HEAD"], initial.worktreePath);
     await writeFile(join(initial.worktreePath, "LOCAL.md"), "local\n");
     await git(["add", "LOCAL.md"], initial.worktreePath);
     await git(["commit", "-m", "local delivery"], initial.worktreePath);
     const remoteHead = await rewriteSourceBranch(value, branchName);
+    await git(["fetch", "origin", `+refs/heads/${branchName}:refs/remotes/origin/${branchName}`], value.repositoryPath);
 
-    await manager.adopt({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_rebased", branchName, baseBranch: "main", preserveLocal: true });
+    await manager.adopt({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_rebased", branchName, baseBranch: "main", sourceHeadSha, preserveLocal: true });
     expect(await git(["rev-parse", "HEAD^"], initial.worktreePath)).toBe(remoteHead);
     expect(await git(["show", "HEAD:LOCAL.md"], initial.worktreePath)).toBe("local");
   } finally { await rm(value.root, { recursive: true, force: true }); }

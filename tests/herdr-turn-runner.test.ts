@@ -871,8 +871,9 @@ test("does not synthesize a Developer delivery from a dirty worktree", async () 
 
 test("fails a live turn that does not make progress within the liveness bound", async () => {
   const setup = await fixture();
+  let now = new Date();
   const herdr = { prompt: async () => setup.session.live, getAgent: async () => ({ ...setup.session.live, status: "working" }) };
-  const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database), undefined, undefined, async () => {});
+  const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database), undefined, undefined, async () => { now = new Date(now.getTime() + 10_000); }, () => now);
   try {
     await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "turn_stalled" });
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }

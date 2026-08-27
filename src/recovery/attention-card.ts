@@ -8,6 +8,55 @@ export type AttentionCondition =
   | { kind: "dirty_worktree_cleanup"; dirtyFileCount: number; worktreePath: string }
   | { kind: "no_progress"; failureClass: FailureClass; signature: string; evidenceRef?: string };
 
+export interface AttentionBlocker {
+  category?: unknown;
+  summary?: unknown;
+  actions?: unknown;
+}
+
+export interface AttentionCardContext {
+  summary?: string | null;
+  pendingAction?: string | null;
+  actions?: Array<{ command: string; label: string; requiresNote?: boolean; destructive?: boolean }>;
+  mergeDecision?: unknown;
+}
+
+function shortTitle(value: string): string {
+  return value.trim().replaceAll("_", " ").slice(0, 80) || "Needs attention";
+}
+
+function genericCard(summary: string | null | undefined, context: AttentionCardContext): AttentionCard {
+  const primary = context.actions?.find((action) => !action.destructive);
+  const cancel = context.actions?.find((action) => action.command === "cancel_issue");
+  const explanation = summary || context.pendingAction || "This task needs your input.";
+  return { kind: "generic", title: shortTitle(context.pendingAction || "Needs attention"), explanation, evidence: [{ kind: "text", ref: explanation }], primaryAction: primary ? { command: primary.command, label: primary.label, requiresNote: primary.requiresNote } : { command: "continue_work", label: "Open the pane and answer" }, ...(cancel ? { secondaryAction: { command: cancel.command, label: cancel.label, destructive: true } } : {}) };
+}
+
+function decision(value: unknown): AttentionCondition | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const input = value as { question?: unknown; choices?: unknown; recommendedChoiceId?: unknown };
+  if (typeof input.question !== "string" || !Array.isArray(input.choices) || input.choices.length < 2 || typeof input.recommendedChoiceId !== "string") return undefined;
+  const choices = input.choices.flatMap((choice): AttentionChoice[] => typeof choice === "object" && choice !== null && typeof (choice as { id?: unknown }).id === "string" && typeof (choice as { label?: unknown }).label === "string" && typeof (choice as { description?: unknown }).description === "string" ? [choice as AttentionChoice] : []);
+  return choices.length >= 2 ? { kind: "product_decision", question: input.question, choices: choices as [AttentionChoice, AttentionChoice, ...AttentionChoice[]], recommendedChoiceId: input.recommendedChoiceId } : undefined;
+}
+
+export function attentionCardFromBlocker(blocker: AttentionBlocker | undefined, context: AttentionCardContext = {}): AttentionCard {
+  const summary = typeof blocker?.summary === "string" && blocker.summary.trim() ? blocker.summary.trim() : context.summary || context.pendingAction;
+  const category = typeof blocker?.category === "string" ? blocker.category : "";
+  if (category === "provider_authentication") return attentionCardFor({ kind: "github_credential", ...(summary ? { detail: summary } : {}) });
+  if (category === "member_decision") { const mergeDecision = decision(context.mergeDecision); if (mergeDecision) return attentionCardFor(mergeDecision); }
+  if (category === "member_decision" || category === "provider_ambiguity") {
+    const choices = Array.isArray(blocker?.actions) ? blocker.actions.flatMap((action, index): AttentionChoice[] => typeof action === "object" && action !== null && typeof (action as { label?: unknown }).label === "string" ? [{ id: typeof (action as { id?: unknown }).id === "string" ? (action as { id: string }).id : `choice-${index + 1}`, label: (action as { label: string }).label, description: typeof (action as { description?: unknown }).description === "string" ? (action as { description: string }).description : "Choose this behavior." }] : typeof action === "string" ? [{ id: `choice-${index + 1}`, label: action, description: "Choose this behavior." }] : []) : [];
+    if (choices.length >= 2) return attentionCardFor({ kind: "product_decision", question: summary || "Choose how this issue should behave.", choices: choices as [AttentionChoice, AttentionChoice, ...AttentionChoice[]], recommendedChoiceId: choices[0]!.id });
+  }
+  if (context.actions?.some((action) => action.label === "Recreate worktree and resume")) return attentionCardFor({ kind: "worktree_missing", worktreePath: null, branchName: null });
+  if (context.actions?.some((action) => action.label === "Discard changes and delete worktree")) return attentionCardFor({ kind: "dirty_worktree_cleanup", dirtyFileCount: 1, worktreePath: "Recorded worktree" });
+  if (summary?.startsWith("Automatic repair is not making progress") || category === "agent_exhausted" || category === "verification_unrecoverable") return attentionCardFor({ kind: "no_progress", failureClass: "code_failure", signature: summary || "Automatic repair needs your input." });
+  const resume = context.actions?.find((action) => action.label === "Resume Developer turn" || action.label === "Resume Lead turn");
+  if (resume) return attentionCardFor({ kind: "missing_turn_outcome", role: resume.label.includes("Lead") ? "lead" : "developer", dirty: false });
+  return genericCard(summary, context);
+}
+
 export function attentionCardFor(condition: AttentionCondition, overrides?: Partial<AttentionCard>): AttentionCard {
   const card = (() => {
     switch (condition.kind) {

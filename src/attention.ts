@@ -2,8 +2,8 @@ import { AuthService } from "./auth.js";
 import type { ForgeDatabase } from "./database.js";
 import { type IssueCommand } from "./temporal/issue-contracts.js";
 import { jsonRequired } from "./task-utils.js";
-import { attentionCardFor } from "./recovery/attention-card.js";
-import type { AttentionCard, AttentionChoice } from "./recovery/convergence.js";
+import { attentionCardFromBlocker } from "./recovery/attention-card.js";
+import type { AttentionCard } from "./recovery/convergence.js";
 
 export interface AttentionAction {
   command: IssueCommand;
@@ -61,25 +61,6 @@ function actions(raw: string, expectedRevision: number): AttentionAction[] {
   }
 }
 
-function genericCard(summary: string | null, pendingAction: string | null, actionList: AttentionAction[]): AttentionCard {
-  const primary = actionList.find((action) => !action.destructive);
-  const cancel = actionList.find((action) => action.command === "cancel_issue");
-  const explanation = summary || pendingAction || "This task needs your input.";
-  return { kind: "generic", title: (pendingAction || "Needs attention").replaceAll("_", " "), explanation, evidence: [{ kind: "text", ref: explanation }], primaryAction: primary ? { command: primary.command, label: primary.label, requiresNote: primary.requiresNote } : { command: "continue_work", label: "Open the pane and answer" }, ...(cancel ? { secondaryAction: { command: cancel.command, label: cancel.label, destructive: true } } : {}) };
-}
-
-function cardForBlocker(blocker: Blocker | undefined, row: ProjectionRow, actionList: AttentionAction[]): AttentionCard {
-  const summary = typeof blocker?.summary === "string" && blocker.summary.trim() ? blocker.summary.trim() : row.pending_action;
-  const category = typeof blocker?.category === "string" ? blocker.category : "";
-  if (category === "provider_authentication") return summary ? attentionCardFor({ kind: "github_credential", detail: summary }) : attentionCardFor({ kind: "github_credential" });
-  if (category === "member_decision" || category === "provider_ambiguity") {
-    const rawChoices = Array.isArray(blocker?.actions) ? blocker.actions.flatMap((action, index): AttentionChoice[] => typeof action === "object" && action !== null && typeof (action as { label?: unknown }).label === "string" ? [{ id: typeof (action as { id?: unknown }).id === "string" ? (action as { id: string }).id : `choice-${index + 1}`, label: (action as { label: string }).label, description: typeof (action as { description?: unknown }).description === "string" ? (action as { description: string }).description : "Choose this behavior." }] : typeof action === "string" ? [{ id: `choice-${index + 1}`, label: action, description: "Choose this behavior." }] : []) : [];
-    if (rawChoices.length >= 2) return attentionCardFor({ kind: "product_decision", question: summary || "Choose how this issue should behave.", choices: rawChoices as [AttentionChoice, AttentionChoice, ...AttentionChoice[]], recommendedChoiceId: rawChoices[0]!.id });
-  }
-  if (category === "unsafe_recovery" && /worktree/i.test(summary || "")) return attentionCardFor({ kind: "dirty_worktree_cleanup", dirtyFileCount: 1, worktreePath: "Recorded worktree" });
-  if (category === "agent_exhausted" || category === "verification_unrecoverable") return attentionCardFor({ kind: "no_progress", failureClass: "code_failure", signature: summary || "Automatic repair needs your input." });
-  return genericCard(summary, row.pending_action, actionList);
-}
 
 export class AttentionService {
   constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService) {}
@@ -111,11 +92,11 @@ export class AttentionService {
       const attention = rows.map((row) => {
         const actionList = row.pane_id ? [] : actions(row.allowed_commands_json, row.revision);
         const summary = row.pane_id ? [`Agent needs you in ${row.pane_id}`, row.agent_name ? `(${row.agent_name})` : "", row.attention_excerpt].filter(Boolean).join(" ") : row.pending_action;
-        const blocker = row.pane_id ? undefined : this.database.authQuery((db) => {
+        const snapshot = row.pane_id ? undefined : this.database.authQuery((db) => {
           const snapshot = db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision DESC LIMIT 1").get(row.task_id) as { state_json?: string } | undefined;
-          try { return snapshot?.state_json ? (jsonRequired(snapshot.state_json) as { blocker?: Blocker }).blocker : undefined; } catch { return undefined; }
+          try { return snapshot?.state_json ? jsonRequired(snapshot.state_json) as { blocker?: Blocker; mergeDecision?: unknown } : undefined; } catch { return undefined; }
         });
-        const card = row.pane_id ? genericCard(row.attention_excerpt || "The agent asked a question in its pane.", "Agent is waiting for you", actionList) : cardForBlocker(blocker, row, actionList);
+        const card = attentionCardFromBlocker(snapshot?.blocker, { summary: row.pane_id ? row.attention_excerpt : undefined, pendingAction: row.pane_id ? "Agent is waiting for you" : row.pending_action, actions: actionList, mergeDecision: snapshot?.mergeDecision });
         return { companyId: row.company_id, taskId: row.task_id, issueKey: row.issue_key, taskTitle: row.task_title, summary, sourceRevision: row.revision, activatedAt: row.activated_at, actions: actionList, card };
       });
       return { companyId: company.id, companyName: company.name, companyStatus: company.status, attentionCount: attention.length, attention };

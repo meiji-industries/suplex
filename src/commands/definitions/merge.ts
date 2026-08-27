@@ -1,6 +1,7 @@
 import { ExpectedRevisionBodySchema } from "../../http/contracts/common.js";
-import { ArtifactReferenceSchema } from "../../temporal/contracts/primitives.js";
 import { z } from "zod";
+
+const ForwardMergeConflictArtifactSchema = z.object({ id: z.string().min(1).max(256), kind: z.literal("forward-merge-conflict") }).strict();
 import { defineIssueCommand } from "../kit.js";
 
 export const mergeCommands = {
@@ -18,7 +19,7 @@ export const mergeCommands = {
       priorHead: z.string(),
       priorTree: z.string(),
       remoteHead: z.string(),
-      conflictArtifact: ArtifactReferenceSchema,
+      conflictArtifact: ForwardMergeConflictArtifactSchema,
       conflictFileCount: z.number().int().nonnegative(),
     }).strict(),
     note: "none",

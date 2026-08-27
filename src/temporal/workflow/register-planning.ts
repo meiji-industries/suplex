@@ -26,6 +26,7 @@ import {
   preparePlanRevision,
 } from "./activity-proxies.js";
 import { retryDevelopment, startDevelopment } from "./register-development.js";
+import { resolveMergeConflict } from "./register-merge.js";
 import { evidencePointer, humanBlocker } from "./state-transitions.js";
 import type { IssueWorkflowContext } from "./context.js";
 
@@ -339,6 +340,11 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
     if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
     await recordPlannerNote({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, revision: command.expectedRevision, actorUserId: command.actorUserId, commandId: command.commandId, ...("noteId" in command ? { noteId: command.noteId, noteSha256: command.noteSha256 } : { note: command.note }) });
     ctx.markCommandProcessed(command.commandId);
+    if (ctx.patched("forge-merge-resolution-loop-v1") && ctx.state.phase === "merge_conflict_required" && ctx.state.mergeDecision) {
+      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Applying your decision", mergeResolutionPlanArtifactId: null, mergeDecision: null, pendingPlannerNotes: "note" in command ? [command.note] : [], blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      await ctx.project();
+      return resolveMergeConflict(ctx, { expectedRevision: ctx.state.revision, actorUserId: command.actorUserId, commandId: `${ctx.state.workflowId}:decision-resolve:${ctx.state.revision}` });
+    }
     if (ctx.herdrExecutionSubstrateEnabled) return ctx.state;
     if (["backlog", "planning", "supplemental_review", "plan_consolidation"].includes(ctx.state.phase) || !ctx.state.leadSessionRef) {
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, pendingPlannerNotes: [...(ctx.state.pendingPlannerNotes ?? []), ...("note" in command ? [command.note] : [])].slice(-32) });

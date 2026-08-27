@@ -2,8 +2,9 @@ import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { createGithubReleasePort, type GithubPullRequestObservation } from "./github-release.js";
 import { json } from "./task-utils.js";
-import { durableCommand, executeIssueCommand } from "./temporal/service.js";
+import { connectTemporal, durableCommand, executeIssueCommand } from "./temporal/service.js";
 import { IssueWorkflowStateSchema, type IssueWorkflowState } from "./temporal/issue-contracts.js";
+import { issueUpdates } from "./temporal/issue-updates.js";
 import type { IssueCommand } from "./commands/registry.js";
 import { integrateRemoteBranch, type RemoteIntegration } from "./remote-branch-integration.js";
 
@@ -17,6 +18,23 @@ type ReconciliationOptions = {
   execute?: typeof executeIssueCommand;
   integrate?: typeof integrateRemoteBranch;
 };
+type RemoteConflict = Extract<RemoteIntegration, { kind: "conflict" }> & { priorHead: string; priorTree: string };
+
+async function executeRemoteConflict(config: ForgeConfig, workflowId: string, input: { expectedRevision: number; actorUserId: string; commandId: string; forwardMergeId: string; priorHead: string; priorTree: string; remoteHead: string; conflictArtifact: { id: string; kind: "forward-merge-conflict" }; conflictFileCount: number }): Promise<void> {
+  const temporal = await connectTemporal(config);
+  try {
+    const handle = temporal.client.workflow.getHandle(workflowId);
+    await handle.executeUpdate(issueUpdates.integrate_remote_conflict, { args: [input], updateId: input.commandId });
+  } finally {
+    await temporal.connection.close();
+  }
+}
+
+function remoteConflict(database: ForgeDatabase, result: Extract<RemoteIntegration, { kind: "conflict" }>): RemoteConflict {
+  const row = database.authQuery((db) => db.prepare("SELECT prior_head AS priorHead, prior_tree AS priorTree FROM forge_forward_merges WHERE id = ?").get(result.forwardMergeId) as { priorHead: string; priorTree: string } | undefined);
+  if (!row?.priorHead || !row.priorTree) throw new Error("Remote conflict evidence is incomplete");
+  return { ...result, ...row };
+}
 
 const IGNORED_PHASES = new Set(["backlog", "planning", "development", "reviewing_delivery", "repair_required", "done", "cancelled"]);
 
@@ -67,16 +85,24 @@ export async function reconcileGithubObservations(database: ForgeDatabase, confi
       const observed = await observe({ repository: candidate.repository, branch: candidate.branch, pullRequestNumber: candidate.pullRequestNumber });
       const observation = classify(candidate, observed);
       let integration: RemoteIntegration["kind"] | undefined;
+      let conflict: RemoteConflict | undefined;
       if (observation === "head_changed" && observed.headSha && candidate.worktreePath) {
         const result = await integrate(database, config, { taskId: candidate.taskId, companyId: candidate.companyId, workflowId: candidate.workflowId, repository: candidate.repository, branchName: candidate.branch, remoteHead: observed.headSha, worktreePath: candidate.worktreePath, targetBaseSha: candidate.targetBaseSha });
         integration = result.kind;
+        if (result.kind === "conflict") conflict = remoteConflict(database, result);
         if (result.kind === "skipped_active_turn") { skipped += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: null, commandId: null, deduplicated: false, integration }); continue; }
       }
-      const command = commandFor(candidate, observation);
+      const command = integration === "conflict" ? "integrate_remote_conflict" : commandFor(candidate, observation);
       if (!command) { skipped += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: null, commandId: null, deduplicated: false, ...(integration ? { integration } : {}) }); continue; }
-      const input = durableCommand(candidate.workflowId, command, { expectedRevision: candidate.revision, actorUserId: "github-reconciler", headSha: observed.headSha, observation });
+      const input = conflict
+        ? durableCommand(candidate.workflowId, "integrate-remote-conflict", { expectedRevision: candidate.revision, actorUserId: "github-reconciler", forwardMergeId: conflict.forwardMergeId, priorHead: conflict.priorHead, priorTree: conflict.priorTree, remoteHead: conflict.remoteHead, conflictArtifact: { id: conflict.conflictArtifactId, kind: "forward-merge-conflict" as const }, conflictFileCount: conflict.conflictFileCount })
+        : durableCommand(candidate.workflowId, command, { expectedRevision: candidate.revision, actorUserId: "github-reconciler", headSha: observed.headSha, observation });
       const deduplicated = candidate.state.processedCommandIds?.includes(input.commandId) ?? false;
-      if (!deduplicated) { await execute(config, candidate.workflowId, command, input); signalled += 1; }
+      if (!deduplicated) {
+        if (command === "integrate_remote_conflict" && !options.execute) await executeRemoteConflict(config, candidate.workflowId, input as Parameters<typeof executeRemoteConflict>[2]);
+        else await execute(config, candidate.workflowId, command, input);
+        signalled += 1;
+      }
       else skipped += 1;
       outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: command, commandId: input.commandId, deduplicated, ...(integration ? { integration } : {}) });
     } catch (error) {

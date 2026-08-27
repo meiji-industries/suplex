@@ -29,9 +29,9 @@ test("lead completes, then its structured result is missing", () => {
 });
 
 test("worker restarts during a live turn", () => {
-  const pending = facts({ turn: { ...facts().turn!, status: "running" } });
-  const first = twice(pending, live({ herdr: { session: "live", stalledBeyondPolicy: false } }));
-  const adopted = twice({ ...pending, turn: { ...pending.turn!, status: "completed", resultPresent: true, resultValid: true } }, live({ herdr: { session: "idle", stalledBeyondPolicy: false } }));
+  const pending = facts({ turn: { ...facts().turn!, status: "waiting" } });
+  const first = twice(pending, live({ herdr: { session: "live_progress", stalledBeyondPolicy: false } }));
+  const adopted = twice({ ...pending, turn: { ...pending.turn!, status: "completed", resultPresent: true, resultValid: true } }, live({ herdr: { session: "terminal", stalledBeyondPolicy: false } }));
   expect(first).toMatchObject({ action: "no_change" });
   expect(adopted).toMatchObject({ action: "advance" });
 });

@@ -331,12 +331,12 @@ function DeliveryChecksCard({ task }: { task: ApiTask }): ReactElement {
   </Card>;
 }
 
-function TaskOptions({ canCancel, busy, resyncBusy, onCancel, onDuplicate, onResync }: { canCancel: boolean; busy: boolean; resyncBusy: boolean; onCancel: () => void; onDuplicate: () => void; onResync: () => void }): ReactElement {
+function TaskOptions({ canCancel, busy, resyncBusy, onCancel, onSaveTemplate, onDuplicate, onResync }: { canCancel: boolean; busy: boolean; resyncBusy: boolean; onCancel: () => void; onSaveTemplate: () => void; onDuplicate: () => void; onResync: () => void }): ReactElement {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Task options" title="Task options" />}><Ellipsis /></DropdownMenuTrigger>
       {/* Resync stays enabled even while the projection is lagging — that's the state it exists to repair, so it can't share the lagging-gated `busy` flag the other items use. */}
-      <DropdownMenuContent align="start"><DropdownMenuItem disabled={busy} onClick={onDuplicate}>Duplicate</DropdownMenuItem><DropdownMenuItem disabled={resyncBusy} onClick={onResync}>Resync</DropdownMenuItem>{canCancel ? <DropdownMenuItem variant="destructive" disabled={busy} onClick={onCancel}>Cancel task</DropdownMenuItem> : null}</DropdownMenuContent>
+      <DropdownMenuContent align="start"><DropdownMenuItem disabled={busy} onClick={onSaveTemplate}>Save as template…</DropdownMenuItem><DropdownMenuItem disabled={busy} onClick={onDuplicate}>Duplicate</DropdownMenuItem><DropdownMenuItem disabled={resyncBusy} onClick={onResync}>Resync</DropdownMenuItem>{canCancel ? <DropdownMenuItem variant="destructive" disabled={busy} onClick={onCancel}>Cancel task</DropdownMenuItem> : null}</DropdownMenuContent>
     </DropdownMenu>
   );
 }
@@ -472,7 +472,7 @@ function TaskPromptProvenanceRow({ taskId, overrides }: { taskId: string; overri
   </Collapsible.Root>;
 }
 
-export function TaskDetailsPage({ task, project, companyId: _companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onMerge: _onMerge, onDuplicate, onUpdateDetails, onRefresh, onRescue }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onMerge: () => Promise<void>; onDuplicate: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport> }): ReactElement {
+export function TaskDetailsPage({ task, project, companyId: _companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onMerge: _onMerge, onDuplicate, onSaveTemplate = async () => {}, onUpdateDetails, onRefresh, onRescue }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onMerge: () => Promise<void>; onDuplicate: () => Promise<void>; onSaveTemplate?: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport> }): ReactElement {
   const [syncing, setSyncing] = useState(false);
   const observedAtRef = useRef(task.githubPullRequest?.observedAt ?? null);
   observedAtRef.current = task.githubPullRequest?.observedAt ?? null;
@@ -547,7 +547,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
     {hasChecks ? <TabsContent value="checks"><CiPanel ci={task.ci!} /></TabsContent> : null}
   </>;
   return (
-    <ApplicationFrame title={task.issueKey ? `${task.issueKey} · ${task.title}` : task.title} headerActions={<TaskOptions canCancel={task.allowedCommands.includes("cancel_issue")} busy={busy || task.projection.status === "lagging"} resyncBusy={busy} onCancel={() => void onPlanAction("cancel")} onDuplicate={() => void onDuplicate()} onResync={() => void onPlanAction("resync-projection")} />}>
+    <ApplicationFrame title={task.issueKey ? `${task.issueKey} · ${task.title}` : task.title} headerActions={<TaskOptions canCancel={task.allowedCommands.includes("cancel_issue")} busy={busy || task.projection.status === "lagging"} resyncBusy={busy} onCancel={() => void onPlanAction("cancel")} onSaveTemplate={() => void onSaveTemplate()} onDuplicate={() => void onDuplicate()} onResync={() => void onPlanAction("resync-projection")} />}>
       <article data-task-detail className="min-w-0">
         <div data-task-body className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_260px]">
           <div className="min-w-0">

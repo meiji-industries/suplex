@@ -1,0 +1,26 @@
+import { type ZodTypeProvider } from "@fastify/type-provider-zod";
+import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
+
+
+import type { AuthService } from "../../auth.js";
+import type { ForgeConfig } from "../../config.js";
+import type { TaskTemplateService } from "../../task-templates.js";
+import { ProjectTaskTemplatesParamsSchema, SaveTaskAsTemplateBodySchema, SaveTaskAsTemplateParamsSchema, TaskTemplateListResponseSchema, TaskTemplateParamsSchema, TaskTemplateResponseSchema } from "../contracts/task-templates.js";
+import { sessionUser } from "../session.js";
+
+export interface TaskTemplateRoutesOptions { auth: AuthService; config: ForgeConfig; templates: TaskTemplateService; }
+
+const taskTemplates: FastifyPluginAsync<TaskTemplateRoutesOptions> = async (app, options) => {
+  const typed = app.withTypeProvider<ZodTypeProvider>();
+  typed.addHook("preHandler", async (request, reply) => {
+    const user = await sessionUser(options.auth, request, reply, options.config);
+    if (!user) return reply.code(401).send({ error: "Authentication required" });
+    request.forgeUser = user;
+  });
+  typed.get("/api/projects/:projectId/task-templates", { schema: { params: ProjectTaskTemplatesParamsSchema, response: { 200: TaskTemplateListResponseSchema } } }, async (request, reply) => reply.send({ templates: options.templates.list(request.forgeUser.id, request.params.projectId) }));
+  typed.post("/api/tasks/:taskId/save-as-template", { schema: { params: SaveTaskAsTemplateParamsSchema, body: SaveTaskAsTemplateBodySchema, response: { 201: TaskTemplateResponseSchema } } }, async (request, reply) => reply.code(201).send(options.templates.createFromTask(request.forgeUser.id, request.params.taskId, request.body.name)));
+  typed.delete("/api/task-templates/:templateId", { schema: { params: TaskTemplateParamsSchema, response: { 204: z.null() } } }, async (_request, reply) => reply.code(204).send(null));
+};
+
+export default taskTemplates;

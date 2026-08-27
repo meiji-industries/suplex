@@ -28,7 +28,7 @@ const ReviewLineageResponseSchema = z.object({ currentReview: ReviewResponseSche
 export { ContinueWorkBodySchema } from "../../commands/definitions/lifecycle.js";
 export { PlanRevisionBodySchema } from "../../commands/definitions/planning.js";
 const TaskPhaseSchema = IssuePhaseSchema;
-const RoleAgentsSchema = z.object({ planner: z.string().optional(), builder: z.string().optional(), reviewer: z.string().optional(), integrator: z.string().optional() });
+export const RoleAgentsSchema = z.object({ planner: z.string().optional(), builder: z.string().optional(), reviewer: z.string().optional(), integrator: z.string().optional() });
 const TaskImageResponseSchema = z.object({ artifactId: z.string(), filename: z.string(), mimeType: z.string(), byteSize: z.number() });
 const TimelineResponseSchema = z.object({ id: z.string(), revision: z.number(), eventType: z.string(), metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])), createdAt: z.string() });
 const ActivityUserActorSchema = z.object({ kind: z.literal("user").optional(), id: z.string(), displayName: z.string(), username: z.string(), avatarSeed: z.string() });

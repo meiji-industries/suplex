@@ -15,6 +15,7 @@ import type { HermesAgentService } from "./hermes-agents.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
 import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
+import type { TaskTemplateService } from "./task-templates.js";
 import type { ProjectionRebuildService } from "./projection-rebuild.js";
 import { HealthSnapshotSchema } from "./schemas.js";
 import {
@@ -33,6 +34,7 @@ import hermesPairing from "./http/routes/hermes-pairing.js";
 import { registerHermesTaskRoutes } from "./http/routes/hermes-tasks.js";
 import prompts from "./http/routes/prompts.js";
 import taskPrompts from "./http/routes/task-prompts.js";
+import taskTemplates from "./http/routes/task-templates.js";
 
 export interface AppDependencies {
   fullApp?: boolean;
@@ -42,6 +44,7 @@ export interface AppDependencies {
   auth?: AuthService;
   projects?: ProjectService;
   tasks?: TaskService;
+  taskTemplates?: TaskTemplateService;
   attention?: AttentionService;
   release?: ReleaseService;
   ci?: CiService;
@@ -102,7 +105,7 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
 export function registerAppRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
   const getHealth = dependencies.getHealth ?? (() => inspectHostHealth(dependencies.config, dependencies.health));
   const readHealth = async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth());
-  const { auth, projects: projectService, tasks: taskService, attention: attentionService, release: releaseService, database, rebuild } = dependencies;
+  const { auth, projects: projectService, tasks: taskService, taskTemplates: templateService, attention: attentionService, release: releaseService, database, rebuild } = dependencies;
 
   void app.register(pages, {
     readHealth,
@@ -118,6 +121,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
     void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(releaseService ? { release: releaseService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}), ...(rebuild ? { rebuild } : {}), ...(dependencies.capacity ? { capacity: dependencies.capacity } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
     if (projectService && database) void app.register(prompts, { auth, config: dependencies.config, database, projects: projectService });
     if (taskService && database) void app.register(taskPrompts, { auth, config: dependencies.config, database, tasks: taskService });
+    if (templateService) void app.register(taskTemplates, { auth, config: dependencies.config, templates: templateService });
   }
   if (!dependencies.frontendDevelopment) void app.register(assets, { prefix: "/assets" });
 }

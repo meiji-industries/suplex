@@ -13,6 +13,7 @@ import { loadConfig, type ForgeConfig } from "./config.js";
 import { ForgeDatabase } from "./database.js";
 import { seedDevelopmentData } from "./development.js";
 import { createHostHealthDependencies } from "./host-health.js";
+import { TaskTemplateService } from "./task-templates.js";
 import { createFastifyLogger, StructuredLogger } from "./logging.js";
 import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
@@ -37,6 +38,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   const artifactStore = new ArtifactStore(config.artifactRoot);
   const capacity = new CapacityManager(database, config);
   const tasks = new TaskService(database, auth, projects, config, { capacity });
+  const taskTemplates = new TaskTemplateService(database, auth, tasks);
   const attention = new AttentionService(database, auth);
   const githubRelease = createGithubReleasePort();
   const release = new ReleaseService(database, artifactStore, githubRelease);
@@ -50,6 +52,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     hermes,
     projects,
     tasks,
+    taskTemplates,
     attention,
     database,
     release,

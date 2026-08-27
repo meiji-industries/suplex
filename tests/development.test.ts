@@ -1,14 +1,29 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { expect, test } from "vitest";
+import { TestWorkflowEnvironment } from "@temporalio/testing";
+import { Worker } from "@temporalio/worker";
+import { ApplicationFailure } from "@temporalio/common";
+import { afterEach, expect, test } from "vitest";
 
 import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 import { createTestConfig } from "../src/config.js";
 import { createForgeServer } from "../src/server.js";
+import type { IssueActivities, IssueWorkflowInput, IssueWorkflowState } from "../src/temporal/issue-contracts.js";
 import { StartPlanningInputSchema, IssueWorkflowStateSchema, buildInitialIssueWorkflowState } from "../src/temporal/issue-contracts.js";
 import { blockFailedDeveloperStart } from "../src/temporal/workflow/register-development.js";
+import { issueStateQuery, issueWorkflow } from "../src/temporal/workflows.js";
+import { createIssueActivitiesFake } from "./fakes/issue-activities.js";
+
+const workflowsPath = fileURLToPath(new URL("../src/temporal/workflows.ts", import.meta.url));
+let environment: TestWorkflowEnvironment | undefined;
+
+afterEach(async () => {
+  await environment?.teardown();
+  environment = undefined;
+});
 
 test("blocks a supervised Developer retry that cannot start", async () => {
   const command = StartPlanningInputSchema.parse({ expectedRevision: 1, commandId: "retry-start-failure", actorUserId: "user-development" });
@@ -28,6 +43,50 @@ test("blocks a supervised Developer retry that cannot start", async () => {
   await expect(blockFailedDeveloperStart(ctx, command, "developer_execution", new Error("unavailable"))).resolves.toBe(true);
   expect(ctx.state).toMatchObject({ phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer could not start: unavailable", developerRecoveryStatus: "failed", activeOperation: null });
   expect(projected).toBe(true);
+});
+
+test("retries a supervised Developer start failure once before blocking", { timeout: 60_000 }, async () => {
+  environment = await TestWorkflowEnvironment.createTimeSkipping();
+  const workflowId = "workflow-development-start-retry";
+  const initial = buildInitialIssueWorkflowState({ workflowId, companyId: "company-development", projectId: "project-development", issueId: "issue-development", projectRevisionId: "revision-development", briefArtifactId: "brief-development", briefSha256: "a".repeat(64), imageArtifactIds: [], roleProfiles: { planner: "profile", builder: "profile" }, supplementalReview: false });
+  const attempts: string[] = [];
+  const projections: IssueWorkflowState[] = [];
+  const activities: Partial<IssueActivities> = {
+    projectIssueState: async (event) => { projections.push(structuredClone(event.state)); return event.state; },
+    runDeveloperExecutionSupervised: async (input) => {
+      attempts.push(input.developerTurnExecutionId);
+      throw ApplicationFailure.nonRetryable("controlled start failure");
+    },
+  };
+  const worker = await Worker.create({ connection: environment.nativeConnection, namespace: environment.namespace ?? "default", taskQueue: "development-start-retry", workflowsPath, activities: createIssueActivitiesFake(activities) as unknown as Record<string, (...args: never[]) => unknown> });
+  const workerRun = worker.run();
+  try {
+    const input: IssueWorkflowInput = {
+      workflowId,
+      companyId: "company-development",
+      projectId: "project-development",
+      issueId: "issue-development",
+      projectRevisionId: "revision-development",
+      briefArtifactId: "brief-development",
+      briefSha256: "a".repeat(64),
+      imageArtifactIds: [],
+      roleProfiles: { planner: "profile", builder: "profile" },
+      supplementalReview: false,
+      continuationState: { ...initial, revision: 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${workflowId}:1`, planRevision: 1, planMaterial: true, planApproved: true, leadSessionRef: "lead-session", leadOutputArtifactId: "lead-output" },
+    };
+    const handle = await environment.client.workflow.start(issueWorkflow, { workflowId, taskQueue: "development-start-retry", args: [input] });
+    await expect.poll(() => handle.query(issueStateQuery), { timeout: 30_000 }).toMatchObject({ phase: "delivery_blocked", developerAttempt: 2 });
+    const state = await handle.query(issueStateQuery);
+    expect(state).toMatchObject({ phase: "delivery_blocked", owner: "human", developerAttempt: 2 });
+    expect(state.pendingAction).toMatch(/^Developer could not start:/);
+    expect(state.allowedCommands).toEqual(expect.arrayContaining(["retry_development", "cancel_issue"]));
+    expect(projections).toContainEqual(expect.objectContaining({ phase: "ready_for_development", pendingAction: "Developer could not start; Forge is starting the one automatic retry." }));
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).not.toBe(attempts[1]);
+  } finally {
+    worker.shutdown();
+    await workerRun;
+  }
 });
 
 test("development startup seeds identity without requiring a Git repository root", async () => {

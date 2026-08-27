@@ -52,6 +52,19 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
       }
       const failedToStart = ctx.supervisedDeveloperTurns && ctx.patched("forge-developer-start-failure-blocked-v1") && ctx.state.developerExecutionId === executionId && !ctx.state.developerOutcome;
       if (failedToStart) {
+        const autoRetryStartFailure = developerAttempt === 1 && ctx.patched("forge-developer-start-failure-auto-retry-v1");
+        if (autoRetryStartFailure) {
+          const retried = await ctx.withStateMutation(() => {
+            if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;
+            ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ctx.addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: "Developer could not start; Forge is starting the one automatic retry.", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("failed", null, `Developer could not start: ${error instanceof Error ? error.message : String(error)}`, null), activeOperation: null });
+            if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
+            return true;
+          });
+          if (retried) {
+            await ctx.project();
+            return startDevelopment(ctx, { ...command, expectedRevision: ctx.state.revision, commandId: `${ctx.state.workflowId}:auto-retry-development-start:${ctx.state.revision}` });
+          }
+        }
         if (await blockFailedDeveloperStart(ctx, command, executionId, error)) return ctx.state;
         await ctx.recordHandlerNoop("start_development", "Development was superseded before the Developer result could be applied.");
         return ctx.state;
@@ -138,6 +151,19 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
     }
     const failedToStart = ctx.supervisedDeveloperTurns && ctx.patched("forge-developer-start-failure-blocked-v1") && ctx.state.developerExecutionId === executionId && !ctx.state.developerOutcome;
     if (failedToStart) {
+      const autoRetryStartFailure = developerAttempt === 1 && ctx.patched("forge-developer-start-failure-auto-retry-v1");
+      if (autoRetryStartFailure) {
+        const retried = await ctx.withStateMutation(() => {
+          if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;
+          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ctx.addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: "Developer could not start; Forge is starting the one automatic retry.", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("failed", null, `Developer could not start: ${error instanceof Error ? error.message : String(error)}`, null), activeOperation: null });
+          if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
+          return true;
+        });
+        if (retried) {
+          await ctx.project();
+          return retryDevelopment(ctx, { ...command, expectedRevision: ctx.state.revision, commandId: `${ctx.state.workflowId}:auto-retry-development-start:${ctx.state.revision}` }, operatorNote);
+        }
+      }
       if (await blockFailedDeveloperStart(ctx, command, executionId, error)) return ctx.state;
       await ctx.recordHandlerNoop("retry_development", "Developer retry was superseded before the result could be applied.");
       return ctx.state;

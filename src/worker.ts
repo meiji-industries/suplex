@@ -15,6 +15,9 @@ import { buildProductionWorkflowBundle, temporalDataConverter, workflowBundleBui
 import { CapacityManager } from "./capacity.js";
 import { reconcileDonePullRequests } from "./done-pull-request-reconciliation.js";
 import { migrateLegacyHerdrSessions } from "./herdr-session-migration.js";
+import { reconcileActiveTurns } from "./active-turn-recovery.js";
+import { reconcileWorktrees } from "./worktree-reconciliation.js";
+import { reconcileGithubObservations } from "./github-observation-reconciliation.js";
 
 export function workerHasLivePollers(status: Pick<WorkerStatus, "runState" | "workflowPollerState" | "activityPollerState">): boolean {
   return status.runState === "RUNNING"
@@ -80,6 +83,8 @@ const reconciliationTimeoutMs = 30_000;
 const taskCreationReconciliationIntervalMs = 60_000;
 const workflowStallReconciliationIntervalMs = 60_000;
 const donePullRequestSyncIntervalMs = 5 * 60_000;
+const activeTurnReconciliationIntervalMs = 60_000;
+const observationReconciliationIntervalMs = 5 * 60_000;
 
 export async function reconcileWorkflowStalls(database: ForgeDatabase, connection: NativeConnection, config: ForgeConfig): Promise<{ inspected: number; stalled: number }> {
   const tasks = database.authQuery((db) => db.prepare("SELECT task_id AS taskId, workflow_id AS workflowId FROM forge_issue_projections WHERE phase NOT IN ('done', 'cancelled') ORDER BY task_id").all() as Array<{ taskId: string; workflowId: string }>);
@@ -163,6 +168,8 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   let creationReconciliationHeartbeat: NodeJS.Timeout | undefined;
   let workflowStallReconciliationHeartbeat: NodeJS.Timeout | undefined;
   let donePullRequestSyncHeartbeat: NodeJS.Timeout | undefined;
+  let activeTurnReconciliationHeartbeat: NodeJS.Timeout | undefined;
+  let observationReconciliationHeartbeat: NodeJS.Timeout | undefined;
   let workerRun: Promise<void> | undefined;
   let creationRecovery: Promise<void> | undefined;
   let workflowStallRecovery: Promise<void> | undefined;
@@ -226,6 +233,10 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       const reclaimed = reclaimOrphanedHerdrExecutions(database);
       return { sessions, recovered, reclaimed };
     }, (result) => result.sessions.filter((outcome) => outcome.status === "failed").length + result.reclaimed.agentExecutions + result.reclaimed.developerExecutions, (result) => ({ inspected: result.sessions.length, recoveredAgentExecutions: result.recovered.agentExecutions, recoveredDeveloperExecutions: result.recovered.developerExecutions, reclaimedAgentExecutions: result.reclaimed.agentExecutions, reclaimedDeveloperExecutions: result.reclaimed.developerExecutions }));
+    const reconcileActiveTurnsNow = (): void => { void runReconciliation(logger, "active-turn-reconciliation", () => reconcileActiveTurns(database, config), (result) => result.filter((outcome) => outcome.action === "advance").length, (result) => ({ inspected: result.length })); };
+    const reconcileWorktreesNow = (): void => { void runReconciliation(logger, "worktree-reconciliation", () => reconcileWorktrees(database, config), (result) => result.removedExternally, (result) => ({ inspected: result.inspected, reported: result.reported })); };
+    const reconcileObservationsNow = (): void => { void runReconciliation(logger, "github-observation-reconciliation", () => reconcileGithubObservations(database, config), (result) => result.signalled, (result) => ({ inspected: result.inspected, signalled: result.signalled })); };
+    reconcileActiveTurnsNow(); reconcileWorktreesNow(); reconcileObservationsNow();
     const reconcileWorkflowStall = (): void => {
       if (workflowStallRecovery || !connection) return;
       workflowStallRecovery = runReconciliation(
@@ -254,6 +265,9 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
     workflowStallReconciliationHeartbeat.unref();
     donePullRequestSyncHeartbeat = setInterval(reconcileDonePullRequestSync, donePullRequestSyncIntervalMs);
     donePullRequestSyncHeartbeat.unref();
+    activeTurnReconciliationHeartbeat = setInterval(reconcileActiveTurnsNow, activeTurnReconciliationIntervalMs);
+    observationReconciliationHeartbeat = setInterval(reconcileObservationsNow, observationReconciliationIntervalMs);
+    activeTurnReconciliationHeartbeat.unref(); observationReconciliationHeartbeat.unref();
 
     let shuttingDown = false;
     shutdown = (): void => {
@@ -277,6 +291,8 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       clearInterval(workflowStallReconciliationHeartbeat);
     }
     if (donePullRequestSyncHeartbeat) clearInterval(donePullRequestSyncHeartbeat);
+    if (activeTurnReconciliationHeartbeat) clearInterval(activeTurnReconciliationHeartbeat);
+    if (observationReconciliationHeartbeat) clearInterval(observationReconciliationHeartbeat);
     await creationRecovery;
     await workflowStallRecovery;
     database.unregisterWorker(workerId);
@@ -297,6 +313,8 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       clearInterval(workflowStallReconciliationHeartbeat);
     }
     if (donePullRequestSyncHeartbeat) clearInterval(donePullRequestSyncHeartbeat);
+    if (activeTurnReconciliationHeartbeat) clearInterval(activeTurnReconciliationHeartbeat);
+    if (observationReconciliationHeartbeat) clearInterval(observationReconciliationHeartbeat);
     await creationRecovery;
     await workflowStallRecovery;
     // Cleanup must never mask the original startup error: drain the worker

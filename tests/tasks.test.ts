@@ -14,6 +14,7 @@ import type { GithubReleasePort } from "../src/github-release.js";
 import { loadTaskConfiguration } from "../src/task-project-configuration.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
+import { TaskResponseSchema } from "../src/http/contracts/tasks.js";
 import { jsonRequired } from "../src/task-utils.js";
 
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
@@ -629,5 +630,23 @@ test("re-resolves a pull request selector and pins source and PR base coordinate
     expect(requestedNumber).toBe(17);
     const configuration = value.database.authQuery((db) => loadTaskConfiguration(db, new ArtifactStore(value.config.artifactRoot, value.database), { taskId: created.task.id, companyId: value.companyId }));
     expect(configuration).toMatchObject({ baseBranch: "release", baseSha: "d".repeat(40), targetBranch: "main", targetSha: "b".repeat(40), source: { kind: "pull_request", number: 17, headBranch: "feature/source", baseBranch: "release", headSha: "c".repeat(40), baseSha: "d".repeat(40) } });
+    expect(value.tasks.getTask(value.adminId, created.task.id).source).toEqual({ kind: "pull_request", number: 17, url: pull.url, headBranch: "feature/source", baseBranch: "release" });
+    expect(TaskResponseSchema.parse(value.tasks.getTask(value.adminId, created.task.id)).source).toEqual({ kind: "pull_request", number: 17, url: pull.url, headBranch: "feature/source", baseBranch: "release" });
+
+    const capturedConfiguration = structuredClone(configuration) as Record<string, unknown>;
+    delete capturedConfiguration.artifactId;
+    delete capturedConfiguration.artifactSha256;
+    const branchConfiguration = { ...capturedConfiguration, source: { kind: "branch" as const, branch: "feature/branch", headSha: "e".repeat(40) } };
+    const store = new ArtifactStore(value.config.artifactRoot, value.database);
+    const artifact = await store.put(value.companyId, "task-project-configuration", { filename: "task-project-configuration.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify(branchConfiguration)) });
+    value.database.authTransaction((db) => {
+      db.prepare("UPDATE forge_tasks SET project_configuration_artifact_id = ? WHERE id = ?").run(artifact.id, created.task.id);
+    });
+    expect(value.tasks.getTask(value.adminId, created.task.id).source).toEqual({ kind: "branch", branch: "feature/branch" });
+    expect(TaskResponseSchema.parse(value.tasks.getTask(value.adminId, created.task.id)).source).toEqual({ kind: "branch", branch: "feature/branch" });
+
+    const scratch = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Scratch task", description: "No source.", idempotencyKey: "scratch-source-create-0001", images: [] });
+    expect(value.tasks.getTask(value.adminId, scratch.task.id).source).toBeUndefined();
+    expect(TaskResponseSchema.parse(value.tasks.getTask(value.adminId, scratch.task.id)).source).toBeUndefined();
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

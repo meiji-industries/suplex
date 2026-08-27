@@ -241,6 +241,7 @@ test("uses planned publication copy before publishing and skeletons while publis
     allowedCommands: ["publish_draft"],
     commands: [],
     pendingAction: "Opening the pull request",
+    source: { kind: "branch", branch: "work/sign-out" },
     projection: { status: "current" },
     leadOutput: { content: { kind: "plan", gitPresentation: { pullRequestTitle: "Add sign-out controls", pullRequestDescription: "Explain the logout behavior." } } },
   } as unknown as ApiTask;
@@ -258,6 +259,36 @@ test("uses planned publication copy before publishing and skeletons while publis
   expect(render(false)).not.toContain("Publication details are not available yet.");
   expect(render(true)).toContain('data-publication-preview-loading="true"');
   expect(render(true).match(/data-slot="skeleton"/g)).toHaveLength(3);
+});
+
+test("labels a sourced pull request publication as a push without a new-PR preview", () => {
+  const task = {
+    phase: "delivery_reviewed",
+    allowedCommands: ["publish_draft"],
+    commands: [],
+    pendingAction: "Push the reviewed commit",
+    projection: { status: "current" },
+    source: { kind: "pull_request", number: 1516, url: "https://github.com/NewSchoolFoods/RTD/pull/1516", headBranch: "feat/campaign-derivation-math", baseBranch: "main" },
+    leadOutput: { content: { kind: "plan", gitPresentation: { pullRequestTitle: "Do not show this", pullRequestDescription: "Do not show this description." } } },
+  } as unknown as ApiTask;
+  const render = (busy: boolean, blocked = false): string => renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
+    task: (blocked ? { ...task, release: { status: "blocked" } } : task) as unknown as ApiTask,
+    busy,
+    onStartPlanning: async () => undefined,
+    onPlanAction: async () => undefined,
+    onRevisePlan: async () => undefined,
+    onContinueWork: async () => undefined,
+  }) }));
+
+  expect(render(false)).toContain("Ready to Update Pull Request");
+  expect(render(false)).toContain(">Push Commits<");
+  expect(render(false)).toContain("Pull request #1516");
+  expect(render(false)).toContain('href="https://github.com/NewSchoolFoods/RTD/pull/1516"');
+  expect(render(false)).toContain("feat/campaign-derivation-math</code> → <code>main");
+  expect(render(false)).not.toContain("Draft Pull Request");
+  expect(render(false)).not.toContain("Do not show this description.");
+  expect(render(true)).toContain(">Pushing…<");
+  expect(render(false, true)).toContain(">Retry Push<");
 });
 
 test("hides a task-actions card with only a planning status label", () => {

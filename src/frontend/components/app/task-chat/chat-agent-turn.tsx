@@ -9,12 +9,12 @@ import type { ChatEvent, ChatItem } from "../../../lib/task-chat.js";
 
 function duration(startedAt: string, finishedAt: string | null, now: number): string { return `${Math.max(0, Math.floor(((finishedAt ? Date.parse(finishedAt) : now) - Date.parse(startedAt)) / 1_000))}s`; }
 
-function AgentBubble({ children, message = false }: { children: ReactNode; message?: boolean }) {
-  return <div data-task-chat-agent-bubble data-task-chat-agent-message={message || undefined} className="max-w-[85%] rounded-[6px] border bg-muted/40 px-2.5 py-2 text-[13px]">{children}</div>;
+function AgentBubble({ children }: { children: ReactNode }) {
+  return <div data-task-chat-agent-bubble className="max-w-[85%] rounded-[6px] border bg-muted/40 px-2.5 py-2 text-[13px]">{children}</div>;
 }
 
 function ReasoningEvent({ event }: { event: ChatEvent }) {
-  return <li data-task-chat-reasoning className="text-[12px] text-muted-foreground"><div className="flex items-center gap-1.5 text-foreground"><Brain className="size-3.5 text-muted-foreground" />Thinking</div><div className="mt-1 space-y-3 text-muted-foreground"><Markdown source={event.text} /></div></li>;
+  return <li data-task-chat-reasoning className="text-[12px] text-muted-foreground"><div className="flex items-center gap-1.5 text-foreground"><Brain className="size-3.5 text-muted-foreground" />Thinking</div><div className="mt-1 space-y-3 text-muted-foreground"><Markdown source={event.text} />{event.count && event.count > 1 ? ` ×${event.count}` : ""}</div></li>;
 }
 
 function CommandEvent({ event, running }: { event: ChatEvent; running: boolean }) {
@@ -34,18 +34,14 @@ function CommandEvent({ event, running }: { event: ChatEvent; running: boolean }
 
 function EventLine({ event, onOpenDiff, running }: { event: ChatEvent; onOpenDiff: () => void; running: boolean }) {
   const className = "flex min-w-0 items-center gap-2 py-0.5 text-[12px] text-muted-foreground";
-  if (event.kind === "thinking_summary") return <ReasoningEvent event={event} />;
+  if (event.kind === "thinking_summary" || event.kind === "message" || event.kind === "agent_update") return <ReasoningEvent event={event} />;
   if (event.kind === "command" || event.kind === "tool_call") return <CommandEvent event={event} running={running} />;
   if (event.kind === "file_change") return <li className={className}><span className="font-medium text-foreground">Edited </span><span className="truncate">{event.files?.map((file) => <button type="button" className="underline underline-offset-2" onClick={onOpenDiff} key={file}>{file}</button>)} {event.text}</span></li>;
   return <li className={className}>{event.kind === "test_result" ? <span className="font-medium text-foreground">Tests: </span> : null}<span className="truncate">{event.text}{event.count && event.count > 1 ? ` ×${event.count}` : ""}</span></li>;
 }
 
-function NarrationStream({ events }: { events: ChatEvent[] }) {
-  return <div className="space-y-1">{events.filter((event) => event.kind === "message" || event.kind === "agent_update").map((event) => <AgentBubble key={event.id} message={event.kind === "message"}><Markdown source={event.text} />{event.count && event.count > 1 ? ` ×${event.count}` : ""}</AgentBubble>)}</div>;
-}
-
-function ExecutionChain({ events, onOpenDiff, running, open, onOpenChange, durationLabel, statsText }: { events: ChatEvent[]; onOpenDiff: () => void; running: boolean; open: boolean; onOpenChange: (open: boolean) => void; durationLabel: string; statsText: string | undefined }) {
-  const executionEvents = events.filter((event) => event.kind !== "message" && event.kind !== "agent_update");
+function ExecutionChain({ events, intro, onOpenDiff, running, open, onOpenChange, durationLabel, statsText }: { events: ChatEvent[]; intro: string | undefined; onOpenDiff: () => void; running: boolean; open: boolean; onOpenChange: (open: boolean) => void; durationLabel: string; statsText: string | undefined }) {
+  const executionEvents = intro ? [{ id: "intro", at: "", kind: "thinking_summary", text: intro }, ...events] : events;
   if (executionEvents.length === 0) return <p className="text-xs text-muted-foreground">{durationLabel}{statsText}</p>;
   return <Collapsible.Root open={open} onOpenChange={onOpenChange} data-task-chat-execution-chain><Collapsible.Trigger className="flex items-center gap-1 text-xs text-muted-foreground"><ChevronDown className="size-3" />{running ? <LoaderCircle className="size-3 motion-safe:animate-spin" /> : <CheckCircle2 className="size-3" />}<span data-task-chat-duration>{durationLabel}</span><span data-task-chat-step-count> · {executionEvents.length} {executionEvents.length === 1 ? "step" : "steps"}</span>{statsText}</Collapsible.Trigger><Collapsible.Panel><ol data-task-chat-execution-group className="mt-1 space-y-1">{executionEvents.map((event) => <EventLine event={event} onOpenDiff={onOpenDiff} running={running} key={event.id} />)}</ol></Collapsible.Panel></Collapsible.Root>;
 }
@@ -58,5 +54,5 @@ export function ChatAgentTurn({ item, onOpenDiff, onLoadEvents }: { item: Extrac
   const toggleExecution = (open: boolean): void => { setExecutionOpen(open); if (open) void onLoadEvents(); };
   const durationLabel = running ? `Working for ${duration(item.startedAt, null, now)}` : `Worked for ${duration(item.startedAt, item.finishedAt, now)}`;
   const statsText = item.stats ? ` · +${item.stats.additions} −${item.stats.deletions}` : undefined;
-  return <div className="flex gap-2" data-task-chat-agent-turn data-task-chat-status={item.status}><ProfileAvatar name={item.agent.name} seed={item.agent.avatarSeed} size="xs" /><div className="min-w-0 flex-1 space-y-1"><div className="flex flex-wrap items-baseline gap-x-2 text-xs"><span className="font-medium">{item.agent.name}</span><time className="text-[11px] text-muted-foreground" dateTime={item.startedAt}>{new Date(item.startedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></div>{item.intro ? <AgentBubble>{item.intro}</AgentBubble> : null}<ExecutionChain events={item.events} onOpenDiff={onOpenDiff} running={running} open={executionOpen} onOpenChange={toggleExecution} durationLabel={durationLabel} statsText={statsText} /><NarrationStream events={item.events} />{item.summary ? <AgentBubble><Markdown source={item.summary} /></AgentBubble> : null}{item.status === "failed" || item.status === "blocked" ? <p className="text-xs text-destructive">{item.agent.name} is {item.status}</p> : item.finishedAt ? <p className="text-xs text-muted-foreground">{item.agent.name} has finished</p> : null}</div></div>;
+  return <div className="flex gap-2" data-task-chat-agent-turn data-task-chat-status={item.status}><ProfileAvatar name={item.agent.name} seed={item.agent.avatarSeed} size="xs" /><div className="min-w-0 flex-1 space-y-1"><div className="flex flex-wrap items-baseline gap-x-2 text-xs"><span className="font-medium">{item.agent.name}</span><time className="text-[11px] text-muted-foreground" dateTime={item.startedAt}>{new Date(item.startedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time></div><ExecutionChain events={item.events} intro={item.intro} onOpenDiff={onOpenDiff} running={running} open={executionOpen} onOpenChange={toggleExecution} durationLabel={durationLabel} statsText={statsText} />{item.summary ? <AgentBubble><Markdown source={item.summary} /></AgentBubble> : null}</div></div>;
 }

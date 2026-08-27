@@ -9,38 +9,41 @@ import { ChatMemberMessage } from "../src/frontend/components/app/task-chat/chat
 const completed = { kind: "agent_turn" as const, id: "turn", role: "builder" as const, agent: { name: "Builder", avatarSeed: "builder" }, startedAt: "2026-08-23T00:00:00.000Z", finishedAt: "2026-08-23T00:00:40.000Z", status: "completed" as const, intro: "I will inspect the exact delivered commit.", events: [{ id: "command", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "git status", exitCode: 0, status: "completed" as const }, { id: "message", at: "2026-08-23T00:00:11.000Z", kind: "message", text: "I found three in-scope blocking gaps." }, { id: "tool", at: "2026-08-23T00:00:12.000Z", kind: "tool_call", text: "read" }, { id: "update", at: "2026-08-23T00:00:13.000Z", kind: "agent_update", text: "The service now gathers all campaign routes." }, { id: "reasoning", at: "2026-08-23T00:00:14.000Z", kind: "thinking_summary", text: "Reasoning details" }, { id: "file", at: "2026-08-23T00:00:15.000Z", kind: "file_change", text: "Updated task-chat.ts", files: ["src/task-chat.ts"] }], summary: "The work is complete.", stats: { filesChanged: 1, additions: 12, deletions: 3 } };
 
 describe("task chat UI", () => {
-  it("renders collapsed completed work with narration and change stats", () => {
+  it("keeps a completed final summary visible while progress stays collapsed", () => {
     const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item: completed, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
     expect(html).toContain("Worked for 40s");
     expect(html).toContain("+12 −3");
-    expect(html).toContain("4 steps");
+    expect(html).toContain("7 steps");
     expect(html).toContain("data-task-chat-execution-chain");
     expect(html).toMatch(/aria-expanded="false"/);
-    expect(html).toContain("I will inspect the exact delivered commit.");
-    expect(html).toContain("I found three in-scope blocking gaps.");
-    expect(html).toContain("The service now gathers all campaign routes.");
     expect(html).toContain("The work is complete.");
+    expect(html).not.toContain("I will inspect the exact delivered commit.");
+    expect(html).not.toContain("I found three in-scope blocking gaps.");
+    expect(html).not.toContain("The service now gathers all campaign routes.");
     expect(html).not.toContain("git status");
     expect(html).not.toContain("Reasoning details");
     expect(html).not.toContain("Updated task-chat.ts");
     expect(html).not.toContain("data-task-chat-execution-group");
   });
 
-  it("renders a compact execution chain apart from narration bubbles", () => {
+  it("renders intro and every progress event as ordered flat thinking blocks", () => {
     const item = { ...completed, finishedAt: null, status: "running" as const, events: [
       { id: "command-one", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "git status", exitCode: 0, status: "completed" as const },
       { id: "message", at: "2026-08-23T00:00:11.000Z", kind: "message", text: "I found three in-scope blocking gaps." },
       { id: "tool", at: "2026-08-23T00:00:12.000Z", kind: "tool_call", text: "read" },
       { id: "update", at: "2026-08-23T00:00:13.000Z", kind: "agent_update", text: "The service now gathers all campaign routes." },
-      { id: "command-two", at: "2026-08-23T00:00:14.000Z", kind: "command", text: "pnpm test", exitCode: 0, status: "completed" as const },
+      { id: "reasoning", at: "2026-08-23T00:00:14.000Z", kind: "thinking_summary", text: "Reasoning details" },
+      { id: "command-two", at: "2026-08-23T00:00:15.000Z", kind: "command", text: "pnpm test", exitCode: 0, status: "completed" as const },
     ] };
     const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
-    expect(html.match(/data-task-chat-agent-bubble/g)).toHaveLength(4);
-    expect(html.match(/data-task-chat-execution-group/g)).toHaveLength(1);
-    expect(html).toContain("3 steps");
-    expect(html).toMatch(/data-task-chat-execution-chain[^>]*>.*data-task-chat-execution-group[^>]*>.*git status.*read.*pnpm test/s);
+    const chain = html.match(/<ol data-task-chat-execution-group[^]*?<\/ol>/)?.[0] ?? "";
+    expect(html.match(/data-task-chat-agent-bubble/g)).toHaveLength(1);
+    expect(html.match(/data-task-chat-reasoning/g)).toHaveLength(4);
+    expect(html).toContain("7 steps");
+    expect(chain).toMatch(/I will inspect.*git status.*I found three.*read.*The service now.*Reasoning details.*pnpm test/s);
+    expect(chain).not.toContain("data-task-chat-agent-bubble");
+    expect(chain).not.toContain("rounded-[6px]");
     expect(html).not.toContain("border-l");
-    expect(html.match(/<ol data-task-chat-execution-group[^]*?<\/ol>/)?.[0]).not.toContain("data-task-chat-agent-bubble");
   });
 
   it("renders a running header, execution groups, composer reason, and markdown member body", () => {
@@ -85,7 +88,6 @@ describe("task chat UI", () => {
     expect(html).toContain("Thinking");
     expect(html).toMatch(/one<br\/>\s*two<br\/>\s*three<br\/>\s*four<br\/>\s*five/);
     expect(html).not.toContain("Reasoning");
-    expect(html.match(/aria-expanded="true"/g)).toHaveLength(1);
     expect(html).toContain("exit 1");
     expect(html).toContain("data-variant=\"destructive\"");
     expect(html).toContain("exec");

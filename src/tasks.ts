@@ -1166,7 +1166,7 @@ export class TaskService {
         SELECT t.id, t.title
         FROM forge_tasks t
         JOIN forge_issue_projections p ON p.task_id = t.id AND p.company_id = t.company_id
-        WHERE t.company_id = ? AND t.project_id = ? AND p.phase NOT IN ('done', 'cancelled')
+        WHERE t.company_id = ? AND t.project_id = ? AND t.archived_at IS NULL AND p.phase NOT IN ('done', 'cancelled')
           AND (
             EXISTS (SELECT 1 FROM forge_issue_worktrees w WHERE w.task_id = t.id AND w.company_id = t.company_id AND w.branch_name = ? AND w.status <> 'released')
             OR EXISTS (SELECT 1 FROM forge_workflow_snapshots s WHERE s.task_id = t.id AND s.company_id = t.company_id AND json_extract(s.state_json, '$.branchName') = ?)

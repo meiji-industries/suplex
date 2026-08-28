@@ -11,7 +11,7 @@ import { TaskService } from "../src/tasks.js";
 const now = "2026-08-28T00:00:00.000Z";
 const sha = "a".repeat(40);
 
-async function fixture(phase: "planning" | "done" | "cancelled") {
+async function fixture(phase: "planning" | "done" | "cancelled" | "failed", archived = false) {
   const root = await mkdtemp(join(tmpdir(), "forge-branch-owner-"));
   const config = createTestConfig(root);
   const database = new ForgeDatabase(config.databasePath);
@@ -25,6 +25,7 @@ async function fixture(phase: "planning" | "done" | "cancelled") {
     db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('owner-task', 'company', 'project', 'owner-workflow', 1, ?, 'lead', '[]', 'Working', ?, 'owner-workflow:1')").run(phase, now);
     db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES ('owner-worktree', 'owner-task', 'company', 'project', 'owner-workflow', ?, ?, ?, 'feat/owned', ?, 'lease', 'active', ?)").run(join(root, "repo"), join(root, "worktrees"), join(root, "worktrees", "owner"), sha, now);
   });
+  if (archived) database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET archived_at = ? WHERE id = 'owner-task'").run(now));
   const project = { id: "project", companyId: "company", name: "Project", repositoryPath: join(root, "repo"), worktreeRoot: join(root, "worktrees"), repository: "acme/project", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: [], roleDefaults: { builder: "builder" }, createdAt: now, updatedAt: now };
   const tasks = new TaskService(database, { requireCompanyAccess() { return { status: "active" }; }, recordAuditEventInTransaction() {} } as never, {
     getProject() { return project; },
@@ -52,5 +53,12 @@ test.each(["done", "cancelled"] as const)("task creation allows a %s task that p
   const value = await fixture(phase);
   try {
     await expect(value.tasks.createTask("member", "company", { projectId: "project", title: "New source task", description: "Body", idempotencyKey: `new-${phase}-branch`, images: [], source: { kind: "branch", branch: "feat/owned" } })).resolves.toMatchObject({ created: true });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("task creation allows an archived task that previously owned the source branch even when its phase is failed", async () => {
+  const value = await fixture("failed", true);
+  try {
+    await expect(value.tasks.createTask("member", "company", { projectId: "project", title: "New source task", description: "Body", idempotencyKey: "new-archived-branch", images: [], source: { kind: "branch", branch: "feat/owned" } })).resolves.toMatchObject({ created: true });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

@@ -34,3 +34,26 @@ test("branch checkout blockers explain the duplicate-task recovery choices", () 
     secondaryAction: { command: "retry_development", label: "Retry after the other task finishes" },
   });
 });
+
+test("repair limit blockers show the delivery decision", () => {
+  const actions = [
+    { command: "record_delivery_decision", label: "Continue anyway", requiresNote: true },
+    { command: "cancel_issue", label: "Cancel issue", destructive: true },
+  ];
+  expect(attentionCardFromBlocker(
+    { category: "agent_exhausted", summary: "The Lead review found one open problem." },
+    { actions },
+  )).toMatchObject({
+    kind: "generic",
+    title: "Review problems are not fixed",
+    primaryAction: { command: "record_delivery_decision" },
+    secondaryAction: { command: "cancel_issue" },
+  });
+});
+
+test("other repair blockers still show the no-progress card", () => {
+  expect(attentionCardFromBlocker(
+    { category: "agent_exhausted", summary: "Automatic repair is not making progress." },
+    { actions: [{ command: "retry_development", label: "Resume Developer turn" }] },
+  )).toMatchObject({ kind: "no_progress", title: "Automatic repair is not making progress" });
+});

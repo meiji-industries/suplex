@@ -79,6 +79,19 @@ export function attentionCardFromBlocker(blocker: AttentionBlocker | undefined, 
   }
   if (context.actions?.some((action) => action.label === "Recreate worktree and resume")) return attentionCardFor({ kind: "worktree_missing", worktreePath: null, branchName: null });
   if (context.actions?.some((action) => action.label === "Discard changes and delete worktree")) return attentionCardFor({ kind: "dirty_worktree_cleanup", dirtyFileCount: 1, worktreePath: "Recorded worktree" });
+  const deliveryDecision = context.actions?.find((action) => action.command === "record_delivery_decision");
+  if (category === "agent_exhausted" && deliveryDecision) {
+    const cancel = context.actions?.find((action) => action.command === "cancel_issue");
+    const explanation = "The Lead review found blocking problems. The Developer tried to repair them and did not succeed. Read the review findings below. Then choose: continue anyway, or cancel the issue.";
+    return {
+      kind: "generic",
+      title: "Review problems are not fixed",
+      explanation,
+      evidence: [{ kind: "text", ref: summary || explanation }],
+      primaryAction: { command: deliveryDecision.command, label: deliveryDecision.label, ...(deliveryDecision.requiresNote ? { requiresNote: true } : {}) },
+      ...(cancel ? { secondaryAction: { command: cancel.command, label: cancel.label, destructive: true } } : {}),
+    };
+  }
   if (summary?.startsWith("Automatic repair is not making progress") || summary?.startsWith("Automatic continuation is not making progress") || category === "agent_exhausted" || category === "verification_unrecoverable") return attentionCardFor({ kind: "no_progress", failureClass: "code_failure", signature: summary || "Automatic repair needs your input." });
   const resume = context.actions?.find((action) => action.label === "Resume Developer turn" || action.label === "Resume Lead turn");
   if (resume) return attentionCardFor({ kind: "missing_turn_outcome", role: resume.label.includes("Lead") ? "lead" : "developer", dirty: false });

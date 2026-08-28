@@ -106,6 +106,9 @@ test("delivery workflow constructors keep blockers retryable and approvals exact
   const repairRequired = repairRequiredState(blocked, blocking, 2);
   expect(repairRequired).toMatchObject({ phase: "repair_required", owner: "lead", allowedCommands: ["record_delivery_decision", "repair_delivery", "cancel_issue"], deliveryReviewId: "review_1" });
 
+  const repairLimitReached = repairRequiredState(IssueWorkflowStateSchema.parse({ ...blocked, repairCycle: 2 }), blocking, 2);
+  expect(repairLimitReached).toMatchObject({ phase: "delivery_blocked", pendingAction: "Review problems are not fixed", blocker: { summary: expect.stringMatching(/^Review found 1 blocking problem\./) } });
+
   const repairBlocked = DeveloperRepairActivityResultSchema.parse({ outcome: "blocked", repairAttemptId: "repair_1", cycle: 1, reviewId: "review_1", subject, code: "worktree-unsafe", summary: "The worktree was not clean.", evidenceArtifactId: "artifact_repair_evidence", developerExecutionId: subject.developerExecutionId, developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", resultCommit: subject.subjectCommit, resultTree: subject.subjectTree, dirtyState: "dirty" });
   if (repairBlocked.outcome !== "blocked") throw new Error("Expected a blocked repair fixture");
   const blockedRepair = repairBlockedState(repairRequired, repairBlocked, 2);

@@ -16,6 +16,7 @@ import { loadTaskConfiguration, TaskProjectConfigurationSchema, type TaskProject
 import { PromptOverrideService, type ResolvedPromptSet } from "./prompt-overrides.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
 import { acceptIssueDevelopment, acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, resyncIssueProjection, reviseIssuePlan, startIssueWorkflow } from "./temporal/service.js";
+import { executeWorktreeCommand, type WorktreeCommandInput } from "./temporal/worktree-commands.js";
 import { issueCommands } from "./commands/registry.js";
 import { createInitialIssueWorkflowState, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type SendPlannerNoteInput, type StartPlanningInput } from "./temporal/issue-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
@@ -687,6 +688,7 @@ export interface TaskDeveloperDiff {
 export interface IssueWorkflowPort {
   start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string; existing?: boolean }>;
   execute(command: IssueCommand, workflowId: string, input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput): Promise<IssueWorkflowState>;
+  worktreeCommand?(command: "delete_worktree" | "recreate_worktree", workflowId: string, input: WorktreeCommandInput): Promise<IssueWorkflowState>;
   revisePlan(workflowId: string, input: PlanRevisionCommand): Promise<IssueWorkflowState>;
   continueWork(workflowId: string, input: ContinueWorkCommand): Promise<IssueWorkflowState>;
   resolveDecisionBlocker(workflowId: string, input: ResolveDecisionBlockerInput): Promise<IssueWorkflowState>;
@@ -875,6 +877,7 @@ export class TaskService {
     this.workflow = options.workflow ?? {
       start: (input) => startIssueWorkflow(config, input),
       execute: (command, workflowId, input) => executeIssueCommand(config, workflowId, command, input),
+      worktreeCommand: (command, workflowId, input) => executeWorktreeCommand(config, workflowId, command, input),
       acceptPlanning: (workflowId, input) => acceptIssuePlanning(config, workflowId, input),
       acceptDevelopment: (workflowId, input, command) => acceptIssueDevelopment(config, workflowId, input, command),
       revisePlan: (workflowId, input) => reviseIssuePlan(config, workflowId, input),
@@ -1495,7 +1498,7 @@ export class TaskService {
     const task = this.getTask(actorUserId, taskId);
     const allowedCommands = derivedAllowedCommands(task.phase, task.allowedCommands, task.planRevision, task.planHistory.some((plan) => plan.kind === "plan"), Boolean(task.successorTaskId));
     const descriptor = issueCommands[command];
-    if (descriptor.family === "bespoke") throw new TaskFailure("This command requires its dedicated action", [finding("workflow-unavailable", "workflow", "The durable issue workflow is unavailable")], 503, task);
+    if (descriptor.family === "bespoke" && command !== "delete_worktree" && command !== "recreate_worktree") throw new TaskFailure("This command requires its dedicated action", [finding("workflow-unavailable", "workflow", "The durable issue workflow is unavailable")], 503, task);
     const expectedRevision = payload.expectedRevision;
     if (!Number.isInteger(expectedRevision) || (command !== "cancel_issue" && expectedRevision !== task.revision)) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
     const retryingCancellation = command === "cancel_development" && task.developerRecovery?.status === "cancellation_requested";
@@ -1527,20 +1530,22 @@ export class TaskService {
     const deliveryChangesNote = command === "request_delivery_changes"
       ? await this.stageDeliveryChangesNote(task, payload.note)
       : undefined;
-    const input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput | { expectedRevision: number; confirmDiscardDirty?: boolean } = plannerNote
+    const input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput | WorktreeCommandInput = plannerNote
       ? { expectedRevision, actorUserId, ...plannerNote }
       : deliveryChangesNote
       ? { expectedRevision, actorUserId, noteId: deliveryChangesNote.ref, noteSha256: deliveryChangesNote.sha256, ...(payload.idempotencyKey !== undefined ? { idempotencyKey: payload.idempotencyKey } : {}) }
       : descriptor.family === "start"
       ? { expectedRevision, actorUserId, commandId: payload.commandId ?? randomUUID(), ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
       : (command === "delete_worktree" || command === "recreate_worktree")
-      ? { expectedRevision, ...(payload.confirmDiscardDirty !== undefined ? { confirmDiscardDirty: payload.confirmDiscardDirty } : {}) }
+      ? { expectedRevision, actorUserId, ...(payload.confirmDiscardDirty !== undefined ? { confirmDiscardDirty: payload.confirmDiscardDirty } : {}) }
       : planInput;
     try {
       const state = command === "start_planning" && this.workflow.acceptPlanning
         ? await this.workflow.acceptPlanning(task.workflowId, input as StartPlanningInput)
         : (command === "start_development" || command === "retry_development") && this.workflow.acceptDevelopment
           ? await this.workflow.acceptDevelopment(task.workflowId, input as StartPlanningInput, command)
+          : (command === "delete_worktree" || command === "recreate_worktree") && this.workflow.worktreeCommand
+            ? await this.workflow.worktreeCommand(command, task.workflowId, input as WorktreeCommandInput)
           : await this.workflow.execute(command, task.workflowId, input as StartPlanningInput | PlanCommandInput | SendPlannerNoteInput);
       if (command !== "cancel_issue" && command !== "send_planner_note" && state.revision <= expectedRevision) {
         throw new Error("Stale workflow revision");

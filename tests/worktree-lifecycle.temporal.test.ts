@@ -2,7 +2,8 @@ import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/temporal/service.js";
+import { queryIssueWorkflow, startIssueWorkflow } from "../src/temporal/service.js";
+import { executeWorktreeCommand } from "../src/temporal/worktree-commands.js";
 import { createTemporalHarness } from "./helpers/temporal-harness.js";
 
 test("a task parked in delivery_blocked offers delete then recreate worktree", async () => {
@@ -16,11 +17,11 @@ test("a task parked in delivery_blocked offers delete then recreate worktree", a
     });
     const initial = await queryIssueWorkflow(harness.config, started.workflowId);
     expect(initial.allowedCommands).toContain("delete_worktree");
-    const deleted = await executeIssueCommand(harness.config, started.workflowId, "delete_worktree", { expectedRevision: initial.revision });
+    const deleted = await executeWorktreeCommand(harness.config, started.workflowId, "delete_worktree", { expectedRevision: initial.revision, actorUserId: "issue-admin" });
     expect(deleted).toMatchObject({ worktreeState: "cleaned" });
     expect(deleted.allowedCommands).toContain("recreate_worktree");
     expect(deleted.allowedCommands).not.toContain("delete_worktree");
-    expect(await executeIssueCommand(harness.config, started.workflowId, "delete_worktree", { expectedRevision: deleted.revision })).toEqual(deleted);
+    expect(await executeWorktreeCommand(harness.config, started.workflowId, "delete_worktree", { expectedRevision: deleted.revision, actorUserId: "issue-admin" })).toEqual(deleted);
   } finally {
     await harness.stop();
   }

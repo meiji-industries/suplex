@@ -103,6 +103,21 @@ function BranchSyncCard({ taskId, updatedAt, onRefresh }: { taskId: string; upda
   </Card>;
 }
 
+function WorktreeControls({ task, busy, onAction }: { task: ApiTask; busy: boolean; onAction: (path: TaskPlanAction) => Promise<void> }): ReactElement | null {
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const canDelete = task.allowedCommands.includes("delete_worktree");
+  const canRecreate = task.allowedCommands.includes("recreate_worktree");
+  const path = task.developerExecution?.worktreePath;
+  if (!path && task.worktreeState !== "cleaned" && !canRecreate) return null;
+  return <div className="space-y-1"><dt className="text-muted-foreground">Worktree</dt><dd className="flex min-w-0 flex-wrap items-center gap-1">
+    {task.worktreeState === "cleaned" ? <span>Worktree removed</span> : path ? <><CopyButton value={path} label="Copy worktree path" /><span className="min-w-0 truncate font-mono" title={path}>{path.split("/").pop()}</span></> : null}
+    {canDelete ? <Button size="xs" variant="destructive" onClick={() => setDeleteOpen(true)} disabled={busy}>Delete worktree</Button> : null}
+    {canRecreate ? <Button size="xs" variant="outline" onClick={() => void onAction("recreate-worktree")} disabled={busy}>Recreate worktree</Button> : null}
+  </dd>
+  <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete worktree?</AlertDialogTitle><AlertDialogDescription>Delete the local worktree? The branch and task history are kept.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => void onAction("delete-worktree")}>Delete worktree</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+  </div>;
+}
+
 export function NextAction({ value }: { value: string | null }): ReactElement {
   if (value === "Lead delivery review" || value?.startsWith("Fresh Lead delivery review")) return <>Forge is checking the completed work against the approved plan.</>;
   if (value === "Developer repair of blocking findings") return <>Developer needs to address required review feedback</>;
@@ -656,7 +671,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
               <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Mode</dt><dd><TooltipProvider><Tooltip><TooltipTrigger render={<span className="inline-flex cursor-help items-center" tabIndex={0}>{materialityMode(task.planMaterial)}</span>} /><TooltipContent><ul className="space-y-1" aria-label="Materiality criteria">{materialityCriteria(task.planMaterial ? task.materialCategories : []).map((criterion) => <li className="flex items-center gap-1.5" key={criterion.category}>{criterion.checked ? <Check aria-label="Present" className="size-3" /> : <Circle aria-label="Not present" className="size-3 text-muted-foreground" />}<span>{criterion.label}</span></li>)}</ul></TooltipContent></Tooltip></TooltipProvider></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Prompts</dt><dd title={task.prompts.overrides.join("\n") || undefined}><TaskPromptProvenanceRow taskId={task.id} overrides={task.prompts.overrides} /></dd></div>
-              {task.developerExecution?.worktreePath ? <div className="space-y-1"><dt className="text-muted-foreground">Worktree</dt><dd className="flex items-center gap-1 min-w-0"><CopyButton value={task.developerExecution.worktreePath} label="Copy worktree path" /><span className="min-w-0 truncate font-mono" title={task.developerExecution.worktreePath}>{task.developerExecution.worktreePath.split("/").pop()}</span></dd></div> : null}
+              <WorktreeControls task={task} busy={busy} onAction={async (path) => onPlanAction(path)} />
               <div className="space-y-1"><dt className="text-muted-foreground">Delivery</dt><dd>{deliveryTargetLabel(task.deliveryTarget)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Run project tests</dt><dd>{executionControlLabel(task.executionControls?.runProjectTests)}</dd></div>

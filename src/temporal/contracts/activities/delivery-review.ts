@@ -17,6 +17,7 @@ const DeliveryReviewActivityInputCoreSchema = z.object({
   subject: DeliveryReviewSubjectSchema,
   worktreePath: z.string().min(1).max(1_000),
   branchName: z.string().min(1).max(256),
+  deliverySummary: z.string().min(1).max(200).optional(),
   reviewKind: z.enum(["delivery", "final"]).optional(),
   releaseId: durableId.optional(),
   ciRunId: durableId.optional(),

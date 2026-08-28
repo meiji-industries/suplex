@@ -34,13 +34,16 @@ test("GitHub conflicts start automatic resolution without a human command", { ti
   const projections: IssueWorkflowState[] = [];
   let publishes = 0;
   let baseUpdates = 0;
+  let forwardVerificationChecks = 0;
   let reviewed = false;
   let merged = false;
   let githubConflictSeen = false;
   const githubActions: string[] = [];
   const activities: Partial<IssueActivities> = {
     projectIssueState: async (event) => { projections.push(structuredClone(event.state)); return event.state; },
-    reconcileTargetBase: async (input) => ({ outcome: "no_drift" as const, checkId: `target-base-${input.checkpoint}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: nextBase, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree }),
+    reconcileTargetBase: async (input) => input.checkpoint === "pre_release" && ++forwardVerificationChecks === 1
+      ? { outcome: "blocked" as const, checkId: "forward_merge_failure", checkpoint: input.checkpoint, code: "verification_failed" as const, owner: "lead" as const, retryable: true, summary: "The project test command failed", observedBaseSha: nextBase, priorHead: head, priorTree: tree, resultHead: mergedHead, resultTree: mergedTree }
+      : { outcome: "no_drift" as const, checkId: `target-base-${input.checkpoint}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: nextBase, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree },
     publishRelease: async () => {
       publishes += 1;
       const merged = publishes > 1;
@@ -133,15 +136,11 @@ test("GitHub conflicts start automatic resolution without a human command", { ti
     await handle.result();
 
     const settled = await handle.query(issueStateQuery);
-    expect(settled).toMatchObject({ phase: "done", targetBaseSha: nextBase, resultCommit: head, resultTree: tree, developerExecutionId: "developer_original" });
-    const cleanConflictCheck = projections.find((projection) => projection.pendingAction === "GitHub reports merge conflicts, but the branch already contains the base branch. Waiting for GitHub to re-check.");
-    expect(cleanConflictCheck).toMatchObject({ phase: "ci_waiting", owner: "lead", ciNextPollAt: null });
-    expect(cleanConflictCheck?.allowedCommands).toContain("cancel_issue");
-    expect(cleanConflictCheck?.allowedCommands).not.toContain("resolve_merge_conflict");
-    const phaseSequence = projections.map((state) => state.phase).filter((phase, index, all) => phase !== all[index - 1]);
-    expect(phaseSequence).toContain("merge_conflict_reviewing");
-    expect(phaseSequence.slice(phaseSequence.indexOf("merge_conflict_reviewing"), phaseSequence.indexOf("merge_conflict_reviewing") + 2)).toEqual(["merge_conflict_reviewing", "ci_waiting"]);
-    expect(publishes).toBe(1);
+    expect(settled).toMatchObject({ phase: "done", targetBaseSha: nextBase, resultCommit: mergedHead, resultTree: mergedTree, developerExecutionId: "developer_original" });
+    const failedVerificationReview = projections.find((projection) => projection.deliverySummary === "Project verification failed: The project test command failed");
+    expect(failedVerificationReview).toMatchObject({ phase: "delivery_ready", owner: "lead", resultCommit: mergedHead, resultTree: mergedTree, targetBaseSha: nextBase, targetBaseBlockerCode: "verification_failed" });
+    expect(failedVerificationReview?.allowedCommands).toContain("review_delivery");
+    expect(publishes).toBe(2);
     expect(githubActions).toEqual(["enable_auto_merge"]);
     history = await handle.fetchHistory();
   } finally {

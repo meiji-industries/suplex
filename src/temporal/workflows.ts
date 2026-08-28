@@ -136,9 +136,66 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await projectIssueState(state);
   };
   const applyTargetBaseBlocked = (result: Extract<ReconcileTargetBaseActivityResult, { outcome: "blocked" }>): void => {
+    const reviewVerificationFailure = patched("forge-verification-failure-review-v1");
     const verification = result.code === "verification_failed" || result.code === "verification_timed_out" || result.code === "verification_evidence_too_large";
-    const allowedCommands = [verification ? "retry_forward_merge_verification" : "retry_target_base_reconciliation", "cancel_issue"] as const;
     const summary = normalizeSafeSummary(result.summary, 200);
+    if (reviewVerificationFailure && result.code === "verification_failed" && result.owner === "lead" && result.resultHead && result.resultTree && state.developerExecutionId) {
+      const published = Boolean(state.releaseId && state.pullRequestNumber && state.pullRequestUrl);
+      state = IssueWorkflowStateSchema.parse({
+        ...state,
+        blocker: null,
+        revision: state.revision + 1,
+        phase: "delivery_ready",
+        owner: "lead",
+        allowedCommands: ["review_delivery", "cancel_issue"],
+        pendingAction: "Fresh Lead review required after target-base revalidation",
+        lastEventId: `${state.workflowId}:${state.revision + 1}`,
+        targetBaseSha: result.observedBaseSha ?? state.targetBaseSha,
+        targetBaseCheckId: result.checkId,
+        targetBaseCheckpoint: result.checkpoint,
+        targetBaseOutcome: result.outcome,
+        targetBaseBlockerCode: result.code,
+        targetBaseBlockerOwner: result.owner,
+        targetBaseBlockerRetryable: result.retryable,
+        targetBaseBlockerSummary: summary,
+        forwardMergeId: result.checkId,
+        forwardMergePriorHead: result.priorHead ?? state.forwardMergePriorHead,
+        forwardMergePriorTree: result.priorTree ?? state.forwardMergePriorTree,
+        forwardMergeTargetBaseSha: result.observedBaseSha ?? state.forwardMergeTargetBaseSha,
+        forwardMergeConflictArtifact: null,
+        forwardMergeConflictFileCount: null,
+        resultCommit: result.resultHead,
+        resultTree: result.resultTree,
+        dirtyState: "clean",
+        deliverySummary: normalizeSafeSummary(`Project verification failed: ${summary}`, 200),
+        developerOutcome: "completed",
+        deliveryReviewSupersedesId: null,
+        repairCycle: 0,
+        deliveryReviewId: null,
+        deliveryReviewOutcome: null,
+        deliveryReviewSummary: null,
+        deliveryBlockingFindings: [],
+        deliveryRepairPlan: null,
+        releaseId: published ? state.releaseId : null,
+        pullRequestNumber: published ? state.pullRequestNumber : null,
+        pullRequestUrl: published ? state.pullRequestUrl : null,
+        deliveryDecisionArtifactId: null,
+        ciRunId: null,
+        ciAttempt: 0,
+        ciOutcome: null,
+        ciNextPollAt: null,
+        finalReviewId: null,
+        finalReviewOutcome: null,
+        acceptanceId: null,
+        acceptedHeadSha: null,
+        mergeOutcome: null,
+        expectedHeadSha: result.resultHead,
+        expectedHeadTree: result.resultTree,
+        ...recoveryFields(null, null, null, null),
+      });
+      return;
+    }
+    const allowedCommands = [verification ? "retry_forward_merge_verification" : "retry_target_base_reconciliation", "cancel_issue"] as const;
     state = IssueWorkflowStateSchema.parse({
       ...state,
       blocker: null,

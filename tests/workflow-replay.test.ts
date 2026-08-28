@@ -224,9 +224,9 @@ test("the payload policy uses encoded converter output and covers every configur
   expect(PAYLOAD_POLICY.updateOrSignalArguments).toBe(8 * 1024);
   expect(PAYLOAD_POLICY.activityArguments).toBe(24 * 1024);
   expect(PAYLOAD_POLICY.activityResult).toBe(24 * 1024);
-  expect(PAYLOAD_POLICY.workflowOrUpdateResult).toBe(16 * 1024);
+  expect(PAYLOAD_POLICY.workflowOrUpdateResult).toBe(32 * 1024);
   expect(PAYLOAD_POLICY.queryArguments).toBe(2 * 1024);
-  expect(PAYLOAD_POLICY.queryResult).toBe(16 * 1024);
+  expect(PAYLOAD_POLICY.queryResult).toBe(32 * 1024);
   expect(PAYLOAD_POLICY.memo).toBe(4 * 1024);
   expect(PAYLOAD_POLICY.searchAttributes).toBe(4 * 1024);
   expect(PAYLOAD_POLICY.continueAsNewInput).toBe(8 * 1024);

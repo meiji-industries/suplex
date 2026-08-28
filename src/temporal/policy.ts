@@ -11,9 +11,11 @@ export const PAYLOAD_POLICY = {
   updateOrSignalArguments: 8 * 1024,
   activityArguments: 24 * 1024,
   activityResult: 24 * 1024,
-  workflowOrUpdateResult: 16 * 1024,
+  // Update and query results carry the full issue state. A gate below the single-payload
+  // limit wedges a long-lived workflow (every workflow task fails) once the state grows.
+  workflowOrUpdateResult: WORKFLOW_PAYLOAD_LIMIT_BYTES,
   queryArguments: 2 * 1024,
-  queryResult: 16 * 1024,
+  queryResult: WORKFLOW_PAYLOAD_LIMIT_BYTES,
   memo: 4 * 1024,
   searchAttributes: 4 * 1024,
   continueAsNewInput: WORKFLOW_CONTINUE_STATE_LIMIT_BYTES,

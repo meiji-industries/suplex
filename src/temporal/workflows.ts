@@ -129,7 +129,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const commandAlreadyProcessed = (commandId: string): boolean => commandId !== "legacy-command" && (state.processedCommandIds ?? []).includes(commandId);
   const markCommandProcessed = (commandId: string): void => {
     const processed = state.processedCommandIds ?? [];
-    if (commandId !== "legacy-command" && !processed.includes(commandId)) state = IssueWorkflowStateSchema.parse({ ...state, processedCommandIds: [...processed, commandId].slice(-64) });
+    if (commandId !== "legacy-command" && !processed.includes(commandId)) state = IssueWorkflowStateSchema.parse({ ...state, processedCommandIds: [...processed, commandId].slice(-32) });
   };
   const recordHandlerNoop = async (command: string, reason: string): Promise<void> => {
     state = IssueWorkflowStateSchema.parse({ ...state, lastHandlerError: { command, reason: reason.slice(0, 256), at: new Date().toISOString() } });

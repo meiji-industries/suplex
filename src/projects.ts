@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { access, constants, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
+// eslint-disable-next-line no-restricted-imports -- this module owns the legacy local repository adapter.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
@@ -14,6 +15,7 @@ import { jsonRequired } from "./task-utils.js";
 import { createGithubReleasePort, type GithubReleasePort } from "./github-release.js";
 import { TaskSourceService, type TaskSourceSelector } from "./task-sources.js";
 import type { AgentProviderKind } from "./agent-providers/provider.js";
+import { seedDefaultTaskTemplates } from "./default-task-templates.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -982,6 +984,7 @@ export class ProjectService {
         db.prepare("UPDATE forge_projects SET name = ?, repository_path = ?, worktree_root = ?, repository_identity = ?, base_branch = ?, target_branch = ?, setup_command = ?, verification_command = ?, required_checks_json = ?, role_defaults_json = ?, updated_at = ? WHERE id = ?").run(normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, id);
       } else {
         db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, now);
+        seedDefaultTaskTemplates(db, { id, companyId, roleAgents: normalized.roleDefaults });
       }
       this.auth.recordAuditEventInTransaction(db, actorUserId, updating ? "project_updated" : "project_created", undefined, companyId, { projectId: id });
       return { id };

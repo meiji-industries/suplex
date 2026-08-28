@@ -22,3 +22,10 @@ test("linked retry prompt rebases preserved work onto the current target base", 
   expect(prompt).toContain("Do not amend or rewrite commits that already exist on the branch unless rebasing onto the target base requires it.");
   expect(prompt).not.toContain("directly on the accepted starting SHA");
 });
+
+test("Developer prompt includes continuation context only for a continuation", () => {
+  const continued = buildDeveloperExecutionPrompt({ executionId: "developer_1", reuseWorktree: true, startingSha, verificationSteps: "1: pnpm test", continuation: { completedSteps: [1], remainingSteps: [2, 3], previousCommit: "b".repeat(40), previousDeliverySummary: "First step done" } });
+  expect(continued).toContain("You already completed steps 1");
+  expect(continued).toContain("Continue with steps 2, 3 in the same worktree.");
+  expect(buildDeveloperExecutionPrompt({ executionId: "developer_1", reuseWorktree: false, startingSha, verificationSteps: "1: pnpm test" })).not.toContain("You already completed steps");
+});

@@ -179,6 +179,13 @@ export class HerdrSessionStore {
         this.ensuring.delete(reserved.id);
     }
   }
+  async retireRoleSession(taskId: string, role: RoleSessionRole): Promise<boolean> {
+    const existing = this.database.authQuery((db) => db.prepare("SELECT id, pane_id FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(taskId, role) as { id: string; pane_id: string | null } | undefined);
+    if (!existing) return false;
+    if (existing.pane_id) await this.closeRecordedPane(existing.id, existing.pane_id);
+    this.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0, status = 'closed', pane_id = NULL, agent_name = NULL, updated_at = ? WHERE id = ?").run(now(), existing.id));
+    return true;
+  }
   private async ensureReserved(
     row: Record<string, any>,
     task: RoleSessionTask,

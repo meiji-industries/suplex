@@ -339,6 +339,15 @@ export class DeveloperService {
     let sessionRef: string | undefined = existing?.sessionRef ?? undefined;
     try {
         const task = this.taskContext(input);
+        const priorTerminalExecutions = this.database.authQuery((db) => db.prepare("SELECT status, result_commit AS resultCommit FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status IN ('blocked', 'completed') AND id <> ? ORDER BY started_at DESC LIMIT 2").all(input.taskId, input.companyId, input.workflowId, executionId) as Array<{ status: string; resultCommit: string | null }>);
+        const noProgress = priorTerminalExecutions.length === 2
+          && priorTerminalExecutions[0]!.status === "blocked"
+          && priorTerminalExecutions[0]!.resultCommit !== null
+          && priorTerminalExecutions[0]!.resultCommit === priorTerminalExecutions[1]!.resultCommit;
+        if (noProgress) {
+          await this.roleSessions.retireRoleSession(task.taskId, "developer");
+          evidenceLines.push(JSON.stringify({ type: "forge.session", retired: "developer", reason: "no-progress-retry" }));
+        }
         const turn = await this.turnRunner.run({ task: { ...task, worktreePath: worktree.worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "developer", executionRole: "builder", ledger: "developer", executionId, promptKind: "implementation", prompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperDeliveryReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-delivery", DeveloperDeliveryReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision });
         sessionRef = turn.roleSessionId;
         const execution = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined);

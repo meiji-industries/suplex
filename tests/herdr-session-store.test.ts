@@ -865,6 +865,26 @@ test("switching providers retires the old role session and closes its pane", asy
   }
 });
 
+test("retiring a role session closes the current row and reports when none remains", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never);
+    const current = (store as unknown as {
+      reserve(task: RoleSessionTask, role: "developer", settings: typeof startupSettings): { id: string };
+    }).reserve(taskFor(value.root), "developer", startupSettings);
+    value.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET pane_id = 'developer-pane', agent_name = 'developer-agent', status = 'ready' WHERE id = ?").run(current.id));
+
+    await expect(store.retireRoleSession("task", "developer")).resolves.toBe(true);
+    expect(herdr.closed).toEqual(["developer-pane"]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT is_current, status, pane_id, agent_name FROM forge_herdr_role_sessions WHERE id = ?").get(current.id))).toEqual({ is_current: 0, status: "closed", pane_id: null, agent_name: null });
+    await expect(store.retireRoleSession("task", "developer")).resolves.toBe(false);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("reviewer generations get distinct bounded agent names", async () => {
   const value = await startupFixture();
   const herdr = new StartupHerdrFake();

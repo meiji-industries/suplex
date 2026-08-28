@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { ArtifactStore } from "../src/artifacts.js";
 import { AgentFailure } from "../src/agent-failure.js";
@@ -14,6 +14,7 @@ import { buildGitBranchName } from "../src/git-branch-name.js";
 import { fallbackGitPresentation } from "../src/git-presentation.js";
 import type { HerdrTurnInput, HerdrTurnOutput } from "../src/herdr-turn-runner.js";
 import { WorktreeManager } from "../src/worktrees.js";
+import { HerdrSessionStore } from "../src/herdr-session-store.js";
 
 export async function command(command: string, args: string[], cwd: string): Promise<string> {
   const result = await runCommand({ taskId: null, stepId: null, command, args, cwd });
@@ -114,6 +115,26 @@ test("a Developer retry uses current project prompts and records prompt repinnin
     const evidence = value.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ?").get(result.evidenceArtifactId) as { storage_path: string; sha256: string });
     expect(artifacts.getArtifactSync({ companyId: "company_1", storagePath: evidence.storage_path, sha256: evidence.sha256 }).toString("utf8")).toContain('"promptsRepinned":true');
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test.each([
+  { commits: ["a".repeat(40), "a".repeat(40)], retired: 1 },
+  { commits: ["a".repeat(40), "b".repeat(40)], retired: 0 },
+])("Developer retry retires a no-progress session only for matching commits", async ({ commits, retired }) => {
+  const value = await fixture();
+  const retire = vi.spyOn(HerdrSessionStore.prototype, "retireRoleSession").mockResolvedValue(true);
+  const fake = fakeTurnRunner(() => ({ kind: "delivery", summary: "Blocked", steps: [{ number: 1, status: "blocked", filesChanged: [], notes: "blocked" }], authorizedStepsNotCompleted: [1], resultCommit: commits[0], resultTree: "c".repeat(40), dirtyState: "clean", blocker: "blocked" }));
+  try {
+    const targetSha = await command("git", ["rev-parse", "HEAD"], join(value.root, "repo"));
+    value.database.authQuery((db) => commits.forEach((commit, index) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, result_commit) VALUES (?, 'task_1', 'company_1', 'workflow_1', 1, ?, ?, 'work/fixture', ?, ?, ?, ?)").run(`prior_${index}`, index + 1, index === 1 ? "blocked" : "completed", join(value.root, "worktrees", "task_1"), targetSha, new Date(2026, 0, index + 1).toISOString(), commit)));
+    await new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run({ ...value.input, developerAttempt: 3 });
+    expect(retire).toHaveBeenCalledTimes(retired);
+    if (retired) expect(retire).toHaveBeenCalledWith("task_1", "developer");
+  } finally {
+    retire.mockRestore();
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
 });
 
 test("required Developer proof is ingested and persisted without local paths", async () => {

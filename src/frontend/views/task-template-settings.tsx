@@ -12,7 +12,7 @@ import { Checkbox } from "../components/ui/checkbox.js";
 import { Input } from "../components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select.js";
 import { Textarea } from "../components/ui/textarea.js";
-import { readJson, withCompany } from "../lib/api.js";
+import { isApiError, readJson, withCompany } from "../lib/api.js";
 import { relativeTime, type ApiAgent, type ApiTaskTemplate } from "../lib/view-shared.js";
 
 const COLUMNS: SettingsTableColumn[] = [{ key: "name", label: "Name", width: 230 }, { key: "delivery", label: "Delivery target", width: 150 }, { key: "source", label: "Source", width: 140 }, { key: "roles", label: "Role agents", width: 210 }, { key: "updated", label: "Updated", width: 120 }];
@@ -28,15 +28,20 @@ function TemplateEditor({ template, projectId, agents, onSaved, onDeleted }: { t
   const [draft, setDraft] = useState<Draft>(blankDraft);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => { setDraft(template ? { name: template.name, description: template.description, roleAgents: template.roleAgents, supplementalReview: template.supplementalReview, autoApprovePlan: template.autoApprovePlan, deliveryTarget: template.deliveryTarget, runProjectTests: template.runProjectTests, visualEvidence: template.visualEvidence, ...(template.source ? { source: template.source } : {}) } : blankDraft()); setError(""); }, [template?.id]);
+  const [nameError, setNameError] = useState("");
+  useEffect(() => { setDraft(template ? { name: template.name, description: template.description, roleAgents: template.roleAgents, supplementalReview: template.supplementalReview, autoApprovePlan: template.autoApprovePlan, deliveryTarget: template.deliveryTarget, runProjectTests: template.runProjectTests, visualEvidence: template.visualEvidence, ...(template.source ? { source: template.source } : {}) } : blankDraft()); setError(""); setNameError(""); }, [template?.id]);
   const set = <Key extends keyof Draft>(key: Key, value: Draft[Key]): void => setDraft((current) => ({ ...current, [key]: value }));
   const save = async (): Promise<void> => {
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setNameError("");
     try {
       const url = template ? `/api/task-templates/${encodeURIComponent(template.id)}` : `/api/projects/${encodeURIComponent(projectId)}/task-templates`;
       const saved = await readJson<ApiTaskTemplate>(url, { method: template ? "PATCH" : "POST", body: JSON.stringify(draft) });
       onSaved(saved, created);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to save template."); }
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Unable to save template.";
+      const finding = isApiError(reason) ? reason.findings?.find((item) => item.field === "name") : undefined;
+      if (finding) setNameError(finding.message); else setError(message);
+    }
     finally { setBusy(false); }
   };
   const remove = async (): Promise<void> => {
@@ -48,7 +53,7 @@ function TemplateEditor({ template, projectId, agents, onSaved, onDeleted }: { t
   };
   return <section aria-label="Template editor" className="min-w-0 border-t p-4 lg:border-l lg:border-t-0">
     <div className="space-y-3">
-      <label className="grid gap-1 text-xs font-medium">Name<Input aria-label="Name" value={draft.name} onChange={(event) => set("name", event.target.value)} /></label>
+      <label className="grid gap-1 text-xs font-medium">Name<Input aria-describedby={nameError ? "template-name-error" : undefined} aria-label="Name" value={draft.name} onChange={(event) => set("name", event.target.value)} />{nameError ? <span className="text-destructive" id="template-name-error">{nameError}</span> : null}</label>
       {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
       <label className="grid gap-1 text-xs font-medium">Description<Textarea aria-label="Description" value={draft.description} onChange={(event) => set("description", event.target.value)} /></label>
       <label className="grid gap-1 text-xs font-medium">Delivery target<Select value={draft.deliveryTarget} onValueChange={(value) => set("deliveryTarget", value as Draft["deliveryTarget"])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{taskDeliveryTargetOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></label>

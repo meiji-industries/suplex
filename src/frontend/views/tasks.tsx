@@ -41,7 +41,7 @@ async function fileAsImage(file: File): Promise<{ filename: string; mimeType: st
   });
 }
 
-type TaskListFilter = "active" | "backlog" | "all";
+type TaskListFilter = "active" | "backlog" | "all" | "archived";
 
 function taskListDate(timestamp: string): string {
   const date = new Date(timestamp);
@@ -212,7 +212,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     try {
       const [projectResult, taskResult, agentResult] = await Promise.all([
         readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
-        readTaskList(companyId),
+        readTaskList(companyId, taskFilter === "archived"),
         readJson<{ agents: ApiAgent[] }>("/api/agents"),
       ]);
       if (token !== requestToken.current) return;
@@ -226,7 +226,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
       else if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
       else setError("Unable to load tasks");
     }
-  }, [companyId, loading, mode, reloadCompanies]);
+  }, [companyId, loading, mode, reloadCompanies, taskFilter]);
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
     if (!companyId || !loadedCompanyId || loadedCompanyId !== companyId) { setBranchSync({}); return; }
@@ -286,7 +286,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     { id: "backlog", title: "Backlog", phases: new Set<TaskPhase>(["backlog"]), tasks: visibleTasks.filter((task) => task.phase === "backlog") },
     { id: "blocked", title: "Blocked", phases: blockedTaskPhases, tasks: visibleTasks.filter((task) => blockedTaskPhases.has(task.phase)) },
     { id: "completed", title: "Completed", phases: new Set<TaskPhase>(["done", "cancelled"]), tasks: visibleTasks.filter((task) => task.phase === "done" || task.phase === "cancelled") },
-  ].filter((group) => taskFilter === "all" ? group.tasks.length > 0 : group.id === taskFilter).map((group) => ({ ...group, tasks: [...group.tasks].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)) }));
+  ].filter((group) => taskFilter === "all" || taskFilter === "archived" ? group.tasks.length > 0 : group.id === taskFilter).map((group) => ({ ...group, tasks: [...group.tasks].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)) }));
   const selectTask = (task: ApiTaskSummary): void => { setSelected(undefined); selectedRef.current = undefined; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`${routeBase}/${encodeURIComponent(task.id)}`, companyId)); window.dispatchEvent(new Event("forge:navigate")); };
   const addImages = async (files: File[]): Promise<void> => {
     setCreateError("");
@@ -467,6 +467,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
                 <SelectContent><SelectItem value="all">All projects</SelectItem>{visibleProjects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent>
               </Select>
               <label className="flex cursor-pointer items-center gap-2 text-xs"><Checkbox checked={hideEmptyColumns} onCheckedChange={(c) => setHideEmptyColumns(c === true)} />Hide empty columns</label>
+              <label className="flex cursor-pointer items-center gap-2 text-xs"><Checkbox checked={taskFilter === "archived"} onCheckedChange={(checked) => setTaskFilter(checked === true ? "archived" : "all")} />Archived</label>
               <Layers3 className="size-3.5 text-muted-foreground" aria-hidden="true" />
             </div>
             <div className="flex items-center gap-1">
@@ -522,12 +523,13 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
               <TabsTrigger value="active">Active <span className="text-[11px] text-muted-foreground">{activeCount}</span></TabsTrigger>
               <TabsTrigger value="backlog">Backlog <span className="text-[11px] text-muted-foreground">{backlogCount}</span></TabsTrigger>
               <TabsTrigger value="all">All tasks <span className="text-[11px] text-muted-foreground">{visibleTasks.length}</span></TabsTrigger>
+              <TabsTrigger value="archived">Archived <span className="text-[11px] text-muted-foreground">{visibleTasks.length}</span></TabsTrigger>
             </TabsList>
           </Tabs>
         </div>
         {error ? <div className="p-3 sm:p-4"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
         {!scopeLoaded && !error ? <div className="space-y-px p-2" aria-label="Loading tasks" aria-busy="true"><Skeleton className="h-8 w-full" /><Skeleton className="h-9 w-full" /><Skeleton className="h-9 w-full" /></div> : null}
-        {scopeLoaded && taskGroups.length === 0 ? <div className="px-4 py-8 text-xs text-muted-foreground">{taskFilter === "active" ? "No active tasks." : taskFilter === "backlog" ? "No backlog tasks." : "No tasks yet. Press ⌘N to create one."}</div> : null}
+        {scopeLoaded && taskGroups.length === 0 ? <div className="px-4 py-8 text-xs text-muted-foreground">{taskFilter === "active" ? "No active tasks." : taskFilter === "backlog" ? "No backlog tasks." : taskFilter === "archived" ? "No archived tasks." : "No tasks yet. Press ⌘N to create one."}</div> : null}
         {scopeLoaded ? <div aria-label="Task groups" className="py-1">
           {taskGroups.map((group) => {
             const GroupIcon = group.id === "completed" ? CheckCircle2 : group.id === "blocked" ? CircleX : group.id === "active" ? CircleDotDashed : CircleDashed;

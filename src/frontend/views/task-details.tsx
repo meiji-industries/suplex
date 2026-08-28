@@ -40,7 +40,7 @@ import type { IssueCommandSlug } from "../../commands/registry.js";
 import { BLOCKED_PHASES, TERMINAL_PHASES, phaseLabel } from "../../issue-phases.js";
 import { releaseFailureCopy } from "../../release-failures.js";
 import type { ActivityFeedRow } from "../lib/task-activity-feed.js";
-import { Check, Circle, Ellipsis, GitPullRequest, RefreshCw } from "lucide-react";
+import { Archive, ArchiveRestore, Check, Circle, Ellipsis, GitPullRequest, RefreshCw } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 const DeveloperDiff = lazy(async () => await import("../components/app/developer-diff.js"));
@@ -387,12 +387,12 @@ function DeliveryChecksCard({ task }: { task: ApiTask }): ReactElement {
   </Card>;
 }
 
-function TaskOptions({ canCancel, busy, resyncBusy, onCancel, onSaveTemplate, onDuplicate, onResync }: { canCancel: boolean; busy: boolean; resyncBusy: boolean; onCancel: () => void; onSaveTemplate: () => void; onDuplicate: () => void; onResync: () => void }): ReactElement {
+function TaskOptions({ canCancel, archived, busy, resyncBusy, onArchive, onCancel, onSaveTemplate, onDuplicate, onResync, onUnarchive }: { canCancel: boolean; archived: boolean; busy: boolean; resyncBusy: boolean; onArchive: () => void; onCancel: () => void; onSaveTemplate: () => void; onDuplicate: () => void; onResync: () => void; onUnarchive: () => void }): ReactElement {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Task options" title="Task options" />}><Ellipsis /></DropdownMenuTrigger>
       {/* Resync stays enabled even while the projection is lagging — that's the state it exists to repair, so it can't share the lagging-gated `busy` flag the other items use. */}
-      <DropdownMenuContent align="start"><DropdownMenuItem disabled={busy} onClick={onSaveTemplate}>Save as template…</DropdownMenuItem><DropdownMenuItem disabled={busy} onClick={onDuplicate}>Duplicate</DropdownMenuItem><DropdownMenuItem disabled={resyncBusy} onClick={onResync}>Resync</DropdownMenuItem>{canCancel ? <DropdownMenuItem variant="destructive" disabled={busy} onClick={onCancel}>Cancel task</DropdownMenuItem> : null}</DropdownMenuContent>
+      <DropdownMenuContent align="start"><DropdownMenuItem disabled={busy} onClick={onSaveTemplate}>Save as template…</DropdownMenuItem><DropdownMenuItem disabled={busy} onClick={onDuplicate}>Duplicate</DropdownMenuItem><DropdownMenuItem disabled={resyncBusy} onClick={onResync}>Resync</DropdownMenuItem>{archived ? <DropdownMenuItem disabled={busy} onClick={onUnarchive}><ArchiveRestore />Unarchive</DropdownMenuItem> : <><DropdownMenuItem disabled={busy} onClick={onArchive}><Archive />Archive task</DropdownMenuItem>{canCancel ? <DropdownMenuItem variant="destructive" disabled={busy} onClick={onCancel}>Cancel task</DropdownMenuItem> : null}</>}</DropdownMenuContent>
     </DropdownMenu>
   );
 }
@@ -552,6 +552,24 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   const decisionControls = task.phase === "approval" && exactApproveCommand ? <PlanDecisionForm key={task.revision} approveCommand={exactApproveCommand} busy={busy} onSubmit={(payload) => onPlanAction(payload.command.endpoint as TaskPlanAction, payload.note, { idempotencyKey: payload.idempotencyKey })} error={error} /> : null;
   const [answer, setAnswer] = useState("");
   useEffect(() => { setAnswer(""); }, [task.id, task.revision]);
+  const [archiveDialog, setArchiveDialog] = useState<"initial" | number | null>(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const archiveTask = async (confirmDiscardDirty = false): Promise<void> => {
+    setArchiveBusy(true);
+    try {
+      const result = await readJson<{ status: "archived"; task: ApiTask } | { status: "confirmation_required"; dirtyFileCount: number; task: ApiTask }>(`/api/tasks/${encodeURIComponent(task.id)}/archive`, { method: "POST", body: JSON.stringify({ confirmDiscardDirty }) });
+      if (result.status === "confirmation_required") { setArchiveDialog(result.dirtyFileCount); return; }
+      setArchiveDialog(null); await onRefresh();
+    } catch (reason) {
+      setArchiveDialog(null);
+      throw reason;
+    } finally { setArchiveBusy(false); }
+  };
+  const unarchiveTask = async (): Promise<void> => {
+    setArchiveBusy(true);
+    try { await readJson<ApiTask>(`/api/tasks/${encodeURIComponent(task.id)}/unarchive`, { method: "POST" }); await onRefresh(); }
+    finally { setArchiveBusy(false); }
+  };
   const [changesFileCount, setChangesFileCount] = useState<number | undefined>(undefined);
   useEffect(() => { setChangesFileCount(undefined); }, [task.id, task.developerExecution?.id]);
   const [activeWorkTab, setActiveWorkTab] = useState("chat");
@@ -603,14 +621,14 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
     {hasChanges ? <TabsContent value="diffs" keepMounted><div ref={diffPanelRef} data-task-diff-panel className="scroll-mt-24"><Suspense fallback={<Skeleton className="h-48 w-full" />}><DeveloperDiff taskId={task.id} executionId={task.developerExecution!.id} poll={pollDeveloperDiff} onFileCount={setChangesFileCount} /></Suspense></div></TabsContent> : null}
     {hasChecks ? <TabsContent value="checks"><CiPanel ci={task.ci!} /></TabsContent> : null}
   </>;
-  return (
-    <ApplicationFrame title={task.issueKey ? `${task.issueKey} · ${task.title}` : task.title} headerActions={<TaskOptions canCancel={task.allowedCommands.includes("cancel_issue")} busy={busy || task.projection.status === "lagging"} resyncBusy={busy} onCancel={() => void onPlanAction("cancel")} onSaveTemplate={() => void onSaveTemplate()} onDuplicate={() => void onDuplicate()} onResync={() => void onPlanAction("resync-projection")} />}>
+  return <>
+    <ApplicationFrame title={task.issueKey ? `${task.issueKey} · ${task.title}` : task.title} headerActions={<TaskOptions canCancel={task.allowedCommands.includes("cancel_issue")} archived={Boolean(task.archivedAt)} busy={busy || archiveBusy || task.projection.status === "lagging"} resyncBusy={busy} onArchive={() => setArchiveDialog("initial")} onCancel={() => void onPlanAction("cancel")} onSaveTemplate={() => void onSaveTemplate()} onDuplicate={() => void onDuplicate()} onResync={() => void onPlanAction("resync-projection")} onUnarchive={() => void unarchiveTask()} />}>
       <article data-task-detail className="min-w-0">
         <div data-task-body className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_260px]">
           <div className="min-w-0">
             <header className="px-4 pt-4 pb-3 sm:px-6 lg:px-10">
               <div data-task-header-content className="mx-auto max-w-4xl space-y-4">
-                <h2 className="min-w-0"><InlineTaskEditor field="title" value={task.title} onSave={async (title) => onUpdateDetails({ title })} /></h2>
+                <h2 className="min-w-0"><InlineTaskEditor field="title" value={task.title} onSave={async (title) => onUpdateDetails({ title })} />{task.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}</h2>
               </div>
             </header>
             <div data-task-content className="min-w-0 px-4 pt-4 pb-6 sm:px-6 lg:px-10">
@@ -687,7 +705,19 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
         </div>
       </article>
     </ApplicationFrame>
-  );
+      <AlertDialog open={archiveDialog !== null} onOpenChange={(open) => { if (!open && !archiveBusy) setArchiveDialog(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{typeof archiveDialog === "number" ? `Discard ${archiveDialog} uncommitted changes and archive?` : "Archive task?"}</AlertDialogTitle>
+            {archiveDialog === "initial" ? <AlertDialogDescription>Archive this task? Work stops, the local worktree is deleted, and the task is hidden. The branch and history are kept.</AlertDialogDescription> : null}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={archiveBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={archiveBusy} onClick={(event) => { event.preventDefault(); void archiveTask(typeof archiveDialog === "number"); }}>{archiveBusy ? "Archiving…" : "Archive task"}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+  </>;
 }
 
 export function TaskDetailsSkeleton(): ReactElement {

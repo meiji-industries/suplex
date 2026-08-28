@@ -45,6 +45,19 @@ export function revisioned(state: IssueWorkflowState, phase: IssueWorkflowState[
   return IssueWorkflowStateSchema.parse({ ...state, revision, phase, owner, allowedCommands, pendingAction, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${revision}` });
 }
 
+export function withWorktreeCommands(state: IssueWorkflowState, patched: boolean): IssueWorkflowState {
+  if (!patched) return state;
+  const terminal = state.phase === "done" || state.phase === "cancelled";
+  const canDelete = state.activeOperation === null && Boolean(state.worktreePath) && state.worktreeState !== "cleaned";
+  const canRecreate = !terminal && (state.worktreeState === "cleaned" || state.worktreeState === "removed_externally");
+  const allowedCommands = [
+    ...state.allowedCommands,
+    ...(canDelete && !state.allowedCommands.includes("delete_worktree") ? ["delete_worktree" as const] : []),
+    ...(canRecreate && !state.allowedCommands.includes("recreate_worktree") ? ["recreate_worktree" as const] : []),
+  ];
+  return allowedCommands.length === state.allowedCommands.length ? state : IssueWorkflowStateSchema.parse({ ...state, allowedCommands });
+}
+
 export function freshDeliveryLineage(): Pick<IssueWorkflowState, "deliveryReviewSupersedesId" | "deliveryRepairAttemptId" | "repairCycle" | "deliveryReviewId" | "deliveryReviewOutcome" | "deliveryReviewSummary" | "deliveryBlockingFindings" | "deliveryRepairPlan" | "deliveryRepairPlanArtifactId" | "deliveryRepairAuthority"> {
   return {
     deliveryReviewSupersedesId: null,

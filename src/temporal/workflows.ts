@@ -9,7 +9,7 @@ import { githubPullRequestObservationFields } from "../github-pull-request-obser
 import { reconcile, type PullRequestTarget } from "../pull-request-reconciler.js";
 import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, recordProbeStarted, loadTaskSourcePullRequest, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
 import { syncGithubPullRequestSignal } from "./issue-updates.js";
-import { evidencePointer, humanBlocker } from "./workflow/state-transitions.js";
+import { evidencePointer, humanBlocker, withWorktreeCommands } from "./workflow/state-transitions.js";
 import { createIssueWorkflowContext } from "./workflow/context.js";
 import { registerGovernanceHandlers } from "./workflow/register-governance.js";
 import { registerLifecycleHandlers, registerLifecycleHandlersContinuation } from "./workflow/register-lifecycle.js";
@@ -25,7 +25,11 @@ import { registerTargetBaseHandlers } from "./workflow/register-target-base.js";
 import { applyLeadResult, applyLegacyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, compactStateForContinuation, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
 export * from "./issue-updates.js";
 export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
-async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: workflowInfo().runId, eventId: state.lastEventId, state })); }
+const worktreeCommandsPatch = "forge-worktree-commands-v1";
+async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> {
+  const projected = withWorktreeCommands(state, patched(worktreeCommandsPatch));
+  return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: workflowInfo().runId, eventId: projected.lastEventId, state: projected }));
+}
 const MAX_RECONCILIATION_ATTEMPTS = 20;
 function sleepUntil(retryAt: string | null | undefined): Promise<void> { return retryAt ? sleep(Math.max(1, Date.parse(retryAt) - Date.now())) : sleep("1 second"); }
 export const probeStateQuery = defineQuery<ProbeWorkflowState>("probeState");
@@ -108,6 +112,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (supplementalReview) actions.push({ command: "request_supplemental_review", label: "Request supplemental review", requiresNote: false, destructive: false });
     return humanBlocker("member_authorization", "Member approval is required for this material plan.", actions, evidencePointer(result.leadOutputArtifactId, "lead-plan"));
   };
+  state = withWorktreeCommands(state, patched(worktreeCommandsPatch));
   const initialProjection = continuation || !exactPlanAuthorityEnabled ? Promise.resolve(state) : projectIssueState(state);
   let continuationRequested = false;
   let initialProjectionComplete = Boolean(continuation);
@@ -265,8 +270,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: projectIssueState, projectCapacityState, patched, durableCapacityPatch, capacityFinalizationOwnershipPatch, capacityReadmissionPatch });
   const guarded = createGuarded({ get: () => state, set: (next) => { state = next; } }, { enabled: guardedHandlersEnabled, reviseContinueEnabled, failedRetryEnabled, project: projectIssueState });
   const workflowContext = createIssueWorkflowContext(validatedInput, state, {
-    project: () => projectIssueState(state),
-    projectState: (value) => projectIssueState(value),
+    project: () => { state = withWorktreeCommands(state, patched(worktreeCommandsPatch)); return projectIssueState(state); },
+    projectState: (value) => { state = withWorktreeCommands(value, patched(worktreeCommandsPatch)); return projectIssueState(state); },
     projectInitialPlanningState: async (next, distinctPlanningStates) => {
       if (distinctPlanningStates || !patched(planningProjectionIntegrityPatch)) await projectIssueState(next);
     },

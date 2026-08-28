@@ -31,9 +31,9 @@ function result(input: { developerTurnExecutionId: string }, commit: string, rem
   };
 }
 
-async function waitForPhase(h: TemporalHarness, workflowId: string, phase: string) {
+async function waitForPhase(h: TemporalHarness, workflowId: string, phase: string, settled = (_state: Awaited<ReturnType<typeof queryIssueWorkflow>>) => true) {
   let state = await queryIssueWorkflow(h.config, workflowId);
-  for (let attempt = 0; attempt < 120 && state.phase !== phase; attempt += 1) {
+  for (let attempt = 0; attempt < 120 && (state.phase !== phase || !settled(state)); attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 50));
     state = await queryIssueWorkflow(h.config, workflowId);
   }
@@ -63,12 +63,11 @@ test("partial Developer delivery automatically continues on the same session", {
   await h.start();
   try {
     const started = await start(h, "developer-continuation-complete");
-    await waitForPhase(h, started.workflowId, "delivery_ready");
+    const settled = await waitForPhase(h, started.workflowId, "delivery_ready", (state) => state.developerContinuation === null);
     expect(projected).toContainEqual(expect.objectContaining({ phase: "delivery_ready", developerContinuation: null }));
     expect(inputs).toHaveLength(2);
     expect(inputs[1]).toMatchObject({ continuation: { remainingSteps: [2, 3, 4, 5, 6, 7, 8], previousCommit: firstCommit } });
-    const queried = await queryIssueWorkflow(h.config, started.workflowId);
-    expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(queried);
+    expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(settled);
   } finally { await h.stop(); }
 });
 

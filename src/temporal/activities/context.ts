@@ -187,17 +187,32 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     throw ApplicationFailure.nonRetryable(safeSummary, code, { code, category, summary: safeSummary });
   };
   const agentCategory = (error: AgentFailure): AttentionCategory => error.code === "login-expired" ? "provider_authentication" : error.code === "model-unavailable" ? "provider_ambiguity" : error.code === "rate-limited" ? "provider_connectivity_exhausted" : error.code === "malformed-output" || error.code === "invalid-output" ? "agent_contradiction" : "agent_exhausted";
-  const invokeAgent = async <T>(input: { companyId: string }, operation: () => Promise<T>, provider = "codex"): Promise<T> => {
+  const providerForLead = (input: { roleProfiles?: { planner?: string | undefined } | undefined }): string => {
+    const profileId = input.roleProfiles?.planner;
+    if (!profileId) return "codex";
+    return (database.authQuery((db) => db.prepare("SELECT provider FROM forge_profiles WHERE id = ?").get(profileId) as { provider?: string } | undefined)?.provider) ?? "codex";
+  };
+  const invokeAgent = async <T>(input: { companyId: string; roleProfiles?: { planner?: string | undefined } | undefined }, operation: () => Promise<T>, provider?: string): Promise<T> => {
     let heartbeat: ((details?: unknown) => void) | undefined;
     let interval: NodeJS.Timeout | undefined;
+    let queueHint: NodeJS.Timeout | undefined;
     try {
       const activityContext = Context.current();
-      heartbeat = (details?: unknown) => activityContext.heartbeat(details);
+      heartbeat = (details?: unknown) => {
+        activityContext.heartbeat(details);
+        if (!queueHint && details && typeof details === "object" && (details as { queued?: unknown }).queued === true && "taskId" in input) {
+          queueHint = setTimeout(() => {
+            const waiting = details as { provider: string; position: number; activeCount: number };
+            database.authTransaction((db) => db.prepare("UPDATE forge_issue_projections SET pending_action = ?, updated_at = ? WHERE task_id = ?").run(`Waiting for a ${waiting.provider} agent slot (${waiting.activeCount} active, position ${waiting.position})`, new Date().toISOString(), (input as { taskId: string }).taskId));
+          }, 10_000);
+          queueHint.unref();
+        }
+      };
       interval = setInterval(heartbeat, 5_000);
       interval.unref();
     } catch { /* direct unit calls do not have an Activity context */ }
     try {
-      return await capacity.run(operation, provider, heartbeat, cancellationSignal());
+      return await capacity.run(operation, provider ?? providerForLead(input), heartbeat, cancellationSignal());
     } catch (error) {
       try {
         if (Context.current().cancellationSignal.aborted) throw new CancelledFailure("CANCELLED");
@@ -217,6 +232,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       throw error;
     } finally {
       clearInterval(interval);
+      clearTimeout(queueHint);
     }
   };
   const bindCapacityExecution = async <T>(_capacityRequestId: string | undefined, _owner: { executionKind: "agent" | "developer"; executionId: string; sessionRef?: string | null; worktreePath?: string | null }, result: T): Promise<T> => result;

@@ -295,7 +295,7 @@ function ProjectSettingsDialog({
                 })}
                 {agents.length === 0 ? <FieldDescription>No agents configured. <a href={withCompany("/admin/agents", project.companyId)}>Create an agent</a> before activating this project.</FieldDescription> : null}
               </FieldSet>
-              <DialogFooter>{missingRequirements.length ? <span className="mr-auto text-[11px] text-amber-800">Complete the missing requirements to save.</span> : null}<a href={withCompany(`/projects/${encodeURIComponent(project.id)}/prompts`, project.companyId)}>Prompts</a><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || missingRequirements.length > 0}>{busy ? "Saving…" : "Save settings"}</Button></DialogFooter>
+              <DialogFooter>{missingRequirements.length ? <span className="mr-auto text-[11px] text-amber-800">Complete the missing requirements to save.</span> : null}<a href={withCompany(`/projects/${encodeURIComponent(project.id)}/prompts`, project.companyId)}>Prompts</a><a href={withCompany(`/projects/${encodeURIComponent(project.id)}/templates`, project.companyId)}>Templates</a><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || missingRequirements.length > 0}>{busy ? "Saving…" : "Save settings"}</Button></DialogFooter>
             </FieldGroup>
           </form> : null}
           {error ? <div className="mt-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}

@@ -13,6 +13,7 @@ import { ProjectsView } from "../../views/projects.js";
 import { TasksView } from "../../views/tasks.js";
 import { TimelineView } from "../../views/timeline.js";
 import { PromptSettings } from "../../views/prompt-settings.js";
+import { TaskTemplateSettings } from "../../views/task-template-settings.js";
 
 function AppView(): ReactElement {
   const pathname = window.location.pathname;
@@ -21,6 +22,7 @@ function AppView(): ReactElement {
   if (pathname === "/profile") return <ProfileView />;
   if (pathname === "/projects") return <ProjectsView />;
   if (/^\/projects\/[^/]+\/prompts$/.test(pathname)) return <PromptSettings scope="project" projectId={pathname.split("/")[2]!} />;
+  if (/^\/projects\/[^/]+\/templates$/.test(pathname)) return <TaskTemplateSettings projectId={pathname.split("/")[2]!} />;
   if (pathname === "/tasks" || pathname.startsWith("/tasks/")) return <TasksView />;
   if (pathname === "/board" || pathname.startsWith("/board/")) return <TasksView mode="board" />;
   if (pathname === "/timeline") return <TimelineView />;

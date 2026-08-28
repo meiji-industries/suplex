@@ -30,6 +30,7 @@ import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, t
 import { TaskDetailsPage, TaskDetailsNotFound, TaskDetailsSkeleton, type PlanRevisionInput, type TaskPlanAction } from "./task-details.js";
 import { prefillForTaskSource, preserveEditedPrefill, TaskSourcePicker, type TaskSourceSelector, type TaskSourceSummary } from "../components/app/task-source-picker.js";
 import { TaskRoleSelectors } from "../components/app/task-role-selectors.js";
+import { taskDeliveryTargetOptions } from "../components/app/task-delivery-target.js";
 
 async function fileAsImage(file: File): Promise<{ filename: string; mimeType: string; base64: string }> {
   return await new Promise((resolve, reject) => {
@@ -140,7 +141,7 @@ function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId,
             <fieldset className="border-t border-border/70 bg-muted/30 px-5 py-3">
               <legend className="px-0 text-xs font-medium text-muted-foreground">Delivery &amp; checks</legend>
               <RadioGroup aria-label="Delivery target" value={deliveryTarget} onValueChange={(value) => { if (["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"].includes(value)) onDeliveryTargetChange(value as typeof deliveryTarget); }} className="mt-2.5 flex flex-wrap gap-x-4 gap-y-2">
-                {[["local_worktree", "Keep in worktree"], ["remote_branch", "Push branch"], ["pull_request_draft", "Draft pull request"], ["pull_request_ready", "Ready for review"], ["merged", "Fully merged"]].map(([value, label]) => <label className="flex items-center gap-1.5 text-xs" key={value}><RadioGroupItem value={value} />{label}</label>)}
+                {taskDeliveryTargetOptions.map(({ value, label }) => <label className="flex items-center gap-1.5 text-xs" key={value}><RadioGroupItem value={value} />{label}</label>)}
               </RadioGroup>
               <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border/60 pt-2.5 text-xs">
                 <label className="flex cursor-pointer items-center gap-2"><Checkbox id="task-auto-approve-plan" checked={autoApprovePlan} onCheckedChange={(checked) => onAutoApprovePlanChange(checked === true)} />Auto-approve plan</label>

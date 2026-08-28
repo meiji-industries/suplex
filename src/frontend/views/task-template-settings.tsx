@@ -40,7 +40,7 @@ function TemplateEditor({ template, projectId, agents, onSaved, onDeleted }: { t
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : "Unable to save template.";
       const finding = isApiError(reason) ? reason.findings?.find((item) => item.field === "name") : undefined;
-      if (finding) setNameError(finding.message); else setError(message);
+      if (finding) setNameError(finding.message || message || "Template name is already in use"); else setError(message);
     }
     finally { setBusy(false); }
   };

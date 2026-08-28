@@ -155,6 +155,7 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
         const failureRevision = failureBase.revision + 1;
         const capacityFailure = ["not-found", "not-owner", "duplicate", "conflict", "stale-revision", "profile-unavailable", "invalid-status", "deadline-exhausted"].includes(failure.code);
         const resumeTurn = ["turn_outcome_missing", "turn_stalled"].includes(failure.code) && ctx.patched("forge-turn-outcome-recovery-v1");
+        const startupBlocked = failure.code === "agent_startup_blocked" && ctx.patched("forge-turn-outcome-recovery-v1");
         ctx.state = IssueWorkflowStateSchema.parse({
           ...failureBase,
           capacity: null,
@@ -164,7 +165,7 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
           owner: "human",
           allowedCommands: resumeTurn ? ["start_planning", "cancel_issue"] : capacityFailure ? ["start_planning", "cancel_issue"] : ctx.reviseContinueEnabled ? ["start_planning", "continue_work", "cancel_issue"] : ["start_planning", "cancel_issue"],
           pendingAction: resumeTurn ? "Resume Lead turn" : capacityFailure ? `${summary} Retry planning.` : summary,
-          blocker: resumeTurn ? humanBlocker("agent_exhausted", summary, [{ command: "start_planning", label: "Resume Lead turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : failure.category ? humanBlocker(failure.category, summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : null,
+          blocker: startupBlocked ? humanBlocker("member_authorization", summary, [{ command: "start_planning", label: "Retry after answering the agent prompt", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : resumeTurn ? humanBlocker("agent_exhausted", summary, [{ command: "start_planning", label: "Resume Lead turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : failure.category ? humanBlocker(failure.category, summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : null,
           stateChangedAt: new Date().toISOString(),
           lastEventId: `${ctx.state.workflowId}:${failureRevision}`,
         });

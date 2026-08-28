@@ -333,9 +333,18 @@ export class HerdrSessionStore {
       );
     } catch (error) {
       if (secretsFile) await this.removeSecrets(task.runtimeRoot, row.id);
+      if (paneId && error instanceof HerdrFailure && error.code === "agent_not_ready") {
+        const excerpt = await this.startupExcerpt(paneId);
+        const summary = `Agent blocked during startup in ${paneId}: ${excerpt.split("\n")[0] || error.message}`;
+        this.database.authQuery((db) =>
+          db.prepare("UPDATE forge_herdr_role_sessions SET status = 'blocked', attention_excerpt = ?, attention_activated_at = ?, updated_at = ? WHERE id = ? AND pane_id = ?")
+            .run(excerpt, now(), now(), row.id, paneId),
+        );
+        throw new HerdrFailure("agent_startup_blocked", false, summary);
+      }
       if (
         paneId &&
-        !(error instanceof HerdrFailure && error.code === "agent_blocked")
+        !(error instanceof HerdrFailure && ["agent_blocked", "agent_startup_blocked"].includes(error.code))
       )
         await this.cleanupFailedPane(row.id, paneId);
       if (
@@ -350,6 +359,13 @@ export class HerdrSessionStore {
             .run(now(), row.id),
         );
       throw error;
+    }
+  }
+  private async startupExcerpt(paneId: string): Promise<string> {
+    try {
+      return (await this.herdr.readPane(paneId)).replace(/\s+/g, " ").trim().slice(0, 300) || "Agent is waiting at a startup prompt.";
+    } catch {
+      return "Agent is waiting at a startup prompt.";
     }
   }
   private assertIdentity(row: Record<string, any>, live: HerdrAgent): void {

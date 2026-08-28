@@ -740,8 +740,9 @@ export class ReleaseService {
     try { context = this.context(input); } catch (error) { return this.fail(input, error); }
     const { coordinates, reviewed, title, bodyInput } = context;
     try {
-      const review = this.database.authQuery((db) => db.prepare("SELECT outcome, base_sha FROM forge_delivery_reviews WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(reviewed.reviewId, input.taskId, input.companyId, input.workflowId) as { outcome: string; base_sha: string } | undefined);
-      if (!review || review.outcome !== "approved") throw providerFailure("stale-reviewed-revision", "Approved review is unavailable");
+      // A member delivery decision recorded after a blocking review accepts that review for publication.
+      const review = this.database.authQuery((db) => db.prepare("SELECT r.outcome, r.base_sha, EXISTS (SELECT 1 FROM forge_delivery_decisions dd WHERE dd.task_id = r.task_id AND dd.workflow_id = r.workflow_id AND dd.created_at >= r.created_at) AS decided FROM forge_delivery_reviews r WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?").get(reviewed.reviewId, input.taskId, input.companyId, input.workflowId) as { outcome: string; base_sha: string; decided: number } | undefined);
+      if (!review || (review.outcome !== "approved" && !review.decided)) throw providerFailure("stale-reviewed-revision", "Approved review is unavailable");
       await this.github.checkAuthentication();
       if ((await this.github.getRemoteRepository({ cwd: coordinates.worktreePath })) !== coordinates.repository.toLowerCase()) throw providerFailure("wrong-remote", "Local origin does not match the pinned repository");
       const local = await this.github.inspectLocalRevision({ cwd: coordinates.worktreePath });

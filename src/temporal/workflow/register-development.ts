@@ -9,7 +9,7 @@ import type { IssueWorkflowContext } from "./context.js";
 import { classifyDelivery } from "../../developer-contracts.js";
 export async function blockFailedDeveloperStart(ctx: IssueWorkflowContext, command: contracts.StartPlanningInput, executionId: string, error: unknown): Promise<boolean> {
   if (!ctx.supervisedDeveloperTurns || !ctx.patched("forge-developer-start-failure-blocked-v1") || ctx.state.developerExecutionId !== executionId || ctx.state.developerOutcome) return false;
-  const failure = ctx.permanentActivityFailure(error);
+  const failure = typeof ctx.permanentActivityFailure === "function" ? ctx.permanentActivityFailure(error) : undefined;
   const summary = `Developer could not start: ${failure?.summary ?? (error instanceof Error ? error.message : String(error))}`;
   const branchCheckedOut = failure?.code === "branch_checked_out" || /already checked out/i.test(summary);
   const blocked = await ctx.withStateMutation(() => {

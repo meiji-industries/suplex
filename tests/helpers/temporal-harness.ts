@@ -78,17 +78,11 @@ export type TemporalHarness = {
   readonly activityOverrides: Map<string, (input: any) => Promise<any>>;
 };
 
-function withActivityOverrides<T extends Record<string, (...args: any[]) => any>>(activities: T, overrides: Map<string, (input: any) => Promise<any>>): T {
-  return new Proxy(activities, {
-    get(target, property, receiver) {
-      const activity = Reflect.get(target, property, receiver);
-      if (typeof property !== "string" || typeof activity !== "function") return activity;
-      return async (...args: any[]) => {
-        const override = overrides.get(property);
-        return override ? override(args[0]) : activity(...args);
-      };
-    },
-  });
+function withActivityOverrides<T extends object>(activities: T, overrides: Map<string, (input: any) => Promise<any>>): T {
+  return Object.fromEntries(Object.entries(activities).map(([name, activity]) => [name, async (...args: any[]) => {
+    const override = overrides.get(name);
+    return override ? override(args[0]) : activity(...args);
+  }])) as T;
 }
 
 export function createTemporalHarness(): TemporalHarness {

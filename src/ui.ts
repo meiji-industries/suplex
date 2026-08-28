@@ -46,14 +46,14 @@ ${frontendEntry(assetMode)}
 </html>`;
 }
 
-export function renderApplicationPage(view: "auth" | "admin" | "projects" | "project-prompts" | "tasks" | "board" | "timeline" | "attention" | "company-settings" | "profile", assetMode: FrontendAssetMode = "built"): string {
+export function renderApplicationPage(view: "auth" | "admin" | "projects" | "project-prompts" | "project-templates" | "tasks" | "board" | "timeline" | "attention" | "company-settings" | "profile", assetMode: FrontendAssetMode = "built"): string {
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f8f8fa">
-    <title>Forge · ${view === "auth" ? "Sign in" : view === "admin" ? "Administration" : view === "projects" ? "Projects" : view === "project-prompts" ? "Project prompts" : view === "tasks" ? "Tasks" : view === "board" ? "Board" : view === "timeline" ? "Timeline" : view === "attention" ? "Attention" : view === "profile" ? "Profile" : "Company settings"}</title>
+    <title>Forge · ${view === "auth" ? "Sign in" : view === "admin" ? "Administration" : view === "projects" ? "Projects" : view === "project-prompts" ? "Project prompts" : view === "project-templates" ? "Project templates" : view === "tasks" ? "Tasks" : view === "board" ? "Board" : view === "timeline" ? "Timeline" : view === "attention" ? "Attention" : view === "profile" ? "Profile" : "Company settings"}</title>
 ${frontendHead(assetMode)}  </head>
   <body>
     <div id="forge-app"></div>

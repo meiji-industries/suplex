@@ -23,4 +23,5 @@ Prior scoped Lead evidence:
 
 Execution coordinates:
 {"branchName":"{{branch_name}}","worktreePath":"{{worktree_path}}","targetBaseSha":"{{target_base_sha}}"}{{operator_note_section}}
+{{continuation_context}}
 ---contract---

@@ -148,7 +148,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         phase: "delivery_ready",
         owner: "lead",
         allowedCommands: ["review_delivery", "cancel_issue"],
-        pendingAction: "Fresh Lead review required after target-base revalidation",
+        pendingAction: "Project verification failed after the merge. Reviewing the merged changes.",
         lastEventId: `${state.workflowId}:${state.revision + 1}`,
         targetBaseSha: result.observedBaseSha ?? state.targetBaseSha,
         targetBaseCheckId: result.checkId,

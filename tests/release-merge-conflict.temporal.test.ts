@@ -151,6 +151,44 @@ test("GitHub conflicts start automatic resolution without a human command", { ti
   await Worker.runReplayHistory({ workflowsPath }, history, workflowId);
 });
 
+
+test("a forward-merge verification timeout stays retryable", { timeout: 120_000 }, async () => {
+  environment = await TestWorkflowEnvironment.createTimeSkipping();
+  const projections: IssueWorkflowState[] = [];
+  let timeoutProjection!: () => void;
+  const timeoutSeen = new Promise<void>((resolve) => { timeoutProjection = resolve; });
+  const activities: Partial<IssueActivities> = {
+    projectIssueState: async (event) => {
+      projections.push(structuredClone(event.state));
+      if (event.state.targetBaseBlockerCode === "verification_timed_out") timeoutProjection();
+      return event.state;
+    },
+    pushDeliveryBranch: async (input) => ({ repository: "acme/forge", branchName: input.branchName, commitSha: input.commitSha }),
+    reconcileTargetBase: async (input) => ({ outcome: "blocked" as const, checkId: "forward_merge_timeout", checkpoint: input.checkpoint, code: "verification_timed_out" as const, owner: "lead" as const, retryable: true, summary: "The project test command timed out", observedBaseSha: nextBase, priorHead: head, priorTree: tree, resultHead: mergedHead, resultTree: mergedTree }),
+    publishRelease: async () => ({ outcome: "completed" as const, releaseId: "release_timeout", repository: "acme/forge", branchName: "forge/issue/release_timeout", baseBranch: "main", headSha: head, headTree: tree, pullRequestNumber: 43, pullRequestUrl: "https://github.com/acme/forge/pull/43", isDraft: false, reused: false, attempt: 1, targetBaseSha: base }),
+    observeGithubPullRequest: async () => ({ exists: true, number: 43, url: "https://github.com/acme/forge/pull/43", state: "open" as const, isDraft: false, headSha: head, baseSha: nextBase, mergeable: "CONFLICTING" as const, checks: { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
+    applyGithubPullRequestAction: async () => undefined,
+    reconcileCi: async (input) => ({ runId: "ci_timeout", attemptId: "ci_attempt_timeout", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: "ci_evidence", outcome: "waiting" as const, reason: "checks_pending", owner: null, repairable: false, summary: "Checks are pending", retryAt: null, nextPollAt: "2026-08-21T00:00:00.000Z", policyHash: sha256, propagationDeadline: null, overallDeadline: null }),
+  };
+  const input: IssueWorkflowInput = {
+    workflowId: "workflow:release_timeout", companyId: "company_test", projectId: "project_test", issueId: "release_timeout", projectRevisionId: "revision_test", briefArtifactId: "brief_test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { planner: "profile-planner", builder: "profile-builder" }, supplementalReview: false, pullRequestMode: "auto_merge", deliveryTarget: "merged", autoMergeActorUserId: "member_test",
+    continuationState: { phase: "ci_waiting", revision: 10, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for CI", lastEventId: "seed:10", continuationCount: 0, lastSummaryHash: null, leadSessionRef: "lead_session", leadOutputArtifactId: "lead_plan", leadSummary: "Approved plan", planRevision: 1, developerExecutionId: "developer_original", developerSessionRef: "developer_session", worktreePath: "/tmp/forge_release_timeout_test", branchName: "forge/issue/release_timeout", targetBaseSha: base, resultCommit: head, resultTree: tree, dirtyState: "clean", deliveryArtifactId: "delivery_original", developerEvidenceArtifactId: "evidence_original", deliverySummary: "Verified delivery", developerOutcome: "completed", developerRecoveryStatus: "active", developerRecoverySummary: "Developer result claimed.", deliveryReviewId: "review_original", deliveryReviewOutcome: "approved", releaseId: "release_timeout", releaseRepository: "acme/forge", pullRequestNumber: 43, pullRequestUrl: "https://github.com/acme/forge/pull/43", expectedHeadSha: head, expectedHeadTree: tree, ciRunId: "ci_timeout", ciNextPollAt: null },
+  };
+  const queue = "release-merge-timeout";
+  const worker = await Worker.create({ connection: environment.nativeConnection, namespace: environment.namespace ?? "default", taskQueue: queue, workflowsPath, activities: activities as unknown as Record<string, (...args: never[]) => unknown> });
+  const workerRun = worker.run();
+  try {
+    const handle = await environment.client.workflow.start(issueWorkflow, { workflowId: input.workflowId, taskQueue: queue, args: [input] });
+    await timeoutSeen;
+    const timedOut = projections.at(-1)!;
+    expect(timedOut).toMatchObject({ phase: "delivery_blocked", targetBaseBlockerCode: "verification_timed_out" });
+    expect(timedOut.allowedCommands).toContain("retry_forward_merge_verification");
+    await handle.cancel();
+  } finally {
+    worker.shutdown();
+    await workerRun;
+  }
+});
 test("auto-merge rejection uses direct merge on the next sync", { timeout: 120_000 }, async () => {
   environment = await TestWorkflowEnvironment.createTimeSkipping();
   const githubActions: string[] = [];

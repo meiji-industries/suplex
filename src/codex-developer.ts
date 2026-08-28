@@ -215,7 +215,7 @@ export class DeveloperService {
     this.browserProof = new BrowserProofService(database, this.artifacts);
     const herdr = new CliHerdrClient();
     this.roleSessions = new HerdrSessionStore(database, herdr);
-    this.turnRunner = options.turnRunner ?? new HerdrTurnRunner(database, herdr, this.roleSessions, new IssueTimelineEvents(database));
+    this.turnRunner = options.turnRunner ?? new HerdrTurnRunner(database, herdr, this.roleSessions, new IssueTimelineEvents(database), undefined, undefined, undefined, undefined, config);
     this.worktrees = options.worktrees ?? new WorktreeManager();
     this.now = options.now ?? (() => new Date());
     this.github = options.github;

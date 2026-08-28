@@ -26,6 +26,7 @@ export const ForgeEnvironmentSchema = z.object({
   FORGE_CODEX_CAPACITY: z.string().regex(/^\d+$/).optional(),
   FORGE_DEVELOPMENT_AUTO_LOGIN: z.literal("1").optional(),
   FORGE_CODEX_WAIT_LIMIT_MS: z.string().regex(/^\d+$/).optional(),
+  FORGE_TURN_STALL_TIMEOUT_MS: z.string().regex(/^\d+$/).optional(),
   FORGE_CODEX_RATE_LIMIT_ATTEMPTS: z.string().regex(/^\d+$/).optional(),
 }).passthrough();
 
@@ -49,6 +50,7 @@ export const ForgeConfigSchema = z.object({
   deliveryRepairCycleLimit: z.number().int().min(0).max(5),
   externalTurnCapacity: z.number().int().min(1).max(32),
   externalTurnWaitLimitMs: z.number().int().min(60_000).max(86_400_000),
+  turnStallTimeoutMs: z.number().int().min(60_000).max(86_400_000),
   externalTurnRateLimitAttempts: z.number().int().min(1).max(20),
   installationId: z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/),
   developmentAutoLogin: z.boolean(),

@@ -17,6 +17,7 @@ import { herdrRuntime, type HerdrProviderRuntime } from "./agent-providers/herdr
 import type { AgentProviderKind } from "./agent-providers/provider.js";
 import { redact } from "./logging.js";
 import { jsonRequired } from "./task-utils.js";
+import type { ForgeConfig } from "./config.js";
 
 type Role = RoleSessionRole;
 type ExecutionRole = "planner" | "reviewer" | "builder" | "integrator";
@@ -51,6 +52,7 @@ export class HerdrTurnRunner {
     private readonly candidates: () => Promise<string[]> = () => herdrRuntime("codex").candidatePaths(process.env),
     private readonly sleep: (ms: number) => Promise<void> = delay,
     private readonly now: () => Date = () => new Date(),
+    private readonly config: Pick<ForgeConfig, "turnStallTimeoutMs"> = { turnStallTimeoutMs: 1_200_000 },
   ) {}
 
   async run<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T>> {
@@ -122,6 +124,7 @@ export class HerdrTurnRunner {
     let polls = 0;
     let idlePolls = 0;
     let stalledAt: number | undefined;
+    let rolloutVersion: string | undefined;
     let resends = 0;
     let executionActive = true;
     for (;;) {
@@ -144,11 +147,14 @@ export class HerdrTurnRunner {
         await this.updateAttention(session, turnId, "blocked", await this.blockedExcerpt(session));
       } else if (live.status === "working") {
         idlePolls = 0;
-        if (drained.events.length > 0) stalledAt = undefined;
-        else {
+        const nextRolloutVersion = await this.rolloutVersion(session.rolloutPath);
+        if (drained.events.length > 0 || !nextRolloutVersion || nextRolloutVersion !== rolloutVersion) {
+          stalledAt = undefined;
+        } else {
           stalledAt ??= this.now().getTime();
-          if (this.now().getTime() - stalledAt >= 30_000) throw new AgentFailure("turn_stalled", "Agent remained working without producing progress", { nonRetryable: true });
+          if (this.now().getTime() - stalledAt >= this.config.turnStallTimeoutMs) throw new AgentFailure("turn_stalled", "Agent remained working without producing progress");
         }
+        rolloutVersion = nextRolloutVersion;
         this.clearAttention(session.id, turnId, "working");
       }
       const stable = completion.completed && await this.stableResult(
@@ -219,6 +225,7 @@ export class HerdrTurnRunner {
       } else if (live.status !== "working") {
         idlePolls = 0;
         stalledAt = undefined;
+        rolloutVersion = undefined;
       }
       await this.sleep(1_000);
     }
@@ -440,6 +447,10 @@ export class HerdrTurnRunner {
   private async offset(path?: string): Promise<number> { return path ? (await stat(path).catch(() => ({ size: 0 }))).size : 0; }
   private async quarantine(path: string): Promise<void> { if (await stat(path).then(() => true).catch(() => false)) await rename(path, `${path}.quarantine-${randomUUID()}`); }
   private async resultVersion(path: string): Promise<string | undefined> { const item = await stat(path).catch(() => undefined); return item?.isFile() ? `${item.ino}:${item.size}:${item.mtimeMs}` : undefined; }
+  private async rolloutVersion(path?: string): Promise<string | undefined> {
+    const item = path ? await stat(path).catch(() => undefined) : undefined;
+    return item?.isFile() ? `${item.size}:${item.mtimeMs}` : undefined;
+  }
   private promptSentAt(turnId: string): string | undefined {
     return this.database.authQuery((db) => (
       db.prepare("SELECT prompt_sent_at FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as

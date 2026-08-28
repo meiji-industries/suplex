@@ -30,6 +30,7 @@ export interface ForgeConfig {
   deliveryRepairCycleLimit: number;
   externalTurnCapacity: number;
   externalTurnWaitLimitMs: number;
+  turnStallTimeoutMs: number;
   externalTurnRateLimitAttempts: number;
   installationId: string;
   developmentAutoLogin: boolean;
@@ -188,6 +189,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
   const deliveryRepairCycleLimit = Number(parsedEnvironment.data.FORGE_DELIVERY_REPAIR_LIMIT ?? "2");
   const externalTurnCapacity = Number(parsedEnvironment.data.FORGE_CODEX_CAPACITY ?? "2");
   const externalTurnWaitLimitMs = Number(parsedEnvironment.data.FORGE_CODEX_WAIT_LIMIT_MS ?? "7200000");
+  const turnStallTimeoutMs = Number(parsedEnvironment.data.FORGE_TURN_STALL_TIMEOUT_MS ?? "1200000");
   const externalTurnRateLimitAttempts = Number(parsedEnvironment.data.FORGE_CODEX_RATE_LIMIT_ATTEMPTS ?? "5");
   return ForgeConfigSchema.parse({
     accessMode,
@@ -209,6 +211,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
     deliveryRepairCycleLimit,
     externalTurnCapacity,
     externalTurnWaitLimitMs,
+    turnStallTimeoutMs,
     externalTurnRateLimitAttempts,
     installationId: stableInstallationId,
     developmentAutoLogin: parsedEnvironment.data.FORGE_DEVELOPMENT_AUTO_LOGIN === "1",
@@ -239,6 +242,7 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     deliveryRepairCycleLimit: overrides.deliveryRepairCycleLimit ?? 2,
     externalTurnCapacity: overrides.externalTurnCapacity ?? 2,
     externalTurnWaitLimitMs: overrides.externalTurnWaitLimitMs ?? 7_200_000,
+    turnStallTimeoutMs: overrides.turnStallTimeoutMs ?? 1_200_000,
     externalTurnRateLimitAttempts: overrides.externalTurnRateLimitAttempts ?? 5,
     installationId: overrides.installationId ?? "test-installation",
     developmentAutoLogin: overrides.developmentAutoLogin ?? false,

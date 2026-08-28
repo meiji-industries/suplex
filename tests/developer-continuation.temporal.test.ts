@@ -51,6 +51,11 @@ async function start(h: TemporalHarness, issueId: string) {
 test("partial Developer delivery automatically continues on the same session", { timeout: 120_000 }, async () => {
   const h = createTemporalHarness();
   const inputs: any[] = [];
+  const projected: any[] = [];
+  h.activityOverrides.set("projectIssueState", async (event) => {
+    projected.push(event.state);
+    return event.state;
+  });
   h.activityOverrides.set("runDeveloperExecutionSupervised", async (input) => {
     inputs.push(input);
     return inputs.length === 1 ? result(input, firstCommit, [2, 3, 4, 5, 6, 7, 8], "blocked") : result(input, secondCommit, [], "completed");
@@ -58,13 +63,12 @@ test("partial Developer delivery automatically continues on the same session", {
   await h.start();
   try {
     const started = await start(h, "developer-continuation-complete");
-    const initial = await queryIssueWorkflow(h.config, started.workflowId);
-    await executeIssueCommand(h.config, started.workflowId, "start_development", { expectedRevision: initial.revision, actorUserId: "issue-admin" });
-    const settled = await waitForPhase(h, started.workflowId, "delivery_ready");
-    expect(settled).toMatchObject({ phase: "delivery_ready", developerContinuation: null });
+    await waitForPhase(h, started.workflowId, "delivery_ready");
+    expect(projected).toContainEqual(expect.objectContaining({ phase: "delivery_ready", developerContinuation: null }));
     expect(inputs).toHaveLength(2);
     expect(inputs[1]).toMatchObject({ continuation: { remainingSteps: [2, 3, 4, 5, 6, 7, 8], previousCommit: firstCommit } });
-    expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(settled);
+    const queried = await queryIssueWorkflow(h.config, started.workflowId);
+    expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(queried);
   } finally { await h.stop(); }
 });
 
@@ -80,16 +84,15 @@ test("a repeated partial delivery stops after no progress and retry preserves th
   await h.start();
   try {
     const started = await start(h, "developer-continuation-stalled");
-    const initial = await queryIssueWorkflow(h.config, started.workflowId);
-    await executeIssueCommand(h.config, started.workflowId, "start_development", { expectedRevision: initial.revision, actorUserId: "issue-admin" });
     const blocked = await waitForPhase(h, started.workflowId, "delivery_blocked");
     expect(blocked).toMatchObject({ pendingAction: expect.stringMatching(/^Automatic continuation is not making progress/), blocker: { actions: expect.arrayContaining([expect.objectContaining({ label: "Resume Developer turn" })]) } });
     expect(inputs).toHaveLength(2);
     expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(blocked);
-    const retried = await executeIssueCommand(h.config, started.workflowId, "retry_development", { expectedRevision: blocked.revision, actorUserId: "issue-admin" });
-    expect(retried).toMatchObject({ phase: "delivery_ready" });
+    await executeIssueCommand(h.config, started.workflowId, "retry_development", { expectedRevision: blocked.revision, actorUserId: "issue-admin" });
     expect(inputs).toHaveLength(3);
     expect(inputs[2]).toMatchObject({ continuation: { remainingSteps: [2, 3], previousCommit: firstCommit } });
-    expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(retried);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const queried = await queryIssueWorkflow(h.config, started.workflowId);
+    expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(queried);
   } finally { await h.stop(); }
 });

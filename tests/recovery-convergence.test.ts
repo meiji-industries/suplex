@@ -8,6 +8,11 @@ function live(overrides: Partial<LiveObservations> = {}): LiveObservations { ret
 test("rule 0 leaves terminal and cancelled tasks unchanged", () => expect(classifyRecovery(facts({ terminal: true }), live({ git: { worktreePresent: false, onRecordedBranch: false, dirty: false, headCommit: null } })).action).toBe("no_change"));
 test("rule 1 advances a valid turn outcome", () => expect(classifyRecovery(facts({ turn: { turnId: "turn", role: "lead", status: "completed", resultPresent: true, resultValid: true, resumeRequestsSent: 0 } }), live()).action).toBe("advance"));
 test("rule 2 advances a clean Developer handoff", () => expect(classifyRecovery(facts({ turn: { turnId: "turn", role: "developer", status: "completed", resultPresent: false, resultValid: false, resumeRequestsSent: 0 } }), live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "abc" } })).action).toBe("advance"));
+test("a clean Developer commit with remaining steps resumes instead of needing attention", () => {
+  const recovery = classifyRecovery(facts({ lastReviewedCommit: "prior", turn: { turnId: "turn", role: "developer", status: "blocked", resultPresent: true, resultValid: false, resumeRequestsSent: 0 } }), live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "new-commit" } }));
+  expect(["advance", "resume"]).toContain(recovery.action);
+  expect(recovery.action).not.toBe("attention");
+});
 test("rule 3 resumes an idle Lead once", () => expect(classifyRecovery(facts({ turn: { turnId: "turn", role: "lead", status: "completed", resultPresent: false, resultValid: false, resumeRequestsSent: 0 } }), live({ herdr: { session: "terminal", stalledBeyondPolicy: false } })).action).toBe("resume"));
 test("rule 4 attends a missing Developer outcome", () => expect(classifyRecovery(facts({ turn: { turnId: "turn", role: "developer", status: "failed", resultPresent: false, resultValid: false, resumeRequestsSent: 0 } }), live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: true, headCommit: null } })).action).toBe("attention"));
 test("rule 5 attends an active missing worktree", () => expect(classifyRecovery(facts(), live({ git: { worktreePresent: false, onRecordedBranch: false, dirty: false, headCommit: null } })).action).toBe("attention"));

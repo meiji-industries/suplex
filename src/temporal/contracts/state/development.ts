@@ -17,4 +17,5 @@ export const developmentStateFields = {
   developerEvidenceArtifact: DurableArtifactReferenceSchema.optional(),
   deliverySummary: SafeSummarySchema.nullable().optional(),
   developerOutcome: z.enum(["completed", "blocked"]).nullable().optional(),
+  developerContinuation: z.object({ remainingSteps: z.array(z.number().int().positive()), completedSteps: z.array(z.number().int().positive()), previousCommit: z.string().regex(/^[a-f0-9]{40,64}$/i), turnsUsed: z.number().int().nonnegative() }).nullable().optional(),
 };

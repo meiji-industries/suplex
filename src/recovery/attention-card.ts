@@ -67,7 +67,7 @@ export function attentionCardFromBlocker(blocker: AttentionBlocker | undefined, 
   }
   if (context.actions?.some((action) => action.label === "Recreate worktree and resume")) return attentionCardFor({ kind: "worktree_missing", worktreePath: null, branchName: null });
   if (context.actions?.some((action) => action.label === "Discard changes and delete worktree")) return attentionCardFor({ kind: "dirty_worktree_cleanup", dirtyFileCount: 1, worktreePath: "Recorded worktree" });
-  if (summary?.startsWith("Automatic repair is not making progress") || category === "agent_exhausted" || category === "verification_unrecoverable") return attentionCardFor({ kind: "no_progress", failureClass: "code_failure", signature: summary || "Automatic repair needs your input." });
+  if (summary?.startsWith("Automatic repair is not making progress") || summary?.startsWith("Automatic continuation is not making progress") || category === "agent_exhausted" || category === "verification_unrecoverable") return attentionCardFor({ kind: "no_progress", failureClass: "code_failure", signature: summary || "Automatic repair needs your input." });
   const resume = context.actions?.find((action) => action.label === "Resume Developer turn" || action.label === "Resume Lead turn");
   if (resume) return attentionCardFor({ kind: "missing_turn_outcome", role: resume.label.includes("Lead") ? "lead" : "developer", dirty: false });
   return genericCard(summary, context);

@@ -98,6 +98,7 @@ export interface DeveloperExecutionActivityInput {
   visualEvidence?: "off" | "capture" | "required" | undefined;
   capacityRequestId?: string;
   authorization?: AuthorizedPlanSubject;
+  continuation?: { remainingSteps: number[]; completedSteps: number[]; previousCommit: string; turnsUsed: number; previousDeliverySummary: string };
 }
 
 export interface DeveloperExecutionResult {
@@ -119,6 +120,9 @@ export interface DeveloperExecutionResult {
   failureCode?: string | null;
   reconciliationArtifactId?: string;
   providerObservationArtifactId?: string;
+  steps?: Array<{ number: number; status: string }>;
+  authorizedStepsNotCompleted?: number[];
+  blocker?: string | null;
 }
 
 export type WorkflowDeveloperExecutionResult = Omit<DeveloperExecutionResult, "worktreePath">;

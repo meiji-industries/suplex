@@ -6,6 +6,7 @@ import * as stateTransitions from "./state-transitions.js";
 import { developerExecutionId } from "../deterministic-id.js";
 import { issueUpdates } from "../issue-updates.js";
 import type { IssueWorkflowContext } from "./context.js";
+import { classifyDelivery } from "../../developer-contracts.js";
 export async function blockFailedDeveloperStart(ctx: IssueWorkflowContext, command: contracts.StartPlanningInput, executionId: string, error: unknown): Promise<boolean> {
   if (!ctx.supervisedDeveloperTurns || !ctx.patched("forge-developer-start-failure-blocked-v1") || ctx.state.developerExecutionId !== executionId || ctx.state.developerOutcome) return false;
   const summary = `Developer could not start: ${error instanceof Error ? error.message : String(error)}`;
@@ -25,6 +26,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
       await ctx.recordHandlerNoop("start_development", "This development command was already processed.");
       return ctx.state;
     }
+    const priorCommit = ctx.state.resultCommit ?? ctx.state.targetBaseSha ?? null;
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
     const executionId = ctx.supervisedDeveloperTurns ? developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "implementation", ctx.patched("forge-unique-developer-execution-id-v1") ? command.commandId : undefined) : `developer_${ctx.state.workflowId}_${command.commandId}`.slice(0, 256);
@@ -34,12 +36,12 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
       ctx.markCommandProcessed(command.commandId);
     });
     await ctx.project();
-    const legacyInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, ...(ctx.state.revisionRequestId ? { revisionRequestId: ctx.state.revisionRequestId } : {}), ...(ctx.state.finalPlanSubject ? { finalPlanSubject: ctx.state.finalPlanSubject } : {}), ...(ctx.state.materialityEvidence ? { materialityEvidence: ctx.state.materialityEvidence } : {}), ...(ctx.state.planDecisionReceipt ? { approvalDecisionId: ctx.state.planDecisionReceipt.decisionId } : {}), ...(ctx.input.runProjectTests !== undefined ? { runProjectTests: ctx.input.runProjectTests } : {}), ...(ctx.input.visualEvidence !== undefined ? { visualEvidence: ctx.input.visualEvidence } : {}) };
+    const legacyInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, ...(ctx.state.developerContinuation ? { continuation: { ...ctx.state.developerContinuation, previousDeliverySummary: ctx.state.deliverySummary ?? "Prior delivery" } } : {}), ...(ctx.state.revisionRequestId ? { revisionRequestId: ctx.state.revisionRequestId } : {}), ...(ctx.state.finalPlanSubject ? { finalPlanSubject: ctx.state.finalPlanSubject } : {}), ...(ctx.state.materialityEvidence ? { materialityEvidence: ctx.state.materialityEvidence } : {}), ...(ctx.state.planDecisionReceipt ? { approvalDecisionId: ctx.state.planDecisionReceipt.decisionId } : {}), ...(ctx.input.runProjectTests !== undefined ? { runProjectTests: ctx.input.runProjectTests } : {}), ...(ctx.input.visualEvidence !== undefined ? { visualEvidence: ctx.input.visualEvidence } : {}) };
     const recoverDeveloperFailures = ctx.supervisedDeveloperTurns ? false : ctx.patched(ctx.developerFailureRecoveryPatch);
     let outcome: Awaited<ReturnType<typeof activityProxies.runDeveloperExecutionSupervised>> | { status: "completed"; result: Awaited<ReturnType<typeof activityProxies.runDeveloperExecution>>; resultHash: string };
     try {
       outcome = await ctx.acquireExternalTurn(
-        { operation: "developer_execution", role: "builder", profileId: ctx.input.roleProfiles.builder },
+        { operation: "developer_execution", role: "builder", profileId: ctx.input.roleProfiles.builder, ...(ctx.state.developerContinuation ? { sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath } : {}) },
         (capacityRequestId) => ctx.supervisedDeveloperTurns
           ? activityProxies.runDeveloperExecutionSupervised({ ...legacyInput, developerTurnExecutionId: executionId, developerAttempt, turnKind: "implementation", ...(capacityRequestId ? { capacityRequestId } : {}) })
           : activityProxies.runDeveloperExecution({ ...legacyInput, executionId, ...(capacityRequestId ? { capacityRequestId } : {}) }).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),
@@ -80,10 +82,23 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
       return ctx.state;
     }
     let autoRetry = false;
+    let autoContinue = false;
     const applied = await ctx.withStateMutation(() => {
       if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;
       if (outcome.status === "completed") {
         const result = outcome.result;
+        const disposition = result.outcome === "blocked" && ctx.patched("forge-developer-continuation-v1") ? classifyDelivery({ steps: result.steps ?? [], authorizedStepsNotCompleted: result.authorizedStepsNotCompleted ?? [], dirtyState: result.dirtyState, resultCommit: result.resultCommit ?? null, blocker: result.blocker ?? null }, priorCommit) : "blocked";
+        if (disposition === "incomplete") {
+          const remainingSteps = result.authorizedStepsNotCompleted ?? [];
+          const completedSteps = (result.steps ?? []).filter((step) => step.status === "completed" || step.status === "not_applicable_locally").map((step) => step.number);
+          const progress = stateTransitions.withRepairProgress(ctx.state, { signature: stateTransitions.repairSignature({ source: "review", code: "developer-continuation", firstFailingLine: remainingSteps.join(",") }), commit: result.resultCommit ?? null, diagnosticHash: null });
+          const stalled = stateTransitions.noProgress(ctx.state.repairProgress, progress.repairProgress!);
+          autoContinue = !stalled;
+          const summary = stalled ? `Automatic continuation is not making progress: steps ${remainingSteps.join(",")} remain after ${(ctx.state.developerContinuation?.turnsUsed ?? 0) + 1} turns.` : `Developer completed steps ${completedSteps.join(",")}; continuing with steps ${remainingSteps.join(",")}`;
+          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, phase: stalled ? "delivery_blocked" : "ready_for_development", owner: stalled ? "human" : "lead", allowedCommands: stalled ? ctx.addRevisionCommand(["retry_development", "cancel_issue"]) : ctx.addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, developerContinuation: { remainingSteps, completedSteps, previousCommit: result.resultCommit!, turnsUsed: (ctx.state.developerContinuation?.turnsUsed ?? 0) + 1 }, activeOperation: null, blocker: stalled ? stateTransitions.humanBlocker("agent_exhausted", summary, [{ command: "retry_development", label: "Resume Developer turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.evidenceArtifactId, "attention-evidence")) : null, stateChangedAt: new Date().toISOString() });
+          if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
+          return true;
+        }
         const typedBlockedState = result.outcome === "blocked" && ctx.patched(ctx.developerBlockedRecoveryStatePatch);
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ctx.addRevisionCommand(["review_delivery", "cancel_issue"]) : ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: result.outcome === "completed" ? "Lead delivery review" : "Developer retry is available", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, ...ctx.recoveryFields(typedBlockedState ? "failed" : "active", typedBlockedState ? result.failureCode ?? null : null, typedBlockedState ? result.deliverySummary : "Developer result claimed.", null), activeOperation: null, blocker: result.outcome === "blocked" ? stateTransitions.humanBlocker(result.failureCode === "delivery-reconciliation-failed" ? "unsafe_recovery" : "agent_exhausted", result.deliverySummary, [{ command: "retry_development", label: "Retry Developer", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.attentionEvidenceArtifactId, "attention-evidence")) : null, stateChangedAt: new Date().toISOString() });
       } else {
@@ -101,7 +116,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
     // command's own result is still being handed back to the caller.
     const settled = ctx.state;
     if (applied) await ctx.project();
-    if (applied && autoRetry) return startDevelopment(ctx, { ...command, expectedRevision: ctx.state.revision, commandId: `${ctx.state.workflowId}:auto-retry-development:${ctx.state.revision}` });
+    if (applied && (autoRetry || autoContinue)) return startDevelopment(ctx, { ...command, expectedRevision: ctx.state.revision, commandId: `${ctx.state.workflowId}:${autoContinue ? "continue-development" : "auto-retry-development"}:${ctx.state.revision}` });
     void command;
     return settled;
 }

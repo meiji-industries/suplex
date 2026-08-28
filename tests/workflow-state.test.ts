@@ -3,7 +3,7 @@ import { expect, test } from "vitest";
 import { DeliveryReviewActivityResultSchema, DeveloperRepairActivityResultSchema, IssueWorkflowStateSchema, SafeSummarySchema, normalizeSafeSummary, toSafeSummary } from "../src/temporal/issue-contracts.js";
 import { ISSUE_PHASES, TERMINAL_PHASES } from "../src/issue-phases.js";
 import { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "../src/temporal/workflows.js";
-import { finalReviewerTurn, freshDeliveryLineage } from "../src/temporal/workflow/state-transitions.js";
+import { finalReviewerTurn, freshDeliveryLineage, withWorktreeCommands } from "../src/temporal/workflow/state-transitions.js";
 import { assignWorkflowState, type IssueWorkflowContext } from "../src/temporal/workflow/context.js";
 
 const subject = { planRevision: 1, targetBaseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40), developerExecutionId: "developer_1", deliveryArtifactId: "artifact_delivery", developerEvidenceArtifactId: "artifact_evidence", leadSessionRef: "session_lead", developerSessionRef: "session_developer" };
@@ -22,6 +22,15 @@ test("state parsing always offers cancellation outside terminal phases", () => {
       expect(parsed.allowedCommands).not.toEqual([]);
     }
   }
+});
+
+test("withWorktreeCommands offers safe worktree lifecycle commands", () => {
+  const initial = state();
+  expect(withWorktreeCommands({ ...initial, activeOperation: { commandId: "command_1", kind: "development", startedRevision: 10 } }, true).allowedCommands).not.toContain("delete_worktree");
+  expect(withWorktreeCommands({ ...initial, worktreeState: "cleaned" }, true).allowedCommands).toEqual(expect.arrayContaining(["recreate_worktree"]));
+  expect(withWorktreeCommands({ ...initial, worktreeState: "cleaned" }, true).allowedCommands).not.toContain("delete_worktree");
+  expect(withWorktreeCommands({ ...initial, phase: "done", worktreeState: "cleaned" }, true).allowedCommands).not.toContain("recreate_worktree");
+  expect(withWorktreeCommands({ ...initial, phase: "cancelled", worktreeState: "present", activeOperation: null }, true).allowedCommands).toContain("delete_worktree");
 });
 
 test("accepts a sha-less plan blocker response receipt", () => {

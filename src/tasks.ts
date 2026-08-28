@@ -704,6 +704,7 @@ export interface TaskCommandPayload {
   subject?: unknown;
   idempotencyKey?: string;
   blockerSubject?: unknown;
+  confirmDiscardDirty?: boolean;
 }
 
 interface TaskServiceOptions {
@@ -1526,19 +1527,21 @@ export class TaskService {
     const deliveryChangesNote = command === "request_delivery_changes"
       ? await this.stageDeliveryChangesNote(task, payload.note)
       : undefined;
-    const input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput = plannerNote
+    const input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput | { expectedRevision: number; confirmDiscardDirty?: boolean } = plannerNote
       ? { expectedRevision, actorUserId, ...plannerNote }
       : deliveryChangesNote
       ? { expectedRevision, actorUserId, noteId: deliveryChangesNote.ref, noteSha256: deliveryChangesNote.sha256, ...(payload.idempotencyKey !== undefined ? { idempotencyKey: payload.idempotencyKey } : {}) }
       : descriptor.family === "start"
       ? { expectedRevision, actorUserId, commandId: payload.commandId ?? randomUUID(), ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
+      : (command === "delete_worktree" || command === "recreate_worktree")
+      ? { expectedRevision, ...(payload.confirmDiscardDirty !== undefined ? { confirmDiscardDirty: payload.confirmDiscardDirty } : {}) }
       : planInput;
     try {
       const state = command === "start_planning" && this.workflow.acceptPlanning
         ? await this.workflow.acceptPlanning(task.workflowId, input as StartPlanningInput)
         : (command === "start_development" || command === "retry_development") && this.workflow.acceptDevelopment
           ? await this.workflow.acceptDevelopment(task.workflowId, input as StartPlanningInput, command)
-          : await this.workflow.execute(command, task.workflowId, input);
+          : await this.workflow.execute(command, task.workflowId, input as StartPlanningInput | PlanCommandInput | SendPlannerNoteInput);
       if (command !== "cancel_issue" && command !== "send_planner_note" && state.revision <= expectedRevision) {
         throw new Error("Stale workflow revision");
       }

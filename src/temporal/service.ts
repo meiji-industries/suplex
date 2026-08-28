@@ -235,13 +235,12 @@ export function issueCommandId(workflowId: string, command: IssueCommand, input:
   return durableCommand(workflowId, descriptor.durableCommandKind, input).commandId;
 }
 
-export async function executeIssueCommand(config: ForgeConfig, workflowId: string, command: IssueCommand, input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput): Promise<IssueWorkflowState> {
+export async function executeIssueCommand(config: ForgeConfig, workflowId: string, command: IssueCommand, input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput | { expectedRevision: number; confirmDiscardDirty?: boolean }): Promise<IssueWorkflowState> {
   const descriptor = issueCommands[command];
-  if (descriptor.family === "bespoke") throw new Error(`Command ${command} requires its dedicated client function`);
   const identifiers = runtimeIdentifiers(config.installationId);
   if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
-  const schema = command === "send_planner_note" ? SendPlannerNoteInputSchema : descriptor.family === "start" ? StartPlanningInputSchema : PlanCommandInputSchema;
-  const durable = descriptor.durableCommandKind === null ? input : durableCommand(workflowId, descriptor.durableCommandKind, input);
+  const schema = descriptor.body ?? (command === "send_planner_note" ? SendPlannerNoteInputSchema : descriptor.family === "start" ? StartPlanningInputSchema : PlanCommandInputSchema);
+  const durable = descriptor.durableCommandKind === null ? input : durableCommand(workflowId, descriptor.durableCommandKind, input as StartPlanningInput | PlanCommandInput | SendPlannerNoteInput);
   const validatedInput = schema.parse(durable);
   assertPayloadWithinLimit(descriptor.payloadLabel, validatedInput);
   const temporalClient = await connectTemporal(config);

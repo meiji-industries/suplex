@@ -9,7 +9,7 @@ import { githubPullRequestObservationFields } from "../github-pull-request-obser
 import { reconcile, type PullRequestTarget } from "../pull-request-reconciler.js";
 import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, recordProbeStarted, loadTaskSourcePullRequest, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
 import { syncGithubPullRequestSignal } from "./issue-updates.js";
-import { evidencePointer, humanBlocker, withWorktreeCommands } from "./workflow/state-transitions.js";
+import { evidencePointer, humanBlocker, withWorktreeCommands, worktreeCommandsPatch } from "./workflow/state-transitions.js";
 import { createIssueWorkflowContext } from "./workflow/context.js";
 import { registerGovernanceHandlers } from "./workflow/register-governance.js";
 import { registerLifecycleHandlers, registerLifecycleHandlersContinuation } from "./workflow/register-lifecycle.js";
@@ -25,11 +25,7 @@ import { registerTargetBaseHandlers } from "./workflow/register-target-base.js";
 import { applyLeadResult, applyLegacyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, compactStateForContinuation, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
 export * from "./issue-updates.js";
 export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
-const worktreeCommandsPatch = "forge-worktree-commands-v1";
-async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> {
-  const projected = withWorktreeCommands(state, patched(worktreeCommandsPatch));
-  return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: workflowInfo().runId, eventId: projected.lastEventId, state: projected }));
-}
+async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { const projected = withWorktreeCommands(state, patched(worktreeCommandsPatch)); return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: workflowInfo().runId, eventId: projected.lastEventId, state: projected })); }
 const MAX_RECONCILIATION_ATTEMPTS = 20;
 function sleepUntil(retryAt: string | null | undefined): Promise<void> { return retryAt ? sleep(Math.max(1, Date.parse(retryAt) - Date.now())) : sleep("1 second"); }
 export const probeStateQuery = defineQuery<ProbeWorkflowState>("probeState");

@@ -45,6 +45,7 @@ export function revisioned(state: IssueWorkflowState, phase: IssueWorkflowState[
   return IssueWorkflowStateSchema.parse({ ...state, revision, phase, owner, allowedCommands, pendingAction, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${revision}` });
 }
 
+export const worktreeCommandsPatch = "forge-worktree-commands-v1";
 export function withWorktreeCommands(state: IssueWorkflowState, patched: boolean): IssueWorkflowState {
   if (!patched) return state;
   const terminal = state.phase === "done" || state.phase === "cancelled";

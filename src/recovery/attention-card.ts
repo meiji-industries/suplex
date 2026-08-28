@@ -43,6 +43,22 @@ function decision(value: unknown): AttentionCondition | undefined {
 export function attentionCardFromBlocker(blocker: AttentionBlocker | undefined, context: AttentionCardContext = {}): AttentionCard {
   const summary = typeof blocker?.summary === "string" && blocker.summary.trim() ? blocker.summary.trim() : context.summary || context.pendingAction;
   const category = typeof blocker?.category === "string" ? blocker.category : "";
+  if (category === "member_authorization" && /startup|trust the contents of this directory/i.test(summary || "")) {
+    const primary = context.actions?.find((action) => !action.destructive);
+    const cancel = context.actions?.find((action) => action.command === "cancel_issue");
+    const trust = /trust the contents of this directory/i.test(summary || "");
+    const repository = (summary || "").match(/(?:repository root:?\s*|in\s+)(\/[^\s]+)/i)?.[1];
+    return {
+      kind: trust ? "github_credential" : "generic",
+      title: trust ? "Codex needs this repository trusted" : "Agent is waiting at a startup prompt",
+      explanation: trust
+        ? `Codex is asking whether to trust ${repository || "this repository"}. Answer 'Yes, continue' in the agent pane (or add the repository to ~/.codex/config.toml), then retry.`
+        : "The agent is waiting at a startup prompt. Answer it in the agent pane, then retry.",
+      evidence: [{ kind: "text", ref: summary || "Agent is waiting at a startup prompt." }],
+      primaryAction: primary ? { command: primary.command, label: primary.label, ...(primary.requiresNote ? { requiresNote: true } : {}) } : { command: "retry_development", label: "Retry Developer turn" },
+      ...(cancel ? { secondaryAction: { command: cancel.command, label: cancel.label, destructive: true } } : {}),
+    };
+  }
   if (category === "provider_authentication") return attentionCardFor({ kind: "github_credential", ...(summary ? { detail: summary } : {}) });
   if (category === "member_decision") { const mergeDecision = decision(context.mergeDecision); if (mergeDecision) return attentionCardFor(mergeDecision); }
   if (category === "member_decision" || category === "provider_ambiguity") {

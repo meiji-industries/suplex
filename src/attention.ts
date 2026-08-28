@@ -81,7 +81,7 @@ export class AttentionService {
         JOIN forge_companies c ON c.id = ip.company_id
         WHERE ip.company_id = ? AND ht.status IN ('blocked', 'awaiting_human') AND ip.phase NOT IN ('done', 'cancelled') AND rs.is_current = 1
         UNION ALL
-        SELECT ip.company_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END, ip.task_id, t.title, ip.revision, '[]', NULL, COALESCE(rs.attention_activated_at, rs.updated_at), rs.pane_id, rs.agent_name, NULL
+        SELECT ip.company_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END, ip.task_id, t.title, ip.revision, '[]', NULL, COALESCE(rs.attention_activated_at, rs.updated_at), rs.pane_id, rs.agent_name, rs.attention_excerpt
         FROM forge_herdr_role_sessions rs
         JOIN forge_issue_projections ip ON ip.task_id = rs.task_id
         JOIN forge_tasks t ON t.id = ip.task_id
@@ -96,7 +96,7 @@ export class AttentionService {
           const snapshot = db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision DESC LIMIT 1").get(row.task_id) as { state_json?: string } | undefined;
           try { return snapshot?.state_json ? jsonRequired(snapshot.state_json) as { blocker?: Blocker; mergeDecision?: unknown } : undefined; } catch { return undefined; }
         });
-        const card = attentionCardFromBlocker(snapshot?.blocker, { ...(row.pane_id ? { summary: row.attention_excerpt } : {}), pendingAction: row.pane_id ? "Agent is waiting for you" : row.pending_action, actions: actionList, ...(snapshot?.mergeDecision ? { mergeDecision: snapshot.mergeDecision } : {}) });
+        const card = attentionCardFromBlocker(snapshot?.blocker, { ...(row.pane_id ? { summary } : {}), pendingAction: row.pane_id ? "Agent is waiting for you" : row.pending_action, actions: actionList, ...(snapshot?.mergeDecision ? { mergeDecision: snapshot.mergeDecision } : {}) });
         return { companyId: row.company_id, taskId: row.task_id, issueKey: row.issue_key, taskTitle: row.task_title, summary, sourceRevision: row.revision, activatedAt: row.activated_at, actions: actionList, card };
       });
       return { companyId: company.id, companyName: company.name, companyStatus: company.status, attentionCount: attention.length, attention };

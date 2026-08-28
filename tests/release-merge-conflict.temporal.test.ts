@@ -36,17 +36,11 @@ test("GitHub conflicts start automatic resolution without a human command", { ti
   let baseUpdates = 0;
   let reviewed = false;
   let merged = false;
-  let conflictSeen = false;
+  let githubConflictSeen = false;
   const githubActions: string[] = [];
   const activities: Partial<IssueActivities> = {
     projectIssueState: async (event) => { projections.push(structuredClone(event.state)); return event.state; },
-    reconcileTargetBase: async (input) => {
-      if (input.checkpoint === "pre_release" && !conflictSeen) {
-        conflictSeen = true;
-        return { outcome: "conflict" as const, checkId: "target-base-conflict", checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: nextBase, priorHead: input.expectedHeadSha, priorTree: input.expectedHeadTree, conflictFileCount: 1, conflictArtifact: { id: "conflict_artifact", kind: "forward-merge-conflict" as const } };
-      }
-      return { outcome: "no_drift" as const, checkId: `target-base-${input.checkpoint}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: input.expectedBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree };
-    },
+    reconcileTargetBase: async (input) => ({ outcome: "no_drift" as const, checkId: `target-base-${input.checkpoint}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: nextBase, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree }),
     publishRelease: async () => {
       publishes += 1;
       const merged = publishes > 1;
@@ -72,7 +66,11 @@ test("GitHub conflicts start automatic resolution without a human command", { ti
     reconcileMerge: async () => ({ outcome: "merged" as const, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", mergeObservationId: "merge_observation", completionReceiptId: "completion_receipt", observedAt: "2026-08-21T00:00:00.000Z", mergedAt: "2026-08-21T00:00:00.000Z", retryAt: null }),
     pushDeliveryBranch: async (input) => ({ repository: "acme/forge", branchName: input.branchName, commitSha: input.commitSha }),
     // GitHub first reports a conflict. After Forge resolves it, CI passes and auto-merge completes.
-    observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.com/acme/forge/pull/42", state: merged ? "merged" as const : "open" as const, isDraft: false, headSha: mergedHead, baseSha: nextBase, mergeable: conflictSeen ? "MERGEABLE" : "CONFLICTING", checks: reviewed ? { total: 1, pending: 0, failing: 0, successful: 1 } : { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
+    observeGithubPullRequest: async () => {
+      const mergeable = githubConflictSeen ? "MERGEABLE" as const : "CONFLICTING" as const;
+      githubConflictSeen = true;
+      return { exists: true, number: 42, url: "https://github.com/acme/forge/pull/42", state: merged ? "merged" as const : "open" as const, isDraft: false, headSha: mergedHead, baseSha: nextBase, mergeable, checks: reviewed ? { total: 1, pending: 0, failing: 0, successful: 1 } : { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null };
+    },
     applyGithubPullRequestAction: async (input) => {
       githubActions.push(input.action);
       merged = true;
@@ -134,25 +132,16 @@ test("GitHub conflicts start automatic resolution without a human command", { ti
     const handle = await environment.client.workflow.start(issueWorkflow, { workflowId, taskQueue, args: [input] });
     await handle.result();
 
-    // GitHub conflicts preserve the forward-merge inputs for the automatic resolution turn.
-    const conflicted = projections.find((state) => state.phase === "merge_conflict_required");
-    expect(conflicted).toMatchObject({
-      forwardMergeId: "target-base-conflict",
-      forwardMergePriorHead: head,
-      forwardMergePriorTree: tree,
-      forwardMergeTargetBaseSha: nextBase,
-      forwardMergeConflictArtifact: { id: "conflict_artifact", kind: "forward-merge-conflict" },
-      forwardMergeConflictFileCount: 1,
-    });
-
     const settled = await handle.query(issueStateQuery);
-    expect(settled).toMatchObject({ phase: "done", targetBaseSha: nextBase, resultCommit: mergedHead, resultTree: mergedTree, developerExecutionId: "developer_conflict_resolution" });
+    expect(settled).toMatchObject({ phase: "done", targetBaseSha: nextBase, resultCommit: head, resultTree: tree, developerExecutionId: "developer_original" });
+    const cleanConflictCheck = projections.find((projection) => projection.pendingAction === "GitHub reports merge conflicts, but the branch already contains the base branch. Waiting for GitHub to re-check.");
+    expect(cleanConflictCheck).toMatchObject({ phase: "ci_waiting", owner: "lead", ciNextPollAt: null });
+    expect(cleanConflictCheck?.allowedCommands).toContain("cancel_issue");
+    expect(cleanConflictCheck?.allowedCommands).not.toContain("resolve_merge_conflict");
     const phaseSequence = projections.map((state) => state.phase).filter((phase, index, all) => phase !== all[index - 1]);
-    expect(phaseSequence.slice(phaseSequence.indexOf("merge_conflict_required"))).toEqual([
-      "merge_conflict_required", "merge_conflict_resolving", "delivery_ready",
-      "reviewing_delivery", "delivery_reviewed", "releasing", "ci_waiting", "final_review", "manual_merge", "done",
-    ]);
-    expect(publishes).toBe(2);
+    expect(phaseSequence).toContain("merge_conflict_reviewing");
+    expect(phaseSequence.slice(phaseSequence.indexOf("merge_conflict_reviewing"), phaseSequence.indexOf("merge_conflict_reviewing") + 2)).toEqual(["merge_conflict_reviewing", "ci_waiting"]);
+    expect(publishes).toBe(1);
     expect(githubActions).toEqual(["enable_auto_merge"]);
     history = await handle.fetchHistory();
   } finally {

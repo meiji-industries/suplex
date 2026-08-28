@@ -254,7 +254,12 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
             await projectIssueState(state);
           }
         }
-        else if (action.kind === "resolve_conflicts") await runTargetBaseCheckpoint("pre_release");
+        else if (action.kind === "resolve_conflicts") {
+          if (await runTargetBaseCheckpoint("pre_release")) {
+            state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "GitHub reports merge conflicts, but the branch already contains the base branch. Waiting for GitHub to re-check.", ciNextPollAt: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+            await projectIssueState(state);
+          }
+        }
         else if ((action.kind === "push_open_draft" || action.kind === "push_open_ready") && state.phase === "releasing") await workflowContext.runPublishTurn();
         else if (action.kind === "repair_ci" && state.phase === "ci_waiting") await workflowContext.reconcileCiTurn();
       }

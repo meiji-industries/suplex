@@ -387,6 +387,25 @@ test("forward merge reports no drift without mutating the issue branch", async (
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("forward merge does not report no drift when matching recorded bases are absent from the issue branch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-forward-merge-matching-records-"));
+  try {
+    await exec("git", ["init", "-b", "main"], { cwd: root });
+    await exec("git", ["config", "user.email", "forge@example.test"], { cwd: root });
+    await exec("git", ["config", "user.name", "Forge Test"], { cwd: root });
+    await writeFile(join(root, "base.txt"), "base\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "base"], { cwd: root });
+    await exec("git", ["checkout", "-b", "issue/task-a"], { cwd: root });
+    await writeFile(join(root, "issue.txt"), "issue\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "issue"], { cwd: root });
+    await exec("git", ["checkout", "main"], { cwd: root });
+    await writeFile(join(root, "base.txt"), "base updated\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "base-update"], { cwd: root });
+    const observedBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await exec("git", ["checkout", "issue/task-a"], { cwd: root });
+    const result = await new ForwardMergeService().reconcile({ worktreePath: root, expectedBaseSha: observedBase, currentBaseSha: observedBase, branchName: "issue/task-a", repositoryPath: root });
+    expect(result.status).toBe("merged");
+    expect(await exec("git", ["merge-base", "--is-ancestor", observedBase, result.mergeCommit!], { cwd: root })).toBeDefined();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("forward merge rejects a non-descendant target base instead of rewriting history", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-forward-merge-orphan-"));
   try {

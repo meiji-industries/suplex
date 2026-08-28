@@ -253,13 +253,15 @@ describe("target-base reconciliation contracts", () => {
     const root = await mkdtemp(join(tmpdir(), "forge-target-base-no-drift-"));
     try {
       const repository = await gitRepository(root);
+      const { execFile } = await import("node:child_process");
+      await new Promise<void>((resolve, reject) => execFile("git", ["remote", "add", "origin", root], { cwd: root }, (error) => error ? reject(error) : resolve()));
       const calls: string[] = [];
       const result = await new ForwardMergeService(undefined, {
         async getBranchHead() { calls.push("observe"); return repository.base; },
         async getRemoteRepository() { calls.push("remote"); return "acme/repo"; },
       }).reconcile({ worktreePath: root, repositoryPath: root, repository: "acme/repo", baseBranch: "main", branchName: "issue/task-1", expectedBaseSha: repository.base, expectedHeadSha: repository.head, expectedHeadTree: (await (await import("node:child_process")).execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root, encoding: "utf8" })).trim() });
       expect(result.status).toBe("no_drift");
-      expect(calls).toEqual(["remote", "observe"]);
+      expect(calls).toEqual(["remote", "observe", "remote", "observe"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

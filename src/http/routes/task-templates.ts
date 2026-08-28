@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { AuthService } from "../../auth.js";
 import type { ForgeConfig } from "../../config.js";
 import type { TaskTemplateService } from "../../task-templates.js";
-import { ProjectTaskTemplatesParamsSchema, SaveTaskAsTemplateBodySchema, SaveTaskAsTemplateParamsSchema, TaskTemplateListResponseSchema, TaskTemplateParamsSchema, TaskTemplateResponseSchema } from "../contracts/task-templates.js";
+import { CreateTaskTemplateBodySchema, ProjectTaskTemplatesParamsSchema, SaveTaskAsTemplateBodySchema, SaveTaskAsTemplateParamsSchema, TaskTemplateListResponseSchema, TaskTemplateParamsSchema, TaskTemplateResponseSchema, UpdateTaskTemplateBodySchema } from "../contracts/task-templates.js";
 import { sessionUser } from "../session.js";
 
 export interface TaskTemplateRoutesOptions { auth: AuthService; config: ForgeConfig; templates: TaskTemplateService; }
@@ -19,8 +19,10 @@ const taskTemplates: FastifyPluginAsync<TaskTemplateRoutesOptions> = async (app,
     request.forgeUser = user;
   });
   typed.get("/api/projects/:projectId/task-templates", { schema: { params: ProjectTaskTemplatesParamsSchema, response: { 200: TaskTemplateListResponseSchema } } }, async (request, reply) => reply.send({ templates: options.templates.list(request.forgeUser.id, request.params.projectId) }));
+  typed.post("/api/projects/:projectId/task-templates", { schema: { params: ProjectTaskTemplatesParamsSchema, body: CreateTaskTemplateBodySchema, response: { 201: TaskTemplateResponseSchema } } }, async (request, reply) => reply.code(201).send(options.templates.create(request.forgeUser.id, request.params.projectId, request.body)));
   typed.post("/api/tasks/:taskId/save-as-template", { schema: { params: SaveTaskAsTemplateParamsSchema, body: SaveTaskAsTemplateBodySchema, response: { 201: TaskTemplateResponseSchema } } }, async (request, reply) => reply.code(201).send(options.templates.createFromTask(request.forgeUser.id, request.params.taskId, request.body.name)));
-  typed.delete("/api/task-templates/:templateId", { schema: { params: TaskTemplateParamsSchema, response: { 204: z.null() } } }, async (_request, reply) => reply.code(204).send(null));
+  typed.patch("/api/task-templates/:templateId", { schema: { params: TaskTemplateParamsSchema, body: UpdateTaskTemplateBodySchema, response: { 200: TaskTemplateResponseSchema } } }, async (request, reply) => reply.send(options.templates.update(request.forgeUser.id, request.params.templateId, request.body)));
+  typed.delete("/api/task-templates/:templateId", { schema: { params: TaskTemplateParamsSchema, response: { 204: z.null() } } }, async (request, reply) => { options.templates.delete(request.forgeUser.id, request.params.templateId); return reply.code(204).send(null); });
 };
 
 export default taskTemplates;

@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 import { ForgeDatabase } from "../src/database.js";
 import { TaskTemplateService } from "../src/task-templates.js";
 
-test("task templates preserve task presets and reject duplicate names", async () => {
+test("task templates create, update, reject duplicates, and delete", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-task-template-test-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   const auth = { requireCompanyAccess: () => ({}) };
@@ -19,8 +19,15 @@ test("task templates preserve task presets and reject duplicate names", async ()
     const template = templates.createFromTask("user-1", "task-1", "  Release preset  ");
     expect(template).toMatchObject({ projectId: "project-1", name: "Release preset", description: "Template description", source: { kind: "pull_request", number: 42 }, roleAgents: tasks.getTask().roleAgents, supplementalReview: true, autoApprovePlan: true, deliveryTarget: "pull_request_ready", runProjectTests: true, visualEvidence: "required" });
     expect(templates.list("user-1", "project-1")).toEqual([template]);
+    const scratch = templates.create("user-1", "project-1", { name: "Scratch", description: "Created from settings", roleAgents: {}, supplementalReview: false, autoApprovePlan: false, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
+    expect(scratch).toMatchObject({ name: "Scratch", description: "Created from settings", updatedAt: null });
+    const updated = templates.update("user-1", scratch.id, { name: "  Release checklist  ", description: "Updated", runProjectTests: false, visualEvidence: "capture" });
+    expect(updated).toMatchObject({ name: "Release checklist", description: "Updated", runProjectTests: false, visualEvidence: "capture", updatedAt: expect.any(String) });
     let duplicate: unknown; try { templates.createFromTask("user-1", "task-1", "Release preset"); } catch (error) { duplicate = error; } expect(duplicate).toMatchObject({ statusCode: 409 });
+    let renameDuplicate: unknown; try { templates.update("user-1", updated.id, { name: "Release preset" }); } catch (error) { renameDuplicate = error; } expect(renameDuplicate).toMatchObject({ statusCode: 409 });
     templates.delete("user-1", template.id);
+    expect(templates.list("user-1", "project-1")).toEqual([updated]);
+    templates.delete("user-1", updated.id);
     expect(templates.list("user-1", "project-1")).toEqual([]);
   } finally { database.close(); await rm(root, { recursive: true, force: true }); }
 });

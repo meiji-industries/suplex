@@ -13,7 +13,9 @@ const TaskTemplateSourceSchema = z.discriminatedUnion("kind", [
 export const TaskTemplateResponseSchema = z.object({
   id: z.string(), projectId: z.string(), name: z.string(), description: z.string(), roleAgents: RoleAgentsSchema,
   supplementalReview: z.boolean(), autoApprovePlan: z.boolean(), deliveryTarget: DeliveryTargetSchema,
-  runProjectTests: z.boolean(), visualEvidence: VisualEvidenceSchema, source: TaskTemplateSourceSchema.optional(), createdAt: z.string(),
+  runProjectTests: z.boolean(), visualEvidence: VisualEvidenceSchema, source: TaskTemplateSourceSchema.optional(), createdAt: z.string(), updatedAt: z.string().nullable(),
 });
 export const TaskTemplateListResponseSchema = z.object({ templates: z.array(TaskTemplateResponseSchema) });
+export const CreateTaskTemplateBodySchema = z.object({ name: z.string(), description: z.string(), roleAgents: RoleAgentsSchema, supplementalReview: z.boolean(), autoApprovePlan: z.boolean(), deliveryTarget: DeliveryTargetSchema, runProjectTests: z.boolean(), visualEvidence: VisualEvidenceSchema, source: TaskTemplateSourceSchema.optional() });
+export const UpdateTaskTemplateBodySchema = CreateTaskTemplateBodySchema.partial().extend({ source: TaskTemplateSourceSchema.nullable().optional() });
 export type TaskTemplateResponse = z.infer<typeof TaskTemplateResponseSchema>;

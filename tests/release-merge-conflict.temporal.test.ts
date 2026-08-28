@@ -29,7 +29,7 @@ afterEach(async () => {
 // path must leave the Workflow with the same forward-merge inputs a plan-side conflict
 // leaves, or the Integrator's resolve turn throws "An owned Developer execution and
 // forward-merge evidence are required" and the auto-chain halts for good.
-test("GitHub conflicts start automatic resolution and auto-merge fallback merges directly", { timeout: 120_000 }, async () => {
+test("GitHub conflicts start automatic resolution without a human command", { timeout: 120_000 }, async () => {
   environment = await TestWorkflowEnvironment.createTimeSkipping();
   const projections: IssueWorkflowState[] = [];
   let publishes = 0;
@@ -71,11 +71,10 @@ test("GitHub conflicts start automatic resolution and auto-merge fallback merges
     acceptDelivery: async () => ({ acceptanceId: "acceptance_new", status: "accepted" as const, outcome: "ready" as const, retryAt: null, readyAt: "2026-08-21T00:00:00.000Z", acceptedAt: "2026-08-21T00:00:00.000Z", evidenceArtifactId: null, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", reasonArtifactId: null }),
     reconcileMerge: async () => ({ outcome: "merged" as const, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", mergeObservationId: "merge_observation", completionReceiptId: "completion_receipt", observedAt: "2026-08-21T00:00:00.000Z", mergedAt: "2026-08-21T00:00:00.000Z", retryAt: null }),
     pushDeliveryBranch: async (input) => ({ repository: "acme/forge", branchName: input.branchName, commitSha: input.commitSha }),
-    // GitHub first reports a conflict. After Forge resolves it, CI passes and direct merge completes.
+    // GitHub first reports a conflict. After Forge resolves it, CI passes and auto-merge completes.
     observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.com/acme/forge/pull/42", state: merged ? "merged" as const : "open" as const, isDraft: false, headSha: mergedHead, baseSha: nextBase, mergeable: conflictSeen ? "MERGEABLE" : "CONFLICTING", checks: reviewed ? { total: 1, pending: 0, failing: 0, successful: 1 } : { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
     applyGithubPullRequestAction: async (input) => {
       githubActions.push(input.action);
-      if (input.action === "enable_auto_merge") throw new Error("Auto merge is not allowed for this repository");
       merged = true;
     },
   };
@@ -154,8 +153,7 @@ test("GitHub conflicts start automatic resolution and auto-merge fallback merges
       "reviewing_delivery", "delivery_reviewed", "releasing", "ci_waiting", "final_review", "manual_merge", "done",
     ]);
     expect(publishes).toBe(2);
-    expect(githubActions).toContain("merge");
-    expect(githubActions.at(-1)).toBe("merge");
+    expect(githubActions).toEqual(["enable_auto_merge"]);
     history = await handle.fetchHistory();
   } finally {
     worker.shutdown();
@@ -163,4 +161,61 @@ test("GitHub conflicts start automatic resolution and auto-merge fallback merges
   }
 
   await Worker.runReplayHistory({ workflowsPath }, history, workflowId);
+});
+
+test("auto-merge rejection uses direct merge on the next sync", { timeout: 120_000 }, async () => {
+  environment = await TestWorkflowEnvironment.createTimeSkipping();
+  const githubActions: string[] = [];
+  let merged = false;
+  const activities: Partial<IssueActivities> = {
+    projectIssueState: async (event) => event.state,
+    observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.com/acme/forge/pull/42", state: merged ? "merged" as const : "open" as const, isDraft: false, headSha: head, baseSha: base, mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, autoMergeEnabled: false, reviewDecision: null }),
+    applyGithubPullRequestAction: async (input) => {
+      githubActions.push(input.action);
+      if (input.action === "enable_auto_merge") throw new Error("Auto merge is not allowed for this repository");
+      merged = true;
+    },
+  };
+  const workflowId = "workflow:auto_merge_unavailable";
+  const input: IssueWorkflowInput = {
+    workflowId,
+    companyId: "company_test",
+    projectId: "project_test",
+    issueId: "auto_merge_unavailable",
+    projectRevisionId: "revision_test",
+    briefArtifactId: "brief_test",
+    briefSha256: "0".repeat(64),
+    imageArtifactIds: [],
+    roleProfiles: { planner: "profile-planner", builder: "profile-builder" },
+    supplementalReview: false,
+    pullRequestMode: "auto_merge",
+    deliveryTarget: "merged",
+    autoMergeActorUserId: "member_test",
+    continuationState: {
+      phase: "manual_merge",
+      revision: 10,
+      owner: "lead",
+      allowedCommands: ["cancel_issue"],
+      pendingAction: "Merging",
+      lastEventId: "seed:10",
+      continuationCount: 0,
+      lastSummaryHash: null,
+      releaseRepository: "acme/forge",
+      branchName: "forge/issue/auto_merge_unavailable",
+      pullRequestNumber: 42,
+      expectedHeadSha: head,
+      expectedHeadTree: tree,
+    },
+  };
+  const worker = await Worker.create({ connection: environment.nativeConnection, namespace: environment.namespace ?? "default", taskQueue: "auto-merge-unavailable", workflowsPath, activities: activities as unknown as Record<string, (...args: never[]) => unknown> });
+  const workerRun = worker.run();
+  try {
+    const handle = await environment.client.workflow.start(issueWorkflow, { workflowId, taskQueue: "auto-merge-unavailable", args: [input] });
+    await expect(handle.result()).resolves.toMatchObject({ phase: "done" });
+    expect(githubActions).toContain("enable_auto_merge");
+    expect(githubActions.at(-1)).toBe("merge");
+  } finally {
+    worker.shutdown();
+    await workerRun;
+  }
 });

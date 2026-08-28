@@ -42,7 +42,7 @@ function conflictSnapshot(task: TaskFailure["current"]): unknown {
 function sendDomainFailure(reply: FastifyReply, error: AuthFailure | ProjectFailure | TaskFailure | HermesAgentFailure): void {
   const body = error instanceof AuthFailure || error instanceof HermesAgentFailure
     ? { error: error.publicMessage, ...(error.code !== "auth_failure" ? { code: error.code } : {}) }
-    : { error: error.publicMessage, findings: error.findings, ...(error instanceof TaskFailure && error.current ? { current: conflictSnapshot(error.current) } : {}) };
+    : { error: error.publicMessage, findings: error.findings, ...(error instanceof TaskFailure && error.current ? { current: conflictSnapshot(error.current) } : {}), ...(error instanceof TaskFailure && error.ownerTaskId ? { ownerTaskId: error.ownerTaskId } : {}) };
   reply.code(error.statusCode).send(body);
 }
 

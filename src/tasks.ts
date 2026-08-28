@@ -48,7 +48,7 @@ export class TaskFailure extends Error {
   readonly findings: TaskFinding[];
   readonly current: ForgeTask | undefined;
 
-  constructor(publicMessage: string, findings: TaskFinding[] = [], statusCode = 400, current?: ForgeTask) {
+  constructor(publicMessage: string, findings: TaskFinding[] = [], statusCode = 400, current?: ForgeTask, readonly ownerTaskId?: string) {
     super(publicMessage);
     this.name = "TaskFailure";
     this.publicMessage = publicMessage;
@@ -1152,6 +1152,30 @@ export class TaskService {
     let source;
     try { source = input.source ? await this.projects.resolveTaskSource(project, input.source) : undefined; }
     catch (error) { if (error instanceof TaskSourceFailure) throw new TaskFailure(error.message, [finding(error.code, "source", error.message)], error.statusCode); throw error; }
+    const sourceBranch = source?.kind === "pull_request" ? source.headBranch : source?.kind === "branch" ? source.branch : undefined;
+    if (sourceBranch) {
+      const owner = this.database.authQuery((db) => db.prepare(`
+        SELECT t.id, t.title
+        FROM forge_tasks t
+        JOIN forge_issue_projections p ON p.task_id = t.id AND p.company_id = t.company_id
+        WHERE t.company_id = ? AND t.project_id = ? AND p.phase NOT IN ('done', 'cancelled')
+          AND (
+            EXISTS (SELECT 1 FROM forge_issue_worktrees w WHERE w.task_id = t.id AND w.company_id = t.company_id AND w.branch_name = ? AND w.status <> 'released')
+            OR EXISTS (SELECT 1 FROM forge_workflow_snapshots s WHERE s.task_id = t.id AND s.company_id = t.company_id AND json_extract(s.state_json, '$.branchName') = ?)
+          )
+        ORDER BY t.created_at
+        LIMIT 1
+      `).get(companyId, project.id, sourceBranch, sourceBranch) as { id: string; title: string } | undefined);
+      if (owner) {
+        throw new TaskFailure(
+          "Branch is already being worked by another task",
+          [finding("branch-owned-by-task", "source", `${owner.title} (${owner.id}) already owns ${sourceBranch}. Finish or cancel it first.`)],
+          409,
+          undefined,
+          owner.id,
+        );
+      }
+    }
     const branchHeads = await this.projects.captureTaskConfiguration(project);
     let promptSet: ResolvedPromptSet;
     try {

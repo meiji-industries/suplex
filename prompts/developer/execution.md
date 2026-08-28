@@ -24,4 +24,5 @@ Prior scoped Lead evidence:
 Execution coordinates:
 {"branchName":"{{branch_name}}","worktreePath":"{{worktree_path}}","targetBaseSha":"{{target_base_sha}}"}{{operator_note_section}}
 {{continuation_context}}
+If you run out of budget before finishing, commit what is complete, mark remaining steps `incomplete`, leave `blocker` null, and say what is left. Use `blocker` only when you cannot proceed without a decision, credential, or fix outside your control.
 ---contract---

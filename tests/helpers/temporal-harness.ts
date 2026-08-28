@@ -78,6 +78,19 @@ export type TemporalHarness = {
   readonly activityOverrides: Map<string, (input: any) => Promise<any>>;
 };
 
+function withActivityOverrides<T extends Record<string, (...args: any[]) => any>>(activities: T, overrides: Map<string, (input: any) => Promise<any>>): T {
+  return new Proxy(activities, {
+    get(target, property, receiver) {
+      const activity = Reflect.get(target, property, receiver);
+      if (typeof property !== "string" || typeof activity !== "function") return activity;
+      return async (...args: any[]) => {
+        const override = overrides.get(property);
+        return override ? override(args[0]) : activity(...args);
+      };
+    },
+  });
+}
+
 export function createTemporalHarness(): TemporalHarness {
   let root = "";
   let config!: ForgeConfig;
@@ -253,13 +266,7 @@ export function createTemporalHarness(): TemporalHarness {
       },
     };
     workerConnection = await NativeConnection.connect({ address: config.temporalAddress });
-    const overriddenActivities = new Proxy(integrationActivities, {
-      get(target, property, receiver) {
-        const override = typeof property === "string" ? activityOverrides.get(property) : undefined;
-        if (override) return override;
-        return Reflect.get(target, property, receiver);
-      },
-    });
+    const overriddenActivities = withActivityOverrides(integrationActivities, activityOverrides);
     worker = await Worker.create({
       connection: workerConnection,
       namespace: config.temporalNamespace,
@@ -274,13 +281,7 @@ export function createTemporalHarness(): TemporalHarness {
     if ((await api.app.inject({ method: "GET", url: "/api/auth/status" })).statusCode !== 200) throw new Error("Forge server health check failed");
 
 
-      restartActivitiesFactory = (reopenedDatabase) => new Proxy(createActivities(reopenedDatabase, config, { agent: integrationAgent, developer: integrationDeveloper }), {
-        get(target, property, receiver) {
-          const override = typeof property === "string" ? activityOverrides.get(property) : undefined;
-          if (override) return override;
-          return Reflect.get(target, property, receiver);
-        },
-      });
+      restartActivitiesFactory = (reopenedDatabase) => withActivityOverrides(createActivities(reopenedDatabase, config, { agent: integrationAgent, developer: integrationDeveloper }), activityOverrides);
     database.authQuery((db) => {
       db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('issue-admin', 'Issue Admin', 'issue-admin@forge.local', 'admin', 'active', ?, ?)").run(new Date().toISOString(), new Date().toISOString());
       db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('issue-company', 'Issue Company', 'active', ?)").run(new Date().toISOString());

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { ApplicationFailure } from "@temporalio/common";
 import { expect, test } from "vitest";
-import { queryIssueWorkflow, startIssueWorkflow } from "../src/temporal/service.js";
+import { executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/temporal/service.js";
 import { createTemporalHarness, type TemporalHarness } from "./helpers/temporal-harness.js";
 
 function continuation(h: TemporalHarness, issueId: string) { return { phase: "ci_waiting" as const, revision: 20, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Waiting for CI", lastEventId: `${issueId}-20`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: new Date().toISOString(), leadSessionRef: "session_ci_lead", leadExecutionId: "agent_ci_lead", leadOutputArtifactId: "artifact_ci_lead_output", deliveryReviewId: `delivery_${issueId}`, planRevision: 1, developerExecutionId: "developer_ci_original", developerSessionRef: "session_ci_developer", worktreePath: join(h.root, "worktrees", issueId), branchName: `forge/issue/${issueId}`, targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_ci_delivery", developerEvidenceArtifactId: "artifact_ci_developer_evidence", releaseId: `release_${issueId}`, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", expectedHeadSha: "b".repeat(40), expectedHeadTree: "c".repeat(40), ciAttempt: 0, ciOutcome: "waiting" as const, ciNextPollAt: null }; }
@@ -15,8 +15,11 @@ test("another user pushes a clean head change to an imported pr", async () => {
   try {
     h.activityOverrides.set("reconcileMerge", async () => ({ outcome: "changed_head", observedHeadSha: "e".repeat(40), mergeObservationId: "github-head-change", completionReceiptId: null, retryAt: null, blockerCode: null, evidenceArtifactId: null, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42" }));
     const started = await startIssueWorkflow(h.config, { companyId: "issue-company", projectId: "issue-project", issueId: "ci-pass", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: h.issueRoleProfiles, supplementalReview: false, continuationState: { ...continuation(h, "ci-pass"), phase: "manual_merge", allowedCommands: ["reconcile_merge"], pendingAction: "Waiting for your merge", acceptanceId: "acceptance_imported" } });
-    const first = await waitForPhase(h, started.workflowId, "delivery_ready");
+    const initial = await queryIssueWorkflow(h.config, started.workflowId);
+    const first = await executeIssueCommand(h.config, started.workflowId, "reconcile_merge", { expectedRevision: initial.revision, actorUserId: "issue-admin" });
     expect(first).toMatchObject({ phase: "delivery_ready", pendingAction: "Reviewing the latest changes", expectedHeadSha: "e".repeat(40), resultCommit: "e".repeat(40), blocker: null });
+    const second = await executeIssueCommand(h.config, started.workflowId, "reconcile_merge", { expectedRevision: first.revision, actorUserId: "issue-admin" });
+    expect(second).toEqual(first);
     expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(first);
   } finally { await h.stop(); }
 });

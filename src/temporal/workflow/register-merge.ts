@@ -183,11 +183,13 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
 export function registerMergeReconciliationHandler(ctx: IssueWorkflowContext): void {
   const validateReconcileMerge = (rawInput: contracts.StartPlanningInput): contracts.StartPlanningInput => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
-    if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "manual_merge") throw new Error("Merge reconciliation is not available in the current phase");
+    const adoptedLiveHead = ctx.patched("forge-live-head-v1") && ctx.state.phase === "delivery_ready" && ctx.state.mergeOutcome === "changed_head";
+    if (command.expectedRevision !== ctx.state.revision || (ctx.state.phase !== "manual_merge" && !adoptedLiveHead)) throw new Error("Merge reconciliation is not available in the current phase");
     return command;
   };
   setHandler(issueUpdates.reconcile_merge, ctx.guarded(async (rawInput) => {
     validateReconcileMerge(rawInput);
+    if (ctx.patched("forge-live-head-v1") && ctx.state.phase === "delivery_ready" && ctx.state.mergeOutcome === "changed_head") return ctx.state;
     return ctx.reconcileMergeTurn();
   }, "reconcile_merge"), { validator(rawInput) { validateReconcileMerge(rawInput); } });
 }

@@ -149,7 +149,7 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
         if (ctx.currentState().phase === "cancelled") return ctx.currentState();
         if (ctx.state.capacityBlocker) return ctx.state;
         // A cancel (e.g. archive) that lands while the Lead turn is running must not be overwritten by the turn's failure.
-        if (ctx.patched("forge-cancelled-planning-failure-v1") && (ctx.state.phase === "cancelled" || ctx.state.phase === "done")) return ctx.state;
+        if (ctx.patched("forge-cancelled-planning-failure-v1") && ["cancelled", "done"].includes(ctx.state.phase as string)) return ctx.state;
         const failure = ctx.permanentActivityFailure(error, ctx.patched(ctx.exhaustedActivityRecoveryPatch));
         if (!failure) throw error;
         const summary = failure.code === "activity-failed" ? "Planning failed; retry is available" : failure.summary;

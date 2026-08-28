@@ -21,6 +21,7 @@ import { CapacityManager } from "./capacity.js";
 import { createGithubReleasePort, ReleaseService } from "./github-release.js";
 import { ProjectionRebuildService } from "./projection-rebuild.js";
 import { HermesAgentService } from "./hermes-agents.js";
+import { backfillDefaultTaskTemplates } from "./default-task-templates.js";
 
 export interface ForgeServer {
   app: FastifyInstance;
@@ -35,6 +36,8 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   const hermes = new HermesAgentService(database, auth);
   const projects = new ProjectService(database, auth, config);
   await seedDevelopmentData(auth, projects, config);
+  const seededTemplates = backfillDefaultTaskTemplates(database);
+  if (seededTemplates > 0) new StructuredLogger().info("Default task templates backfilled", { inserted: seededTemplates } as never);
   const artifactStore = new ArtifactStore(config.artifactRoot);
   const capacity = new CapacityManager(database, config);
   const tasks = new TaskService(database, auth, projects, config, { capacity });

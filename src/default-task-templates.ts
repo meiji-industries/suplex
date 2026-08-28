@@ -3,7 +3,7 @@ import type { Database } from "better-sqlite3";
 import type { DeliveryTarget, VisualEvidence } from "./tasks.js";
 import type { RoleAssignments } from "./projects.js";
 import { ForgeDatabase } from "./database.js";
-import { id } from "./task-utils.js";
+import { id, json } from "./task-utils.js";
 
 export const DEFAULT_TASK_TEMPLATES: ReadonlyArray<{
   name: string;
@@ -56,6 +56,6 @@ export function seedDefaultTaskTemplates(db: Database, project: { id: string; co
 export function backfillDefaultTaskTemplates(database: ForgeDatabase): number {
   return database.authTransaction((db) => {
     const projects = db.prepare("SELECT id, company_id, role_defaults_json FROM forge_projects").all() as Array<{ id: string; company_id: string; role_defaults_json: string }>;
-    return projects.reduce((inserted, project) => inserted + seedDefaultTaskTemplates(db, { id: project.id, companyId: project.company_id, roleAgents: JSON.parse(project.role_defaults_json) as RoleAssignments }), 0);
+    return projects.reduce((inserted, project) => inserted + seedDefaultTaskTemplates(db, { id: project.id, companyId: project.company_id, roleAgents: json<RoleAssignments>(project.role_defaults_json, {}) }), 0);
   });
 }

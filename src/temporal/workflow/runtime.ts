@@ -28,7 +28,7 @@ export function classifyRepairFailure(input: { code: string | null; category?: s
 }
 
 export function compactStateForContinuation(state: IssueWorkflowState): IssueWorkflowState {
-  const compact = { ...state, activeOperation: null } as Record<string, unknown>;
+  const compact = { ...state, activeOperation: null, processedCommandIds: (state.processedCommandIds ?? []).slice(-8) } as Record<string, unknown>;
   for (const key of ["worktreePath", "deliveryBlockingFindings", "deliveryRepairPlan", "forwardMergeConflictFiles", "forwardMergeConflictDiff", "conflictFiles", "conflictDiff"]) delete compact[key];
   return IssueWorkflowStateSchema.parse(compact);
 }

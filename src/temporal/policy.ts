@@ -4,7 +4,9 @@ import { AuthorizedPlanSubjectSchema } from "../developer-contracts.js";
 
 export const WORKFLOW_PAYLOAD_LIMIT_BYTES = 32 * 1024;
 export const WORKFLOW_HISTORY_EVENT_LIMIT = 5_000;
-export const WORKFLOW_CONTINUE_STATE_LIMIT_BYTES = 8 * 1024;
+// The continuation state rides inside the workflow start input, so it shares that limit.
+// A lower gate here wedges a long-lived workflow at its continue-as-new point.
+export const WORKFLOW_CONTINUE_STATE_LIMIT_BYTES = 16 * 1024;
 
 export const PAYLOAD_POLICY = {
   workflowStartInput: 16 * 1024,

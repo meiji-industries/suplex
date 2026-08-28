@@ -229,7 +229,7 @@ test("the payload policy uses encoded converter output and covers every configur
   expect(PAYLOAD_POLICY.queryResult).toBe(32 * 1024);
   expect(PAYLOAD_POLICY.memo).toBe(4 * 1024);
   expect(PAYLOAD_POLICY.searchAttributes).toBe(4 * 1024);
-  expect(PAYLOAD_POLICY.continueAsNewInput).toBe(8 * 1024);
+  expect(PAYLOAD_POLICY.continueAsNewInput).toBe(16 * 1024);
   for (const boundary of Object.keys(PAYLOAD_POLICY)) expect(() => assertPayloadWithinLimit(boundary, "x".repeat(32 * 1024))).toThrow(/[Pp]ayload policy/);
   expect(() => assertContinuationStateWithinLimit({ carried: "x".repeat(8 * 1024) })).toThrow(/[Pp]ayload policy/);
   expect(() => assertHistoryEventCountWithinLimit(WORKFLOW_HISTORY_EVENT_LIMIT + 1)).toThrow(/history/);

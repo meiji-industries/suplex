@@ -29,6 +29,7 @@ export interface ForgeConfig {
   taskQueue: string;
   deliveryRepairCycleLimit: number;
   externalTurnCapacity: number;
+  externalTurnCapacityByProvider: Record<string, number>;
   externalTurnWaitLimitMs: number;
   turnStallTimeoutMs: number;
   externalTurnRateLimitAttempts: number;
@@ -188,6 +189,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
   const taskQueue = parsedEnvironment.data.FORGE_TASK_QUEUE ?? identifiers.taskQueue;
   const deliveryRepairCycleLimit = Number(parsedEnvironment.data.FORGE_DELIVERY_REPAIR_LIMIT ?? "2");
   const externalTurnCapacity = Number(parsedEnvironment.data.FORGE_CODEX_CAPACITY ?? "2");
+  const externalTurnCapacityByProvider = { codex: externalTurnCapacity, claude: Number(parsedEnvironment.data.FORGE_CLAUDE_CAPACITY ?? "2") };
   const externalTurnWaitLimitMs = Number(parsedEnvironment.data.FORGE_CODEX_WAIT_LIMIT_MS ?? "7200000");
   const turnStallTimeoutMs = Number(parsedEnvironment.data.FORGE_TURN_STALL_TIMEOUT_MS ?? "1200000");
   const externalTurnRateLimitAttempts = Number(parsedEnvironment.data.FORGE_CODEX_RATE_LIMIT_ATTEMPTS ?? "5");
@@ -210,6 +212,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
     taskQueue,
     deliveryRepairCycleLimit,
     externalTurnCapacity,
+    externalTurnCapacityByProvider,
     externalTurnWaitLimitMs,
     turnStallTimeoutMs,
     externalTurnRateLimitAttempts,
@@ -241,6 +244,7 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     taskQueue: overrides.taskQueue ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").taskQueue,
     deliveryRepairCycleLimit: overrides.deliveryRepairCycleLimit ?? 2,
     externalTurnCapacity: overrides.externalTurnCapacity ?? 2,
+    externalTurnCapacityByProvider: overrides.externalTurnCapacityByProvider ?? { codex: overrides.externalTurnCapacity ?? 2, claude: 2 },
     externalTurnWaitLimitMs: overrides.externalTurnWaitLimitMs ?? 7_200_000,
     turnStallTimeoutMs: overrides.turnStallTimeoutMs ?? 1_200_000,
     externalTurnRateLimitAttempts: overrides.externalTurnRateLimitAttempts ?? 5,

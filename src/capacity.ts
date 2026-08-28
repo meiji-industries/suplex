@@ -1,3 +1,4 @@
+import { CancelledFailure } from "@temporalio/activity";
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import type { AdminCapacityLane, PublicCapacityStatus } from "./capacity-contracts.js";
@@ -15,17 +16,38 @@ export class CapacityManager {
   private readonly active = new Map<string, number>();
   private readonly waiters = new Map<string, Array<() => void>>();
 
-  constructor(private readonly database: ForgeDatabase, private readonly config: Pick<ForgeConfig, "externalTurnCapacity">) {}
+  constructor(private readonly database: ForgeDatabase, private readonly config: Pick<ForgeConfig, "externalTurnCapacity" | "externalTurnCapacityByProvider">) {}
 
-  async acquire(provider = "codex", heartbeat?: () => void): Promise<() => void> {
-    const limit = this.config.externalTurnCapacity;
+  private limit(provider: string): number {
+    return this.config.externalTurnCapacityByProvider[provider] ?? this.config.externalTurnCapacity;
+  }
+
+  snapshot(provider?: string): Record<string, { activeCount: number; queuedCount: number; capacity: number }> {
+    const providers = provider ? [provider] : [...new Set(["codex", ...this.active.keys(), ...this.waiters.keys(), ...Object.keys(this.config.externalTurnCapacityByProvider)])];
+    return Object.fromEntries(providers.map((name) => [name, { activeCount: this.active.get(name) ?? 0, queuedCount: this.waiters.get(name)?.length ?? 0, capacity: this.limit(name) }]));
+  }
+
+  async acquire(provider = "codex", heartbeat?: (details?: unknown) => void, signal?: AbortSignal): Promise<() => void> {
+    const limit = this.limit(provider);
     while ((this.active.get(provider) ?? 0) >= limit) {
-      heartbeat?.();
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 1_000);
-        this.waiters.set(provider, [...(this.waiters.get(provider) ?? []), () => { clearTimeout(timer); resolve(); }]);
+      if (signal?.aborted) throw new CancelledFailure("CANCELLED");
+      const position = (this.waiters.get(provider)?.length ?? 0) + 1;
+      heartbeat?.({ queued: true, provider, position, activeCount: this.active.get(provider) ?? 0 });
+      await new Promise<void>((resolve, reject) => {
+        const wake = () => { cleanup(); resolve(); };
+        const abort = () => { cleanup(); reject(new CancelledFailure("CANCELLED")); };
+        const timer = setTimeout(wake, 1_000);
+        const cleanup = () => {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", abort);
+          const queue = this.waiters.get(provider);
+          if (queue) this.waiters.set(provider, queue.filter((waiter) => waiter !== wake));
+        };
+        this.waiters.set(provider, [...(this.waiters.get(provider) ?? []), wake]);
+        signal?.addEventListener("abort", abort, { once: true });
       });
     }
+    if (signal?.aborted) throw new CancelledFailure("CANCELLED");
     this.active.set(provider, (this.active.get(provider) ?? 0) + 1);
     let released = false;
     return () => {
@@ -36,8 +58,8 @@ export class CapacityManager {
     };
   }
 
-  async run<T>(operation: () => Promise<T>, provider = "codex", heartbeat?: () => void): Promise<T> {
-    const release = await this.acquire(provider, heartbeat);
+  async run<T>(operation: () => Promise<T>, provider = "codex", heartbeat?: (details?: unknown) => void, signal?: AbortSignal): Promise<T> {
+    const release = await this.acquire(provider, heartbeat, signal);
     try { return await operation(); } finally { release(); }
   }
 
@@ -52,7 +74,7 @@ export class CapacityManager {
       profileName: profile.name,
       provider: profile.provider,
       capacity: profile.capacity,
-      effectiveCapacity: profile.capacity ?? this.config.externalTurnCapacity,
+      effectiveCapacity: profile.capacity ?? this.limit(profile.provider),
       activeCount: this.active.get(profile.provider) ?? 0,
       queuedCount: this.waiters.get(profile.provider)?.length ?? 0,
       rateLimitedCount: 0,

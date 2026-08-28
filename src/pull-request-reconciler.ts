@@ -3,7 +3,7 @@
  * runtime dependencies: it is imported by the Temporal workflow bundle.
  */
 export type PullRequestTarget = "draft" | "ready" | "merged";
-export type PullRequestPhase = "Opening PR" | "Waiting for CI" | "Merging" | "Done" | "Blocked";
+export type PullRequestPhase = "Opening PR" | "Waiting for CI" | "Merging" | "Resolving conflicts" | "Done" | "Blocked";
 export type PullRequestOwner = "lead" | "human" | "none";
 
 export interface PullRequestObservation {
@@ -40,6 +40,7 @@ export type PullRequestAction =
   | { kind: "mark_ready"; number: number }
   | { kind: "enable_auto_merge"; number: number; headSha: string }
   | { kind: "merge"; number: number; headSha: string }
+  | { kind: "resolve_conflicts" }
   | { kind: "repair_ci" }
   | { kind: "review_delivery"; headSha: string }
   | { kind: "send_planner_note"; message: string }
@@ -78,6 +79,9 @@ export function reconcile(input: { observed: PullRequestObservation; target: Pul
   if (observed.isDraft) {
     if (target === "draft") return done(current, observed, "Draft PR open");
     return { phase: "Blocked", pendingAction: "Pull request is a draft on GitHub — mark it ready to continue", owner: "human", allowedCommands: ["mark_ready", "cancel_issue"], actions: feedOnce(current, observed, "Pull request was converted to a draft on GitHub") };
+  }
+  if (observed.state === "open" && observed.mergeable === "CONFLICTING") {
+    return { phase: "Resolving conflicts", pendingAction: "Resolving merge conflicts with the base branch", owner: "lead", allowedCommands: ["cancel_issue"], actions: [...feedOnce(current, observed, "Pull request has merge conflicts on GitHub"), { kind: "resolve_conflicts" }] };
   }
   if (observed.headSha && current.headSha && observed.headSha.toLowerCase() !== current.headSha.toLowerCase()) {
     return { phase: "Waiting for CI", pendingAction: "Reviewing the latest changes", owner: "lead", allowedCommands: ["review_delivery"], actions: [...feedOnce(current, observed, "Pull request head changed on GitHub"), { kind: "review_delivery", headSha: observed.headSha }] };

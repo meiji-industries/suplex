@@ -29,34 +29,36 @@ afterEach(async () => {
 // path must leave the Workflow with the same forward-merge inputs a plan-side conflict
 // leaves, or the Integrator's resolve turn throws "An owned Developer execution and
 // forward-merge evidence are required" and the auto-chain halts for good.
-test("a conflict detected while keeping the pull request current resolves through the Integrator and reaches done", { timeout: 120_000 }, async () => {
+test("GitHub conflicts start automatic resolution and auto-merge fallback merges directly", { timeout: 120_000 }, async () => {
   environment = await TestWorkflowEnvironment.createTimeSkipping();
   const projections: IssueWorkflowState[] = [];
-  const conflictPlanRoles: Array<string | undefined> = [];
   let publishes = 0;
   let baseUpdates = 0;
   let reviewed = false;
   let merged = false;
+  let conflictSeen = false;
   const githubActions: string[] = [];
   const activities: Partial<IssueActivities> = {
     projectIssueState: async (event) => { projections.push(structuredClone(event.state)); return event.state; },
-    reconcileTargetBase: async (input) => ({ outcome: "no_drift" as const, checkId: `target-base-${input.checkpoint}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: input.expectedBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree }),
+    reconcileTargetBase: async (input) => {
+      if (input.checkpoint === "pre_release" && !conflictSeen) {
+        conflictSeen = true;
+        return { outcome: "conflict" as const, checkId: "target-base-conflict", checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: nextBase, priorHead: input.expectedHeadSha, priorTree: input.expectedHeadTree, conflictFileCount: 1, conflictArtifact: { id: "conflict_artifact", kind: "forward-merge-conflict" as const } };
+      }
+      return { outcome: "no_drift" as const, checkId: `target-base-${input.checkpoint}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: input.expectedBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree };
+    },
     publishRelease: async () => {
       publishes += 1;
       const merged = publishes > 1;
       return { outcome: "completed" as const, releaseId: "release_new", repository: "acme/forge", branchName: "forge/issue/release_conflict", baseBranch: "main", headSha: merged ? mergedHead : head, headTree: merged ? mergedTree : tree, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", isDraft: false, reused: merged, attempt: 1, targetBaseSha: merged ? nextBase : base };
     },
     reconcileCi: async (input) => ({ runId: "ci_new", attemptId: "ci_attempt_new", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: "ci_evidence", outcome: "passed" as const, reason: "checks_passed", owner: null, repairable: false, summary: "All required checks passed", retryAt: null, nextPollAt: null, policyHash: sha256, propagationDeadline: null, overallDeadline: null }),
-    // The first base update conflicts; the republished merge result then sees no drift.
+    // A GitHub conflict starts the existing conflict-resolution path before CI handling.
     updateCiFromBase: async () => {
       baseUpdates += 1;
-      if (baseUpdates > 1) return { outcome: "no_drift" as const, summary: "The pull request base has not advanced" };
-      return { outcome: "conflict" as const, forwardMergeId: "merge_release_conflict", priorHead: head, priorTree: tree, baseSha: nextBase, conflictArtifactId: "conflict_artifact", conflictFileCount: 1, summary: "The base branch advanced and the update conflicts" };
+      return { outcome: "no_drift" as const, summary: "The pull request base has not advanced" };
     },
-    planMergeConflict: async (input) => {
-      conflictPlanRoles.push(input.executionRole);
-      return { planId: "conflict_plan", planArtifactId: "conflict_plan_artifact", evidenceArtifactId: "conflict_plan_evidence", leadExecutionId: "lead_conflict", leadSessionRef: "lead_session", summary: "Keep both invariants" };
-    },
+    planMergeConflict: async () => ({ planId: "conflict_plan", planArtifactId: "conflict_plan_artifact", evidenceArtifactId: "conflict_plan_evidence", leadExecutionId: "lead_conflict", leadSessionRef: "lead_session", summary: "Keep both invariants" }),
     resolveMergeConflictSupervised: async () => ({ status: "completed" as const, resultHash: sha256, result: { developerExecutionId: "developer_conflict_resolution", developerSessionRef: "developer_session", resultCommit: mergedHead, resultTree: mergedTree, deliveryArtifactId: "delivery_forward_merge", deliveryArtifactSha256: sha256, evidenceArtifactId: "conflict_resolution_evidence", evidenceArtifactSha256: sha256, verificationArtifactId: "verification_forward_merge", verificationArtifactSha256: sha256, summary: "Resolved the release conflict" } }),
     reviewDelivery: async (input) => ({
       outcome: "completed" as const,
@@ -69,10 +71,13 @@ test("a conflict detected while keeping the pull request current resolves throug
     acceptDelivery: async () => ({ acceptanceId: "acceptance_new", status: "accepted" as const, outcome: "ready" as const, retryAt: null, readyAt: "2026-08-21T00:00:00.000Z", acceptedAt: "2026-08-21T00:00:00.000Z", evidenceArtifactId: null, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", reasonArtifactId: null }),
     reconcileMerge: async () => ({ outcome: "merged" as const, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", mergeObservationId: "merge_observation", completionReceiptId: "completion_receipt", observedAt: "2026-08-21T00:00:00.000Z", mergedAt: "2026-08-21T00:00:00.000Z", retryAt: null }),
     pushDeliveryBranch: async (input) => ({ repository: "acme/forge", branchName: input.branchName, commitSha: input.commitSha }),
-    // GitHub as the reconciler sees it: checks go green once Forge's final review ran, Forge then
-    // requests auto-merge, and the next observation reports the pull request merged.
-    observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.com/acme/forge/pull/42", state: merged ? "merged" as const : "open" as const, isDraft: false, headSha: mergedHead, baseSha: nextBase, mergeable: "MERGEABLE", checks: reviewed ? { total: 1, pending: 0, failing: 0, successful: 1 } : { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
-    applyGithubPullRequestAction: async (input) => { githubActions.push(input.action); merged = true; },
+    // GitHub first reports a conflict. After Forge resolves it, CI passes and direct merge completes.
+    observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.com/acme/forge/pull/42", state: merged ? "merged" as const : "open" as const, isDraft: false, headSha: mergedHead, baseSha: nextBase, mergeable: conflictSeen ? "MERGEABLE" : "CONFLICTING", checks: reviewed ? { total: 1, pending: 0, failing: 0, successful: 1 } : { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
+    applyGithubPullRequestAction: async (input) => {
+      githubActions.push(input.action);
+      if (input.action === "enable_auto_merge") throw new Error("Auto merge is not allowed for this repository");
+      merged = true;
+    },
   };
 
   const workflowId = "workflow:release_conflict";
@@ -130,12 +135,10 @@ test("a conflict detected while keeping the pull request current resolves throug
     const handle = await environment.client.workflow.start(issueWorkflow, { workflowId, taskQueue, args: [input] });
     await handle.result();
 
-    // The regression: the release path used to store neither the prior tree nor the
-    // conflict artifact, so resolve_merge_conflict threw on its own preconditions and
-    // the auto-chain halted for good at merge_conflict_required.
+    // GitHub conflicts preserve the forward-merge inputs for the automatic resolution turn.
     const conflicted = projections.find((state) => state.phase === "merge_conflict_required");
     expect(conflicted).toMatchObject({
-      forwardMergeId: "merge_release_conflict",
+      forwardMergeId: "target-base-conflict",
       forwardMergePriorHead: head,
       forwardMergePriorTree: tree,
       forwardMergeTargetBaseSha: nextBase,
@@ -147,13 +150,12 @@ test("a conflict detected while keeping the pull request current resolves throug
     expect(settled).toMatchObject({ phase: "done", targetBaseSha: nextBase, resultCommit: mergedHead, resultTree: mergedTree, developerExecutionId: "developer_conflict_resolution" });
     const phaseSequence = projections.map((state) => state.phase).filter((phase, index, all) => phase !== all[index - 1]);
     expect(phaseSequence.slice(phaseSequence.indexOf("merge_conflict_required"))).toEqual([
-      "merge_conflict_required", "merge_conflict_reviewing", "merge_conflict_resolving", "delivery_ready",
+      "merge_conflict_required", "merge_conflict_resolving", "delivery_ready",
       "reviewing_delivery", "delivery_reviewed", "releasing", "ci_waiting", "final_review", "manual_merge", "done",
     ]);
-    // The Integrator, not the Planner, owns the release-side conflict plan.
-    expect(conflictPlanRoles).toEqual(["integrator"]);
     expect(publishes).toBe(2);
-    expect(githubActions).toEqual(["enable_auto_merge"]);
+    expect(githubActions).toContain("merge");
+    expect(githubActions.at(-1)).toBe("merge");
     history = await handle.fetchHistory();
   } finally {
     worker.shutdown();

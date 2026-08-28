@@ -12,6 +12,12 @@ describe("pull request reconciler", () => {
   test.each([["draft"], ["ready"]] as const)("adopts a ready PR for %s", (target) => expect(result(target)).toMatchObject({ phase: "Done", pendingAction: "Pull request ready" }));
   test("waits for CI for a merged target", () => expect(result("merged", { checks: "pending" })).toMatchObject({ phase: "Waiting for CI", pendingAction: "Waiting for CI" }));
   test("starts the CI repair path without a human gate", () => expect(result("merged", { checks: "failed" })).toMatchObject({ phase: "Waiting for CI", owner: "lead", actions: expect.arrayContaining([{ kind: "repair_ci" }]) }));
+  test.each([["ready"], ["merged"]] as const)("resolves GitHub merge conflicts for %s", (target) => {
+    const reconciliation = result(target, { mergeable: "CONFLICTING" });
+    expect(reconciliation).toMatchObject({ phase: "Resolving conflicts", owner: "lead", allowedCommands: ["cancel_issue"] });
+    expect(reconciliation.actions).toContainEqual({ kind: "resolve_conflicts" });
+  });
+  test("does not resolve an unknown GitHub merge state", () => expect(result("merged", { mergeable: "UNKNOWN" })).not.toMatchObject({ phase: "Resolving conflicts" }));
   test("enables auto merge for green merged delivery", () => {
     const reconciliation = result("merged");
     expect(reconciliation).toMatchObject({ phase: "Merging", owner: "lead", allowedCommands: [] });

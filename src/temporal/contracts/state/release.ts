@@ -35,4 +35,5 @@ export const releaseObservationStateFields = {
   githubPullRequestChangedFiles: z.number().int().nonnegative().nullable().optional(),
   githubPullRequestAdditions: z.number().int().nonnegative().nullable().optional(),
   githubPullRequestDeletions: z.number().int().nonnegative().nullable().optional(),
+  autoMergeAvailable: z.boolean().nullable().optional(),
 };

@@ -74,11 +74,15 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
         ? stateTransitions.reviewBlockedState(ctx.state, exactResult)
         : stateTransitions.repairRequiredState(ctx.state, exactResult, ctx.repairCycleLimit, ctx.patched("forge-repair-no-progress-v1"));
     }
+    const pushReviewedHead = ctx.patched("forge-push-reviewed-head-v1");
     if (ctx.state.phase === "delivery_reviewed" && ctx.input.deliveryTarget === "remote_branch") {
       await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName!, commitSha: ctx.state.resultCommit! });
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Done — branch pushed", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     } else if (ctx.state.phase === "delivery_reviewed" && ctx.input.deliveryTarget === "local_worktree") {
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Done — kept in worktree", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    } else if (ctx.state.phase === "delivery_reviewed" && pushReviewedHead && ctx.input.deliveryTarget && ["pull_request_draft", "pull_request_ready", "merged"].includes(ctx.input.deliveryTarget) && ctx.state.pullRequestNumber && ctx.state.resultCommit && ctx.state.resultCommit.toLowerCase() !== ctx.state.expectedHeadSha?.toLowerCase()) {
+      await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName!, commitSha: ctx.state.resultCommit! });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_reviewed", expectedHeadSha: ctx.state.resultCommit, expectedHeadTree: ctx.state.resultTree, allowedCommands: ctx.addRevisionCommand(ctx.state.allowedCommands), pendingAction: "Pushed the reviewed commit to the pull request", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     } else {
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, allowedCommands: ctx.addRevisionCommand(ctx.state.allowedCommands) });
     }

@@ -4,7 +4,7 @@ import { CapacityManager } from "../src/capacity.js";
 import { createTestConfig } from "../src/config.js";
 
 function capacity() {
-  return new CapacityManager(null as never, createTestConfig("/tmp/forge-capacity-test", { externalTurnCapacity: 1 }));
+  return new CapacityManager(null as never, createTestConfig("/tmp/forge-capacity-test", { externalTurnCapacity: 1, externalTurnCapacityByProvider: { codex: 1, claude: 1 } }));
 }
 
 test("second turn waits for the provider slot then runs", async () => {
@@ -18,6 +18,20 @@ test("second turn waits for the provider slot then runs", async () => {
   first();
   await second;
   expect(ran).toBe(true);
+});
+
+test("provider buckets are independent and queued waits heartbeat then abort", async () => {
+  const slots = capacity();
+  const release = await slots.acquire("codex");
+  const claudeRelease = await slots.acquire("claude");
+  const controller = new AbortController();
+  const details: unknown[] = [];
+  const queued = slots.acquire("codex", (detail) => details.push(detail), controller.signal);
+  expect(details).toContainEqual({ queued: true, provider: "codex", position: 1, activeCount: 1 });
+  controller.abort();
+  await expect(queued).rejects.toMatchObject({ name: "CancelledFailure" });
+  release();
+  claudeRelease();
 });
 
 test("a restarted worker does not retain stale slots", async () => {

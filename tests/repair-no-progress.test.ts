@@ -25,4 +25,11 @@ describe("repair progress", () => {
     expect(credential).toMatchObject({ phase: "delivery_blocked", owner: "human", blocker: { category: "provider_authentication" } });
     expect(credential.blocker?.actions[0]).toMatchObject({ command: "repair_ci", label: "Sign in to GitHub and retry" });
   });
+
+  it("offers CI reconciliation after GitHub sign-in", () => {
+    const initial = buildInitialIssueWorkflowState({ issueId: "issue_1", companyId: "company_1", workflowId: "workflow_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: "artifact_1", imageArtifactIds: [], roleProfiles: {}, supplementalReview: false });
+    const credential = credentialBlockedState(initial, "reconcile_ci", { artifactId: "evidence_1", kind: "attention-evidence" });
+    expect(credential).toMatchObject({ phase: "delivery_blocked", owner: "human", allowedCommands: ["reconcile_ci", "cancel_issue"], blocker: { category: "provider_authentication" } });
+    expect(credential.blocker?.actions[0]).toMatchObject({ command: "reconcile_ci", label: "Sign in to GitHub and retry" });
+  });
 });

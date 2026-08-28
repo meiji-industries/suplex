@@ -80,6 +80,13 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     } catch (error) {
       if (ctx.state.phase !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId || ctx.state.expectedHeadSha !== expectedHeadSha) return ctx.state;
       const failure = ctx.permanentActivityFailure(error);
+      const failureClass = ctx.patched("forge-repair-no-progress-v1") ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary: failure?.summary ?? "Couldn't check CI — retry", source: "ci" }) : null;
+      if (failureClass === "credential_missing") {
+        const evidence = stateTransitions.evidencePointer(failure?.evidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence");
+        ctx.state = stateTransitions.credentialBlockedState(ctx.state, "reconcile_ci", evidence);
+        await ctx.project();
+        return ctx.state;
+      }
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ciAttempt: attempt, ciOutcome: "provider_unavailable", ciReason: "provider_failure_budget_exhausted", ciOwner: "human", ciRepairable: false, ciNextPollAt: null, phase: "delivery_blocked", owner: "human", allowedCommands: ["reconcile_ci", "cancel_issue"], pendingAction: failure?.summary ?? "Couldn't check CI — retry", blocker: failure?.category ? stateTransitions.humanBlocker(failure.category, failure.summary, [{ command: "reconcile_ci", label: "Retry CI reconciliation", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], undefined) : null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.state;

@@ -116,6 +116,17 @@ test("terminal projections close tabs, while failed tabs remain available", asyn
   }
 });
 
+test("closes old sessions for finished tasks without polling Herdr", async () => {
+  const value = await fixture("failed");
+  const herdr = new FakeHerdrClient();
+  try {
+    value.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET updated_at = '2000-01-01T00:00:00.000Z' WHERE id = 'session'").run());
+    await expect(reconcileHerdrSessions(value.database, herdr as unknown as HerdrClient)).resolves.toEqual([]);
+    expect(herdr.getAgentCalls).toEqual([]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_role_sessions WHERE id = 'session'").get())).toEqual({ status: "closed" });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("a blocked role session is an attention row without Forge actions", async () => {
   const value = await fixture();
   const herdr = new FakeHerdrClient();

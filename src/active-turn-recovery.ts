@@ -52,7 +52,7 @@ function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
     JOIN forge_issue_projections projection ON projection.task_id = turn.task_id
     LEFT JOIN forge_issue_worktrees worktree ON worktree.task_id = turn.task_id AND worktree.status <> 'released'
     LEFT JOIN forge_delivery_reviews review ON review.id = (SELECT id FROM forge_delivery_reviews WHERE workflow_id = projection.workflow_id ORDER BY created_at DESC, id DESC LIMIT 1)
-    WHERE turn.status IN (${activeStatuses}) AND projection.phase NOT IN ('done', 'cancelled')${taskId ? " AND turn.task_id = ?" : ""}
+    WHERE turn.status IN (${activeStatuses}) AND (projection.phase NOT IN ('done', 'cancelled', 'failed') OR session.updated_at >= datetime('now', '-1 day'))${taskId ? " AND turn.task_id = ?" : ""}
     ORDER BY turn.task_id, turn.turn_id`).all(...(taskId ? [taskId] : [])) as Turn[]);
 }
 

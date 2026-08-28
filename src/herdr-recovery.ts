@@ -16,7 +16,12 @@ export async function reconcileHerdrSessions(
   herdr: HerdrClient = new CliHerdrClient(),
   taskId?: string,
 ): Promise<HerdrRecoveryOutcome[]> {
-  const sessions = database.authQuery((db) => db.prepare(`SELECT id, task_id AS taskId, agent_name AS agentName, codex_session_id AS codexSessionId, pane_id AS paneId, status FROM forge_herdr_role_sessions WHERE status NOT IN ('closed')${taskId ? " AND task_id = ?" : ""} ORDER BY task_id, id`).all(...(taskId ? [taskId] : [])) as Array<{ id: string; taskId: string; agentName: string | null; codexSessionId: string | null; paneId: string | null; status: string }>);
+  const staleSessions = database.authQuery((db) => db.prepare(`SELECT session.id FROM forge_herdr_role_sessions session JOIN forge_issue_projections projection ON projection.task_id = session.task_id WHERE session.status NOT IN ('closed') AND projection.phase IN ('done', 'cancelled', 'failed') AND session.updated_at < datetime('now', '-1 day')${taskId ? " AND session.task_id = ?" : ""}`).all(...(taskId ? [taskId] : [])) as Array<{ id: string }>);
+  if (staleSessions.length) database.authTransaction((db) => {
+    const close = db.prepare("UPDATE forge_herdr_role_sessions SET status = 'closed', updated_at = ? WHERE id = ? AND status <> 'closed'");
+    for (const session of staleSessions) close.run(now(), session.id);
+  });
+  const sessions = database.authQuery((db) => db.prepare(`SELECT session.id, session.task_id AS taskId, session.agent_name AS agentName, session.codex_session_id AS codexSessionId, session.pane_id AS paneId, session.status FROM forge_herdr_role_sessions session JOIN forge_issue_projections projection ON projection.task_id = session.task_id WHERE session.status NOT IN ('closed') AND (projection.phase NOT IN ('done', 'cancelled', 'failed') OR session.updated_at >= datetime('now', '-1 day'))${taskId ? " AND session.task_id = ?" : ""} ORDER BY session.task_id, session.id`).all(...(taskId ? [taskId] : [])) as Array<{ id: string; taskId: string; agentName: string | null; codexSessionId: string | null; paneId: string | null; status: string }>);
   const outcomes: HerdrRecoveryOutcome[] = [];
   for (const session of sessions) {
     const live = session.agentName ? await herdr.getAgent(session.agentName) : null;

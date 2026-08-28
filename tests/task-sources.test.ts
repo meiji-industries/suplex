@@ -7,7 +7,7 @@ import { afterEach, expect, test } from "vitest";
 import type { GithubPullRequest, GithubReleasePort } from "../src/github-release.js";
 import type { Project } from "../src/projects.js";
 import { TaskSourceService } from "../src/task-sources.js";
-import { WorktreeFailure, WorktreeManager } from "../src/worktrees.js";
+import { WorktreeManager } from "../src/worktrees.js";
 import { TaskBodySchema } from "../src/http/contracts/tasks.js";
 
 const roots: string[] = [];
@@ -73,10 +73,10 @@ test("adoption checks out remote head while recording the merge-base and is idem
   await expect(manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main" })).resolves.toEqual(adopted);
 });
 
-test("adoption reports another checkout with the stable source code", async () => {
+test("adoption reports another checkout with the branch ownership code", async () => {
   process.env.FORGE_MIN_FREE_DISK_GB = "0";
   const value = fixture(); git(value.repo, "switch", "feature");
-  await expect(new WorktreeManager().adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main" })).rejects.toEqual(expect.objectContaining<Partial<WorktreeFailure>>({ code: "source-branch-checked-out" }));
+  await expect(new WorktreeManager().adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main" })).rejects.toMatchObject({ code: "branch_checked_out", message: expect.stringContaining(value.repo) });
 });
 
 test("adoption safely follows remote movement", async () => {

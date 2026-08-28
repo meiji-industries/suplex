@@ -130,6 +130,16 @@ test("adopts a force-pushed source branch without local commits", async () => {
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("reports the path that already has a source branch checked out", async () => {
+  const value = await remoteFixture();
+  const branchName = "feat/owned-source";
+  try {
+    await createSourceBranch(value, branchName);
+    await git(["switch", branchName], value.repositoryPath);
+    await expect(new WorktreeManager().adopt({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_second_owner", branchName, baseBranch: "main" })).rejects.toMatchObject({ code: "branch_checked_out", message: expect.stringContaining(value.repositoryPath) });
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("rebases local source commits onto a force-pushed source branch", async () => {
   const value = await remoteFixture();
   const branchName = "feat/source";

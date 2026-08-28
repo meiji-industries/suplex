@@ -22,3 +22,15 @@ test("provider authentication blockers use the GitHub sign-in card", () => {
   const service = new AttentionService(database as never, { listVisibleCompanies() { return [{ id: "company", name: "Company", status: "active" }]; } } as never);
   expect(service.list("member")[0]?.attention[0]?.card.primaryAction.label).toBe("Sign in to GitHub and retry");
 });
+
+test("branch checkout blockers explain the duplicate-task recovery choices", () => {
+  expect(attentionCardFromBlocker(
+    { category: "unsafe_recovery", summary: "feat/time-clock is already checked out by /worktrees/task-owner" },
+    { actions: [{ command: "cancel_issue", label: "Cancel issue", destructive: true }, { command: "retry_development", label: "Retry Developer" }] },
+  )).toMatchObject({
+    title: "Branch is owned by another task",
+    explanation: expect.stringContaining("/worktrees/task-owner"),
+    primaryAction: { command: "cancel_issue", label: "Cancel this duplicate task", destructive: true },
+    secondaryAction: { command: "retry_development", label: "Retry after the other task finishes" },
+  });
+});

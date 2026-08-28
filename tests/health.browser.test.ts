@@ -51,10 +51,10 @@ test("mobile health page shows separate healthy and unhealthy states", { timeout
     expect(await page.locator("body").innerText()).toMatch(/forge\.tailnet\.ts\.net/);
     expect(await page.locator("body").innerText()).not.toMatch(/Truthful readiness/);
 
-    const navigationTrigger = page.getByRole("button", { name: "Open settings navigation" });
+    const navigationTrigger = page.getByRole("button", { name: "Open navigation" });
     await navigationTrigger.focus();
     await page.keyboard.press("Enter");
-    expect(await page.locator('[data-slot="settings-mobile-nav"]').isVisible()).toBe(true);
+    expect(await page.locator('[data-slot="sidebar"][data-mobile="true"]').isVisible()).toBe(true);
     await page.keyboard.press("Escape");
     expect(await navigationTrigger.evaluate((element) => element === document.activeElement)).toBe(true);
 
@@ -105,7 +105,7 @@ test("mobile health page shows separate healthy and unhealthy states", { timeout
     await healthy.waitFor();
     expect(await healthy.getAttribute("data-status")).toBe("green");
 
-    expect(await desktop.locator("aside").isVisible()).toBe(true);
+    expect(await desktop.locator('[data-slot="sidebar"]').isVisible()).toBe(true);
     expect(await desktop.locator('[data-slot="health-row"]').count()).toBe(3);
     expect(await desktop.locator("[data-system-health]").getAttribute("data-status")).toBe("green");
   } finally {

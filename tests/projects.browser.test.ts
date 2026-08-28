@@ -150,7 +150,7 @@ test("projects desktop flow auto-activates valid clones and shows actionable val
       await page.reload();
       expect(await page.getByLabel("Issue code", { exact: true }).inputValue()).toBe("PROJ");
       expect(await page.getByRole("link", { name: "Profile", exact: true }).isVisible()).toBe(true);
-      const settingsAside = page.locator("aside");
+      const settingsAside = page.locator('[data-slot="sidebar"]');
       const settingsSearch = settingsAside.getByLabel("Search settings", { exact: true });
       expect(await settingsSearch.getAttribute("placeholder")).toBe("Search settings…");
       await page.keyboard.press("/");
@@ -235,11 +235,11 @@ test("projects desktop flow auto-activates valid clones and shows actionable val
       await expect.poll(async () => narrow.getByRole("button", { name: "Archive" }).first().isVisible({ timeout: 1000 })).toBe(true);
       await narrow.goto(`${baseUrl}/companies/${encodeURIComponent(browserCompany.id)}/settings?company=${encodeURIComponent(browserCompany.id)}`);
       await expect.poll(async () => narrow.getByLabel("Issue code", { exact: true }).inputValue()).toBe("PROJ");
-      await narrow.getByRole("button", { name: "Open settings navigation", exact: true }).click();
+      await narrow.getByRole("button", { name: "Open navigation", exact: true }).click();
       await narrow.getByRole("dialog").getByRole("link", { name: "Profile", exact: true }).click();
       await narrow.getByRole("heading", { name: "Profile", exact: true, level: 1 }).waitFor();
       expect(await narrow.locator("#username").inputValue()).toBe("browser-admin");
-      await narrow.getByRole("button", { name: "Open settings navigation", exact: true }).click();
+      await narrow.getByRole("button", { name: "Open navigation", exact: true }).click();
       const narrowSettingsNav = narrow.getByRole("dialog");
       expect(await narrowSettingsNav.getByLabel("Search settings", { exact: true }).getAttribute("placeholder")).toBe("Search settings…");
       expect(await narrowSettingsNav.getByRole("link", { name: "Profile", exact: true }).getAttribute("aria-current")).toBe("page");

@@ -60,7 +60,7 @@ test("attention page renders projection-backed task rows", { timeout: 60_000 }, 
       expect(await page.getByRole("textbox", { name: "Decision needed note" }).isVisible()).toBe(true);
       expect(await page.getByRole("button", { name: "Choose a behavior" }).isVisible()).toBe(true);
       await page.setViewportSize({ width: 390, height: 844 });
-      expect(await page.getByRole("button", { name: "Open settings navigation" }).isVisible()).toBe(true);
+      expect(await page.getByRole("button", { name: "Open navigation" }).isVisible()).toBe(true);
       expect(await page.getByRole("radio", { name: /Preserve changes/ }).isChecked()).toBe(true);
       expect(await page.getByRole("button", { name: "Choose a behavior" }).isVisible()).toBe(true);
       await page.close(); await context.close();

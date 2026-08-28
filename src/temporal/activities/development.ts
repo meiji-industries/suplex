@@ -37,7 +37,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
     },
     async runDeveloperExecution(input) {
       const operation = developer.run ? developer.run.bind(developer) : defaultDeveloper.run.bind(defaultDeveloper);
-      const result = await invokeAgent(input, () => operation(input));
+      const result = await invokeAgent(input, () => operation(input), "codex");
       if (input.executionId && result.developerExecutionId !== input.executionId) throw new Error("Developer execution identity did not match the durable Workflow operation");
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
@@ -53,14 +53,14 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
         const { worktreePath: _worktreePath, ...safeResult } = result;
         void _worktreePath;
         return { ...safeResult, deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) };
-      }));
+      }), "codex");
     },
     async runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput) {
       const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null } | undefined) ?? { worktreePath: latestWorktree(input, input.developerExecutionId), branchName: input.branchName, targetBaseSha: input.targetBaseSha, resultCommit: input.subjectCommit, resultTree: input.subjectTree };
       if (!execution) throw new Error("Developer execution context is unavailable");
       const serviceInput = { ...input, blockingFindings: input.blockingFindings ?? [], worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree! };
       const runRepair = developer.runRepair ? developer.runRepair.bind(developer) : defaultDeveloper.runRepair.bind(defaultDeveloper);
-      const result = await invokeAgent(input, async () => normalizeRepairResult(await runRepair(serviceInput), serviceInput));
+      const result = await invokeAgent(input, async () => normalizeRepairResult(await runRepair(serviceInput), serviceInput), "codex");
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;
@@ -76,10 +76,10 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
         const { worktreePath: _worktreePath, ...safeResult } = result;
         void _worktreePath;
         return { ...safeResult, summary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.summary)) };
-      }));
+      }), "codex");
     },
     async cancelDeveloperExecution(input) {
-      const result = await cancelDeveloperExecution(database, input.executionId);
+      const result = await cancelDeveloperExecution(database, input.executionId, input.taskId);
       return result;
     },
   };

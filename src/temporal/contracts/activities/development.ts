@@ -144,7 +144,7 @@ export type SupervisedDeveloperExecutionActivityInput = Omit<DeveloperExecutionA
 export type SupervisedDeveloperRepairActivityInput = WorkflowDeveloperRepairActivityInput & DeveloperSupervisorActivityIdentity;
 
 export type DeveloperCancellationResult =
-  | { status: "cancelled" }
+  | { status: "cancelled"; reason?: "execution-not-started" }
   | { status: "cancelled_confirmed"; executionId: string; exitCode: number | null; exitSignal: string | null; evidenceArtifactId: string | null }
   | { status: "completed_before_cancellation"; executionId: string; result: unknown }
   | { status: "interrupted"; executionId: string; reasonCode: string; summary: string }

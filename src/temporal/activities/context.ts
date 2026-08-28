@@ -187,17 +187,17 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     throw ApplicationFailure.nonRetryable(safeSummary, code, { code, category, summary: safeSummary });
   };
   const agentCategory = (error: AgentFailure): AttentionCategory => error.code === "login-expired" ? "provider_authentication" : error.code === "model-unavailable" ? "provider_ambiguity" : error.code === "rate-limited" ? "provider_connectivity_exhausted" : error.code === "malformed-output" || error.code === "invalid-output" ? "agent_contradiction" : "agent_exhausted";
-  const invokeAgent = async <T>(input: { companyId: string }, operation: () => Promise<T>): Promise<T> => {
-    let heartbeat: (() => void) | undefined;
+  const invokeAgent = async <T>(input: { companyId: string }, operation: () => Promise<T>, provider = "codex"): Promise<T> => {
+    let heartbeat: ((details?: unknown) => void) | undefined;
     let interval: NodeJS.Timeout | undefined;
     try {
       const activityContext = Context.current();
-      heartbeat = () => activityContext.heartbeat();
+      heartbeat = (details?: unknown) => activityContext.heartbeat(details);
       interval = setInterval(heartbeat, 5_000);
       interval.unref();
     } catch { /* direct unit calls do not have an Activity context */ }
     try {
-      return await capacity.run(operation, "codex", heartbeat);
+      return await capacity.run(operation, provider, heartbeat, cancellationSignal());
     } catch (error) {
       try {
         if (Context.current().cancellationSignal.aborted) throw new CancelledFailure("CANCELLED");
@@ -227,6 +227,9 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     const key = operationKey(["turn", input.taskId, input.developerTurnExecutionId]);
     const claim = claimOperation(database, { key, taskId: input.taskId, kind: "turn" });
     if (!claim.claimed && claim.status === "settled" && claim.result !== null) return claim.result as DeveloperTurnActivityOutcome<T>;
+    if (!claim.claimed && claim.status === "failed" && (claim.result as { reasonCode?: unknown } | null)?.reasonCode === "cancelled") {
+      return claim.result as DeveloperTurnActivityOutcome<T>;
+    }
     try {
       const result = await operation(developer as DeveloperService);
       await bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId }, result);

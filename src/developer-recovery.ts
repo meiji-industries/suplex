@@ -3,6 +3,7 @@ import type { ForgeDatabase } from "./database.js";
 import { CliHerdrClient } from "./herdr-client.js";
 import { reconcileHerdrSessions } from "./herdr-recovery.js";
 import type { DeveloperCancellationResult } from "./temporal/issue-contracts.js";
+import { cancelOperation, operationKey } from "./operation-claims.js";
 
 export interface DeveloperRecoveryOutcome {
   executionId: string;
@@ -47,9 +48,15 @@ export async function reconcileRestoredDeveloperExecutions(database: ForgeDataba
   }));
 }
 
-export async function cancelDeveloperExecution(database: ForgeDatabase, executionId: string): Promise<DeveloperCancellationResult> {
+export async function cancelDeveloperExecution(database: ForgeDatabase, executionId: string, taskId?: string): Promise<DeveloperCancellationResult> {
   const execution = database.authQuery((db) => db.prepare("SELECT task_id AS taskId FROM forge_developer_executions WHERE id = ? AND status IN ('starting', 'running')").get(executionId) as { taskId: string } | undefined);
-  if (!execution) return { status: "cancelled" };
+  if (!execution) {
+    // An activity may be waiting in the worker-local capacity queue, before it
+    // creates its execution ledger row. Its durable operation key is still
+    // known to the workflow, so stop it at the next pre-start check.
+    if (taskId) cancelOperation(database, { key: operationKey(["turn", taskId, executionId]), taskId, kind: "turn" });
+    return { status: "cancelled", reason: "execution-not-started" } as DeveloperCancellationResult;
+  }
   await new HerdrCodexProvider(database, new CliHerdrClient()).interrupt(execution.taskId, "developer");
   const now = new Date().toISOString();
   database.authTransaction((db) => {

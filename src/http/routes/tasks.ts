@@ -26,8 +26,8 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   const { tasks } = options;
   const rescue = options.database && options.config ? new TaskRescueService(tasks, options.database, options.config) : undefined;
   const taskResponse = { response: { 200: TaskResponseSchema } };
-  typed.get("/api/tasks", { schema: { response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id) }));
-  typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId) }));
+  typed.get("/api/tasks", { schema: { querystring: z.object({ archived: z.coerce.boolean().optional() }), response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, undefined, request.query.archived === true) }));
+  typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, querystring: z.object({ archived: z.coerce.boolean().optional() }), response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId, request.query.archived === true) }));
   typed.post("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, body: TaskBodySchema, response: { 200: TaskResponseSchema, 201: TaskResponseSchema } } }, async (request, reply) => {
     const { roleAgents: rawRoleAgents, ...body } = request.body;
     const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, { ...body, ...(rawRoleAgents ? { roleAgents: rawRoleAgents } : {}) });

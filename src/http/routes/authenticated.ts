@@ -19,6 +19,7 @@ import projects from "./projects.js";
 import tasks from "./tasks.js";
 import taskBranch from "./task-branch.js";
 import taskRefresh from "./task-refresh.js";
+import taskArchive from "./task-archive.js";
 
 import hermesAdministration from "./hermes-administration.js";
 
@@ -53,6 +54,7 @@ const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app
   if (options.tasks) await app.register(tasks, { tasks: options.tasks, ...(options.release ? { release: options.release } : {}), ...(options.database ? { database: options.database } : {}), ...(options.config ? { config: options.config } : {}) });
   if (options.tasks) await app.register(taskBranch, { tasks: options.tasks });
   if (options.tasks && options.database && options.config) await app.register(taskRefresh, { tasks: options.tasks, database: options.database, config: options.config });
+  if (options.tasks && options.database) await app.register(taskArchive, { tasks: options.tasks, database: options.database });
   if (options.tasks) await app.register(agentEvents, { tasks: options.tasks });
   if (options.attention) await app.register(attention, { attention: options.attention });
 };

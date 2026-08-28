@@ -185,6 +185,9 @@ class StartupHerdrFake {
   writeReadiness = true;
   responses: Array<HerdrAgent | null> = [];
   getAgentFailure: HerdrFailure | undefined;
+  paneText = "";
+
+  async readPane() { return this.paneText; }
 
   async getAgent(_name: string) {
     if (this.getAgentFailure) throw this.getAgentFailure;
@@ -317,6 +320,22 @@ test("starts a fresh session without waiting for its lazy Codex identity", async
     expect(herdr.panes).toEqual(["pane-1"]);
     expect(herdr.starts).toHaveLength(1);
     expect(herdr.commands[0]).toContain("/herdr-ready/");
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("keeps an agent pane open and records its startup trust prompt", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  herdr.startFailure = new HerdrFailure("agent_not_ready", false, "agent is blocked during startup and is not ready for prompts");
+  herdr.paneText = "Do you trust the contents of this directory?   1. Yes, continue";
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
+    await expect(store.ensureRoleSession(taskFor(value.root), "lead", startupSettings)).rejects.toMatchObject({ code: "agent_startup_blocked" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, pane_id, attention_excerpt FROM forge_herdr_role_sessions WHERE task_id = 'task'").get())).toEqual({ status: "blocked", pane_id: "pane-1", attention_excerpt: "Do you trust the contents of this directory? 1. Yes, continue" });
+    expect(herdr.closed).toEqual([]);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

@@ -60,6 +60,18 @@ export function attentionCardFromBlocker(blocker: AttentionBlocker | undefined, 
     };
   }
   if (category === "provider_authentication") return attentionCardFor({ kind: "github_credential", ...(summary ? { detail: summary } : {}) });
+  if (/already checked out/i.test(summary || "")) {
+    const cancel = context.actions?.find((action) => action.command === "cancel_issue");
+    const retry = context.actions?.find((action) => action.command === "retry_development");
+    return {
+      kind: "generic",
+      title: "Branch is owned by another task",
+      explanation: summary || "Another task already owns this branch.",
+      evidence: [{ kind: "text", ref: summary || "Another task already owns this branch." }],
+      primaryAction: cancel ? { command: cancel.command, label: "Cancel this duplicate task", destructive: true } : { command: "cancel_issue", label: "Cancel this duplicate task", destructive: true },
+      secondaryAction: retry ? { command: retry.command, label: "Retry after the other task finishes" } : { command: "retry_development", label: "Retry after the other task finishes" },
+    };
+  }
   if (category === "member_decision") { const mergeDecision = decision(context.mergeDecision); if (mergeDecision) return attentionCardFor(mergeDecision); }
   if (category === "member_decision" || category === "provider_ambiguity") {
     const choices = Array.isArray(blocker?.actions) ? blocker.actions.flatMap((action, index): AttentionChoice[] => typeof action === "object" && action !== null && typeof (action as { label?: unknown }).label === "string" ? [{ id: typeof (action as { id?: unknown }).id === "string" ? (action as { id: string }).id : `choice-${index + 1}`, label: (action as { label: string }).label, description: typeof (action as { description?: unknown }).description === "string" ? (action as { description: string }).description : "Choose this behavior." }] : typeof action === "string" ? [{ id: `choice-${index + 1}`, label: action, description: "Choose this behavior." }] : []) : [];

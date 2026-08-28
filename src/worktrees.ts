@@ -329,7 +329,7 @@ export class WorktreeManager {
     const registrations = await this.git.run(["worktree", "list", "--porcelain"], repositoryPath, activity);
     const registered = registrations.split("\n\n").find((entry) => entry.includes(`branch refs/heads/${input.branchName}`));
     const registeredPath = registered?.match(/^worktree (.+)$/m)?.[1];
-    if (registeredPath && resolve(registeredPath) !== worktreePath) throw new WorktreeFailure("source-branch-checked-out", "The source branch is already checked out in another worktree");
+    if (registeredPath && resolve(registeredPath) !== worktreePath) throw new WorktreeFailure("branch_checked_out", `${input.branchName} is already checked out by ${registeredPath}`);
     let localBehindOrEqual = !localExists;
     let remoteBehindOrEqual = false;
     if (localExists) {
@@ -376,7 +376,11 @@ export class WorktreeManager {
     else if (!localExists) await this.git.run(["branch", "--track", input.branchName, remoteRef], repositoryPath, activity);
     await assertWorktreeDiskHeadroom(worktreeRoot);
     try { await this.git.run(["worktree", "add", worktreePath, input.branchName], repositoryPath, activity); }
-    catch { throw new WorktreeFailure("source-branch-checked-out", "The source branch could not be checked out because it is already in use"); }
+    catch (error) {
+      const detail = String(error && typeof error === "object" && "stderr" in error ? error.stderr : error instanceof Error ? error.message : error);
+      if (/already checked out|already used by worktree/i.test(detail)) throw new WorktreeFailure("branch_checked_out", `${input.branchName} is already checked out by another worktree`);
+      throw new WorktreeFailure("worktree-create-failed", "Git could not create the source worktree");
+    }
     const head = await this.git.run(["rev-parse", "HEAD"], worktreePath, activity);
     if (localBehindOrEqual && head !== remoteHead) throw new WorktreeFailure("source-branch-diverged", "The source branch did not adopt the current origin head");
     return { branchName: input.branchName, worktreePath, targetBaseSha: mergeBase };

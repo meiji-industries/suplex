@@ -9,10 +9,11 @@ import type { IssueWorkflowContext } from "./context.js";
 import { classifyDelivery } from "../../developer-contracts.js";
 export async function blockFailedDeveloperStart(ctx: IssueWorkflowContext, command: contracts.StartPlanningInput, executionId: string, error: unknown): Promise<boolean> {
   if (!ctx.supervisedDeveloperTurns || !ctx.patched("forge-developer-start-failure-blocked-v1") || ctx.state.developerExecutionId !== executionId || ctx.state.developerOutcome) return false;
-  const summary = `Developer could not start: ${error instanceof Error ? error.message : String(error)}`;
+  const failure = ctx.permanentActivityFailure(error);
+  const summary = `Developer could not start: ${failure?.summary ?? (error instanceof Error ? error.message : String(error))}`;
   const blocked = await ctx.withStateMutation(() => {
     if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;
-    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("failed", null, summary, null), activeOperation: null });
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("failed", failure?.code ?? null, summary, null), activeOperation: null, blocker: stateTransitions.humanBlocker(failure?.category ?? "unsafe_recovery", summary, [{ command: "cancel_issue", label: "Cancel this duplicate task", requiresNote: false, destructive: true }, { command: "retry_development", label: "Retry after the other task finishes", requiresNote: false, destructive: false }], stateTransitions.evidencePointer(failure?.evidenceArtifactId, "attention-evidence")) });
     if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
     return true;
   });
@@ -54,7 +55,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
       }
       const failedToStart = ctx.supervisedDeveloperTurns && ctx.patched("forge-developer-start-failure-blocked-v1") && ctx.state.developerExecutionId === executionId && !ctx.state.developerOutcome;
       if (failedToStart) {
-        const autoRetryStartFailure = developerAttempt === 1 && ctx.patched("forge-developer-start-failure-auto-retry-v1");
+        const autoRetryStartFailure = developerAttempt === 1 && ctx.patched("forge-developer-start-failure-auto-retry-v1") && ctx.permanentActivityFailure(error)?.code !== "branch_checked_out";
         if (autoRetryStartFailure) {
           const retried = await ctx.withStateMutation(() => {
             if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;
@@ -183,7 +184,7 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
     }
     const failedToStart = ctx.supervisedDeveloperTurns && ctx.patched("forge-developer-start-failure-blocked-v1") && ctx.state.developerExecutionId === executionId && !ctx.state.developerOutcome;
     if (failedToStart) {
-      const autoRetryStartFailure = developerAttempt === 1 && ctx.patched("forge-developer-start-failure-auto-retry-v1");
+      const autoRetryStartFailure = developerAttempt === 1 && ctx.patched("forge-developer-start-failure-auto-retry-v1") && ctx.permanentActivityFailure(error)?.code !== "branch_checked_out";
       if (autoRetryStartFailure) {
         const retried = await ctx.withStateMutation(() => {
           if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;

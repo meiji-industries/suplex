@@ -182,9 +182,9 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   capacity.reconcileFromLedgers();
   const agent = options.agent;
   const developer = options.developer ?? defaultDeveloper;
-  const attentionFailure = async (_input: { companyId: string }, category: AttentionCategory, code: string, summary: string): Promise<never> => {
+  const attentionFailure = async (_input: { companyId: string }, category: AttentionCategory, code: string, summary: string, evidenceArtifactId?: string): Promise<never> => {
     const safeSummary = normalizeSafeSummary(redact(summary));
-    throw ApplicationFailure.nonRetryable(safeSummary, code, { code, category, summary: safeSummary });
+    throw ApplicationFailure.nonRetryable(safeSummary, code, { code, category, summary: safeSummary, ...(evidenceArtifactId ? { evidenceArtifactId } : {}) });
   };
   const agentCategory = (error: AgentFailure): AttentionCategory => error.code === "login-expired" ? "provider_authentication" : error.code === "model-unavailable" ? "provider_ambiguity" : error.code === "rate-limited" ? "provider_connectivity_exhausted" : error.code === "malformed-output" || error.code === "invalid-output" ? "agent_contradiction" : "agent_exhausted";
   const providerForLead = (input: { roleProfiles?: { planner?: string | undefined } | undefined }): string => {
@@ -225,7 +225,11 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       }
       // Worktree failures are deterministic until a person changes the local state.
       // Surface them as a Retry blocker instead of allowing Temporal to retry them.
-      if (error instanceof WorktreeFailure) await attentionFailure(input, error.code === "host_capacity" ? "capacity_exhausted" : "unsafe_recovery", error.code, error.message);
+      if (error instanceof WorktreeFailure) {
+        const taskId = "taskId" in input && typeof input.taskId === "string" ? input.taskId : undefined;
+        const evidence = taskId ? await artifacts.putArtifact(input.companyId, "attention-evidence", { taskId, filename: `${taskId}-${error.code}.txt`, mimeType: "text/plain", bytes: Buffer.from(error.message, "utf8") }).catch(() => undefined) : undefined;
+        await attentionFailure(input, error.code === "host_capacity" ? "capacity_exhausted" : "unsafe_recovery", error.code, error.message, evidence?.id);
+      }
       const permanentFailure = asNonRetryableApplicationFailure(error) ?? asNonRetryableCapacityFailure(error);
       if (permanentFailure) {
         if (error instanceof AgentFailure) await attentionFailure(input, agentCategory(error), error.code, error.message);

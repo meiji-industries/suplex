@@ -197,6 +197,18 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await page.getByRole("menuitem", { name: /Planner.*Selected/ }).waitFor();
       await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Task options", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Archive task", exact: true }).click();
+      const archiveDialog = page.getByRole("alertdialog");
+      expect(await archiveDialog.getByText("Archive this task? Work stops, the local worktree is deleted, and the task is hidden. The branch and history are kept.", { exact: true }).isVisible()).toBe(true);
+      await page.keyboard.press("Escape");
+      await page.setViewportSize({ width: 390, height: 800 });
+      await page.getByRole("button", { name: "Task options", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Archive task", exact: true }).click();
+      expect(await archiveDialog.isVisible()).toBe(true);
+      expect((await archiveDialog.boundingBox())?.width).toBeLessThanOrEqual(390);
+      await page.keyboard.press("Escape");
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.getByRole("button", { name: "Task options", exact: true }).click();
       await page.getByRole("menuitem", { name: "Cancel task", exact: true }).waitFor();
       expect(await taskDetail.getByRole("button", { name: "Cancel", exact: true }).count()).toBe(0);
       await page.keyboard.press("Escape");

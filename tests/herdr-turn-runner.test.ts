@@ -15,6 +15,7 @@ import { HerdrTurnRunner, type HerdrTurnInput } from "../src/herdr-turn-runner.j
 import { IssueTimelineEvents } from "../src/issue-timeline-events.js";
 import { runCommand } from "../src/command-runner.js";
 import { DeveloperDeliverySchema } from "../src/developer-contracts.js";
+import { createTestConfig } from "../src/config.js";
 
 const ResultSchema = z.object({ status: z.enum(["ok", "blocked"]) }).strict();
 const task = { taskId: "task", projectId: "project", projectSlug: "project", worktreePath: "/worktree", runtimeRoot: "" };
@@ -869,13 +870,38 @@ test("does not synthesize a Developer delivery from a dirty worktree", async () 
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("fails a live turn that does not make progress within the liveness bound", async () => {
+test("fails a live turn that does not make progress within the configured liveness bound", async () => {
   const setup = await fixture();
   let now = new Date();
   const herdr = { prompt: async () => setup.session.live, getAgent: async () => ({ ...setup.session.live, status: "working" }) };
-  const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database), undefined, undefined, async () => { now = new Date(now.getTime() + 10_000); }, () => now);
+  const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database), undefined, undefined, async () => { now = new Date(now.getTime() + 10_000); }, () => now, createTestConfig(setup.root, { turnStallTimeoutMs: 60_000 }));
   try {
-    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "turn_stalled" });
+    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "turn_stalled", nonRetryable: false });
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
+test("does not stall a working session that is quiet for five minutes with default config", async () => {
+  const setup = await fixture();
+  let now = new Date();
+  let prompt = "";
+  let sleeps = 0;
+  const herdr = {
+    prompt: async (_name: string, value: string) => { prompt = value; return setup.session.live; },
+    getAgent: async () => ({ ...setup.session.live, status: "working" }),
+  };
+  const runner = new HerdrTurnRunner(
+    setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never,
+    new IssueTimelineEvents(setup.database), undefined, undefined,
+    async () => {
+      sleeps += 1;
+      now = new Date(now.getTime() + 10_000);
+      if (sleeps === 31) await complete(setup.session, prompt, { status: "ok" });
+    },
+    () => now,
+    createTestConfig(setup.root),
+  );
+  try {
+    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 

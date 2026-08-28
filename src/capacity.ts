@@ -19,7 +19,9 @@ export class CapacityManager {
   constructor(private readonly database: ForgeDatabase, private readonly config: Pick<ForgeConfig, "externalTurnCapacity" | "externalTurnCapacityByProvider">) {}
 
   private limit(provider: string): number {
-    return this.config.externalTurnCapacityByProvider[provider] ?? this.config.externalTurnCapacity;
+    // Older/test callers can provide the pre-provider config shape. Every
+    // provider must still share the configured default bucket in that case.
+    return this.config.externalTurnCapacityByProvider?.[provider] ?? this.config.externalTurnCapacity;
   }
 
   snapshot(provider?: string): Record<string, { activeCount: number; queuedCount: number; capacity: number }> {

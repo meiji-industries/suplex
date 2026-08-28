@@ -202,8 +202,12 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
         activityContext.heartbeat(details);
         if (!queueHint && details && typeof details === "object" && (details as { queued?: unknown }).queued === true && "taskId" in input) {
           queueHint = setTimeout(() => {
-            const waiting = details as { provider: string; position: number; activeCount: number };
-            database.authTransaction((db) => db.prepare("UPDATE forge_issue_projections SET pending_action = ?, updated_at = ? WHERE task_id = ?").run(`Waiting for a ${waiting.provider} agent slot (${waiting.activeCount} active, position ${waiting.position})`, new Date().toISOString(), (input as { taskId: string }).taskId));
+            // This is projection-only feedback. A stale/missing projection must
+            // never turn a queued activity into a failed one.
+            try {
+              const waiting = details as { provider: string; position: number; activeCount: number };
+              database.authTransaction((db) => db.prepare("UPDATE forge_issue_projections SET pending_action = ?, updated_at = ? WHERE task_id = ?").run(`Waiting for a ${waiting.provider} agent slot (${waiting.activeCount} active, position ${waiting.position})`, new Date().toISOString(), (input as { taskId: string }).taskId));
+            } catch { /* queued hint is best-effort */ }
           }, 10_000);
           queueHint.unref();
         }

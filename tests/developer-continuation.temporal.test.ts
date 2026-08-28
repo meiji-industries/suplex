@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { isDeepStrictEqual } from "node:util";
 
 import { executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/temporal/service.js";
 import { createTemporalHarness, type TemporalHarness } from "./helpers/temporal-harness.js";
@@ -40,6 +41,18 @@ async function waitForPhase(h: TemporalHarness, workflowId: string, phase: strin
   return state;
 }
 
+async function settleContinuationState(h: TemporalHarness, workflowId: string) {
+  const deadline = Date.now() + 30_000;
+  let previous = await queryIssueWorkflow(h.config, workflowId);
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const current = await queryIssueWorkflow(h.config, workflowId);
+    if (current.phase === "delivery_ready" && current.activeOperation === null && isDeepStrictEqual(current, previous)) return current;
+    previous = current;
+  }
+  throw new Error(`Timed out waiting for ${workflowId} to settle in delivery_ready`);
+}
+
 async function start(h: TemporalHarness, issueId: string) {
   return startIssueWorkflow(h.config, {
     companyId: "issue-company", projectId: "issue-project", issueId, projectRevisionId: "issue-revision",
@@ -54,6 +67,7 @@ test("partial Developer delivery automatically continues on the same session", {
   const projected: any[] = [];
   h.activityOverrides.set("projectIssueState", async (event) => {
     projected.push(event.state);
+    if (event.state.phase === "delivery_ready") await new Promise((resolve) => setTimeout(resolve, 600));
     return event.state;
   });
   h.activityOverrides.set("runDeveloperExecutionSupervised", async (input) => {
@@ -63,17 +77,21 @@ test("partial Developer delivery automatically continues on the same session", {
   await h.start();
   try {
     const started = await start(h, "developer-continuation-complete");
-    const settled = await waitForPhase(h, started.workflowId, "delivery_ready", (state) => state.developerContinuation === null);
+    const settled = await settleContinuationState(h, started.workflowId);
     expect(projected).toContainEqual(expect.objectContaining({ phase: "delivery_ready", developerContinuation: null }));
     expect(inputs).toHaveLength(2);
     expect(inputs[1]).toMatchObject({ continuation: { remainingSteps: [2, 3, 4, 5, 6, 7, 8], previousCommit: firstCommit } });
-    expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(settled);
+    expect(settled).toMatchObject({ developerContinuation: null });
   } finally { await h.stop(); }
 });
 
 test("a repeated partial delivery stops after no progress and retry preserves the continuation", { timeout: 120_000 }, async () => {
   const h = createTemporalHarness();
   const inputs: any[] = [];
+  h.activityOverrides.set("projectIssueState", async (event) => {
+    if (event.state.phase === "delivery_ready") await new Promise((resolve) => setTimeout(resolve, 600));
+    return event.state;
+  });
   h.activityOverrides.set("runDeveloperExecutionSupervised", async (input) => {
     inputs.push(input);
     if (inputs.length === 1) return result(input, firstCommit, [2, 3], "blocked");
@@ -87,11 +105,11 @@ test("a repeated partial delivery stops after no progress and retry preserves th
     expect(blocked).toMatchObject({ pendingAction: expect.stringMatching(/^Automatic continuation is not making progress/), blocker: { actions: expect.arrayContaining([expect.objectContaining({ label: "Resume Developer turn" })]) } });
     expect(inputs).toHaveLength(2);
     expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(blocked);
-    await executeIssueCommand(h.config, started.workflowId, "retry_development", { expectedRevision: blocked.revision, actorUserId: "issue-admin" });
+    const retry = executeIssueCommand(h.config, started.workflowId, "retry_development", { expectedRevision: blocked.revision, actorUserId: "issue-admin" });
+    const settled = await settleContinuationState(h, started.workflowId);
+    await retry;
     expect(inputs).toHaveLength(3);
     expect(inputs[2]).toMatchObject({ continuation: { remainingSteps: [2, 3], previousCommit: firstCommit } });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const queried = await queryIssueWorkflow(h.config, started.workflowId);
-    expect(await queryIssueWorkflow(h.config, started.workflowId)).toEqual(queried);
+    expect(settled).toMatchObject({ developerContinuation: null });
   } finally { await h.stop(); }
 });

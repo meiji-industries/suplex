@@ -95,7 +95,18 @@ export class ForwardMergeService {
       if (secondObservation.toLowerCase() !== observedBaseSha.toLowerCase()) throw new ForwardMergeFailure("base-advanced-again");
     }
     const stored = this.lookupStoredOperation(input, observedBaseSha);
-    if (stored) return this.revalidateStoredOperation(input, stored, observedBaseSha);
+    if (stored) {
+      if (stored.status === "no_drift") {
+        const ownership = await this.inspectOwnership(input);
+        if (ownership.headSha.toLowerCase() === stored.priorHead.toLowerCase() && ownership.treeSha.toLowerCase() === stored.priorTree?.toLowerCase() && !await this.isAncestor(observedBaseSha, ownership.headSha, input.worktreePath)) {
+          this.database!.authTransaction((db) => db.prepare("DELETE FROM forge_forward_merges WHERE id = ? AND task_id = ? AND company_id = ?").run(stored.id, input.taskId, input.companyId));
+        } else {
+          return this.revalidateStoredOperation(input, stored, observedBaseSha);
+        }
+      } else {
+        return this.revalidateStoredOperation(input, stored, observedBaseSha);
+      }
+    }
     const ownership = await this.inspectOwnership(input);
     if (await this.isAncestor(observedBaseSha, ownership.headSha, input.worktreePath)) {
       const result: ForwardMergeResult = { status: "no_drift", priorHead: ownership.headSha, priorTree: ownership.treeSha, targetBaseSha: observedBaseSha, mergeCommit: null, tree: null, conflictFiles: [] };
@@ -276,7 +287,6 @@ export class ForwardMergeService {
     if (stored.status === "no_drift") {
       const ownership = await this.inspectOwnership(input);
       if (ownership.headSha.toLowerCase() !== stored.priorHead.toLowerCase() || ownership.treeSha.toLowerCase() !== stored.priorTree.toLowerCase()) throw new ForwardMergeFailure("merge-state-ownership-mismatch");
-      if (!await this.isAncestor(observedBaseSha, ownership.headSha, input.worktreePath)) throw new ForwardMergeFailure("merge-state-ownership-mismatch");
       return { status: "no_drift", priorHead: stored.priorHead, priorTree: stored.priorTree, targetBaseSha: observedBaseSha, mergeCommit: null, tree: null, conflictFiles: [], forwardMergeId: stored.id };
     }
     const branch = await this.git(["branch", "--show-current"], input.worktreePath);

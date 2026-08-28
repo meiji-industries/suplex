@@ -498,6 +498,39 @@ test("forward merge no-drift ledger is idempotent across repeated checks", async
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("forward merge supersedes a stale no-drift record after the base advances", async () => {
+  const value = await fixture();
+  const repoPath = join(value.root, "repo");
+  await mkdir(repoPath, { recursive: true });
+  try {
+    await exec("git", ["init", "-b", "main"], { cwd: repoPath });
+    await exec("git", ["config", "user.email", "forge@example.test"], { cwd: repoPath });
+    await exec("git", ["config", "user.name", "Forge Test"], { cwd: repoPath });
+    await writeFile(join(repoPath, "base.txt"), "base\n"); await exec("git", ["add", "."], { cwd: repoPath }); await exec("git", ["commit", "-m", "base"], { cwd: repoPath });
+    const oldBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    await exec("git", ["checkout", "-b", "issue/task-a"], { cwd: repoPath });
+    await writeFile(join(repoPath, "issue.txt"), "issue\n"); await exec("git", ["add", "."], { cwd: repoPath }); await exec("git", ["commit", "-m", "issue"], { cwd: repoPath });
+    const issueHead = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    const input = { worktreePath: repoPath, expectedBaseSha: oldBase, expectedHeadSha: issueHead, branchName: "issue/task-a", repositoryPath: repoPath, currentBaseSha: oldBase, taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", projectRevisionId: "revision-a", checkpoint: "pre_release" };
+    const service = new ForwardMergeService(value.database);
+    const stale = await service.reconcile(input);
+    await exec("git", ["checkout", "main"], { cwd: repoPath });
+    await writeFile(join(repoPath, "base.txt"), "base advanced\n"); await exec("git", ["add", "."], { cwd: repoPath }); await exec("git", ["commit", "-m", "base-update"], { cwd: repoPath });
+    const newBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    await exec("git", ["checkout", "issue/task-a"], { cwd: repoPath });
+    const operationKey = `workflow-a:pre_release:revision-a:${oldBase}:${newBase}:${issueHead}`;
+    const staleId = `merge_${createHash("sha256").update(operationKey).digest("hex").slice(0, 32)}`;
+    value.database.authTransaction((db) => db.prepare("UPDATE forge_forward_merges SET id = ?, current_base_sha = ?, operation_key = ? WHERE id = ?").run(staleId, newBase, operationKey, stale.forwardMergeId));
+
+    const result = await service.reconcile({ ...input, currentBaseSha: newBase });
+
+    expect(result.status).toBe("merged");
+    expect(result.forwardMergeId).toBe(staleId);
+    const row = value.database.authQuery((db) => db.prepare("SELECT status, current_base_sha AS currentBaseSha FROM forge_forward_merges WHERE id = ?").get(staleId)) as { status: string; currentBaseSha: string };
+    expect(row).toEqual({ status: "merged", currentBaseSha: newBase });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("forward merge in one worktree does not disturb another active worktree", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-forward-merge-isolation-"));
   try {

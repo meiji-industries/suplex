@@ -182,6 +182,23 @@ export const DeveloperDeliverySchema = z.object({
 
 export type DeveloperDelivery = z.infer<typeof DeveloperDeliverySchema>;
 
+export type DeliveryDisposition = "complete" | "incomplete" | "blocked";
+
+/** Classifies structured delivery state without trusting an agent's free-text blocker. */
+export function classifyDelivery(
+  delivery: { steps: Array<{ number: number; status: string }>; authorizedStepsNotCompleted: number[]; dirtyState: string; resultCommit: string | null; blocker: string | null },
+  priorCommit: string | null,
+): DeliveryDisposition {
+  const authorized = new Set(delivery.authorizedStepsNotCompleted);
+  const allAuthorizedComplete = delivery.steps
+    .filter((step) => !authorized.has(step.number))
+    .every((step) => step.status === "completed" || step.status === "not_applicable_locally")
+    && delivery.authorizedStepsNotCompleted.length === 0;
+  if (allAuthorizedComplete) return "complete";
+  if (delivery.dirtyState === "clean" && delivery.resultCommit !== null && delivery.resultCommit !== priorCommit && !delivery.steps.some((step) => step.status === "blocked")) return "incomplete";
+  return "blocked";
+}
+
 export function normalizeRepositoryInstructionPath(value: string): string {
   return relativeRepositoryPath.parse(value);
 }

@@ -26,7 +26,9 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
     try {
       const subject = { planRevision: ctx.state.planRevision ?? ctx.state.revision, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, developerExecutionId: ctx.state.developerExecutionId!, deliveryArtifactId: ctx.state.deliveryArtifactId!, developerEvidenceArtifactId: ctx.state.developerEvidenceArtifactId!, leadSessionRef: ctx.state.leadSessionRef!, developerSessionRef: ctx.state.developerSessionRef! };
       const common = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, branchName: ctx.state.branchName!, ...(ctx.state.deliverySummary ? { deliverySummary: ctx.state.deliverySummary } : {}) };
-      const supersedesReviewId = ctx.state.targetBaseOutcome === "revalidated" || ctx.state.developerTurnKind === "implementation" || !ctx.state.deliveryRepairAttemptId
+      // A CI repair produces a fresh delivery; it does not supersede the last blocking review's subject.
+      const ciRepairDelivery = Boolean(ctx.state.ciRepairDeveloperExecutionId) && ctx.state.ciRepairDeveloperExecutionId === ctx.state.developerExecutionId;
+      const supersedesReviewId = ctx.state.targetBaseOutcome === "revalidated" || ctx.state.developerTurnKind === "implementation" || !ctx.state.deliveryRepairAttemptId || ciRepairDelivery
         ? null
         : ctx.state.deliveryReviewSupersedesId ?? null;
       result = await ctx.acquireExternalTurn<contracts.DeliveryReviewActivityResult | LegacyReviewResult>(

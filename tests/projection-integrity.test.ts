@@ -193,3 +193,15 @@ test("a reset workflow's new run supersedes the abandoned run's projected revisi
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("workflow snapshots keep revision 0 and only the newest 50 revisions per task", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-projection-integrity-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    for (let revision = 0; revision <= 80; revision += 1) database.projectIssueEvent(createEvent(revision, revision === 0 ? "backlog" : "planning", `workflow-integrity:${revision}`));
+    const revisions = database.authQuery((db) => db.prepare("SELECT revision FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision").all("task-integrity") as Array<{ revision: number }>).map((row) => row.revision);
+    expect(revisions[0]).toBe(0);
+    expect(revisions.slice(1)).toEqual(Array.from({ length: 50 }, (_, index) => 31 + index));
+  } finally { database.close(); await rm(root, { recursive: true, force: true }); }
+});

@@ -507,6 +507,8 @@ export class ForgeDatabase {
     const priorPhase = database.prepare("SELECT json_extract(metadata_json, '$.phase') AS phase FROM forge_issue_timeline WHERE workflow_id = ? AND source = 'workflow' AND event_type LIKE 'phase_%' ORDER BY revision DESC, stream_id DESC LIMIT 1").get(parsed.workflowId) as { phase: string } | undefined;
     if (!eventById && !eventByRevision && (parsed.phase === "backlog" || priorPhase?.phase !== parsed.phase)) database.prepare(`INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, run_id, revision, source, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, ?, ?, 'workflow', ?, ?, ?, ?)`).run(parsed.lastEventId, parsed.issueId, parsed.companyId, parsed.workflowId, runId, parsed.revision, eventType, JSON.stringify({ revision: parsed.revision, phase: parsed.phase, stateHash }), updatedAt, stateHash);
     if (!snapshot) database.prepare(`INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, run_id, revision, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(parsed.issueId, parsed.companyId, parsed.workflowId, runId, parsed.revision, JSON.stringify(parsed), updatedAt);
+    // Snapshots are a bounded history: keep revision 0 (the creation record) and the newest 50. A hot loop once grew one task to 2.7M rows.
+    database.prepare("DELETE FROM forge_workflow_snapshots WHERE task_id = ? AND revision > 0 AND revision <= ?").run(parsed.issueId, parsed.revision - 50);
     const authoritativeRevision = parsed.revision;
     const authoritativeEventHash = stateHash;
     const projectionStatus = "current";

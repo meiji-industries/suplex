@@ -49,6 +49,8 @@ export function reconcileWorkflowStalls(engine: IssueEngine): { inspected: numbe
 }
 
 export async function startEngineHost(config: ForgeConfig, database = new ForgeDatabase(config.databasePath)): Promise<IssueEngine> {
+  // One process owns the in-flight ledger; rows left by a previous process are stale by definition.
+  database.authTransaction((db) => db.prepare("DELETE FROM forge_engine_activities").run());
   const engine = new IssueEngine(config, database); installIssueEngine(config, engine); await loadIssueRuns(engine);
   const workerId = `${runtimeIdentifiers(config.installationId).workerPrefix}-${process.pid}`;
   database.registerWorker({ workerId, taskQueue: runtimeIdentifiers(config.installationId).taskQueue, buildId: runtimeIdentifiers(config.installationId).buildId });

@@ -53,9 +53,12 @@ export async function startEngineHost(config: ForgeConfig, database = new ForgeD
   database.authTransaction((db) => db.prepare("DELETE FROM forge_engine_activities").run());
   const engine = new IssueEngine(config, database); installIssueEngine(config, engine); await loadIssueRuns(engine);
   const workerId = `${runtimeIdentifiers(config.installationId).workerPrefix}-${process.pid}`;
-  database.registerWorker({ workerId, taskQueue: runtimeIdentifiers(config.installationId).taskQueue, buildId: runtimeIdentifiers(config.installationId).buildId });
+  const registration = { workerId, taskQueue: runtimeIdentifiers(config.installationId).taskQueue, buildId: runtimeIdentifiers(config.installationId).buildId };
+  database.registerWorker(registration);
   new StructuredLogger().info("Forge worker RUNNING and polling");
   const schedule = (milliseconds: number, operation: () => Promise<unknown> | unknown): void => { void Promise.resolve().then(operation).catch(() => undefined); const timer = setInterval(() => void Promise.resolve().then(operation).catch(() => undefined), milliseconds); timer.unref(); };
+  // The health page treats a worker whose heartbeat is older than its max age as unavailable.
+  schedule(15_000, () => database.registerWorker(registration));
   schedule(60_000, () => reconcileTaskCreationIntents(database, config));
   schedule(60_000, () => reconcileActiveTurns(database, config));
   schedule(60_000, () => reconcileWorktrees(database, config));

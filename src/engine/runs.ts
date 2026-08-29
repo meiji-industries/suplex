@@ -80,7 +80,7 @@ export class IssueRun {
       signal: this.controller.signal,
       commands: this.commands,
       queries: this.queries,
-      activity: async (name: string, args: unknown[], options: Parameters<ActivityCaller["call"]>[2]) => {
+      activity: (name: string, args: unknown[], options: Parameters<ActivityCaller["call"]>[2]) => {
         if (name === "projectIssueState") {
           const now = this.clock.now();
           this.projectionTimes = this.projectionTimes.filter((time) => now - time <= 10_000);

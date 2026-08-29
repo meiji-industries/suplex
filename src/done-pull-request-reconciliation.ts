@@ -2,7 +2,7 @@ import type { ForgeDatabase } from "./database.js";
 import { createGithubReleasePort, type GithubReleasePort } from "./github-release.js";
 import { githubPullRequestObservationFields } from "./github-pull-request-observation.js";
 import { json } from "./task-utils.js";
-import { IssueWorkflowStateSchema, type IssueWorkflowState } from "./temporal/issue-contracts.js";
+import { IssueWorkflowStateSchema, type IssueWorkflowState } from "./engine/issue-contracts.js";
 
 type Candidate = { taskId: string; repository: string; branch: string; pullRequestNumber: number; state: IssueWorkflowState };
 export type DonePullRequestSyncResult = { inspected: number; changed: Array<{ taskId: string; pullRequestNumber: number; state: string | null }> };

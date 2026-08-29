@@ -152,7 +152,7 @@ async function main(): Promise<void> {
           companiesRebuilt: companies,
           reconciliation,
           requiresReauthentication: true,
-          nextSteps: ["Recreate the restored Cloud configuration without copying secrets; preserve installationId, temporalNamespace, and taskQueue", "Create a new Temporal Cloud API key for the restored host", "Reauthenticate the restored host integrations", "Start Forge against the existing Temporal Cloud namespace", "Inspect interrupted Developer turns before explicitly retrying or cancelling them"],
+          nextSteps: ["Recreate the restored Cloud configuration without copying secrets; preserve installationId, engineNamespace, and taskQueue", "Create a new Engine Cloud API key for the restored host", "Reauthenticate the restored host integrations", "Start Forge against the existing Engine Cloud namespace", "Inspect interrupted Developer turns before explicitly retrying or cancelling them"],
         };
         await writeFile(join(destination, "forge-backup", "restore-handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`, { mode: 0o600 });
         process.stdout.write(rebuild ? `Restored projection state (${rebuild.rebuilt} issue snapshots, ${companies} companies); ` : `Restored database; projection rebuild blocked (${rebuildFailure?.code}), ${companies} companies reconciled; `);

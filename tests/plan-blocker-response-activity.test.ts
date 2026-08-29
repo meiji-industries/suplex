@@ -7,8 +7,8 @@ import { expect, test } from "vitest";
 import { ArtifactStore } from "../src/artifacts.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { createActivityContext } from "../src/temporal/activities/context.js";
-import { createGovernanceActivities } from "../src/temporal/activities/governance.js";
+import { createActivityContext } from "../src/engine/activities/context.js";
+import { createGovernanceActivities } from "../src/engine/activities/governance.js";
 
 test("records a plan blocker response when the durable subject has no hash", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-plan-blocker-response-"));

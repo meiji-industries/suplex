@@ -1,10 +1,10 @@
 import { expect, test } from "vitest";
 
 import { boundedLogTail, ciRunIdFromDetailsUrl, createGithubCiProvider, CI_FAILED_LOG_MAX_LINES } from "../src/ci.js";
-import { CiRepairPlanSchema } from "../src/temporal/contracts/primitives.js";
-import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/temporal/issue-contracts.js";
+import { CiRepairPlanSchema } from "../src/engine/contracts/primitives.js";
+import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/engine/issue-contracts.js";
 import { reconcile } from "../src/pull-request-reconciler.js";
-import { deferCiReconciliation, CI_RERUN_LIMIT } from "../src/temporal/workflow/register-ci.js";
+import { deferCiReconciliation, CI_RERUN_LIMIT } from "../src/engine/workflow/register-ci.js";
 
 test("extracts the Actions run id from a check-run details url", () => {
   expect(ciRunIdFromDetailsUrl("https://github.com/o/r/actions/runs/32485824288/job/96781973569?pr=479")).toBe("32485824288");

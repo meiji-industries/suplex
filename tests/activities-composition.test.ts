@@ -6,21 +6,21 @@ import { expect, test } from "vitest";
 
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { createActivities } from "../src/temporal/activities.js";
-import { createActivityContext } from "../src/temporal/activities/context.js";
-import { createAcceptanceActivities } from "../src/temporal/activities/acceptance.js";
-import { createCiActivities } from "../src/temporal/activities/ci.js";
-import { createDeliveryReviewActivities } from "../src/temporal/activities/delivery-review.js";
-import { createDevelopmentActivities } from "../src/temporal/activities/development.js";
-import { createFinalReviewActivities } from "../src/temporal/activities/final-review.js";
-import { createGovernanceActivities } from "../src/temporal/activities/governance.js";
-import { createGithubSyncActivities } from "../src/temporal/activities/github-sync.js";
-import { createMergeConflictActivities } from "../src/temporal/activities/merge-conflict.js";
-import { createPlanningActivities } from "../src/temporal/activities/planning.js";
-import { createProjectionActivities } from "../src/temporal/activities/projection.js";
-import { createReleaseActivities } from "../src/temporal/activities/release.js";
-import { createTargetBaseActivities } from "../src/temporal/activities/target-base.js";
-import { createWorktreeActivities } from "../src/temporal/activities/worktree.js";
+import { createActivities } from "../src/engine/activities.js";
+import { createActivityContext } from "../src/engine/activities/context.js";
+import { createAcceptanceActivities } from "../src/engine/activities/acceptance.js";
+import { createCiActivities } from "../src/engine/activities/ci.js";
+import { createDeliveryReviewActivities } from "../src/engine/activities/delivery-review.js";
+import { createDevelopmentActivities } from "../src/engine/activities/development.js";
+import { createFinalReviewActivities } from "../src/engine/activities/final-review.js";
+import { createGovernanceActivities } from "../src/engine/activities/governance.js";
+import { createGithubSyncActivities } from "../src/engine/activities/github-sync.js";
+import { createMergeConflictActivities } from "../src/engine/activities/merge-conflict.js";
+import { createPlanningActivities } from "../src/engine/activities/planning.js";
+import { createProjectionActivities } from "../src/engine/activities/projection.js";
+import { createReleaseActivities } from "../src/engine/activities/release.js";
+import { createTargetBaseActivities } from "../src/engine/activities/target-base.js";
+import { createWorktreeActivities } from "../src/engine/activities/worktree.js";
 
 const expectedActivityKeys = [
   "acceptDelivery",

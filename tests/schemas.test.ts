@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 
 import { HealthSnapshotSchema, ProcessRegistrySchema, ProbeWorkflowInputSchema, ProbeWorkflowStateSchema } from "../src/schemas.js";
 import { parseTailscaleHostname, parseTailscaleServeStatus } from "../src/tailscale.js";
-import { ContinueWorkCommandSchema, PlanRevisionCommandSchema } from "../src/temporal/issue-contracts.js";
+import { ContinueWorkCommandSchema, PlanRevisionCommandSchema } from "../src/engine/issue-contracts.js";
 import { ContinueWorkBodySchema, PlanRevisionBodySchema } from "../src/http/contracts/tasks.js";
 
 test("boundary schemas reject malformed and unexpected values", () => {

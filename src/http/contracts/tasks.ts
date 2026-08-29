@@ -2,9 +2,9 @@ import { z } from "zod";
 import { PlanMaterialCategorySchema, PublicPlanBlockerSubjectSchema, PublicPlanSubjectSchema } from "../../plan-governance.js";
 import { PersistedLeadOutputSchema } from "../../codex-lead.js";
 import { IssueCommandSlugSchema, IssueCommandSchema } from "../../commands/registry.js";
-import { IssuePhaseSchema } from "../../temporal/issue-contracts.js";
+import { IssuePhaseSchema } from "../../engine/issue-contracts.js";
 
-import { DeliveryOperationBlockCodeSchema, DeliveryWorkflowBlockCodeSchema } from "../../temporal/issue-contracts.js";
+import { DeliveryOperationBlockCodeSchema, DeliveryWorkflowBlockCodeSchema } from "../../engine/issue-contracts.js";
 import { ReleaseFailureCodeSchema } from "../../release-failures.js";
 import { CapacityWaitReasonSchema } from "../../capacity-contracts.js";
 import { AttentionCardSchema } from "./attention.js";

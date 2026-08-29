@@ -4,18 +4,18 @@ import { join } from "node:path";
 
 import { afterEach, expect, test, vi } from "vitest";
 
-const { connectTemporal, reconcileIssueDeveloperDelivery } = vi.hoisted(() => ({ connectTemporal: vi.fn(), reconcileIssueDeveloperDelivery: vi.fn() }));
-vi.mock("../src/temporal/service.js", () => ({ connectTemporal, reconcileIssueDeveloperDelivery }));
+const { connectEngine, reconcileIssueDeveloperDelivery } = vi.hoisted(() => ({ connectEngine: vi.fn(), reconcileIssueDeveloperDelivery: vi.fn() }));
+vi.mock("../src/engine/service.js", () => ({ connectEngine, reconcileIssueDeveloperDelivery }));
 
 afterEach(() => {
-  connectTemporal.mockReset();
+  connectEngine.mockReset();
   reconcileIssueDeveloperDelivery.mockReset();
 });
 
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { TaskRescueService } from "../src/task-rescue.js";
-import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/temporal/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/engine/issue-contracts.js";
 import { jsonRequired } from "../src/task-utils.js";
 
 function state(revision: number) {
@@ -46,7 +46,7 @@ test("rescue resyncs the live workflow projection before retrying its allowed co
     const live = state(25);
     const close = vi.fn();
     reconcileIssueDeveloperDelivery.mockResolvedValue(live);
-    connectTemporal.mockResolvedValue({ connection: { close, workflowService: { describeWorkflowExecution: vi.fn().mockResolvedValue({ workflowExecutionInfo: { status: "running" } }) } }, client: { workflow: { getHandle: vi.fn().mockReturnValue({ query: vi.fn().mockResolvedValue(live), describe: vi.fn().mockResolvedValue({ runId: "run-after-reset" }) }) } } });
+    connectEngine.mockResolvedValue({ connection: { close, workflowService: { describeWorkflowExecution: vi.fn().mockResolvedValue({ workflowExecutionInfo: { status: "running" } }) } }, client: { workflow: { getHandle: vi.fn().mockReturnValue({ query: vi.fn().mockResolvedValue(live), describe: vi.fn().mockResolvedValue({ runId: "run-after-reset" }) }) } } });
     const stale = { id: "task-rescue", companyId: "company-rescue", workflowId: "workflow-rescue", revision: 26, phase: "delivery_blocked", allowedCommands: [] };
     const tasks = {
       getTask: vi.fn().mockImplementation(() => {
@@ -81,7 +81,7 @@ test("rescue stops after typed Developer reconciliation reaches delivery ready",
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES ('task-rescue', 'company-rescue', 'project-rescue', 'Rescue', 'brief-rescue', '[]', '{}', 0, 'workflow-rescue', 'revision-rescue', 'rescue-key', ?, ?, ?)").run("b".repeat(64), now, now);
     });
     const live = state(25);
-    connectTemporal.mockResolvedValue({ connection: { close: vi.fn() }, client: { workflow: { getHandle: vi.fn().mockReturnValue({ query: vi.fn().mockResolvedValue(live), describe: vi.fn().mockResolvedValue({ runId: "run" }) }) } } });
+    connectEngine.mockResolvedValue({ connection: { close: vi.fn() }, client: { workflow: { getHandle: vi.fn().mockReturnValue({ query: vi.fn().mockResolvedValue(live), describe: vi.fn().mockResolvedValue({ runId: "run" }) }) } } });
     reconcileIssueDeveloperDelivery.mockResolvedValue({ ...live, phase: "delivery_ready" });
     const tasks = { getTask: vi.fn().mockImplementation(() => ({ id: "task-rescue", companyId: "company-rescue", workflowId: "workflow-rescue", revision: 25, phase: "delivery_blocked", allowedCommands: ["retry_development"] })), executeCommand: vi.fn() };
     const result = await new TaskRescueService(tasks as never, database, config).rescue("admin", "task-rescue");

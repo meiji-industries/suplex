@@ -125,10 +125,6 @@ function configuration(config: ForgeConfig): Record<string, string | number | bo
     runtimeRoot: config.runtimeRoot,
     repositoryRoot: config.repositoryRoot,
     worktreeRoot: config.worktreeRoot,
-    temporalTarget: config.temporalTarget,
-    temporalAddress: config.temporalAddress,
-    temporalNamespace: config.temporalNamespace,
-    taskQueue: config.taskQueue,
     deliveryRepairCycleLimit: config.deliveryRepairCycleLimit,
     externalTurnCapacity: config.externalTurnCapacity,
     installationId: config.installationId,
@@ -190,8 +186,8 @@ export class BackupService {
         },
         entries,
         database: { path: "app/forge.sqlite", integrity: "ok" },
-        secretsExcluded: ["credential registrations", "passkeys", "sessions", "challenges", "invitation tokens", "external agent credentials", "provider API keys", "external agent pairing codes", "cookies", "private keys", "provider tokens", "Temporal API keys", "generated environment files"],
-        requiredConfiguration: ["accessMode", "reachableAddress", "databasePath", "artifactRoot", "temporalTarget", "temporalAddress", "temporalNamespace", "taskQueue", "installationId"],
+        secretsExcluded: ["credential registrations", "passkeys", "sessions", "challenges", "invitation tokens", "external agent credentials", "provider API keys", "external agent pairing codes", "cookies", "private keys", "provider tokens", "Engine API keys", "generated environment files"],
+        requiredConfiguration: ["accessMode", "reachableAddress", "databasePath", "artifactRoot", "installationId"],
       };
       await writeFile(join(root, "manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });
       await execFileAsync("tar", ["-czf", destination, "-C", staging, backupRoot], { timeout: 60_000, maxBuffer: 64 * 1024 });

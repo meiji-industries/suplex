@@ -22,8 +22,8 @@ interface DevService {
 
 export interface DevPorts {
   forge?: number;
-  temporal: number;
-  temporalUi: number;
+  engine: number;
+  engineUi: number;
 }
 
 export type DevState = "ready" | "starting" | "restarting" | "stopping" | "stopped" | "orphaned";
@@ -62,7 +62,7 @@ export interface DevStackOptions {
   logPath?: string;
   pollMs?: number;
   restartTimeoutMs?: number;
-  temporal?: DevServiceCommand;
+  engine?: DevServiceCommand;
 }
 
 const tscCli = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
@@ -144,12 +144,12 @@ function samePids(left: number[] | undefined, right: number[] | undefined): bool
 }
 
 export function resolveDevPorts(conductorPort: string | undefined): DevPorts {
-  if (conductorPort === undefined) return { temporal: 7233, temporalUi: 8233 };
+  if (conductorPort === undefined) return { engine: 7233, engineUi: 8233 };
   const forge = Number(conductorPort);
   if (!Number.isInteger(forge) || forge < 1 || forge > 65533) {
     throw new Error(`CONDUCTOR_PORT must reserve three valid ports; received ${conductorPort}`);
   }
-  return { forge, temporal: forge + 1, temporalUi: forge + 2 };
+  return { forge, engine: forge + 1, engineUi: forge + 2 };
 }
 
 export async function inspectDevLock(runtimeRoot: string, controller: ProcessController = defaultProcessController): Promise<DevLockInspection> {
@@ -350,20 +350,17 @@ async function stopService(service: DevService, signal: NodeJS.Signals): Promise
 export function forgeEnvironment(ports: DevPorts): NodeJS.ProcessEnv {
   return {
     ...(ports.forge === undefined ? {} : { FORGE_PORT: String(ports.forge) }),
-    FORGE_TEMPORAL_TARGET: "local",
-    FORGE_TEMPORAL_ADDRESS: `127.0.0.1:${ports.temporal}`,
-    FORGE_TEMPORAL_NAMESPACE: "forge-dev",
     FORGE_FRONTEND_DEV_SERVER: "1",
     FORGE_DEVELOPMENT_AUTO_LOGIN: "1",
   };
 }
 
-async function waitForForgeRestart(runtimeRoot: string, priorPids: number[] | undefined, forge: DevService, temporal: DevService, shuttingDown: () => boolean, pollMs: number, timeoutMs: number): Promise<"ready" | "stop" | "shutdown"> {
+async function waitForForgeRestart(runtimeRoot: string, priorPids: number[] | undefined, forge: DevService, engine: DevService, shuttingDown: () => boolean, pollMs: number, timeoutMs: number): Promise<"ready" | "stop" | "shutdown"> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (shuttingDown()) return "shutdown";
     if (await pathExists(controlPath(devLockPath(runtimeRoot), "stop"))) return "stop";
-    if (serviceStopped(temporal)) throw new Error("Temporal stopped while Forge was restarting");
+    if (serviceStopped(engine)) throw new Error("Engine stopped while Forge was restarting");
     if (serviceStopped(forge)) {
       const result = await forge.exited;
       const detail = result.signal ? `signal ${result.signal}` : `exit code ${result.code ?? 1}`;
@@ -380,14 +377,14 @@ export async function superviseDevStack(ports: DevPorts, runtimeRoot: string, op
   const pollMs = options.pollMs ?? controlPollMs;
   const restartTimeoutMs = options.restartTimeoutMs ?? controlTimeoutMs;
   const logPath = options.logPath ?? join("logs", "dev.log");
-  if (!options.temporal) await mkdir(join(".forge", "dev"), { recursive: true });
+  if (!options.engine) await mkdir(join(".forge", "dev"), { recursive: true });
   await mkdir(dirname(logPath), { recursive: true });
   const log = createWriteStream(logPath, { flags: "a", mode: 0o600 });
   log.write(`\n[dev] ${new Date().toISOString()}\n`);
-  const temporalCommand = options.temporal ?? { command: "temporal", args: ["server", "start-dev", "--port", String(ports.temporal), "--ui-port", String(ports.temporalUi), "--db-filename", ".forge/dev/temporal.db", "--namespace", "forge-dev", "--search-attribute", "CompanyId=Keyword", "--search-attribute", "ProjectId=Keyword", "--search-attribute", "IssueId=Keyword"] };
+  const engineCommand = options.engine ?? { command: "engine", args: ["server", "start-dev", "--port", String(ports.engine), "--ui-port", String(ports.engineUi), "--db-filename", ".forge/dev/engine.db", "--namespace", "forge-dev", "--search-attribute", "CompanyId=Keyword", "--search-attribute", "ProjectId=Keyword", "--search-attribute", "IssueId=Keyword"] };
   const forgeCommand = options.forge ?? { command: process.execPath, args: ["--import", "tsx", "src/cli.ts", "start", "--foreground"], environment: forgeEnvironment(ports) };
   const startForge = (): DevService => startService("Forge", forgeCommand.command, forgeCommand.args, log, forgeCommand.environment);
-  const temporal = startService("Temporal", temporalCommand.command, temporalCommand.args, log, temporalCommand.environment);
+  const engine = startService("Engine", engineCommand.command, engineCommand.args, log, engineCommand.environment);
   let forge = startForge();
   let requestedExitCode = 0;
   let shuttingDown = false;
@@ -397,7 +394,7 @@ export async function superviseDevStack(ports: DevPorts, runtimeRoot: string, op
     if (shutdown) return shutdown;
     shuttingDown = true;
     requestedExitCode = exitCode;
-    shutdown = Promise.allSettled([stopService(temporal, signal), stopService(forge, signal)]).then(() => undefined);
+    shutdown = Promise.allSettled([stopService(engine, signal), stopService(forge, signal)]).then(() => undefined);
     return shutdown;
   };
 
@@ -411,7 +408,7 @@ export async function superviseDevStack(ports: DevPorts, runtimeRoot: string, op
     while (!shuttingDown) {
       await wait(pollMs);
       if (shuttingDown) break;
-      const stoppedService = serviceStopped(temporal) ? temporal : serviceStopped(forge) ? forge : undefined;
+      const stoppedService = serviceStopped(engine) ? engine : serviceStopped(forge) ? forge : undefined;
       if (stoppedService) {
         const result = await stoppedService.exited;
         // mise and terminals can signal the whole process group, so allow the
@@ -435,7 +432,7 @@ export async function superviseDevStack(ports: DevPorts, runtimeRoot: string, op
       }
       if (control !== "restart") continue;
 
-      writeDevLog(log, "[dev] restarting Forge; Temporal remains running\n");
+      writeDevLog(log, "[dev] restarting Forge; Engine remains running\n");
       const priorPids = await readyForgePids(runtimeRoot);
       await stopService(forge, "SIGTERM");
       if (shuttingDown) break;
@@ -444,7 +441,7 @@ export async function superviseDevStack(ports: DevPorts, runtimeRoot: string, op
         break;
       }
       forge = startForge();
-      const outcome = await waitForForgeRestart(runtimeRoot, priorPids, forge, temporal, () => shuttingDown, pollMs, restartTimeoutMs);
+      const outcome = await waitForForgeRestart(runtimeRoot, priorPids, forge, engine, () => shuttingDown, pollMs, restartTimeoutMs);
       if (outcome === "stop") {
         await stopServices("SIGTERM", 0);
         break;

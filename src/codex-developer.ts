@@ -24,7 +24,7 @@ import { runPinnedVerification } from "./verification.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { loadDefaultPrompts, loadPromptCatalog, renderPrompt, type PromptPath } from "./prompts.js";
 import { isVersionedPromptSet, resolvePromptSet, type PromptOverrideRow } from "./prompt-resolution.js";
-import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
+import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./engine/issue-contracts.js";
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
 import { jsonRequired } from "./task-utils.js";
@@ -76,7 +76,7 @@ export function buildDeveloperExecutionPrompt(input: { executionId: string; reus
 
 
 
-type RepairBlockCode = import("./temporal/issue-contracts.js").DeliveryOperationBlockCode;
+type RepairBlockCode = import("./engine/issue-contracts.js").DeliveryOperationBlockCode;
 function repairBlockCode(failure: AgentFailure): RepairBlockCode {
   if (["missing-repair-report", "malformed-repair-report", "invalid-repair-report"].includes(failure.code)) return "invalid-output";
   if (failure.code === "session-identity-conflict" || failure.code === "session-conflict") return "session-conflict";

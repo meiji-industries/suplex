@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { releaseDeliveryProjection } from "../src/temporal/activities/release.js";
+import { releaseDeliveryProjection } from "../src/engine/activities/release.js";
 
 
 test("keeps historical direct delivery artifacts readable", () => {

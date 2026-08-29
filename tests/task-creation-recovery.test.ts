@@ -62,7 +62,7 @@ test("committed task creation converges after unavailable and concurrent workflo
       db.prepare("INSERT INTO forge_task_creation_intents (id, company_id, project_id, task_id, workflow_id, idempotency_key, project_revision_id, state, attempt, lease_token, lease_expires_at, created_at, updated_at) VALUES ('creation-1', 'company-1', 'project-1', 'task-1', 'workflow-1', 'key-1', 'revision-1', 'workflow_starting', 1, 'lease-1', ?, ?, ?)").run(now, now, now);
     });
 
-    await reconcileTaskCreationIntents(database, config, async () => { throw new Error("Temporal unavailable"); });
+    await reconcileTaskCreationIntents(database, config, async () => { throw new Error("legacy workflow service unavailable"); });
     expect(database.authQuery((db) => db.prepare("SELECT state, error_code FROM forge_task_creation_intents WHERE id = 'creation-1'").get())).toEqual({ state: "workflow_starting", error_code: "workflow_start_ambiguous" });
 
     const starts: string[] = [];

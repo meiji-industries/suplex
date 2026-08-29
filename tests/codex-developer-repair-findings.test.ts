@@ -10,7 +10,7 @@ import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import type { HerdrTurnInput } from "../src/herdr-turn-runner.js";
-import { createActivities } from "../src/temporal/activities.js";
+import { createActivities } from "../src/engine/activities.js";
 
 const workflowId = "workflow-repair-findings";
 const branchName = "forge/issue/repair-findings";

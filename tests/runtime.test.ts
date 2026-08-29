@@ -68,15 +68,14 @@ test("probes the configured address for direct Tailscale HTTP", () => {
   expect(healthProbeAddress(config)).toBe("http://100.87.170.105:4111");
 });
 
-test("a registry is current when both ready Forge children are live", async () => {
-  const worker = ownedProcess("worker", 4101);
+test("a registry is current when the single Forge server is live", async () => {
   const server = ownedProcess("server", 4102);
-  const livePids = new Set([worker.pid, server.pid]);
+  const livePids = new Set([server.pid]);
   const signalled: number[] = [];
   const controller = reconciliationController({
     async inspect(pid) {
       if (!livePids.has(pid)) return undefined;
-      return inspection(pid === worker.pid ? worker : server);
+      return inspection(server);
     },
     async signal(pid) {
       signalled.push(pid);
@@ -84,7 +83,7 @@ test("a registry is current when both ready Forge children are live", async () =
     },
   });
 
-  await expect(reconcileExistingRegistry({ version: 1, processes: [worker, server] }, createTestConfig("/tmp/forge-runtime-test"), controller)).resolves.toBe(true);
+  await expect(reconcileExistingRegistry({ version: 1, processes: [server] }, createTestConfig("/tmp/forge-runtime-test"), controller)).resolves.toBe(true);
   expect(signalled).toEqual([]);
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyRepairFailure } from "../src/temporal/workflow/runtime.js";
+import { classifyRepairFailure } from "../src/engine/workflow/runtime.js";
 
 describe("classifyRepairFailure", () => {
   it.each([

@@ -9,7 +9,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { checkArtifactRoot, checkDatabase, checkWorker } from "../src/host-health.js";
 import { inspectHostHealth, type HealthCheck } from "../src/health.js";
 import { checkGithubAuthentication, CodexReadinessProbe } from "../src/provider-readiness.js";
-import { TemporalHealthProbe } from "../src/temporal/service.js";
+import { EngineHealthProbe } from "../src/engine/service.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 
 const check = (id: HealthCheck["id"], status: "healthy" | "unhealthy"): HealthCheck => ({
@@ -22,7 +22,7 @@ const check = (id: HealthCheck["id"], status: "healthy" | "unhealthy"): HealthCh
 
 test("host readiness reports owned-service health separately from provider authentication", async () => {
   const snapshot = await inspectHostHealth(createTestConfig("/tmp/forge-health-test"), {
-    temporal: async () => check("temporal", "healthy"),
+    engine: async () => check("engine", "healthy"),
     database: async () => check("database", "healthy"),
     artifactRoot: async () => check("artifact-root", "healthy"),
     worker: async () => check("worker", "healthy"),
@@ -34,7 +34,7 @@ test("host readiness reports owned-service health separately from provider authe
   expect(
     snapshot.checks.map(({ id, status }) => ({ id, status })),
   ).toEqual([
-      { id: "temporal", status: "healthy" },
+      { id: "engine", status: "healthy" },
       { id: "database", status: "healthy" },
       { id: "artifact-root", status: "healthy" },
       { id: "worker", status: "healthy" },
@@ -46,7 +46,7 @@ test("host readiness reports owned-service health separately from provider authe
 
 test("host readiness is false when an owned service is unavailable", async () => {
   const snapshot = await inspectHostHealth(createTestConfig("/tmp/forge-health-test"), {
-    temporal: async () => check("temporal", "unhealthy"),
+    engine: async () => check("engine", "unhealthy"),
     database: async () => check("database", "healthy"),
     artifactRoot: async () => check("artifact-root", "healthy"),
     worker: async () => check("worker", "healthy"),
@@ -63,7 +63,7 @@ test("the API health probe is cached for ten seconds", async () => {
   const app = createApp({
     config: createTestConfig("/tmp/forge-health-route-cache-test"),
     health: {
-      temporal: async () => check("temporal", "healthy"),
+      engine: async () => check("engine", "healthy"),
       database: async () => check("database", "healthy"),
       artifactRoot: async () => check("artifact-root", "healthy"),
       worker: async () => check("worker", "healthy"),
@@ -94,15 +94,15 @@ test("health snapshot does not expose host paths or credentials", async () => {
   try {
     database.registerWorker({
       workerId: `${identifiers.workerPrefix}-live`,
-      taskQueue: config.taskQueue,
+      taskQueue: identifiers.taskQueue,
       buildId: identifiers.buildId,
     });
     const codexProbe = new CodexReadinessProbe("codex");
     const snapshot = await inspectHostHealth(config, {
-      temporal: new TemporalHealthProbe(config).check,
+      engine: new EngineHealthProbe(config).check,
       database: async () => checkDatabase(database),
       artifactRoot: async () => checkArtifactRoot(config.artifactRoot),
-      worker: async () => checkWorker(database, config.taskQueue, config.installationId),
+      worker: async () => checkWorker(database, identifiers.taskQueue, config.installationId),
       codexAuth: async () => codexProbe.check(),
       ghAuth: checkGithubAuthentication("gh"),
     });

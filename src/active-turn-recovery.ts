@@ -9,7 +9,7 @@ import { type HerdrClient, CliHerdrClient } from "./herdr-client.js";
 import { reconcileHerdrSessions } from "./herdr-recovery.js";
 import { classifyRecovery, type DurableTaskFacts, type LiveObservations } from "./recovery/convergence.js";
 import { json } from "./task-utils.js";
-import { reconcileIssueDeveloperDelivery } from "./temporal/service.js";
+import { reconcileIssueDeveloperDelivery } from "./engine/service.js";
 
 export interface ActiveTurnOutcome {
   taskId: string;

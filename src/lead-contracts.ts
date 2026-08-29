@@ -162,7 +162,7 @@ for (const variant of leadOutputVariants) {
 }
 const leadOutputProperties = Object.fromEntries([...leadOutputPropertyEntries.entries()].map(([name, schema]) => {
   if (name === "kind") return [name, { type: "string", enum: ["plan", "decision_blocker"] }];
-  // Structured clone of our own object; this file is part of the Temporal workflow bundle and must not import node modules.
+  // Structured clone of our own object; this file is part of the legacy workflow service workflow bundle and must not import node modules.
   // eslint-disable-next-line no-restricted-syntax
   const schemaObject = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
   if (name === "developerContext") {

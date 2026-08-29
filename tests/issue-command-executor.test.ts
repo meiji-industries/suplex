@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
 
-import { issueCommandId } from "../src/temporal/service.js";
+import { issueCommandId } from "../src/engine/service.js";
 
 const workflowId = "workflow-test-installation-issue-command-parity";
 const input = { expectedRevision: 7, actorUserId: "fixture-user" };

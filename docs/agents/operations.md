@@ -23,7 +23,8 @@ the default local development mode with Vite HMR.
 
 `scripts/dev-restart.sh` waits up to three minutes for the worker's polling
 log signal, then confirms `/api/health`; its success output names the readiness
-signal used.
+signal used. The worker is hosted in the API process, and `mise run dev:idle`
+checks SQLite's in-flight engine activity ledger before allowing a restart.
 
 ## Claude Code provider
 

@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { asNonRetryableApplicationFailure } from "../src/temporal/activities/context.js";
+import { asNonRetryableApplicationFailure } from "../src/engine/activities/context.js";
 import { runCommand } from "../src/command-runner.js";
 import { createGitCommandGuard, reserveOwnedWorktree, withWorktreeBuildCaches, WorktreeFailure, WorktreeManager } from "../src/worktrees.js";
 
@@ -458,7 +458,7 @@ test("an active lease adopts its existing worktree when configuration coordinate
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("maps every worktree failure code to a non-retryable Temporal failure", () => {
+test("maps every worktree failure code to a non-retryable Engine failure", () => {
   expect(asNonRetryableApplicationFailure(new WorktreeFailure("any-worktree-condition", "Restore the worktree path, then retry."))).toMatchObject({
     type: "any-worktree-condition",
     nonRetryable: true,

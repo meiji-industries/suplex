@@ -57,7 +57,7 @@ test.skip("project API activates valid configuration, redacts typed failures, an
     repositoryProvisioner: { async ensure(input) { await mkdir(input.repositoryPath, { recursive: true }); await mkdir(input.worktreeRoot, { recursive: true }); } },
   });
   const app = createApp({ config, auth, projects, capacity: new CapacityManager(database, config), health: {
-    temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }),
+    engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }),
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
     artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
     worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }),
@@ -127,7 +127,7 @@ test("profile API accepts OpenRouter models and rejects unknown providers", asyn
   const auth = new AuthService(database, config, { webAuthn: webAuthn() });
   const projects = new ProjectService(database, auth, config, { github });
   const app = createApp({ config, auth, projects, capacity: new CapacityManager(database, config), health: {
-    temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }),
+    engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }),
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
     artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
     worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }),

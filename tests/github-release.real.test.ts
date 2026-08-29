@@ -8,7 +8,7 @@ import { ArtifactStore } from "../src/artifacts.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { assertPublicProjectionBounds, createGithubReleasePort } from "../src/github-release.js";
-import { createActivities } from "../src/temporal/activities.js";
+import { createActivities } from "../src/engine/activities.js";
 import { jsonRequired } from "../src/task-utils.js";
 
 const execFileAsync = promisify(execFile);

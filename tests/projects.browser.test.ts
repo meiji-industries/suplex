@@ -73,7 +73,7 @@ test("projects desktop flow auto-activates valid clones and shows actionable val
     repositoryProvisioner: { async ensure(input) { await mkdir(input.repositoryPath, { recursive: true }); await mkdir(input.worktreeRoot, { recursive: true }); } },
   });
   const app = createApp({ config, auth, projects, capacity: new CapacityManager(database, config), health: {
-    temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }),
+    engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }),
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
     artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
     worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }),
@@ -138,7 +138,7 @@ test("projects desktop flow auto-activates valid clones and shows actionable val
       expect(await systemHealth.innerText()).toBe("Healthy");
       await systemHealth.click();
       const healthDialog = page.getByRole("dialog", { name: "System health", exact: true });
-      await healthDialog.getByText("Temporal", { exact: true }).waitFor();
+      await healthDialog.getByText("Engine", { exact: true }).waitFor();
       await healthDialog.getByRole("button", { name: "Close", exact: true }).click();
 
       await page.goto(`${baseUrl}/companies/${encodeURIComponent(browserCompany.id)}/settings?company=${encodeURIComponent(browserCompany.id)}`);

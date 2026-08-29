@@ -1,4 +1,4 @@
-import { CancelledFailure } from "@temporalio/activity";
+import { CancelledFailure } from "./engine/failures.js";
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import type { AdminCapacityLane, PublicCapacityStatus } from "./capacity-contracts.js";
@@ -11,7 +11,7 @@ export class CapacityFailure extends Error {
     this.name = "CapacityFailure";
   }
 }
-/** Worker-local provider slots. Temporal owns activity distribution. */
+/** Worker-local provider slots. Engine owns activity distribution. */
 export class CapacityManager {
   private readonly active = new Map<string, number>();
   private readonly waiters = new Map<string, Array<() => void>>();

@@ -14,10 +14,6 @@ const managedKeys = new Set([
   "FORGE_TAILSCALE_ADDRESS",
   "FORGE_BIND_ADDRESS",
   "FORGE_PORT",
-  "FORGE_TEMPORAL_TARGET",
-  "FORGE_TEMPORAL_ADDRESS",
-  "FORGE_TEMPORAL_NAMESPACE",
-  "FORGE_TEMPORAL_API_KEY",
 ]);
 
 export async function upsertForgeEnvironment(filename: string, values: Record<string, string>): Promise<void> {
@@ -85,21 +81,11 @@ export async function runSetup(): Promise<void> {
     const mode = await askChoice("Choose 1 or 2", new Set(["1", "2"]), "1", readline);
     const exposure = mode === "2" ? "direct" : "serve";
     const port = await ask("Forge port", process.env.FORGE_PORT ?? "4111", readline);
-    const temporalAddress = await ask("Temporal Cloud endpoint", process.env.FORGE_TEMPORAL_ADDRESS ?? "namespace.account.tmprl.cloud:7233", readline);
-    const temporalNamespace = await ask("Temporal Cloud namespace", process.env.FORGE_TEMPORAL_NAMESPACE ?? "namespace.account", readline);
-    const temporalApiKey = process.env.FORGE_TEMPORAL_API_KEY?.trim();
-    if (!temporalApiKey) {
-      throw new Error("Set FORGE_TEMPORAL_API_KEY before running Forge setup");
-    }
     const values = {
       FORGE_ACCESS_MODE: "tailscale",
       FORGE_TAILSCALE_EXPOSURE: exposure,
       FORGE_TAILSCALE_ADDRESS: hostname,
       FORGE_PORT: port,
-      FORGE_TEMPORAL_TARGET: "cloud",
-      FORGE_TEMPORAL_ADDRESS: temporalAddress,
-      FORGE_TEMPORAL_NAMESPACE: temporalNamespace,
-      FORGE_TEMPORAL_API_KEY: temporalApiKey,
       ...(exposure === "serve" ? { FORGE_BIND_ADDRESS: "127.0.0.1" } : { FORGE_BIND_ADDRESS: hostname }),
     };
     const config = loadConfig({ ...process.env, ...values, FORGE_ENV_FILE: envFile });

@@ -21,7 +21,7 @@ test("mobile health page shows separate healthy and unhealthy states", { timeout
   const app = createApp({
     config: createTestConfig("/tmp/forge-browser-test"),
     health: {
-      temporal: async () => snapshot.checks[0]!,
+      engine: async () => snapshot.checks[0]!,
       database: async () => snapshot.checks[0]!,
       artifactRoot: async () => snapshot.checks[0]!,
       worker: async () => snapshot.checks[0]!,
@@ -126,7 +126,7 @@ test("health makes a failed refresh visibly stale while retaining the last succe
   const app = createApp({
     config: createTestConfig("/tmp/forge-health-stale-browser-test"),
     health: {
-      temporal: async () => snapshot.checks[0]!,
+      engine: async () => snapshot.checks[0]!,
       database: async () => snapshot.checks[0]!,
       artifactRoot: async () => snapshot.checks[0]!,
       worker: async () => snapshot.checks[0]!,
@@ -170,7 +170,7 @@ test("legacy cached user and company records never render before the current ses
   const app = createApp({
     config: createTestConfig("/tmp/forge-health-cache-browser-test"),
     health: {
-      temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }),
+      engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }),
       database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
       artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
       worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }),

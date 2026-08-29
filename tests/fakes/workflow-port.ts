@@ -1,5 +1,5 @@
 import { initialStateFixture } from "../fixtures/issue-state.js";
-import { IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "../../src/temporal/issue-contracts.js";
+import { IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "../../src/engine/issue-contracts.js";
 import type { IssueWorkflowPort } from "../../src/tasks.js";
 
 interface WorkflowPortFakeOptions {

@@ -14,7 +14,7 @@ import type { GithubAdapter } from "../src/github.js";
 import { HermesAgentService } from "../src/hermes-agents.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import { TaskService } from "../src/tasks.js";
-import { IssueProjectionEventSchema } from "../src/temporal/issue-contracts.js";
+import { IssueProjectionEventSchema } from "../src/engine/issue-contracts.js";
 import { createWorkflowPortFake } from "./fakes/workflow-port.js";
 
 const execFileAsync = promisify(execFile);
@@ -189,7 +189,7 @@ beforeEach(async () => {
     tasks,
     hermes,
     health: {
-      temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }),
+      engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }),
       database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
       artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
       worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }),

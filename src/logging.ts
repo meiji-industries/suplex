@@ -1,4 +1,4 @@
-import { Context } from "@temporalio/activity";
+import { Context } from "./engine/activity-context.js";
 import { appendFileSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import pino, { type DestinationStream, type Logger } from "pino";
@@ -296,14 +296,8 @@ export class StructuredLogger {
 
 export function activityLogContext(): LogContext {
   try {
-    const info = Context.current().info;
-    return {
-      activityId: info.activityId,
-      ...(info.workflowExecution ? {
-        workflowId: info.workflowExecution.workflowId,
-        runId: info.workflowExecution.runId,
-      } : {}),
-    };
+    Context.current();
+    return {};
   } catch {
     return {};
   }

@@ -90,9 +90,9 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     return reply.send({ lanes: capacity.listAdminLanes() });
   });
   if (database && attention) {
-    typed.post("/api/admin/rebuild-projections", { schema: { body: ProjectionRebuildBodySchema, response: { 200: z.object({ source: z.literal("temporal"), rebuilt: z.number(), findings: z.array(z.object({ taskId: z.string(), code: z.string(), summary: z.string() })) }), 403: ErrorResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
+    typed.post("/api/admin/rebuild-projections", { schema: { body: ProjectionRebuildBodySchema, response: { 200: z.object({ source: z.literal("engine"), rebuilt: z.number(), findings: z.array(z.object({ taskId: z.string(), code: z.string(), summary: z.string() })) }), 403: ErrorResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
       if (request.forgeUser.role !== "admin") return reply.code(403).send({ error: "Administrator access required" });
-      if (!config) return reply.code(503).send({ error: "Temporal rebuild is unavailable" });
+      if (!config) return reply.code(503).send({ error: "Engine rebuild is unavailable" });
       let result;
       try {
         result = await new ProjectionRebuildService(database, config).rebuild({
@@ -103,7 +103,7 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
         if (error instanceof ProjectionRebuildFailure) return reply.code(503).send({ error: error.message, code: error.code });
         throw error;
       }
-      return reply.send({ source: "temporal" as const, ...result });
+      return reply.send({ source: "engine" as const, ...result });
     });
   }
 };

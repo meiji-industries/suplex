@@ -3,15 +3,11 @@ import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { UnsafeBindingError, UnsupportedRuntimeError, loadConfig, temporalConnectionOptions } from "../src/config.js";
+import { UnsafeBindingError, UnsupportedRuntimeError, loadConfig } from "../src/config.js";
 
 const baseEnvironment = {
   FORGE_TAILSCALE_ADDRESS: "forge.tailnet.ts.net",
   FORGE_DATA_ROOT: "/tmp/forge-test-data",
-  FORGE_TEMPORAL_TARGET: "cloud",
-  FORGE_TEMPORAL_ADDRESS: "test.account.tmprl.cloud:7233",
-  FORGE_TEMPORAL_NAMESPACE: "test.account",
-  FORGE_TEMPORAL_API_KEY: "test-api-key",
 };
 
 test("loads a Tailscale-only configuration and exposes the reachable address", () => {
@@ -22,37 +18,6 @@ test("loads a Tailscale-only configuration and exposes the reachable address", (
   expect(config.reachableAddress).toBe("http://forge.tailnet.ts.net:4111");
   expect(config.repositoryRoot).toBe(join(homedir(), "forge", "repos"));
   expect(config.worktreeRoot).toBe(join(homedir(), "forge", "worktrees"));
-  expect(config.temporalNamespace).toBe("test.account");
-  expect(config.taskQueue).toBe("tasks-test-installation");
-});
-
-test("configures a TLS-authenticated hosted Temporal connection", () => {
-  expect(temporalConnectionOptions(loadConfig(baseEnvironment))).toEqual({
-    address: "test.account.tmprl.cloud:7233",
-    tls: true,
-    apiKey: "test-api-key",
-  });
-});
-
-test("requires the complete hosted Temporal configuration", () => {
-  expect(() => loadConfig({ ...baseEnvironment, FORGE_TEMPORAL_API_KEY: undefined })).toThrow(/required for Temporal Cloud/);
-});
-
-test("connects to the local Temporal dev server without Cloud credentials", () => {
-  const config = loadConfig({
-    ...baseEnvironment,
-    FORGE_TEMPORAL_TARGET: "local",
-    FORGE_TEMPORAL_ADDRESS: "127.0.0.1:7233",
-    FORGE_TEMPORAL_NAMESPACE: "forge-dev",
-  });
-
-  expect(config.temporalApiKey).toBeUndefined();
-  expect(temporalConnectionOptions(config)).toEqual({ address: "127.0.0.1:7233" });
-});
-
-test("keeps local and Cloud Temporal targets separate", () => {
-  expect(() => loadConfig({ ...baseEnvironment, FORGE_TEMPORAL_TARGET: "local" })).toThrow(/loopback/);
-  expect(() => loadConfig({ ...baseEnvironment, FORGE_TEMPORAL_ADDRESS: "127.0.0.1:7233" })).toThrow(/must not use a loopback/);
 });
 
 for (const address of [
@@ -92,9 +57,6 @@ test("allows development auto-login only on a loopback binding", () => {
     ...baseEnvironment,
     FORGE_TAILSCALE_EXPOSURE: "serve",
     FORGE_BIND_ADDRESS: "127.0.0.1",
-    FORGE_TEMPORAL_TARGET: "local",
-    FORGE_TEMPORAL_ADDRESS: "127.0.0.1:7233",
-    FORGE_TEMPORAL_NAMESPACE: "forge-dev",
     FORGE_DEVELOPMENT_AUTO_LOGIN: "1",
   });
   expect(development.developmentAutoLogin).toBe(true);

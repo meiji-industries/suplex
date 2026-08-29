@@ -23,7 +23,7 @@ export interface HealthSnapshot {
 }
 
 export interface HostHealthDependencies {
-  temporal: () => Promise<HealthCheck>;
+  engine: () => Promise<HealthCheck>;
   database: () => Promise<HealthCheck>;
   artifactRoot: () => Promise<HealthCheck>;
   worker: () => Promise<HealthCheck>;
@@ -51,7 +51,7 @@ async function safelyCheck(id: HealthCheckId, label: string, check: () => Promis
 
 export async function inspectHostHealth(config: ForgeConfig, dependencies: HostHealthDependencies): Promise<HealthSnapshot> {
   const checks = await Promise.all([
-    safelyCheck("temporal", "Temporal", dependencies.temporal),
+    safelyCheck("engine", "Engine", dependencies.engine),
     safelyCheck("database", "SQLite database", dependencies.database),
     safelyCheck("artifact-root", "Artifact root", dependencies.artifactRoot),
     safelyCheck("worker", "Worker and task queue", dependencies.worker),

@@ -1,0 +1,68 @@
+import { fileURLToPath } from "node:url";
+import { loadConfig, type ForgeConfig } from "../config.js";
+import { ForgeDatabase } from "../database.js";
+import { StructuredLogger } from "../logging.js";
+import { runtimeIdentifiers } from "../runtime-identifiers.js";
+import { installIssueEngine } from "./index.js";
+import { IssueWorkflowInputSchema, IssueWorkflowStateSchema } from "./issue-contracts.js";
+import { IssueEngine } from "./runs.js";
+import { reconcileActiveTurns } from "../active-turn-recovery.js";
+import { reconcileWorktrees } from "../worktree-reconciliation.js";
+import { reconcileGithubObservations } from "../github-observation-reconciliation.js";
+import { reconcileTaskCreationIntents } from "../task-creation-recovery.js";
+import { reconcileSuccessorIntents } from "../successor-recovery.js";
+import { reconcileDonePullRequests } from "../done-pull-request-reconciliation.js";
+import { CapacityManager } from "../capacity.js";
+
+export function reclaimOrphanedHerdrExecutions(database: ForgeDatabase, now = new Date().toISOString()): { agentExecutions: number; developerExecutions: number } {
+  return database.authTransaction((db) => ({
+    agentExecutions: db.prepare(`UPDATE forge_agent_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = COALESCE(finished_at, ?) WHERE status IN ('starting', 'running', 'cancelling') AND NOT EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'agent' AND turn.execution_id = forge_agent_executions.id AND turn.task_id = forge_agent_executions.task_id AND session.is_current = 1 AND session.status IN ('ready', 'working', 'blocked'))`).run(now).changes,
+    developerExecutions: db.prepare(`UPDATE forge_developer_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = COALESCE(finished_at, ?) WHERE status IN ('starting', 'running', 'cancelling') AND NOT EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'developer' AND turn.execution_id = forge_developer_executions.id AND turn.task_id = forge_developer_executions.task_id AND session.is_current = 1 AND session.status IN ('ready', 'working', 'blocked'))`).run(now).changes,
+  }));
+}
+export function recoverOrphanedHerdrExecutions(database: ForgeDatabase): { agentExecutions: number; developerExecutions: number } {
+  return database.authTransaction((db) => ({
+    agentExecutions: db.prepare(`UPDATE forge_agent_executions SET status = 'running', failure_code = NULL, finished_at = NULL WHERE status = 'failed' AND failure_code = 'worker-restart-orphan' AND EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'agent' AND turn.execution_id = forge_agent_executions.id AND turn.task_id = forge_agent_executions.task_id AND session.is_current = 1 AND session.status IN ('ready', 'working', 'blocked') AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed'))`).run().changes,
+    developerExecutions: db.prepare(`UPDATE forge_developer_executions SET status = 'running', failure_code = NULL, finished_at = NULL WHERE status = 'failed' AND failure_code = 'worker-restart-orphan' AND EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'developer' AND turn.execution_id = forge_developer_executions.id AND turn.task_id = forge_developer_executions.task_id AND session.is_current = 1 AND session.status IN ('ready', 'working', 'blocked') AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed'))`).run().changes,
+  }));
+}
+export function logReconciliation(logger: Pick<StructuredLogger, "debug" | "info">, name: string, durationMs: number, changes: number, counts: Record<string, number>): void {
+  logger[changes === 0 ? "debug" : "info"](`Worker periodic reconciliation ${changes === 0 ? "idle" : "changed state"}: ${name}`, { durationMs, ...counts } as never);
+}
+
+export async function loadIssueRuns(engine: IssueEngine): Promise<number> {
+  const rows = engine.database.authQuery((db) => db.prepare(`SELECT s.state_json, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.request_hash, t.predecessor_task_id, t.auto_approve_plan, t.pull_request_mode, t.delivery_target, t.run_project_tests, t.visual_evidence FROM forge_workflow_snapshots s JOIN forge_tasks t ON t.id = s.task_id JOIN (SELECT task_id, max(revision) revision FROM forge_workflow_snapshots GROUP BY task_id) latest ON latest.task_id=s.task_id AND latest.revision=s.revision WHERE json_extract(s.state_json, '$.phase') NOT IN ('done','cancelled','failed')`).all() as Array<Record<string, unknown>>);
+  for (const row of rows) {
+    const state = IssueWorkflowStateSchema.parse(JSON.parse(String(row.state_json)));
+    if (engine.runs.has(state.workflowId)) continue;
+    await engine.create(IssueWorkflowInputSchema.parse({ workflowId: state.workflowId, companyId: state.companyId, projectId: state.projectId, issueId: state.issueId, projectRevisionId: state.projectRevisionId, briefArtifactId: row.brief_artifact_id, imageArtifactIds: JSON.parse(String(row.image_artifact_ids_json)), roleProfiles: JSON.parse(String(row.role_agents_json)), supplementalReview: Boolean(row.supplemental_review), requestHash: row.request_hash ?? undefined, predecessorTaskId: row.predecessor_task_id ?? undefined, autoApprovePlan: Boolean(row.auto_approve_plan), pullRequestMode: row.pull_request_mode ?? undefined, deliveryTarget: row.delivery_target ?? undefined, runProjectTests: Boolean(row.run_project_tests), visualEvidence: row.visual_evidence ?? undefined, continuationState: state }));
+  }
+  return rows.length;
+}
+export function reconcileWorkflowStalls(engine: IssueEngine): { inspected: number; stalled: number } {
+  let stalled = 0;
+  for (const run of engine.runs.values()) if (run.error) { stalled += 1; engine.database.authTransaction((db) => db.prepare("UPDATE forge_issue_projections SET projection_status='stalled', projection_status_message=? WHERE workflow_id=?").run(run.error instanceof Error ? run.error.message : "Engine loop failed", run.workflowId)); }
+  return { inspected: engine.runs.size, stalled };
+}
+
+export async function startEngineHost(config: ForgeConfig, database = new ForgeDatabase(config.databasePath)): Promise<IssueEngine> {
+  const engine = new IssueEngine(config, database); installIssueEngine(config, engine); await loadIssueRuns(engine);
+  const workerId = `${runtimeIdentifiers(config.installationId).workerPrefix}-${process.pid}`;
+  database.registerWorker({ workerId, taskQueue: runtimeIdentifiers(config.installationId).taskQueue, buildId: runtimeIdentifiers(config.installationId).buildId });
+  new StructuredLogger().info("Forge worker RUNNING and polling");
+  const schedule = (milliseconds: number, operation: () => Promise<unknown> | unknown): void => { void Promise.resolve().then(operation).catch(() => undefined); const timer = setInterval(() => void Promise.resolve().then(operation).catch(() => undefined), milliseconds); timer.unref(); };
+  schedule(60_000, () => reconcileTaskCreationIntents(database, config));
+  schedule(60_000, () => reconcileActiveTurns(database, config));
+  schedule(60_000, () => reconcileWorktrees(database, config));
+  schedule(300_000, () => reconcileGithubObservations(database, config));
+  schedule(60_000, () => reconcileWorkflowStalls(engine));
+  schedule(300_000, () => reconcileDonePullRequests(database));
+  schedule(300_000, () => reconcileSuccessorIntents(database, config));
+  schedule(300_000, () => new CapacityManager(database, config).reconcileFromLedgers());
+  return engine;
+}
+export async function runWorker(config: ForgeConfig = loadConfig()): Promise<void> {
+  const database = new ForgeDatabase(config.databasePath); const engine = await startEngineHost(config, database);
+  await new Promise<void>((resolve) => { const stop = () => { engine.dispose(); database.close(); resolve(); }; process.once("SIGTERM", stop); process.once("SIGINT", stop); });
+}
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) runWorker().catch((error) => { new StructuredLogger().error("Forge worker stopped", {}, { error: error instanceof Error ? error.message : String(error) }); process.exitCode = 1; });

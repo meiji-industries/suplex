@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import { LeadOutputSchema, PersistedLeadOutputSchema } from "../src/codex-lead-contracts.js";
-import { SafeSummarySchema, toSafeSummary } from "../src/temporal/issue-contracts.js";
+import { SafeSummarySchema, toSafeSummary } from "../src/engine/issue-contracts.js";
 
 const gitPresentation = {
   branchSlug: "improve-lead-contracts",
@@ -9,7 +9,7 @@ const gitPresentation = {
   pullRequestDescription: "Make the approved plan carry clear Git presentation metadata.",
 };
 
-test("multiline and multibyte Lead summaries fit bounded Temporal state", () => {
+test("multiline and multibyte Lead summaries fit bounded Engine state", () => {
   const summary = toSafeSummary(`A detailed plan\n${"évidence ".repeat(80)}`);
   expect(summary).not.toMatch(/[\r\n]/);
   expect(new TextEncoder().encode(summary).byteLength).toBeLessThanOrEqual(240);

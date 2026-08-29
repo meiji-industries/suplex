@@ -6,9 +6,9 @@ import { expect, test } from "vitest";
 
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase, projectionStateHash } from "../src/database.js";
-import { createActivityContext } from "../src/temporal/activities/context.js";
-import { createProjectionActivities } from "../src/temporal/activities/projection.js";
-import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueProjectionEvent } from "../src/temporal/issue-contracts.js";
+import { createActivityContext } from "../src/engine/activities/context.js";
+import { createProjectionActivities } from "../src/engine/activities/projection.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueProjectionEvent } from "../src/engine/issue-contracts.js";
 
 function createEvent(revision: number, phase: "backlog" | "planning" | "ci_waiting" | "development", lastEventId: string): IssueProjectionEvent {
   const state = IssueWorkflowStateSchema.parse({
@@ -170,7 +170,7 @@ test("a reset workflow's new run supersedes the abandoned run's projected revisi
     database.projectIssueEvent(createEvent(0, "backlog", "workflow-integrity:0"));
     database.projectIssueEvent(createEvent(1, "planning", "workflow-integrity:1"));
 
-    // `temporal workflow reset` starts a new run that re-derives revision 1 with different state.
+    // `engine workflow reset` starts a new run that re-derives revision 1 with different state.
     const afterReset = createEvent(1, "planning", "workflow-integrity:1");
     afterReset.state.pendingAction = "Lead planning after the reset";
     const resetEvent = IssueProjectionEventSchema.parse({ ...afterReset, runId: "run-after-reset" });

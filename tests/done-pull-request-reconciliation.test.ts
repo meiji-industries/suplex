@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import { selectDonePullRequestSyncCandidates } from "../src/done-pull-request-reconciliation.js";
-import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/temporal/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/engine/issue-contracts.js";
 
 function doneState(githubPullRequestState: "open" | "merged" | "closed" | null) {
   return IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId: "workflow-done-pr", companyId: "company", projectId: "project", issueId: "task", projectRevisionId: "revision", briefArtifactId: "brief", briefSha256: "a".repeat(64), imageArtifactIds: [], requestHash: "b".repeat(64), roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }), revision: 4, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Done — draft pull request #42 opened", githubPullRequestState, lastEventId: "workflow-done-pr:4" });

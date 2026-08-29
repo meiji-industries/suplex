@@ -6,8 +6,8 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { createActivityContext } from "../src/temporal/activities/context.js";
-import { createDevelopmentActivities } from "../src/temporal/activities/development.js";
+import { createActivityContext } from "../src/engine/activities/context.js";
+import { createDevelopmentActivities } from "../src/engine/activities/development.js";
 import { HerdrCodexProvider } from "../src/agent-providers/herdr-codex.js";
 
 const now = "2026-08-26T00:00:00.000Z";

@@ -25,7 +25,7 @@ export function parseProcessList(output: string): ProcessSummary[] {
 }
 
 export function isForgeDevelopmentCommand(command: string): boolean {
-  return /(?:^|\s)(?:\S*\/)?temporal server start-dev\b.*(?:^|\s)--db-filename(?:=|\s+)\.forge\/dev\/temporal\.db(?:\s|$)/.test(command)
+  return /(?:^|\s)(?:\S*\/)?engine server start-dev\b.*(?:^|\s)--db-filename(?:=|\s+)\.forge\/dev\/engine\.db(?:\s|$)/.test(command)
     || /(?:^|\s)(?:\S*\/)?node --import tsx scripts\/dev\.ts(?:\s+start)?\s*$/.test(command)
     || /(?:^|\s)(?:\S*\/)?node --import tsx src\/cli\.ts start --foreground(?:\s|$)/.test(command)
     || /(?:^|\s)\S*tsx\/dist\/cli\.mjs watch\b.*\ssrc\/(?:server|worker)\.ts(?:\s|$)/.test(command);

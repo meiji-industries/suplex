@@ -25,7 +25,7 @@ type SystemHealthContextValue = {
 const SystemHealthContext = createContext<SystemHealthContextValue | undefined>(undefined);
 
 const icons: Record<string, LucideIcon> = {
-  temporal: Workflow,
+  engine: Workflow,
   database: Database,
   "artifact-root": HardDrive,
   worker: Activity,

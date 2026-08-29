@@ -13,7 +13,7 @@ import { DeveloperService } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { createGithubReleasePort, ReleaseService } from "../src/github-release.js";
-import { createActivities } from "../src/temporal/activities.js";
+import { createActivities } from "../src/engine/activities.js";
 
 const exec = promisify(execFile);
 const repository = process.env.FORGE_REAL_GITHUB_REPOSITORY?.trim();

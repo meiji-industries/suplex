@@ -12,7 +12,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { HermesAgentService } from "../src/hermes-agents.js";
 
 const health = {
-  temporal: async () => ({ id: "temporal" as const, label: "Temporal", status: "healthy" as const, summary: "Reachable", details: {} }),
+  engine: async () => ({ id: "engine" as const, label: "Engine", status: "healthy" as const, summary: "Reachable", details: {} }),
   database: async () => ({ id: "database" as const, label: "Database", status: "healthy" as const, summary: "Reachable", details: {} }),
   artifactRoot: async () => ({ id: "artifact-root" as const, label: "Artifacts", status: "healthy" as const, summary: "Reachable", details: {} }),
   worker: async () => ({ id: "worker" as const, label: "Worker", status: "healthy" as const, summary: "Reachable", details: {} }),

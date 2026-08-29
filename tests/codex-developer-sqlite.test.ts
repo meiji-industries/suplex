@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
 
-import { asNonRetryableApplicationFailure } from "../src/temporal/activities.js";
+import { asNonRetryableApplicationFailure } from "../src/engine/activities.js";
 
-test("SQLite failures become visible non-retryable Temporal application failures", () => {
+test("SQLite failures become visible non-retryable Engine application failures", () => {
   const error = new Error("FOREIGN KEY constraint failed");
   error.name = "SqliteError";
 

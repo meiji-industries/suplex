@@ -4,13 +4,11 @@ import { basename, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 
-import { defaultPayloadConverter } from "@temporalio/common";
-
 import type { ForgeConfig } from "../config.js";
 import type { ForgeDatabase } from "../database.js";
-import { connectTemporal } from "../temporal/service.js";
-import { issueStateQuery } from "../temporal/workflows.js";
-import { IssueWorkflowStateSchema } from "../temporal/issue-contracts.js";
+import { connectEngine } from "../engine/service.js";
+import { issueStateQuery } from "../engine/workflows.js";
+import { IssueWorkflowStateSchema } from "../engine/issue-contracts.js";
 import { jsonRequired } from "../task-utils.js";
 
 const execFileAsync = promisify(execFile);
@@ -31,7 +29,8 @@ function failure(value: unknown): string | null {
   return text(item.message) ?? (Object.keys(item).length ? JSON.stringify(item).slice(0, 500) : null);
 }
 function decodePayload(value: unknown): unknown {
-  try { return defaultPayloadConverter.fromPayload(value as never); } catch { return undefined; }
+  void value;
+  return undefined;
 }
 function eventSummary(event: unknown): RecordValue {
   const item = record(event);
@@ -78,9 +77,9 @@ export async function inspectTask(config: ForgeConfig, database: ForgeDatabase, 
   const projected = projection(database, taskId);
   const result: TaskDiagnostic = { taskId, projection: projected, live: { available: false }, workflow: { status: "unavailable" }, history: [], ...localRows(database, taskId) };
   try {
-    const temporal = await connectTemporal(config);
+    const engine = await connectEngine(config);
     try {
-      const handle = temporal.client.workflow.getHandle(String(projected.workflowId), text(projected.runId) ?? undefined);
+      const handle = engine.client.workflow.getHandle(String(projected.workflowId), text(projected.runId) ?? undefined);
       const [rawState, description, history] = await Promise.all([handle.query(issueStateQuery), handle.describe(), handle.fetchHistory()]);
       const live = IssueWorkflowStateSchema.parse(rawState);
       const described = record(description);
@@ -95,8 +94,8 @@ export async function inspectTask(config: ForgeConfig, database: ForgeDatabase, 
       const status = record(described.status).name ?? described.status ?? "unknown";
       result.workflow = { status, runId: described.runId, buildId: record(described.workerVersionStamp).buildId ?? null, pendingWorkflowTaskAgeSeconds: iso(pendingWorkflowTask.scheduledTime) ? Math.max(0, Math.floor((Date.now() - Date.parse(iso(pendingWorkflowTask.scheduledTime)!)) / 1000)) : null, lastFailure: failure(pendingWorkflowTask.failure), pendingActivities };
       result.history = includeAllHistory ? events : events.slice(-30);
-    } finally { await temporal.connection.close(); }
-  } catch (error) { result.live = { available: false, error: error instanceof Error ? error.message : "Temporal unavailable" }; }
+    } finally { await engine.connection.close(); }
+  } catch (error) { result.live = { available: false, error: error instanceof Error ? error.message : "Engine unavailable" }; }
   return result;
 }
 

@@ -11,8 +11,8 @@ import { expect, test } from "vitest";
 import { ArtifactStore } from "../src/artifacts.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { createActivityContext } from "../src/temporal/activities/context.js";
-import { createWorktreeActivities } from "../src/temporal/activities/worktree.js";
+import { createActivityContext } from "../src/engine/activities/context.js";
+import { createWorktreeActivities } from "../src/engine/activities/worktree.js";
 import { WorktreeManager } from "../src/worktrees.js";
 
 const execFileAsync = promisify(execFile);

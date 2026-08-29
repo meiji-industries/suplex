@@ -22,16 +22,20 @@ import { createGithubReleasePort, ReleaseService } from "./github-release.js";
 import { ProjectionRebuildService } from "./projection-rebuild.js";
 import { HermesAgentService } from "./hermes-agents.js";
 import { backfillDefaultTaskTemplates } from "./default-task-templates.js";
+import { startEngineHost } from "./engine/host.js";
+import type { IssueEngine } from "./engine/runs.js";
 
 export interface ForgeServer {
   app: FastifyInstance;
   database: ForgeDatabase;
+  engine: IssueEngine;
 }
 
 export async function createForgeServer(config: ForgeConfig = loadConfig(), options: { logSink?: (line: string) => void } = {}): Promise<ForgeServer> {
   await mkdir(config.artifactRoot, { recursive: true });
   await mkdir(config.worktreeRoot, { recursive: true });
   const database = new ForgeDatabase(config.databasePath);
+  const engine = await startEngineHost(config, database);
   const auth = new AuthService(database, config);
   const hermes = new HermesAgentService(database, auth);
   const projects = new ProjectService(database, auth, config);
@@ -77,7 +81,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     database.close();
     throw error;
   }
-  return { app, database };
+  return { app, database, engine };
 }
 
 export async function startServer(config: ForgeConfig = loadConfig()): Promise<void> {
@@ -92,6 +96,7 @@ export async function startServer(config: ForgeConfig = loadConfig()): Promise<v
         }
         closed = true;
         await server.app.close();
+        server.engine.dispose();
         server.database.close();
         resolve();
       };

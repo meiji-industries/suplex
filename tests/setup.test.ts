@@ -13,29 +13,17 @@ test("setup upserts Forge choices without duplicating or overwriting unrelated s
       FORGE_TAILSCALE_EXPOSURE: "serve",
       FORGE_TAILSCALE_ADDRESS: "meiji.tail1234.ts.net",
       FORGE_PORT: "4111",
-      FORGE_TEMPORAL_TARGET: "cloud",
-      FORGE_TEMPORAL_ADDRESS: "old.account.tmprl.cloud:7233",
-      FORGE_TEMPORAL_NAMESPACE: "old.account",
-      FORGE_TEMPORAL_API_KEY: "old-key",
     });
     await upsertForgeEnvironment(filename, {
       FORGE_TAILSCALE_EXPOSURE: "direct",
       FORGE_TAILSCALE_ADDRESS: "new-host.tail1234.ts.net",
       FORGE_PORT: "4222",
-      FORGE_TEMPORAL_TARGET: "cloud",
-      FORGE_TEMPORAL_ADDRESS: "new.account.tmprl.cloud:7233",
-      FORGE_TEMPORAL_NAMESPACE: "new.account",
-      FORGE_TEMPORAL_API_KEY: "new-key",
     });
     const contents = await readFile(filename, "utf8");
 
     expect(contents).toMatch(/FORGE_TAILSCALE_EXPOSURE=direct/);
     expect(contents).toMatch(/FORGE_TAILSCALE_ADDRESS=new-host\.tail1234\.ts\.net/);
     expect(contents).toMatch(/FORGE_PORT=4222/);
-    expect(contents).toMatch(/FORGE_TEMPORAL_TARGET=cloud/);
-    expect(contents).toMatch(/FORGE_TEMPORAL_ADDRESS=new\.account\.tmprl\.cloud:7233/);
-    expect(contents).toMatch(/FORGE_TEMPORAL_NAMESPACE=new\.account/);
-    expect(contents).toMatch(/FORGE_TEMPORAL_API_KEY=new-key/);
     expect((contents.match(/FORGE_PORT=/g) ?? []).length).toBe(1);
     expect((await stat(filename)).mode & 0o777).toBe(0o600);
   } finally {

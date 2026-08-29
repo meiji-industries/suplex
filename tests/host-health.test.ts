@@ -7,21 +7,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { checkWorker } from "../src/host-health.js";
 import { CodexReadinessProbe, checkGithubAuthentication } from "../src/provider-readiness.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
-import { deploymentVersionOptions, logReconciliation, workerHasLivePollers } from "../src/worker.js";
-import { workflowBundleBuildId } from "../src/temporal/workflow-bundle.js";
-
-test("worker readiness requires both live Temporal pollers", () => {
-  expect(workerHasLivePollers({ runState: "RUNNING", workflowPollerState: "POLLING", activityPollerState: "POLLING" })).toBe(true);
-  expect(workerHasLivePollers({ runState: "RUNNING", workflowPollerState: "FAILED", activityPollerState: "POLLING" })).toBe(false);
-  expect(workerHasLivePollers({ runState: "STOPPED", workflowPollerState: "POLLING", activityPollerState: "POLLING" })).toBe(false);
-});
-
-test("worker deployment versions are code-derived and auto-upgrade existing workflows", () => {
-  const first = workflowBundleBuildId("test-installation", { code: "workflow bundle one" });
-  const second = workflowBundleBuildId("test-installation", { code: "workflow bundle two" });
-  expect(first).not.toBe(second);
-  expect(deploymentVersionOptions("test-installation", first)).toEqual({ useWorkerVersioning: true, version: { deploymentName: "runtime-test-installation", buildId: first }, defaultVersioningBehavior: "AUTO_UPGRADE" });
-});
+import { logReconciliation } from "../src/worker.js";
 
 test("idle periodic reconciliations do not emit info logs", () => {
   const debug: Array<{ message: string; context: object }> = [];

@@ -1,6 +1,6 @@
 /**
  * GitHub-first delivery decision table.  This module intentionally has no
- * runtime dependencies: it is imported by the Temporal workflow bundle.
+ * runtime dependencies: it is imported by the legacy workflow service workflow bundle.
  */
 export type PullRequestTarget = "draft" | "ready" | "merged";
 export type PullRequestPhase = "Opening PR" | "Waiting for CI" | "Merging" | "Resolving conflicts" | "Done" | "Blocked";

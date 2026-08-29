@@ -6,7 +6,7 @@ export interface IssueCommandDescriptor<Name extends string = string, Body exten
   name: Name;
   /** HTTP endpoint segment and frontend action id, e.g. "publish-draft". null = no HTTP route (internal command). */
   slug: string | null;
-  /** FROZEN Temporal update name, e.g. "publishDraft". Pinned by tests/temporal-contract-pins.test.ts. */
+  /** FROZEN Engine update name, e.g. "publishDraft". Pinned by tests/engine-contract-pins.test.ts. */
   updateName: string;
   label: string;
   /** Which client pipeline executes it. "bespoke" descriptors keep hand-written routes/wrappers. */

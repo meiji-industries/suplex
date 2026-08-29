@@ -11,10 +11,10 @@ const VOCABULARY_ALLOWLIST: Record<string, string> = {
   "src/frontend/views/projects.tsx": "legacy provider-check copy",
   "src/frontend/views/task-details.tsx": "legacy diagnostics copy",
   "src/frontend/views/timeline.tsx": "legacy timeline copy",
-  "src/temporal/activities/context.ts": "legacy provider failure summaries",
-  "src/temporal/workflow/register-ci.ts": "legacy CI retry labels",
-  "src/temporal/workflow/register-planning.ts": "legacy cancellation summary",
-  "src/temporal/workflow/runtime.ts": "legacy capacity summary",
+  "src/engine/activities/context.ts": "legacy provider failure summaries",
+  "src/engine/workflow/register-ci.ts": "legacy CI retry labels",
+  "src/engine/workflow/register-planning.ts": "legacy cancellation summary",
+  "src/engine/workflow/runtime.ts": "legacy capacity summary",
 };
 
 const lines = (pattern: string): Finding[] => globSync(pattern).flatMap((file) => readFileSync(file, "utf8").split("\n").map((text, index) => ({ file, line: index + 1, text })));
@@ -24,7 +24,7 @@ const source = (pattern: string) => globSync(pattern).map((file) => ({ file, tex
 test("response and projection schemas strip unknown keys instead of rejecting them", () => {
   const findings = [
     ...lines("src/http/contracts/**/*.{ts,tsx}"),
-    ...lines("src/temporal/contracts/state/**/*.{ts,tsx}"),
+    ...lines("src/engine/contracts/state/**/*.{ts,tsx}"),
   ].filter(({ text }) => /\.strict\(\)/.test(text));
 
   expect(findings, `Remove .strict() from response/projection schemas:\n${describe(findings)}`).toEqual([]);
@@ -67,7 +67,7 @@ test("error wrappers retain the caught failure as diagnostic context", () => {
 test("workflow and UI strings avoid proof-language that users cannot act on", () => {
   const banned = /\b(?:exact|recorded|authoritative|bounded|reconcil\w*|ownership|sha256|integrity|lineage)\b/i;
   const findings: Finding[] = [];
-  for (const { file, text } of source("{src/temporal/workflow,src/temporal/activities,src/frontend}/**/*.{ts,tsx}")) {
+  for (const { file, text } of source("{src/engine/workflow,src/engine/activities,src/frontend}/**/*.{ts,tsx}")) {
     for (const [index, raw] of text.split("\n").entries()) {
       const line = raw.replace(/\/\/.*$/, "");
       const values = [...line.matchAll(/(?:\b(?:pendingAction|summary|blocker|label|title|description|placeholder)\s*[:=]\s*)(["'](?:\\.|[^"'\\])*["']|`(?:\\.|[^`\\])*`)|>([^<{]+)</g)].map((match) => match[1] ?? match[2] ?? "");
@@ -78,19 +78,9 @@ test("workflow and UI strings avoid proof-language that users cannot act on", ()
   expect(findings, `Rewrite user-facing string text without banned proof-language:\n${describe(findings)}`).toEqual([]);
 });
 
-const PATCH_IDS = [
-  "forge-adopt-observed-head-v1", "forge-adopt-source-pull-request-v1", "forge-adopt-source-pull-request-v2", "forge-auto-chain-halt-v1", "forge-auto-chain-lead-phases-v1", "forge-auto-retry-blockers-v1",
-  "forge-auto-start-development-v1", "forge-auto-start-routine-v1", "forge-capacity-ownership-clear-v1", "forge-ci-rerun-v1",
-  "forge-ci-update-from-base-v1", "forge-content-hash-contracts-v1", "forge-developer-auto-retry-v1",
-  "forge-developer-continuation-v1",
-  "forge-developer-start-failure-auto-retry-v1", "forge-developer-start-failure-blocked-v1", "forge-failed-retry-v1",
-  "forge-simple-capacity-v1", "forge-unique-developer-execution-id-v1",
-].sort();
-
-test("workflow patch markers remain append-only", () => {
-  const present = new Set(lines("src/temporal/**/*.{ts,tsx}").flatMap(({ text }) => [...text.matchAll(/(?:ctx\.)?patched\(["']([^"']+)["']\)/g)].map((match) => match[1])));
-  const missing = PATCH_IDS.filter((id) => !present.has(id));
-  expect(missing, `Never delete a Temporal patch marker; restore:\n${missing.join("\n")}`).toEqual([]);
+test("the engine contains no replay patch gates", () => {
+  const present = lines("src/engine/**/*.{ts,tsx}").filter(({ text }) => /(?:ctx\.)?patched\(/.test(text));
+  expect(present).toEqual([]);
 });
 
 test("human-owned workflow states always offer an exit and a forward action", () => {
@@ -143,7 +133,7 @@ test("human-owned workflow states always offer an exit and a forward action", ()
     return states;
   };
   const findings: Finding[] = [];
-  for (const { file, text } of source("src/temporal/workflow/**/*.{ts,tsx}")) {
+  for (const { file, text } of source("src/engine/workflow/**/*.{ts,tsx}")) {
     for (const match of stateLiterals(text)) {
       const { literal } = match;
       const owner = /owner\s*:\s*[^,]*["']human["']/.test(literal);

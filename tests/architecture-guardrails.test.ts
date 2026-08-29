@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 import { ISSUE_COMMAND_NAMES, ISSUE_COMMAND_SLUGS, issueCommands, routedIssueCommands } from "../src/commands/registry.js";
 import type { TaskService } from "../src/tasks.js";
 import taskRoutes from "../src/http/routes/tasks.js";
-import { issueUpdates } from "../src/temporal/issue-updates.js";
+import { issueUpdates } from "../src/engine/issue-updates.js";
 
 const BESPOKE_COMMANDS = ["reject_plan", "revise_plan", "continue_work", "record_progress", "resolve_decision_blocker", "resync_projection", "delete_worktree", "recreate_worktree", "resume_preserved_work", "report_worktree_missing", "integrate_remote_conflict"] as const;
 
@@ -20,7 +20,7 @@ test("issue command registry stays complete across descriptors, updates, routes,
   for (const name of ISSUE_COMMAND_NAMES) {
     const descriptors = entries.filter(([key, descriptor]) => key === name && descriptor.name === name);
     expect(descriptors, `${name} must have exactly one descriptor`).toHaveLength(1);
-    expect(issueUpdates[name].name).toBe(issueCommands[name].updateName);
+    expect(issueUpdates[name]).toBe(issueCommands[name].updateName);
   }
 
   const descriptorSlugs = entries.flatMap(([, descriptor]) => descriptor.slug === null ? [] : [descriptor.slug]);
@@ -85,13 +85,13 @@ test("issue command registry stays complete across descriptors, updates, routes,
 });
 
 const budgets: Record<string, number> = {
-  "src/temporal/workflows.ts": 450,
-  "src/temporal/issue-contracts.ts": 120,
-  "src/temporal/activities.ts": 5,
+  "src/engine/workflows.ts": 450,
+  "src/engine/issue-contracts.ts": 120,
+  "src/engine/activities.ts": 100,
   "src/tasks.ts": 2_473,
   "src/frontend/main.tsx": 20,
   "src/http/routes/tasks.ts": 179,
-  "src/temporal/service.ts": 400,
+  "src/engine/service.ts": 120,
   "src/claude-rollout.ts": 320,
   "src/agent-providers/claude-launch.ts": 120,
   "src/agent-providers/herdr-runtime.ts": 120,

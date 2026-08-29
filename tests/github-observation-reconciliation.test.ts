@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 
 import { reconcileGithubObservations } from "../src/github-observation-reconciliation.js";
 import type { GithubPullRequestObservation } from "../src/github-release.js";
-import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/temporal/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/engine/issue-contracts.js";
 
 function state(phase: "ci_waiting" | "manual_merge" | "development", allowedCommands: string[], expectedHeadSha = "a".repeat(40)) {
   return IssueWorkflowStateSchema.parse({

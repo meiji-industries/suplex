@@ -6,15 +6,15 @@ import { join } from "node:path";
 import { ForgeDatabase } from "../src/database.js";
 import { ArtifactStore } from "../src/artifacts.js";
 import { createTestConfig } from "../src/config.js";
-import { createActivities } from "../src/temporal/activities.js";
+import { createActivities } from "../src/engine/activities.js";
 import { ForwardMergeService } from "../src/forward-merge.js";
 import { AcceptedProjectRevisionSchema } from "../src/projects.js";
 import {
   IssueWorkflowStateSchema,
   ReconcileTargetBaseActivityInputSchema,
   ReconcileTargetBaseActivityResultSchema,
-} from "../src/temporal/issue-contracts.js";
-import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "../src/temporal/target-base.js";
+} from "../src/engine/issue-contracts.js";
+import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "../src/engine/target-base.js";
 
 const sha = (letter: string) => letter.repeat(40);
 const artifact = { id: "artifact_forward", kind: "forward-merge-delivery" as const };

@@ -1,7 +1,7 @@
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { resolveAgentProfiles } from "./projects.js";
-import { startIssueWorkflow } from "./temporal/service.js";
+import { startIssueWorkflow } from "./engine/service.js";
 import { jsonRequired } from "./task-utils.js";
 
 interface SuccessorIntentRow {
@@ -23,7 +23,7 @@ export interface SuccessorReconciliationResult {
   linked: number;
 }
 
-/** Reconcile successors whose durable rows were committed before Temporal start completed. */
+/** Reconcile successors whose durable rows were committed before Engine start completed. */
 export async function reconcileSuccessorIntents(database: ForgeDatabase, config: ForgeConfig, startWorkflow: typeof startIssueWorkflow = startIssueWorkflow): Promise<SuccessorReconciliationResult> {
   const intents = database.authQuery((db) => db.prepare("SELECT id, predecessor_task_id, predecessor_workflow_id, accepted_revision, successor_task_id, successor_workflow_id, company_id, project_id, project_revision_id, actor_user_id, state FROM forge_successor_intents WHERE state IN ('prepared', 'workflow_starting', 'started') ORDER BY created_at, id").all() as SuccessorIntentRow[]);
   let linked = 0;

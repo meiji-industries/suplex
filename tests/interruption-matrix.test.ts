@@ -150,6 +150,6 @@ test("cancellation races a late agent result and a webhook", () => {
 });
 
 test("worker schedules all three reconciliation entry points", async () => {
-  const worker = await readFile(new URL("../src/worker.ts", import.meta.url), "utf8");
+  const worker = await readFile(new URL("../src/engine/host.ts", import.meta.url), "utf8");
   for (const name of ["reconcileActiveTurns", "reconcileWorktrees", "reconcileGithubObservations"]) expect(worker).toContain(name);
 });

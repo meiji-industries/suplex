@@ -6,8 +6,8 @@ import { expect, test } from "vitest";
 
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { createActivityContext } from "../src/temporal/activities/context.js";
-import { createPlanningActivities } from "../src/temporal/activities/planning.js";
+import { createActivityContext } from "../src/engine/activities/context.js";
+import { createPlanningActivities } from "../src/engine/activities/planning.js";
 
 test("planner notes without a Lead session reach a terminal forwarding state", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-planner-note-"));

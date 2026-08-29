@@ -1,10 +1,10 @@
 import { expect, test } from "vitest";
 
-import { DeliveryReviewActivityResultSchema, DeveloperRepairActivityResultSchema, IssueWorkflowStateSchema, SafeSummarySchema, normalizeSafeSummary, toSafeSummary } from "../src/temporal/issue-contracts.js";
+import { DeliveryReviewActivityResultSchema, DeveloperRepairActivityResultSchema, IssueWorkflowStateSchema, SafeSummarySchema, normalizeSafeSummary, toSafeSummary } from "../src/engine/issue-contracts.js";
 import { ISSUE_PHASES, TERMINAL_PHASES } from "../src/issue-phases.js";
-import { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "../src/temporal/workflows.js";
-import { finalReviewerTurn, freshDeliveryLineage, withWorktreeCommands } from "../src/temporal/workflow/state-transitions.js";
-import { assignWorkflowState, type IssueWorkflowContext } from "../src/temporal/workflow/context.js";
+import { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "../src/engine/workflows.js";
+import { finalReviewerTurn, freshDeliveryLineage, withWorktreeCommands } from "../src/engine/workflow/state-transitions.js";
+import { assignWorkflowState, type IssueWorkflowContext } from "../src/engine/workflow/context.js";
 
 const subject = { planRevision: 1, targetBaseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40), developerExecutionId: "developer_1", deliveryArtifactId: "artifact_delivery", developerEvidenceArtifactId: "artifact_evidence", leadSessionRef: "session_lead", developerSessionRef: "session_developer" };
 const blockingFinding = { findingId: "finding_blocking", severity: "blocking" as const, rationale: "The controlled defect remains.", evidenceRef: "fixture", disposition: "open" as const, repairInstruction: "Fix the controlled defect." };

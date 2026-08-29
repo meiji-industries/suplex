@@ -10,7 +10,7 @@ import type { OwnedProcess, ProcessController, ProcessInspection } from "../src/
 import { jsonRequired } from "../src/task-utils.js";
 
 test("development uses the configured repository root instead of the checkout", () => {
-  expect(forgeEnvironment({ temporal: 7233, temporalUi: 8233 })).not.toHaveProperty("FORGE_REPOSITORY_ROOT");
+  expect(forgeEnvironment({ engine: 7233, engineUi: 8233 })).not.toHaveProperty("FORGE_REPOSITORY_ROOT");
 });
 
 function makeOwner(pid = 4101): OwnedProcess {
@@ -76,24 +76,24 @@ async function waitForValue<T>(read: () => Promise<T | undefined>, timeoutMs = 3
 }
 
 test("reserves a Conductor port block without changing standalone defaults", () => {
-  expect(resolveDevPorts(undefined)).toEqual({ temporal: 7233, temporalUi: 8233 });
-  expect(resolveDevPorts("55000")).toEqual({ forge: 55000, temporal: 55001, temporalUi: 55002 });
+  expect(resolveDevPorts(undefined)).toEqual({ engine: 7233, engineUi: 8233 });
+  expect(resolveDevPorts("55000")).toEqual({ forge: 55000, engine: 55001, engineUi: 55002 });
   expect(() => resolveDevPorts("65534")).toThrow(/three valid ports/);
 });
 
 test("recognizes only Forge development process commands", () => {
-  expect(isForgeDevelopmentCommand("temporal server start-dev --port 7233 --db-filename .forge/dev/temporal.db --namespace forge-dev")).toBe(true);
+  expect(isForgeDevelopmentCommand("engine server start-dev --port 7233 --db-filename .forge/dev/engine.db --namespace forge-dev")).toBe(true);
   expect(isForgeDevelopmentCommand("/opt/node --import tsx scripts/dev.ts")).toBe(true);
   expect(isForgeDevelopmentCommand("/opt/node --import tsx src/cli.ts start --foreground")).toBe(true);
   expect(isForgeDevelopmentCommand("/opt/node /repo/node_modules/tsx/dist/cli.mjs watch --clear-screen=false src/server.ts")).toBe(true);
   expect(isForgeDevelopmentCommand("/opt/node --import tsx scripts/dev.ts restart")).toBe(false);
-  expect(isForgeDevelopmentCommand("temporal server start-dev --db-filename /tmp/other.db")).toBe(false);
+  expect(isForgeDevelopmentCommand("engine server start-dev --db-filename /tmp/other.db")).toBe(false);
   expect(isForgeDevelopmentCommand("/opt/node /other/server.ts")).toBe(false);
 });
 
 test("parses pid, process group, and complete command from ps output", () => {
-  expect(parseProcessList("  41   39 temporal server start-dev --port 7233\n  52   52 node --import tsx scripts/dev.ts\n")).toEqual([
-    { pid: 41, processGroup: 39, command: "temporal server start-dev --port 7233" },
+  expect(parseProcessList("  41   39 engine server start-dev --port 7233\n  52   52 node --import tsx scripts/dev.ts\n")).toEqual([
+    { pid: 41, processGroup: 39, command: "engine server start-dev --port 7233" },
     { pid: 52, processGroup: 52, command: "node --import tsx scripts/dev.ts" },
   ]);
 });
@@ -155,7 +155,7 @@ test("cooperative control gives stop precedence and never kills on timeout", asy
   });
 });
 
-test("concurrent restarts coalesce, preserve Temporal, and fail closed", async () => {
+test("concurrent restarts coalesce, preserve Engine, and fail closed", async () => {
   await withRuntime(async (runtimeRoot) => {
     const processController = controller({
       async inspect(pid) {
@@ -172,7 +172,7 @@ test("concurrent restarts coalesce, preserve Temporal, and fail closed", async (
       import { join } from "node:path";
       const [kind, runtimeRoot] = process.argv.slice(2);
       const registryPath = join(runtimeRoot, "owned-processes.json");
-      if (kind === "temporal") await writeFile(join(runtimeRoot, "temporal.pid"), String(process.pid));
+      if (kind === "engine") await writeFile(join(runtimeRoot, "engine.pid"), String(process.pid));
       if (kind === "forge") {
         await appendFile(join(runtimeRoot, "forge.starts"), String(process.pid) + "\\n");
         try {
@@ -199,8 +199,8 @@ test("concurrent restarts coalesce, preserve Temporal, and fail closed", async (
 
     let supervisor: Promise<number> | undefined;
     try {
-      supervisor = superviseDevStack({ temporal: 1, temporalUi: 2 }, runtimeRoot, {
-        temporal: { command: process.execPath, args: [serviceScript, "temporal", runtimeRoot] },
+      supervisor = superviseDevStack({ engine: 1, engineUi: 2 }, runtimeRoot, {
+        engine: { command: process.execPath, args: [serviceScript, "engine", runtimeRoot] },
         forge: { command: process.execPath, args: [serviceScript, "forge", runtimeRoot] },
         logPath: join(runtimeRoot, "dev.log"),
         pollMs: 10,
@@ -215,9 +215,9 @@ test("concurrent restarts coalesce, preserve Temporal, and fail closed", async (
         }
       };
       const firstPids = await waitForValue(readPids);
-      const temporalPid = await waitForValue(async () => {
+      const enginePid = await waitForValue(async () => {
         try {
-          return Number(await readFile(join(runtimeRoot, "temporal.pid"), "utf8"));
+          return Number(await readFile(join(runtimeRoot, "engine.pid"), "utf8"));
         } catch {
           return undefined;
         }
@@ -232,7 +232,7 @@ test("concurrent restarts coalesce, preserve Temporal, and fail closed", async (
       ]);
       const secondPids = await waitForValue(readPids);
       expect(secondPids).not.toEqual(firstPids);
-      expect(Number(await readFile(join(runtimeRoot, "temporal.pid"), "utf8"))).toBe(temporalPid);
+      expect(Number(await readFile(join(runtimeRoot, "engine.pid"), "utf8"))).toBe(enginePid);
       expect((await readFile(join(runtimeRoot, "forge.starts"), "utf8")).trim().split("\n")).toHaveLength(2);
 
       await writeFile(join(runtimeRoot, "fail-next-forge"), "fail\n");
@@ -273,8 +273,8 @@ test("a cooperative stop waits for children and releases ownership", async () =>
     `;
     const supervisor = (async () => {
       try {
-        return await superviseDevStack({ temporal: 1, temporalUi: 2 }, runtimeRoot, {
-          temporal: { command: process.execPath, args: ["-e", "setInterval(() => undefined, 1000)"] },
+        return await superviseDevStack({ engine: 1, engineUi: 2 }, runtimeRoot, {
+          engine: { command: process.execPath, args: ["-e", "setInterval(() => undefined, 1000)"] },
           forge: { command: process.execPath, args: ["--input-type=module", "-e", forgeScript, runtimeRoot] },
           logPath: join(runtimeRoot, "dev.log"),
           pollMs: 10,

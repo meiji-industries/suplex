@@ -10,8 +10,7 @@ import { HerdrOpenRouterProvider } from "./agent-providers/herdr-openrouter.js";
 import { checkGithubAuthentication } from "./provider-readiness.js";
 import { checkBackupHealth } from "./backup.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
-import { TemporalHealthProbe } from "./temporal/service.js";
-import { buildProductionWorkflowBundle, workflowBundleBuildId } from "./temporal/workflow-bundle.js";
+import { EngineHealthProbe } from "./engine/service.js";
 import { CliHerdrClient } from "./herdr-client.js";
 
 async function checkHerdrReadiness(): Promise<HealthCheck> {
@@ -126,15 +125,15 @@ export async function checkWorker(database: ForgeDatabase, taskQueue: string, in
 }
 
 export function createHostHealthDependencies(config: ForgeConfig, database: ForgeDatabase) {
-  const temporal = new TemporalHealthProbe(config);
+  const engine = new EngineHealthProbe(config);
   const agent = resolveAgentProvider().readinessProbe();
   const claude = resolveAgentProvider("claude").readinessProbe();
   const openrouter = new HerdrOpenRouterProvider(database).readinessProbe();
   return {
-    temporal: () => temporal.check(),
+    engine: () => engine.check(),
     database: () => checkDatabase(database),
     artifactRoot: () => checkArtifactRoot(config.artifactRoot),
-    worker: async () => checkWorker(database, config.taskQueue, config.installationId, workflowBundleBuildId(config.installationId, await buildProductionWorkflowBundle())),
+    worker: async () => checkWorker(database, runtimeIdentifiers(config.installationId).taskQueue, config.installationId),
     codexAuth: () => agent.check(),
     claudeAuth: () => claude.check(),
     openrouterAuth: () => openrouter.check(),

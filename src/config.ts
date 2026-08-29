@@ -5,7 +5,6 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 import { ForgeConfigSchema, ForgeEnvironmentSchema } from "./schemas.js";
-import { runtimeIdentifiers } from "./runtime-identifiers.js";
 
 export type AccessMode = "tailscale";
 export type TailscaleExposure = "direct" | "serve";
@@ -22,11 +21,6 @@ export interface ForgeConfig {
   runtimeRoot: string;
   repositoryRoot: string;
   worktreeRoot: string;
-  temporalTarget: "local" | "cloud";
-  temporalAddress: string;
-  temporalNamespace: string;
-  temporalApiKey?: string | undefined;
-  taskQueue: string;
   deliveryRepairCycleLimit: number;
   externalTurnCapacity: number;
   externalTurnCapacityByProvider: Record<string, number>;
@@ -173,19 +167,6 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
   const reachableHost = configuredAddress ?? bindAddress;
   const scheme = tailscaleExposure === "serve" ? "https" : "http";
   const stableInstallationId = installationId(dataRoot, parsedEnvironment.data, environment === process.env);
-  const identifiers = runtimeIdentifiers(stableInstallationId);
-  const temporalTarget = parsedEnvironment.data.FORGE_TEMPORAL_TARGET;
-  const temporalAddress = parsedEnvironment.data.FORGE_TEMPORAL_ADDRESS;
-  const temporalNamespace = parsedEnvironment.data.FORGE_TEMPORAL_NAMESPACE;
-  if (!temporalTarget || !temporalAddress || !temporalNamespace) {
-    throw new UnsafeBindingError("FORGE_TEMPORAL_TARGET, FORGE_TEMPORAL_ADDRESS, and FORGE_TEMPORAL_NAMESPACE are required");
-  }
-  const temporalApiKey = temporalTarget === "cloud" ? parsedEnvironment.data.FORGE_TEMPORAL_API_KEY : undefined;
-  if (temporalTarget === "cloud" && !temporalApiKey) throw new UnsafeBindingError("FORGE_TEMPORAL_API_KEY is required for Temporal Cloud");
-  const localTemporalAddress = /^(?:localhost|127\.0\.0\.1):\d+$/.test(temporalAddress);
-  if (temporalTarget === "local" && !localTemporalAddress) throw new UnsafeBindingError("Local Temporal must use a loopback address");
-  if (temporalTarget === "cloud" && localTemporalAddress) throw new UnsafeBindingError("Temporal Cloud must not use a loopback address");
-  const taskQueue = parsedEnvironment.data.FORGE_TASK_QUEUE ?? identifiers.taskQueue;
   const deliveryRepairCycleLimit = Number(parsedEnvironment.data.FORGE_DELIVERY_REPAIR_LIMIT ?? "2");
   const externalTurnCapacity = Number(parsedEnvironment.data.FORGE_CODEX_CAPACITY ?? "2");
   const externalTurnCapacityByProvider = { codex: externalTurnCapacity, claude: Number(parsedEnvironment.data.FORGE_CLAUDE_CAPACITY ?? "2") };
@@ -203,11 +184,6 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
     runtimeRoot: parsedEnvironment.data.FORGE_RUNTIME_ROOT ? resolve(parsedEnvironment.data.FORGE_RUNTIME_ROOT) : resolve(dataRoot, "runtime"),
     repositoryRoot: resolve(parsedEnvironment.data.FORGE_REPOSITORY_ROOT ?? resolve(homedir(), "forge", "repos")),
     worktreeRoot: resolve(parsedEnvironment.data.FORGE_WORKTREE_ROOT ?? resolve(homedir(), "forge", "worktrees")),
-    temporalTarget,
-    temporalAddress,
-    temporalNamespace,
-    temporalApiKey,
-    taskQueue,
     deliveryRepairCycleLimit,
     externalTurnCapacity,
     externalTurnCapacityByProvider,
@@ -234,11 +210,6 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     runtimeRoot: overrides.runtimeRoot ?? resolve(dataRoot, "runtime"),
     repositoryRoot: overrides.repositoryRoot ?? resolve(dataRoot, "repositories"),
     worktreeRoot: overrides.worktreeRoot ?? resolve(dataRoot, "worktrees"),
-    temporalTarget: overrides.temporalTarget ?? "local",
-    temporalAddress: overrides.temporalAddress ?? "127.0.0.1:7233",
-    temporalNamespace: overrides.temporalNamespace ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").namespace,
-    temporalApiKey: overrides.temporalApiKey,
-    taskQueue: overrides.taskQueue ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").taskQueue,
     deliveryRepairCycleLimit: overrides.deliveryRepairCycleLimit ?? 2,
     externalTurnCapacity: overrides.externalTurnCapacity ?? 2,
     externalTurnCapacityByProvider: overrides.externalTurnCapacityByProvider ?? { codex: overrides.externalTurnCapacity ?? 2, claude: 2 },
@@ -246,12 +217,5 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     externalTurnRateLimitAttempts: overrides.externalTurnRateLimitAttempts ?? 5,
     installationId: overrides.installationId ?? "test-installation",
     developmentAutoLogin: overrides.developmentAutoLogin ?? false,
-  };
-}
-
-export function temporalConnectionOptions(config: Pick<ForgeConfig, "temporalTarget" | "temporalAddress" | "temporalApiKey">): { address: string; tls?: true; apiKey?: string } {
-  return {
-    address: config.temporalAddress,
-    ...(config.temporalTarget === "cloud" ? { tls: true as const, apiKey: config.temporalApiKey! } : {}),
   };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { credentialBlockedState, noProgress, repairSignature, transientRetryState, withRepairProgress } from "../src/temporal/workflow/state-transitions.js";
-import { buildInitialIssueWorkflowState } from "../src/temporal/issue-contracts.js";
+import { credentialBlockedState, noProgress, repairSignature, transientRetryState, withRepairProgress } from "../src/engine/workflow/state-transitions.js";
+import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
 
 describe("repair progress", () => {
   it("uses a stable signature and only detects identical evidence", () => {

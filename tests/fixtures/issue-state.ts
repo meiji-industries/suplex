@@ -1,4 +1,4 @@
-import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema, type IssueWorkflowState } from "../../src/temporal/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema, type IssueWorkflowState } from "../../src/engine/issue-contracts.js";
 
 export const initialIssueWorkflowInput = {
   workflowId: "workflow-installation-issue-task-recovery",

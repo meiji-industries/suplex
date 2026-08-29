@@ -1,7 +1,7 @@
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { resolveAgentProfiles } from "./projects.js";
-import { IssueWorkflowStartFailure, startIssueWorkflow } from "./temporal/service.js";
+import { IssueWorkflowStartFailure, startIssueWorkflow } from "./engine/service.js";
 import { jsonRequired } from "./task-utils.js";
 
 interface CreationIntentRow {
@@ -25,7 +25,7 @@ export interface TaskCreationReconciliationResult {
   failed: number;
 }
 
-/** Start committed task workflows that were interrupted before Temporal confirmation. */
+/** Start committed task workflows that were interrupted before Engine confirmation. */
 export async function reconcileTaskCreationIntents(database: ForgeDatabase, config: ForgeConfig, startWorkflow: typeof startIssueWorkflow = startIssueWorkflow): Promise<TaskCreationReconciliationResult> {
   const intents = database.authQuery((db) => db.prepare(`SELECT i.id, i.task_id, i.workflow_id, i.company_id, i.project_id, i.project_revision_id,
       t.request_hash, t.brief_artifact_id, b.sha256 AS brief_sha256, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review

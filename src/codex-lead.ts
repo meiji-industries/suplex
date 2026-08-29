@@ -18,7 +18,7 @@ import { HerdrSessionStore } from "./herdr-session-store.js";
 import { HerdrTurnRunner, type HerdrTurnInput, type HerdrTurnOutput } from "./herdr-turn-runner.js";
 import { redact } from "./logging.js";
 import { classifyPlanMateriality } from "./plan-governance.js";
-import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./temporal/issue-contracts.js";
+import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./engine/issue-contracts.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { loadDefaultPrompts, renderPrompt } from "./prompts.js";
@@ -123,7 +123,7 @@ async function readDeliveryGitEvidence(worktreePath: string, targetBaseSha: stri
   };
 }
 
-export function deliveryBlockCode(failure: AgentFailure): import("./temporal/issue-contracts.js").DeliveryOperationBlockCode {
+export function deliveryBlockCode(failure: AgentFailure): import("./engine/issue-contracts.js").DeliveryOperationBlockCode {
   if (failure.code === "login-expired" || failure.code === "authentication-required") return "authentication-required";
   if (failure.code === "rate-limited") return "rate-limited";
   if (failure.code === "evidence-too-large") return "evidence-too-large";
@@ -136,9 +136,9 @@ export function deliveryBlockCode(failure: AgentFailure): import("./temporal/iss
   return "preflight-failed";
 }
 
-export function safeBlockSummary(code: import("./temporal/issue-contracts.js").DeliveryOperationBlockCode, correctionExhausted = false, reason?: string): string {
+export function safeBlockSummary(code: import("./engine/issue-contracts.js").DeliveryOperationBlockCode, correctionExhausted = false, reason?: string): string {
   if (correctionExhausted) return "The Lead returned invalid review output after one format correction; retry the review.";
-  const summaries: Record<import("./temporal/issue-contracts.js").DeliveryOperationBlockCode, string> = {
+  const summaries: Record<import("./engine/issue-contracts.js").DeliveryOperationBlockCode, string> = {
     "invalid-output": "The Lead review was not machine-readable; retry the review.",
     "correction-exhausted": "The Lead returned invalid review output after one format correction; retry the review.",
     "session-conflict": "The Lead review returned a different session identity; retry the review.",
@@ -635,7 +635,7 @@ export class AgentService {
     const evidenceRow = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(input.evidenceArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined);
     const failedLogs = evidenceRow ? await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: evidenceRow.storagePath, sha256: evidenceRow.sha256 }).then((bytes) => (jsonRequired(bytes.toString("utf8")) as { failedCheckLogs?: Array<{ name: string; runId: string; log: string }> }).failedCheckLogs ?? []).catch(() => []) : [];
     const prompt = this.ciRepairPrompt(context.title, { ...input, requiredChecks, localVerification }, failedChecks, failedLogs);
-    let plan: import("./temporal/issue-contracts.js").CiRepairPlan;
+    let plan: import("./engine/issue-contracts.js").CiRepairPlan;
     let leadSessionRef = input.leadSessionRef;
     try {
       const schemaPath = await this.ensureResultSchema("ci-repair-plan", CiRepairPlanSchema);

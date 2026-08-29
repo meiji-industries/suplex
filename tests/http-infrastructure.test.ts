@@ -8,7 +8,7 @@ import { ProjectFailure } from "../src/projects.js";
 import { jsonRequired } from "../src/task-utils.js";
 
 const health: HostHealthDependencies = {
-  temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy" as const, summary: "Ready", details: {} }),
+  engine: async () => ({ id: "engine", label: "Engine", status: "healthy" as const, summary: "Ready", details: {} }),
   database: async () => ({ id: "database", label: "Database", status: "healthy" as const, summary: "Ready", details: {} }),
   artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy" as const, summary: "Ready", details: {} }),
   worker: async () => ({ id: "worker", label: "Worker", status: "healthy" as const, summary: "Ready", details: {} }),

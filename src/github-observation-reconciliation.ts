@@ -2,9 +2,9 @@ import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { createGithubReleasePort, type GithubPullRequestObservation } from "./github-release.js";
 import { json } from "./task-utils.js";
-import { connectTemporal, durableCommand, executeIssueCommand } from "./temporal/service.js";
-import { IssueWorkflowStateSchema, type IssueWorkflowState } from "./temporal/issue-contracts.js";
-import { issueUpdates } from "./temporal/issue-updates.js";
+import { connectEngine, durableCommand, executeIssueCommand } from "./engine/service.js";
+import { IssueWorkflowStateSchema, type IssueWorkflowState } from "./engine/issue-contracts.js";
+import { issueUpdates } from "./engine/issue-updates.js";
 import type { IssueCommand } from "./commands/registry.js";
 import { integrateRemoteBranch, type RemoteIntegration } from "./remote-branch-integration.js";
 
@@ -21,12 +21,12 @@ type ReconciliationOptions = {
 type RemoteConflict = Extract<RemoteIntegration, { kind: "conflict" }> & { priorHead: string; priorTree: string };
 
 async function executeRemoteConflict(config: ForgeConfig, workflowId: string, input: { expectedRevision: number; actorUserId: string; commandId: string; forwardMergeId: string; priorHead: string; priorTree: string; remoteHead: string; conflictArtifact: { id: string; kind: "forward-merge-conflict" }; conflictFileCount: number }): Promise<void> {
-  const temporal = await connectTemporal(config);
+  const engine = await connectEngine(config);
   try {
-    const handle = temporal.client.workflow.getHandle(workflowId);
+    const handle = engine.client.workflow.getHandle(workflowId);
     await handle.executeUpdate(issueUpdates.integrate_remote_conflict, { args: [input], updateId: input.commandId });
   } finally {
-    await temporal.connection.close();
+    await engine.connection.close();
   }
 }
 
@@ -101,7 +101,7 @@ export async function reconcileGithubObservations(database: ForgeDatabase, confi
       }
       const command = integration === "conflict" ? "integrate_remote_conflict" : commandFor(candidate, observation);
       // A merge on GitHub is terminal truth. When the workflow cannot take the command (wrong phase, or the
-      // Temporal run is closed), adopt the merge into the projection directly instead of leaving the task stale.
+      // Engine run is closed), adopt the merge into the projection directly instead of leaving the task stale.
       if (observation === "merged" && !command) { adoptMergedPullRequest(database, candidate); signalled += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: "adopt_merged", commandId: null, deduplicated: false }); continue; }
       if (!command) { skipped += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: null, commandId: null, deduplicated: false, ...(integration ? { integration } : {}) }); continue; }
       const input = conflict

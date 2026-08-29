@@ -1,4 +1,4 @@
-import { sha256Hex } from "../temporal/deterministic-id.js";
+import { sha256Hex } from "../engine/deterministic-id.js";
 import { attentionCardFor } from "./attention-card.js";
 
 export type RecoveryAction = "advance" | "resume" | "retry" | "repair" | "attention" | "no_change";

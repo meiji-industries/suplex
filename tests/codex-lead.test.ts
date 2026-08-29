@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import Database from "better-sqlite3";
 import { expect, test } from "vitest";
-import { ApplicationFailure } from "@temporalio/activity";
+import { ApplicationFailure } from "../src/engine/failures.js";
 
 import { ArtifactStore } from "../src/artifacts.js";
 import { AgentFailure, AgentService, deliveryBlockCode, isAgentExecutionActiveLeaseCollision, LeadOutputSchema, safeBlockSummary } from "../src/codex-lead.js";
@@ -15,8 +15,8 @@ import { ForgeDatabase } from "../src/database.js";
 import { buildGitBranchName } from "../src/git-branch-name.js";
 import { fallbackGitPresentation } from "../src/git-presentation.js";
 import type { HerdrTurnInput, HerdrTurnOutput } from "../src/herdr-turn-runner.js";
-import { asNonRetryableApplicationFailure } from "../src/temporal/activities.js";
-import { DeliveryOperationBlockCodeSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeveloperRepairActivityResultSchema } from "../src/temporal/issue-contracts.js";
+import { asNonRetryableApplicationFailure } from "../src/engine/activities.js";
+import { DeliveryOperationBlockCodeSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeveloperRepairActivityResultSchema } from "../src/engine/issue-contracts.js";
 
 const gitPresentation = {
   branchSlug: "improve-fixture-planning",
@@ -466,7 +466,7 @@ test("Lead authors a complete conflict-resolution plan from both merge sides", a
 });
 
 
-test("permanent agent failures become non-retryable Temporal application failures", () => {
+test("permanent agent failures become non-retryable Engine application failures", () => {
   expect(asNonRetryableApplicationFailure(new AgentFailure("process-exited", "Codex exited"))).toBeUndefined();
   const actual = asNonRetryableApplicationFailure(new AgentFailure("model-unavailable", "Choose a supported model", { nonRetryable: true }));
   expect(actual).toBeInstanceOf(ApplicationFailure);

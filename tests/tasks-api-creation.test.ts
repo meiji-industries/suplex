@@ -14,7 +14,7 @@ import { ForgeDatabase } from "../src/database.js";
 import type { GithubAdapter } from "../src/github.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import { TaskService } from "../src/tasks.js";
-import { IssueProjectionEventSchema } from "../src/temporal/issue-contracts.js";
+import { IssueProjectionEventSchema } from "../src/engine/issue-contracts.js";
 import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 import { createWorkflowPortFake } from "./fakes/workflow-port.js";
 
@@ -60,7 +60,7 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
   const active = await projects.activateProject("admin-1", project.id);
   const workflow = createWorkflowPortFake({ companyId: company.id, projectId: active.id, projectRevisionId: active.activeRevisionId!, projectState: (state) => { database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state })); return state; } });
   const tasks = new TaskService(database, auth, projects, config, { workflow });
-  const app = createApp({ config, auth, projects, tasks, health: { temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }), database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }), artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }), worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }), codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }), ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }) } });
+  const app = createApp({ config, auth, projects, tasks, health: { engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }), database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }), artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }), worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }), codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }), ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }) } });
   const invitation = auth.createRecoveryInvitation({ confirmed: true, initiationMethod: "local-cli", installationId: config.installationId });
   const options = await app.inject({ method: "POST", url: "/api/auth/recovery/options", payload: { token: invitation.token } });
   const enrolled = await app.inject({ method: "POST", url: "/api/auth/recovery/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: "api-creation-admin", type: "public-key" } } });

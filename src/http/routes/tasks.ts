@@ -12,7 +12,7 @@ import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionE
 import { TaskRescueService } from "../../task-rescue.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { ForgeConfig } from "../../config.js";
-import { signalIssueGithubPullRequestSync } from "../../temporal/service.js";
+import { signalIssueGithubPullRequestSync } from "../../engine/service.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;

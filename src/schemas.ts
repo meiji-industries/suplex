@@ -17,11 +17,6 @@ export const ForgeEnvironmentSchema = z.object({
   FORGE_REPOSITORY_ROOT: z.string().min(1).optional(),
   FORGE_WORKTREE_ROOT: z.string().min(1).optional(),
   FORGE_INSTALLATION_ID: z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/).optional(),
-  FORGE_TEMPORAL_TARGET: z.enum(["local", "cloud"]).optional(),
-  FORGE_TEMPORAL_ADDRESS: z.string().regex(/^[^:\s]+:\d+$/).optional(),
-  FORGE_TEMPORAL_NAMESPACE: z.string().regex(/^\S+$/).optional(),
-  FORGE_TEMPORAL_API_KEY: z.string().regex(/^\S+$/).optional(),
-  FORGE_TASK_QUEUE: z.string().min(1).optional(),
   FORGE_DELIVERY_REPAIR_LIMIT: z.string().regex(/^\d+$/).optional(),
   FORGE_CODEX_CAPACITY: z.string().regex(/^\d+$/).optional(),
   FORGE_CLAUDE_CAPACITY: z.string().regex(/^\d+$/).optional(),
@@ -42,11 +37,6 @@ export const ForgeConfigSchema = z.object({
   runtimeRoot: z.string().min(1),
   repositoryRoot: z.string().min(1),
   worktreeRoot: z.string().min(1),
-  temporalTarget: z.enum(["local", "cloud"]),
-  temporalAddress: z.string().regex(/^[^:\s]+:\d+$/),
-  temporalNamespace: z.string().min(1),
-  temporalApiKey: z.string().min(1).optional(),
-  taskQueue: z.string().min(1),
   deliveryRepairCycleLimit: z.number().int().min(0).max(5),
   externalTurnCapacity: z.number().int().min(1).max(32),
   externalTurnCapacityByProvider: z.record(z.string(), z.number().int().min(1).max(32)),
@@ -55,12 +45,6 @@ export const ForgeConfigSchema = z.object({
   installationId: z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/),
   developmentAutoLogin: z.boolean(),
 }).superRefine((config, context) => {
-  if (config.temporalTarget === "cloud" && !config.temporalApiKey) {
-    context.addIssue({ code: "custom", path: ["temporalApiKey"], message: "Temporal Cloud requires an API key" });
-  }
-  if (config.temporalTarget === "local" && config.temporalApiKey) {
-    context.addIssue({ code: "custom", path: ["temporalApiKey"], message: "Local Temporal must not use a Cloud API key" });
-  }
   if (config.developmentAutoLogin && !["127.0.0.1", "::1"].includes(config.bindAddress)) {
     context.addIssue({ code: "custom", path: ["developmentAutoLogin"], message: "Development auto-login requires a loopback bind address" });
   }

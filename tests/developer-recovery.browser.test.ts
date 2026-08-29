@@ -103,7 +103,7 @@ test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at
   database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('recovery-admin', 'Recovery Admin', 'recovery-admin', 'admin', 'active', '2026-08-12T00:00:00.000Z', '2026-08-12T00:00:00.000Z')").run());
   const company = auth.createCompany("recovery-admin", "Recovery Browser");
   const app = createApp({ config, auth, health: {
-    temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }),
+    engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }),
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
     artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
     worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }),

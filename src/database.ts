@@ -10,7 +10,7 @@ import { desc, eq } from "drizzle-orm";
 import { probeWorkflows, workerRegistrations } from "./database-schema.js";
 import { authSchema, type AuthSchema } from "./auth-schema.js";
 import { canonicalJson } from "./canonical-json.js";
-import { IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueProjectionEvent, type IssueWorkflowState } from "./temporal/issue-contracts.js";
+import { IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueProjectionEvent, type IssueWorkflowState } from "./engine/issue-contracts.js";
 import { StructuredLogger } from "./logging.js";
 import { jsonRequired } from "./task-utils.js";
 
@@ -475,7 +475,7 @@ export class ForgeDatabase {
       && current.last_run_id === runId;
     if (identical) return;
 
-    // Temporal resets re-issue revision and event identities. The workflow's
+    // Engine resets re-issue revision and event identities. The workflow's
     // newest state is authoritative, so replace all bookkeeping from the
     // divergence point instead of treating a reused identity as corruption.
     if ((eventById && (eventById.workflow_id !== parsed.workflowId || eventById.revision !== parsed.revision || eventById.event_hash !== stateHash))

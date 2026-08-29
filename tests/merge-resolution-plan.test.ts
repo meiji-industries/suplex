@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MergeConflictPlanSchema } from "../src/temporal/contracts/primitives.js";
+import { MergeConflictPlanSchema } from "../src/engine/contracts/primitives.js";
 
 const mechanical = { kind: "merge_conflict_plan", summary: "Resolve both invariants", resolutions: [{ number: 1, file: "a.ts", resolution: "preserve both", intendedResult: "both", issueInvariant: "issue", baseInvariant: "base", compatibilityConcern: "compat" }], verificationStrategy: "pnpm test", unresolvedQuestions: [] };
 

@@ -1,7 +1,6 @@
 [tools]
 node = "26.7.0"
 "npm:pnpm" = "11.0.6"
-"github:temporalio/cli" = "1.8.2"
 
 [hooks]
 postinstall = "pnpm install --frozen-lockfile"
@@ -17,205 +16,62 @@ FORGE_BIND_ADDRESS = "127.0.0.1"
 _.path = "./node_modules/.bin"
 
 [tasks.dev]
-description = "Run Temporal, the Forge API, and the worker without hot reload (restart manually; live Developer turns survive src edits)"
-env = { FORGE_PRETTY_LOGS = "1" }
-run = [{ tasks = ["temporal", "server", "worker"] }]
-
-[tasks."dev:remote"]
-description = "Build the frontend once, then serve it from Fastify for responsive remote access"
-depends = ["frontend:build"]
-env = { FORGE_PRETTY_LOGS = "1" }
-run = [{ tasks = ["temporal", "server:remote", "worker"] }]
-
-[tasks."frontend:build"]
-description = "Build the frontend files served by Fastify"
-run = "pnpm exec vite build"
+description = "Run the Forge API, worker host, and Vite HMR in one process"
+env = { FORGE_PRETTY_LOGS = "1", FORGE_FRONTEND_DEV_SERVER = "1", FORGE_DEVELOPMENT_AUTO_LOGIN = "1" }
+run = "tsx src/server.ts"
 
 [tasks."dev:watch"]
-description = "Same as dev, but tsx watch restarts the API and worker on every src save"
-env = { FORGE_WATCH = "1", FORGE_PRETTY_LOGS = "1" }
-run = [{ tasks = ["temporal", "server", "worker"] }]
+description = "Run the single-process stack with backend reloads"
+env = { FORGE_PRETTY_LOGS = "1", FORGE_FRONTEND_DEV_SERVER = "1", FORGE_DEVELOPMENT_AUTO_LOGIN = "1" }
+run = "tsx watch --clear-screen=false --exclude './src/frontend/**' src/server.ts"
+
+[tasks.worker]
+description = "Run the engine host without HTTP"
+run = "tsx src/engine/host.ts"
+
+[tasks."dev:idle"]
+description = "Exit 0 when no engine activities are in flight"
+run = '''
+db=${FORGE_DATABASE_PATH:-.forge/data/forge.sqlite}
+busy=$(sqlite3 "$db" "select workflow_id||': '||activity from forge_engine_activities" 2>/dev/null || true)
+if [ -n "$busy" ]; then echo "BUSY — activities in flight:"; echo "$busy"; exit 1; fi
+echo "IDLE — safe to restart"
+'''
 
 [tasks.down]
-description = "Stop this checkout's dev stack (prefer Ctrl-C in the dev terminal)"
+description = "Stop this checkout's dev stack"
 run = '''
 FP=${CONDUCTOR_PORT:-4111}
-TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
-UI=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+2))}; UI=${UI:-8233}
-PIDS=$(lsof -ti:$FP,$TP,$UI 2>/dev/null | sort -u)
-if [ -z "$PIDS" ]; then echo "nothing listening on $FP/$TP/$UI"; exit 0; fi
+PIDS=$(lsof -ti:$FP 2>/dev/null | sort -u)
+if [ -z "$PIDS" ]; then echo "nothing listening on $FP"; exit 0; fi
 for p in $PIDS; do g=$(ps -o pgid= -p "$p" | tr -d ' '); [ -n "$g" ] && kill -TERM -"$g" 2>/dev/null; done
 echo "sent SIGTERM to dev stack"
 '''
 
 [tasks."dev:status"]
-description = "Show what is listening on this checkout's dev ports"
 run = '''
 FP=${CONDUCTOR_PORT:-4111}
-TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
-UI=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+2))}; UI=${UI:-8233}
-lsof -nP -iTCP:$FP -iTCP:$TP -iTCP:$UI -sTCP:LISTEN || echo "dev stack not running (ports $FP/$TP/$UI free)"
-'''
-
-[tasks."dev:restart"]
-description = "Reminder: `mise run dev` has no hot reload — Ctrl-C and rerun it (or use dev:watch)"
-run = "echo 'mise run dev does not hot-reload: Ctrl-C and rerun it. Use `mise run dev:watch` for tsx watch.'"
-
-[tasks."dev:idle"]
-description = "Exit 0 if no open workflow has a pending activity (safe to restart the worker), else list what is running"
-run = '''
-TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
-busy=$(temporal workflow list --address "127.0.0.1:$TP" --namespace forge-dev --query 'ExecutionStatus="Running"' -o json | jq -r '.[].execution.workflowId' | while read -r w; do
-  temporal workflow describe --address "127.0.0.1:$TP" --namespace forge-dev -w "$w" -o json | jq -r --arg w "$w" '[.pendingActivities[]? | .activityType.name] | select(length > 0) | "\($w): \(join(", "))"'
-done)
-if [ -n "$busy" ]; then echo "BUSY — activities in flight:"; echo "$busy"; exit 1; fi
-echo "IDLE — safe to restart"
+lsof -nP -iTCP:$FP -sTCP:LISTEN || echo "dev stack not running (port $FP free)"
 '''
 
 [tasks."dev:recover"]
-description = "Force-kill anything still holding this checkout's dev ports"
 run = '''
 FP=${CONDUCTOR_PORT:-4111}
-TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
-UI=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+2))}; UI=${UI:-8233}
-PIDS=$(lsof -ti:$FP,$TP,$UI 2>/dev/null | sort -u)
-if [ -z "$PIDS" ]; then echo "nothing listening on $FP/$TP/$UI"; exit 0; fi
+PIDS=$(lsof -ti:$FP 2>/dev/null | sort -u)
+if [ -z "$PIDS" ]; then echo "nothing listening on $FP"; exit 0; fi
 for p in $PIDS; do g=$(ps -o pgid= -p "$p" | tr -d ' '); [ -n "$g" ] && kill -KILL -"$g" 2>/dev/null; done
 echo "force-killed dev stack"
 '''
 
-[tasks.worktree]
-description = "Install pinned tools and dependencies for a development worktree"
-run = "mise install"
-
-[tasks.temporal]
-description = "Start the local Temporal development server"
-run = '''
-TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
-UI=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+2))}; UI=${UI:-8233}
-mkdir -p .forge/dev
-exec temporal server start-dev --port "$TP" --ui-port "$UI" --db-filename .forge/dev/temporal.db --namespace forge-dev --search-attribute CompanyId=Keyword --search-attribute ProjectId=Keyword --search-attribute IssueId=Keyword
-'''
-
-[tasks.server]
-description = "Forge API (waits for Temporal, embeds Vite HMR; tsx watch only under dev:watch)"
-run = '''
-TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
-export PATH="$(dirname "$(mise which node)"):$PATH"
-[ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
-until nc -z 127.0.0.1 "$TP" 2>/dev/null; do sleep 0.5; done
-export FORGE_PORT=${CONDUCTOR_PORT:-4111}
-export FORGE_TEMPORAL_ADDRESS="127.0.0.1:$TP"
-if [ -n "${FORGE_WATCH:-}" ]; then exec tsx watch --clear-screen=false --exclude "./src/frontend/**" src/server.ts; fi
-exec tsx src/server.ts
-'''
-
-[tasks.server.env]
-FORGE_TEMPORAL_TARGET = "local"
-FORGE_TEMPORAL_NAMESPACE = "forge-dev"
-FORGE_FRONTEND_DEV_SERVER = "1"
-FORGE_DEVELOPMENT_AUTO_LOGIN = "1"
-
-[tasks."server:remote"]
-description = "Forge API serving built frontend assets (waits for Temporal)"
-run = '''
-TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
-export PATH="$(dirname "$(mise which node)"):$PATH"
-[ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
-until nc -z 127.0.0.1 "$TP" 2>/dev/null; do sleep 0.5; done
-export FORGE_PORT=${CONDUCTOR_PORT:-4111}
-export FORGE_TEMPORAL_ADDRESS="127.0.0.1:$TP"
-exec tsx src/server.ts
-'''
-
-[tasks."server:remote".env]
-FORGE_TEMPORAL_TARGET = "local"
-FORGE_TEMPORAL_NAMESPACE = "forge-dev"
-FORGE_DEVELOPMENT_AUTO_LOGIN = "1"
-
-[tasks.worker]
-description = "Forge Temporal worker (waits for Temporal; tsx watch only under dev:watch)"
-run = '''
-TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
-export PATH="$(dirname "$(mise which node)"):$PATH"
-[ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
-until nc -z 127.0.0.1 "$TP" 2>/dev/null; do sleep 0.5; done
-export FORGE_TEMPORAL_ADDRESS="127.0.0.1:$TP"
-if [ -n "${FORGE_WATCH:-}" ]; then exec tsx watch --clear-screen=false --exclude "./src/frontend/**" src/worker.ts; fi
-exec tsx src/worker.ts
-'''
-
-[tasks.worker.env]
-FORGE_TEMPORAL_TARGET = "local"
-FORGE_TEMPORAL_NAMESPACE = "forge-dev"
-FORGE_FRONTEND_DEV_SERVER = "1"
-FORGE_DEVELOPMENT_AUTO_LOGIN = "1"
-
 [tasks."db:migrate"]
-description = "Apply pending SQLite database migrations"
 run = "mise exec -- node --import tsx src/cli.ts migrate"
-
-[tasks."db:migrate".env]
-FORGE_TEMPORAL_TARGET = "local"
-FORGE_TEMPORAL_ADDRESS = "127.0.0.1:7233"
-FORGE_TEMPORAL_NAMESPACE = "forge-dev"
-
-[tasks.watch]
-description = "Rebuild the frontend when source files change"
-run = "pnpm exec vite build --watch"
-
-[tasks.vite]
-description = "Start a standalone Vite dev server (normally embedded by mise run dev)"
-run = "pnpm exec vite"
-
 [tasks.build]
-description = "Compile TypeScript and build with Vite"
 run = "pnpm run build"
-
 [tasks.typecheck]
-description = "Type-check the project without emitting"
 run = "pnpm run typecheck"
-
-[tasks.smoke]
-description = "Run the authenticated happy-path smoke test against an already-running dev stack"
-run = "pnpm run smoke"
-
-[tasks.logs]
-description = "Tail merged, readable Forge API and worker logs (pass filters after --)"
-run = "pnpm exec tsx src/cli.ts logs \"$@\""
-
-[tasks.task]
-description = "Inspect a task, including its recent recorded commands"
-run = "pnpm exec tsx src/cli.ts task \"$@\""
-
-[tasks.doctor]
-description = "Check this Forge checkout and its configured providers"
-run = "pnpm exec tsx src/cli.ts doctor \"$@\""
-
 [tasks.test]
-description = "Run unit and integration tests (excludes Temporal and browser tests)"
 run = "pnpm run test"
-
-[tasks.test-temporal]
-description = "Run Temporal integration tests"
-run = "pnpm run test:temporal"
-
+[tasks.test-engine]
+run = "pnpm run test:engine"
 [tasks.test-browser]
-description = "Build and run Playwright browser tests"
 run = "pnpm run test:browser"
-
-[tasks.test-governance-real]
-description = "Run the mandatory authenticated Ticket 07 governance seam"
-run = "pnpm run test:governance-real"
-
-[tasks.verify-ticket-07]
-description = "Verify Ticket 07 with the mandatory real Codex seam"
-run = "pnpm run verify-ticket-07"
-
-[tasks.test-all]
-description = "Run typecheck, unit, Temporal, and browser tests"
-run = "pnpm run test:all"
-
-[tasks.test-release-lead]
-description = "Run the mandatory authenticated real-Codex Lead/browser release gate"
-run = "pnpm run test:release:lead"

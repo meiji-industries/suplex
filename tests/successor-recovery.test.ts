@@ -24,7 +24,7 @@ test("successor reconciliation survives a start fault and converges under concur
       db.prepare("INSERT INTO forge_successor_intents (id, predecessor_task_id, predecessor_workflow_id, accepted_revision, successor_task_id, successor_workflow_id, company_id, project_id, project_revision_id, actor_user_id, reason_artifact_id, state, created_at, updated_at) VALUES ('intent-1', 'predecessor', 'workflow-original', 7, 'successor', 'workflow-successor', 'company-1', 'project-1', 'revision-1', 'user-1', 'reason-1', 'workflow_starting', ?, ?)").run(now, now);
     });
 
-    await reconcileSuccessorIntents(database, config, async () => { throw new Error("Temporal unavailable"); });
+    await reconcileSuccessorIntents(database, config, async () => { throw new Error("legacy workflow service unavailable"); });
     expect(database.authQuery((db) => db.prepare("SELECT state FROM forge_successor_intents WHERE id = 'intent-1'").get())).toEqual({ state: "workflow_starting" });
 
     const starts: string[] = [];

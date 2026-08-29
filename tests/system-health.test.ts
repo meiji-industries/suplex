@@ -8,7 +8,7 @@ const snapshot: HealthSnapshot = {
   reachableAddress: "http://127.0.0.1:4111",
   ready: true,
   checks: [
-    { id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} },
+    { id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} },
     { id: "backup", label: "Backup verification", status: "unhealthy", summary: "No verified backup is recorded", details: {} },
   ],
 };

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
-import { buildInitialIssueWorkflowState, type IssueWorkflowState } from "../src/temporal/issue-contracts.js";
-import { createAcquireExternalTurn } from "../src/temporal/workflow/runtime.js";
+import { buildInitialIssueWorkflowState, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
+import { createAcquireExternalTurn } from "../src/engine/workflow/runtime.js";
 
 test("simple capacity admission preserves the current pending action", async () => {
   let state: IssueWorkflowState = {
@@ -31,15 +31,10 @@ test("simple capacity admission preserves the current pending action", async () 
       },
     },
     {
-      patched: (patchId) => patchId === "forge-simple-capacity-v1",
       projectState: async (next) => {
         projected.push(next);
         return next;
       },
-      projectCapacityState: async () => state.revision,
-      durableCapacityPatch: "forge-durable-capacity-v1",
-      capacityFinalizationOwnershipPatch: "forge-capacity-finalization-ownership-v1",
-      capacityReadmissionPatch: "forge-capacity-readmission-v1",
     },
   );
 

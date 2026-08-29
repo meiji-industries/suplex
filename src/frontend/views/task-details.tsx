@@ -216,7 +216,7 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
   if (task.projection.status === "stalled") return <Card data-task-actions data-task-status-card size="sm" role="alert">
     <CardHeader>
       <CardTitle><h3>Forge's workflow is stuck</h3></CardTitle>
-      <CardDescription>{task.projection.message ?? "Temporal reported a workflow failure."}</CardDescription>
+      <CardDescription>{task.projection.message ?? "legacy workflow service reported a workflow failure."}</CardDescription>
     </CardHeader>
     <CardFooter className="justify-end"><Button size="sm" onClick={() => void onPlanAction("resync-projection")} disabled={busy}>Resync projection</Button></CardFooter>
   </Card>;

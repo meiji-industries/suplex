@@ -4,10 +4,9 @@ import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { TERMINAL_PHASES } from "./issue-phases.js";
 import type { IssueCommand } from "./commands/registry.js";
-import { connectTemporal, reconcileIssueDeveloperDelivery } from "./temporal/service.js";
-import { issueStateQuery } from "./temporal/workflows.js";
-import { IssueWorkflowStateSchema } from "./temporal/issue-contracts.js";
-import { routeWorkflowToCurrentDeployment } from "./worker-deployment.js";
+import { connectEngine, reconcileIssueDeveloperDelivery } from "./engine/service.js";
+import { issueStateQuery } from "./engine/workflows.js";
+import { IssueWorkflowStateSchema } from "./engine/issue-contracts.js";
 import type { ForgeTask, TaskService } from "./tasks.js";
 
 export type RescueStep = { name: string; outcome: "completed" | "skipped" | "failed"; detail: string };
@@ -40,16 +39,16 @@ export class TaskRescueService {
     }));
     let workflow: TaskDiagnostics["workflow"] = { status: "unavailable", lastWorkflowTaskFailure: null, pendingWorkflowTaskAgeSeconds: null, buildId: null, currentBuildId: null };
     try {
-      const temporal = await connectTemporal(this.config);
+      const engine = await connectEngine(this.config);
       try {
-        const response = await temporal.connection.workflowService.describeWorkflowExecution({ namespace: this.config.temporalNamespace, execution: { workflowId: task.workflowId } });
+        const response = await engine.connection.workflowService.describeWorkflowExecution({ execution: { workflowId: task.workflowId } });
         const info = response.workflowExecutionInfo as unknown as Record<string, unknown>;
         const pending = response.pendingWorkflowTask as unknown as Record<string, unknown> | undefined;
         const scheduledAt = pending?.scheduledTime as { seconds?: number | string } | undefined;
         const seconds = scheduledAt?.seconds === undefined ? null : Number(scheduledAt.seconds) * 1000;
         workflow = { status: String(info.status ?? "running"), lastWorkflowTaskFailure: typeof pending?.failure === "object" ? JSON.stringify(pending.failure).slice(0, 500) : null, pendingWorkflowTaskAgeSeconds: seconds === null ? null : Math.max(0, Math.floor((Date.now() - seconds) / 1000)), buildId: typeof info.workerVersionStamp === "object" ? JSON.stringify(info.workerVersionStamp) : null, currentBuildId: null };
-      } finally { await temporal.connection.close(); }
-    } catch { /* diagnostics must remain useful when Temporal is unavailable */ }
+      } finally { await engine.connection.close(); }
+    } catch { /* diagnostics must remain useful when Engine is unavailable */ }
     return { workflow, executions: local.executions.map((entry) => ({ ...entry, terminal: terminalExecution.has(entry.status) })), capacityRequests: local.capacityRequests, leases: [] };
   }
 
@@ -57,15 +56,15 @@ export class TaskRescueService {
     let task = this.task(actorUserId, taskId);
     const steps: RescueStep[] = [];
     try {
-      const temporal = await connectTemporal(this.config);
+      const engine = await connectEngine(this.config);
       try {
-        const handle = temporal.client.workflow.getHandle(task.workflowId);
+        const handle = engine.client.workflow.getHandle(task.workflowId);
         const [rawState, description] = await Promise.all([handle.query(issueStateQuery), handle.describe()]);
         const state = IssueWorkflowStateSchema.parse(rawState);
         const runId = description.rootExecution?.runId ?? description.runId;
         this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, ...(runId ? { runId } : {}), revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state });
         steps.push(this.record(task, "Resync projection", "completed", `Projected workflow revision ${state.revision}.`));
-      } finally { await temporal.connection.close(); }
+      } finally { await engine.connection.close(); }
     } catch (error) {
       steps.push(this.record(task, "Resync projection", "failed", error instanceof Error ? error.message.slice(0, 300) : "Could not query the live workflow state."));
     }
@@ -81,20 +80,7 @@ export class TaskRescueService {
       }
     } else steps.push(this.record(task, "Reconcile Developer delivery", "skipped", "Task is not in a Developer recovery phase."));
     const diagnostics = await this.diagnostics(actorUserId, taskId);
-    const needsReset = diagnostics.workflow.lastWorkflowTaskFailure !== null || (diagnostics.workflow.pendingWorkflowTaskAgeSeconds ?? 0) > 60;
-    if (needsReset) {
-      try {
-        const temporal = await connectTemporal(this.config);
-        try {
-          const description = await temporal.connection.workflowService.describeWorkflowExecution({ namespace: this.config.temporalNamespace, execution: { workflowId: task.workflowId } });
-          const runId = description.workflowExecutionInfo?.execution?.runId;
-          const finishEventId = Number((description.pendingWorkflowTask as unknown as { scheduledEventId?: number | string } | undefined)?.scheduledEventId ?? 0);
-          await temporal.connection.workflowService.resetWorkflowExecution({ namespace: this.config.temporalNamespace, workflowExecution: { workflowId: task.workflowId, ...(runId ? { runId } : {}) }, reason: "Forge task rescue", requestId: randomUUID(), workflowTaskFinishEventId: finishEventId, resetReapplyType: 1 } as never);
-          await routeWorkflowToCurrentDeployment(temporal.connection as never, this.config, task.workflowId, "forge-task-rescue");
-          steps.push(this.record(task, "Re-dispatch workflow", "completed", "Reset to the last workflow task and cleared the versioning override."));
-        } finally { await temporal.connection.close(); }
-      } catch (error) { steps.push(this.record(task, "Re-dispatch workflow", "failed", error instanceof Error ? error.message.slice(0, 300) : "Temporal reset failed.")); }
-    } else steps.push(this.record(task, "Re-dispatch workflow", "skipped", "Workflow has no stale or failed workflow task."));
+    steps.push(this.record(task, "Re-dispatch workflow", "skipped", diagnostics.workflow.status === "running" ? "The in-process run is active." : "Restart the Forge process to reload the durable snapshot."));
     steps.push(this.record(task, "Release stale bookkeeping", "skipped", "Process PID rescue is unavailable for Herdr executions."));
     task = this.task(actorUserId, taskId);
     const command = retryCommands.find((candidate) => task.allowedCommands.includes(candidate));

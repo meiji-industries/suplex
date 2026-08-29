@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, rm } from "node:fs/promises";
 
 import type { ForgeConfig } from "./config.js";
-import { connectTemporal, ensureTemporalFoundation } from "./temporal/service.js";
 import { defaultProcessController, hasCompleteProcessIdentity, ownedProcessIsRunning, processIdentityMatches, readProcessRegistry, type OwnedProcess, type ProcessController, type ProcessInspection, type ProcessRegistry, signalOwnedProcess, stopOwnedProcesses, writeProcessRegistry } from "./process-manager.js";
 import { configureTailscaleServe, disableTailscaleServe, isTailscaleServeConfigured, verifyTailscaleServe } from "./tailscale.js";
 
@@ -20,22 +19,6 @@ const runtimeReconciliationController: RuntimeReconciliationController = {
   disableServe: disableTailscaleServe,
   wait: async (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 };
-
-async function waitForTemporal(config: ForgeConfig, timeoutMs = 30_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let lastError: unknown;
-  while (Date.now() < deadline) {
-    try {
-      const temporal = await connectTemporal(config);
-      await temporal.connection.close();
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
-  throw new Error(`Temporal did not become reachable: ${lastError instanceof Error ? lastError.message : "unknown error"}`);
-}
 
 export function healthProbeAddress(config: ForgeConfig): string {
   if (config.tailscaleExposure !== "serve") {
@@ -96,11 +79,6 @@ async function spawnForgeProcess(name: string, script: string, config: ForgeConf
       ...process.env,
       FORGE_DATA_ROOT: config.dataRoot,
       FORGE_INSTALLATION_ID: config.installationId,
-      FORGE_TEMPORAL_TARGET: config.temporalTarget,
-      FORGE_TEMPORAL_ADDRESS: config.temporalAddress,
-      FORGE_TEMPORAL_NAMESPACE: config.temporalNamespace,
-      FORGE_TEMPORAL_API_KEY: config.temporalApiKey,
-      FORGE_TASK_QUEUE: config.taskQueue,
     },
     stdio: foreground ? "inherit" : ["ignore", logHandle!.fd, logHandle!.fd],
   });
@@ -131,7 +109,7 @@ async function spawnForgeProcess(name: string, script: string, config: ForgeConf
   };
 }
 
-const expectedForgeProcessNames = new Set(["worker", "server"]);
+const expectedForgeProcessNames = new Set(["server"]);
 
 function hasCompleteRunningProcessSet(registry: ProcessRegistry): boolean {
   return registry.processes.length === expectedForgeProcessNames.size
@@ -224,14 +202,6 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
   }
   let registry: ProcessRegistry | undefined;
   try {
-    await waitForTemporal(config);
-    const temporal = await connectTemporal(config);
-    try {
-      await ensureTemporalFoundation(temporal.connection, config);
-    } finally {
-      await temporal.connection.close();
-    }
-
     registry = {
       version: 1,
       processes: [],
@@ -239,9 +209,6 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
         tailscaleServe: { port: config.port, backend: `http://${config.bindAddress}:${config.port}` },
       } : {}),
     };
-    await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
-    const worker = await spawnForgeProcess("worker", "src/worker.ts", config, config.runtimeRoot, foreground);
-    registry.processes.push(worker.owned);
     await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
     const server = await spawnForgeProcess("server", "src/server.ts", config, config.runtimeRoot, foreground);
     registry.processes.push(server.owned);

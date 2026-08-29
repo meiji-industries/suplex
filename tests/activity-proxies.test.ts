@@ -7,7 +7,7 @@ import { describe, expect, test } from "vitest";
 // built with, so the built proxies can't be introspected at runtime even though
 // the module itself imports cleanly outside the workflow sandbox. A regex over
 // the source is the honest way to pin "every proxy has a bounded retry policy".
-const source = readFileSync(join(import.meta.dirname, "../src/temporal/workflow/activity-proxies.ts"), "utf8");
+const source = readFileSync(join(import.meta.dirname, "../src/engine/workflow/activity-proxies.ts"), "utf8");
 
 describe("activity proxies retry policies", () => {
   test("every proxyActivities call has a retry policy with a finite maximumAttempts", () => {

@@ -9,7 +9,7 @@ const snapshot: HealthSnapshot = {
   reachableAddress: "http://forge.tailnet.ts.net:4111",
   ready: true,
   checks: [
-    { id: "temporal", label: "Temporal", status: "healthy", summary: "Reachable", details: {} },
+    { id: "engine", label: "Engine", status: "healthy", summary: "Reachable", details: {} },
     { id: "gh-auth", label: "GitHub CLI authentication", status: "unhealthy", summary: "Authentication is unavailable", details: {} },
   ],
 };
@@ -18,7 +18,7 @@ test("health page renders the exact reachable address and distinct states", asyn
   const app = createApp({
     config: createTestConfig("/tmp/forge-app-test"),
     health: {
-      temporal: async () => snapshot.checks[0]!,
+      engine: async () => snapshot.checks[0]!,
       database: async () => snapshot.checks[0]!,
       artifactRoot: async () => snapshot.checks[0]!,
       worker: async () => snapshot.checks[0]!,
@@ -41,7 +41,7 @@ test("development pages are transformable and load the Vite source entry", async
   const app = createApp({
     config: createTestConfig("/tmp/forge-vite-app-test"),
     health: {
-      temporal: async () => snapshot.checks[0]!,
+      engine: async () => snapshot.checks[0]!,
       database: async () => snapshot.checks[0]!,
       artifactRoot: async () => snapshot.checks[0]!,
       worker: async () => snapshot.checks[0]!,

@@ -2,7 +2,7 @@ import { HerdrCodexProvider } from "./agent-providers/herdr-codex.js";
 import type { ForgeDatabase } from "./database.js";
 import { CliHerdrClient } from "./herdr-client.js";
 import { reconcileHerdrSessions } from "./herdr-recovery.js";
-import type { DeveloperCancellationResult } from "./temporal/issue-contracts.js";
+import type { DeveloperCancellationResult } from "./engine/issue-contracts.js";
 import { cancelOperation, operationKey } from "./operation-claims.js";
 
 export interface DeveloperRecoveryOutcome {

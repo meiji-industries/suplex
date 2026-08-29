@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { PublishReleaseActivityResultSchema } from "../src/temporal/contracts/activities/release.js";
+import { PublishReleaseActivityResultSchema } from "../src/engine/contracts/activities/release.js";
 
 const sha = "a".repeat(40);
 

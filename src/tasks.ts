@@ -15,10 +15,10 @@ import { ProjectFailure, ProjectService, resolveAgentProfiles, type Project, typ
 import { loadTaskConfiguration, TaskProjectConfigurationSchema, type TaskProjectConfiguration } from "./task-project-configuration.js";
 import { PromptOverrideService, type ResolvedPromptSet } from "./prompt-overrides.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
-import { acceptIssueDevelopment, acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, resyncIssueProjection, reviseIssuePlan, startIssueWorkflow } from "./temporal/service.js";
-import { executeWorktreeCommand, type WorktreeCommandInput } from "./temporal/worktree-commands.js";
+import { acceptIssueDevelopment, acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, resyncIssueProjection, reviseIssuePlan, startIssueWorkflow } from "./engine/service.js";
+import { executeWorktreeCommand, type WorktreeCommandInput } from "./engine/worktree-commands.js";
 import { issueCommands } from "./commands/registry.js";
-import { createInitialIssueWorkflowState, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type SendPlannerNoteInput, type StartPlanningInput } from "./temporal/issue-contracts.js";
+import { createInitialIssueWorkflowState, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type SendPlannerNoteInput, type StartPlanningInput } from "./engine/issue-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { taskCommandDescriptors, type TaskCommandDescriptor } from "./task-commands.js";
 import { TERMINAL_PHASES } from "./issue-phases.js";
@@ -1229,7 +1229,7 @@ export class TaskService {
       ...(input.source ? { source: input.source } : {}),
     });
     const idempotencyKey = input.idempotencyKey.trim();
-    // The legacy column/input is retained for old Temporal histories. New tasks
+    // The legacy column/input is retained for old Engine histories. New tasks
     // use their configuration artifact ID as that compatibility value.
     let reserved = this.reserveCreationIntent({ companyId, projectId: input.projectId, idempotencyKey, projectRevisionId: `configuration-${idempotencyKey}`, creatorAgentId });
     await this.maybeFault("after_intent_reserved", { intentId: reserved.intent.id, taskId: reserved.intent.task_id });

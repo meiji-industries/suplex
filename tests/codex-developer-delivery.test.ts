@@ -5,7 +5,7 @@ import { expect, test } from "vitest";
 
 import { AgentFailure } from "../src/agent-failure.js";
 import { DeveloperService } from "../src/codex-developer.js";
-import { DeveloperRepairActivityResultSchema } from "../src/temporal/issue-contracts.js";
+import { DeveloperRepairActivityResultSchema } from "../src/engine/issue-contracts.js";
 import { command, fakeTurnRunner, fixture } from "./codex-developer.test.js";
 
 const report = (summary: string, blocker: string | null = null) => ({

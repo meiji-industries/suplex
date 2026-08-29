@@ -1,6 +1,6 @@
 #!/bin/zsh
 # usage: scripts/dev-restart.sh [--force] <dev-pane-id>
-# Restarts `mise run dev` in the given Herdr pane, only when no Temporal activity is in flight.
+# Restarts `mise run dev` in the given Herdr pane, only when no legacy workflow service activity is in flight.
 # Exit 1 = busy (nothing touched), exit 2 = pane did not come back healthy.
 set -e
 FORCE=0

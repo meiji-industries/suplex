@@ -16,7 +16,7 @@ import type { GithubAdapter } from "../src/github.js";
 import type { GithubReleasePort } from "../src/github-release.js";
 import { loadTaskConfiguration } from "../src/task-project-configuration.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
-import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "../src/engine/issue-contracts.js";
 import { TaskResponseSchema } from "../src/http/contracts/tasks.js";
 import { jsonRequired } from "../src/task-utils.js";
 import taskBranch from "../src/http/routes/task-branch.js";
@@ -168,7 +168,7 @@ test("a stuck cancellation can be safely reissued", async () => {
 });
 
 
-test("cancelling falls back to the projection when Temporal rejects the update", async () => {
+test("cancelling falls back to the projection when Engine rejects the update", async () => {
   const value = await fixture();
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Rejected cancellation", description: "body", idempotencyKey: "rejected-workflow-cancel", images: [] });
@@ -476,7 +476,7 @@ test("shows the current target-base blocker instead of stale Developer recovery 
   }
 });
 
-test("repairs the legacy revision-zero seed before applying the Temporal initial projection", async () => {
+test("repairs the legacy revision-zero seed before applying the Engine initial projection", async () => {
   const value = await fixture();
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Legacy seed", description: "body", idempotencyKey: "legacy-seed-0001", images: [] });
@@ -510,7 +510,7 @@ test("repairs the legacy revision-zero seed before applying the Temporal initial
   }
 });
 
-test("streams projection changes written by the Temporal worker process", async () => {
+test("streams projection changes written by the Engine worker process", async () => {
   const value = await fixture();
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Synced task", description: "body", idempotencyKey: "synced-task-0001", images: [] });

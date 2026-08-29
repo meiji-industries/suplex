@@ -3,16 +3,16 @@ import { describe, expect, it } from "vitest";
 import { recentTasks, showRecentTasks } from "../src/frontend/components/app/recent-tasks.js";
 
 describe("recentTasks", () => {
-  it("returns the five newest tasks first", () => {
-    const tasks = ["1", "6", "2", "5", "3", "4"].map((id) => ({ id, phase: "backlog", updatedAt: `2026-08-13T00:00:0${id}.000Z` }));
+  it("returns the ten newest tasks first", () => {
+    const tasks = [1, 12, 2, 11, 3, 10, 4, 9, 5, 8, 6, 7].map((id) => ({ id: String(id), phase: "backlog", updatedAt: `2026-08-13T00:00:${String(id).padStart(2, "0")}.000Z` }));
 
-    expect(recentTasks(tasks).map((task) => task.id)).toEqual(["6", "5", "4", "3", "2"]);
+    expect(recentTasks(tasks).map((task) => task.id)).toEqual(["12", "11", "10", "9", "8", "7", "6", "5", "4", "3"]);
   });
 
   it("omits cancelled tasks before limiting the list", () => {
-    const tasks = ["1", "2", "3", "4", "5", "6"].map((id) => ({ id, phase: id === "6" ? "cancelled" : "backlog", updatedAt: `2026-08-13T00:00:0${id}.000Z` }));
+    const tasks = Array.from({ length: 12 }, (_, index) => index + 1).map((id) => ({ id: String(id), phase: id === 12 ? "cancelled" : "backlog", updatedAt: `2026-08-13T00:00:${String(id).padStart(2, "0")}.000Z` }));
 
-    expect(recentTasks(tasks).map((task) => task.id)).toEqual(["5", "4", "3", "2", "1"]);
+    expect(recentTasks(tasks).map((task) => task.id)).toEqual(["11", "10", "9", "8", "7", "6", "5", "4", "3", "2"]);
   });
 
   it("hides only in settings", () => {

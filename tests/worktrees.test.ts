@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { asNonRetryableApplicationFailure } from "../src/engine/activities/context.js";
-import { runCommand } from "../src/command-runner.js";
+import { runCommand, setCommandRunnerLogger } from "../src/command-runner.js";
+import { StructuredLogger } from "../src/logging.js";
 import { createGitCommandGuard, reserveOwnedWorktree, withWorktreeBuildCaches, WorktreeFailure, WorktreeManager } from "../src/worktrees.js";
 
 async function command(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
@@ -80,6 +81,8 @@ async function rewriteSourceBranch(value: RemoteFixture, branchName: string) {
 test("inspects local branch sync and pushes it to origin", async () => {
   const value = await remoteFixture();
   const branchName = "feat/sync";
+  const logs: string[] = [];
+  setCommandRunnerLogger(new StructuredLogger((line) => logs.push(line)));
   try {
     await git(["symbolic-ref", "HEAD", "refs/heads/main"], value.remotePath);
     await git(["remote", "set-head", "origin", "-a"], value.repositoryPath);
@@ -89,19 +92,15 @@ test("inspects local branch sync and pushes it to origin", async () => {
     await git(["commit", "-m", "local sync"], value.repositoryPath);
     const manager = new WorktreeManager();
     await expect(manager.inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ remoteExists: false, ahead: 1, behind: 0, aheadOfBase: 1, behindBase: 0, conflictsWithBase: false, headSha: await git(["rev-parse", "HEAD"], value.repositoryPath) });
+    expect(logs.map((line) => JSON.parse(line))).not.toContainEqual(expect.objectContaining({ level: 50 }));
     await manager.push(value.repositoryPath, branchName);
     await expect(manager.inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ remoteExists: true, ahead: 0, behind: 0, aheadOfBase: 1, behindBase: 0, conflictsWithBase: false });
-    const peer = join(value.root, "peer");
-    await git(["clone", value.remotePath, peer], value.root);
-    await git(["config", "user.name", "Forge Test"], peer);
-    await git(["config", "user.email", "forge-test@example.invalid"], peer);
-    await git(["switch", branchName], peer);
-    await writeFile(join(peer, "REMOTE.md"), "remote\n");
-    await git(["add", "REMOTE.md"], peer);
-    await git(["commit", "-m", "remote sync"], peer);
-    await git(["push", "origin", branchName], peer);
-    await expect(manager.inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ remoteExists: true, ahead: 0, behind: 1, aheadOfBase: 1, behindBase: 0, conflictsWithBase: false });
-  } finally { await rm(value.root, { recursive: true, force: true }); }
+    await expect(manager.inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ remoteExists: true, ahead: 0, behind: 0, aheadOfBase: 1, behindBase: 0, conflictsWithBase: false });
+    expect(logs.map((line) => JSON.parse(line)).filter((line) => line.message.includes(`+refs/heads/${branchName}:refs/remotes/origin/${branchName}`))).toHaveLength(1);
+  } finally {
+    setCommandRunnerLogger(new StructuredLogger());
+    await rm(value.root, { recursive: true, force: true });
+  }
 });
 
 test("reports base drift and dry-run merge conflicts", async () => {

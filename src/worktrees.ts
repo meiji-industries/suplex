@@ -9,7 +9,7 @@ import type { ForgeDatabase } from "./database.js";
 import { DEFAULT_MIN_FREE_DISK_GB } from "./environment-settings.js";
 import { claimOperation, operationKey, settleOperation } from "./operation-claims.js";
 import { OwnedWorktreeSchema, type OwnedWorktree } from "./developer-contracts.js";
-import { runCommand } from "./command-runner.js";
+import { runCommand, type CommandRunResult } from "./command-runner.js";
 
 
 export class WorktreeFailure extends Error {
@@ -143,7 +143,7 @@ export interface OwnedWorktreeInspection {
 }
 
 interface GitAdapter {
-  run(args: string[], cwd: string, activity?: { taskId: string; stepId: string }): Promise<string>;
+  run(args: string[], cwd: string, activity?: { taskId: string; stepId: string }, options?: { expectNonZero?: boolean | ((result: CommandRunResult) => boolean) }): Promise<string>;
 }
 
 const taskIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -166,9 +166,12 @@ function exactRegisteredWorktree(output: string, worktreePath: string, branchNam
   });
 }
 
+const branchFetches = new Map<string, number>();
+const branchFetchIntervalMs = 60_000;
+
 const defaultGit: GitAdapter = {
-  async run(args, cwd, activity) {
-    const result = await runCommand({ taskId: activity?.taskId ?? "system", stepId: activity?.stepId ?? "system", command: "git", args, cwd, timeout: 30_000 });
+  async run(args, cwd, activity, options) {
+    const result = await runCommand({ taskId: activity?.taskId ?? "system", stepId: activity?.stepId ?? "system", command: "git", args, cwd, timeout: 30_000, ...options });
     if (result.exitCode !== 0 || result.timedOut) throw Object.assign(new Error("git command failed"), { stdout: result.stdout, stderr: result.stderr, code: result.exitCode });
     return result.stdout.trim();
   },
@@ -421,7 +424,13 @@ export class WorktreeManager {
     const headSha = await this.git.run(["rev-parse", "HEAD"], canonical);
     const remoteRef = `refs/remotes/origin/${branchName}`;
     const baseRef = `refs/remotes/origin/${baseBranch}`;
-    await this.git.run(["fetch", "--no-tags", "origin", `refs/heads/${baseBranch}:${baseRef}`], canonical).catch(() => {});
+    const fetch = async (branch: string, ref: string, force = false): Promise<void> => {
+      const key = `${canonical}\0${branch}`;
+      if ((branchFetches.get(key) ?? 0) + branchFetchIntervalMs > Date.now()) return;
+      await this.git.run(["fetch", "--no-tags", "origin", `${force ? "+" : ""}refs/heads/${branch}:${ref}`], canonical);
+      branchFetches.set(key, Date.now());
+    };
+    await fetch(baseBranch, baseRef).catch(() => {});
     const baseCounts = await this.git.run(["rev-list", "--left-right", "--count", `${baseRef}...${branchName}`], canonical)
       .then((counts) => counts.split(/\s+/).map(Number))
       .catch(() => [0, 0]);
@@ -432,12 +441,17 @@ export class WorktreeManager {
         if (error && typeof error === "object" && "code" in error && error.code === 1) return true;
         throw error;
       });
-    try {
-      await this.git.run(["fetch", "--no-tags", "origin", `+refs/heads/${branchName}:${remoteRef}`], canonical);
-    } catch {
+    const remoteExists = await this.git.run(["ls-remote", "--exit-code", "--heads", "origin", branchName], canonical, undefined, {
+      expectNonZero: (result) => result.exitCode === 2,
+    }).then(() => true).catch((error: unknown) => {
+      if (error && typeof error === "object" && "code" in error && error.code === 2) return false;
+      throw error;
+    });
+    if (!remoteExists) {
       const ahead = await this.git.run(["rev-list", "--count", branchName, "^refs/remotes/origin/HEAD"], canonical).then(Number).catch(() => 0);
       return { remoteExists: false, ahead, behind: 0, aheadOfBase, behindBase, conflictsWithBase, headSha };
     }
+    await fetch(branchName, remoteRef, true);
     const [behind = 0, ahead = 0] = (await this.git.run(["rev-list", "--left-right", "--count", `${remoteRef}...${branchName}`], canonical)).split(/\s+/).map(Number);
     return { remoteExists: true, ahead, behind, aheadOfBase, behindBase, conflictsWithBase, headSha };
   }
@@ -453,6 +467,7 @@ export class WorktreeManager {
     }
     try {
       await this.git.run(["push", "--set-upstream", "origin", branchName], canonical);
+      branchFetches.delete(`${canonical}\0${branchName}`);
       if (claims && key) settleOperation(claims.database, key, "settled");
     } catch (error) {
       if (claims && key) settleOperation(claims.database, key, "failed", { message: error instanceof Error ? error.message : String(error) });

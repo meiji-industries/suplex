@@ -36,6 +36,30 @@ test("agent time is split by local day and summed per ticket", () => {
   expect(summary.lanes.find((lane) => lane.key === "planner-agent")).toMatchObject({ name: "Planner agent", trackCount: 2, durationMs: 90 * 60_000 });
 });
 
+test("agent time is grouped by project without changing flat totals", () => {
+  const tasks: TimelineTask[] = [
+    { id: "ticket-a", projectId: "project-a", issueKey: "FORGE-1", title: "Forge ticket", agentInvocations: [invocation("builder-a", "builder", at(10, 9), at(10, 11), "builder-agent", "Builder agent", "a".repeat(32))] },
+    { id: "ticket-b", projectId: "project-b", issueKey: "HERDR-1", title: "Herdr ticket", agentInvocations: [invocation("planner-b", "planner", at(10, 10), at(10, 11), "planner-agent", "Planner agent", "b".repeat(32))] },
+    { id: "ticket-c", projectId: "project-unknown", issueKey: null, title: "Unknown ticket", agentInvocations: [invocation("builder-c", "builder", at(10, 10, 30), at(10, 11), "builder-agent", "Builder agent", "a".repeat(32))] },
+  ];
+  const summary = summarizeAgentTime(tasks, [{ id: "project-a", name: "Forge" }, { id: "project-b", name: "Herdr" }], { start: new Date(2026, 7, 10).getTime(), end: new Date(2026, 7, 11).getTime() }, new Date(2026, 7, 11).getTime());
+
+  expect(summary.projectGroups.map(({ projectName, durationMs }) => ({ projectName, durationMs }))).toEqual([
+    { projectName: "Forge", durationMs: 120 * 60_000 },
+    { projectName: "Herdr", durationMs: 60 * 60_000 },
+    { projectName: "Unknown project", durationMs: 30 * 60_000 },
+  ]);
+  expect(summary.projectGroups.map((group) => group.ticketTotals.map((total) => total.key))).toEqual([["ticket-a"], ["ticket-b"], ["ticket-c"]]);
+  for (const group of summary.projectGroups) expect(group.dayTotals.reduce((total, day) => total + day.durationMs, 0)).toBe(group.durationMs);
+  expect(summary.projectGroups.reduce((total, group) => total + group.durationMs, 0)).toBe(summary.durationMs);
+  expect(summary.ticketTotals.map(({ key, durationMs }) => ({ key, durationMs }))).toEqual([
+    { key: "ticket-a", durationMs: 120 * 60_000 },
+    { key: "ticket-b", durationMs: 60 * 60_000 },
+    { key: "ticket-c", durationMs: 30 * 60_000 },
+  ]);
+  expect(summary.dayTotals.map(({ key, durationMs }) => ({ key, durationMs }))).toEqual([{ key: "2026-08-10", durationMs: 210 * 60_000 }]);
+});
+
 test("timeline selections stay inside the source window and keep a usable width", () => {
   expect(clampTimelineRange({ start: 90, end: 100 }, { start: 0, end: 100 }, 20)).toEqual({ start: 80, end: 100 });
   expect(clampTimelineRange({ start: 80, end: 20 }, { start: 0, end: 100 }, 20)).toEqual({ start: 20, end: 80 });

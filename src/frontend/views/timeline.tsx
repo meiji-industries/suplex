@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent a
 
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Button } from "../components/ui/button.js";
+import { Checkbox } from "../components/ui/checkbox.js";
 import { Input } from "../components/ui/input.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs.js";
@@ -48,7 +49,7 @@ type WorkLane = {
   trackCount: number;
 };
 
-type WorkTotal = {
+export type WorkTotal = {
   key: string;
   label: string;
   issueKey: string | null;
@@ -57,11 +58,20 @@ type WorkTotal = {
   durationMs: number;
 };
 
+export type WorkProjectGroup = {
+  projectId: string;
+  projectName: string;
+  ticketTotals: WorkTotal[];
+  dayTotals: WorkTotal[];
+  durationMs: number;
+};
+
 export type WorkTimelineSummary = {
   intervals: WorkInterval[];
   lanes: WorkLane[];
   ticketTotals: WorkTotal[];
   dayTotals: WorkTotal[];
+  projectGroups: WorkProjectGroup[];
   durationMs: number;
 };
 
@@ -151,6 +161,7 @@ export function summarizeAgentTime(tasks: TimelineTask[], projects: Pick<ApiProj
   const intervals: WorkInterval[] = [];
   const ticketTotals = new Map<string, WorkTotal>();
   const dayTotals = new Map<string, WorkTotal>();
+  const projectTotals = new Map<string, { ticketTotals: Map<string, WorkTotal>; dayTotals: Map<string, WorkTotal>; durationMs: number }>();
 
   for (const task of tasks) {
     for (const invocation of task.agentInvocations) {
@@ -180,11 +191,20 @@ export function summarizeAgentTime(tasks: TimelineTask[], projects: Pick<ApiProj
       };
       intervals.push(interval);
       addTotal(ticketTotals, task.id, task.title, interval.projectName, interval.durationMs, task.issueKey);
+      const projectTotal = projectTotals.get(task.projectId) ?? { ticketTotals: new Map(), dayTotals: new Map(), durationMs: 0 };
+      addTotal(projectTotal.ticketTotals, task.id, task.title, interval.projectName, interval.durationMs, task.issueKey);
+      projectTotal.durationMs += interval.durationMs;
+      projectTotals.set(task.projectId, projectTotal);
 
       for (let day = startOfDay(new Date(start)); day.getTime() < end; day = addDays(day, 1)) {
         const nextDay = addDays(day, 1);
         const durationMs = Math.min(end, nextDay.getTime()) - Math.max(start, day.getTime());
-        if (durationMs > 0) addTotal(dayTotals, dateInputValue(day), new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(day), "Summed agent time", durationMs);
+        if (durationMs > 0) {
+          const key = dateInputValue(day);
+          const label = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(day);
+          addTotal(dayTotals, key, label, "Summed agent time", durationMs);
+          addTotal(projectTotal.dayTotals, key, label, "Summed agent time", durationMs);
+        }
       }
     }
   }
@@ -202,11 +222,20 @@ export function summarizeAgentTime(tasks: TimelineTask[], projects: Pick<ApiProj
   for (const lane of lanes) lane.trackCount = assignTracks(lane.intervals);
   lanes.sort((left, right) => left.intervals[0]!.start - right.intervals[0]!.start || left.name.localeCompare(right.name));
 
+  const projectGroups = [...projectTotals.entries()].map(([projectId, totals]) => ({
+    projectId,
+    projectName: projectNames.get(projectId) ?? "Unknown project",
+    ticketTotals: [...totals.ticketTotals.values()].sort((left, right) => right.durationMs - left.durationMs || left.label.localeCompare(right.label)),
+    dayTotals: [...totals.dayTotals.values()].sort((left, right) => right.key.localeCompare(left.key)),
+    durationMs: totals.durationMs,
+  })).sort((left, right) => right.durationMs - left.durationMs || left.projectName.localeCompare(right.projectName));
+
   return {
     intervals,
     lanes,
     ticketTotals: [...ticketTotals.values()].sort((left, right) => right.durationMs - left.durationMs || left.label.localeCompare(right.label)),
     dayTotals: [...dayTotals.values()].sort((left, right) => right.key.localeCompare(left.key)),
+    projectGroups,
     durationMs: intervals.reduce((total, interval) => total + interval.durationMs, 0),
   };
 }
@@ -260,6 +289,12 @@ function SummaryTable({ label, totals, companyId, tickets = false }: { label: st
       )}
     </section>
   );
+}
+
+export function TimelineTotals({ summary, groupByProject, companyId }: { summary: WorkTimelineSummary; groupByProject: boolean; companyId: string }): ReactElement {
+  const groups = summary.projectGroups.length > 0 ? summary.projectGroups : [{ projectId: "empty", projectName: "", ticketTotals: [], dayTotals: [], durationMs: 0 }];
+  if (!groupByProject) return <div className="grid lg:grid-cols-2"><SummaryTable label="Daily agent-hours" totals={summary.dayTotals} companyId={companyId} /><SummaryTable label="Ticket totals" totals={summary.ticketTotals} companyId={companyId} tickets /></div>;
+  return <div>{groups.map((group) => <div key={group.projectId}>{group.projectName ? <div data-project-header={group.projectName} className="flex h-9 items-center justify-between border-t border-border/70 bg-muted/30 px-3 text-xs font-medium sm:px-4"><span>{group.projectName}</span><span>{group.ticketTotals.length} tickets · {formatDuration(group.durationMs)}</span></div> : null}<div className="grid lg:grid-cols-2"><SummaryTable label="Daily agent-hours" totals={group.dayTotals} companyId={companyId} /><SummaryTable label="Ticket totals" totals={group.ticketTotals} companyId={companyId} tickets /></div></div>)}</div>;
 }
 
 function TimelineMiniMap({ summary, fullRange, visibleRange, onRangeChange }: { summary: WorkTimelineSummary; fullRange: TimelineRange; visibleRange: TimelineRange; onRangeChange: (range: TimelineRange) => void }): ReactElement {
@@ -439,6 +474,7 @@ export function TimelineView(): ReactElement {
   const [customStart, setCustomStart] = useState(() => dateInputValue(addDays(new Date(), -6)));
   const [customEnd, setCustomEnd] = useState(() => dateInputValue(new Date()));
   const [visibleRange, setVisibleRange] = useState<TimelineRange>(() => presetRange("7-days", new Date()));
+  const [groupByProject, setGroupByProject] = useState(false);
   const requestToken = useRef(0);
 
   const reload = useCallback(async (): Promise<void> => {
@@ -522,7 +558,8 @@ export function TimelineView(): ReactElement {
         {!scopeLoaded && !error ? <div className="space-y-px p-2" aria-label="Loading timeline" aria-busy="true"><Skeleton className="h-9 w-full" /><Skeleton className="h-14 w-full" /><Skeleton className="h-14 w-full" /></div> : null}
         {scopeLoaded && overview.intervals.length === 0 ? <div className="px-4 py-8 text-xs text-muted-foreground">No agent activity in this range.</div> : null}
         {scopeLoaded && overview.intervals.length > 0 ? <WorkChart summary={summary} overview={overview} range={visibleRange} fullRange={sourceRange} companyId={companyId} now={now} onRangeChange={updateVisibleRange} /> : null}
-        {scopeLoaded ? <div className="grid lg:grid-cols-2"><SummaryTable label="Daily agent-hours" totals={summary.dayTotals} companyId={companyId} /><SummaryTable label="Ticket totals" totals={summary.ticketTotals} companyId={companyId} tickets /></div> : null}
+        {scopeLoaded ? <div className="flex h-8 items-center gap-2 border-b border-border/70 px-3 text-[11px] text-muted-foreground sm:px-4"><label className="flex items-center gap-2"><Checkbox checked={groupByProject} onCheckedChange={(checked) => setGroupByProject(checked === true)} />Group by project</label></div> : null}
+        {scopeLoaded ? <TimelineTotals summary={summary} groupByProject={groupByProject} companyId={companyId} /> : null}
       </div>
     </ApplicationFrame>
   );

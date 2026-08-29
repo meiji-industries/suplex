@@ -480,7 +480,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         if (delay > 0) await sleep(delay);
         if (workflowContext.state.phase !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
         if (patched("forge-pr-reconciler-v1")) await syncGithubPullRequest();
-        if (workflowContext.state.phase === "ci_waiting") await workflowContext.reconcileCiTurn();
+        // CI reconciliation needs a release; without one the PR sync above is the only observer. Never throw from the loop.
+        if (workflowContext.state.phase === "ci_waiting" && workflowContext.state.releaseId) await workflowContext.reconcileCiTurn();
+        else if (workflowContext.state.phase === "ci_waiting") await sleep("60 seconds");
         continue;
       }
       if (workflowContext.state.phase === "manual_merge" && patched("forge-pr-reconciler-v1")) {

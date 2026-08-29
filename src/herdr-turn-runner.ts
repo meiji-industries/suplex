@@ -61,16 +61,19 @@ export class HerdrTurnRunner {
     try {
       let correction = 0;
       let validationIssues: string | undefined;
-      session = await this.ensure(input);
       for (;;) {
         turnId = this.turnId(input, correction);
+        const initialResultPath = this.resultPath(input, turnId);
+        const marker = `[forge-turn:${turnId}]`;
+        let resultPath = initialResultPath;
+        let prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
+        session = await this.ensure(input, { path: this.promptPath(resultPath), content: prompt });
         const existing = this.existingTurn(input, correction);
         const resumed = existing?.promptSentAt ? existing : undefined;
-        const resultPath = existing
+        resultPath = existing
           ? this.existingResultPath(input, existing.resultRelativePath)
-          : this.resultPath(input, turnId);
-        const marker = `[forge-turn:${turnId}]`;
-        const prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
+          : initialResultPath;
+        prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
         if (resumed?.status === "completed") {
           const bytes = await this.stableResult(resultPath, undefined, resumed.promptSentAt, false);
           if (!bytes) throw new AgentFailure("recovery-result-invalid", "The completed Forge turn has no stable schema-valid result", { nonRetryable: true });
@@ -87,10 +90,21 @@ export class HerdrTurnRunner {
           const candidates = session.codexSessionId ? undefined : [...(await (session.provider === "codex" ? this.candidates() : this.runtimes(session.provider).candidatePaths(process.env)))];
           const start = await this.offset(session.rolloutPath);
           this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', updated_at = ? WHERE turn_id = ?", start, start, iso(), turnId);
-          await this.herdr.prompt(session.agentName, prompt);
+          const promptInArgv = session.launched && session.provider === "openrouter";
+          let baseline = await this.rolloutVersion(session.rolloutPath);
+          const submitted = promptInArgv ? session.live : await this.herdr.prompt(session.agentName, prompt);
+          this.update("UPDATE forge_herdr_turns SET status = 'waiting', updated_at = ? WHERE turn_id = ?", iso(), turnId);
+          if (input.signal?.aborted) throw new AgentFailure("cancelled", "The interactive agent turn was cancelled.", { nonRetryable: true });
+          if (!(await this.waitForPromptAcceptance(session, baseline, submitted.status))) {
+            if (promptInArgv) throw new AgentFailure("prompt-not-accepted", "Interactive agent did not start a turn after the prompt was submitted", { nonRetryable: true });
+            baseline = await this.rolloutVersion(session.rolloutPath);
+            const resent = await this.herdr.prompt(session.agentName, prompt);
+            if (!(await this.waitForPromptAcceptance(session, baseline, resent.status)))
+              throw new AgentFailure("prompt-not-accepted", "Interactive agent did not start a turn after the prompt was submitted", { nonRetryable: true });
+          }
           session = await this.relocateTranscript(await this.resolveIdentity(session, input, turnId, candidates), input, turnId);
           const promptSentAt = this.now().toISOString();
-          this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, status = 'waiting', updated_at = ? WHERE turn_id = ?", promptSentAt, promptSentAt, turnId);
+          this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", promptSentAt, promptSentAt, turnId);
         }
         const completion = await this.wait(input, session, turnId, marker, resultPath, prompt, input.signal, resumed && await this.recoverCompletion(input, session, turnId, marker, resultPath));
         session = completion.session ?? session;
@@ -321,7 +335,17 @@ export class HerdrTurnRunner {
     if (!session) throw new AgentFailure("recovery-session-missing", "The durable role session is missing", { nonRetryable: true });
     return session.id;
   }
-  private async ensure(input: HerdrTurnInput<unknown>): Promise<EnsuredRoleSession> { return this.sessions.ensureRoleSession(input.task, input.sessionRole, { provider: input.profile.provider ?? "codex", model: input.profile.model, reasoningLevel: input.profile.reasoningLevel, serviceTier: input.profile.servicePriority === "fast" ? "fast" : input.profile.servicePriority === "priority" ? "priority" : "default" }); }
+  private async ensure(input: HerdrTurnInput<unknown>, initialPrompt?: { path: string; content: string }): Promise<EnsuredRoleSession> { return this.sessions.ensureRoleSession(input.task, input.sessionRole, { provider: input.profile.provider ?? "codex", model: input.profile.model, reasoningLevel: input.profile.reasoningLevel, serviceTier: input.profile.servicePriority === "fast" ? "fast" : input.profile.servicePriority === "priority" ? "priority" : "default" }, initialPrompt ? { initialPrompt } : undefined); }
+  private promptPath(resultPath: string): string { return join(dirname(resultPath), `prompt-${randomUUID()}.forge`); }
+  private async waitForPromptAcceptance(session: EnsuredRoleSession, baseline?: string, initialStatus?: string): Promise<boolean> {
+    if (initialStatus === "working") return true;
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      const live = await this.herdr.getAgent(session.agentName);
+      if (live?.status === "working" || baseline && await this.rolloutVersion(session.rolloutPath) !== baseline) return true;
+      await this.sleep(1_000);
+    }
+    return false;
+  }
   private existingResultPath(input: HerdrTurnInput<unknown>, value: string): string {
     const path = join(input.task.runtimeRoot, value);
     if (relative(input.task.runtimeRoot, path).startsWith("..")) throw new AgentFailure("recovery-result-path-invalid", "The durable result path is outside the Forge runtime", { nonRetryable: true });
@@ -403,7 +427,7 @@ export class HerdrTurnRunner {
   }
   private async closeReviewer(session: EnsuredRoleSession, runtimeRoot: string): Promise<void> {
     await this.herdr.closePane(session.paneId);
-    await this.sessions.removeSecrets(runtimeRoot, session.id);
+    if (session.provider === "openrouter") await this.sessions.removeSecrets(runtimeRoot, session.id);
     this.update("UPDATE forge_herdr_role_sessions SET pane_id = NULL, status = 'closed', is_current = 0, updated_at = ? WHERE id = ? AND codex_session_id = ?", iso(), session.id, session.codexSessionId);
   }
   private interruptedGeneration(turnId: string): number | undefined { return this.database.authQuery((db) => (db.prepare("SELECT interrupted_generation FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { interrupted_generation: number | null } | undefined)?.interrupted_generation ?? undefined); }

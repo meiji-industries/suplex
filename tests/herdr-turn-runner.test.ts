@@ -21,7 +21,7 @@ const ResultSchema = z.object({ status: z.enum(["ok", "blocked"]) }).strict();
 const task = { taskId: "task", projectId: "project", projectSlug: "project", worktreePath: "/worktree", runtimeRoot: "" };
 const line = (payload: Record<string, unknown>) => `${JSON.stringify({ timestamp: "2026-08-24T00:00:00.000Z", type: "event_msg", payload })}\n`;
 
-interface FakeSession { id: string; provider: "codex" | "claude"; agentName: string; paneId: string; codexSessionId: string | null; generation: number; rolloutPath: string | undefined; live: { name: string; paneId: string; agentSession?: string; status: string }; }
+interface FakeSession { id: string; provider: "codex" | "claude" | "openrouter"; agentName: string; paneId: string; codexSessionId: string | null; generation: number; rolloutPath: string | undefined; launched?: boolean; live: { name: string; paneId: string; agentSession?: string; status: string }; }
 
 async function fixture(): Promise<{ root: string; database: ForgeDatabase; input: HerdrTurnInput<z.infer<typeof ResultSchema>>; session: FakeSession }> {
   const root = await mkdtemp(join(tmpdir(), "forge-herdr-turn-"));
@@ -131,6 +131,57 @@ test("converts non-retryable Herdr session failures at the turn boundary", async
   } as never, new IssueTimelineEvents(setup.database));
   try {
     await expect(runner.run(setup.input)).rejects.toEqual(expect.objectContaining<Partial<AgentFailure>>({ code: "guard_invalid", nonRetryable: true }));
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+test("passes a fresh omp prompt at launch without separately prompting", async () => {
+  const setup = await fixture();
+  setup.session = { ...setup.session, provider: "openrouter", codexSessionId: "omp-session", launched: true };
+  setup.input = { ...setup.input, profile: { ...setup.input.profile, provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } };
+  let initialPrompt: { path: string; content: string } | undefined;
+  let getCalls = 0;
+  const herdr = {
+    prompt: async () => { throw new Error("omp prompt must be passed at launch"); },
+    getAgent: async () => {
+      getCalls += 1;
+      const prompt = initialPrompt!;
+      if (getCalls === 1) {
+        await mkdir(dirname(resultPath(prompt.content)), { recursive: true });
+        await appendFile(setup.session.rolloutPath!, `${JSON.stringify({ type: "message", id: "omp-turn", timestamp: "2026-08-28T12:00:00.000Z", role: "user", message: { content: [{ type: "text", text: marker(prompt.content) }] } })}\n${JSON.stringify({ type: "message", timestamp: "2026-08-28T12:00:01.000Z", role: "assistant", stopReason: "stop", message: { content: [{ type: "text", text: "done" }] } })}\n`);
+      } else if (getCalls === 2) {
+        await writeFile(resultPath(prompt.content), JSON.stringify({ status: "ok" }));
+      }
+      return setup.session.live;
+    },
+  };
+  const sessions = {
+    ensureRoleSession: async (_task: unknown, _role: unknown, _settings: unknown, options?: { initialPrompt?: { path: string; content: string } }) => {
+      initialPrompt = options?.initialPrompt;
+      return setup.session;
+    },
+  };
+  const runner = new HerdrTurnRunner(setup.database, herdr as never, sessions as never, new IssueTimelineEvents(setup.database));
+  try {
+    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
+    expect(initialPrompt).toMatchObject({ path: expect.stringMatching(/\.forge$/), content: expect.stringMatching(/^\[forge-turn:/) });
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
+test("retries one idle prompt then reports prompt acceptance failure", async () => {
+  const setup = await fixture();
+  setup.session = { ...setup.session, live: { ...setup.session.live, status: "idle" } };
+  let prompts = 0;
+  const runner = new HerdrTurnRunner(
+    setup.database,
+    { prompt: async () => { prompts += 1; return setup.session.live; }, getAgent: async () => setup.session.live } as never,
+    { ensureRoleSession: async () => setup.session } as never,
+    new IssueTimelineEvents(setup.database),
+    undefined,
+    undefined,
+    async () => {},
+  );
+  try {
+    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "prompt-not-accepted", nonRetryable: true });
+    expect(prompts).toBe(2);
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 

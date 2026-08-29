@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { access, chmod, mkdir, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { ForgeDatabase } from "./database.js";
 import {
   HerdrFailure,
@@ -35,8 +35,12 @@ export interface EnsuredRoleSession {
   generation: number;
   rolloutPath?: string;
   live: HerdrAgent;
+  launched: boolean;
 }
 const now = (): string => new Date().toISOString();
+export interface EnsureRoleSessionOptions {
+  initialPrompt?: { path: string; content: string };
+}
 const quote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 const isMissingHerdrFailure = (error: unknown): boolean =>
   error instanceof HerdrFailure &&
@@ -150,6 +154,7 @@ export class HerdrSessionStore {
     task: RoleSessionTask,
     role: RoleSessionRole,
     settings: LaunchSettings,
+    options: EnsureRoleSessionOptions = {},
   ): Promise<EnsuredRoleSession> {
     const existing = this.database.authQuery((db) => db.prepare("SELECT * FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(task.taskId, role) as Record<string, any> | undefined);
     const provider = settings.provider ?? "codex";
@@ -172,6 +177,7 @@ export class HerdrSessionStore {
         task,
         role,
         { ...settings, provider },
+        options,
       );
     } finally {
       release();
@@ -191,6 +197,7 @@ export class HerdrSessionStore {
     task: RoleSessionTask,
     role: RoleSessionRole,
     settings: LaunchSettings,
+    options: EnsureRoleSessionOptions,
   ): Promise<EnsuredRoleSession> {
     if (settings.provider === "openrouter" && !this.credentials.get("openrouter"))
       throw new HerdrFailure("authentication-required", false, "OpenRouter API key is not configured. Add it in Settings > Providers and retry.");
@@ -203,7 +210,7 @@ export class HerdrSessionStore {
     if (existing && existing.paneId === row.pane_id) {
       this.assertIdentity(row, existing);
       if (row.launch_fingerprint === fingerprint)
-        return this.ready(row, existing, fingerprint);
+        return this.ready(row, existing, fingerprint, false);
       await this.closeRecordedPane(row.id, existing.paneId);
       closedPaneId = existing.paneId;
       existing = null;
@@ -308,7 +315,10 @@ export class HerdrSessionStore {
         row = this.readRoleSession(row.id)!;
       }
       const transcriptExists = row.codex_session_id ? await this.hasRollout(runtime, row.codex_session_id, task.worktreePath) : false;
-      const args = runtime.launchArgs(settings, row.codex_session_id ?? null, transcriptExists);
+      const initialPromptPath = runtime.kind === "omp" && options.initialPrompt
+        ? await this.writeInitialPrompt(options.initialPrompt)
+        : undefined;
+      const args = runtime.launchArgs(settings, row.codex_session_id ?? null, transcriptExists, initialPromptPath);
       let live: HerdrAgent;
       try {
         await runtime.prepareLaunch({ cwd: task.worktreePath, env: this.environment });
@@ -337,6 +347,7 @@ export class HerdrSessionStore {
         { ...row, agent_name: name, pane_id: live.paneId, generation: Number(row.generation) + 1 },
         live,
         fingerprint,
+        true,
       );
     } catch (error) {
       if (secretsFile) await this.removeSecrets(task.runtimeRoot, row.id);
@@ -596,6 +607,12 @@ export class HerdrSessionStore {
       await rm(launchPath, { force: true }).catch(() => undefined);
     }
   }
+  private async writeInitialPrompt(input: { path: string; content: string }): Promise<string> {
+    await mkdir(dirname(input.path), { recursive: true, mode: 0o700 });
+    await writeFile(input.path, input.content, { mode: 0o600 });
+    await chmod(input.path, 0o600);
+    return resolve(input.path);
+  }
   private async writeLaunchScript(
     runtimeRoot: string,
     body: string,
@@ -783,6 +800,7 @@ if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READ
     row: Record<string, any>,
     live: HerdrAgent,
     fingerprint: string,
+    launched: boolean,
   ): EnsuredRoleSession {
     this.database.authQuery((db) =>
       db
@@ -815,6 +833,7 @@ if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READ
         ? { rolloutPath: row.rollout_path }
         : {}),
       live,
+      launched,
     };
   }
 }

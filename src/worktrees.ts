@@ -437,7 +437,7 @@ export class WorktreeManager {
       if (!claim.claimed && claim.status === "settled") return;
     }
     try {
-      await this.git.run(["push", "origin", branchName], canonical);
+      await this.git.run(["push", "--set-upstream", "origin", branchName], canonical);
       if (claims && key) settleOperation(claims.database, key, "settled");
     } catch (error) {
       if (claims && key) settleOperation(claims.database, key, "failed", { message: error instanceof Error ? error.message : String(error) });

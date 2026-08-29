@@ -75,7 +75,7 @@ test("uses supported gh commands and parses branch and pull observations", async
     ["git", "rev-parse", "HEAD"],
     ["git", "rev-parse", "HEAD^{tree}"],
     ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-    ["git", "push", "origin", "HEAD:refs/heads/issue/7"],
+    ["git", "push", "--set-upstream", "origin", "HEAD:refs/heads/issue/7"],
     ["gh", "api", "repos/acme/forge/branches/main"],
     ["gh", "pr", "list", "--repo", "acme/forge", "--head", "issue/7", "--state", "open", "--limit", "100", "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid"],
     ["gh", "pr", "list", "--repo", "acme/forge", "--head", "issue/7", "--state", "open", "--limit", "100", "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid"],

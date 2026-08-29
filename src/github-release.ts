@@ -411,7 +411,7 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       }
     },
     async pushNormal(input) {
-      try { await runGit(["push", "origin", `HEAD:refs/heads/${input.branch}`], { cwd: input.cwd, timeout: 60_000, maxBuffer: 64 * 1024 }); } catch (error) { throw classifyCommandFailure(error, "normal push"); }
+      try { await runGit(["push", "--set-upstream", "origin", `HEAD:refs/heads/${input.branch}`], { cwd: input.cwd, timeout: 60_000, maxBuffer: 64 * 1024 }); } catch (error) { throw classifyCommandFailure(error, "normal push"); }
     },
     async reconcileBranch(input) {
       const remoteRef = `refs/remotes/origin/${input.branch}`;

@@ -57,9 +57,11 @@ export async function sleep(value: string | number): Promise<void> {
 export async function condition(predicate: () => boolean, timeout?: string | number): Promise<boolean> {
   const ctx = runExecution.current();
   const deadline = timeout === undefined ? undefined : ctx.now() + durationMs(timeout)!;
+  // Commands and signals wake the run, so the predicate is re-checked on every state change; the
+  // 1 s cap only bounds clock-driven predicates. Polling faster re-parses the state and burns CPU.
   while (!predicate()) {
     if (deadline !== undefined && ctx.now() >= deadline) return false;
-    await sleep(Math.min(50, deadline === undefined ? 50 : Math.max(1, deadline - ctx.now())));
+    await sleep(Math.min(1_000, deadline === undefined ? 1_000 : Math.max(1, deadline - ctx.now())));
   }
   return true;
 }

@@ -125,7 +125,9 @@ export function developerPaneEnvironment(input: {
   if (input.readinessSentinel)
     values.FORGE_HERDR_READINESS_SENTINEL = input.readinessSentinel;
   const shell = "/bin/zsh";
-  const script = `exec ${quote(shell)} -i`;
+  // CI images can omit zsh. Keep the guarded environment usable with sh.
+  // The fallback also writes the readiness file because it does not read zshrc.
+  const script = `if [ -x ${quote(shell)} ]; then exec ${quote(shell)} -i; fi; PATH="$FORGE_GIT_GUARD_DIR:/usr/bin"; export PATH; printf '%s\\n' "$PATH"; command -v git; if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READINESS_SENTINEL"; fi; exec /bin/sh -i`;
   const command = `exec env -i ${Object.entries(values)
     .map(([key, value]) => `${key}=${quote(value)}`)
     .join(" ")}${input.secretsFile ? " OPENROUTER_API_KEY=\"$OPENROUTER_API_KEY\"" : ""} /bin/sh -c ${quote(script)}`;

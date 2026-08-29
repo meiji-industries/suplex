@@ -26,8 +26,9 @@ export const PAYLOAD_POLICY = {
 
 export type PayloadBoundary = keyof typeof PAYLOAD_POLICY;
 
-const allowedIdentityKeys: Record<string, true> = { artifactId: true, requestHash: true, workflowId: true, issueId: true, companyId: true, projectId: true, projectRevisionId: true, source: true };
+const allowedIdentityKeys: Record<string, true> = { artifactId: true, requestHash: true, workflowId: true, issueId: true, companyId: true, projectId: true, projectRevisionId: true };
 const forbiddenKey = /^(?:prompt|source|log|rawDiff|conflictDiff|taskBody|description|authorization|password|token|credential|secret|privateKey|apiKey)$/i;
+const sourceIdentifier = /^[a-z_]+$/;
 const forbiddenValue = /-----BEGIN [^-]+-----|\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\b|(?:bearer|basic)\s+[a-z0-9+/=_-]{16,}/i;
 const authorizationKeys = new Set(["authorizationId", "taskId", "companyId", "projectId", "workflowId", "planRevision", "planArtifactId", "planSha256", "authorizationKind", "approvalDecisionId", "authorizedAt"]);
 
@@ -69,7 +70,11 @@ function assertSafeValue(value: unknown, path = "value"): void {
   }
   for (const [key, child] of Object.entries(value)) {
     if (key === "authorization" && approvedAuthorizationEnvelope(child)) { assertSafeValue(child, `${path}.${key}`); continue; }
-    if (!allowedIdentityKeys[key] && forbiddenKey.test(key)) throw new PayloadPolicyViolation(path, 0, 0);
+    const sourceAllowed = key === "source" && (
+      child !== null && typeof child === "object" && !Array.isArray(child)
+      || typeof child === "string" && sourceIdentifier.test(child)
+    );
+    if (!sourceAllowed && !allowedIdentityKeys[key] && forbiddenKey.test(key)) throw new PayloadPolicyViolation(path, 0, 0);
     assertSafeValue(child, `${path}.${key}`);
   }
 }

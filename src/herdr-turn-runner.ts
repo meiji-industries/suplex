@@ -94,9 +94,9 @@ export class HerdrTurnRunner {
           if (!promptInArgv) await this.herdr.prompt(session.agentName, prompt);
           this.update("UPDATE forge_herdr_turns SET status = 'waiting', updated_at = ? WHERE turn_id = ?", iso(), turnId);
           if (input.signal?.aborted) throw new AgentFailure("cancelled", "The interactive agent turn was cancelled.", { nonRetryable: true });
-          session = await this.resolveIdentity(session, input, turnId, candidates);
           const promptSentAt = this.now().toISOString();
           this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", promptSentAt, promptSentAt, turnId);
+          session = await this.resolveIdentity(session, input, turnId, candidates);
         }
         const completion = await this.wait(input, session, turnId, marker, resultPath, prompt, input.signal, resumed && await this.recoverCompletion(input, session, turnId, marker, resultPath));
         session = completion.session ?? session;
@@ -215,7 +215,14 @@ export class HerdrTurnRunner {
       const live = (await snapshotAgents(this.herdr)).find((agent) => agent.name === session.agentName) ?? await this.herdr.getAgent(session.agentName);
       const paths = (session.provider ?? "codex") === "codex" ? await this.candidates() : await runtime.candidatePaths(process.env);
       const reported = live?.agentSession;
-      const reportedPath = session.provider === "openrouter" && reported && isAbsolute(reported) && reported.endsWith(".jsonl") ? reported : undefined;
+      // OMP can report the transcript with its terminal title before the path.
+      // Use the trailing absolute JSONL path so its argv prompt is adopted.
+      const reportedTranscript = session.provider === "openrouter" && reported
+        ? reported.match(/(\/[^\n\r]*\.jsonl)$/)?.[1]
+        : undefined;
+      const reportedPath = reportedTranscript && isAbsolute(reportedTranscript)
+        ? reportedTranscript
+        : undefined;
       try {
         const rollout = await runtime.discover(reportedPath ? [reportedPath] : paths, { cwd: input.task.worktreePath, ...(session.codexSessionId ? { sessionId: session.codexSessionId } : reportedPath ? {} : reported ? { sessionId: reported } : { before: baseline }) });
         this.bindIdentity(session.id, rollout.sessionId, rollout.path);
@@ -436,7 +443,8 @@ export class HerdrTurnRunner {
     if (
       completionVersion
         ? version !== completionVersion
-        : !promptSentAt || first.mtimeMs <= Date.parse(promptSentAt)
+        // ponytail: 1s slack — Linux stamps mtimes from a coarse clock that trails Date.now() by a tick, and some filesystems only keep whole seconds.
+        : !promptSentAt || first.mtimeMs < Date.parse(promptSentAt) - 1_000
     ) return undefined;
     await delay(250);
     return version === await this.resultVersion(path) ? readFile(path).catch(() => undefined) : undefined;

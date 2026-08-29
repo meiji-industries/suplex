@@ -44,7 +44,11 @@ export async function loadIssueRuns(engine: IssueEngine): Promise<number> {
 }
 export function reconcileWorkflowStalls(engine: IssueEngine): { inspected: number; stalled: number } {
   let stalled = 0;
-  for (const run of engine.runs.values()) if (run.error) { stalled += 1; engine.database.authTransaction((db) => db.prepare("UPDATE forge_issue_projections SET projection_status='stalled', projection_status_message=? WHERE workflow_id=?").run(run.error instanceof Error ? run.error.message : "Engine loop failed", run.workflowId)); }
+  for (const run of engine.runs.values()) {
+    const status = run.error ? "stalled" : "current";
+    if (run.error) stalled += 1;
+    engine.database.authTransaction((db) => db.prepare("UPDATE forge_issue_projections SET projection_status=?, projection_status_message=? WHERE workflow_id=?").run(status, run.error ? (run.error instanceof Error ? run.error.message : "Engine loop failed") : null, run.workflowId));
+  }
   return { inspected: engine.runs.size, stalled };
 }
 

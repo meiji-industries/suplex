@@ -362,6 +362,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         if (true) await syncGithubPullRequest();
         continue;
       }
+      if (workflowContext.state.phase === "releasing" && workflowContext.state.activeOperation === null && !workflowContext.state.releaseRetryAt) {
+        workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision: workflowContext.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: workflowContext.addRevisionCommand(["review_delivery", "cancel_issue"]), pendingAction: "Publish was interrupted — re-review before publishing", lastEventId: `${workflowContext.state.workflowId}:${workflowContext.state.revision + 1}` });
+        await workflowContext.project();
+        continue;
+      }
       if (workflowContext.state.phase === "releasing" && workflowContext.state.releaseRetryAt) {
         const delay = Math.max(0, Date.parse(workflowContext.state.releaseRetryAt) - Date.now());
         if (delay > 0) await sleep(delay);

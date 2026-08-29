@@ -79,6 +79,21 @@ test("stale projections do not write and re-issued events replace their state", 
   }
 });
 
+test("a successful projection clears a stale workflow stall", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-projection-stall-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    database.projectIssueEvent(createEvent(0, "backlog", "workflow-integrity:0"));
+    database.authTransaction((db) => db.prepare("UPDATE forge_issue_projections SET projection_status = 'stalled', projection_status_message = 'Activity pushDeliveryBranch failed' WHERE task_id = ?").run("task-integrity"));
+    database.projectIssueEvent(createEvent(1, "planning", "workflow-integrity:1"));
+    expect(database.authQuery((db) => db.prepare("SELECT projection_status, projection_status_message FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ projection_status: "current", projection_status_message: null });
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("records one timeline row for repeated observations of a phase", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-projection-phase-events-test-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));

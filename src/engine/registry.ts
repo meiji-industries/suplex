@@ -11,6 +11,7 @@ export interface RunExecutionContext {
   queries: Map<string, Handler>;
   activity(name: string, args: unknown[], options: ActivityCallOptions): Promise<unknown>;
   wait(milliseconds: number): Promise<void>;
+  now(): number;
   wake(): void;
 }
 export interface ActivityCallOptions {
@@ -39,7 +40,7 @@ export function setHandler(name: string, handler: (...args: any[]) => any, optio
 }
 export function workflowInfo(): { runId: string; workflowId: string; historyLength: number; continueAsNewSuggested: boolean; unsafe: { now(): number } } {
   const ctx = runExecution.current();
-  return { runId: ctx.runId, workflowId: ctx.workflowId, historyLength: 0, continueAsNewSuggested: false, unsafe: { now: Date.now } };
+  return { runId: ctx.runId, workflowId: ctx.workflowId, historyLength: 0, continueAsNewSuggested: false, unsafe: { now: () => ctx.now() } };
 }
 
 export function durationMs(value: string | number | undefined): number | undefined {
@@ -54,10 +55,11 @@ export async function sleep(value: string | number): Promise<void> {
   await ctx.wait(durationMs(value)!);
 }
 export async function condition(predicate: () => boolean, timeout?: string | number): Promise<boolean> {
-  const deadline = timeout === undefined ? undefined : Date.now() + durationMs(timeout)!;
+  const ctx = runExecution.current();
+  const deadline = timeout === undefined ? undefined : ctx.now() + durationMs(timeout)!;
   while (!predicate()) {
-    if (deadline !== undefined && Date.now() >= deadline) return false;
-    await sleep(Math.min(50, deadline === undefined ? 50 : Math.max(1, deadline - Date.now())));
+    if (deadline !== undefined && ctx.now() >= deadline) return false;
+    await sleep(Math.min(50, deadline === undefined ? 50 : Math.max(1, deadline - ctx.now())));
   }
   return true;
 }

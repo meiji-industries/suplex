@@ -6,7 +6,7 @@ import { createActivities, createActivityCaller, type ActivityCaller } from "./a
 import { CancelledFailure } from "./failures.js";
 import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, buildInitialIssueWorkflowState, type IssueWorkflowInput, type IssueWorkflowState } from "./issue-contracts.js";
 import { issueWorkflow } from "./workflows.js";
-import { runExecution, type Handler } from "./registry.js";
+import { runExecution, type Handler, type RunExecutionContext } from "./registry.js";
 
 export interface EngineClock {
   now(): number;
@@ -49,6 +49,7 @@ export class IssueRun {
   private workflowPromise?: Promise<IssueWorkflowState>;
   private loopError?: unknown;
   private initialState: IssueWorkflowState;
+  private executionContext?: RunExecutionContext;
 
   constructor(
     readonly input: IssueWorkflowInput,
@@ -69,7 +70,7 @@ export class IssueRun {
 
   start(): void {
     if (this.workflowPromise) return;
-    const context = {
+    const context: RunExecutionContext = {
       workflowId: this.workflowId,
       runId: this.runId,
       signal: this.controller.signal,
@@ -80,6 +81,7 @@ export class IssueRun {
       now: () => this.clock.now(),
       wake: () => this.wakeable.wake(),
     };
+    this.executionContext = context;
     this.workflowPromise = runExecution.run(context, () => issueWorkflow(this.input));
     void this.workflowPromise.catch((error) => {
       if (!this.controller.signal.aborted) this.loopError = error;
@@ -101,7 +103,7 @@ export class IssueRun {
       }
       const handler = this.commands.get(name);
       if (!handler) throw new Error(`Unknown issue command: ${name}`);
-      const result = IssueWorkflowStateSchema.parse(await handler(input as never));
+      const result = IssueWorkflowStateSchema.parse(await runExecution.run(this.executionContext!, () => handler(input as never)));
       if (commandId !== "legacy-command") this.database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_engine_commands (command_id, workflow_id, command, result_json, created_at) VALUES (?, ?, ?, ?, ?)").run(commandId, this.workflowId, name, JSON.stringify(result), new Date(this.clock.now()).toISOString()));
       this.initialState = result;
       this.wakeable.wake();
@@ -115,7 +117,7 @@ export class IssueRun {
     await this.ready();
     const handler = this.commands.get(name);
     if (!handler) throw new Error(`Unknown issue signal: ${name}`);
-    await handler(...args as never[]);
+    await runExecution.run(this.executionContext!, () => handler(...args as never[]));
     this.wakeable.wake();
   }
 

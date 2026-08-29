@@ -481,10 +481,11 @@ export class CliHerdrClient implements HerdrClient {
     );
   }
   async readAgent(name: string, source = "recent-unwrapped" as const, lines?: number): Promise<string> {
-    return String(
-      (await this.call(["agent", "read", name, "--source", source, ...(lines ? ["--lines", String(lines)] : [])]))
-        .text ?? "",
-    );
+    // `agent read` prints plain text; older builds wrapped it in the JSON envelope.
+    const { stdout } = await this.runner(this.binary, ["agent", "read", name, "--source", source, ...(lines ? ["--lines", String(lines)] : [])], { maxBuffer: 1024 * 1024 });
+    const parsed = json(stdout, undefined) as Json | undefined;
+    const result = parsed && typeof parsed === "object" ? ((parsed.result as Json | undefined) ?? parsed) : undefined;
+    return typeof result?.text === "string" ? result.text : stdout;
   }
   async waitAgent(name: string): Promise<HerdrAgent> {
     return agent(

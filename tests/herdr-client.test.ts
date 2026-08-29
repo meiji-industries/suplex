@@ -259,3 +259,11 @@ test("agent startup allows Codex interactive readiness under load", async () => 
     ],
   ]);
 });
+
+test("readAgent returns plain-text pane output as well as the JSON envelope", async () => {
+  const { CliHerdrClient } = await import("../src/herdr-client.js");
+  const plain = new CliHerdrClient("herdr", (async () => ({ stdout: "line one\nline two\n", stderr: "", exitCode: 0 })) as never);
+  expect(await plain.readAgent("agent", "recent-unwrapped", 5)).toBe("line one\nline two\n");
+  const wrapped = new CliHerdrClient("herdr", (async () => ({ stdout: JSON.stringify({ id: "x", result: { text: "wrapped" } }), stderr: "", exitCode: 0 })) as never);
+  expect(await wrapped.readAgent("agent")).toBe("wrapped");
+});

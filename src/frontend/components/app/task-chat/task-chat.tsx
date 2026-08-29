@@ -14,7 +14,8 @@ export function TaskChat({ task, busy, onRefresh, onMarkReady, onOpenDiff, onSen
   const { liveEventsByExecution, loadEvents } = useTaskChatStream(task.id, task, onRefresh);
   const [optimistic, setOptimistic] = useState<Extract<ChatItem, { kind: "member" }>[]>([]);
   const [panes, setPanes] = useState<Array<{ role: string; text: string }>>([]);
-  const running = task.phase === "development" || task.agentInvocations.some((invocation) => invocation.status === "running");
+  // Panes keep moving in every non-terminal phase (CI repair, reviews, integrator work), so keep tailing.
+  const running = !["done", "cancelled"].includes(task.phase);
   useEffect(() => {
     let active = true;
     const load = async () => { const response = await fetch(`/api/tasks/${encodeURIComponent(task.id)}/pane`); if (active && response.ok) setPanes(((await response.json()) as { panes?: Array<{ role: string; text: string }> }).panes ?? []); };

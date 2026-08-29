@@ -74,6 +74,7 @@ export class HerdrTurnRunner {
           ? this.existingResultPath(input, existing.resultRelativePath)
           : initialResultPath;
         prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
+        let recycled = false;
         if (resumed?.status === "completed") {
           const bytes = await this.stableResult(resultPath, undefined, resumed.promptSentAt, false);
           if (!bytes) throw new AgentFailure("recovery-result-invalid", "The completed Forge turn has no stable schema-valid result", { nonRetryable: true });
@@ -90,23 +91,31 @@ export class HerdrTurnRunner {
           const candidates = session.codexSessionId ? undefined : [...(await (session.provider === "codex" ? this.candidates() : this.runtimes(session.provider).candidatePaths(process.env)))];
           const start = await this.offset(session.rolloutPath);
           this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', updated_at = ? WHERE turn_id = ?", start, start, iso(), turnId);
-          const promptInArgv = session.launched && session.provider === "openrouter";
+          let promptInArgv = session.launched && session.provider === "openrouter";
           let baseline = await this.rolloutVersion(session.rolloutPath);
-          const submitted = promptInArgv ? session.live : await this.herdr.prompt(session.agentName, prompt);
+          let submitted = promptInArgv ? session.live : await this.herdr.prompt(session.agentName, prompt);
           this.update("UPDATE forge_herdr_turns SET status = 'waiting', updated_at = ? WHERE turn_id = ?", iso(), turnId);
           if (input.signal?.aborted) throw new AgentFailure("cancelled", "The interactive agent turn was cancelled.", { nonRetryable: true });
           if (!(await this.waitForPromptAcceptance(session, baseline, submitted.status))) {
             if (promptInArgv) throw new AgentFailure("prompt-not-accepted", "Interactive agent did not start a turn after the prompt was submitted", { nonRetryable: true });
             baseline = await this.rolloutVersion(session.rolloutPath);
-            const resent = await this.herdr.prompt(session.agentName, prompt);
-            if (!(await this.waitForPromptAcceptance(session, baseline, resent.status)))
-              throw new AgentFailure("prompt-not-accepted", "Interactive agent did not start a turn after the prompt was submitted", { nonRetryable: true });
+            submitted = await this.herdr.prompt(session.agentName, prompt);
+            if (!(await this.waitForPromptAcceptance(session, baseline, submitted.status))) {
+              if (session.provider !== "openrouter") throw new AgentFailure("prompt-not-accepted", "Interactive agent did not start a turn after the prompt was submitted", { nonRetryable: true });
+              session = await this.recycleRejectedSession(input, prompt, resultPath, turnId);
+              recycled = true;
+              promptInArgv = session.launched && session.provider === "openrouter";
+              baseline = await this.rolloutVersion(session.rolloutPath);
+              submitted = promptInArgv ? session.live : await this.herdr.prompt(session.agentName, prompt);
+              if (!(await this.waitForPromptAcceptance(session, baseline, submitted.status)))
+                throw new AgentFailure("prompt-not-accepted", "Interactive agent did not start a turn after the prompt was submitted", { nonRetryable: true });
+            }
           }
           session = await this.relocateTranscript(await this.resolveIdentity(session, input, turnId, candidates), input, turnId);
           const promptSentAt = this.now().toISOString();
           this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", promptSentAt, promptSentAt, turnId);
         }
-        const completion = await this.wait(input, session, turnId, marker, resultPath, prompt, input.signal, resumed && await this.recoverCompletion(input, session, turnId, marker, resultPath));
+        const completion = await this.wait(input, session, turnId, marker, resultPath, prompt, recycled, input.signal, resumed && await this.recoverCompletion(input, session, turnId, marker, resultPath));
         session = completion.session ?? session;
         const bytes = await this.stableResult(resultPath, completion.resultVersion, this.promptSentAt(turnId), completion.steeredAfterCompletion);
         if (!bytes) continue;
@@ -132,7 +141,7 @@ export class HerdrTurnRunner {
     }
   }
 
-  private async wait(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, marker: string, resultPath: string, prompt: string, signal?: AbortSignal, recovered?: Completion): Promise<Completion> {
+  private async wait(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, marker: string, resultPath: string, prompt: string, recycled: boolean, signal?: AbortSignal, recovered?: Completion): Promise<Completion> {
     const completion: Completion = recovered ?? { marker: false, completed: false, steeredAfterCompletion: false };
     let activeTurnId: string | undefined;
     let polls = 0;
@@ -187,6 +196,17 @@ export class HerdrTurnRunner {
             const now = this.now().toISOString();
             this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", now, now, turnId);
             resends += 1;
+          } else if (!recycled && session.provider === "openrouter") {
+            session = await this.recycleRejectedSession(input, prompt, resultPath, turnId);
+            recycled = true;
+            const baseline = await this.rolloutVersion(session.rolloutPath);
+            const submitted = session.launched ? session.live : await this.herdr.prompt(session.agentName, prompt);
+            if (!(await this.waitForPromptAcceptance(session, baseline, submitted.status)))
+              throw new AgentFailure("prompt-not-accepted", "Interactive agent did not start a turn after the prompt was submitted", { nonRetryable: true });
+            session = await this.relocateTranscript(await this.resolveIdentity(session, input, turnId), input, turnId);
+            const now = this.now().toISOString();
+            this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", now, now, turnId);
+            resends = 0;
           } else if (resends >= 3) {
             await this.updateAttention(session, turnId, "awaiting_human", "Prompt was not accepted by the agent after 4 attempts");
           }
@@ -327,16 +347,17 @@ export class HerdrTurnRunner {
   private completionBlock(marker: string, path: string, schema: string): string { return `${marker}\n\nForge completion contract\n- Atomically write exactly one JSON object to ${path} (write a sibling temp file, then rename).\n- The object must satisfy ${schema}; no Markdown fence or commentary belongs in the file.\n- Do not say the task is complete until the result file exists.\n- Do not repeat the file contents in your reply; one short sentence is enough.`; }
   private existingTurn(input: HerdrTurnInput<unknown>, correction: number): { resultRelativePath: string; status: string; promptSentAt: string | undefined; resultHash: string | undefined } | undefined {
     return this.database.authQuery((db) => db.prepare(
-      "SELECT result_relative_path AS resultRelativePath, status, prompt_sent_at AS promptSentAt, result_sha256 AS resultHash FROM forge_herdr_turns WHERE ledger = ? AND execution_id = ? AND prompt_kind = ? AND correction_index = ? AND task_id = ? AND role_session_id = ?",
-    ).get(input.ledger, input.executionId, input.promptKind, correction, input.task.taskId, this.roleSessionId(input)) as { resultRelativePath: string; status: string; promptSentAt: string | undefined; resultHash: string | undefined } | undefined);
-  }
-  private roleSessionId(input: HerdrTurnInput<unknown>): string {
-    const session = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(input.task.taskId, input.sessionRole) as { id: string } | undefined);
-    if (!session) throw new AgentFailure("recovery-session-missing", "The durable role session is missing", { nonRetryable: true });
-    return session.id;
+      "SELECT result_relative_path AS resultRelativePath, status, prompt_sent_at AS promptSentAt, result_sha256 AS resultHash FROM forge_herdr_turns WHERE ledger = ? AND execution_id = ? AND prompt_kind = ? AND correction_index = ? AND task_id = ?",
+    ).get(input.ledger, input.executionId, input.promptKind, correction, input.task.taskId) as { resultRelativePath: string; status: string; promptSentAt: string | undefined; resultHash: string | undefined } | undefined);
   }
   private async ensure(input: HerdrTurnInput<unknown>, initialPrompt?: { path: string; content: string }): Promise<EnsuredRoleSession> { return this.sessions.ensureRoleSession(input.task, input.sessionRole, { provider: input.profile.provider ?? "codex", model: input.profile.model, reasoningLevel: input.profile.reasoningLevel, serviceTier: input.profile.servicePriority === "fast" ? "fast" : input.profile.servicePriority === "priority" ? "priority" : "default" }, initialPrompt ? { initialPrompt } : undefined); }
   private promptPath(resultPath: string): string { return join(dirname(resultPath), `prompt-${randomUUID()}.forge`); }
+  private async recycleRejectedSession(input: HerdrTurnInput<unknown>, prompt: string, resultPath: string, turnId: string): Promise<EnsuredRoleSession> {
+    await this.sessions.retireRoleSession(input.task.taskId, input.sessionRole);
+    const session = await this.ensure(input, { path: this.promptPath(resultPath), content: prompt });
+    this.update("UPDATE forge_herdr_turns SET role_session_id = ?, rollout_path = ?, rollout_start_offset = 0, rollout_cursor_offset = 0, updated_at = ? WHERE turn_id = ?", session.id, session.rolloutPath ?? null, iso(), turnId);
+    return session;
+  }
   private async waitForPromptAcceptance(session: EnsuredRoleSession, baseline?: string, initialStatus?: string): Promise<boolean> {
     if (initialStatus === "working") return true;
     for (let attempt = 0; attempt < 15; attempt += 1) {

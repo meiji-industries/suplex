@@ -166,14 +166,85 @@ test("passes a fresh omp prompt at launch without separately prompting", async (
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("retries one idle prompt then reports prompt acceptance failure", async () => {
+test("recycles a rejected existing omp session and starts its prompt from argv", async () => {
   const setup = await fixture();
-  setup.session = { ...setup.session, live: { ...setup.session.live, status: "idle" } };
-  let prompts = 0;
+  const replacement: FakeSession = {
+    ...setup.session,
+    id: "replacement",
+    provider: "openrouter",
+    agentName: "replacement",
+    paneId: "replacement-pane",
+    codexSessionId: "omp-session",
+    launched: true,
+    live: { name: "replacement", paneId: "replacement-pane", agentSession: "omp-session", status: "working" },
+  };
+  setup.session = { ...setup.session, provider: "openrouter", launched: false, live: { ...setup.session.live, status: "idle" } };
+  setup.input = { ...setup.input, profile: { ...setup.input.profile, provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } };
+  let initialPrompt: { path: string; content: string } | undefined;
+  let freshGets = 0;
+  let ensures = 0;
+  const herdr = {
+    prompt: async () => setup.session.live,
+    getAgent: async (name: string) => {
+      if (name !== replacement.agentName) return setup.session.live;
+      freshGets += 1;
+      if (freshGets === 1) {
+        const prompt = initialPrompt!;
+        await appendFile(replacement.rolloutPath!, `${JSON.stringify({ type: "message", id: "omp-turn", timestamp: "2026-08-28T12:00:00.000Z", role: "user", message: { content: [{ type: "text", text: marker(prompt.content) }] } })}\n${JSON.stringify({ type: "message", timestamp: "2026-08-28T12:00:01.000Z", role: "assistant", stopReason: "stop", message: { content: [{ type: "text", text: "done" }] } })}\n`);
+      } else if (freshGets === 2) {
+        await writeFile(resultPath(initialPrompt!.content), JSON.stringify({ status: "ok" }));
+      }
+      return replacement.live;
+    },
+  };
+  const sessions = {
+    ensureRoleSession: async (_task: unknown, _role: unknown, _settings: unknown, options?: { initialPrompt?: { path: string; content: string } }) => {
+      ensures += 1;
+      if (ensures === 1) return setup.session;
+      initialPrompt = options?.initialPrompt;
+      return replacement;
+    },
+    retireRoleSession: async () => {
+      const now = new Date().toISOString();
+      setup.database.authQuery((db) => {
+        db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0 WHERE id = 'session'").run();
+        db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, codex_session_id, agent_name, pane_id, rollout_path, status, created_at, updated_at) VALUES ('replacement', 'task', 'lead', 2, 1, 'openrouter', 'omp-session', 'replacement', 'replacement-pane', ?, 'ready', ?, ?)").run(replacement.rolloutPath, now, now);
+      });
+      return true;
+    },
+  };
+  const runner = new HerdrTurnRunner(setup.database, herdr as never, sessions as never, new IssueTimelineEvents(setup.database), undefined, undefined, async () => {});
+  try {
+    await expect(runner.run(setup.input)).resolves.toMatchObject({ roleSessionId: "replacement", result: { status: "ok" } });
+    expect(initialPrompt?.content).toMatch(/^\[forge-turn:/);
+    expect(setup.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_herdr_turns").get() as { count: number }).count).toBe(1);
+    expect(setup.database.authQuery((db) => db.prepare("SELECT role_session_id AS roleSessionId FROM forge_herdr_turns").get() as { roleSessionId: string }).roleSessionId).toBe("replacement");
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
+test("reports prompt-not-accepted when the recycled argv launch also stays idle", async () => {
+  const setup = await fixture();
+  const replacement = { ...setup.session, id: "replacement", provider: "openrouter" as const, agentName: "replacement", launched: true, live: { ...setup.session.live, name: "replacement", status: "idle" } };
+  setup.session = { ...setup.session, provider: "openrouter", launched: false, live: { ...setup.session.live, status: "idle" } };
+  setup.input = { ...setup.input, profile: { ...setup.input.profile, provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } };
+  let retired = 0;
+  let ensures = 0;
+  const sessions = {
+    ensureRoleSession: async () => ++ensures === 1 ? setup.session : replacement,
+    retireRoleSession: async () => {
+      retired += 1;
+      const now = new Date().toISOString();
+      setup.database.authQuery((db) => {
+        db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0 WHERE id = 'session'").run();
+        db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, codex_session_id, agent_name, pane_id, rollout_path, status, created_at, updated_at) VALUES ('replacement', 'task', 'lead', 2, 1, 'openrouter', 'omp-session', 'replacement', 'pane', ?, 'ready', ?, ?)").run(replacement.rolloutPath, now, now);
+      });
+      return true;
+    },
+  };
   const runner = new HerdrTurnRunner(
     setup.database,
-    { prompt: async () => { prompts += 1; return setup.session.live; }, getAgent: async () => setup.session.live } as never,
-    { ensureRoleSession: async () => setup.session } as never,
+    { prompt: async () => setup.session.live, getAgent: async (name: string) => name === replacement.agentName ? replacement.live : setup.session.live } as never,
+    sessions as never,
     new IssueTimelineEvents(setup.database),
     undefined,
     undefined,
@@ -181,7 +252,7 @@ test("retries one idle prompt then reports prompt acceptance failure", async () 
   );
   try {
     await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "prompt-not-accepted", nonRetryable: true });
-    expect(prompts).toBe(2);
+    expect(retired).toBe(1);
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 

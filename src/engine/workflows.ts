@@ -278,15 +278,15 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: projectIssueState });
   const guarded = createGuarded({ get: () => state, set: (next) => { state = next; } }, { enabled: guardedHandlersEnabled, reviseContinueEnabled, failedRetryEnabled, project: projectIssueState });
   const workflowContext = createIssueWorkflowContext(validatedInput, state, {
-    project: async () => {
-      // Yield to the macrotask queue on every projection so a hot loop can never starve HTTP or timers,
-      // and throttle a run that projects more than 20 revisions a second: that is a bug, not progress.
+    project: () => {
+      // A run projecting more than 100 revisions in a wall-clock second is a hot loop, not progress:
+      // log it and pause for real time so HTTP and timers keep running. Otherwise stay synchronous so
+      // command/auto-chain ordering is unchanged.
       const now = Date.now();
       projectionStamps.push(now);
       while (projectionStamps.length && now - projectionStamps[0]! > 1_000) projectionStamps.shift();
-      if (projectionStamps.length > 20) { log.error("Issue run is projecting in a hot loop; throttling", { workflowId: state.workflowId, phase: state.phase, revision: state.revision }); await sleep(1_000); }
-      else await sleep(0);
       state = withWorktreeCommands(state, true);
+      if (projectionStamps.length > 100) { log.error("Issue run is projecting in a hot loop; throttling", { workflowId: state.workflowId, phase: state.phase, revision: state.revision }); return new Promise<void>((resolve) => setTimeout(resolve, 1_000)).then(() => projectIssueState(state)); }
       return projectIssueState(state);
     },
     projectState: (value) => { state = withWorktreeCommands(value, true); return projectIssueState(state); },

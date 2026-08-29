@@ -289,7 +289,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     // GitHub reconciliation only runs while Forge is waiting on GitHub. While an agent turn or a
     // publish is in flight, an observation must not rewrite the phase under it.
     const syncSkipsAgentPhases = patched("forge-sync-skips-agent-phases-v1");
-    if (syncSkipsAgentPhases && !isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review"].includes(state.phase))) return;
+    if (syncSkipsAgentPhases && !isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review"].includes(state.phase))) return;
     const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch(() => null);
     if (!observed) return;
     const number = state.pullRequestNumber, wasDraft = state.githubPullRequestDraft, common = githubPullRequestObservationFields(observed, new Date().toISOString());

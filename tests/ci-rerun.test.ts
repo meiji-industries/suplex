@@ -2,7 +2,9 @@ import { expect, test } from "vitest";
 
 import { boundedLogTail, ciRunIdFromDetailsUrl, createGithubCiProvider, CI_FAILED_LOG_MAX_LINES } from "../src/ci.js";
 import { CiRepairPlanSchema } from "../src/temporal/contracts/primitives.js";
-import { CI_RERUN_LIMIT } from "../src/temporal/workflow/register-ci.js";
+import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/temporal/issue-contracts.js";
+import { reconcile } from "../src/pull-request-reconciler.js";
+import { deferCiReconciliation, CI_RERUN_LIMIT } from "../src/temporal/workflow/register-ci.js";
 
 test("extracts the Actions run id from a check-run details url", () => {
   expect(ciRunIdFromDetailsUrl("https://github.com/o/r/actions/runs/32485824288/job/96781973569?pr=479")).toBe("32485824288");
@@ -38,4 +40,15 @@ test("a CI repair plan defaults to repair and accepts rerun", () => {
 
 test("reruns are bounded per CI cycle", () => {
   expect(CI_RERUN_LIMIT).toBe(2);
+});
+
+test("missing CI release evidence defers repair so a merged PR completes", () => {
+  const state = IssueWorkflowStateSchema.parse({
+    ...buildInitialIssueWorkflowState({ workflowId: "workflow", companyId: "company", projectId: "project", issueId: "task", projectRevisionId: "revision", briefArtifactId: "brief", briefSha256: "a".repeat(64), imageArtifactIds: [], requestHash: "b".repeat(64), roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }),
+    phase: "ci_waiting", revision: 3, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Lead diagnosis", releaseId: null, expectedHeadSha: null, lastEventId: "workflow:3",
+  });
+  const waiting = deferCiReconciliation(state, "2026-08-28T00:00:00.000Z");
+
+  expect(waiting).toMatchObject({ phase: "ci_waiting", revision: 4, pendingAction: "Waiting for CI — release evidence is unavailable", lastEventId: "workflow:4" });
+  expect(reconcile({ observed: { exists: true, number: 76, state: "merged", isDraft: false, headSha: "a".repeat(40), mergeable: null, checks: "failed", reviewDecision: null, autoMergeEnabled: false }, target: "merged", current: { phase: waiting.phase } }).phase).toBe("Done");
 });

@@ -13,6 +13,10 @@ export const CI_RERUN_LIMIT = 2;
 const CI_RERUN_POLL_DELAY_MS = 60_000;
 const shouldUpdateFromBaseBeforeCiRepair = (result: { outcome: string; repairable: boolean; owner: string | null }, baseUpdateCount: number): boolean => result.outcome === "failed" && result.repairable && result.owner === "lead" && baseUpdateCount < 2;
 
+export function deferCiReconciliation(state: contracts.IssueWorkflowState, now: string): contracts.IssueWorkflowState {
+  return contracts.IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, pendingAction: "Waiting for CI — release evidence is unavailable", stateChangedAt: now, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+}
+
 export function registerCiHandlers(ctx: IssueWorkflowContext): void {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
   const agent = activityProxies;
@@ -59,7 +63,11 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     return ctx.state;
   };
   const reconcileCiTurn = async (): Promise<contracts.IssueWorkflowState> => {
-    if (!ctx.state.releaseId || !ctx.state.expectedHeadSha) throw new Error("Release evidence is required for CI reconciliation");
+    if (!ctx.state.releaseId || !ctx.state.expectedHeadSha) {
+      ctx.state = deferCiReconciliation(ctx.state, new Date().toISOString());
+      await ctx.project();
+      return ctx.state;
+    }
     const attempt = (ctx.state.ciAttempt ?? 0) + 1;
     const expectedReleaseId = ctx.state.releaseId;
     const expectedHeadSha = ctx.state.expectedHeadSha;

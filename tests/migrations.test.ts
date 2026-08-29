@@ -45,6 +45,29 @@ describe("timestamp migrations", () => {
     }
   });
 
+  test("preserves independently added nullable columns across legacy table rebuilds", () => {
+    const folder = mkdtempSync(join(tmpdir(), "forge-migrations-"));
+    const database = new Database(":memory:");
+    try {
+      writeFileSync(join(folder, "20260812100000000_create_records.sql"), "CREATE TABLE records (id text PRIMARY KEY);\n");
+      writeFileSync(join(folder, "20260812110000000_add_excerpt.sql"), "ALTER TABLE records ADD COLUMN excerpt text;\n");
+      writeFileSync(join(folder, "20260812120000000_rebuild_records.sql"), [
+        "CREATE TABLE records_new (id text PRIMARY KEY);",
+        "INSERT INTO records_new SELECT * FROM records;",
+        "DROP TABLE records;",
+        "ALTER TABLE records_new RENAME TO records;",
+      ].join("\n--> statement-breakpoint\n"));
+
+      applyMigrations(database, folder);
+
+      expect(database.prepare("PRAGMA table_info('records')").all()).toEqual(expect.arrayContaining([expect.objectContaining({ name: "excerpt", type: "TEXT" })]));
+      expect(database.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({ count: 3 });
+    } finally {
+      database.close();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
   test("rejects sequential and duplicate timestamp names", () => {
     const folder = mkdtempSync(join(tmpdir(), "forge-migrations-"));
     try {

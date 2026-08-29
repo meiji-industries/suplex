@@ -189,6 +189,28 @@ export function readMigrations(folder: string): ExpectedMigration[] {
   return migrations.map((migration, index) => ({ index, ...migration }));
 }
 
+const REBUILD_COPY_ALL = /^\s*INSERT\s+INTO\s+[`"]?([A-Za-z_][A-Za-z0-9_]*)[`"]?\s+SELECT\s+\*\s+FROM\s+[`"]?([A-Za-z_][A-Za-z0-9_]*)[`"]?\s*;?\s*$/i;
+
+function preserveAdditiveColumnsDuringRebuild(db: Database.Database, statement: string): void {
+  const match = REBUILD_COPY_ALL.exec(statement);
+  if (!match) return;
+  const destination = match[1]!;
+  const source = match[2]!;
+  const destinationColumns = new Set((db.pragma(`table_info('${destination}')`) as Array<{ name: string }>).map((column) => column.name));
+  const sourceColumns = db.pragma(`table_info('${source}')`) as Array<{ name: string; type: string; notnull: number; dflt_value: string | null; pk: number }>;
+  for (const column of sourceColumns) {
+    if (destinationColumns.has(column.name)) continue;
+    if (column.pk || (column.notnull && column.dflt_value === null)) {
+      throw new Error(`Cannot preserve required column ${source}.${column.name} during rebuild into ${destination}`);
+    }
+    const name = `"${column.name.replaceAll('"', '""')}"`;
+    const type = column.type.trim();
+    const defaultValue = column.dflt_value === null ? "" : ` DEFAULT ${column.dflt_value}`;
+    db.exec(`ALTER TABLE "${destination}" ADD COLUMN ${name}${type ? ` ${type}` : ""}${column.notnull ? " NOT NULL" : ""}${defaultValue}`);
+    destinationColumns.add(column.name);
+  }
+}
+
 export function applyMigrations(db: Database.Database, folder: string): void {
   const migrations = readMigrations(folder);
   db.exec(`CREATE TABLE IF NOT EXISTS __drizzle_migrations (
@@ -219,7 +241,10 @@ export function applyMigrations(db: Database.Database, folder: string): void {
         if (appliedByTimestamp.get(migration.createdAt) === migration.hash) continue;
         const sql = readFileSync(`${folder}/${migration.tag}.sql`, "utf8");
         for (const statement of sql.split("--> statement-breakpoint")) {
-          if (statement.trim()) db.exec(statement);
+          if (statement.trim()) {
+            preserveAdditiveColumnsDuringRebuild(db, statement);
+            db.exec(statement);
+          }
         }
         insert.run(migration.hash, migration.createdAt);
       }

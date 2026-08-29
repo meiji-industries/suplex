@@ -18,16 +18,31 @@ _.path = "./node_modules/.bin"
 [tasks.dev]
 description = "Run the Forge API, worker host, and Vite HMR in one process"
 env = { FORGE_PRETTY_LOGS = "1", FORGE_FRONTEND_DEV_SERVER = "1", FORGE_DEVELOPMENT_AUTO_LOGIN = "1" }
-run = "tsx src/server.ts"
+run = '''
+export PATH="$(dirname "$(mise which node)"):$PATH"
+[ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
+export FORGE_PORT=${CONDUCTOR_PORT:-4111}
+exec tsx src/server.ts
+'''
 
 [tasks."dev:watch"]
 description = "Run the single-process stack with backend reloads"
 env = { FORGE_PRETTY_LOGS = "1", FORGE_FRONTEND_DEV_SERVER = "1", FORGE_DEVELOPMENT_AUTO_LOGIN = "1" }
-run = "tsx watch --clear-screen=false --exclude './src/frontend/**' src/server.ts"
+run = '''
+export PATH="$(dirname "$(mise which node)"):$PATH"
+[ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
+export FORGE_PORT=${CONDUCTOR_PORT:-4111}
+exec tsx watch --clear-screen=false --exclude './src/frontend/**' src/server.ts
+'''
 
 [tasks.worker]
 description = "Run the engine host without HTTP"
-run = "tsx src/engine/host.ts"
+run = '''
+export PATH="$(dirname "$(mise which node)"):$PATH"
+[ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
+export FORGE_PORT=${CONDUCTOR_PORT:-4111}
+exec tsx src/engine/host.ts
+'''
 
 [tasks."dev:idle"]
 description = "Exit 0 when no engine activities are in flight"

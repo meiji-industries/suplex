@@ -48,8 +48,8 @@ export function revisioned(state: IssueWorkflowState, phase: IssueWorkflowState[
 export const worktreeCommandsPatch = "forge-worktree-commands-v1";
 export function withWorktreeCommands(state: IssueWorkflowState, patched: boolean): IssueWorkflowState {
   if (!patched) return state;
-  const terminal = state.phase === "done" || state.phase === "cancelled";
-  const canDelete = state.activeOperation === null && Boolean(state.worktreePath) && state.worktreeState !== "cleaned";
+  const terminal = state.phase === "done" || state.phase === "cancelled" || state.phase === "failed";
+  const canDelete = state.activeOperation === null && state.worktreeState !== "cleaned" && (Boolean(state.worktreePath) || (terminal && Boolean(state.branchName)));
   const canRecreate = !terminal && (state.worktreeState === "cleaned" || state.worktreeState === "removed_externally");
   const allowedCommands = [
     ...state.allowedCommands,

@@ -21,7 +21,13 @@ export async function executeWorktreeCommand(config: ForgeConfig, workflowId: st
   const temporalClient = await connectTemporal(config);
   try {
     const handle = temporalClient.client.workflow.getHandle(workflowId);
-    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates[command], { args: [validatedInput] }));
+    try {
+      return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates[command], { args: [validatedInput] }));
+    } catch (error) {
+      let current: unknown = error;
+      while (current && typeof current === "object" && "cause" in current && (current as { cause?: unknown }).cause) current = (current as { cause: unknown }).cause;
+      throw current instanceof Error ? current : error;
+    }
   } finally {
     await temporalClient.connection.close();
   }

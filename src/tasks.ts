@@ -1507,8 +1507,9 @@ export class TaskService {
     if (!Number.isInteger(expectedRevision) || (command !== "cancel_issue" && expectedRevision !== task.revision)) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
     const retryingCancellation = command === "cancel_development" && task.developerRecovery?.status === "cancellation_requested";
     const canContinuePastReview = command === "record_delivery_decision" && (task.phase === "repair_required" || (task.phase === "delivery_blocked" && task.allowedCommands.includes("repair_delivery")));
+    const canDeleteTerminalWorktree = command === "delete_worktree" && (TERMINAL_PHASES.has(task.phase) || task.phase === "failed");
     const retryingLegacyConflictPlan = command === "resolve_merge_conflict" && task.phase === "merge_conflict_required" && task.pendingAction === "Planner couldn't plan the fix — retry or take a look";
-    if (command !== "cancel_issue" && !allowedCommands.includes(command) && !retryingCancellation && !canContinuePastReview && !retryingLegacyConflictPlan) {
+    if (command !== "cancel_issue" && !allowedCommands.includes(command) && !retryingCancellation && !canContinuePastReview && !canDeleteTerminalWorktree && !retryingLegacyConflictPlan) {
       const message = command === "start_planning" ? "Planning cannot start from the current state" : command === "record_delivery_decision" ? "A delivery decision is not available" : descriptor.family === "start" ? "Plan action is not available" : "Task action is not available";
       throw new TaskFailure(message, [finding("illegal-command", "phase", message)], 409, task);
     }

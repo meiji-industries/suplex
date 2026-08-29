@@ -1,4 +1,4 @@
-import { condition, setHandler } from "@temporalio/workflow";
+import { ApplicationFailure, condition, setHandler } from "@temporalio/workflow";
 import { z } from "zod";
 
 import { TERMINAL_PHASES } from "../../issue-phases.js";
@@ -188,7 +188,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     const result = await cleanupTaskWorktree({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, ...(command.confirmDiscardDirty !== undefined ? { confirmDiscardDirty: command.confirmDiscardDirty } : {}) });
     if (result.outcome === "cleaned" || result.outcome === "already_absent") ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, worktreeState: "cleaned", allowedCommands: ctx.state.allowedCommands.filter((entry) => entry !== "delete_worktree"), pendingAction: TERMINAL_PHASES.has(ctx.state.phase) ? "Archived" : "Worktree deleted", blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     else if (result.outcome === "dirty_confirmation_required") ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "human", allowedCommands: ctx.addRevisionCommand(["delete_worktree", "continue_work"]), pendingAction: `Worktree has ${result.dirtyFileCount} uncommitted changes — confirm to discard`, blocker: stateTransitions.humanBlocker("unsafe_recovery", "Worktree has uncommitted changes that require confirmation before deletion.", [{ command: "delete_worktree", label: "Discard changes and delete worktree", requiresNote: false, destructive: false }, { command: "continue_work", label: "Keep worktree", requiresNote: false, destructive: false }], stateTransitions.evidencePointer(result.evidenceArtifactId, "attention-evidence")), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
-    else if (result.outcome === "not_owned") await ctx.recordHandlerNoop("delete_worktree", "Forge does not own the requested worktree.");
+    else if (result.outcome === "not_owned") throw ApplicationFailure.nonRetryable("Forge does not own the requested worktree", "worktree-not-owned");
     await ctx.project(); return ctx.state;
   }), { validator(raw) { const command = expected.extend({ confirmDiscardDirty: z.boolean().optional() }).parse(raw); if (command.expectedRevision !== ctx.state.revision || ctx.state.activeOperation) throw new Error("Worktree deletion was superseded"); } });
   setHandler(issueUpdates.recreate_worktree, ctx.guarded(async (raw) => {

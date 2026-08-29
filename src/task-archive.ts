@@ -13,8 +13,13 @@ export class TaskArchiveService {
     if (task.archivedAt) return { status: "archived", task };
     if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [{ code: "stale-revision", field: "expectedRevision", message: "Refresh the issue before this action" }], 409, task);
     if (!["done", "cancelled", "failed"].includes(task.phase)) throw new TaskFailure("Task action is not available", [{ code: "illegal-command", field: "phase", message: "Only a terminal task can be archived" }], 409, task);
-    if (task.worktreeState !== "cleaned" && task.allowedCommands.includes("delete_worktree")) {
-      task = await this.tasks.executeCommand(actorUserId, taskId, "delete_worktree", { expectedRevision: task.revision, ...(options.confirmDiscardDirty !== undefined ? { confirmDiscardDirty: options.confirmDiscardDirty } : {}) });
+    if (task.worktreeState !== "cleaned") {
+      try {
+        task = await this.tasks.executeCommand(actorUserId, taskId, "delete_worktree", { expectedRevision: task.revision, ...(options.confirmDiscardDirty !== undefined ? { confirmDiscardDirty: options.confirmDiscardDirty } : {}) });
+      } catch (error) {
+        if (!(error instanceof TaskFailure)) throw error;
+        throw new TaskFailure("Worktree could not be removed", [{ code: "worktree-cleanup-failed", field: "worktree", message: error.message }], 409, task);
+      }
       const dirtyFileCount = dirtyCount(task.pendingAction);
       if (dirtyFileCount !== null) return { status: "confirmation_required", dirtyFileCount, task };
     }

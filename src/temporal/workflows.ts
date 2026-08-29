@@ -363,7 +363,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       workflowContext.initialProjectionComplete = true;
     }
     while (true) {
-      if (workflowContext.state.phase === "done" || (workflowContext.state.phase === "cancelled" && !(patched("forge-terminal-return-v2") && workflowContext.state.allowedCommands.includes("continue_work")))) { if (patched("forge-terminal-return-v2")) await condition(allHandlersFinished); return workflowContext.state; } // finish only after every handler landed its projection; a cancelled issue still offering continue_work stays open for the successor
+      if ((workflowContext.state.phase === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.phase === "cancelled" && !(patched("forge-terminal-return-v2") && (workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree"))))) { if (patched("forge-terminal-return-v2")) await condition(allHandlersFinished); return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
       if (githubSyncRequested) {
         githubSyncRequested = false;
         if (patched("forge-pr-reconciler-v1")) await syncGithubPullRequest();
@@ -410,7 +410,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         await runAutoChainedCommand(workflowContext, chained);
         continue;
       }
-      await condition(() => githubSyncRequested || (patched("forge-terminal-return-v2") && allHandlersFinished() && (workflowContext.state.phase === "done" || (workflowContext.state.phase === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) || (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge" || (allHandlersFinished() && (autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) !== null || canAutoRetryDeliveryBlocker(workflowContext))));
+      await condition(() => githubSyncRequested || (patched("forge-terminal-return-v2") && allHandlersFinished() && !workflowContext.state.allowedCommands.includes("delete_worktree") && (workflowContext.state.phase === "done" || (workflowContext.state.phase === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) || (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge" || (allHandlersFinished() && (autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) !== null || canAutoRetryDeliveryBlocker(workflowContext))));
       if (workflowContext.continuationRequested && allHandlersFinished()) {
         if (workflowContext.stateMutationLocked || workflowContext.state.activeOperation !== null) continue;
         const compact = compactStateForContinuation(workflowContext.state);

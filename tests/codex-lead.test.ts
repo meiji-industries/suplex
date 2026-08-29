@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,8 @@ import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
 import { isDeveloperExecutionActiveLeaseCollision } from "../src/codex-developer.js";
 import { ForgeDatabase } from "../src/database.js";
+import { buildGitBranchName } from "../src/git-branch-name.js";
+import { fallbackGitPresentation } from "../src/git-presentation.js";
 import type { HerdrTurnInput, HerdrTurnOutput } from "../src/herdr-turn-runner.js";
 import { asNonRetryableApplicationFailure } from "../src/temporal/activities.js";
 import { DeliveryOperationBlockCodeSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeveloperRepairActivityResultSchema } from "../src/temporal/issue-contracts.js";
@@ -74,8 +76,8 @@ async function execFileAsync(command: string, args: string[], options: { cwd?: s
   return result;
 }
 
-async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixture repository."): Promise<{ root: string; database: ForgeDatabase; config: ReturnType<typeof createTestConfig>; briefId: string }> {
-  const root = await mkdtemp(join(tmpdir(), "forge-codex-lead-test-"));
+async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixture repository."): Promise<{ root: string; repositoryPath: string; targetSha: string; database: ForgeDatabase; config: ReturnType<typeof createTestConfig>; briefId: string }> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "forge-codex-lead-test-")));
   const repositoryPath = join(root, "repo");
   const worktreeRoot = join(root, "worktrees");
   await mkdir(repositoryPath, { recursive: true });
@@ -117,7 +119,7 @@ async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixtu
     db.prepare("INSERT INTO forge_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company_1', 'task_1', ?, ?, ?, ?, ?, ?, ?)").run(taskConfiguration.id, taskConfiguration.kind, taskConfiguration.filename, taskConfiguration.mimeType, taskConfiguration.byteSize, taskConfiguration.sha256, taskConfiguration.storagePath, taskConfiguration.createdAt);
     db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, project_configuration_artifact_id, project_configuration_captured_at, idempotency_key, created_at, updated_at) VALUES ('task_1', 'company_1', 'project_1', 'Fixture task', ?, '[]', '{\"lead\":\"profile_1\"}', 0, 'workflow-test-issue-task_1', 'revision_1', ?, ?, 'idempotency_1', ?, ?)").run(brief.id, taskConfiguration.id, capturedAt, now, now);
   });
-  return { root, database, config, briefId: brief.id };
+  return { root, repositoryPath, targetSha, database, config, briefId: brief.id };
 }
 
 function routinePlan(summary = "A bounded fixture plan") {
@@ -187,12 +189,20 @@ test("Lead planning persists a fake turn result and reuses the Lead role session
   const value = await fixture();
   const fake = fakeTurnRunner({ "lead-plan": () => routinePlan(), "lead-plan-revision": () => routinePlan("A revised fixture plan") });
   try {
+    await writeFile(join(value.repositoryPath, "shared-untracked.txt"), "keep\n");
     value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET provider = 'claude' WHERE id = 'profile_1'").run());
     const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
     const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
     expect(result.leadSessionRef).toBe("session_0123456789abcdef01234567");
     expect(fake.calls).toHaveLength(1);
     expect(fake.calls[0]).toMatchObject({ promptKind: "lead-plan", sessionRole: "lead", executionRole: "planner" });
+    const worktreePath = join(value.root, "worktrees", "task_1");
+    const branchName = buildGitBranchName({ branchSlug: fallbackGitPresentation("Fixture task").branchSlug, taskId: "task_1" });
+    expect(fake.calls[0]?.task.worktreePath).toBe(worktreePath);
+    expect(await execFileAsync("git", ["symbolic-ref", "--short", "HEAD"], { cwd: worktreePath })).toMatchObject({ stdout: `${branchName}\n` });
+    expect(await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).toMatchObject({ stdout: `${value.targetSha}\n` });
+    expect(await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: value.repositoryPath })).toMatchObject({ stdout: `${value.targetSha}\n` });
+    expect((await execFileAsync("git", ["status", "--porcelain"], { cwd: value.repositoryPath })).stdout).toContain("shared-untracked.txt");
     expect(fake.calls[0]?.prompt).toContain("Plan only work that can be completed and verified inside an isolated git worktree.");
     const briefSha = value.database.authQuery((db) => (db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ?").get(value.briefId) as { sha256: string }).sha256);
     value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET model = 'changed-after-task-creation' WHERE id = 'profile_1'").run());

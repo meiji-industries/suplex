@@ -25,8 +25,10 @@ import { loadDefaultPrompts, renderPrompt } from "./prompts.js";
 import { isVersionedPromptSet } from "./prompt-resolution.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { jsonRequired } from "./task-utils.js";
-import { WorktreeManager } from "./worktrees.js";
+import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { BrowserProofService } from "./browser-proof.js";
+import { buildGitBranchName } from "./git-branch-name.js";
+import { fallbackGitPresentation } from "./git-presentation.js";
 
 const execFileAsync = promisify(execFile);
 type MergeConflictPlanInput = MergeConflictPlanActivityInput;
@@ -159,16 +161,6 @@ async function taskScopedPath(root: string, candidate: string): Promise<string> 
   const relativePath = relative(absoluteRoot, absoluteCandidate);
   if (relativePath.startsWith(`..${sep}`) || relativePath === "..") throw new AgentFailure("unsafe-working-directory", "Lead working directory is outside the configured repository root", { nonRetryable: true });
   return absoluteCandidate;
-}
-
-function pinnedRepositoryPath(normalizedJson: string): string {
-  try {
-    const parsed = jsonRequired(normalizedJson) as { repositoryPath?: unknown };
-    if (typeof parsed.repositoryPath === "string" && parsed.repositoryPath.length > 0) return parsed.repositoryPath;
-  } catch {
-    // Keep revision failures redacted at the activity boundary.
-  }
-  throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain a repository path");
 }
 
 interface PlanningRow {
@@ -347,14 +339,17 @@ export class AgentService {
     row.normalized_json = JSON.stringify(configuration);
     const completed = await this.completedPlanningResult(input);
     if (completed) return completed;
-    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
-    await this.worktrees.syncBase(repositoryPath, configuration.baseBranch);
+    const revisionRequest = input.revisionRequestId ? this.database.authQuery((db) => db.prepare(`SELECT r.disposition, r.worktree_path AS worktreePath, r.branch_name AS branchName, r.base_sha AS baseSha, r.head_sha AS headSha, r.tree_sha AS treeSha, r.exact_base_sha AS exactBaseSha, a.storage_path AS reasonPath, a.sha256 AS reasonSha
+      FROM forge_plan_revision_requests r JOIN forge_artifacts a ON a.id = r.reason_artifact_id AND a.company_id = r.company_id AND a.kind = 'plan-revision-reason'
+      WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { disposition: "reuse" | "new"; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null; reasonPath: string; reasonSha: string } | undefined) : undefined;
+    if (input.revisionRequestId && !revisionRequest) throw new AgentFailure("revision-request-missing", "The plan revision request is unavailable");
+    const worktreePath = await this.planningWorktree(input, configuration, row.title, revisionRequest);
     let sourceGuidance = "";
     if (configuration.source) {
       const sourceBranch = configuration.source.kind === "pull_request" ? configuration.source.headBranch : configuration.source.branch;
       try {
-        await execFileAsync("git", ["fetch", "--no-tags", "origin", `refs/heads/${sourceBranch}:refs/remotes/origin/${sourceBranch}`], { cwd: repositoryPath, timeout: 30_000, maxBuffer: 64 * 1024 });
-        const mergeBase = (await execFileAsync("git", ["merge-base", `refs/remotes/origin/${configuration.baseBranch}`, `refs/remotes/origin/${sourceBranch}`], { cwd: repositoryPath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
+        await execFileAsync("git", ["fetch", "--no-tags", "origin", `refs/heads/${sourceBranch}:refs/remotes/origin/${sourceBranch}`], { cwd: worktreePath, timeout: 30_000, maxBuffer: 64 * 1024 });
+        const mergeBase = (await execFileAsync("git", ["merge-base", `refs/remotes/origin/${configuration.baseBranch}`, `refs/remotes/origin/${sourceBranch}`], { cwd: worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
         sourceGuidance = `\n\nThis task continues the existing source branch \`${sourceBranch}\` at \`origin/${sourceBranch}\`. Before planning, inspect its commits and complete diff from merge-base \`${mergeBase}\` with \`git log ${mergeBase}..origin/${sourceBranch}\` and \`git diff ${mergeBase}..origin/${sourceBranch}\`. Plan against the source changes, not only the base checkout.`;
       } catch { throw new AgentFailure("source-branch-unavailable", "The selected source branch could not be inspected for planning"); }
     }
@@ -392,15 +387,11 @@ export class AgentService {
       ? { id: persisted.profileId ?? input.roleProfiles.planner ?? "pinned-lead", name: "Pinned Lead", provider: persisted.provider as AgentProviderKind, model: persisted.model, reasoningLevel: persisted.reasoningLevel, servicePriority: persisted.servicePriority, capacity: 0 }
       : profileSettings.find((profile) => profile.id === input.roleProfiles.planner);
     if (!leadProfile) throw new AgentFailure("profile-unavailable", "The configured Lead profile is unavailable");
-    const revisionRequest = input.revisionRequestId ? this.database.authQuery((db) => db.prepare(`SELECT r.disposition, r.worktree_path AS worktreePath, r.branch_name AS branchName, r.base_sha AS baseSha, r.head_sha AS headSha, r.tree_sha AS treeSha, r.exact_base_sha AS exactBaseSha, a.storage_path AS reasonPath, a.sha256 AS reasonSha
-      FROM forge_plan_revision_requests r JOIN forge_artifacts a ON a.id = r.reason_artifact_id AND a.company_id = r.company_id AND a.kind = 'plan-revision-reason'
-      WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { disposition: "reuse" | "new"; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null; reasonPath: string; reasonSha: string } | undefined) : undefined;
-    if (input.revisionRequestId && !revisionRequest) throw new AgentFailure("revision-request-missing", "The plan revision request is unavailable");
     const revisionContext = revisionRequest ? { ...revisionRequest, reason: (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: revisionRequest.reasonPath, sha256: revisionRequest.reasonSha })).toString("utf8") } : undefined;
     if (!AGENT_PROVIDER_KINDS.includes(leadProfile.provider) || !/^[a-z0-9][a-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,119})?$/.test(leadProfile.model) || !["low", "medium", "high", "xhigh"].includes(leadProfile.reasoningLevel) || !["standard", "priority", "fast"].includes(leadProfile.servicePriority)) {
       throw new AgentFailure("scope_configuration", "The configured Lead profile has invalid turn settings", { nonRetryable: true });
     }
-    const repositoryEvidence = await this.repositoryEvidence(repositoryPath);
+    const repositoryEvidence = await this.repositoryEvidence(worktreePath);
     const repositoryEvidenceArtifact = await this.artifacts.putArtifact(input.companyId, "repository-evidence", { filename: `${input.taskId}-${input.revision}.json`, mimeType: "application/json", bytes: Buffer.from(repositoryEvidence, "utf8") });
     const planningManifest = {
       version: 1,
@@ -490,7 +481,7 @@ export class AgentService {
       const prompt = revisionPrompt
         ? this.revisionPrompt(input.operatorNotes?.length ? input.operatorNotes.map((note) => `The operator asked: ${note}`).join("\n") : revisionNoteText ?? `Human blocker answer:\n${memberResponseText}`)
         : `${this.initialPrompt(input, row.title, brief, row.normalized_json, profileSettings, repositoryEvidence, revisionContext)}\n\nPlan only work that can be completed and verified inside an isolated git worktree. Do not add steps for deployment, rollout, physical device checks or production verification — mention them in a 'Follow-up outside Forge' note instead.`;
-      const result = await this.turnRunner.run({ task: { taskId: input.taskId, projectId: input.projectId, projectSlug: row.project_slug, ...(row.issue_key ? { issueKey: row.issue_key } : {}), worktreePath: repositoryPath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "lead", executionRole: "planner", ledger: "agent", executionId, promptKind: revisionPrompt ? "lead-plan-revision" : "lead-plan", prompt: `${prompt}${sourceGuidance}${resumeInstruction ? `\n\nMember instruction for this ${input.resume?.reason ?? "revision"}:\n${resumeInstruction}` : ""}`, profile: leadProfile, resultSchema: LeadOutputSchema, schemaPath: await this.ensureResultSchema("lead-plan", LeadOutputSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.revision, signal: runtime.signal });
+      const result = await this.turnRunner.run({ task: { taskId: input.taskId, projectId: input.projectId, projectSlug: row.project_slug, ...(row.issue_key ? { issueKey: row.issue_key } : {}), worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "lead", executionRole: "planner", ledger: "agent", executionId, promptKind: revisionPrompt ? "lead-plan-revision" : "lead-plan", prompt: `${prompt}${sourceGuidance}${resumeInstruction ? `\n\nMember instruction for this ${input.resume?.reason ?? "revision"}:\n${resumeInstruction}` : ""}`, profile: leadProfile, resultSchema: LeadOutputSchema, schemaPath: await this.ensureResultSchema("lead-plan", LeadOutputSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.revision, signal: runtime.signal });
       sessionRef = result.roleSessionId;
       const artifacts = await this.persistOutput(input, executionId, sessionRef, evidenceLines, result.result, { id: manifestArtifact.id, sha256: manifestArtifact.sha256 });
       await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', session_ref = ?, process_pid = NULL, process_group_id = NULL, finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), this.now().toISOString(), artifacts.evidence.id, executionId));
@@ -910,11 +901,10 @@ export class AgentService {
     const reviewerProfile = profile;
     const configuration = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input);
     const normalizedJson = JSON.stringify(configuration);
-    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(configuration.repositoryPath));
-    await this.worktrees.syncBase(repositoryPath, configuration.baseBranch);
+    const worktreePath = await this.planningWorktree(input, configuration, context.title);
     const brief = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
     const draft = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
-    const instructions = await this.repositoryEvidence(repositoryPath);
+    const instructions = await this.repositoryEvidence(worktreePath);
     const images = this.database.authQuery((db) => {
       if (!input.imageArtifactIds.length) return [] as ImageRow[];
       const placeholders = input.imageArtifactIds.map(() => "?").join(",");
@@ -932,7 +922,7 @@ export class AgentService {
     });
     const lines: string[] = [];
     try {
-      const output = await this.turnRunner.run({ task: { taskId: input.taskId, projectId: input.projectId, projectSlug: context.projectSlug, ...(context.issueKey ? { issueKey: context.issueKey } : {}), worktreePath: repositoryPath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "reviewer", executionRole: "reviewer", ledger: "agent", executionId, promptKind: "supplemental-review", prompt: this.reviewPrompt(input, context.title, brief, normalizedJson, draft, instructions), profile: reviewerProfile, resultSchema: SupplementalReviewSchema, schemaPath, companyId: input.companyId, workflowId: input.workflowId, revision: input.revision, signal: runtime.signal });
+      const output = await this.turnRunner.run({ task: { taskId: input.taskId, projectId: input.projectId, projectSlug: context.projectSlug, ...(context.issueKey ? { issueKey: context.issueKey } : {}), worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "reviewer", executionRole: "reviewer", ledger: "agent", executionId, promptKind: "supplemental-review", prompt: this.reviewPrompt(input, context.title, brief, normalizedJson, draft, instructions), profile: reviewerProfile, resultSchema: SupplementalReviewSchema, schemaPath, companyId: input.companyId, workflowId: input.workflowId, revision: input.revision, signal: runtime.signal });
       const review = output.result;
       const sessionRef = output.roleSessionId;
       if (input.primaryLeadSessionRef && sessionRef === input.primaryLeadSessionRef) throw new AgentFailure("session-identity-conflict", "Supplemental reviewer must use a fresh session");
@@ -957,17 +947,16 @@ export class AgentService {
 
   async consolidateLeadPlan(rawInput: ConsolidateLeadPlanActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<LeadPlanningResult> {
     const lead = await this.resolveTurnProfile(rawInput.roleProfiles.planner, rawInput.leadSessionRef, "Lead consolidation");
-    const task = this.database.authQuery((db) => db.prepare(`SELECT p.name AS projectSlug,
+    const task = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.name AS projectSlug,
       CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issueKey
       FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id JOIN forge_companies c ON c.id = t.company_id
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ?`).get(rawInput.taskId, rawInput.companyId, rawInput.projectId, rawInput.workflowId) as { projectSlug: string; issueKey: string | null } | undefined);
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ?`).get(rawInput.taskId, rawInput.companyId, rawInput.projectId, rawInput.workflowId) as { title: string; projectSlug: string; issueKey: string | null } | undefined);
     if (!task) throw new AgentFailure("scoped-input-missing", "Consolidation task is unavailable");
     const draft = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.leadOutputArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
     const review = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.supplementalReviewArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
     if (!draft || !review) throw new AgentFailure("scoped-input-missing", "Consolidation evidence is unavailable");
-    const repositoryPath = await this.consolidationRepositoryPath(rawInput);
     const configuration = this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, rawInput));
-    await this.worktrees.syncBase(repositoryPath, configuration.baseBranch);
+    const worktreePath = await this.planningWorktree(rawInput, configuration, task.title);
     const draftText = (await this.artifacts.getArtifact({ ...draft, companyId: rawInput.companyId })).toString("utf8");
     const reviewText = (await this.artifacts.getArtifact({ ...review, companyId: rawInput.companyId })).toString("utf8");
     const schemaPath = await this.ensureResultSchema("lead-consolidation", LeadReviewResponseSchema);
@@ -983,7 +972,7 @@ export class AgentService {
       let turn;
       let response;
       for (;;) {
-        turn = await this.turnRunner.run({ task: { taskId: rawInput.taskId, projectId: rawInput.projectId, projectSlug: task.projectSlug, ...(task.issueKey ? { issueKey: task.issueKey } : {}), worktreePath: repositoryPath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "lead", executionRole: "planner", ledger: "agent", executionId, promptKind: correction ? "lead-consolidation-correction" : "lead-consolidation", prompt: this.consolidationPrompt(rawInput, draftText, reviewText, correction), profile: lead, resultSchema: LeadReviewResponseSchema, schemaPath, companyId: rawInput.companyId, workflowId: rawInput.workflowId, revision: rawInput.revision, signal: runtime.signal });
+        turn = await this.turnRunner.run({ task: { taskId: rawInput.taskId, projectId: rawInput.projectId, projectSlug: task.projectSlug, ...(task.issueKey ? { issueKey: task.issueKey } : {}), worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "lead", executionRole: "planner", ledger: "agent", executionId, promptKind: correction ? "lead-consolidation-correction" : "lead-consolidation", prompt: this.consolidationPrompt(rawInput, draftText, reviewText, correction), profile: lead, resultSchema: LeadReviewResponseSchema, schemaPath, companyId: rawInput.companyId, workflowId: rawInput.workflowId, revision: rawInput.revision, signal: runtime.signal });
         response = turn.result;
         if (response.originalPlanRevision === expectedRevision && response.reviewArtifactId === rawInput.supplementalReviewArtifactId) break;
         if (correction) throw new AgentFailure("invalid-review-response", "Lead supplemental-review response is not pinned to the exact review");
@@ -1030,9 +1019,22 @@ export class AgentService {
     return this.renderTaskPrompt(input, "lead/consolidation.md", { instruction: correction ? "Your previous response did not satisfy the exact envelope or pinned identifiers. Continue the same Lead session and return one corrected JSON object only." : "Reconsider the complete Lead plan in this same session after an independent supplemental review.", draft, review });
   }
 
-  private async consolidationRepositoryPath(input: ConsolidateLeadPlanActivityInput): Promise<string> {
-    try { return taskScopedPath(this.config.repositoryRoot, await realpath(loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input).repositoryPath)); }
-    catch { throw new AgentFailure("scoped-input-missing", "Consolidation repository is unavailable"); }
+  private async planningWorktree(input: { taskId: string }, configuration: ReturnType<typeof loadTaskConfiguration>, title: string, revisionRequest?: { disposition: "reuse" | "new"; worktreePath: string | null }): Promise<string> {
+    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(configuration.repositoryPath));
+    const worktreeRoot = await taskScopedPath(this.config.worktreeRoot, configuration.worktreeRoot);
+    if (revisionRequest?.disposition === "reuse" && revisionRequest.worktreePath) return taskScopedPath(this.config.worktreeRoot, revisionRequest.worktreePath);
+    try {
+      if (configuration.source) {
+        const branchName = configuration.source.kind === "pull_request" ? configuration.source.headBranch : configuration.source.branch;
+        return (await this.worktrees.adopt({ repositoryPath, worktreeRoot, taskId: input.taskId, branchName, baseBranch: configuration.baseBranch, sourceHeadSha: configuration.source.headSha, preserveLocal: true })).worktreePath;
+      }
+      const targetBaseSha = await this.worktrees.currentBaseSha(repositoryPath, configuration.baseBranch);
+      const branchName = buildGitBranchName({ branchSlug: fallbackGitPresentation(title).branchSlug, taskId: input.taskId });
+      return (await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName })).worktreePath;
+    } catch (error) {
+      if (error instanceof WorktreeFailure) throw new AgentFailure(error.code, error.message);
+      throw error;
+    }
   }
 
   private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string, role: "planner" | "reviewer" | "integrator" = "planner"): Promise<{ id: string; provider: AgentProviderKind; model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }> {

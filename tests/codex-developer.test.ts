@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,7 +10,10 @@ import { DeveloperService, finalizeDeveloperSourceCommit } from "../src/codex-de
 import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
+import { buildGitBranchName } from "../src/git-branch-name.js";
+import { fallbackGitPresentation } from "../src/git-presentation.js";
 import type { HerdrTurnInput, HerdrTurnOutput } from "../src/herdr-turn-runner.js";
+import { WorktreeManager } from "../src/worktrees.js";
 
 export async function command(command: string, args: string[], cwd: string): Promise<string> {
   const result = await runCommand({ taskId: null, stepId: null, command, args, cwd });
@@ -19,7 +22,7 @@ export async function command(command: string, args: string[], cwd: string): Pro
 }
 
 export async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "forge-codex-developer-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "forge-codex-developer-")));
   const repository = join(root, "repo");
   const worktreeRoot = join(root, "worktrees");
   await mkdir(repository, { recursive: true });
@@ -66,6 +69,10 @@ export function fakeTurnRunner(handler: (input: HerdrTurnInput<unknown>) => unkn
 test("Developer delivery uses the fake turn role session and preserves delivery assertions", async () => {
   const value = await fixture();
   const worktree = join(value.root, "worktrees", "task_1");
+  const repositoryPath = join(value.root, "repo");
+  const targetBaseSha = await command("git", ["rev-parse", "HEAD"], repositoryPath);
+  const branchName = buildGitBranchName({ branchSlug: fallbackGitPresentation("Fixture").branchSlug, taskId: "task_1" });
+  await new WorktreeManager().reuse({ repositoryPath, worktreeRoot: join(value.root, "worktrees"), taskId: "task_1", targetBaseSha, branchName });
   const fake = fakeTurnRunner(async () => {
     await writeFile(join(worktree, "MARKER.md"), "done\n");
     await command("git", ["add", "MARKER.md"], worktree);
@@ -75,6 +82,7 @@ test("Developer delivery uses the fake turn role session and preserves delivery 
   try {
     const result = await new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run(value.input);
     expect(result).toMatchObject({ outcome: "completed", deliverySummary: "Marker delivered", developerSessionRef: "session_0123456789abcdef01234567" });
+    expect(result).toMatchObject({ worktreePath: worktree, branchName });
     expect(fake.calls[0]).toMatchObject({ promptKind: "implementation", sessionRole: "developer", executionRole: "builder", ledger: "developer" });
     expect(value.database.authQuery((db) => db.prepare("SELECT session_ref, status FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toEqual({ session_ref: "session_0123456789abcdef01234567", status: "completed" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }

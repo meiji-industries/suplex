@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { gzipSync } from "node:zlib";
 
 import type { z } from "zod";
@@ -308,8 +308,9 @@ export class HerdrTurnRunner {
       const live = await this.herdr.getAgent(session.agentName);
       const paths = (session.provider ?? "codex") === "codex" ? await this.candidates() : await runtime.candidatePaths(process.env);
       const reported = live?.agentSession;
+      const reportedPath = session.provider === "openrouter" && reported && isAbsolute(reported) && reported.endsWith(".jsonl") ? reported : undefined;
       try {
-        const rollout = await runtime.discover(paths, { cwd: input.task.worktreePath, ...(session.codexSessionId ? { sessionId: session.codexSessionId } : reported ? { sessionId: reported } : { before: baseline }) });
+        const rollout = await runtime.discover(reportedPath ? [reportedPath] : paths, { cwd: input.task.worktreePath, ...(session.codexSessionId ? { sessionId: session.codexSessionId } : reportedPath ? {} : reported ? { sessionId: reported } : { before: baseline }) });
         this.bindIdentity(session.id, rollout.sessionId, rollout.path);
         return { ...session, codexSessionId: rollout.sessionId, rolloutPath: rollout.path, live: live ?? session.live };
       } catch (error) {

@@ -133,7 +133,7 @@ test("converts non-retryable Herdr session failures at the turn boundary", async
     await expect(runner.run(setup.input)).rejects.toEqual(expect.objectContaining<Partial<AgentFailure>>({ code: "guard_invalid", nonRetryable: true }));
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
-test("accepts a fresh argv prompt when its OMP transcript appears while Herdr stays idle", async () => {
+test("accepts a fresh argv prompt from a title-prefixed OMP transcript reported by path", async () => {
   const setup = await fixture();
   const ompHome = join(setup.root, "omp");
   const previousOmpHome = process.env.OMP_HOME;
@@ -158,11 +158,11 @@ test("accepts a fresh argv prompt when its OMP transcript appears while Herdr st
       const transcriptPath = join(ompHome, "agent", "sessions", "project", "session.jsonl");
       if (getCalls === 1) {
         await mkdir(dirname(transcriptPath), { recursive: true });
-        await writeFile(transcriptPath, `${JSON.stringify({ type: "session", id: "omp-session", cwd: setup.input.task.worktreePath })}\n${JSON.stringify({ type: "message", id: "omp-turn", timestamp: "2026-08-28T12:00:00.000Z", role: "user", message: { content: [{ type: "text", text: marker(prompt.content) }] } })}\n${JSON.stringify({ type: "message", timestamp: "2026-08-28T12:00:01.000Z", role: "assistant", stopReason: "stop", message: { content: [{ type: "text", text: "done" }] } })}\n`);
+        await writeFile(transcriptPath, `${JSON.stringify({ type: "title", v: 1, title: "" })}\n${JSON.stringify({ type: "session", id: "omp-session", cwd: setup.input.task.worktreePath })}\n${JSON.stringify({ type: "message", id: "omp-turn", timestamp: "2026-08-28T12:00:00.000Z", role: "user", message: { content: [{ type: "text", text: marker(prompt.content) }] } })}\n${JSON.stringify({ type: "message", timestamp: "2026-08-28T12:00:01.000Z", role: "assistant", stopReason: "stop", message: { content: [{ type: "text", text: "done" }] } })}\n`);
       } else if (getCalls === 2) {
         await writeFile(resultPath(prompt.content), JSON.stringify({ status: "ok" }));
       }
-      return setup.session.live;
+      return { ...setup.session.live, agentSession: transcriptPath };
     },
   };
   const sessions = {

@@ -51,6 +51,9 @@ export class IssueRun {
   private loopError?: unknown;
   private initialState: IssueWorkflowState;
   private executionContext?: RunExecutionContext;
+  private projectionTimes: number[] = [];
+  private projectionSignatures: string[] = [];
+  private runawayHalted = false;
 
   constructor(
     readonly input: IssueWorkflowInput,
@@ -77,7 +80,25 @@ export class IssueRun {
       signal: this.controller.signal,
       commands: this.commands,
       queries: this.queries,
-      activity: (name: string, args: unknown[], options: Parameters<ActivityCaller["call"]>[2]) => this.caller.call(name, args, options, this.controller.signal, this.workflowId),
+      activity: async (name: string, args: unknown[], options: Parameters<ActivityCaller["call"]>[2]) => {
+        if (name === "projectIssueState") {
+          const now = this.clock.now();
+          this.projectionTimes = this.projectionTimes.filter((time) => now - time <= 10_000);
+          this.projectionSignatures = this.projectionSignatures.slice(-this.projectionTimes.length);
+          this.projectionTimes.push(now);
+          const event = args[0] as { schemaVersion: number; runId: string; eventId: string; state: IssueWorkflowState };
+          this.projectionSignatures.push(`${event.state.phase}\u0000${event.state.pendingAction}`);
+          if (this.projectionTimes.length > 50 && !this.runawayHalted && new Set(this.projectionSignatures).size <= 2 && this.projectionSignatures.every((signature) => signature.startsWith("merge_conflict_required\u0000") || signature.startsWith("merge_conflict_resolving\u0000"))) {
+            this.runawayHalted = true;
+            const state = IssueWorkflowStateSchema.parse({ ...event.state, owner: "human", allowedCommands: [...new Set([...event.state.allowedCommands, "cancel_issue"])], pendingAction: "Runaway transition loop halted", lastHandlerError: { command: "workflow", reason: "Runaway transition loop halted", at: new Date(now).toISOString() } });
+            this.initialState = state;
+            this.logger.error("Runaway transition loop halted", { workflowId: this.workflowId, runId: this.runId });
+            return this.caller.call(name, [{ ...event, eventId: state.lastEventId, state }], options, this.controller.signal, this.workflowId);
+          }
+        }
+        if (this.runawayHalted && name !== "projectIssueState") throw new Error("Runaway transition loop halted");
+        return this.caller.call(name, args, options, this.controller.signal, this.workflowId);
+      },
       wait: (milliseconds: number) => this.wakeable.wait(milliseconds, this.controller.signal, this.clock),
       now: () => this.clock.now(),
       wake: () => this.wakeable.wake(),
@@ -106,6 +127,11 @@ export class IssueRun {
   execute(name: string, input: unknown, commandId = "legacy-command"): Promise<IssueWorkflowState> {
     const operation = this.chain.then(async () => {
       await this.ready();
+      if (this.runawayHalted) {
+        this.runawayHalted = false;
+        this.projectionTimes = [];
+        this.projectionSignatures = [];
+      }
       if (commandId !== "legacy-command") {
         const stored = this.database.authQuery((db) => db.prepare("SELECT result_json FROM forge_engine_commands WHERE command_id = ? AND workflow_id = ?").get(commandId, this.workflowId) as { result_json: string } | undefined);
         if (stored) return IssueWorkflowStateSchema.parse(JSON.parse(stored.result_json));

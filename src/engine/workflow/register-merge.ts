@@ -1,4 +1,4 @@
-import { setHandler } from "../registry.js";
+import { setHandler, sleep } from "../registry.js";
 import * as contracts from "../issue-contracts.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
@@ -128,6 +128,7 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
       return ctx.state;
     }
     if (!ctx.state.mergeResolutionPlanArtifactId) throw new Error("A Lead conflict plan is required");
+  for (let retry = 0; retry < 2; retry += 1) {
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
     const turnExecutionId = developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "merge_conflict_resolution");
     const prior = { forwardMergeId: ctx.state.forwardMergeId, developerExecutionId: ctx.state.developerExecutionId, developerSessionRef: ctx.state.developerSessionRef, branchName: ctx.state.branchName, priorHead: ctx.state.forwardMergePriorHead, priorTree: ctx.state.forwardMergePriorTree, targetBaseSha: ctx.state.forwardMergeTargetBaseSha, expectedBaseSha: ctx.state.targetBaseSha, conflictArtifact: ctx.state.forwardMergeConflictArtifact, conflictFileCount: ctx.state.forwardMergeConflictFileCount, planArtifactId: ctx.state.mergeResolutionPlanArtifactId };
@@ -145,22 +146,19 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
         (value) => value.status === "completed" ? value.result.developerExecutionId : value.developerExecutionId,
       );
       if (outcome.status !== "completed") {
-        let autoRetry = false;
+        const interrupted = outcome.status === "interrupted";
+        const autoRetry = interrupted && developerAttempt === 1 && retry === 0;
         const applied = await ctx.withStateMutation(() => {
           if (ctx.state.activeOperation?.commandId !== command.commandId) return false;
-          // In the trusted single-operator environment an unconfirmed process is
-          // treated as interrupted. The first loss is retried immediately; later
-          // losses leave the normal retry command available without a dead-end
-          // ownership-verification gate.
-          const interrupted = outcome.status === "interrupted";
-          autoRetry = interrupted && developerAttempt === 1 && true;
           const recoveryStatus = interrupted ? "interrupted" : outcome.status;
-          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: autoRetry ? "lead" : "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: autoRetry ? "Developer conflict-resolution process ended; Forge is starting the one automatic retry." : outcome.summary, ...ctx.recoveryFields(recoveryStatus, outcome.reasonCode, outcome.summary, "lastHeartbeatAt" in outcome ? outcome.lastHeartbeatAt : null), developerEvidenceArtifactId: outcome.status === "failed" ? outcome.evidenceArtifactId : ctx.state.developerEvidenceArtifactId, activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: autoRetry ? "lead" : "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: autoRetry ? "Developer conflict-resolution process ended; Forge is starting the one automatic retry." : outcome.summary, developerAttempt, ...ctx.recoveryFields(recoveryStatus, outcome.reasonCode, outcome.summary, "lastHeartbeatAt" in outcome ? outcome.lastHeartbeatAt : null), developerEvidenceArtifactId: outcome.status === "failed" ? outcome.evidenceArtifactId : ctx.state.developerEvidenceArtifactId, activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
           return true;
         });
         if (applied) await ctx.project();
-        if (applied && autoRetry) return resolveMergeConflict(ctx, { ...command, expectedRevision: ctx.state.revision, commandId: `${ctx.state.workflowId}:auto-retry-merge-conflict:${ctx.state.revision}` });
-        return ctx.state;
+        if (!applied || !autoRetry) return ctx.state;
+        await sleep("2 seconds");
+        command = { ...command, expectedRevision: ctx.state.revision, commandId: `${ctx.state.workflowId}:auto-retry-merge-conflict:${ctx.state.revision}` };
+        continue;
       }
       const result = outcome.result;
       await ctx.withStateMutation(() => {
@@ -180,8 +178,9 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
       });
     }
     await ctx.project();
-    void command;
     return ctx.state;
+  }
+  return ctx.state;
 }
 
 export function registerMergeReconciliationHandler(ctx: IssueWorkflowContext): void {

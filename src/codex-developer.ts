@@ -428,12 +428,22 @@ export class DeveloperService {
 
 
   async runMergeConflictResolution(rawInput: MergeConflictResolutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<MergeConflictResolutionActivityResult> {
-    const input = rawInput;
+    const input = { ...rawInput };
     const prior = this.database.authQuery((db) => db.prepare(`SELECT id, status, session_ref, branch_name, worktree_path, delivery_artifact_id, evidence_artifact_id
       FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; status: string; session_ref: string | null; branch_name: string; worktree_path: string; delivery_artifact_id: string | null; evidence_artifact_id: string | null } | undefined);
     const planRow = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'merge-conflict-plan'").get(input.planArtifactId, input.companyId) as { storage_path: string; sha256: string } | undefined);
-    if (!prior || !planRow || !["completed", "blocked"].includes(prior.status) || prior.session_ref !== input.developerSessionRef || prior.branch_name !== input.branchName || prior.worktree_path !== input.worktreePath) {
+    if (!prior || !planRow || !["completed", "blocked"].includes(prior.status) || prior.session_ref !== input.developerSessionRef || prior.branch_name !== input.branchName || (input.worktreePath && prior.worktree_path !== input.worktreePath)) {
       throw new AgentFailure("merge-resolution-identity-mismatch", "Merge-conflict resolution coordinates do not match the owned Developer worktree");
+    }
+    input.worktreePath ||= prior.worktree_path;
+    try {
+      const inspected = await this.worktrees.inspectDelivery(input.worktreePath, input.branchName);
+      if (inspected.branchName !== input.branchName) throw new AgentFailure("merge-resolution-identity-mismatch", "The owned Developer worktree branch does not match the recorded branch");
+    } catch (error) {
+      if (!(error instanceof WorktreeFailure) || error.code !== "worktree-unavailable") throw error;
+      const configuration = this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input));
+      const [repositoryPath, worktreeRoot] = await Promise.all([scopedRepository(this.config.repositoryRoot, configuration.repositoryPath), scopedRepository(this.config.worktreeRoot, configuration.worktreeRoot)]);
+      input.worktreePath = (await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha: input.targetBaseSha, branchName: input.branchName })).worktreePath;
     }
     let conflict: ForwardMergeConflictArtifact;
     const conflictRow = this.database.authQuery((db) => db.prepare("SELECT a.storage_path, a.sha256 FROM forge_artifacts a JOIN forge_forward_merges f ON f.conflict_artifact_id = a.id AND f.id = ? AND f.task_id = ? AND f.company_id = ? WHERE a.id = ? AND a.company_id = ? AND a.kind = 'forward-merge-conflict'").get(input.forwardMergeId, input.taskId, input.companyId, input.conflictArtifact.id, input.companyId) as { storage_path: string; sha256: string } | undefined);

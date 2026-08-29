@@ -6,6 +6,8 @@ import { activityRelativeDate, extractAgentTranscript, harnessSummary, TaskActiv
 import { invocationActorLabel, workflowOwnerLabel } from "../src/frontend/components/app/task-invocations.js";
 import type { TaskResponse } from "../src/http/contracts/tasks.js";
 
+const approvedPlanOutput: NonNullable<TaskResponse["leadOutput"]> = { kind: "plan", summary: "Plan", executionId: "lead_1", outputArtifactId: "plan_1", evidenceArtifactId: "evidence_1", content: { kind: "plan", summary: "Plan", gitPresentation: { branchSlug: "stream-progress", pullRequestTitle: "Stream progress", pullRequestDescription: "Show live Developer progress." }, reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "First", entryPoint: null, completionCriterion: null, verification: "test one", verificationCommands: [] }, { number: 2, instruction: "Second", entryPoint: null, completionCriterion: null, verification: "test two", verificationCommands: [] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "No impact", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], preservedWorktreeCompatibility: null, affectedPaths: [], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: {} } } };
+
 test("labels an agent with its execution profile", () => {
   expect(invocationActorLabel({ agentName: "Planner", profileName: "Smart", role: "planner" })).toBe("Planner (Smart)");
   expect(invocationActorLabel({ agentName: "Planner", profileName: "Fast", role: "integrator" })).toBe("Integrator (Fast)");
@@ -22,7 +24,7 @@ test("makes conflict summaries easy to scan", () => {
 });
 
 test("renders the approved plan as static numbered instructions", () => {
-  const html = renderToStaticMarkup(createElement(TaskLeadPlan, { output: { kind: "plan", summary: "Plan", executionId: "lead_1", outputArtifactId: "plan_1", evidenceArtifactId: "evidence_1", content: { kind: "plan", summary: "Plan", gitPresentation: { branchSlug: "stream-progress", pullRequestTitle: "Stream progress", pullRequestDescription: "Show live Developer progress." }, reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "First", entryPoint: null, completionCriterion: null, verification: "test one", verificationCommands: [] }, { number: 2, instruction: "Second", entryPoint: null, completionCriterion: null, verification: "test two", verificationCommands: [] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "No impact", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], preservedWorktreeCompatibility: null, affectedPaths: [], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: {} } } }, decisionControls: createElement("button", null, "Approve Plan") }));
+  const html = renderToStaticMarkup(createElement(TaskLeadPlan, { output: approvedPlanOutput, decisionControls: createElement("button", null, "Approve Plan") }));
 
   const text = html.replace(/<[^>]+>/g, "");
   expect(text).toContain("Step 1 — First");
@@ -40,10 +42,17 @@ test("renders the approved plan as static numbered instructions", () => {
   expect(html).not.toContain("Builder execution");
   expect(html).not.toContain("Active command");
   expect(html).not.toContain("Verification receipts");
-  expect(html).toContain('data-slot="card-footer"');
+  expect(html).toContain('data-plan-slot="plan-footer"');
   expect(html).toContain("Approve Plan");
 });
 
+test("renders a historical plan with a closed panel", () => {
+  const html = renderToStaticMarkup(createElement(TaskLeadPlan, { output: approvedPlanOutput, collapsible: true }));
+
+  expect(html).toContain("Plan: Stream progress");
+  expect(html).not.toContain("Step 1 — First");
+  expect(html).toContain('aria-expanded="false"');
+});
 
 
 

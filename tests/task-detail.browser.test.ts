@@ -338,7 +338,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       const currentPlan = current.locator('[data-task-lead-plan]');
       const taskActions = current.locator('[data-task-actions]');
       expect(await activityPlan.count()).toBe(0);
-      expect(await currentPlan.locator('[data-slot="card-content"]').count()).toBe(1);
+      expect(await currentPlan.locator('[data-plan-slot="plan-content"]').count()).toBe(1);
       expect(await taskActions.getByRole("heading", { name: "Review final plan", exact: true }).count()).toBe(1);
       expect(await taskActions.locator('[data-plan-decision-controls] [data-plan-decision-form]').count()).toBe(1);
       expect(await taskDetail.getByText("Plan step progress", { exact: true }).count()).toBe(0);
@@ -348,6 +348,11 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await planSteps.count()).toBe(1);
       expect(await planSteps.locator("[data-completed]").count()).toBe(0);
       expect(await planSteps.locator("[aria-current]").count()).toBe(0);
+      const currentPlanTrigger = currentPlan.getByRole("button", { name: /Toggle Plan: Improve browser task/ });
+      await currentPlanTrigger.click();
+      expect(await currentPlan.getByText("Step 1 — Inspect repository", { exact: true }).isVisible()).toBe(false);
+      await currentPlanTrigger.click();
+      await currentPlan.getByText("Step 1 — Inspect repository", { exact: true }).waitFor();
       expect(await taskDetail.locator("[data-task-work-tabs]").getByRole("tab", { name: /^Activity \d+$/ }).isVisible()).toBe(true);
       const workTabs = taskDetail.locator("[data-task-work-tabs]");
       await workTabs.waitFor();

@@ -4,9 +4,8 @@ import { Alert, AlertDescription, AlertTitle } from "../ui/alert.js";
 import { ChevronDown } from "lucide-react";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion.js";
 import { Badge } from "../ui/badge.js";
-import { Button } from "../ui/button.js";
-import { Card, CardContent, CardFooter } from "../ui/card.js";
 import { Collapsible } from "../ui/collapsible.js";
+import { Plan, PlanAction, PlanContent, PlanDescription, PlanFooter, PlanHeader, PlanTitle, PlanTrigger } from "../ui/plan.js";
 import { Timeline, TimelineContent, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator } from "../ui/timeline.js";
 import { Markdown } from "./markdown.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
@@ -50,7 +49,7 @@ export function TaskLeadPlan({
     ["Verification strategy", output.content.verificationStrategy],
   ].filter((item): item is [string, string] => item !== null && Boolean(item[1]));
   const [openSteps, setOpenSteps] = useState<string[]>([]);
-  const heading = <span className="font-semibold">Plan: {output.content.gitPresentation?.pullRequestTitle ?? "Planner plan"}</span>;
+  const headingText = `Plan: ${output.content.gitPresentation?.pullRequestTitle ?? "Planner plan"}`;
   const details = <>
     <Markdown source={output.summary} />
         <Timeline orientation="vertical" value={0} data-plan-steps>
@@ -104,14 +103,14 @@ export function TaskLeadPlan({
           ) : null}
   </>;
   return (
-    <Card data-task-lead-plan size="sm">
-      <CardContent>
-        {collapsible ? <Collapsible.Root>
-          <Collapsible.Trigger render={<Button variant="ghost" size="sm" />}><span className="flex w-full flex-wrap items-center justify-between gap-2">{heading}<ChevronDown /></span></Collapsible.Trigger>
-          <Collapsible.Panel><div className="mt-3 flex flex-col gap-3">{details}</div></Collapsible.Panel>
-        </Collapsible.Root> : <><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold">{heading}</h3></div>{details}</>}
-      </CardContent>
-      {decisionControls ? <CardFooter className="justify-end" data-plan-decision-controls>{decisionControls}</CardFooter> : null}
-    </Card>
+    <Plan data-task-lead-plan defaultOpen={!collapsible}>
+      <PlanHeader>
+        <PlanTitle>{headingText}</PlanTitle>
+        {output.content.gitPresentation?.pullRequestDescription ? <PlanDescription>{output.content.gitPresentation.pullRequestDescription}</PlanDescription> : null}
+        <PlanAction><PlanTrigger label={`Toggle ${headingText}`} /></PlanAction>
+      </PlanHeader>
+      <PlanContent><div className="flex flex-col gap-3">{details}</div></PlanContent>
+      {decisionControls ? <PlanFooter className="justify-end" data-plan-decision-controls>{decisionControls}</PlanFooter> : null}
+    </Plan>
   );
 }

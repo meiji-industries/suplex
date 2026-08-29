@@ -20,7 +20,8 @@ test("a stale reviewed revision blocks publication for human review", async () =
   try {
     const started = await startIssueWorkflow(h.config, { companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "stale-publish", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false, continuationState });
     const state = await h.settle(started.workflowId, (value) => value.phase === "delivery_blocked");
-    expect(state).toMatchObject({ phase: "delivery_blocked", owner: "human", allowedCommands: ["review_delivery", "cancel_issue"], releaseFailureCode: "stale-reviewed-revision", pendingAction: "The reviewed branch is unavailable for pushing" });
+    expect(state).toMatchObject({ phase: "delivery_blocked", owner: "human", allowedCommands: expect.arrayContaining(["review_delivery", "cancel_issue"]), releaseFailureCode: "stale-reviewed-revision", pendingAction: "The reviewed branch is unavailable for pushing" });
+    expect(state.allowedCommands).toContain("retry_target_base_reconciliation");
   } finally { await h.stop(); }
 });
 

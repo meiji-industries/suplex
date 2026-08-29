@@ -196,7 +196,7 @@ test("Lead planning persists a fake turn result and reuses the Lead role session
     const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
     expect(result.leadSessionRef).toBe("session_0123456789abcdef01234567");
     expect(fake.calls).toHaveLength(1);
-    expect(fake.calls[0]).toMatchObject({ promptKind: "lead-plan", sessionRole: "lead", executionRole: "planner" });
+    expect(fake.calls[0]).toMatchObject({ promptKind: "lead-plan", executionRole: "planner" });
     const worktreePath = join(value.root, "worktrees", "task_1");
     const branchName = buildGitBranchName({ branchSlug: fallbackGitPresentation("Fixture task").branchSlug, taskId: "task_1" });
     expect(fake.calls[0]?.task.worktreePath).toBe(worktreePath);
@@ -452,7 +452,7 @@ test("Lead authors a complete conflict-resolution plan from both merge sides", a
     const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
     const result = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, forwardMergeId: "merge-lead-1", roleProfiles: { planner: "profile_1", integrator: "profile_integrator" }, executionRole: "integrator", leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictArtifact: { id: conflictArtifact.id, kind: "forward-merge-conflict" }, conflictFileCount: 1 });
     expect(result).toMatchObject({ leadSessionRef: "session_0123456789abcdef01234567", summary: "Resolve the shared file from both sides." });
-    expect(fake.calls[0]).toMatchObject({ promptKind: "merge-conflict-plan", sessionRole: "lead", executionRole: "integrator" });
+    expect(fake.calls[0]).toMatchObject({ promptKind: "merge-conflict-plan", executionRole: "integrator" });
     expect(value.database.authQuery((db) => db.prepare("SELECT role, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ role: "integrator", profile_id: "profile_integrator", resolved_model: "gpt-5.6-luna", resolved_reasoning_level: "low", resolved_service_priority: "fast" });
     expect(value.database.authQuery((db) => db.prepare("SELECT status, lead_session_ref FROM forge_merge_conflict_resolutions WHERE id = ?").get(result.planId))).toEqual({ status: "planned", lead_session_ref: "session_0123456789abcdef01234567" });
     const second = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, forwardMergeId: "merge-lead-1", leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictArtifact: { id: conflictArtifact.id, kind: "forward-merge-conflict" }, conflictFileCount: 1 });
@@ -503,8 +503,8 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
     expect(review.sessionRef).toBe("session_0123456789abcdef01234567");
     expect(consolidated.leadSessionRef).toBe("session_0123456789abcdef01234567");
     expect(fake.calls).toHaveLength(2);
-    expect(fake.calls[0]).toMatchObject({ promptKind: "supplemental-review", sessionRole: "reviewer", executionRole: "reviewer" });
-    expect(fake.calls[1]).toMatchObject({ promptKind: "lead-consolidation", sessionRole: "lead" });
+    expect(fake.calls[0]).toMatchObject({ promptKind: "supplemental-review", executionRole: "reviewer" });
+    expect(fake.calls[1]).toMatchObject({ promptKind: "lead-consolidation", executionRole: "planner" });
     expect(value.database.authQuery((db) => db.prepare("SELECT profile_id, session_ref, summary FROM forge_plan_reviews WHERE id = ?").get(review.reviewId))).toEqual({ profile_id: "profile_2", session_ref: "session_0123456789abcdef01234567", summary: "Review is independent" });
     expect(value.database.authQuery((db) => db.prepare("SELECT planner_response_artifact_id FROM forge_plan_reviews WHERE id = ?").get(review.reviewId))).toEqual({ planner_response_artifact_id: consolidated.leadReviewResponseArtifactId });
   } finally {

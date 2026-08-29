@@ -18,7 +18,6 @@ export interface AgentReadinessProbe {
 /** A role-owned result schema and the durable coordinates for one TUI turn. */
 export interface InteractiveTurnRequest<T = unknown> {
   task: { taskId: string; projectId: string; projectSlug: string; issueKey?: string; worktreePath: string; runtimeRoot: string };
-  sessionRole: "lead" | "developer" | "reviewer";
   executionRole: "planner" | "reviewer" | "builder" | "integrator";
   ledger: "agent" | "developer";
   executionId: string;

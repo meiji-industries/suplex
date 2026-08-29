@@ -35,7 +35,7 @@ async function fixture(): Promise<{ root: string; database: ForgeDatabase; input
     db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project', 'company', 'Project', '/repo', '/worktrees', 'owner/repo', 'main', 'main', '', '', '[]', '{}', 'active', ?, ?)").run(now, now);
     db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief.md', 'text/markdown', 1, ?, 'brief.md', ?)").run("a".repeat(64), now);
     db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES ('task', 'company', 'project', 'Task', 'brief', '[]', '{}', 0, 'workflow', 'revision', 'key', ?, ?, ?)").run("b".repeat(64), now, now);
-    db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, codex_session_id, agent_name, pane_id, rollout_path, status, created_at, updated_at) VALUES ('session', 'task', 'lead', 1, 1, 'codex', 'codex-session', 'lead', 'pane', ?, 'ready', ?, ?)").run(join(root, "rollout.jsonl"), now, now);
+    db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, codex_session_id, agent_name, pane_id, rollout_path, status, created_at, updated_at) VALUES ('session', 'task', 'planner', 1, 1, 'codex', 'codex-session', 'planner', 'pane', ?, 'ready', ?, ?)").run(join(root, "rollout.jsonl"), now, now);
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, heartbeat_at) VALUES ('execution', 'task', 'company', 'workflow', 'planner', 'running', 1, ?, ?)").run(now, now);
   });
   const rolloutPath = join(root, "rollout.jsonl");
@@ -44,7 +44,7 @@ async function fixture(): Promise<{ root: string; database: ForgeDatabase; input
     root,
     database,
     session: { id: "session", provider: "codex", agentName: "lead", paneId: "pane", codexSessionId: "codex-session", generation: 1, rolloutPath, live: { name: "lead", paneId: "pane", agentSession: "codex-session", status: "working" } },
-    input: { task: { ...task, runtimeRoot: root }, sessionRole: "lead", executionRole: "planner", ledger: "agent", executionId: "execution", promptKind: "plan", prompt: "Plan this", profile: { model: "gpt", reasoningLevel: "high", servicePriority: "priority" }, resultSchema: ResultSchema, schemaPath: "schema.json", companyId: "company", workflowId: "workflow", revision: 1 },
+    input: { task: { ...task, runtimeRoot: root }, executionRole: "planner", ledger: "agent", executionId: "execution", promptKind: "plan", prompt: "Plan this", profile: { model: "gpt", reasoningLevel: "high", servicePriority: "priority" }, resultSchema: ResultSchema, schemaPath: "schema.json", companyId: "company", workflowId: "workflow", revision: 1 },
   };
 }
 
@@ -122,8 +122,8 @@ async function developerTurnFixture(dirty = false) {
     db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('developer', 'task', 'company', 'workflow', 1, 1, 'running', 'forge/issue/task', ?, ?, ?)").run(worktreePath, base, now);
     db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES ('worktree', 'task', 'company', 'project', 'workflow', ?, ?, ?, 'forge/issue/task', ?, 'lease', 'active', ?)").run(worktreePath, setup.root, worktreePath, base, now);
   });
-  const input = { ...setup.input, executionId: "developer", sessionRole: "developer" as const, executionRole: "builder" as const, ledger: "developer" as const, promptKind: "developer-delivery", resultSchema: DeveloperDeliverySchema };
-  setup.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET session_role = 'developer' WHERE id = 'session'").run());
+  const input = { ...setup.input, executionId: "developer", executionRole: "builder" as const, ledger: "developer" as const, promptKind: "developer-delivery", resultSchema: DeveloperDeliverySchema };
+  setup.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET session_role = 'builder' WHERE id = 'session'").run());
   return { ...setup, input };
 }
 
@@ -134,6 +134,20 @@ test("converts non-retryable Herdr session failures at the turn boundary", async
   } as never, new IssueTimelineEvents(setup.database));
   try {
     await expect(runner.run(setup.input)).rejects.toEqual(expect.objectContaining<Partial<AgentFailure>>({ code: "guard_invalid", nonRetryable: true }));
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+test("uses the integrator execution role for the persistent session", async () => {
+  const setup = await fixture();
+  let ensuredRole: string | undefined;
+  const herdr = {
+    prompt: async (_name: string, prompt: string) => { await complete(setup.session, prompt, { status: "ok" }); return setup.session.live; },
+    getAgent: async () => setup.session.live,
+  };
+  const sessions = { ensureRoleSession: async (_task: unknown, role: string) => { ensuredRole = role; return setup.session; } };
+  const runner = makeRunner(setup.database, herdr as never, sessions as never, new IssueTimelineEvents(setup.database));
+  try {
+    await expect(runner.run({ ...setup.input, executionRole: "integrator" })).resolves.toMatchObject({ result: { status: "ok" } });
+    expect(ensuredRole).toBe("integrator");
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 test("accepts a fresh argv prompt from a title-prefixed OMP transcript reported by path", async () => {
@@ -615,7 +629,7 @@ test("surfaces an error completion", async () => {
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("closes a reviewer pane when its turn fails", async () => {
+test("keeps a reviewer pane persistent when its turn fails", async () => {
   const setup = await fixture();
   setup.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET session_role = 'reviewer' WHERE id = 'session'").run());
   let closed = false;
@@ -629,9 +643,9 @@ test("closes a reviewer pane when its turn fails", async () => {
   };
   const runner = makeRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
   try {
-    await expect(runner.run({ ...setup.input, sessionRole: "reviewer", executionRole: "reviewer" })).rejects.toMatchObject({ code: "turn-failed" });
-    expect(closed).toBe(true);
-    expect(setup.database.authQuery((db) => db.prepare("SELECT pane_id, status, is_current FROM forge_herdr_role_sessions WHERE id = 'session'").get())).toEqual({ pane_id: null, status: "closed", is_current: 0 });
+    await expect(runner.run({ ...setup.input, executionRole: "reviewer" })).rejects.toMatchObject({ code: "turn-failed" });
+    expect(closed).toBe(false);
+    expect(setup.database.authQuery((db) => db.prepare("SELECT pane_id, status, is_current FROM forge_herdr_role_sessions WHERE id = 'session'").get())).toEqual({ pane_id: "pane", status: "ready", is_current: 1 });
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
@@ -818,7 +832,7 @@ test("synthesizes one Developer delivery from a clean Git handoff", async () => 
 test("adopts a persisted waiting turn after marker-start-completion without prompting again", async () => {
   const setup = await fixture();
   const turnId = "turn_01b63006007efef685185032a0737895";
-  const path = join(setup.root, "herdr-results", "task", "lead", `result-${turnId}.json`);
+  const path = join(setup.root, "herdr-results", "task", "planner", `result-${turnId}.json`);
   const promptSentAt = new Date(Date.now() - 1_000).toISOString();
   const rollout = `${line({ type: "user_message", message: `[forge-turn:${turnId}]` })}${line({ type: "task_started", turn_id: "codex-turn" })}${line({ type: "task_complete", turn_id: "codex-turn", duration_ms: 1 })}`;
   let prompts = 0;
@@ -826,7 +840,7 @@ test("adopts a persisted waiting turn after marker-start-completion without prom
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, JSON.stringify({ status: "ok" }));
     await appendFile(setup.session.rolloutPath!, rollout);
-    setup.database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, rollout_start_offset, rollout_cursor_offset, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, ?, 0, ?, ?, 'waiting', ?, ?)").run(turnId, "c".repeat(64), join("herdr-results", "task", "lead", `result-${turnId}.json`), setup.session.rolloutPath, Buffer.byteLength(rollout), promptSentAt, promptSentAt, promptSentAt));
+    setup.database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, rollout_start_offset, rollout_cursor_offset, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, ?, 0, ?, ?, 'waiting', ?, ?)").run(turnId, "c".repeat(64), join("herdr-results", "task", "planner", `result-${turnId}.json`), setup.session.rolloutPath, Buffer.byteLength(rollout), promptSentAt, promptSentAt, promptSentAt));
     const runner = makeRunner(setup.database, { prompt: async () => { prompts += 1; return setup.session.live; }, getAgent: async () => setup.session.live } as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
     await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
     expect(prompts).toBe(0);
@@ -862,7 +876,7 @@ test("stores sanitized content-addressed rollout manifests and reuses chunks", a
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("closes a supplemental reviewer pane only after its rollout snapshot", async () => {
+test("keeps a supplemental reviewer pane after its rollout snapshot", async () => {
   const setup = await fixture();
   setup.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET session_role = 'reviewer' WHERE id = 'session'").run());
   const artifacts = new ArtifactStore(join(setup.root, "artifacts"), setup.database);
@@ -874,8 +888,9 @@ test("closes a supplemental reviewer pane only after its rollout snapshot", asyn
   };
   const runner = makeRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database), artifacts);
   try {
-    await expect(runner.run({ ...setup.input, sessionRole: "reviewer", executionRole: "reviewer" })).resolves.toMatchObject({ result: { status: "ok" } });
-    expect(snapshotPresent).toBe(true);
-    expect(setup.database.authQuery((db) => db.prepare("SELECT pane_id, status, is_current FROM forge_herdr_role_sessions WHERE id = 'session'").get())).toEqual({ pane_id: null, status: "closed", is_current: 0 });
+    await expect(runner.run({ ...setup.input, executionRole: "reviewer" })).resolves.toMatchObject({ result: { status: "ok" } });
+    expect(snapshotPresent).toBe(false);
+    expect(setup.database.authQuery((db) => db.prepare("SELECT id FROM forge_artifacts WHERE kind = 'herdr-rollout-manifest'").get())).toBeDefined();
+    expect(setup.database.authQuery((db) => db.prepare("SELECT pane_id, status, is_current FROM forge_herdr_role_sessions WHERE id = 'session'").get())).toEqual({ pane_id: "pane", status: "ready", is_current: 1 });
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });

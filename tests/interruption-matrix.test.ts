@@ -11,7 +11,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { classifyRecovery, type DurableTaskFacts, type LiveObservations } from "../src/recovery/convergence.js";
 import { integrateRemoteBranch } from "../src/remote-branch-integration.js";
 
-const facts = (overrides: Partial<DurableTaskFacts> = {}): DurableTaskFacts => ({ taskId: "task", phase: "development", revision: 1, terminal: false, cancelled: false, branchName: "forge/task", worktreePath: "/worktree", lastReviewedCommit: "a".repeat(40), turn: { turnId: "turn", role: "developer", status: "waiting", resultPresent: false, resultValid: false, resumeRequestsSent: 0 }, failure: null, ...overrides });
+const facts = (overrides: Partial<DurableTaskFacts> = {}): DurableTaskFacts => ({ taskId: "task", phase: "development", revision: 1, terminal: false, cancelled: false, branchName: "forge/task", worktreePath: "/worktree", lastReviewedCommit: "a".repeat(40), turn: { turnId: "turn", role: "builder", status: "waiting", resultPresent: false, resultValid: false, resumeRequestsSent: 0 }, failure: null, ...overrides });
 const live = (overrides: Partial<LiveObservations> = {}): LiveObservations => ({ herdr: { session: "terminal", stalledBeyondPolicy: false }, git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "a".repeat(40) }, github: null, ...overrides });
 const twice = (input: DurableTaskFacts, observation: LiveObservations) => {
   const first = classifyRecovery(input, observation);
@@ -65,7 +65,7 @@ test("developer commits, then its completion message is lost", () => {
 });
 
 test("lead completes, then its structured result is missing", () => {
-  const waiting = facts({ turn: { ...facts().turn!, role: "lead", status: "waiting", resultPresent: false, resultValid: false, resumeRequestsSent: 0 } });
+  const waiting = facts({ turn: { ...facts().turn!, role: "planner", status: "waiting", resultPresent: false, resultValid: false, resumeRequestsSent: 0 } });
   expect(twice(waiting, live())).toMatchObject({ action: "resume" });
   const completed = { ...waiting, turn: { ...waiting.turn!, resultPresent: true, resultValid: true, resumeRequestsSent: 1 } };
   expect(twice(completed, live())).toMatchObject({ action: "advance" });

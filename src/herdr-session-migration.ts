@@ -8,12 +8,12 @@ type LegacyExecution = {
   id: string;
   taskId: string;
   sessionRef: string;
-  sessionRole?: "lead" | "developer";
+  sessionRole?: "planner" | "builder";
 };
 
-function roleForExecution(kind: "agent" | "developer", role: string): "lead" | "developer" | undefined {
-  if (kind === "agent" && role === "planner") return "lead";
-  if (kind === "developer" || role === "builder") return "developer";
+function roleForExecution(kind: "agent" | "developer", role: string): "planner" | "builder" | undefined {
+  if (kind === "agent" && role === "planner") return "planner";
+  if (kind === "developer" || role === "builder") return "builder";
   return undefined;
 }
 
@@ -36,7 +36,7 @@ export async function migrateLegacyHerdrSessions(
     ...(db.prepare("SELECT id, task_id AS taskId, session_ref AS sessionRef, 'builder' AS role FROM forge_developer_executions WHERE status IN ('starting', 'running', 'cancelling') AND session_ref IS NOT NULL").all() as Array<Omit<LegacyExecution, "sessionRole"> & { role: string }>).map((row) => ({ ...row, sessionRole: roleForExecution("developer", row.role) })),
   ]).filter((row) => /^session_[a-f0-9]{24}$/.test(row.sessionRef));
   const unresolved: string[] = [];
-  const sessions: Array<LegacyExecution & { sessionRole: "lead" | "developer"; sessionId: string }> = [];
+  const sessions: Array<LegacyExecution & { sessionRole: "planner" | "builder"; sessionId: string }> = [];
   for (const row of rows) {
     if (!row.sessionRole) {
       unresolved.push(row.id);

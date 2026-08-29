@@ -18,7 +18,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
             AND execution.status IN ('starting', 'running', 'failed', 'completed', 'blocked')
             AND (execution.status <> 'failed' OR NOT EXISTS (SELECT 1 FROM forge_developer_result_claims claim WHERE claim.execution_id = execution.id))
             AND (execution.status NOT IN ('completed', 'blocked') OR EXISTS (SELECT 1 FROM forge_developer_result_claims claim WHERE claim.execution_id = execution.id))
-            AND session.session_role = 'developer' AND session.is_current = 1
+            AND session.session_role IN ('builder', 'integrator') AND session.is_current = 1
             AND (session.status IN ('ready', 'working', 'blocked') OR (session.status = 'missing' AND session.codex_session_id IS NOT NULL))
             AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed')
             AND NOT EXISTS (SELECT 1 FROM forge_developer_result_conflicts conflict WHERE conflict.execution_id = execution.id)

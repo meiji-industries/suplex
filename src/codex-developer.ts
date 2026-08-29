@@ -376,10 +376,10 @@ export class DeveloperService {
           && priorTerminalExecutions[0]!.resultCommit !== null
           && priorTerminalExecutions[0]!.resultCommit === priorTerminalExecutions[1]!.resultCommit;
         if (noProgress) {
-          await this.roleSessions.retireRoleSession(task.taskId, "developer");
+          await this.roleSessions.retireRoleSession(task.taskId, "builder");
           evidenceLines.push(JSON.stringify({ type: "forge.session", retired: "developer", reason: "no-progress-retry" }));
         }
-        const turn = await this.turnRunner.run({ task: { ...task, worktreePath: worktree.worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "developer", executionRole: "builder", ledger: "developer", executionId, promptKind: "implementation", prompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperDeliveryReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-delivery", DeveloperDeliveryReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision });
+        const turn = await this.turnRunner.run({ task: { ...task, worktreePath: worktree.worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "builder", ledger: "developer", executionId, promptKind: "implementation", prompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperDeliveryReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-delivery", DeveloperDeliveryReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision });
         sessionRef = turn.roleSessionId;
         const execution = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined);
         if (!execution || !["starting", "running"].includes(execution.status)) throw new AgentFailure(execution?.status === "cancelled" ? "developer-cancelled" : "developer-superseded", "Developer execution was cancelled before completion");
@@ -469,7 +469,7 @@ export class DeveloperService {
     let completedMerge: { headSha: string; treeSha: string } | undefined;
     try {
       const task = this.taskContext(input);
-      const turn = await this.turnRunner.run({ task: { ...task, worktreePath: input.worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "developer", executionRole: "integrator", ledger: "developer", executionId, promptKind: "merge-conflict-resolution", prompt: mergePrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperMergeConflictResolutionReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "merge-conflict-resolution", DeveloperMergeConflictResolutionReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision });
+      const turn = await this.turnRunner.run({ task: { ...task, worktreePath: input.worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "integrator", ledger: "developer", executionId, promptKind: "merge-conflict-resolution", prompt: mergePrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperMergeConflictResolutionReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "merge-conflict-resolution", DeveloperMergeConflictResolutionReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision });
       const report = turn.result;
       const missingFiles = conflict.conflictFiles.filter((file) => !report.resolvedFiles.includes(file));
       if (missingFiles.length || report.blocker !== null) throw new AgentFailure("merge-resolution-incomplete", missingFiles.length ? `The Developer did not resolve: ${missingFiles.join(", ")}` : report.blocker ?? "Merge-conflict resolution is blocked");
@@ -572,7 +572,7 @@ export class DeveloperService {
       const repairPrompt = this.repairPrompt(input.blockingFindings, { branchName: input.branchName, worktreePath, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree }, `${this.projectTestControl(input.taskId, input.companyId)} ${this.visualEvidenceInstruction(visualEvidence)}`);
       evidenceLines.push(JSON.stringify({ type: "forge.prompt", text: redact(repairPrompt) }));
       const task = this.taskContext(input);
-      const turn = await this.turnRunner.run({ task: { ...task, worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "developer", executionRole: "builder", ledger: "developer", executionId, promptKind: "delivery-repair", prompt: repairPrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperRepairReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-repair", DeveloperRepairReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision });
+      const turn = await this.turnRunner.run({ task: { ...task, worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "builder", ledger: "developer", executionId, promptKind: "delivery-repair", prompt: repairPrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperRepairReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-repair", DeveloperRepairReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision });
       const report = turn.result;
       let durableProof: DurableBrowserProof | undefined, proofBlocker: string | null = null;
       let reportedPaths: string[] = [];
@@ -673,7 +673,7 @@ export class DeveloperService {
     const profile = this.executionProfile(input);
     try {
       const task = this.taskContext(input);
-      const turn = await this.turnRunner.run({ task: { ...task, worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "developer", executionRole: "integrator", ledger: "developer", executionId, promptKind: "ci-repair", prompt: ciRepairPrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperRepairReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-repair", DeveloperRepairReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: 0 });
+      const turn = await this.turnRunner.run({ task: { ...task, worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "integrator", ledger: "developer", executionId, promptKind: "ci-repair", prompt: ciRepairPrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperRepairReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-repair", DeveloperRepairReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: 0 });
       const report = turn.result;
       const gitState = await this.worktrees.inspectDelivery(worktreePath, input.branchName);
       if (gitState.branchName !== input.branchName || gitState.dirtyState !== "clean" || report.blocker !== null) throw new AgentFailure("ci-repair-revision-invalid", "CI repair did not leave a clean task branch");

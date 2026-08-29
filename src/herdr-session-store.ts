@@ -11,7 +11,7 @@ import { herdrRuntime, type HerdrProviderRuntime } from "./agent-providers/herdr
 import type { AgentProviderKind, HerdrAgentKind } from "./agent-providers/provider.js";
 import { ProviderCredentialStore } from "./provider-credentials.js";
 import { createGitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
-export type RoleSessionRole = "lead" | "developer" | "reviewer";
+export type RoleSessionRole = "planner" | "builder" | "reviewer" | "integrator";
 export interface LaunchSettings {
   provider?: AgentProviderKind;
   model: string;
@@ -65,14 +65,12 @@ export function agentName(
   taskId: string,
   role: RoleSessionRole,
   collision = false,
-  generation?: number,
+  _generation?: number,
 ): string {
   const base = herdrLabel(issue);
-  const generationSuffix =
-    role === "reviewer" && generation !== undefined ? `-${generation}` : "";
   const suffix = collision
-    ? `-${herdrLabel(taskId).slice(-8)}-${role}${generationSuffix}`
-    : `-${role}${generationSuffix}`;
+    ? `-${herdrLabel(taskId).slice(-8)}-${role}`
+    : `-${role}`;
   return `${base.slice(0, 32 - suffix.length)}${suffix}`
     .replace(/^-/, "a-")
     .slice(0, 32);
@@ -245,7 +243,7 @@ export class HerdrSessionStore {
     try {
       const pane = await this.herdr.splitPane({
         paneId: tab.shellPaneId,
-        direction: "right",
+        direction: "down",
         cwd: task.worktreePath,
         focus: false,
       });
@@ -271,9 +269,9 @@ export class HerdrSessionStore {
         secretsFile = join(directory, `openrouter-${row.id}.env`);
         await writeFile(secretsFile, `export OPENROUTER_API_KEY=${quote(credential.secret)}\n`, { mode: 0o600 });
         await chmod(secretsFile, 0o600);
-        if (role !== "developer") preparation = `. ${quote(secretsFile)}; ${preparation}`;
+        if (role !== "builder" && role !== "integrator") preparation = `. ${quote(secretsFile)}; ${preparation}`;
       }
-      if (role === "developer") {
+      if (role === "builder" || role === "integrator") {
         const guard = await createGitCommandGuard(task.runtimeRoot, `developer-guard-${row.id}`);
         const gitRealBin = guard.gitRealBin ?? guard.env.FORGE_GIT_REAL_BIN;
         if (!gitRealBin)
@@ -336,7 +334,7 @@ export class HerdrSessionStore {
           role,
           generation: Number(row.generation),
           preparation,
-          scriptFile: role === "developer",
+          scriptFile: role === "builder" || role === "integrator",
           readinessPath,
         });
       } catch (error) {
@@ -515,7 +513,7 @@ export class HerdrSessionStore {
       await this.closeRecordedPane(input.sessionId, input.paneId);
       const pane = await this.herdr.splitPane({
         paneId: input.tab.shellPaneId,
-        direction: "right",
+        direction: "down",
         cwd: input.task.worktreePath,
         focus: false,
       });
@@ -663,14 +661,11 @@ if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READ
   ): Record<string, any> {
     return this.database.authQuery((db) =>
       db.transaction(() => {
-        let row =
-          role === "reviewer"
-            ? undefined
-            : (db
-                .prepare(
-                  "SELECT * FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1 ORDER BY generation DESC LIMIT 1",
-                )
-                .get(task.taskId, role) as Record<string, any> | undefined);
+        let row = db
+          .prepare(
+            "SELECT * FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1 ORDER BY generation DESC LIMIT 1",
+          )
+          .get(task.taskId, role) as Record<string, any> | undefined;
         if (!row) {
           const id = `session_${randomBytes(12).toString("hex")}`;
           const generation =

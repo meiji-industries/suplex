@@ -14,13 +14,13 @@ import { reconcileIssueDeveloperDelivery } from "./temporal/service.js";
 export interface ActiveTurnOutcome {
   taskId: string;
   turnId: string;
-  role: "lead" | "developer";
+  role: "planner" | "builder" | "reviewer" | "integrator";
   action: "advance" | "resume" | "attention" | "no_change";
   idempotencyKey: string;
   evidence: string[];
 }
 
-type Turn = { turnId: string; taskId: string; role: "lead" | "developer"; status: DurableTaskFacts["turn"] extends infer T ? T extends { status: infer S } ? S : never : never; resultRelativePath: string; executionId: string; executionStatus: string | null; executionFinishedAt: string | null; ledger: "agent" | "developer"; executionRole: string; revision: number; phase: string; workflowId: string; agentName: string | null; branchName: string | null; worktreePath: string | null; lastReviewedCommit: string | null; correctionIndex: number };
+type Turn = { turnId: string; taskId: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: DurableTaskFacts["turn"] extends infer T ? T extends { status: infer S } ? S : never : never; resultRelativePath: string; executionId: string; executionStatus: string | null; executionFinishedAt: string | null; ledger: "agent" | "developer"; executionRole: string; revision: number; phase: string; workflowId: string; agentName: string | null; branchName: string | null; worktreePath: string | null; lastReviewedCommit: string | null; correctionIndex: number };
 
 // Keep completed turns with a durable result in the scan so an unchanged second
 // reconciliation reports the same idempotent outcome without writing again.
@@ -67,7 +67,7 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
   for (const turn of candidates(database, taskId)) {
     const bytes = await resultAt(config.runtimeRoot, turn.resultRelativePath);
     const liveAgent = turn.agentName ? await herdr.getAgent(turn.agentName) : null;
-    const handoff = turn.role === "developer" && turn.worktreePath && turn.branchName
+    const handoff = (turn.role === "builder" || turn.role === "integrator") && turn.worktreePath && turn.branchName
       ? await detectHandoff({ worktreePath: turn.worktreePath, branchName: turn.branchName, previousCommit: turn.lastReviewedCommit, taskId: turn.taskId, database })
       : null;
     const git = handoff ? {
@@ -92,7 +92,7 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
     // A result that arrived after Forge failed the execution is still the
     // Developer's delivery: reopen the execution through the reconcile-only
     // retry. The execution leaves `failed` once adopted, so this fires once.
-    if (turn.role === "developer" && turn.executionStatus === "failed" && bytes) {
+    if ((turn.role === "builder" || turn.role === "integrator") && turn.executionStatus === "failed" && bytes) {
       await (deps.reconcileDeveloper ?? reconcileIssueDeveloperDelivery)(config, turn.workflowId, { expectedRevision: turn.revision, actorUserId: "system", commandId: `late-result-${turn.turnId}-${turn.executionFinishedAt ?? "unknown"}`, reconcileOnly: true }).catch(() => undefined);
     }
     outcomes.push({ taskId: turn.taskId, turnId: turn.turnId, role: turn.role, action, idempotencyKey: classified.idempotencyKey, evidence: classified.evidence });

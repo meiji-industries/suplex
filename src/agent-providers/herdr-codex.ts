@@ -9,13 +9,13 @@ import type { CommandRunner } from "../provider-readiness.js";
 
 export async function forwardHerdrAgent(database: ForgeDatabase | undefined, herdr: HerdrClient | undefined, taskId: string, role: "lead" | "developer", text: string): Promise<void> {
   if (!database || !herdr) throw new Error("Herdr provider requires database and HerdrClient for forwarding");
-  const row = database.authQuery((db) => db.prepare("SELECT agent_name FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(taskId, role) as { agent_name: string | null } | undefined);
+  const row = database.authQuery((db) => db.prepare("SELECT agent_name FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(taskId, role === "lead" ? "planner" : "builder") as { agent_name: string | null } | undefined);
   if (row?.agent_name) await herdr.prompt(row.agent_name, text);
 }
 
 export async function interruptHerdrAgent(database: ForgeDatabase | undefined, herdr: HerdrClient | undefined, taskId: string, role: "lead" | "developer"): Promise<void> {
   if (!database || !herdr) throw new Error("Herdr provider requires database and HerdrClient for interruption");
-  const row = database.authQuery((db) => db.prepare("SELECT agent_name FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(taskId, role) as { agent_name: string | null } | undefined);
+  const row = database.authQuery((db) => db.prepare("SELECT agent_name FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(taskId, role === "lead" ? "planner" : "builder") as { agent_name: string | null } | undefined);
   if (row?.agent_name) await herdr.sendKeys(row.agent_name, ["ctrl+c"]);
 }
 
@@ -33,13 +33,13 @@ export class HerdrCodexProvider implements AgentProvider {
   }
   async forward(taskId: string, role: "lead" | "developer", text: string): Promise<void> {
     if (!this.database || !this.herdr) throw new Error("HerdrCodexProvider requires database and HerdrClient for forwarding");
-    const row = this.database.authQuery((db) => db.prepare("SELECT agent_name FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(taskId, role) as { agent_name: string | null } | undefined);
+    const row = this.database.authQuery((db) => db.prepare("SELECT agent_name FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(taskId, role === "lead" ? "planner" : "builder") as { agent_name: string | null } | undefined);
     if (!row?.agent_name) return;
     await this.herdr.prompt(row.agent_name, text);
   }
   async interrupt(taskId: string, role: "lead" | "developer"): Promise<void> {
     if (!this.database || !this.herdr) throw new Error("HerdrCodexProvider requires database and HerdrClient for interruption");
-    const row = this.database.authQuery((db) => db.prepare("SELECT agent_name FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(taskId, role) as { agent_name: string | null } | undefined);
+    const row = this.database.authQuery((db) => db.prepare("SELECT agent_name FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(taskId, role === "lead" ? "planner" : "builder") as { agent_name: string | null } | undefined);
     if (row?.agent_name) await this.herdr.sendKeys(row.agent_name, ["ctrl+c"]);
   }
 }

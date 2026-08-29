@@ -19,7 +19,7 @@ export interface RestoredDeveloperRecoveryReport {
 
 export async function reconcileDeveloperExecutions(database: ForgeDatabase): Promise<DeveloperRecoveryOutcome[]> {
   const sessionOutcomes = await reconcileHerdrSessions(database);
-  const developerSessionIds = new Set(database.authQuery((db) => db.prepare("SELECT id FROM forge_herdr_role_sessions WHERE session_role = 'developer' AND is_current = 1 AND status NOT IN ('closed')").all() as Array<{ id: string }>).map((session) => session.id));
+  const developerSessionIds = new Set(database.authQuery((db) => db.prepare("SELECT id FROM forge_herdr_role_sessions WHERE session_role IN ('builder', 'integrator') AND is_current = 1 AND status NOT IN ('closed')").all() as Array<{ id: string }>).map((session) => session.id));
   const sessionsByTask = new Map(
     sessionOutcomes
       .filter((outcome) => developerSessionIds.has(outcome.sessionId))
@@ -64,7 +64,7 @@ export async function cancelDeveloperExecution(database: ForgeDatabase, executio
     // `closed` is the established terminal role-session status.  Retiring the
     // current row makes the next ensure allocate a new generation and Codex
     // session, while deliberately leaving its pane alone for its owner.
-    db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0, status = 'closed', updated_at = ? WHERE task_id = ? AND session_role = 'developer' AND is_current = 1").run(now, execution.taskId);
+    db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0, status = 'closed', updated_at = ? WHERE task_id = ? AND session_role IN ('builder', 'integrator') AND is_current = 1").run(now, execution.taskId);
   });
   return { status: "cancelled_confirmed", executionId, exitCode: null, exitSignal: "SIGINT", evidenceArtifactId: null };
 }

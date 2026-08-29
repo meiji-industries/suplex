@@ -12,13 +12,12 @@ import { type NeutralTimelineEvent, type RolloutParseResult } from "./codex-roll
 import type { ForgeDatabase } from "./database.js";
 import { HerdrFailure, snapshotAgents, type HerdrClient } from "./herdr-client.js";
 import type { IssueTimelineEvents } from "./issue-timeline-events.js";
-import type { EnsuredRoleSession, HerdrSessionStore, RoleSessionRole } from "./herdr-session-store.js";
+import type { EnsuredRoleSession, HerdrSessionStore } from "./herdr-session-store.js";
 import { herdrRuntime, type HerdrProviderRuntime } from "./agent-providers/herdr-runtime.js";
 import type { AgentProviderKind } from "./agent-providers/provider.js";
 import { redact } from "./logging.js";
 import { jsonRequired } from "./task-utils.js";
 
-type Role = RoleSessionRole;
 type ExecutionRole = "planner" | "reviewer" | "builder" | "integrator";
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const iso = () => new Date().toISOString();
@@ -30,7 +29,7 @@ const responseStyleBlock = `Forge response style
 
 export interface HerdrTurnInput<T> {
   task: { taskId: string; projectId: string; projectSlug: string; issueKey?: string; worktreePath: string; runtimeRoot: string };
-  sessionRole: Role; executionRole: ExecutionRole; ledger: "agent" | "developer"; executionId: string; promptKind: string; prompt: string;
+  executionRole: ExecutionRole; ledger: "agent" | "developer"; executionId: string; promptKind: string; prompt: string;
   profile: { provider?: AgentProviderKind; model: string; reasoningLevel: string; servicePriority: string }; resultSchema: z.ZodType<T>; schemaPath: string;
   companyId: string; workflowId: string; revision: number; signal?: AbortSignal | undefined;
 }
@@ -119,7 +118,6 @@ export class HerdrTurnRunner {
       if (error instanceof HerdrFailure) throw new AgentFailure(error.code, error.message, { nonRetryable: !error.retryable });
       throw error;
     } finally {
-      if (input.sessionRole === "reviewer" && session) await this.closeReviewer(session, input.task.runtimeRoot).catch(() => undefined);
       if (session && turnId) this.clearAttention(session.id, turnId);
     }
   }
@@ -282,7 +280,7 @@ export class HerdrTurnRunner {
   }
 
   private turnId(input: HerdrTurnInput<unknown>, correction: number): string { return `turn_${hash(`${input.executionId}\0${input.promptKind}\0${correction}`).slice(0, 32)}`; }
-  private resultPath(input: HerdrTurnInput<unknown>, turnId: string): string { return join(input.task.runtimeRoot, "herdr-results", input.task.taskId, input.sessionRole, `result-${turnId}.json`); }
+  private resultPath(input: HerdrTurnInput<unknown>, turnId: string): string { return join(input.task.runtimeRoot, "herdr-results", input.task.taskId, input.executionRole, `result-${turnId}.json`); }
   private dispatchPrompt(marker: string, path: string, schema: string, taskPrompt: string, validationIssues?: string): string {
     return `${this.completionBlock(marker, path, schema)}${validationIssues ? `\n\nYour previous result file failed schema validation. Correct these issues:\n${validationIssues}` : ""}\n\n${responseStyleBlock}\n\n${taskPrompt}`;
   }
@@ -292,10 +290,10 @@ export class HerdrTurnRunner {
       "SELECT result_relative_path AS resultRelativePath, status, prompt_sent_at AS promptSentAt, result_sha256 AS resultHash FROM forge_herdr_turns WHERE ledger = ? AND execution_id = ? AND prompt_kind = ? AND correction_index = ? AND task_id = ?",
     ).get(input.ledger, input.executionId, input.promptKind, correction, input.task.taskId) as { resultRelativePath: string; status: string; promptSentAt: string | undefined; resultHash: string | undefined } | undefined);
   }
-  private async ensure(input: HerdrTurnInput<unknown>, initialPrompt?: { path: string; content: string }): Promise<EnsuredRoleSession> { return this.sessions.ensureRoleSession(input.task, input.sessionRole, { provider: input.profile.provider ?? "codex", model: input.profile.model, reasoningLevel: input.profile.reasoningLevel, serviceTier: input.profile.servicePriority === "fast" ? "fast" : input.profile.servicePriority === "priority" ? "priority" : "default" }, initialPrompt ? { initialPrompt } : undefined); }
+  private async ensure(input: HerdrTurnInput<unknown>, initialPrompt?: { path: string; content: string }): Promise<EnsuredRoleSession> { return this.sessions.ensureRoleSession(input.task, input.executionRole, { provider: input.profile.provider ?? "codex", model: input.profile.model, reasoningLevel: input.profile.reasoningLevel, serviceTier: input.profile.servicePriority === "fast" ? "fast" : input.profile.servicePriority === "priority" ? "priority" : "default" }, initialPrompt ? { initialPrompt } : undefined); }
   private promptPath(resultPath: string): string { return join(dirname(resultPath), `prompt-${randomUUID()}.forge`); }
   private async recycleRejectedSession(input: HerdrTurnInput<unknown>, prompt: string, resultPath: string, turnId: string): Promise<EnsuredRoleSession> {
-    await this.sessions.retireRoleSession(input.task.taskId, input.sessionRole);
+    await this.sessions.retireRoleSession(input.task.taskId, input.executionRole);
     const session = await this.ensure(input, { path: this.promptPath(resultPath), content: prompt });
     this.update("UPDATE forge_herdr_turns SET role_session_id = ?, rollout_path = ?, rollout_start_offset = 0, rollout_cursor_offset = 0, updated_at = ? WHERE turn_id = ?", session.id, session.rolloutPath ?? null, iso(), turnId);
     return session;
@@ -378,11 +376,6 @@ export class HerdrTurnRunner {
     const existing = this.database.authQuery((db) => db.prepare("SELECT id, company_id AS companyId, kind, filename, mime_type AS mimeType, byte_size AS byteSize, sha256, storage_path AS storagePath, created_at AS createdAt FROM forge_artifacts WHERE company_id = ? AND kind = ? AND sha256 = ? ORDER BY created_at LIMIT 1").get(input.companyId, kind, sha256) as StoredArtifact | undefined);
     if (existing) return existing;
     return this.artifacts!.putWithId(input.companyId, `artifact_${kind}_${sha256}`, kind, { filename: `${sha256}.${mimeType === "application/gzip" ? "jsonl.gz" : "json"}`, mimeType, bytes, taskId: input.task.taskId });
-  }
-  private async closeReviewer(session: EnsuredRoleSession, runtimeRoot: string): Promise<void> {
-    await this.herdr.closePane(session.paneId);
-    await this.sessions.removeSecrets?.(runtimeRoot, session.id);
-    this.update("UPDATE forge_herdr_role_sessions SET pane_id = NULL, status = 'closed', is_current = 0, updated_at = ? WHERE id = ? AND codex_session_id = ?", iso(), session.id, session.codexSessionId);
   }
   private async blockedExcerpt(session: EnsuredRoleSession): Promise<string | undefined> {
     if (!this.herdr.readAgent) return undefined;

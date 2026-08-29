@@ -14,8 +14,8 @@ import { ProviderCredentialStore } from "../src/provider-credentials.js";
 
 test("labels and agent names are bounded, stable, and valid", () => {
   expect(herdrLabel("ACME / Issue 12!")).toBe("acme-issue-12");
-  expect(agentName("A very long issue title that needs clipping", "task-0123456789", "developer")).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
-  expect(agentName("issue", "task-0123456789", "lead", true)).not.toBe(agentName("issue", "task-0123456789", "lead"));
+  expect(agentName("A very long issue title that needs clipping", "task-0123456789", "builder")).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+  expect(agentName("issue", "task-0123456789", "planner", true)).not.toBe(agentName("issue", "task-0123456789", "planner"));
   expect(agentName("A very long issue title that needs clipping", "task-0123456789", "reviewer", false, 1)).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
   expect(launchFingerprint({ model: "gpt", reasoningLevel: "high", serviceTier: "priority" })).toHaveLength(64);
   expect(launchFingerprint({ model: "gpt", reasoningLevel: "high", serviceTier: "priority" }, "/worktrees/one")).not.toBe(launchFingerprint({ model: "gpt", reasoningLevel: "high", serviceTier: "priority" }, "/worktrees/two"));
@@ -88,7 +88,7 @@ test("role sessions use workflow-compatible session identifiers", async () => {
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task_1', 'company_1', 'project_1', 'Task', 'artifact_1', '[]', '{}', 0, 'workflow_1', 'revision_1', 'key_1', ?, ?)").run(now, now);
     });
     const store = new HerdrSessionStore(database, {} as never);
-    const row = (store as unknown as { reserve(task: { taskId: string; projectId: string; projectSlug: string; worktreePath: string }, role: "lead"): { id: string } }).reserve({ taskId: "task_1", projectId: "project_1", projectSlug: "project", worktreePath: "/worktrees/task_1" }, "lead");
+    const row = (store as unknown as { reserve(task: { taskId: string; projectId: string; projectSlug: string; worktreePath: string }, role: "planner"): { id: string } }).reserve({ taskId: "task_1", projectId: "project_1", projectSlug: "project", worktreePath: "/worktrees/task_1" }, "planner");
     expect(row.id).toMatch(/^session_[a-f0-9]{24}$/);
     expect(store.readRoleSession(row.id)).toMatchObject({ id: row.id });
   } finally {
@@ -292,7 +292,7 @@ test("an OpenRouter session rejects a missing key before it creates a pane", asy
   const herdr = new StartupHerdrFake();
   const store = new HerdrSessionStore(value.database, herdr as never);
   try {
-    await expect(store.ensureRoleSession(taskFor(value.root), "lead", { provider: "openrouter", model: "anthropic/claude-sonnet-4.5", reasoningLevel: "high", serviceTier: "default" })).rejects.toMatchObject({
+    await expect(store.ensureRoleSession(taskFor(value.root), "planner", { provider: "openrouter", model: "anthropic/claude-sonnet-4.5", reasoningLevel: "high", serviceTier: "default" })).rejects.toMatchObject({
       code: "authentication-required", message: expect.stringContaining("Settings > Providers"),
     });
     expect(herdr.panes).toEqual([]);
@@ -306,7 +306,7 @@ test("an OpenRouter lead sources a protected secret file without exposing its ke
   credentials.set("openrouter", "sk-openrouter-session-secret");
   const store = new HerdrSessionStore(value.database, herdr as never, process.env, undefined, undefined, credentials);
   try {
-    await store.ensureRoleSession(taskFor(value.root), "lead", { provider: "openrouter", model: "anthropic/claude-sonnet-4.5", reasoningLevel: "high", serviceTier: "default" });
+    await store.ensureRoleSession(taskFor(value.root), "planner", { provider: "openrouter", model: "anthropic/claude-sonnet-4.5", reasoningLevel: "high", serviceTier: "default" });
     const file = join(value.root, "secrets", (await readdir(join(value.root, "secrets")))[0]!);
     expect((await stat(file)).mode & 0o777).toBe(0o600);
     expect(herdr.commands.join("\n")).toContain(file);
@@ -320,7 +320,7 @@ test("starts a fresh session without waiting for its lazy Codex identity", async
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
     await expect(
-      store.ensureRoleSession(taskFor(value.root), "lead", startupSettings),
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
     ).resolves.toMatchObject({ codexSessionId: null, paneId: "pane-1" });
     expect(herdr.panes).toEqual(["pane-1"]);
     expect(herdr.starts).toHaveLength(1);
@@ -338,7 +338,7 @@ test("keeps an agent pane open and records its startup trust prompt", async () =
   herdr.paneText = "Do you trust the contents of this directory?   1. Yes, continue";
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
-    await expect(store.ensureRoleSession(taskFor(value.root), "lead", startupSettings)).rejects.toMatchObject({ code: "agent_startup_blocked" });
+    await expect(store.ensureRoleSession(taskFor(value.root), "planner", startupSettings)).rejects.toMatchObject({ code: "agent_startup_blocked" });
     expect(value.database.authQuery((db) => db.prepare("SELECT status, pane_id, attention_excerpt FROM forge_herdr_role_sessions WHERE task_id = 'task'").get())).toEqual({ status: "blocked", pane_id: "pane-1", attention_excerpt: "Do you trust the contents of this directory? 1. Yes, continue" });
     expect(herdr.closed).toEqual([]);
   } finally {
@@ -371,7 +371,7 @@ test("developer launches the guarded environment from a short private script", a
     );
     await store.ensureRoleSession(
       taskFor(value.root),
-      "developer",
+      "builder",
       startupSettings,
     );
 
@@ -415,10 +415,10 @@ test("a retired Developer session is replaced by a new generation", async () => 
   const herdr = new StartupHerdrFake();
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
-    const first = await store.ensureRoleSession(taskFor(value.root), "developer", startupSettings);
+    const first = await store.ensureRoleSession(taskFor(value.root), "builder", startupSettings);
     value.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0, status = 'closed' WHERE id = ?").run(first.id));
 
-    const second = await store.ensureRoleSession(taskFor(value.root), "developer", startupSettings);
+    const second = await store.ensureRoleSession(taskFor(value.root), "builder", startupSettings);
 
     expect(second.id).not.toBe(first.id);
     expect(second.generation).toBeGreaterThan(first.generation);
@@ -432,26 +432,26 @@ test("a retired Developer session is replaced by a new generation", async () => 
 test("adopts a recorded live agent with a matching fingerprint without splitting", async () => {
   const value = await startupFixture();
   const herdr = new StartupHerdrFake();
-  herdr.responses = [{ name: "task-lead", paneId: "pane-recorded", status: "starting" }];
+  herdr.responses = [{ name: "task-planner", paneId: "pane-recorded", status: "starting" }];
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
     const row = (store as unknown as {
-      reserve(task: RoleSessionTask, role: "lead"): { id: string };
-    }).reserve(taskFor(value.root), "lead");
+      reserve(task: RoleSessionTask, role: "planner"): { id: string };
+    }).reserve(taskFor(value.root), "planner");
     value.database.authQuery((db) =>
       db
         .prepare(
-          "UPDATE forge_herdr_role_sessions SET agent_name = 'task-lead', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?",
+          "UPDATE forge_herdr_role_sessions SET agent_name = 'task-planner', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?",
         )
         .run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
     );
     await expect(
-      store.ensureRoleSession(taskFor(value.root), "lead", startupSettings),
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
     ).resolves.toMatchObject({ codexSessionId: null, paneId: "pane-recorded" });
     expect(herdr.closed).toEqual([]);
     expect(herdr.panes).toEqual([]);
     expect(herdr.starts).toHaveLength(0);
-    expect(value.database.authQuery((db) => db.prepare("SELECT agent_name, pane_id FROM forge_herdr_role_sessions WHERE id = ?").get(row.id))).toEqual({ agent_name: "task-lead", pane_id: "pane-recorded" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT agent_name, pane_id FROM forge_herdr_role_sessions WHERE id = ?").get(row.id))).toEqual({ agent_name: "task-planner", pane_id: "pane-recorded" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -461,20 +461,20 @@ test("adopts a recorded live agent with a matching fingerprint without splitting
 test("does not adopt a matching live name from another pane", async () => {
   const value = await startupFixture();
   const herdr = new StartupHerdrFake();
-  herdr.agents.set("task-lead", { name: "task-lead", paneId: "foreign-pane", status: "starting" });
+  herdr.agents.set("task-planner", { name: "task-planner", paneId: "foreign-pane", status: "starting" });
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
-    const row = (store as unknown as { reserve(task: RoleSessionTask, role: "lead"): { id: string } }).reserve(taskFor(value.root), "lead");
+    const row = (store as unknown as { reserve(task: RoleSessionTask, role: "planner"): { id: string } }).reserve(taskFor(value.root), "planner");
     value.database.authQuery((db) =>
-      db.prepare("UPDATE forge_herdr_role_sessions SET agent_name = 'task-lead', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?").run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
+      db.prepare("UPDATE forge_herdr_role_sessions SET agent_name = 'task-planner', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?").run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
     );
 
-    await expect(store.ensureRoleSession(taskFor(value.root), "lead", startupSettings)).resolves.toMatchObject({
-      agentName: agentName("TASK", "task", "lead", true),
+    await expect(store.ensureRoleSession(taskFor(value.root), "planner", startupSettings)).resolves.toMatchObject({
+      agentName: agentName("TASK", "task", "planner", true),
       paneId: "pane-1",
     });
     expect(herdr.panes).toEqual(["pane-1"]);
-    expect(herdr.starts).toEqual([agentName("TASK", "task", "lead", true)]);
+    expect(herdr.starts).toEqual([agentName("TASK", "task", "planner", true)]);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -487,8 +487,8 @@ test("serializes concurrent ensures for the same role session", async () => {
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
     await Promise.all([
-      store.ensureRoleSession(taskFor(value.root), "lead", startupSettings),
-      store.ensureRoleSession(taskFor(value.root), "lead", startupSettings),
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
     ]);
     expect(herdr.panes).toEqual(["pane-1"]);
     expect(herdr.starts).toHaveLength(1);
@@ -503,14 +503,14 @@ test("failed pane cleanup does not clear a row moved to another pane", async () 
   const herdr = new StartupHerdrFake();
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
-    const row = (store as unknown as { reserve(task: RoleSessionTask, role: "lead"): { id: string } }).reserve(taskFor(value.root), "lead");
+    const row = (store as unknown as { reserve(task: RoleSessionTask, role: "planner"): { id: string } }).reserve(taskFor(value.root), "planner");
     value.database.authQuery((db) =>
-      db.prepare("UPDATE forge_herdr_role_sessions SET agent_name = 'task-lead', pane_id = 'new-pane', status = 'starting' WHERE id = ?").run(row.id),
+      db.prepare("UPDATE forge_herdr_role_sessions SET agent_name = 'task-planner', pane_id = 'new-pane', status = 'starting' WHERE id = ?").run(row.id),
     );
 
     await (store as unknown as { cleanupFailedPane(id: string, paneId: string): Promise<void> }).cleanupFailedPane(row.id, "old-pane");
 
-    expect(value.database.authQuery((db) => db.prepare("SELECT agent_name, pane_id, status FROM forge_herdr_role_sessions WHERE id = ?").get(row.id))).toEqual({ agent_name: "task-lead", pane_id: "new-pane", status: "starting" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT agent_name, pane_id, status FROM forge_herdr_role_sessions WHERE id = ?").get(row.id))).toEqual({ agent_name: "task-planner", pane_id: "new-pane", status: "starting" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -520,28 +520,28 @@ test("failed pane cleanup does not clear a row moved to another pane", async () 
 test("relaunches a recorded live agent when its launch fingerprint changes", async () => {
   const value = await startupFixture();
   const herdr = new StartupHerdrFake();
-  herdr.responses = [{ name: "task-lead", paneId: "pane-recorded", status: "starting" }];
+  herdr.responses = [{ name: "task-planner", paneId: "pane-recorded", status: "starting" }];
   const changedSettings = { ...startupSettings, model: "gpt-new" };
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
     const row = (store as unknown as {
-      reserve(task: RoleSessionTask, role: "lead"): { id: string };
-    }).reserve(taskFor(value.root), "lead");
+      reserve(task: RoleSessionTask, role: "planner"): { id: string };
+    }).reserve(taskFor(value.root), "planner");
     value.database.authQuery((db) =>
       db
         .prepare(
-          "UPDATE forge_herdr_role_sessions SET agent_name = 'task-lead', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?",
+          "UPDATE forge_herdr_role_sessions SET agent_name = 'task-planner', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?",
         )
         .run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
     );
 
     await expect(
-      store.ensureRoleSession(taskFor(value.root), "lead", changedSettings),
+      store.ensureRoleSession(taskFor(value.root), "planner", changedSettings),
     ).resolves.toMatchObject({ paneId: "pane-1" });
 
     expect(herdr.closed).toEqual(["pane-recorded"]);
     expect(herdr.panes).toEqual(["pane-1"]);
-    expect(herdr.starts).toEqual(["task-lead"]);
+    expect(herdr.starts).toEqual(["task-planner"]);
     expect(
       value.database.authQuery((db) =>
         db
@@ -575,18 +575,18 @@ test("replaces a recorded pane that Herdr has already removed", async () => {
       async () => {},
     );
     const row = (store as unknown as {
-      reserve(task: RoleSessionTask, role: "lead"): { id: string };
-    }).reserve(taskFor(value.root), "lead");
+      reserve(task: RoleSessionTask, role: "planner"): { id: string };
+    }).reserve(taskFor(value.root), "planner");
     value.database.authQuery((db) =>
       db
         .prepare(
-          "UPDATE forge_herdr_role_sessions SET agent_name = 'recorded-lead', pane_id = 'stale-pane' WHERE id = ?",
+          "UPDATE forge_herdr_role_sessions SET agent_name = 'recorded-planner', pane_id = 'stale-pane' WHERE id = ?",
         )
         .run(row.id),
     );
 
     await expect(
-      store.ensureRoleSession(taskFor(value.root), "lead", startupSettings),
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
     ).resolves.toMatchObject({ paneId: "pane-1" });
 
     expect(herdr.closed).toEqual(["stale-pane"]);
@@ -620,18 +620,18 @@ test("propagates a non-missing error while closing a recorded pane", async () =>
       async () => {},
     );
     const row = (store as unknown as {
-      reserve(task: RoleSessionTask, role: "lead"): { id: string };
-    }).reserve(taskFor(value.root), "lead");
+      reserve(task: RoleSessionTask, role: "planner"): { id: string };
+    }).reserve(taskFor(value.root), "planner");
     value.database.authQuery((db) =>
       db
         .prepare(
-          "UPDATE forge_herdr_role_sessions SET agent_name = 'recorded-lead', pane_id = 'stale-pane' WHERE id = ?",
+          "UPDATE forge_herdr_role_sessions SET agent_name = 'recorded-planner', pane_id = 'stale-pane' WHERE id = ?",
         )
         .run(row.id),
     );
 
     await expect(
-      store.ensureRoleSession(taskFor(value.root), "lead", startupSettings),
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
     ).rejects.toMatchObject({ code: "unavailable" });
     expect(herdr.panes).toEqual([]);
     expect(
@@ -655,21 +655,21 @@ test("a recorded name never derives a replacement after its agent is missing", a
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
     const row = (store as unknown as {
-      reserve(task: RoleSessionTask, role: "lead"): { id: string };
-    }).reserve(taskFor(value.root), "lead");
+      reserve(task: RoleSessionTask, role: "planner"): { id: string };
+    }).reserve(taskFor(value.root), "planner");
     value.database.authQuery((db) =>
       db
         .prepare(
-          "UPDATE forge_herdr_role_sessions SET agent_name = 'recorded-lead' WHERE id = ?",
+          "UPDATE forge_herdr_role_sessions SET agent_name = 'recorded-planner' WHERE id = ?",
         )
         .run(row.id),
     );
     const derive = vi.spyOn(store as unknown as { deriveAgentName: (...args: unknown[]) => string }, "deriveAgentName");
 
-    await store.ensureRoleSession(taskFor(value.root), "lead", startupSettings);
+    await store.ensureRoleSession(taskFor(value.root), "planner", startupSettings);
 
     expect(derive).not.toHaveBeenCalled();
-    expect(herdr.starts).toEqual(["recorded-lead"]);
+    expect(herdr.starts).toEqual(["recorded-planner"]);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -682,7 +682,7 @@ test("relaunches over an inactive recorded name with a collision suffix", async 
   herdr.getAgentFailure = new HerdrFailure(
     "agent_name_not_found",
     true,
-    "agent recorded-lead is not an active named agent",
+    "agent recorded-planner is not an active named agent",
   );
   herdr.inactiveNameOnStart = true;
   try {
@@ -693,27 +693,27 @@ test("relaunches over an inactive recorded name with a collision suffix", async 
       async () => {},
     );
     const row = (store as unknown as {
-      reserve(task: RoleSessionTask, role: "lead"): { id: string };
-    }).reserve(taskFor(value.root), "lead");
+      reserve(task: RoleSessionTask, role: "planner"): { id: string };
+    }).reserve(taskFor(value.root), "planner");
     value.database.authQuery((db) =>
       db
         .prepare(
-          "UPDATE forge_herdr_role_sessions SET agent_name = 'recorded-lead', pane_id = 'stale-pane' WHERE id = ?",
+          "UPDATE forge_herdr_role_sessions SET agent_name = 'recorded-planner', pane_id = 'stale-pane' WHERE id = ?",
         )
         .run(row.id),
     );
 
     await expect(
-      store.ensureRoleSession(taskFor(value.root), "lead", startupSettings),
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
     ).resolves.toMatchObject({
-      agentName: agentName("TASK", "task", "lead", true),
+      agentName: agentName("TASK", "task", "planner", true),
       paneId: "pane-1",
     });
 
     expect(herdr.closed).toEqual(["stale-pane"]);
     expect(herdr.startAttempts).toEqual([
-      "recorded-lead",
-      agentName("TASK", "task", "lead", true),
+      "recorded-planner",
+      agentName("TASK", "task", "planner", true),
     ]);
     expect(
       value.database.authQuery((db) =>
@@ -724,7 +724,7 @@ test("relaunches over an inactive recorded name with a collision suffix", async 
           .get(row.id),
       ),
     ).toEqual({
-      agent_name: agentName("TASK", "task", "lead", true),
+      agent_name: agentName("TASK", "task", "planner", true),
       pane_id: "pane-1",
     });
   } finally {
@@ -736,13 +736,13 @@ test("relaunches over an inactive recorded name with a collision suffix", async 
 test("a fresh row collision-renames a foreign live agent", async () => {
   const value = await startupFixture();
   const herdr = new StartupHerdrFake();
-  herdr.agents.set("task-lead", { name: "task-lead", paneId: "foreign-pane" });
+  herdr.agents.set("task-planner", { name: "task-planner", paneId: "foreign-pane" });
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
 
-    await store.ensureRoleSession(taskFor(value.root), "lead", startupSettings);
+    await store.ensureRoleSession(taskFor(value.root), "planner", startupSettings);
 
-    expect(herdr.starts).toEqual([agentName("TASK", "task", "lead", true)]);
+    expect(herdr.starts).toEqual([agentName("TASK", "task", "planner", true)]);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -756,7 +756,7 @@ test("retries an unavailable shell once with a fresh pane", async () => {
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
     await expect(
-      store.ensureRoleSession(taskFor(value.root), "lead", startupSettings),
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
     ).resolves.toMatchObject({ paneId: "pane-2" });
     expect(herdr.closed).toEqual(["pane-1"]);
     expect(herdr.panes).toEqual(["pane-1", "pane-2"]);
@@ -773,12 +773,12 @@ test("a missing resumed rollout fails the role session without another pane", as
   herdr.startFailure = new HerdrFailure("launch_failed", true, "Codex exited immediately");
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, { ...process.env, CODEX_HOME: codexHome }, async () => {});
-    const row = (store as unknown as { reserve(task: RoleSessionTask, role: "lead"): { id: string } }).reserve(taskFor(value.root), "lead");
+    const row = (store as unknown as { reserve(task: RoleSessionTask, role: "planner"): { id: string } }).reserve(taskFor(value.root), "planner");
     value.database.authQuery((db) =>
       db.prepare("UPDATE forge_herdr_role_sessions SET codex_session_id = 'missing-session' WHERE id = ?").run(row.id),
     );
 
-    await expect(store.ensureRoleSession(taskFor(value.root), "lead", startupSettings)).rejects.toMatchObject({ code: "codex_session_unrecoverable", retryable: false });
+    await expect(store.ensureRoleSession(taskFor(value.root), "planner", startupSettings)).rejects.toMatchObject({ code: "codex_session_unrecoverable", retryable: false });
     expect(herdr.panes).toEqual(["pane-1"]);
     expect(value.database.authQuery((db) => db.prepare("SELECT codex_session_id, status FROM forge_herdr_role_sessions WHERE id = ?").get(row.id))).toEqual({ codex_session_id: "missing-session", status: "failed" });
   } finally {
@@ -793,7 +793,7 @@ test("Claude sessions preassign identities and launch through Herdr as Claude", 
   const runtime = { ...claudeRuntime, candidatePaths: async () => [], prepareLaunch: async () => {} };
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {}, () => runtime);
-    const session = await store.ensureRoleSession(taskFor(value.root), "lead", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
+    const session = await store.ensureRoleSession(taskFor(value.root), "planner", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
     expect(session.provider).toBe("claude");
     expect(session.codexSessionId).toMatch(/^[0-9a-f-]{36}$/);
     expect(herdr.startInputs).toContainEqual(expect.objectContaining({ kind: "claude", args: ["--model", "claude-fable-5", "--effort", "high", "--permission-mode", "bypassPermissions", "--session-id", session.codexSessionId] }));
@@ -824,13 +824,13 @@ test("Claude resumes when its preassigned transcript already exists", async () =
     );
     const task = { ...taskFor(value.root), worktreePath: value.root };
     const row = (store as unknown as {
-      reserve(task: RoleSessionTask, role: "lead", settings: { provider: "claude"; model: string; reasoningLevel: string; serviceTier: "default" }): { id: string };
-    }).reserve(task, "lead", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
+      reserve(task: RoleSessionTask, role: "planner", settings: { provider: "claude"; model: string; reasoningLevel: string; serviceTier: "default" }): { id: string };
+    }).reserve(task, "planner", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
     value.database.authQuery((db) =>
       db.prepare("UPDATE forge_herdr_role_sessions SET codex_session_id = ? WHERE id = ?").run(sessionId, row.id),
     );
 
-    await store.ensureRoleSession(task, "lead", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
+    await store.ensureRoleSession(task, "planner", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
 
     expect(herdr.startInputs).toContainEqual(expect.objectContaining({
       kind: "claude",
@@ -849,13 +849,13 @@ test("switching providers retires the old role session and closes its pane", asy
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {}, () => runtime);
     const old = (store as unknown as {
-      reserve(task: RoleSessionTask, role: "lead", settings: { provider: "codex"; model: string; reasoningLevel: string; serviceTier: "priority" }): { id: string };
-    }).reserve(taskFor(value.root), "lead", { provider: "codex", model: "gpt", reasoningLevel: "high", serviceTier: "priority" });
+      reserve(task: RoleSessionTask, role: "planner", settings: { provider: "codex"; model: string; reasoningLevel: string; serviceTier: "priority" }): { id: string };
+    }).reserve(taskFor(value.root), "planner", { provider: "codex", model: "gpt", reasoningLevel: "high", serviceTier: "priority" });
     value.database.authQuery((db) =>
-      db.prepare("UPDATE forge_herdr_role_sessions SET pane_id = 'old-pane', agent_name = 'old-lead', status = 'ready' WHERE id = ?").run(old.id),
+      db.prepare("UPDATE forge_herdr_role_sessions SET pane_id = 'old-pane', agent_name = 'old-planner', status = 'ready' WHERE id = ?").run(old.id),
     );
 
-    const current = await store.ensureRoleSession(taskFor(value.root), "lead", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
+    const current = await store.ensureRoleSession(taskFor(value.root), "planner", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
 
     expect(herdr.closed).toEqual(["old-pane"]);
     expect(value.database.authQuery((db) =>
@@ -876,21 +876,21 @@ test("retiring a role session closes the current row and reports when none remai
   try {
     const store = new HerdrSessionStore(value.database, herdr as never);
     const current = (store as unknown as {
-      reserve(task: RoleSessionTask, role: "developer", settings: typeof startupSettings): { id: string };
-    }).reserve(taskFor(value.root), "developer", startupSettings);
-    value.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET pane_id = 'developer-pane', agent_name = 'developer-agent', status = 'ready' WHERE id = ?").run(current.id));
+      reserve(task: RoleSessionTask, role: "builder", settings: typeof startupSettings): { id: string };
+    }).reserve(taskFor(value.root), "builder", startupSettings);
+    value.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET pane_id = 'builder-pane', agent_name = 'builder-agent', status = 'ready' WHERE id = ?").run(current.id));
 
-    await expect(store.retireRoleSession("task", "developer")).resolves.toBe(true);
-    expect(herdr.closed).toEqual(["developer-pane"]);
+    await expect(store.retireRoleSession("task", "builder")).resolves.toBe(true);
+    expect(herdr.closed).toEqual(["builder-pane"]);
     expect(value.database.authQuery((db) => db.prepare("SELECT is_current, status, pane_id, agent_name FROM forge_herdr_role_sessions WHERE id = ?").get(current.id))).toEqual({ is_current: 0, status: "closed", pane_id: null, agent_name: null });
-    await expect(store.retireRoleSession("task", "developer")).resolves.toBe(false);
+    await expect(store.retireRoleSession("task", "builder")).resolves.toBe(false);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
   }
 });
 
-test("reviewer generations get distinct bounded agent names", async () => {
+test("reviewer sessions are persistent and have bounded agent names", async () => {
   const value = await startupFixture();
   const herdr = new StartupHerdrFake();
   try {
@@ -898,7 +898,8 @@ test("reviewer generations get distinct bounded agent names", async () => {
     const task = { ...taskFor(value.root), issueKey: "A very long issue key that must leave room" };
     const first = await store.ensureRoleSession(task, "reviewer", startupSettings);
     const second = await store.ensureRoleSession(task, "reviewer", startupSettings);
-    expect(first.agentName).not.toBe(second.agentName);
+    expect(first.id).toBe(second.id);
+    expect(first.agentName).toBe(second.agentName);
     expect(first.agentName).toHaveLength(32);
     expect(second.agentName).toHaveLength(32);
   } finally {
@@ -914,7 +915,7 @@ test("startup timeout closes its created pane and releases the name", async () =
     herdr.writeReadiness = false;
     const timedOut = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
     await expect(
-      timedOut.ensureRoleSession(taskFor(value.root), "lead", startupSettings),
+      timedOut.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
     ).rejects.toMatchObject({ code: "readiness_timeout" });
     expect(herdr.closed).toEqual(["pane-1"]);
     expect(value.database.authQuery((db) => db.prepare("SELECT agent_name, pane_id, status FROM forge_herdr_role_sessions WHERE task_id = 'task'").get())).toEqual({ agent_name: null, pane_id: null, status: "unbound" });

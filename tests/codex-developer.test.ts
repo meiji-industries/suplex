@@ -84,7 +84,7 @@ test("Developer delivery uses the fake turn role session and preserves delivery 
     const result = await new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run(value.input);
     expect(result).toMatchObject({ outcome: "completed", deliverySummary: "Marker delivered", developerSessionRef: "session_0123456789abcdef01234567" });
     expect(result).toMatchObject({ worktreePath: worktree, branchName });
-    expect(fake.calls[0]).toMatchObject({ promptKind: "implementation", sessionRole: "developer", executionRole: "builder", ledger: "developer" });
+    expect(fake.calls[0]).toMatchObject({ promptKind: "implementation", executionRole: "builder", ledger: "developer" });
     expect(value.database.authQuery((db) => db.prepare("SELECT session_ref, status FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toEqual({ session_ref: "session_0123456789abcdef01234567", status: "completed" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
@@ -129,7 +129,7 @@ test.each([
     value.database.authQuery((db) => commits.forEach((commit, index) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, result_commit) VALUES (?, 'task_1', 'company_1', 'workflow_1', 1, ?, ?, 'work/fixture', ?, ?, ?, ?)").run(`prior_${index}`, index + 1, index === 1 ? "blocked" : "completed", join(value.root, "worktrees", "task_1"), targetSha, new Date(2026, 0, index + 1).toISOString(), commit)));
     await new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run({ ...value.input, developerAttempt: 3 });
     expect(retire).toHaveBeenCalledTimes(retired);
-    if (retired) expect(retire).toHaveBeenCalledWith("task_1", "developer");
+    if (retired) expect(retire).toHaveBeenCalledWith("task_1", "builder");
   } finally {
     retire.mockRestore();
     value.database.close();

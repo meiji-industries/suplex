@@ -54,7 +54,7 @@ async function fixture(phase = "planning") {
     db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task', 'company', 'project', 'workflow', 3, ?, 'lead', '[]', 'Planning', ?, 'workflow:3')").run(phase, stamp);
     db.prepare("INSERT INTO forge_herdr_project_workspaces (project_id, workspace_label, workspace_id, state, created_at, updated_at) VALUES ('project', 'project', 'workspace', 'open', ?, ?)").run(stamp, stamp);
     db.prepare("INSERT INTO forge_herdr_task_tabs (task_id, project_id, workspace_id, tab_label, tab_id, shell_pane_id, state, created_at, updated_at) VALUES ('task', 'project', 'workspace', 'TASK', 'tab', 'shell', 'open', ?, ?)").run(stamp, stamp);
-    db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, codex_session_id, agent_name, pane_id, status, created_at, updated_at) VALUES ('session', 'task', 'lead', 1, 1, 'codex', 'codex-session', 'task-lead', 'pane-old', 'working', ?, ?)").run(stamp, stamp);
+    db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, codex_session_id, agent_name, pane_id, status, created_at, updated_at) VALUES ('session', 'task', 'planner', 1, 1, 'codex', 'codex-session', 'task-planner', 'pane-old', 'working', ?, ?)").run(stamp, stamp);
   });
   return { root, database };
 }
@@ -62,7 +62,7 @@ async function fixture(phase = "planning") {
 test("worker restart re-finds an agent by durable name", async () => {
   const value = await fixture();
   const herdr = new FakeHerdrClient();
-  herdr.agents.set("task-lead", { name: "task-lead", paneId: "pane-old", tabId: "tab", workspaceId: "workspace", agentSession: "codex-session", status: "working" });
+  herdr.agents.set("task-planner", { name: "task-planner", paneId: "pane-old", tabId: "tab", workspaceId: "workspace", agentSession: "codex-session", status: "working" });
   try {
     await expect(reconcileHerdrSessions(value.database, herdr as unknown as HerdrClient)).resolves.toContainEqual({ sessionId: "session", taskId: "task", status: "active" });
     expect(herdr.starts).toEqual([]);
@@ -73,7 +73,7 @@ test("idle and done agents reconcile as ready while preserving their raw status"
   for (const status of ["idle", "done"] as const) {
     const value = await fixture();
     const herdr = new FakeHerdrClient();
-    herdr.agents.set("task-lead", { name: "task-lead", paneId: "pane-old", tabId: "tab", workspaceId: "workspace", agentSession: "codex-session", status });
+    herdr.agents.set("task-planner", { name: "task-planner", paneId: "pane-old", tabId: "tab", workspaceId: "workspace", agentSession: "codex-session", status });
     try {
       await expect(reconcileHerdrSessions(value.database, herdr as unknown as HerdrClient)).resolves.toContainEqual({ sessionId: "session", taskId: "task", status: "active" });
       expect(value.database.authQuery((db) => db.prepare("SELECT status, last_agent_status FROM forge_herdr_role_sessions WHERE id = 'session'").get())).toEqual({ status: "ready", last_agent_status: status });
@@ -87,11 +87,11 @@ test("a missing agent recreates its pane, resumes the session, and sends one int
   try {
     await reconcileHerdrSessions(value.database, herdr as unknown as HerdrClient);
     const sessions = new HerdrSessionStore(value.database, herdr as unknown as HerdrClient);
-    const first = await sessions.ensureRoleSession({ taskId: "task", projectId: "project", projectSlug: "project", issueKey: "TASK", worktreePath: "/worktree", runtimeRoot: value.root }, "lead", { model: "gpt", reasoningLevel: "high", serviceTier: "priority" });
+    const first = await sessions.ensureRoleSession({ taskId: "task", projectId: "project", projectSlug: "project", issueKey: "TASK", worktreePath: "/worktree", runtimeRoot: value.root }, "planner", { model: "gpt", reasoningLevel: "high", serviceTier: "priority" });
     await herdr.prompt(first.agentName, "You were interrupted. Continue the current Forge turn.");
     herdr.agents.delete(first.agentName);
     await reconcileHerdrSessions(value.database, herdr as unknown as HerdrClient);
-    const second = await sessions.ensureRoleSession({ taskId: "task", projectId: "project", projectSlug: "project", issueKey: "TASK", worktreePath: "/worktree", runtimeRoot: value.root }, "lead", { model: "gpt", reasoningLevel: "high", serviceTier: "priority" });
+    const second = await sessions.ensureRoleSession({ taskId: "task", projectId: "project", projectSlug: "project", issueKey: "TASK", worktreePath: "/worktree", runtimeRoot: value.root }, "planner", { model: "gpt", reasoningLevel: "high", serviceTier: "priority" });
     await herdr.prompt(second.agentName, "You were interrupted. Continue the current Forge turn.");
     expect(herdr.starts).toHaveLength(2);
     expect(herdr.starts.every((start) => start.args.includes("resume") && start.args.includes("codex-session"))).toBe(true);
@@ -130,10 +130,10 @@ test("closes old sessions for finished tasks without polling Herdr", async () =>
 test("a blocked role session is an attention row without Forge actions", async () => {
   const value = await fixture();
   const herdr = new FakeHerdrClient();
-  herdr.agents.set("task-lead", { name: "task-lead", paneId: "pane-old", tabId: "tab", workspaceId: "workspace", agentSession: "codex-session", status: "blocked" });
+  herdr.agents.set("task-planner", { name: "task-planner", paneId: "pane-old", tabId: "tab", workspaceId: "workspace", agentSession: "codex-session", status: "blocked" });
   try {
     await reconcileHerdrSessions(value.database, herdr as unknown as HerdrClient);
     const attention = new AttentionService(value.database, { listVisibleCompanies() { return [{ id: "company", name: "Company", status: "active" }]; } } as never).list("member");
-    expect(attention[0]).toMatchObject({ attentionCount: 1, attention: [{ summary: "Agent needs you in pane-old (task-lead)", actions: [] }] });
+    expect(attention[0]).toMatchObject({ attentionCount: 1, attention: [{ summary: "Agent needs you in pane-old (task-planner)", actions: [] }] });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

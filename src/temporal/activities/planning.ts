@@ -31,7 +31,7 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
       } else {
         database.authTransaction((db) => db.prepare("INSERT INTO forge_planner_notes (id, task_id, company_id, revision, actor, note, created_at, forward_status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')").run(noteId, input.taskId, input.companyId, input.revision, input.actorUserId, note, createdAt));
       }
-      const session = database.authQuery((db) => db.prepare("SELECT id FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = 'lead' AND is_current = 1 AND agent_name IS NOT NULL").get(input.taskId) as { id: string } | undefined);
+      const session = database.authQuery((db) => db.prepare("SELECT id FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = 'planner' AND is_current = 1 AND agent_name IS NOT NULL").get(input.taskId) as { id: string } | undefined);
       if (!session) {
         database.authTransaction((db) => db.prepare("UPDATE forge_planner_notes SET forward_status = 'failed', forward_error_code = 'lead-session-unavailable' WHERE id = ? AND forward_status IN ('pending', 'dispatching')").run(noteId));
         return { noteId, createdAt: existing?.createdAt ?? createdAt };

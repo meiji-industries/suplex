@@ -87,7 +87,7 @@ realTest("real Codex passes the authorized Developer service seam with scoped ar
     expect(reconciliation.independentVerification).toMatchObject({ outcome: "passed", commands: [{ command: "npm test", exitCode: 0 }] });
     expect(result.targetBaseSha).toBe(acceptedSha);
     expect(movedTargetSha).not.toBe(acceptedSha);
-    expect(database.authQuery((db) => db.prepare("SELECT id, codex_session_id FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = 'developer'").get("task_real"))).toMatchObject({ id: result.developerSessionRef, codex_session_id: expect.any(String) });
+    expect(database.authQuery((db) => db.prepare("SELECT id, codex_session_id FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = 'builder'").get("task_real"))).toMatchObject({ id: result.developerSessionRef, codex_session_id: expect.any(String) });
     const worktreeHead = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: result.worktreePath })).stdout.trim();
     const parent = (await execFileAsync("git", ["rev-parse", "HEAD^"], { cwd: result.worktreePath })).stdout.trim();
     expect(worktreeHead).toBe(result.resultCommit);

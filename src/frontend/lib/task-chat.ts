@@ -129,8 +129,15 @@ function turnSummary(task: ApiTask, invocation: ApiTask["agentInvocations"][numb
   return storedSummary;
 }
 
+/** Splits an agent message into its prose and an embedded machine result (`{"kind": …}`), if the agent echoed one. */
+export function splitStructuredResult(text: string): { prose: string; result: string | undefined } {
+  const match = /(?:^|\n)\s*(\{\s*"(?:kind|verdict|version)"\s*:[\s\S]*)$/.exec(text);
+  if (!match) return { prose: text.trim(), result: undefined };
+  return { prose: text.slice(0, match.index).trim(), result: match[1]!.trim() };
+}
+
 function isStructuredResult(event: ChatEvent): boolean {
-  return (event.kind === "message" || event.kind === "agent_update") && /^\{\s*"(?:kind|verdict|version)"\s*:/.test(event.text.trim());
+  return (event.kind === "message" || event.kind === "agent_update") && splitStructuredResult(event.text).result !== undefined;
 }
 
 function promoteTerminalResponse(events: ChatEvent[], invocation: ApiTask["agentInvocations"][number]): ChatEvent[] {

@@ -5,7 +5,7 @@ import { Collapsible } from "../../ui/collapsible.js";
 import { Badge } from "../../ui/badge.js";
 import { Markdown } from "../markdown.js";
 import { ProfileAvatar } from "../profile-avatar.js";
-import type { ChatEvent, ChatItem } from "../../../lib/task-chat.js";
+import { splitStructuredResult, type ChatEvent, type ChatItem } from "../../../lib/task-chat.js";
 
 function duration(startedAt: string, finishedAt: string | null, now: number): string { return `${Math.max(0, Math.floor(((finishedAt ? Date.parse(finishedAt) : now) - Date.parse(startedAt)) / 1_000))}s`; }
 
@@ -45,14 +45,16 @@ function topLevelSummary(text: string): string | undefined {
 }
 
 export function structuredResultSummary(text: string): string | undefined {
-  const source = text.trim();
-  if (!/^\{\s*"(?:kind|verdict|version)"\s*:/.test(source)) return undefined;
-  try { const result = JSON.parse(source); if (result && typeof result === "object" && !Array.isArray(result) && typeof result.summary === "string") return result.summary; } catch { /* clipped machine result */ }
-  return topLevelSummary(source);
+  const { prose, result } = splitStructuredResult(text);
+  if (result === undefined) return undefined;
+  let summary: string | undefined;
+  try { const parsed = JSON.parse(result); if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && typeof parsed.summary === "string") summary = parsed.summary; } catch { /* clipped machine result */ }
+  summary ??= topLevelSummary(result);
+  return [prose, summary].filter(Boolean).join(" ") || undefined;
 }
 
 function isStructuredResult(event: ChatEvent): boolean {
-  return (event.kind === "message" || event.kind === "agent_update") && /^\{\s*"(?:kind|verdict|version)"\s*:/.test(event.text.trim());
+  return (event.kind === "message" || event.kind === "agent_update") && splitStructuredResult(event.text).result !== undefined;
 }
 
 function AgentBubble({ children }: { children: ReactNode }) {

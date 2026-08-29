@@ -233,7 +233,8 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
     if (command && true) {
       const summary = ctx.state.deliveryRepairBlockerSummary ?? "Temporary provider failure persisted after automatic retries.";
       // Record the exhausted blocker once; re-projecting it on every loop pass is a hot loop.
-      if (ctx.state.blocker?.category === "provider_connectivity_exhausted" && ctx.state.pendingAction === summary) return false;
+      // humanBlocker() returns null without evidence, so the projected blocker cannot be the guard.
+      if (ctx.state.owner === "human" && ctx.state.pendingAction === summary && ctx.state.allowedCommands.includes(command)) return false;
       ctx.state = IssueWorkflowStateSchema.parse({
         ...ctx.state,
         revision: ctx.state.revision + 1,

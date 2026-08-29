@@ -1,4 +1,4 @@
-import { allHandlersFinished, CancellationScope, condition, defineQuery, isCancellation, setHandler, sleep, workflowInfo } from "./registry.js";
+import { allHandlersFinished, CancellationScope, condition, defineQuery, isCancellation, log, setHandler, sleep, workflowInfo } from "./registry.js";
 import { ProbeWorkflowInputSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, normalizeSafeSummary, type IssueBlocker, type IssueBlockerAction, type IssueCommand, type IssueWorkflowInput, type IssueWorkflowState, type LeadPlanningResult, type ReconcileTargetBaseActivityResult, type TargetBaseCheckpoint } from "./issue-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
@@ -69,6 +69,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const reviseContinueEnabled = true, guardedHandlersEnabled = true;
   const failedRetryEnabled = true, herdrExecutionSubstrateEnabled = true;
   let sourcePullRequest = sourcePullRequestState(validatedInput, true);
+  const projectionStamps: number[] = [];
   const addRevisionCommand = (commands: IssueCommand[]): IssueCommand[] => reviseContinueEnabled && !commands.includes("revise_plan") ? [...commands, "revise_plan"] : commands;
   let state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState(validatedInput),
@@ -277,7 +278,17 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: projectIssueState });
   const guarded = createGuarded({ get: () => state, set: (next) => { state = next; } }, { enabled: guardedHandlersEnabled, reviseContinueEnabled, failedRetryEnabled, project: projectIssueState });
   const workflowContext = createIssueWorkflowContext(validatedInput, state, {
-    project: () => { state = withWorktreeCommands(state, true); return projectIssueState(state); },
+    project: async () => {
+      // Yield to the macrotask queue on every projection so a hot loop can never starve HTTP or timers,
+      // and throttle a run that projects more than 20 revisions a second: that is a bug, not progress.
+      const now = Date.now();
+      projectionStamps.push(now);
+      while (projectionStamps.length && now - projectionStamps[0]! > 1_000) projectionStamps.shift();
+      if (projectionStamps.length > 20) { log.error("Issue run is projecting in a hot loop; throttling", { workflowId: state.workflowId, phase: state.phase, revision: state.revision }); await sleep(1_000); }
+      else await sleep(0);
+      state = withWorktreeCommands(state, true);
+      return projectIssueState(state);
+    },
     projectState: (value) => { state = withWorktreeCommands(value, true); return projectIssueState(state); },
     projectInitialPlanningState: async (next, distinctPlanningStates) => { if (distinctPlanningStates || !true) await projectIssueState(next); },
     planningProjectionFlags: () => { const distinctPlanningStates = true; return { distinctPlanningStates, shouldProject: distinctPlanningStates || !true }; },

@@ -17,5 +17,5 @@ sleep 2
 herdr pane send-text "$PANE" $'mise run dev\n' >/dev/null
 for i in {1..180}; do [ "$(count "$PANE")" -gt "$before" ] && break; sleep 1; done
 [ "$(count "$PANE")" -gt "$before" ] || { echo "worker did not report ready (signal: $SIGNAL)" >&2; exit 2; }
-for i in {1..30}; do curl -sf -o /dev/null "http://127.0.0.1:${CONDUCTOR_PORT:-4111}/api/health" && { echo "restarted: API + worker up (worker readiness: $SIGNAL)"; exit 0; }; sleep 1; done
+for i in {1..180}; do curl -sf -o /dev/null "http://127.0.0.1:${CONDUCTOR_PORT:-4111}/api/health" && { echo "restarted: API + worker up (worker readiness: $SIGNAL)"; exit 0; }; sleep 1; done
 echo "API did not answer /api/health" >&2; exit 2

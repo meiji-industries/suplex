@@ -14,7 +14,11 @@ const CI_RERUN_POLL_DELAY_MS = 60_000;
 const shouldUpdateFromBaseBeforeCiRepair = (result: { outcome: string; repairable: boolean; owner: string | null }, baseUpdateCount: number): boolean => result.outcome === "failed" && result.repairable && result.owner === "lead" && baseUpdateCount < 2;
 
 export function deferCiReconciliation(state: contracts.IssueWorkflowState, now: string): contracts.IssueWorkflowState {
-  return contracts.IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, pendingAction: "Waiting for CI — release evidence is unavailable", stateChangedAt: now, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+  return contracts.IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, owner: "human", allowedCommands: ["reconcile_ci", "repair_ci", "cancel_issue"], pendingAction: "Waiting for CI — release evidence is unavailable", stateChangedAt: now, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+}
+
+export function ciDeadlineBlockedState(state: contracts.IssueWorkflowState, summary: string, now: string): contracts.IssueWorkflowState {
+  return contracts.IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_repair_required", owner: "human", allowedCommands: ["repair_ci", "reconcile_ci", "cancel_issue"], pendingAction: summary, stateChangedAt: now, lastEventId: `${state.workflowId}:${state.revision + 1}` });
 }
 
 export function registerCiHandlers(ctx: IssueWorkflowContext): void {
@@ -63,10 +67,18 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     return ctx.state;
   };
   const reconcileCiTurn = async (): Promise<contracts.IssueWorkflowState> => {
-    if (!ctx.state.releaseId || !ctx.state.expectedHeadSha) {
+    if (!ctx.state.expectedHeadSha && ctx.state.releaseRepository && ctx.state.branchName) {
+      const observed = await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
+      if (observed?.exists && observed.state === "open" && observed.headSha) ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, expectedHeadSha: observed.headSha });
+    }
+    if (!ctx.state.expectedHeadSha) {
       ctx.state = deferCiReconciliation(ctx.state, new Date().toISOString());
       await ctx.project();
       return ctx.state;
+    }
+    if (!ctx.state.releaseId) {
+      await ctx.runPublishTurn();
+      if (!ctx.state.releaseId) return ctx.state;
     }
     const attempt = (ctx.state.ciAttempt ?? 0) + 1;
     const expectedReleaseId = ctx.state.releaseId;
@@ -103,6 +115,11 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     const ciOwner = (result.owner as "system" | "integrator" | "human" | "lead" | null) === "lead" ? "integrator" : result.owner;
     ctx.assignState(() => contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, expectedHeadSha: result.expectedHeadSha, ciAttempt: result.attemptNumber, ciAttemptId: result.attemptId, ciRunId: result.runId, ciOutcome: result.outcome, ciReason: result.reason, ciOwner, ciRepairable: result.repairable, ciEvidenceArtifactId: result.evidenceArtifactId, ciPropagationDeadline: result.propagationDeadline, ciOverallDeadline: result.overallDeadline, ciNextPollAt: result.nextPollAt, pendingAction: result.outcome === "waiting" || result.outcome === "rate_limited" ? "Waiting for CI" : result.summary, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }));
     await ctx.project();
+    if (result.outcome === "failed" && ctx.state.ciOverallDeadline && Date.parse(ctx.state.ciOverallDeadline) <= Date.now()) {
+      ctx.state = ciDeadlineBlockedState(ctx.state, result.summary, new Date().toISOString());
+      await ctx.project();
+      return ctx.state;
+    }
     if (result.outcome === "passed") {
       if (result.reason === "checks_passed_merged") {
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Merged", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });

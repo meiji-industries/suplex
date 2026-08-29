@@ -5,5 +5,5 @@ export const taskDeliveryTargetOptions: Array<{ value: DeliveryTarget; label: st
   { value: "remote_branch", label: "Push branch" },
   { value: "pull_request_draft", label: "Draft pull request" },
   { value: "pull_request_ready", label: "Ready for review" },
-  { value: "merged", label: "Fully merged" },
+  { value: "merged", label: "Merge to base" },
 ];

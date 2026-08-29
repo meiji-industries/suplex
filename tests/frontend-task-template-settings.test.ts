@@ -99,7 +99,7 @@ test("selecting a template populates its editor", async () => {
     await page.getByRole("row", { name: /Release/ }).click();
     expect(await page.getByLabel("Name").inputValue()).toBe("Release");
     expect(await page.getByLabel("Description").inputValue()).toBe("Ship the release");
-    expect(await page.getByRole("combobox", { name: "Delivery target" }).innerText()).toBe("Fully merged");
+    expect(await page.getByRole("combobox", { name: "Delivery target" }).innerText()).toBe("Merge to base");
     expect(await page.getByRole("combobox", { name: "Visual evidence" }).innerText()).toBe("Capture");
     const controls = page.getByRole("checkbox");
     expect(await controls.nth(0).isChecked()).toBe(false);

@@ -13,7 +13,7 @@ export function deliveryTargetLabel(deliveryTarget?: DeliveryTarget): string {
   if (deliveryTarget === "remote_branch") return "Push branch";
   if (deliveryTarget === "pull_request_draft") return "Draft pull request";
   if (deliveryTarget === "pull_request_ready") return "Ready for review";
-  if (deliveryTarget === "merged") return "Fully merged";
+  if (deliveryTarget === "merged") return "Merge to base";
   return "Not specified";
 }
 

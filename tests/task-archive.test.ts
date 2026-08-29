@@ -22,24 +22,23 @@ function fixture(phase: "backlog" | "cancelled" = "cancelled", dirty = false) {
 
 test("archives a terminal task by deleting its worktree", async () => {
   const value = fixture();
-  const first = await value.archive.archiveTask("user", "task");
-  const second = await value.archive.archiveTask("user", "task");
+  const first = await value.archive.archiveTask("user", "task", 1);
+  const second = await value.archive.archiveTask("user", "task", 2);
   expect(first).toMatchObject({ status: "archived", task: { archivedAt: "2026-08-28T00:00:00.000Z" } });
   expect(value.commands).toEqual(["delete_worktree"]);
   expect(second).toEqual(first);
 });
 
-test("archives an active task after cancelling it", async () => {
+test("rejects an active task", async () => {
   const value = fixture("backlog");
-  await value.archive.archiveTask("user", "task");
-  expect(value.commands).toEqual(["cancel_issue", "delete_worktree"]);
-  expect(value.current()).toMatchObject({ phase: "cancelled", worktreeState: "cleaned", archivedAt: "2026-08-28T00:00:00.000Z" });
+  await expect(value.archive.archiveTask("user", "task", 1)).rejects.toMatchObject({ statusCode: 409, findings: [{ code: "illegal-command" }] });
+  expect(value.commands).toEqual([]);
 });
 
 test("requires dirty worktree confirmation before archiving", async () => {
   const value = fixture("cancelled", true);
-  const blocked = await value.archive.archiveTask("user", "task");
-  const confirmed = await value.archive.archiveTask("user", "task", { confirmDiscardDirty: true });
+  const blocked = await value.archive.archiveTask("user", "task", 1);
+  const confirmed = await value.archive.archiveTask("user", "task", 1, { confirmDiscardDirty: true });
   expect(blocked).toMatchObject({ status: "confirmation_required", dirtyFileCount: 2 });
   expect(confirmed).toMatchObject({ status: "archived", task: { archivedAt: "2026-08-28T00:00:00.000Z" } });
   expect(value.commands).toEqual(["delete_worktree", "delete_worktree"]);
@@ -47,7 +46,7 @@ test("requires dirty worktree confirmation before archiving", async () => {
 
 test("unarchive restores visibility without recreating the worktree", async () => {
   const value = fixture();
-  await value.archive.archiveTask("user", "task");
+  await value.archive.archiveTask("user", "task", 1);
   const first = value.archive.unarchiveTask("user", "task");
   const second = value.archive.unarchiveTask("user", "task");
   expect(first).toMatchObject({ archivedAt: null, worktreeState: "cleaned" });

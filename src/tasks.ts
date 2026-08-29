@@ -590,6 +590,7 @@ export interface ForgeTask {
 
 export type TaskListSummary = Pick<ForgeTask, "id" | "companyId" | "projectId" | "issueKey" | "title" | "deliveryTarget" | "phase" | "revision" | "owner" | "allowedCommands" | "pendingAction" | "createdAt" | "updatedAt"> & {
   archivedAt: string | null;
+  worktreeState: "present" | "cleaned" | "removed_externally" | null;
   agentInvocations: Array<Pick<TaskAgentInvocation, "id" | "role" | "status" | "attempt" | "startedAt" | "finishedAt" | "agentId" | "agentName" | "avatarSeed">>;
   capacity: Pick<PublicCapacityStatus, "status"> | null;
   release?: Pick<TaskRelease, "status" | "pullRequestNumber" | "isDraft"> | null;
@@ -2097,7 +2098,7 @@ export class TaskService {
     const capacity = this.capacity.statusForTask(row.id);
     const releaseState = workflowState.mergeOutcome === "merged" ? "merged" : workflowState.mergeOutcome === "closed_without_merge" ? "closed" : release?.status === "ready" ? "ready" : release ? "draft" : undefined;
     const githubPullRequestState = workflowState.githubPullRequestState === "open" || workflowState.githubPullRequestState === "closed" || workflowState.githubPullRequestState === "merged" ? workflowState.githubPullRequestState : null;
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands, pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, agentInvocations, capacity: capacity ? { status: capacity.status } : null, ...(release ? { release: { status: release.status, pullRequestNumber: release.pullRequestNumber, isDraft: release.pullRequestNumber !== null && release.status === "draft" } } : {}), ...(outcome ? { ci: { outcome: outcome.outcome } } : {}), ...(releaseState ? { deliveryGate: { release: { state: releaseState } } } : {}), ...(workflowState.githubPullRequestState !== undefined ? { githubPullRequest: { state: githubPullRequestState } } : {}) };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands, pendingAction: row.pending_action, worktreeState: workflowState.worktreeState ?? null, createdAt: row.created_at, updatedAt: row.updated_at, agentInvocations, capacity: capacity ? { status: capacity.status } : null, ...(release ? { release: { status: release.status, pullRequestNumber: release.pullRequestNumber, isDraft: release.pullRequestNumber !== null && release.status === "draft" } } : {}), ...(outcome ? { ci: { outcome: outcome.outcome } } : {}), ...(releaseState ? { deliveryGate: { release: { state: releaseState } } } : {}), ...(workflowState.githubPullRequestState !== undefined ? { githubPullRequest: { state: githubPullRequestState } } : {}) };
   }
 
   private publicTask(actorUserId: string, row: TaskRow): ForgeTask {

@@ -174,6 +174,10 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     try { return localStorage.getItem("forge.board.hideEmptyColumns") !== "false"; }
     catch { return true; }
   });
+  const [showArchived, setShowArchived] = useState(() => {
+    try { return localStorage.getItem("forge.board.showArchived") === "true"; }
+    catch { return false; }
+  });
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [source, setSource] = useState<TaskSourceSelector>();
@@ -204,6 +208,10 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     try { localStorage.setItem("forge.board.hideEmptyColumns", String(hideEmptyColumns)); }
     catch { /* Local storage may be unavailable. */ }
   }, [hideEmptyColumns]);
+  useEffect(() => {
+    try { localStorage.setItem("forge.board.showArchived", String(showArchived)); }
+    catch { /* Local storage may be unavailable. */ }
+  }, [showArchived]);
 
   const reload = useCallback(async (): Promise<void> => {
     const token = ++requestToken.current;
@@ -269,7 +277,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const visibleProjects = scopeLoaded ? projects : [];
   const visibleTasks = scopeLoaded ? tasks : [];
   const boardTasks = boardProjectId === "all" ? visibleTasks : visibleTasks.filter((task) => task.projectId === boardProjectId);
-  const taskBoard = Object.fromEntries(taskPhases.map((phase) => [phase, boardTasks.filter((task) => task.phase === phase)])) as Record<(typeof taskPhases)[number], ApiTask[]>;
+  const taskBoard = Object.fromEntries(taskPhases.map((phase) => [phase, boardTasks.filter((task) => task.phase === phase && (phase !== "done" || showArchived || task.worktreeState !== "cleaned"))])) as Record<(typeof taskPhases)[number], ApiTask[]>;
   const selected = scopeLoaded ? selectedState : undefined;
   const availableProjects = visibleProjects.filter((project) => project.companyId === companyId);
   const newTaskProject = availableProjects.find((project) => project.id === projectId);
@@ -467,6 +475,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
                 <SelectContent><SelectItem value="all">All projects</SelectItem>{visibleProjects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent>
               </Select>
               <label className="flex cursor-pointer items-center gap-2 text-xs"><Checkbox checked={hideEmptyColumns} onCheckedChange={(c) => setHideEmptyColumns(c === true)} />Hide empty columns</label>
+              <label className="flex cursor-pointer items-center gap-2 text-xs"><Checkbox checked={showArchived} onCheckedChange={(checked) => setShowArchived(checked === true)} />Show archived</label>
               <label className="flex cursor-pointer items-center gap-2 text-xs"><Checkbox checked={taskFilter === "archived"} onCheckedChange={(checked) => setTaskFilter(checked === true ? "archived" : "all")} />Archived</label>
               <Layers3 className="size-3.5 text-muted-foreground" aria-hidden="true" />
             </div>

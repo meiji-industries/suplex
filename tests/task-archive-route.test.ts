@@ -11,17 +11,17 @@ test("archive route forwards dirty-worktree confirmation and is idempotent", asy
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(() => (data) => JSON.stringify(data));
   app.addHook("preHandler", async (request) => { request.forgeUser = { id: "user" } as never; });
-  const archiveTask = vi.fn(async (_user: string, _task: string, _input: { confirmDiscardDirty?: boolean }) => ({ status: "confirmation_required" as const, dirtyFileCount: 2, task: {} }));
+  const archiveTask = vi.fn(async (_user: string, _task: string, _revision: number, _input: { confirmDiscardDirty?: boolean }) => ({ status: "confirmation_required" as const, dirtyFileCount: 2, task: {} }));
   const unarchiveTask = vi.fn(() => ({}));
   await app.register(taskArchive, { tasks: {} as never, database: {} as never, archive: { archiveTask, unarchiveTask } as never });
   await app.ready();
-  const first = await app.inject({ method: "POST", url: "/api/tasks/task/archive", payload: {} });
-  const second = await app.inject({ method: "POST", url: "/api/tasks/task/archive", payload: { confirmDiscardDirty: true } });
+  const first = await app.inject({ method: "POST", url: "/api/tasks/task/archive", payload: { expectedRevision: 3 } });
+  const second = await app.inject({ method: "POST", url: "/api/tasks/task/archive", payload: { expectedRevision: 3, confirmDiscardDirty: true } });
   expect(first.statusCode).toBe(200);
   expect(second.statusCode).toBe(200);
   expect(first.json()).toMatchObject({ status: "confirmation_required", dirtyFileCount: 2 });
   expect(second.json()).toMatchObject({ status: "confirmation_required", dirtyFileCount: 2 });
-  expect(archiveTask.mock.calls).toEqual([["user", "task", {}], ["user", "task", { confirmDiscardDirty: true }]]);
+  expect(archiveTask.mock.calls).toEqual([["user", "task", 3, {}], ["user", "task", 3, { confirmDiscardDirty: true }]]);
   await app.close();
 });
 

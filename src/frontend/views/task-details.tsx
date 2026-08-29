@@ -388,12 +388,12 @@ function DeliveryChecksCard({ task }: { task: ApiTask }): ReactElement {
   </Card>;
 }
 
-function TaskOptions({ canCancel, archived, busy, resyncBusy, onArchive, onCancel, onSaveTemplate, onDuplicate, onResync, onUnarchive }: { canCancel: boolean; archived: boolean; busy: boolean; resyncBusy: boolean; onArchive: () => void; onCancel: () => void; onSaveTemplate: () => void; onDuplicate: () => void; onResync: () => void; onUnarchive: () => void }): ReactElement {
+function TaskOptions({ canArchive, canCancel, archived, busy, resyncBusy, onArchive, onCancel, onSaveTemplate, onDuplicate, onResync, onUnarchive }: { canArchive: boolean; canCancel: boolean; archived: boolean; busy: boolean; resyncBusy: boolean; onArchive: () => void; onCancel: () => void; onSaveTemplate: () => void; onDuplicate: () => void; onResync: () => void; onUnarchive: () => void }): ReactElement {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Task options" title="Task options" />}><Ellipsis /></DropdownMenuTrigger>
       {/* Resync stays enabled even while the projection is lagging — that's the state it exists to repair, so it can't share the lagging-gated `busy` flag the other items use. */}
-      <DropdownMenuContent align="start"><DropdownMenuItem disabled={busy} onClick={onSaveTemplate}>Save as template…</DropdownMenuItem><DropdownMenuItem disabled={busy} onClick={onDuplicate}>Duplicate</DropdownMenuItem><DropdownMenuItem disabled={resyncBusy} onClick={onResync}>Resync</DropdownMenuItem>{archived ? <DropdownMenuItem disabled={busy} onClick={onUnarchive}><ArchiveRestore />Unarchive</DropdownMenuItem> : <><DropdownMenuItem disabled={busy} onClick={onArchive}><Archive />Archive task</DropdownMenuItem>{canCancel ? <DropdownMenuItem variant="destructive" disabled={busy} onClick={onCancel}>Cancel task</DropdownMenuItem> : null}</>}</DropdownMenuContent>
+      <DropdownMenuContent align="start"><DropdownMenuItem disabled={busy} onClick={onSaveTemplate}>Save as template…</DropdownMenuItem><DropdownMenuItem disabled={busy} onClick={onDuplicate}>Duplicate</DropdownMenuItem><DropdownMenuItem disabled={resyncBusy} onClick={onResync}>Resync</DropdownMenuItem>{archived ? <DropdownMenuItem disabled={busy} onClick={onUnarchive}><ArchiveRestore />Unarchive</DropdownMenuItem> : <>{canArchive ? <DropdownMenuItem disabled={busy} onClick={onArchive}><Archive />Archive task</DropdownMenuItem> : null}{canCancel ? <DropdownMenuItem variant="destructive" disabled={busy} onClick={onCancel}>Cancel task</DropdownMenuItem> : null}</>}</DropdownMenuContent>
     </DropdownMenu>
   );
 }
@@ -558,7 +558,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   const archiveTask = async (confirmDiscardDirty = false): Promise<void> => {
     setArchiveBusy(true);
     try {
-      const result = await readJson<{ status: "archived"; task: ApiTask } | { status: "confirmation_required"; dirtyFileCount: number; task: ApiTask }>(`/api/tasks/${encodeURIComponent(task.id)}/archive`, { method: "POST", body: JSON.stringify({ confirmDiscardDirty }) });
+      const result = await readJson<{ status: "archived"; task: ApiTask } | { status: "confirmation_required"; dirtyFileCount: number; task: ApiTask }>(`/api/tasks/${encodeURIComponent(task.id)}/archive`, { method: "POST", body: JSON.stringify({ expectedRevision: task.revision, confirmDiscardDirty }) });
       if (result.status === "confirmation_required") { setArchiveDialog(result.dirtyFileCount); return; }
       setArchiveDialog(null); await onRefresh();
     } catch (reason) {
@@ -623,13 +623,13 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
     {hasChecks ? <TabsContent value="checks"><CiPanel ci={task.ci!} /></TabsContent> : null}
   </>;
   return <>
-    <ApplicationFrame title={task.issueKey ? `${task.issueKey} · ${task.title}` : task.title} headerActions={<TaskOptions canCancel={task.allowedCommands.includes("cancel_issue")} archived={Boolean(task.archivedAt)} busy={busy || archiveBusy || task.projection.status === "lagging"} resyncBusy={busy} onArchive={() => setArchiveDialog("initial")} onCancel={() => void onPlanAction("cancel")} onSaveTemplate={() => void onSaveTemplate()} onDuplicate={() => void onDuplicate()} onResync={() => void onPlanAction("resync-projection")} onUnarchive={() => void unarchiveTask()} />}>
+    <ApplicationFrame title={task.issueKey ? `${task.issueKey} · ${task.title}` : task.title} headerActions={<TaskOptions canArchive={["done", "cancelled", "failed"].includes(task.phase) && task.worktreeState !== "cleaned"} canCancel={task.allowedCommands.includes("cancel_issue")} archived={Boolean(task.archivedAt)} busy={busy || archiveBusy || task.projection.status === "lagging"} resyncBusy={busy} onArchive={() => setArchiveDialog("initial")} onCancel={() => void onPlanAction("cancel")} onSaveTemplate={() => void onSaveTemplate()} onDuplicate={() => void onDuplicate()} onResync={() => void onPlanAction("resync-projection")} onUnarchive={() => void unarchiveTask()} />}>
       <article data-task-detail className="min-w-0">
         <div data-task-body className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_260px]">
           <div className="min-w-0">
             <header className="px-4 pt-4 pb-3 sm:px-6 lg:px-10">
               <div data-task-header-content className="mx-auto max-w-4xl space-y-4">
-                <h2 className="min-w-0"><InlineTaskEditor field="title" value={task.title} onSave={async (title) => onUpdateDetails({ title })} />{task.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}</h2>
+                <h2 className="min-w-0"><InlineTaskEditor field="title" value={task.title} onSave={async (title) => onUpdateDetails({ title })} />{task.archivedAt || (["done", "cancelled", "failed"].includes(task.phase) && task.worktreeState === "cleaned") ? <Badge variant="secondary">Archived</Badge> : null}</h2>
               </div>
             </header>
             <div data-task-content className="min-w-0 px-4 pt-4 pb-6 sm:px-6 lg:px-10">

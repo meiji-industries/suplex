@@ -107,6 +107,7 @@ export const TaskDetailsBodySchema = z.object({
   description: z.string().optional(),
 }).refine((value) => value.title !== undefined || value.description !== undefined, "Title or description is required");
 export const DuplicateTaskBodySchema = z.object({ idempotencyKey: z.string().min(8).max(128) });
+export const ArchiveTaskBodySchema = z.object({ expectedRevision: z.number().int().nonnegative(), confirmDiscardDirty: z.boolean().optional() }).strict();
 
 export const TaskReleaseResponseSchema = z.object({
   id: z.string(), status: z.enum(["reconciling", "draft", "ready", "blocked"]), failureCode: ReleaseFailureCodeSchema.nullable(), failureSummary: z.string().nullable(), retryAt: z.string().nullable(), repository: z.string(), baseBranch: z.string(), headBranch: z.string(), baseSha: z.string(), headSha: z.string(), headTree: z.string(), reviewedCommit: z.object({ abbreviated: z.string(), full: z.string() }), reviewedTree: z.object({ abbreviated: z.string(), full: z.string() }), pullRequestNumber: z.number().nullable(), pullRequestUrl: z.string().url().nullable(), isDraft: z.boolean(), reused: z.boolean(), bodyArtifactId: z.string().nullable(), title: z.string(), bodyPreview: z.string().nullable(), operation: z.object({ kind: z.string(), status: z.string(), attempt: z.number().nullable(), startedAt: z.string().nullable(), observedAt: z.string().nullable(), completedAt: z.string().nullable() }).nullable(),
@@ -123,7 +124,7 @@ export const TaskResponseSchema = TaskResponseBaseSchema.extend({
 });
 export type TaskResponse = z.infer<typeof TaskResponseSchema>;
 export const TaskListTaskSchema = z.object({
-  id: z.string(), companyId: z.string(), projectId: z.string(), issueKey: z.string().nullable(), title: z.string(), archivedAt: z.string().nullable().optional(), deliveryTarget: DeliveryTargetSchema, phase: TaskPhaseSchema, revision: z.number(), owner: z.enum(["human", "lead"]), allowedCommands: z.array(IssueCommandSchema), pendingAction: z.string().nullable(), createdAt: z.string(), updatedAt: z.string(),
+  id: z.string(), companyId: z.string(), projectId: z.string(), issueKey: z.string().nullable(), title: z.string(), archivedAt: z.string().nullable().optional(), deliveryTarget: DeliveryTargetSchema, phase: TaskPhaseSchema, revision: z.number(), owner: z.enum(["human", "lead"]), allowedCommands: z.array(IssueCommandSchema), pendingAction: z.string().nullable(), worktreeState: z.enum(["present", "cleaned", "removed_externally"]).nullable(), createdAt: z.string(), updatedAt: z.string(),
   agentInvocations: z.array(AgentInvocationResponseSchema.pick({ id: true, role: true, status: true, attempt: true, startedAt: true, finishedAt: true, agentId: true, agentName: true, avatarSeed: true })),
   capacity: z.object({ status: z.enum(["queued", "active", "rate_limited", "exhausted"]) }).nullable(),
   release: TaskReleaseResponseSchema.pick({ status: true, pullRequestNumber: true, isDraft: true }).nullable().optional(),

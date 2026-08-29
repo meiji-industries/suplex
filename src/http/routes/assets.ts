@@ -29,6 +29,16 @@ const assets: FastifyPluginAsync = async (app) => {
       return reply.code(404).type("text/plain; charset=utf-8").send("Forge UI asset is not built");
     }
   });
+  app.get<{ Params: { filename: string } }>("/:filename", async (request, reply) => {
+    const { filename } = request.params;
+    if (!/^[a-zA-Z0-9._-]+$/.test(filename)) return reply.code(404).send("Not found");
+    try {
+      const type = filename.endsWith(".js") ? "text/javascript; charset=utf-8" : filename.endsWith(".woff2") ? "font/woff2" : "application/octet-stream";
+      return reply.type(type).send(await readFrontendAsset(filename));
+    } catch {
+      return reply.code(404).type("text/plain; charset=utf-8").send("Forge UI asset is not built");
+    }
+  });
 };
 
 export default assets;

@@ -21,7 +21,7 @@ import { useCompanyContext } from ".././components/app/company-context.js";
 import { getWorkerHealthFailure, useSystemHealth } from ".././components/app/system-health.js";
 import { ACTIVE_INVOCATION_STATUSES, TaskStatus, TaskStatusIcon, taskPresentationPhase, taskStatusAppearance, taskStatusLabel } from ".././components/app/task-status.js";
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
-import { readTaskList, subscribeTaskListInvalidations } from ".././lib/task-list.js";
+import { invalidateTaskList, readTaskList, subscribeTaskListInvalidations } from ".././lib/task-list.js";
 import { navigate } from ".././lib/navigation.js";
 import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES as blockedTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
 import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, FileText, Filter, FolderKanban, Layers3, ListFilter, Plus } from "lucide-react";
@@ -326,6 +326,8 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     setBusy(true); setCreateError(""); setError("");
     try {
       const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, roleAgents: newTaskRoleAgents, autoApprovePlan, deliveryTarget, runProjectTests, visualEvidence, supplementalReview, ...(source ? { source } : {}), idempotencyKey: crypto.randomUUID() }) });
+      invalidateTaskList(companyId);
+      setTasks((current) => [...current.filter((task) => task.id !== result.id), result]);
       const memory: NewTaskMemory = { projectId, deliveryTarget, autoApprovePlan, runProjectTests, visualEvidence, supplementalReview, roleAgents: Object.fromEntries(Object.entries(newTaskRoleAgents).filter(([, id]) => typeof id === "string" && agents.some((agent) => agent.id === id))) };
       remembered.current = memory; writeNewTaskMemory(memory);
       const taskPath = withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId);
@@ -501,8 +503,8 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   if (mode === "board") {
     return (
       <ApplicationFrame title="Board" headerRight={<span className="text-[11px] text-muted-foreground">Read-only state</span>}>
-        <div className="flex h-[calc(100vh-2.5rem)] min-h-0 flex-col border-t border-border/70 bg-background">
-          <div className="flex h-11 shrink-0 items-center justify-between border-b border-border/70 px-3 sm:px-4">
+        <div className="flex h-[calc(100vh-2.5rem)] min-h-0 min-w-0 flex-col border-t border-border/70 bg-background">
+          <div className="flex h-11 shrink-0 items-center justify-between overflow-x-auto border-b border-border/70 px-3 sm:px-4">
             <div className="flex items-center gap-2">
               <Select value={boardProjectId} onValueChange={(value) => setBoardProjectId(value ?? "all")}>
                 <SelectTrigger aria-label="Filter board by project" className="h-7 w-auto min-w-28 rounded-full border-border bg-background px-2.5 text-xs shadow-none">

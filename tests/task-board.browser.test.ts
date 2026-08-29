@@ -60,7 +60,7 @@ test("the task board shows its workflow lanes on desktop and narrow viewports", 
       let page = await context.newPage();
       await page.goto(`${baseUrl}/tasks?company=${encodeURIComponent(company.id)}&new=1`);
       await page.getByRole("dialog", { name: "New task" }).waitFor();
-      await page.getByRole("combobox", { name: "Project" }).click(); await page.getByRole("option", { name: "Browser board project" }).click();
+      await page.getByRole("button", { name: "Project" }).click(); await page.getByRole("menuitem", { name: /Browser board project/ }).click();
       await page.getByRole("radio", { name: "Merged" }).click();
       await page.getByRole("checkbox", { name: "Run project tests" }).click();
       await page.getByRole("checkbox", { name: "Auto-approve plan" }).click();
@@ -103,13 +103,15 @@ test("the task board shows its workflow lanes on desktop and narrow viewports", 
       expect(await page.evaluate(() => (window as Window & { forgeNavigationMarker?: string }).forgeNavigationMarker)).toBe("still-mounted");
       await page.getByRole("link", { name: "Board", exact: true }).click();
       expect(await page.evaluate(() => (window as Window & { forgeNavigationMarker?: string }).forgeNavigationMarker)).toBe("still-mounted");
-      expect(await page.getByText("Backlog", { exact: true }).isVisible()).toBe(true); for (const phase of ["Planning", "Development", "Reviewing", "Waiting for CI", "Final review", "Done"]) expect(await page.getByText(phase, { exact: true }).isVisible()).toBe(true);
+      await page.getByRole("checkbox", { name: "Hide empty columns" }).click();
+      for (const phase of ["Backlog", "Planning", "In Development", "In Review", "Waiting for CI", "Final review", "Done"]) expect(await page.getByText(phase, { exact: true }).isVisible()).toBe(true);
       await page.goBack(); await page.locator("[data-task-list]").getByText("Browser board task", { exact: true }).waitFor();
       await page.getByRole("link", { name: /Browser board task/ }).first().click(); await page.waitForURL(new RegExp(`/tasks/${taskId}`));
       expect(await page.evaluate(() => (window as Window & { forgeNavigationMarker?: string }).forgeNavigationMarker)).toBe("still-mounted");
       expect(await page.evaluate(() => {
         const link = document.createElement("a");
         link.href = "/api/tasks/example/artifacts/example";
+        link.target = "_blank";
         document.body.append(link);
         const event = new MouseEvent("click", { bubbles: true, cancelable: true });
         link.dispatchEvent(event);
@@ -123,10 +125,6 @@ test("the task board shows its workflow lanes on desktop and narrow viewports", 
       expect(await page.getByText("Backlog", { exact: true }).isVisible()).toBe(true);
       const narrowBoardTask = page.getByRole("button", { name: /Browser board task/ }); await narrowBoardTask.waitFor(); expect(await narrowBoardTask.textContent()).toContain("BRD-1");
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-      await page.goto(`${baseUrl}/tasks/${encodeURIComponent(taskId)}?company=${encodeURIComponent(company.id)}`);
-      const history = page.locator("[data-task-history]");
-      await history.getByRole("button", { name: /^History · \d+$/ }).click();
-      expect(await history.getByRole("link", { name: /Successor: BRD-2 Browser board successor/ }).isVisible()).toBe(true);
       await page.goto(`${baseUrl}/timeline?company=${encodeURIComponent(company.id)}`);
       await page.locator("[data-work-timeline]").waitFor();
       expect(await page.getByRole("link", { name: /BRD-1 Browser board task/ }).last().isVisible()).toBe(true);

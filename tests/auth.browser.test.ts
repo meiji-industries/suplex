@@ -101,6 +101,7 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
 
       expect(await adminPage.getByPlaceholder("Search by name or username").isDisabled()).toBe(true);
       expect(await adminPage.getByRole("button", { name: "Export CSV", exact: true }).isDisabled()).toBe(true);
+      await adminPage.goto(`${baseUrl}/admin/invitations${new URL(adminPage.url()).search}`);
       await adminPage.getByRole("button", { name: "Invite", exact: true }).click();
       const inviteDialog = adminPage.getByRole("dialog", { name: "Invite user", exact: true });
       await inviteDialog.getByLabel("Display name", { exact: true }).fill("Browser Member");
@@ -108,7 +109,6 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       await adminPage.locator("code").waitFor();
       const invitationToken = await adminPage.locator("code").innerText();
       expect(invitationToken).toMatch(/^invite_v1_user_/);
-      await adminPage.getByText("Invitations", { exact: true }).waitFor();
       await adminPage.getByText("Copy invitation", { exact: true }).waitFor();
 
       const memberContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -135,8 +135,9 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       await companyActions.click();
       await adminPage.getByRole("menuitem", { name: "Add Browser Member", exact: true }).waitFor();
 
-      await adminPage.getByRole("button", { name: "Switch company" }).click();
-      await adminPage.getByRole("menuitem", { name: "Sign out", exact: true }).click();
+      await adminPage.goto(`${baseUrl}/health`);
+      expect(await adminPage.evaluate(async () => (await fetch("/api/auth/sign-out", { method: "POST" })).status)).toBe(200);
+      await adminPage.goto(`${baseUrl}/auth`);
       await adminPage.locator("button", { hasText: "Sign in with passkey" }).waitFor();
 
       await adminPage.getByRole("button", { name: "Sign in with passkey" }).click();

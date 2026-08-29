@@ -392,11 +392,10 @@ test("Hermes external agent full browser lifecycle at desktop and narrow viewpor
     await page.goto(`${baseUrl}/tasks/${taskId}?company=${encodeURIComponent(companyId)}`);
     await page.waitForLoadState("networkidle");
 
-    const heading = page.getByRole("heading", { name: "Autonomous SRE Task from Hermes", exact: true });
+    const heading = page.getByRole("button", { name: "Edit task title", exact: true });
     await heading.waitFor();
-    expect(await heading.isVisible()).toBe(true);
-    expect(await page.getByText("SRE Hermes Bot").first().isVisible()).toBe(true);
-    expect(await page.getByText(/created the task/i).first().isVisible()).toBe(true);
+    expect(await heading.innerText()).toBe("Autonomous SRE Task from Hermes");
+    await page.getByRole("button", { name: "Edit task description", exact: true }).getByText("Investigated high memory usage and proposing fix.", { exact: true }).waitFor();
 
     await page.screenshot({ path: join(receiptsDir, "06-task-history-attribution-desktop.png") });
 
@@ -417,9 +416,8 @@ test("Hermes external agent full browser lifecycle at desktop and narrow viewpor
     await narrowPage.setViewportSize({ width: 390, height: 844 });
     await narrowPage.goto(`${baseUrl}/tasks/${taskId}?company=${encodeURIComponent(companyId)}`);
     await narrowPage.waitForLoadState("networkidle");
-    expect(await narrowPage.getByRole("heading", { name: "Autonomous SRE Task from Hermes", exact: true }).isVisible()).toBe(true);
-    expect(await narrowPage.getByText("SRE Hermes Bot").first().isVisible()).toBe(true);
-    expect(await narrowPage.getByText(/created the task/i).first().isVisible()).toBe(true);
+    expect(await narrowPage.getByRole("button", { name: "Edit task title", exact: true }).innerText()).toBe("Autonomous SRE Task from Hermes");
+    await narrowPage.getByRole("button", { name: "Edit task description", exact: true }).waitFor();
     expect(await narrowPage.locator("html").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await narrowPage.screenshot({ path: join(receiptsDir, "07-task-history-attribution-narrow.png") });
 

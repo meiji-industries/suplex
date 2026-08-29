@@ -16,6 +16,7 @@ export default defineConfig({
       input: "src/frontend/main.tsx",
       output: {
         entryFileNames: "forge-ui.js",
+        chunkFileNames: "[name]-[hash].js",
         assetFileNames: "forge-ui.[ext]",
       },
     },

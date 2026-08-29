@@ -10,11 +10,12 @@ import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
+import { TaskResponseSchema } from "../src/http/contracts/tasks.js";
 
 const projectId = "recovery-browser-project";
 const taskId = "recovery-browser-task";
 
-type RecoveryStatus = "starting" | "active" | "reconnecting" | "result_pending_claim" | "interrupted" | "ownership_ambiguous" | "cancellation_requested" | "cancelling" | "cancelled" | "failed";
+type RecoveryStatus = "starting" | "active" | "reconnecting" | "result_pending_claim" | "interrupted" | "cancellation_requested" | "cancelling" | "cancelled" | "failed";
 
 function fakeWebAuthn(): WebAuthnAdapter {
   return {
@@ -26,43 +27,53 @@ function fakeWebAuthn(): WebAuthnAdapter {
 }
 
 function taskState(companyId: string, status: RecoveryStatus, revision = 3, overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  const ambiguous = status === "ownership_ambiguous";
   const cancelled = status === "cancelled";
   const interrupted = status === "interrupted";
   const failed = status === "failed";
-  const commands = ambiguous ? ["verify_developer_ownership"] : cancelled || failed ? ["retry_development"] : interrupted ? ["retry_development", "cancel_issue"] : status === "cancelling" || status === "cancellation_requested" ? [] : ["cancel_development"];
-  return {
+  const commands = cancelled || failed ? ["retry_development"] : interrupted ? ["retry_development", "cancel_issue"] : status === "cancelling" || status === "cancellation_requested" ? [] : ["cancel_development"];
+  return TaskResponseSchema.parse({
     id: taskId,
     companyId,
     projectId,
+    issueKey: "REC-1",
     title: "Recovery task",
+    archivedAt: null,
     description: "A safe recovery browser fixture.",
+    prompts: { overrides: [] },
     briefArtifactId: "recovery-brief",
     images: [],
-    roleProfiles: {},
+    roleAgents: {},
     supplementalReview: false,
+    autoApprovePlan: false,
+    deliveryTarget: "pull_request_ready",
+    executionControls: { runProjectTests: true, visualEvidence: "off", supplementalReview: false },
+    browserProof: [],
+    deliveryReceipt: null,
+    worktreeState: "present",
+    pullRequestMode: "ready",
     workflowId: "recovery-browser-workflow",
     projectRevisionId: "recovery-browser-revision",
     phase: cancelled ? "delivery_blocked" : failed ? "delivery_blocked" : "development",
     revision,
-    owner: ambiguous || interrupted || failed ? "human" : "lead",
+    owner: interrupted || failed ? "human" : "lead",
     allowedCommands: commands,
     commands: [],
     governance: {},
-    pendingAction: ambiguous ? "Recheck Developer ownership" : cancelled ? "Developer turn cancelled; retry or continue" : failed ? "The Developer turn failed" : "Developer execution",
+    pendingAction: cancelled ? "Developer turn cancelled; retry or continue" : failed ? "The Developer turn failed" : "Developer execution",
     createdAt: "2026-08-12T00:00:00.000Z",
     updatedAt: "2026-08-12T00:00:00.000Z",
-    projection: { authoritativeRevision: revision, projectedRevision: revision, projectedAt: "2026-08-12T00:00:00.000Z", status: "current" },
+    projection: { authoritativeRevision: revision, projectedRevision: revision, projectedAt: "2026-08-12T00:00:00.000Z", status: "current", message: null },
     timeline: [{ id: "recovery-browser-workflow:3", revision, eventType: "phase_development", metadata: { revision, phase: "development" }, createdAt: "2026-08-12T00:00:00.000Z" }],
     activity: [],
     agentInvocations: [],
+    capacity: null,
     reviewLineage: { currentReview: null, priorReviews: [], reviewAttempts: [], repairAttempts: [] },
     planHistory: [],
     planDecisionHistory: [],
     revisionHistory: [],
     developerExecutionHistory: [],
     deliveryReviewHistory: [],
-    developerExecution: { id: cancelled ? "developer-cancelled" : "developer-attempt-1", status: cancelled ? "terminated" : "running", attempt: 1, branchName: "forge/issue/recovery-browser-task", targetBaseSha: "a".repeat(40), deliverySummary: cancelled ? "Termination confirmed; worktree and branch preserved." : "Developer is working in the preserved worktree." },
+    developerExecution: { id: cancelled ? "developer-cancelled" : "developer-attempt-1", status: cancelled ? "terminated" : "running", attempt: 1, branchName: "forge/issue/recovery-browser-task", targetBaseSha: "a".repeat(40), startedAt: "2026-08-12T00:00:00.000Z", finishedAt: null, summary: cancelled ? "Termination confirmed; worktree and branch preserved." : "Developer is working in the preserved worktree." },
     targetBaseReconciliation: {
       checkId: null,
       checkpoint: null,
@@ -90,9 +101,9 @@ function taskState(companyId: string, status: RecoveryStatus, revision = 3, over
       summary: null,
       actions: [],
     },
-    developerRecovery: { status, reasonCode: ambiguous ? "developer-ownership-ambiguous" : interrupted ? "developer-worker-lost" : failed ? "developer-failed" : null, summary: ambiguous ? "This summary is replaced by the safe ownership message." : interrupted ? "The Developer worker stopped before the result was claimed." : failed ? "The Developer turn could not complete." : cancelled ? "Developer termination confirmed and preserved." : status === "cancelling" ? "Confirming Developer termination." : status === "reconnecting" ? "Reconnecting to the recorded Developer supervisor." : "Forge is tracking the Developer turn.", lastHeartbeatAt: "2026-08-12T00:00:00.000Z", currentOwner: ambiguous ? "operator" : "forge", evidenceArtifactId: "recovery-evidence", nextAction: ambiguous ? { command: "verify_developer_ownership", label: "Recheck ownership", requiresConfirmation: false } : interrupted || cancelled || failed ? { command: "retry_development", label: "Retry development", requiresConfirmation: true } : { command: "cancel_development", label: "Cancel development", requiresConfirmation: true } },
+    developerRecovery: { status, reasonCode: interrupted ? "developer-worker-lost" : failed ? "developer-failed" : null, summary: interrupted ? "The Developer worker stopped before the result was claimed." : failed ? "The Developer turn could not complete." : cancelled ? "Developer termination confirmed and preserved." : status === "cancelling" ? "Confirming Developer termination." : status === "reconnecting" ? "Reconnecting to the recorded Developer supervisor." : "Forge is tracking the Developer turn.", lastHeartbeatAt: "2026-08-12T00:00:00.000Z", currentOwner: "forge", evidenceArtifactId: "recovery-evidence", nextAction: interrupted || cancelled || failed ? { command: "retry_development", label: "Retry development", requiresConfirmation: true } : { command: "cancel_development", label: "Cancel development", requiresConfirmation: true } },
     ...overrides,
-  };
+  });
 }
 
 test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at %ipx", async (viewportWidth) => {
@@ -128,7 +139,7 @@ test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at
       let current = taskState(company.id, "active");
       let cancellationListReads = 0;
       let staleCancellation = false;
-      await context.route("**/api/companies/*/projects", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ projects: [{ id: projectId, companyId: company.id, name: "Recovery project", repositoryPath: "repository", worktreeRoot: "worktrees", baseBranch: "main", targetBranch: "main", requiredChecks: [], roleDefaults: {}, status: "active", configurationRevision: 1 }] }) }));
+      await context.route("**/api/companies/*/projects", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ projects: [{ id: projectId, companyId: company.id, name: "Recovery project", repositoryPath: "repository", worktreeRoot: "worktrees", repository: "acme/recovery", baseBranch: "main", targetBranch: "main", setupCommand: "", verificationCommand: "pnpm test", requiredChecks: [], roleDefaults: {}, status: "active", configurationRevision: 1, activeRevisionId: "recovery-browser-revision" }] }) }));
       await context.route("**/api/companies/*/tasks", async (route) => {
         const recoveryState = current["developerRecovery"] as { status?: string } | undefined;
         if (recoveryState?.status === "cancelling") {
@@ -137,20 +148,21 @@ test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at
         }
         await route.fulfill({ contentType: "application/json", body: JSON.stringify({ tasks: [current] }) });
       });
-      await context.route("**/api/profiles", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ profiles: [] }) }));
+      await context.route(/\/api\/agents(?:\?.*)?$/, async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ agents: [] }) }));
       await context.route("**/api/tasks/**", async (route) => {
         const request = route.request();
         const url = new URL(request.url());
         if (url.pathname.endsWith("/events")) { await route.fulfill({ status: 200, contentType: "text/event-stream", body: ": ready\n\n" }); return; }
-        if (request.method() !== "POST") { await route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); return; }
+        if (request.method() !== "POST") { await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current) }); return; }
         if (url.pathname.endsWith("/verify-developer-ownership")) { current = taskState(company.id, "active", 6, { pendingAction: "Developer execution" }); await route.fulfill({ contentType: "application/json", body: JSON.stringify(current) }); return; }
-        if (url.pathname.endsWith("/retry-development")) { current = taskState(company.id, "active", 7, { developerExecution: { id: "developer-attempt-2", status: "running", attempt: 2, branchName: "forge/issue/recovery-browser-task", targetBaseSha: "a".repeat(40), deliverySummary: "Linked attempt 2 reconnected to the preserved worktree." } }); await route.fulfill({ contentType: "application/json", body: JSON.stringify(current) }); return; }
+        if (url.pathname.endsWith("/retry-development")) { current = taskState(company.id, "active", 7, { developerExecution: { id: "developer-attempt-2", status: "running", attempt: 2, branchName: "forge/issue/recovery-browser-task", targetBaseSha: "a".repeat(40), startedAt: "2026-08-12T00:00:00.000Z", finishedAt: null, summary: "Linked attempt 2 reconnected to the preserved worktree." } }); await route.fulfill({ contentType: "application/json", body: JSON.stringify(current) }); return; }
         if (url.pathname.endsWith("/cancel-development")) {
           if (staleCancellation) { staleCancellation = false; current = taskState(company.id, "active", 8); await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "stale_workflow_revision" }) }); return; }
           cancellationListReads = 0; current = taskState(company.id, "cancelling", 8); await route.fulfill({ contentType: "application/json", body: JSON.stringify(current) }); return;
         }
         await route.fulfill({ contentType: "application/json", body: JSON.stringify(current) });
       });
+      await context.route(new RegExp(`/api/tasks/${taskId}$`), async (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current) }));
       const page = await context.newPage();
       page.setDefaultTimeout(5_000);
       const openTask = async (): Promise<void> => {
@@ -185,15 +197,9 @@ test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at
       await recovery.getByRole("button", { name: "Cancel development" }).click();
       await page.getByRole("alertdialog").getByRole("button", { name: "Confirm cancellation" }).click();
       await recovery.getByText("Cancelling", { exact: true }).waitFor();
+      current = taskState(company.id, "cancelled", 5);
       await reloadTask();
       await recovery.getByText("Cancelled", { exact: true }).waitFor();
-
-      current = taskState(company.id, "ownership_ambiguous", 3);
-      await reloadTask();
-      await recovery.getByText("Ownership ambiguous", { exact: true }).waitFor();
-      expect(await page.getByRole("button", { name: "Verify ownership" }).count()).toBe(0);
-      await recovery.getByRole("button", { name: "Recheck ownership" }).click();
-      await recovery.getByText("Active", { exact: true }).waitFor();
 
       current = taskState(company.id, "active"); staleCancellation = true;
       await reloadTask();

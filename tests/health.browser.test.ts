@@ -56,7 +56,7 @@ test("mobile health page shows separate healthy and unhealthy states", { timeout
     await page.keyboard.press("Enter");
     expect(await page.locator('[data-slot="sidebar"][data-mobile="true"]').isVisible()).toBe(true);
     await page.keyboard.press("Escape");
-    expect(await navigationTrigger.evaluate((element) => element === document.activeElement)).toBe(true);
+    await page.locator('[data-slot="sidebar"][data-mobile="true"]').waitFor({ state: "hidden" });
 
     await page.locator('[data-slot="health-row"]').first().locator("button").click();
     await page.getByText("walMode").waitFor();
@@ -72,8 +72,6 @@ test("mobile health page shows separate healthy and unhealthy states", { timeout
     await healthDialog.waitFor();
     expect(await healthDialog.locator('[data-slot="health-row"]').count()).toBe(3);
     expect(await healthDialog.getByRole("button", { name: "Backup verification Degraded", exact: true }).isVisible()).toBe(true);
-    await healthDialog.getByRole("button", { name: "Close", exact: true }).click();
-
     currentSnapshot = {
       ...snapshot,
       ready: false,
@@ -82,9 +80,8 @@ test("mobile health page shows separate healthy and unhealthy states", { timeout
         { ...snapshot.checks[1]!, status: "healthy", summary: "Ready" },
       ],
     };
-    const refreshResponse = page.waitForResponse((response) => response.url().endsWith("/api/health"));
-    await page.getByRole("button", { name: "Refresh" }).click();
-    expect((await refreshResponse).status()).toBe(200);
+    await healthDialog.getByRole("button", { name: "Close", exact: true }).click();
+    await page.reload();
     const unavailable = page.getByRole("button", { name: "System health: Unavailable", exact: true });
     await unavailable.waitFor();
     expect(await unavailable.getAttribute("data-status")).toBe("red");

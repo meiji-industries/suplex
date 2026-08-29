@@ -31,6 +31,7 @@ import { TaskDetailsPage, TaskDetailsNotFound, TaskDetailsSkeleton, type PlanRev
 import { prefillForTaskSource, preserveEditedPrefill, TaskSourcePicker, type TaskSourceSelector, type TaskSourceSummary } from "../components/app/task-source-picker.js";
 import { TaskRoleSelectors } from "../components/app/task-role-selectors.js";
 import { taskDeliveryTargetOptions } from "../components/app/task-delivery-target.js";
+import { readNewTaskMemory, writeNewTaskMemory, type NewTaskMemory } from "../components/app/new-task-memory.js";
 
 async function fileAsImage(file: File): Promise<{ filename: string; mimeType: string; base64: string }> {
   return await new Promise((resolve, reject) => {
@@ -162,13 +163,14 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const { snapshot: healthSnapshot } = useSystemHealth();
   const workerFailure = getWorkerHealthFailure(healthSnapshot);
   const planningUnavailable = workerFailure ? `${workerFailure.label} is unavailable. ${workerFailure.summary}` : "";
+  const remembered = useRef(readNewTaskMemory());
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [agents, setAgents] = useState<ApiAgent[]>([]);
-  const [roleAgentOverrides, setRoleAgentOverrides] = useState<{ planner?: string | undefined; builder?: string | undefined; reviewer?: string | undefined; integrator?: string | undefined }>({});
+  const [roleAgentOverrides, setRoleAgentOverrides] = useState<{ planner?: string | undefined; builder?: string | undefined; reviewer?: string | undefined; integrator?: string | undefined }>(remembered.current.roleAgents);
   const [tasks, setTasks] = useState<ApiTaskSummary[]>([]);
   const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [selectedState, setSelected] = useState<ApiTask>();
-  const [projectId, setProjectId] = useState("");
+  const [projectId, setProjectId] = useState(remembered.current.projectId ?? "");
   const [boardProjectId, setBoardProjectId] = useState("all");
   const [hideEmptyColumns, setHideEmptyColumns] = useState(() => {
     try { return localStorage.getItem("forge.board.hideEmptyColumns") !== "false"; }
@@ -183,11 +185,11 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const [source, setSource] = useState<TaskSourceSelector>();
   const [sourceSummary, setSourceSummary] = useState<TaskSourceSummary>();
   const sourcePrefill = useRef({ title: "", description: "" });
-  const [autoApprovePlan, setAutoApprovePlan] = useState(false);
-  const [deliveryTarget, setDeliveryTarget] = useState<"local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged">("pull_request_draft");
-  const [runProjectTests, setRunProjectTests] = useState(true);
-  const [visualEvidence, setVisualEvidence] = useState<"off" | "capture" | "required">("off");
-  const [supplementalReview, setSupplementalReview] = useState(false);
+  const [autoApprovePlan, setAutoApprovePlan] = useState(remembered.current.autoApprovePlan);
+  const [deliveryTarget, setDeliveryTarget] = useState<"local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged">(remembered.current.deliveryTarget);
+  const [runProjectTests, setRunProjectTests] = useState(remembered.current.runProjectTests);
+  const [visualEvidence, setVisualEvidence] = useState<"off" | "capture" | "required">(remembered.current.visualEvidence);
+  const [supplementalReview, setSupplementalReview] = useState(remembered.current.supplementalReview);
   const [images, setImages] = useState<Array<{ filename: string; mimeType: string; base64: string }>>([]);
   const [error, setError] = useState("");
   const [createError, setCreateError] = useState("");
@@ -202,6 +204,10 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const routeBase = mode === "board" ? "/board" : "/tasks";
   const detailPrefix = `${routeBase}/`;
   const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
+  const resetNewTaskSettings = (): void => {
+    const memory = remembered.current;
+    setAutoApprovePlan(memory.autoApprovePlan); setDeliveryTarget(memory.deliveryTarget); setRunProjectTests(memory.runProjectTests); setVisualEvidence(memory.visualEvidence); setSupplementalReview(memory.supplementalReview);
+  };
 
   useEffect(() => { selectedRef.current = selectedState; }, [selectedState]);
   useEffect(() => {
@@ -226,6 +232,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
       if (token !== requestToken.current) return;
       setProjects(projectResult.projects); setTasks(taskResult); setAgents(agentResult.agents);
       setProjectId((current) => projectResult.projects.some((project) => project.id === current) ? current : projectResult.projects[0]?.id ?? "");
+      setRoleAgentOverrides((current) => Object.fromEntries(Object.entries(current).filter(([, id]) => !id || agentResult.agents.some((agent) => agent.id === id))));
       setDetailNotFound(Boolean(routeTaskId) && !taskResult.some((task) => task.id === routeTaskId));
       setLoadedCompanyId(companyId);
     } catch (reason) {
@@ -263,7 +270,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   }, [mode]);
   useEffect(() => {
     selectedRef.current = undefined;
-    setSelected(undefined); setProjectId(""); setRoleAgentOverrides({}); setTitle(""); setDescription(""); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setAutoApprovePlan(false); setDeliveryTarget("pull_request_draft"); setRunProjectTests(true); setVisualEvidence("off"); setSupplementalReview(false); setImages([]); setCreateError(""); setDetailNotFound(false);
+    setSelected(undefined); setProjectId(""); setRoleAgentOverrides({}); setTitle(""); setDescription(""); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; resetNewTaskSettings(); setImages([]); setCreateError(""); setDetailNotFound(false);
   }, [companyId]);
   useEffect(() => {
     const events = new EventSource("/api/tasks/events");
@@ -309,6 +316,8 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     setBusy(true); setCreateError(""); setError("");
     try {
       const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, roleAgents: newTaskRoleAgents, autoApprovePlan, deliveryTarget, runProjectTests, visualEvidence, supplementalReview, ...(source ? { source } : {}), idempotencyKey: crypto.randomUUID() }) });
+      const memory: NewTaskMemory = { projectId, deliveryTarget, autoApprovePlan, runProjectTests, visualEvidence, supplementalReview, roleAgents: Object.fromEntries(Object.entries(newTaskRoleAgents).filter(([, id]) => typeof id === "string" && agents.some((agent) => agent.id === id))) };
+      remembered.current = memory; writeNewTaskMemory(memory);
       const taskPath = withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId);
       if (result.allowedCommands.includes("start_planning")) {
         if (planningUnavailable) { navigate(taskPath); setError(planningUnavailable); return; }
@@ -576,7 +585,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
           })}
         </div> : null}
         {!currentCompany && scopeLoaded ? <div className="px-4 py-8 text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</div> : null}
-        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); else { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setAutoApprovePlan(false); setDeliveryTarget("pull_request_draft"); setRunProjectTests(true); setVisualEvidence("off"); setSupplementalReview(false); } }} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setRoleAgentOverrides({}); }} sourceSummary={sourceSummary} onSourceSelect={selectSource} onSourceClear={() => { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => { const next = { ...current, [role]: agentId }; if (role === "reviewer" && !agentId) setSupplementalReview(false); return next; })} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} autoApprovePlan={autoApprovePlan} onAutoApprovePlanChange={setAutoApprovePlan} deliveryTarget={deliveryTarget} onDeliveryTargetChange={setDeliveryTarget} runProjectTests={runProjectTests} onRunProjectTestsChange={setRunProjectTests} visualEvidence={visualEvidence} onVisualEvidenceChange={setVisualEvidence} supplementalReview={supplementalReview} onSupplementalReviewChange={setSupplementalReview} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} onApplyTemplate={applyTemplate} />
+        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); else { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; resetNewTaskSettings(); } }} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setRoleAgentOverrides({}); }} sourceSummary={sourceSummary} onSourceSelect={selectSource} onSourceClear={() => { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => { const next = { ...current, [role]: agentId }; if (role === "reviewer" && !agentId) setSupplementalReview(false); return next; })} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} autoApprovePlan={autoApprovePlan} onAutoApprovePlanChange={setAutoApprovePlan} deliveryTarget={deliveryTarget} onDeliveryTargetChange={setDeliveryTarget} runProjectTests={runProjectTests} onRunProjectTestsChange={setRunProjectTests} visualEvidence={visualEvidence} onVisualEvidenceChange={setVisualEvidence} supplementalReview={supplementalReview} onSupplementalReviewChange={setSupplementalReview} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} onApplyTemplate={applyTemplate} />
       </div>
     </ApplicationFrame>
   );

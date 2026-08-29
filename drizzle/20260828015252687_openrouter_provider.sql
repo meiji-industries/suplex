@@ -9,13 +9,24 @@ CREATE TABLE `forge_herdr_role_sessions_new` (
   `codex_session_id` text UNIQUE, `agent_name` text, `pane_id` text, `rollout_path` text,
   `launch_fingerprint` text, `guard_directory` text,
   `status` text NOT NULL CHECK (`status` IN ('unbound', 'starting', 'ready', 'working', 'blocked', 'missing', 'closed', 'failed')),
-  `last_agent_status` text, `attention_activated_at` text, `ensure_token` text, `ensure_expires_at` text,
+  `last_agent_status` text, `attention_excerpt` text, `attention_activated_at` text, `ensure_token` text, `ensure_expires_at` text,
   `created_at` text NOT NULL, `updated_at` text NOT NULL, `last_seen_at` text,
   FOREIGN KEY (`task_id`) REFERENCES `forge_tasks`(`id`) ON DELETE cascade,
   UNIQUE (`task_id`, `session_role`, `generation`)
 );
 --> statement-breakpoint
-INSERT INTO `forge_herdr_role_sessions_new` SELECT * FROM `forge_herdr_role_sessions`;
+INSERT INTO `forge_herdr_role_sessions_new` (
+  `id`, `task_id`, `session_role`, `generation`, `is_current`, `provider_kind`,
+  `codex_session_id`, `agent_name`, `pane_id`, `rollout_path`, `launch_fingerprint`, `guard_directory`,
+  `status`, `last_agent_status`, `attention_excerpt`, `attention_activated_at`, `ensure_token`, `ensure_expires_at`,
+  `created_at`, `updated_at`, `last_seen_at`
+)
+SELECT
+  `id`, `task_id`, `session_role`, `generation`, `is_current`, `provider_kind`,
+  `codex_session_id`, `agent_name`, `pane_id`, `rollout_path`, `launch_fingerprint`, `guard_directory`,
+  `status`, `last_agent_status`, `attention_excerpt`, `attention_activated_at`, `ensure_token`, `ensure_expires_at`,
+  `created_at`, `updated_at`, `last_seen_at`
+FROM `forge_herdr_role_sessions`;
 --> statement-breakpoint
 DROP TABLE `forge_herdr_role_sessions`;
 --> statement-breakpoint

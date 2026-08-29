@@ -50,10 +50,14 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
     await ctx.project();
     return ctx.state;
   };
-  setHandler(issueUpdates.resolve_merge_conflict, ctx.guarded(async (rawInput: any) => resolveMergeConflict(ctx, contracts.StartPlanningInputSchema.parse(rawInput))), { validator(rawInput) {
+  setHandler(issueUpdates.resolve_merge_conflict, ctx.guarded(async (rawInput: unknown) => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
-    if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    if (ctx.state.phase !== "merge_conflict_required" || !ctx.state.allowedCommands.includes("resolve_merge_conflict")) throw new Error("Merge-conflict resolution is not available in the current phase");
+    if (ctx.state.phase === "merge_conflict_required") return resolveMergeConflict(ctx, command);
+    return ctx.retryTargetBaseReconciliation(command);
+  }), { validator(rawInput) {
+    const command = contracts.StartPlanningInputSchema.parse(rawInput);
+    const observedConflict = ctx.state.owner === "human" && ctx.state.githubPullRequestMergeable === "CONFLICTING";
+    if (command.expectedRevision !== ctx.state.revision || (!observedConflict && (ctx.state.phase !== "merge_conflict_required" || !ctx.state.allowedCommands.includes("resolve_merge_conflict")))) throw new Error("Merge-conflict resolution is not available in the current phase");
   } });
 
   setHandler(issueUpdates.integrate_remote_conflict, ctx.guarded(async (rawInput: any) => {

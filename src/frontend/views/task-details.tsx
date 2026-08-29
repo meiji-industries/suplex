@@ -65,7 +65,11 @@ function TaskMediaRow({ taskId, images }: { taskId: string; images: ApiTask["ima
   </>;
 }
 
-function BranchSyncCard({ taskId, updatedAt, onRefresh }: { taskId: string; updatedAt: string; onRefresh: () => Promise<void> }): ReactElement | null {
+export function branchSyncStatus(sync: Exclude<ApiTaskBranchSync, { available: false }>, baseBranch: string): string {
+  return sync.conflictsWithBase ? `Conflicts with ${baseBranch}` : sync.behindBase > 0 ? `${sync.behindBase} commits behind ${baseBranch}` : `Up to date with ${baseBranch}`;
+}
+
+export function BranchSyncCard({ taskId, updatedAt, baseBranch, allowedCommands, busy, onRefresh, onAction }: { taskId: string; updatedAt: string; baseBranch: string; allowedCommands: ApiTask["allowedCommands"]; busy: boolean; onRefresh: () => Promise<void>; onAction: (path: TaskPlanAction) => Promise<void> }): ReactElement | null {
   const [sync, setSync] = useState<ApiTaskBranchSync | null>(null);
   const [error, setError] = useState("");
   const [pushing, setPushing] = useState(false);
@@ -78,8 +82,10 @@ function BranchSyncCard({ taskId, updatedAt, onRefresh }: { taskId: string; upda
     });
     return () => { ignore = true; };
   }, [taskId, updatedAt]);
-  if (!sync || "available" in sync) return null;
-  const status = !sync.remoteExists ? "Not on origin yet" : sync.ahead > 0 ? `${sync.ahead} commits to push` : "Up to date";
+  if (!sync) return null;
+  if ("available" in sync) return sync.reason ? <Card data-task-branch-sync size="sm"><CardHeader><CardTitle><h3>Branch</h3></CardTitle></CardHeader><CardContent><p className="text-xs text-muted-foreground">{sync.reason}</p></CardContent></Card> : null;
+  const status = branchSyncStatus(sync, baseBranch);
+  const pushStatus = !sync.remoteExists ? "Not on origin yet" : sync.ahead > 0 ? `${sync.ahead} commits to push` : null;
   const push = async (): Promise<void> => {
     setPushing(true); setError("");
     try {
@@ -95,10 +101,14 @@ function BranchSyncCard({ taskId, updatedAt, onRefresh }: { taskId: string; upda
     <CardHeader>
       <CardTitle><h3>Branch</h3></CardTitle>
       <CardDescription><code>{sync.branchName}</code></CardDescription>
-      <CardAction><Button size="sm" onClick={() => void push()} disabled={pushing || (sync.ahead === 0 && sync.remoteExists)}>{pushing ? "Pushing…" : "Push"}</Button></CardAction>
+      <CardAction><Button size="sm" onClick={() => void push()} disabled={busy || pushing || (sync.ahead === 0 && sync.remoteExists)}>{pushing ? "Pushing…" : "Push"}</Button></CardAction>
     </CardHeader>
     <CardContent>
-      <p className="text-xs text-muted-foreground">{status}{sync.behind > 0 ? ` · ${sync.behind} behind` : ""}</p>
+      <p className="text-xs text-muted-foreground">{status}{pushStatus ? ` · ${pushStatus}` : ""}</p>
+      <div className="mt-2 flex flex-wrap gap-1">
+        {sync.conflictsWithBase && allowedCommands.includes("resolve_merge_conflict") ? <Button size="xs" onClick={() => void onAction("resolve-merge-conflict")} disabled={busy}>Resolve conflicts</Button> : null}
+        {!sync.conflictsWithBase && sync.behindBase > 0 && allowedCommands.includes("retry_target_base_reconciliation") ? <Button size="xs" variant="outline" onClick={() => void onAction("retry-target-base-reconciliation")} disabled={busy}>Merge latest from {baseBranch}</Button> : null}
+      </div>
       {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     </CardContent>
   </Card>;
@@ -683,7 +693,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
             </div>
           </div>
           <aside data-task-properties className="border-border border-t bg-muted/20 px-4 py-6 sm:px-6 lg:sticky lg:top-0 lg:h-fit lg:border-t-0 lg:border-l">
-            <div className="mb-6 space-y-4">{pullRequestInMain ? null : <GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} />}<BranchSyncCard taskId={task.id} updatedAt={task.updatedAt} onRefresh={onRefresh} /><TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} agentInvocations={task.agentInvocations} activeCapacity={task.capacity?.status === "active" ? task.capacity : undefined} /></div>
+            <div className="mb-6 space-y-4">{pullRequestInMain ? null : <GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} />}<BranchSyncCard taskId={task.id} updatedAt={task.updatedAt} baseBranch={project?.baseBranch ?? "base"} allowedCommands={task.allowedCommands} busy={busy} onRefresh={onRefresh} onAction={(path) => onPlanAction(path)} /><TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} agentInvocations={task.agentInvocations} activeCapacity={task.capacity?.status === "active" ? task.capacity : undefined} /></div>
             <TaskAgentAssignments task={task} onRefresh={onRefresh} />
             <h3 className="mb-5 text-xs font-semibold">Properties</h3>
             <dl className="space-y-4 text-xs">

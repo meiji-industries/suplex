@@ -27,6 +27,8 @@ test("state parsing always offers cancellation outside terminal phases", () => {
 test("withWorktreeCommands offers safe worktree lifecycle commands", () => {
   const initial = state();
   expect(withWorktreeCommands({ ...initial, activeOperation: { commandId: "command_1", kind: "development", startedRevision: 10 } }, true).allowedCommands).not.toContain("delete_worktree");
+  expect(withWorktreeCommands({ ...initial, activeOperation: { commandId: "command_1", kind: "development", startedRevision: 10 } }, true).allowedCommands).not.toContain("retry_target_base_reconciliation");
+  expect(withWorktreeCommands(initial, true).allowedCommands).toContain("retry_target_base_reconciliation");
   expect(withWorktreeCommands({ ...initial, worktreeState: "cleaned" }, true).allowedCommands).toEqual(expect.arrayContaining(["recreate_worktree"]));
   expect(withWorktreeCommands({ ...initial, worktreeState: "cleaned" }, true).allowedCommands).not.toContain("delete_worktree");
   expect(withWorktreeCommands({ ...initial, phase: "done", worktreeState: "cleaned" }, true).allowedCommands).not.toContain("recreate_worktree");

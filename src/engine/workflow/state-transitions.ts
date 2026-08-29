@@ -49,12 +49,15 @@ export const worktreeCommandsPatch = "forge-worktree-commands-v1";
 export function withWorktreeCommands(state: IssueWorkflowState, patched: boolean): IssueWorkflowState {
   if (!patched) return state;
   const terminal = state.phase === "done" || state.phase === "cancelled" || state.phase === "failed";
-  const canDelete = state.activeOperation === null && state.worktreeState !== "cleaned" && (Boolean(state.worktreePath) || (terminal && Boolean(state.branchName)));
+  const noActiveOperation = state.activeOperation === null || state.activeOperation === undefined;
+  const canDelete = noActiveOperation && state.worktreeState !== "cleaned" && (Boolean(state.worktreePath) || (terminal && Boolean(state.branchName)));
   const canRecreate = !terminal && (state.worktreeState === "cleaned" || state.worktreeState === "removed_externally");
+  const canSyncBase = noActiveOperation && Boolean(state.branchName && state.developerExecutionId && state.targetBaseSha && state.resultCommit && state.resultTree);
   const allowedCommands = [
     ...state.allowedCommands,
     ...(canDelete && !state.allowedCommands.includes("delete_worktree") ? ["delete_worktree" as const] : []),
     ...(canRecreate && !state.allowedCommands.includes("recreate_worktree") ? ["recreate_worktree" as const] : []),
+    ...(canSyncBase && !state.allowedCommands.includes("retry_target_base_reconciliation") ? ["retry_target_base_reconciliation" as const] : []),
   ];
   return allowedCommands.length === state.allowedCommands.length ? state : IssueWorkflowStateSchema.parse({ ...state, allowedCommands });
 }

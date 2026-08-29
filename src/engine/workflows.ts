@@ -239,7 +239,12 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       const conflictResolutionEnabled = true;
       const pullRequestObservation = { exists: observed.exists, number: observed.number, state: observed.state, isDraft: observed.isDraft, headSha: observed.headSha, mergeable: conflictResolutionEnabled ? observed.mergeable : null, checks, reviewDecision: observed.reviewDecision, autoMergeEnabled: observed.autoMergeEnabled };
       const observationKey = pullRequestObservationKey(pullRequestObservation);
-      if (state.owner === "human" && state.githubPullRequestObservationKey === observationKey) return;
+      if (state.owner === "human" && state.githubPullRequestObservationKey === observationKey) {
+        const allowedCommands = observed.mergeable === "CONFLICTING" && !state.allowedCommands.includes("resolve_merge_conflict") ? [...state.allowedCommands, "resolve_merge_conflict" as const] : state.allowedCommands;
+        state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, allowedCommands, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        await projectIssueState(state);
+        return;
+      }
       const reconciliation = reconcile({ observed: pullRequestObservation, target, current: { phase: state.phase, owner: state.owner, pendingAction: state.pendingAction, ...(state.pullRequestNumber !== undefined ? { pullRequestNumber: state.pullRequestNumber } : {}), ...(state.expectedHeadSha !== undefined ? { observedHeadSha: state.expectedHeadSha } : {}), ...(state.autoMergeAvailable !== undefined ? { autoMergeAvailable: state.autoMergeAvailable } : {}), ...(state.githubPullRequestObservationKey !== undefined ? { adoptedObservationKey: state.githubPullRequestObservationKey } : {}) } });
       if (reconciliation.unchanged) return;
       const revision = state.revision + 1;

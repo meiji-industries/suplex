@@ -87,6 +87,9 @@ export interface BranchSync {
   remoteExists: boolean;
   ahead: number;
   behind: number;
+  aheadOfBase: number;
+  behindBase: number;
+  conflictsWithBase: boolean;
   headSha: string;
 }
 
@@ -412,19 +415,31 @@ export class WorktreeManager {
     }
   }
 
-  async inspectSync(worktreePath: string, branchName: string): Promise<BranchSync> {
-    if (!branchPattern.test(branchName)) throw new WorktreeFailure("unsafe-branch", "Task branch is unsafe");
+  async inspectSync(worktreePath: string, branchName: string, baseBranch: string, observedConflict?: boolean): Promise<BranchSync> {
+    if (!branchPattern.test(branchName) || !branchPattern.test(baseBranch)) throw new WorktreeFailure("unsafe-branch", "Task branch is unsafe");
     const canonical = await canonicalDirectory(worktreePath, "worktree-unavailable");
     const headSha = await this.git.run(["rev-parse", "HEAD"], canonical);
     const remoteRef = `refs/remotes/origin/${branchName}`;
+    const baseRef = `refs/remotes/origin/${baseBranch}`;
+    await this.git.run(["fetch", "--no-tags", "origin", `refs/heads/${baseBranch}:${baseRef}`], canonical).catch(() => {});
+    const baseCounts = await this.git.run(["rev-list", "--left-right", "--count", `${baseRef}...${branchName}`], canonical)
+      .then((counts) => counts.split(/\s+/).map(Number))
+      .catch(() => [0, 0]);
+    const [behindBase = 0, aheadOfBase = 0] = baseCounts;
+    const conflictsWithBase = observedConflict ?? await this.git.run(["merge-tree", "--write-tree", baseRef, branchName], canonical)
+      .then(() => false)
+      .catch((error: unknown) => {
+        if (error && typeof error === "object" && "code" in error && error.code === 1) return true;
+        throw error;
+      });
     try {
       await this.git.run(["fetch", "--no-tags", "origin", `+refs/heads/${branchName}:${remoteRef}`], canonical);
     } catch {
       const ahead = await this.git.run(["rev-list", "--count", branchName, "^refs/remotes/origin/HEAD"], canonical).then(Number).catch(() => 0);
-      return { remoteExists: false, ahead, behind: 0, headSha };
+      return { remoteExists: false, ahead, behind: 0, aheadOfBase, behindBase, conflictsWithBase, headSha };
     }
     const [behind = 0, ahead = 0] = (await this.git.run(["rev-list", "--left-right", "--count", `${remoteRef}...${branchName}`], canonical)).split(/\s+/).map(Number);
-    return { remoteExists: true, ahead, behind, headSha };
+    return { remoteExists: true, ahead, behind, aheadOfBase, behindBase, conflictsWithBase, headSha };
   }
 
   async push(worktreePath: string, branchName: string, claims?: { database: ForgeDatabase; taskId: string }): Promise<void> {

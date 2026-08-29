@@ -93,12 +93,15 @@ function legacyDeliveryTarget(mode: "draft" | "ready" | "auto_merge"): DeliveryT
   return mode === "ready" ? "pull_request_ready" : mode === "auto_merge" ? "merged" : "pull_request_draft";
 }
 
-export type TaskBranchSync = { available: false } | {
+export type TaskBranchSync = { available: false; reason?: string } | {
   branchName: string;
   worktreePath: string;
   remoteExists: boolean;
   ahead: number;
   behind: number;
+  aheadOfBase: number;
+  behindBase: number;
+  conflictsWithBase: boolean;
   headSha: string;
 };
 
@@ -1055,8 +1058,9 @@ export class TaskService {
     const context = this.taskBranchContext(actorUserId, taskId);
     if (!context) return { available: false };
     try {
-      return { branchName: context.branchName, worktreePath: context.worktreePath, ...await new WorktreeManager().inspectSync(context.worktreePath, context.branchName) };
+      return { branchName: context.branchName, worktreePath: context.worktreePath, ...await new WorktreeManager().inspectSync(context.worktreePath, context.branchName, context.baseBranch, context.conflictsWithBase) };
     } catch (error) {
+      if (error instanceof WorktreeFailure && error.code === "worktree-unavailable") return { available: false, reason: "Worktree missing" };
       if (error instanceof WorktreeFailure) throw new TaskFailure(error.message, [finding(error.code, "developerExecution", error.message)], 409);
       throw error;
     }
@@ -1074,10 +1078,12 @@ export class TaskService {
     return this.getBranchSync(actorUserId, taskId);
   }
 
-  private taskBranchContext(actorUserId: string, taskId: string): { branchName: string; worktreePath: string } | undefined {
+  private taskBranchContext(actorUserId: string, taskId: string): { branchName: string; worktreePath: string; baseBranch: string; conflictsWithBase?: boolean } | undefined {
     const task = this.getTask(actorUserId, taskId);
     const execution = this.database.authQuery((db) => db.prepare("SELECT branch_name AS branchName, worktree_path AS worktreePath FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND worktree_path IS NOT NULL ORDER BY attempt DESC, started_at DESC LIMIT 1").get(task.id, task.companyId) as { branchName: string; worktreePath: string } | undefined);
-    return execution;
+    if (!execution) return undefined;
+    const project = this.projects.getProject(actorUserId, task.projectId);
+    return { ...execution, baseBranch: project.baseBranch, ...(task.githubPullRequest?.exists ? { conflictsWithBase: task.githubPullRequest.mergeable === "CONFLICTING" } : {}) };
   }
 
   async createTask(actorUserId: string, companyId: string, input: TaskInput): Promise<{ task: ForgeTask; created: boolean }> {

@@ -88,9 +88,9 @@ test("inspects local branch sync and pushes it to origin", async () => {
     await git(["add", "SYNC.md"], value.repositoryPath);
     await git(["commit", "-m", "local sync"], value.repositoryPath);
     const manager = new WorktreeManager();
-    await expect(manager.inspectSync(value.repositoryPath, branchName)).resolves.toMatchObject({ remoteExists: false, ahead: 1, behind: 0, headSha: await git(["rev-parse", "HEAD"], value.repositoryPath) });
+    await expect(manager.inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ remoteExists: false, ahead: 1, behind: 0, aheadOfBase: 1, behindBase: 0, conflictsWithBase: false, headSha: await git(["rev-parse", "HEAD"], value.repositoryPath) });
     await manager.push(value.repositoryPath, branchName);
-    await expect(manager.inspectSync(value.repositoryPath, branchName)).resolves.toMatchObject({ remoteExists: true, ahead: 0, behind: 0 });
+    await expect(manager.inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ remoteExists: true, ahead: 0, behind: 0, aheadOfBase: 1, behindBase: 0, conflictsWithBase: false });
     const peer = join(value.root, "peer");
     await git(["clone", value.remotePath, peer], value.root);
     await git(["config", "user.name", "Forge Test"], peer);
@@ -100,7 +100,26 @@ test("inspects local branch sync and pushes it to origin", async () => {
     await git(["add", "REMOTE.md"], peer);
     await git(["commit", "-m", "remote sync"], peer);
     await git(["push", "origin", branchName], peer);
-    await expect(manager.inspectSync(value.repositoryPath, branchName)).resolves.toMatchObject({ remoteExists: true, ahead: 0, behind: 1 });
+    await expect(manager.inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ remoteExists: true, ahead: 0, behind: 1, aheadOfBase: 1, behindBase: 0, conflictsWithBase: false });
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("reports base drift and dry-run merge conflicts", async () => {
+  const value = await remoteFixture();
+  const branchName = "feat/conflict";
+  try {
+    await git(["switch", "-c", branchName], value.repositoryPath);
+    await writeFile(join(value.repositoryPath, "README.md"), "branch\n");
+    await git(["commit", "-am", "branch change"], value.repositoryPath);
+    await git(["push", "-u", "origin", branchName], value.repositoryPath);
+    const peer = join(value.root, "peer");
+    await git(["clone", value.remotePath, peer], value.root);
+    await git(["config", "user.name", "Forge Test"], peer);
+    await git(["config", "user.email", "forge-test@example.invalid"], peer);
+    await writeFile(join(peer, "README.md"), "base\n");
+    await git(["commit", "-am", "base change"], peer);
+    await git(["push", "origin", "main"], peer);
+    await expect(new WorktreeManager().inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ aheadOfBase: 1, behindBase: 1, conflictsWithBase: true });
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
 test("assigns Cargo task worktrees a mode-0700 shared per-project target directory", async () => {

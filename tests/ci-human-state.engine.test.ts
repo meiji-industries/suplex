@@ -39,6 +39,6 @@ test("repeated unchanged PR syncs retain a human CI decision", async () => {
     await signalIssueGithubPullRequestSync(h.config, started.workflowId);
     await h.settle(started.workflowId, () => observations === 2);
 
-    expect(await queryIssueWorkflow(h.config, started.workflowId)).toMatchObject({ phase: "ci_repair_required", owner: "human", revision: 20, pendingAction: "Required check failed: Test suite" });
+    expect(await queryIssueWorkflow(h.config, started.workflowId)).toMatchObject({ phase: "ci_repair_required", owner: "human", revision: 21, pendingAction: "Required check failed: Test suite", githubPullRequestMergeable: "MERGEABLE", githubPullRequestChecks: { total: 1, pending: 0, failing: 1, successful: 0 }, expectedHeadSha: head });
   } finally { await h.stop(); }
 });

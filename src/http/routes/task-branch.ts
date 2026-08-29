@@ -22,7 +22,7 @@ const taskBranch: FastifyPluginAsync<TaskBranchRoutesOptions> = async (app, opti
         const taskId = taskIds[next++];
         if (!taskId) continue;
         const status = await options.tasks.getBranchSync(request.forgeUser.id, taskId);
-        if (!("available" in status)) sync[taskId] = { ahead: status.ahead, behind: status.behind, remoteExists: status.remoteExists };
+        if (!("available" in status)) sync[taskId] = { ahead: status.ahead, behind: status.behind, aheadOfBase: status.aheadOfBase, behindBase: status.behindBase, conflictsWithBase: status.conflictsWithBase, remoteExists: status.remoteExists };
       }
     }));
     return reply.header("Cache-Control", "private, no-store").send(sync);

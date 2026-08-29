@@ -25,8 +25,8 @@ export type RunCommandInput = {
   /** Null is a worker-level observation: emit a structured log but no task activity row. */
   taskId: string | null;
   stepId: string | null;
-  /** Non-zero exit is an expected answer (probe); log at debug instead of error. */
-  expectNonZero?: boolean;
+  /** Non-zero exit is an expected answer (probe); log at debug instead of error. A matcher keeps unexpected probe failures visible. */
+  expectNonZero?: boolean | ((result: CommandRunResult) => boolean);
   command: string;
   args: readonly string[];
   cwd?: string;
@@ -102,7 +102,8 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
     const stderrTail = tail(result.stderr).trim().split("\n").slice(-3).join("\n");
     const message = `Command failed: ${result.command} (exit ${result.exitCode ?? "signal"}${result.timedOut ? ", timed out" : ""})`;
     const details = { ...context, ...(stderrTail ? { error: stderrTail } : {}) };
-    if (input.expectNonZero) logger.debug(message, details);
+    const expectedNonZero = typeof input.expectNonZero === "function" ? input.expectNonZero(result) : input.expectNonZero;
+    if (expectedNonZero) logger.debug(message, details);
     else logger.error(message, input.taskId ? { taskId: input.taskId } : {}, details);
   }
   return result;

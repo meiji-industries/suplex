@@ -6,15 +6,21 @@ type ExecFileRunner = (
   args: readonly string[],
   options: {
     maxBuffer: number;
+    expectNonZero?: (result: import("./command-runner.js").CommandRunResult) => boolean;
   },
 ) => Promise<{
   stdout: string;
   stderr?: string;
 }>;
-const execute: ExecFileRunner = async (file, args) => {
+const missingResourceResult = (result: import("./command-runner.js").CommandRunResult): boolean => {
+  const output = `${result.stdout} ${result.stderr}`;
+  return [...missing].some((code) => output.includes(`"code":"${code}"`));
+};
+const execute: ExecFileRunner = async (file, args, options) => {
   const result = await runCommand({
     taskId: null,
     stepId: null,
+    ...(options.expectNonZero ? { expectNonZero: options.expectNonZero } : {}),
     command: file,
     args,
   });
@@ -204,16 +210,18 @@ export class CliHerdrClient implements HerdrClient {
     private readonly binary = "herdr",
     private readonly runner: ExecFileRunner = execute,
   ) {}
-  private async call(args: string[]): Promise<Json> {
-    return this.callAllowingEmpty(args, false) as Promise<Json>;
+  private async call(args: string[], expectMissing = false): Promise<Json> {
+    return this.callAllowingEmpty(args, false, expectMissing) as Promise<Json>;
   }
   private async callAllowingEmpty(
     args: string[],
     allowingEmpty = true,
+    expectMissing = false,
   ): Promise<Json | undefined> {
     try {
       const { stdout } = await this.runner(this.binary, args, {
         maxBuffer: 1024 * 1024,
+        ...(expectMissing ? { expectNonZero: missingResourceResult } : {}),
       });
       if (allowingEmpty && !stdout.trim()) return undefined;
       const parsed = json(stdout, undefined);
@@ -328,7 +336,7 @@ export class CliHerdrClient implements HerdrClient {
     return this.optional(async () =>
       workspace(
         value<Json>(
-          await this.call(["workspace", "get", idValue]),
+          await this.call(["workspace", "get", idValue], true),
           "workspace",
         ),
       ),
@@ -373,7 +381,7 @@ export class CliHerdrClient implements HerdrClient {
   }
   async getTab(idValue: string): Promise<Tab | null> {
     return this.optional(async () =>
-      tab(value<Json>(await this.call(["tab", "get", idValue]), "tab")),
+      tab(value<Json>(await this.call(["tab", "get", idValue], true), "tab")),
     );
   }
   renameTab(idValue: string, label: string): Promise<void> {
@@ -390,7 +398,7 @@ export class CliHerdrClient implements HerdrClient {
   }
   async getPane(idValue: string): Promise<Pane | null> {
     return this.optional(async () =>
-      pane(value<Json>(await this.call(["pane", "get", idValue]), "pane")),
+      pane(value<Json>(await this.call(["pane", "get", idValue], true), "pane")),
     );
   }
   async splitPane(input: {
@@ -450,7 +458,7 @@ export class CliHerdrClient implements HerdrClient {
   }
   async getAgent(name: string): Promise<HerdrAgent | null> {
     return this.optional(async () =>
-      agent(value<Json>(await this.call(["agent", "get", name]), "agent")),
+      agent(value<Json>(await this.call(["agent", "get", name], true), "agent")),
     );
   }
   async readAgent(name: string): Promise<string> {

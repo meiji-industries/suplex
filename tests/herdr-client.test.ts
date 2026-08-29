@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 
 import { CliHerdrClient, HerdrFailure } from "../src/herdr-client.js";
+import type { CommandRunResult } from "../src/command-runner.js";
 
 test("client validates JSON envelopes and passes unambiguous argv", async () => {
   const argv: string[][] = [];
@@ -48,6 +49,20 @@ test("client treats an inactive named agent as missing", async () => {
   });
 
   await expect(client.getAgent("sampler-9-developer")).resolves.toBeNull();
+});
+
+test("client marks only missing-resource lookups as expected non-zero probes", async () => {
+  const options: Array<{ expectNonZero?: (result: CommandRunResult) => boolean }> = [];
+  const client = new CliHerdrClient("herdr", async (_file, _args, runOptions) => {
+    options.push(runOptions);
+    throw { code: 1, stderr: '{"error":{"code":"agent_not_found"}}' };
+  });
+
+  await expect(client.getAgent("missing-agent")).resolves.toBeNull();
+  const matcher = options[0]?.expectNonZero;
+  expect(matcher).toBeTypeOf("function");
+  expect(matcher?.({ stdout: "", stderr: '{"error":{"code":"agent_not_found"}}' } as never)).toBe(true);
+  expect(matcher?.({ stdout: "", stderr: '{"error":{"code":"permission_denied"}}' } as never)).toBe(false);
 });
 
 test("client preserves non-missing Herdr error details", async () => {

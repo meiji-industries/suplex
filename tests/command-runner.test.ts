@@ -31,6 +31,12 @@ test("logs expected non-zero commands at debug", async () => {
   expect(records()).not.toContainEqual(expect.objectContaining({ level: 50 }));
 });
 
+test("keeps unexpected probe failures at error level", async () => {
+  await runCommand({ taskId: null, stepId: null, expectNonZero: (result) => result.stderr.includes("not found"), command: "sh", args: ["-c", "echo permission-denied >&2; exit 3"] });
+
+  expect(records()).toEqual([expect.objectContaining({ level: 50, error: "permission-denied" })]);
+});
+
 test("logs completed commands at info", async () => {
   await runCommand({ taskId: null, stepId: null, command: "sh", args: ["-c", "exit 0"] });
 

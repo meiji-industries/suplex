@@ -67,3 +67,15 @@ test("counts transient GitHub observation errors and continues", async () => {
 
   expect(result).toMatchObject({ inspected: 1, signalled: 0, errors: 1, outcomes: [] });
 });
+
+test("a merged pull request is adopted into the projection when the workflow cannot take the command", async () => {
+  const rows = [{ taskId: "merge", phase: "manual_merge", stateJson: JSON.stringify(state("manual_merge", ["reconcile_merge"])) }];
+  const projectIssueState = vi.fn();
+  const db = { ...database(rows), projectIssueState };
+  const execute = vi.fn<(...args: any[]) => Promise<any>>(async () => { throw new Error("workflow execution already completed"); });
+  const result = await reconcileGithubObservations(db as never, {} as never, { observe: async () => observed({ state: "merged" }), execute: execute as never });
+  expect(result.errors).toBe(0);
+  expect(result.signalled).toBe(1);
+  expect(projectIssueState).toHaveBeenCalledTimes(1);
+  expect(projectIssueState.mock.calls[0]![0]).toMatchObject({ taskId: "merge", phase: "done", pendingAction: "Merged", revision: 4 });
+});

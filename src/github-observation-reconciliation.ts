@@ -36,6 +36,13 @@ function remoteConflict(database: ForgeDatabase, result: Extract<RemoteIntegrati
   return { ...result, ...row };
 }
 
+/** Projects a task as done because its pull request merged on GitHub and the workflow cannot process the observation. */
+function adoptMergedPullRequest(database: ForgeDatabase, candidate: Candidate): void {
+  const revision = candidate.revision + 1;
+  const state = { ...candidate.state, revision, phase: "done" as const, owner: "human" as const, allowedCommands: [], pendingAction: "Merged", blocker: null, mergeOutcome: "merged" as const, githubPullRequestState: "merged" as const, lastEventId: `${candidate.workflowId}:${revision}`, stateChangedAt: new Date().toISOString() };
+  database.projectIssueState({ taskId: candidate.taskId, companyId: candidate.companyId, projectId: candidate.state.projectId, workflowId: candidate.workflowId, revision, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Merged", lastEventId: state.lastEventId, state });
+}
+
 const IGNORED_PHASES = new Set(["backlog", "planning", "development", "reviewing_delivery", "repair_required", "done", "cancelled"]);
 
 function candidates(database: ForgeDatabase, taskId?: string): Candidate[] {
@@ -93,14 +100,22 @@ export async function reconcileGithubObservations(database: ForgeDatabase, confi
         if (result.kind === "skipped_active_turn") { skipped += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: null, commandId: null, deduplicated: false, integration }); continue; }
       }
       const command = integration === "conflict" ? "integrate_remote_conflict" : commandFor(candidate, observation);
+      // A merge on GitHub is terminal truth. When the workflow cannot take the command (wrong phase, or the
+      // Temporal run is closed), adopt the merge into the projection directly instead of leaving the task stale.
+      if (observation === "merged" && !command) { adoptMergedPullRequest(database, candidate); signalled += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: "adopt_merged", commandId: null, deduplicated: false }); continue; }
       if (!command) { skipped += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: null, commandId: null, deduplicated: false, ...(integration ? { integration } : {}) }); continue; }
       const input = conflict
         ? durableCommand(candidate.workflowId, "integrate-remote-conflict", { expectedRevision: candidate.revision, actorUserId: "github-reconciler", forwardMergeId: conflict.forwardMergeId, priorHead: conflict.priorHead, priorTree: conflict.priorTree, remoteHead: conflict.remoteHead, conflictArtifact: { id: conflict.conflictArtifactId, kind: "forward-merge-conflict" as const }, conflictFileCount: conflict.conflictFileCount })
         : durableCommand(candidate.workflowId, command, { expectedRevision: candidate.revision, actorUserId: "github-reconciler", headSha: observed.headSha, observation });
       const deduplicated = candidate.state.processedCommandIds?.includes(input.commandId) ?? false;
       if (!deduplicated) {
-        if (command === "integrate_remote_conflict" && !options.execute) await executeRemoteConflict(config, candidate.workflowId, input as Parameters<typeof executeRemoteConflict>[2]);
-        else await execute(config, candidate.workflowId, command, input);
+        try {
+          if (command === "integrate_remote_conflict" && !options.execute) await executeRemoteConflict(config, candidate.workflowId, input as Parameters<typeof executeRemoteConflict>[2]);
+          else await execute(config, candidate.workflowId, command, input);
+        } catch (error) {
+          if (observation !== "merged") throw error;
+          adoptMergedPullRequest(database, candidate);
+        }
         signalled += 1;
       }
       else skipped += 1;

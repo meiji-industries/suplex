@@ -56,7 +56,8 @@ export class IssueRun {
     private readonly caller: ActivityCaller,
     private readonly clock: EngineClock = realClock,
   ) {
-    this.initialState = IssueWorkflowStateSchema.parse(input.continuationState ?? buildInitialIssueWorkflowState(input));
+    // A continuation snapshot is a partial state: layer it over the initial state as the workflow always did.
+    this.initialState = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState(input), activeOperation: null, processedCommandIds: [], ...(input.continuationState ?? {}) });
   }
 
   get workflowId(): string { return this.input.workflowId; }
@@ -76,6 +77,7 @@ export class IssueRun {
       queries: this.queries,
       activity: (name: string, args: unknown[], options: Parameters<ActivityCaller["call"]>[2]) => this.caller.call(name, args, options, this.controller.signal, this.workflowId),
       wait: (milliseconds: number) => this.wakeable.wait(milliseconds, this.controller.signal, this.clock),
+      now: () => this.clock.now(),
       wake: () => this.wakeable.wake(),
     };
     this.workflowPromise = runExecution.run(context, () => issueWorkflow(this.input));

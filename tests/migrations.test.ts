@@ -177,12 +177,7 @@ describe("timestamp migrations", () => {
 
       database.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, codex_session_id, agent_name, pane_id, rollout_path, launch_fingerprint, guard_directory, status, last_agent_status, attention_excerpt, attention_activated_at, ensure_token, ensure_expires_at, created_at, updated_at, last_seen_at) VALUES ('session', 'task', 'lead', 1, 1, 'codex', 'codex-session', 'lead-agent', 'pane-1', 'rollout.jsonl', 'fingerprint', '/worktree', 'blocked', 'waiting', 'Needs approval', '2026-08-28T00:00:00.000Z', 'token', '2026-08-29T00:00:00.000Z', '2026-08-27T00:00:00.000Z', '2026-08-28T00:00:00.000Z', '2026-08-28T01:00:00.000Z')").run();
 
-      database.transaction(() => {
-        for (const statement of readFileSync(`${folder}/${openrouterMigration.tag}.sql`, "utf8").split("--> statement-breakpoint")) {
-          if (statement.trim()) database.exec(statement);
-        }
-        insert.run(openrouterMigration.hash, openrouterMigration.createdAt);
-      })();
+      applyMigrations(database, folder);
 
       expect(database.prepare("SELECT provider_kind, codex_session_id, agent_name, pane_id, rollout_path, launch_fingerprint, guard_directory, status, last_agent_status, attention_excerpt, attention_activated_at, ensure_token, ensure_expires_at, created_at, updated_at, last_seen_at FROM forge_herdr_role_sessions WHERE id = 'session'").get()).toEqual({ provider_kind: "codex", codex_session_id: "codex-session", agent_name: "lead-agent", pane_id: "pane-1", rollout_path: "rollout.jsonl", launch_fingerprint: "fingerprint", guard_directory: "/worktree", status: "blocked", last_agent_status: "waiting", attention_excerpt: "Needs approval", attention_activated_at: "2026-08-28T00:00:00.000Z", ensure_token: "token", ensure_expires_at: "2026-08-29T00:00:00.000Z", created_at: "2026-08-27T00:00:00.000Z", updated_at: "2026-08-28T00:00:00.000Z", last_seen_at: "2026-08-28T01:00:00.000Z" });
     } finally {

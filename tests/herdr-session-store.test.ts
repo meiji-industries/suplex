@@ -28,6 +28,8 @@ test("developer pane replacement clears secrets and preserves terminal and local
     env: {
       PATH: "/mise/shims:/usr/bin",
       HOME: "/home/forge",
+      HERDR_SOCKET_PATH: "/tmp/herdr.sock",
+      HERDR_PANE_ID: "pane-1",
       SECRET: "never",
       MISE_TRUSTED_CONFIG_PATHS: "/repo",
     },
@@ -41,6 +43,8 @@ test("developer pane replacement clears secrets and preserves terminal and local
   expect(command).toContain("TERM='xterm-256color'");
   expect(command).toContain("/bin/sh -c");
   expect(command).not.toContain("SECRET");
+  expect(command).toContain("HERDR_SOCKET_PATH='/tmp/herdr.sock'");
+  expect(command).toContain("HERDR_PANE_ID='pane-1'");
 });
 
 test("OpenRouter developer preparation sources the secret file without writing its value", () => {

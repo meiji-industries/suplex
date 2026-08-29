@@ -92,12 +92,15 @@ export class HerdrTurnRunner {
           const start = await this.offset(session.rolloutPath);
           this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', updated_at = ? WHERE turn_id = ?", start, start, iso(), turnId);
           let promptInArgv = session.launched && session.provider === "openrouter";
+          let identityResolved = false;
           let baseline = await this.rolloutVersion(session.rolloutPath);
           let submitted = promptInArgv ? session.live : await this.herdr.prompt(session.agentName, prompt);
           this.update("UPDATE forge_herdr_turns SET status = 'waiting', updated_at = ? WHERE turn_id = ?", iso(), turnId);
           if (input.signal?.aborted) throw new AgentFailure("cancelled", "The interactive agent turn was cancelled.", { nonRetryable: true });
-          if (!(await this.waitForPromptAcceptance(session, baseline, submitted.status))) {
-            if (promptInArgv) throw new AgentFailure("prompt-not-accepted", "Interactive agent did not start a turn after the prompt was submitted", { nonRetryable: true });
+          if (promptInArgv && !session.codexSessionId) {
+            session = await this.relocateTranscript(await this.resolveIdentity(session, input, turnId, candidates), input, turnId);
+            identityResolved = true;
+          } else if (!(await this.waitForPromptAcceptance(session, baseline, submitted.status))) {
             baseline = await this.rolloutVersion(session.rolloutPath);
             submitted = await this.herdr.prompt(session.agentName, prompt);
             if (!(await this.waitForPromptAcceptance(session, baseline, submitted.status))) {
@@ -107,11 +110,16 @@ export class HerdrTurnRunner {
               promptInArgv = session.launched && session.provider === "openrouter";
               baseline = await this.rolloutVersion(session.rolloutPath);
               submitted = promptInArgv ? session.live : await this.herdr.prompt(session.agentName, prompt);
-              if (!(await this.waitForPromptAcceptance(session, baseline, submitted.status)))
+              if (promptInArgv) {
+                session = await this.relocateTranscript(await this.resolveIdentity(session, input, turnId, candidates), input, turnId);
+                identityResolved = true;
+              } else if (!(await this.waitForPromptAcceptance(session, baseline, submitted.status))) {
                 throw new AgentFailure("prompt-not-accepted", "Interactive agent did not start a turn after the prompt was submitted", { nonRetryable: true });
+              }
             }
           }
-          session = await this.relocateTranscript(await this.resolveIdentity(session, input, turnId, candidates), input, turnId);
+          if (!identityResolved)
+            session = await this.relocateTranscript(await this.resolveIdentity(session, input, turnId, candidates), input, turnId);
           const promptSentAt = this.now().toISOString();
           this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", promptSentAt, promptSentAt, turnId);
         }
@@ -148,6 +156,7 @@ export class HerdrTurnRunner {
     let idlePolls = 0;
     let stalledAt: number | undefined;
     let rolloutVersion: string | undefined;
+    let rolloutStaticAt: number | undefined;
     let resends = 0;
     let executionActive = true;
     for (;;) {
@@ -173,6 +182,7 @@ export class HerdrTurnRunner {
         const nextRolloutVersion = await this.rolloutVersion(session.rolloutPath);
         if (drained.events.length > 0 || !nextRolloutVersion || nextRolloutVersion !== rolloutVersion) {
           stalledAt = undefined;
+          rolloutStaticAt = this.now().getTime();
         } else {
           stalledAt ??= this.now().getTime();
           if (this.now().getTime() - stalledAt >= this.config.turnStallTimeoutMs) throw new AgentFailure("turn_stalled", "Agent remained working without producing progress");
@@ -189,23 +199,41 @@ export class HerdrTurnRunner {
       if (stable) return { ...completion, session };
       if (live.status === "idle" || live.status === "done") {
         if (!completion.marker) {
+          const now = this.now().getTime();
+          const nextRolloutVersion = await this.rolloutVersion(session.rolloutPath);
+          const rolloutChanged = rolloutVersion !== undefined && nextRolloutVersion !== rolloutVersion;
+          rolloutVersion = nextRolloutVersion;
+          if (rolloutChanged || rolloutStaticAt === undefined) rolloutStaticAt = now;
           const resendAfter = [15_000, 30_000, 60_000][resends];
           const sentAt = Date.parse(this.promptSentAt(turnId) ?? "");
-          if (resends < 3 && (!Number.isFinite(sentAt) || this.now().getTime() - sentAt >= resendAfter!)) {
+          if (
+            resends < 3 &&
+            !rolloutChanged &&
+            now - rolloutStaticAt >= resendAfter! &&
+            (!Number.isFinite(sentAt) || now - sentAt >= resendAfter!)
+          ) {
             await this.herdr.prompt(session.agentName, prompt);
-            const now = this.now().toISOString();
-            this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", now, now, turnId);
+            const sentAt = this.now().toISOString();
+            this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", sentAt, sentAt, turnId);
+            rolloutVersion = await this.rolloutVersion(session.rolloutPath);
+            rolloutStaticAt = this.now().getTime();
             resends += 1;
-          } else if (!recycled && session.provider === "openrouter") {
+          } else if (resends >= 3 && !recycled && session.provider === "openrouter") {
             session = await this.recycleRejectedSession(input, prompt, resultPath, turnId);
             recycled = true;
             const baseline = await this.rolloutVersion(session.rolloutPath);
-            const submitted = session.launched ? session.live : await this.herdr.prompt(session.agentName, prompt);
-            if (!(await this.waitForPromptAcceptance(session, baseline, submitted.status)))
+            const promptInArgv = session.launched && session.provider === "openrouter";
+            const submitted = promptInArgv ? session.live : await this.herdr.prompt(session.agentName, prompt);
+            if (promptInArgv && !session.codexSessionId) {
+              session = await this.relocateTranscript(await this.resolveIdentity(session, input, turnId), input, turnId);
+            } else if (!(await this.waitForPromptAcceptance(session, baseline, submitted.status))) {
               throw new AgentFailure("prompt-not-accepted", "Interactive agent did not start a turn after the prompt was submitted", { nonRetryable: true });
-            session = await this.relocateTranscript(await this.resolveIdentity(session, input, turnId), input, turnId);
-            const now = this.now().toISOString();
-            this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", now, now, turnId);
+            }
+            session = await this.relocateTranscript(session, input, turnId);
+            const sentAt = this.now().toISOString();
+            this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", sentAt, sentAt, turnId);
+            rolloutVersion = await this.rolloutVersion(session.rolloutPath);
+            rolloutStaticAt = this.now().getTime();
             resends = 0;
           } else if (resends >= 3) {
             await this.updateAttention(session, turnId, "awaiting_human", "Prompt was not accepted by the agent after 4 attempts");
@@ -260,6 +288,7 @@ export class HerdrTurnRunner {
         idlePolls = 0;
         stalledAt = undefined;
         rolloutVersion = undefined;
+        rolloutStaticAt = undefined;
       }
       await this.sleep(1_000);
     }

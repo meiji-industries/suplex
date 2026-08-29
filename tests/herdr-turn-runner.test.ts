@@ -133,20 +133,32 @@ test("converts non-retryable Herdr session failures at the turn boundary", async
     await expect(runner.run(setup.input)).rejects.toEqual(expect.objectContaining<Partial<AgentFailure>>({ code: "guard_invalid", nonRetryable: true }));
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
-test("passes a fresh omp prompt at launch without separately prompting", async () => {
+test("accepts a fresh argv prompt when its OMP transcript appears while Herdr stays idle", async () => {
   const setup = await fixture();
-  setup.session = { ...setup.session, provider: "openrouter", codexSessionId: "omp-session", launched: true };
+  const ompHome = join(setup.root, "omp");
+  const previousOmpHome = process.env.OMP_HOME;
+  setup.session = {
+    ...setup.session,
+    provider: "openrouter",
+    codexSessionId: null,
+    rolloutPath: undefined,
+    launched: true,
+    live: { name: "lead", paneId: "pane", status: "idle" },
+  };
   setup.input = { ...setup.input, profile: { ...setup.input.profile, provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } };
+  setup.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET provider_kind = 'openrouter', codex_session_id = NULL, rollout_path = NULL WHERE id = 'session'").run());
+  process.env.OMP_HOME = ompHome;
   let initialPrompt: { path: string; content: string } | undefined;
   let getCalls = 0;
   const herdr = {
-    prompt: async () => { throw new Error("omp prompt must be passed at launch"); },
+    prompt: async () => { throw new Error("fresh argv prompts must not be resent"); },
     getAgent: async () => {
       getCalls += 1;
       const prompt = initialPrompt!;
+      const transcriptPath = join(ompHome, "agent", "sessions", "project", "session.jsonl");
       if (getCalls === 1) {
-        await mkdir(dirname(resultPath(prompt.content)), { recursive: true });
-        await appendFile(setup.session.rolloutPath!, `${JSON.stringify({ type: "message", id: "omp-turn", timestamp: "2026-08-28T12:00:00.000Z", role: "user", message: { content: [{ type: "text", text: marker(prompt.content) }] } })}\n${JSON.stringify({ type: "message", timestamp: "2026-08-28T12:00:01.000Z", role: "assistant", stopReason: "stop", message: { content: [{ type: "text", text: "done" }] } })}\n`);
+        await mkdir(dirname(transcriptPath), { recursive: true });
+        await writeFile(transcriptPath, `${JSON.stringify({ type: "session", id: "omp-session", cwd: setup.input.task.worktreePath })}\n${JSON.stringify({ type: "message", id: "omp-turn", timestamp: "2026-08-28T12:00:00.000Z", role: "user", message: { content: [{ type: "text", text: marker(prompt.content) }] } })}\n${JSON.stringify({ type: "message", timestamp: "2026-08-28T12:00:01.000Z", role: "assistant", stopReason: "stop", message: { content: [{ type: "text", text: "done" }] } })}\n`);
       } else if (getCalls === 2) {
         await writeFile(resultPath(prompt.content), JSON.stringify({ status: "ok" }));
       }
@@ -161,9 +173,14 @@ test("passes a fresh omp prompt at launch without separately prompting", async (
   };
   const runner = new HerdrTurnRunner(setup.database, herdr as never, sessions as never, new IssueTimelineEvents(setup.database));
   try {
-    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
+    await expect(runner.run(setup.input)).resolves.toMatchObject({ sessionId: "omp-session", result: { status: "ok" } });
     expect(initialPrompt).toMatchObject({ path: expect.stringMatching(/\.forge$/), content: expect.stringMatching(/^\[forge-turn:/) });
-  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+  } finally {
+    if (previousOmpHome === undefined) delete process.env.OMP_HOME;
+    else process.env.OMP_HOME = previousOmpHome;
+    setup.database.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
 });
 
 test("recycles a rejected existing omp session and starts its prompt from argv", async () => {
@@ -222,9 +239,9 @@ test("recycles a rejected existing omp session and starts its prompt from argv",
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("reports prompt-not-accepted when the recycled argv launch also stays idle", async () => {
+test("reports prompt-not-accepted when a recycled session stays idle", async () => {
   const setup = await fixture();
-  const replacement = { ...setup.session, id: "replacement", provider: "openrouter" as const, agentName: "replacement", launched: true, live: { ...setup.session.live, name: "replacement", status: "idle" } };
+  const replacement = { ...setup.session, id: "replacement", provider: "openrouter" as const, agentName: "replacement", launched: false, live: { ...setup.session.live, name: "replacement", status: "idle" } };
   setup.session = { ...setup.session, provider: "openrouter", launched: false, live: { ...setup.session.live, status: "idle" } };
   setup.input = { ...setup.input, profile: { ...setup.input.profile, provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } };
   let retired = 0;
@@ -901,6 +918,45 @@ test("surfaces an unbound turn only after all prompt delivery attempts go unobse
   try {
     const running = runner.run(setup.input);
     await expect(running).resolves.toMatchObject({ result: { status: "ok" } });
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
+test("does not resend an idle prompt while its rollout advances", async () => {
+  const setup = await fixture();
+  let now = new Date();
+  let prompts = 0;
+  let sent = "";
+  let getCalls = 0;
+  const herdr = {
+    prompt: async (_name: string, prompt: string) => {
+      prompts += 1;
+      sent = prompt;
+      return setup.session.live;
+    },
+    getAgent: async () => {
+      getCalls += 1;
+      if (getCalls < 3) {
+        await appendFile(setup.session.rolloutPath!, line({ type: "agent_message", message: `still working ${getCalls}` }));
+      } else if (getCalls === 3) {
+        await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(sent) })}${line({ type: "task_started", turn_id: "advancing" })}${line({ type: "task_complete", turn_id: "advancing", duration_ms: 1 })}`);
+        await writeFile(resultPath(sent), JSON.stringify({ status: "ok" }));
+      }
+      return { ...setup.session.live, status: "idle" };
+    },
+  };
+  const runner = new HerdrTurnRunner(
+    setup.database,
+    herdr as never,
+    { ensureRoleSession: async () => setup.session } as never,
+    new IssueTimelineEvents(setup.database),
+    undefined,
+    undefined,
+    async () => { now = new Date(now.getTime() + 60_000); },
+    () => now,
+  );
+  try {
+    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
+    expect(prompts).toBe(1);
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 

@@ -98,8 +98,6 @@ export function developerPaneEnvironment(input: {
     "LC_ALL",
     "COLORTERM",
     "CODEX_HOME",
-    "HERDR_ENV",
-    "HERDR_SOCKET",
     "MISE_DATA_DIR",
     "MISE_CONFIG_DIR",
     "MISE_TRUSTED_CONFIG_PATHS",
@@ -117,7 +115,8 @@ export function developerPaneEnvironment(input: {
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
   ];
   const values: Record<string, string> = {};
-  for (const key of keys) if (input.env[key]) values[key] = input.env[key]!;
+  for (const [key, value] of Object.entries(input.env))
+    if (value && (keys.includes(key) || key.startsWith("HERDR_"))) values[key] = value;
   values.TERM ??= "xterm-256color";
   values.PATH = `${input.guardDirectory}:${input.env.PATH ?? ""}`;
   values.FORGE_GIT_GUARD_DIR = input.guardDirectory;

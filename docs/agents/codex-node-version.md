@@ -12,6 +12,21 @@ Codex/Herdr can inherit an environment that never loaded `~/.zprofile`, where
 `~/.zshenv` now prepends `~/.local/share/mise/shims`, so mise resolves the
 directory-specific version from `mise.toml`.
 
+This also means every non-interactive `node`, `pnpm`, or other mise-managed
+command evaluates the repository's `mise.toml` before the command starts. In
+Forge, that evaluation runs `scripts/resolve-magicdns.sh` to populate
+`FORGE_TAILSCALE_ADDRESS`. If Tailscale exits successfully but prints something
+other than JSON, `jq` fails and the requested command never starts. This is a
+local environment-rendering failure, not a TypeScript or test failure. To
+diagnose the project independently, invoke the pinned Node binary directly;
+fix the Tailscale/MagicDNS response before returning to the normal mise shim.
+
+Git fixture tests have a separate inherited-state hazard: a global
+`commit.gpgsign=true` applies inside temporary repositories unless the fixture
+disables it. In a sandbox this can look like a product failure because GPG
+cannot access `~/.gnupg`. For local diagnosis, `GIT_CONFIG_GLOBAL=/dev/null`
+reproduces CI's clean global Git configuration without changing user settings.
+
 ## Verify
 
 From the repository, run `zsh -c 'node --version'` or:

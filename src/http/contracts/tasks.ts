@@ -99,7 +99,7 @@ export const TaskBodySchema = z.object({
   deliveryTarget: DeliveryTargetSchema.default("pull_request_draft"),
   runProjectTests: z.boolean().default(true),
   visualEvidence: VisualEvidenceSchema.default("off"),
-  source: z.discriminatedUnion("kind", [z.object({ kind: z.literal("pull_request"), number: z.number().int().positive() }), z.object({ kind: z.literal("branch"), branch: z.string().min(1).max(240) })]).optional(),
+  source: z.discriminatedUnion("kind", [z.strictObject({ kind: z.literal("pull_request"), number: z.number().int().positive() }), z.strictObject({ kind: z.literal("branch"), branch: z.string().min(1).max(240) })]).optional(),
 });
 export const TaskAgentsBodySchema = z.object({ planner: z.string().optional(), builder: z.string().optional(), reviewer: z.string().optional(), integrator: z.string().optional() });
 export const TaskDetailsBodySchema = z.object({
@@ -107,7 +107,7 @@ export const TaskDetailsBodySchema = z.object({
   description: z.string().optional(),
 }).refine((value) => value.title !== undefined || value.description !== undefined, "Title or description is required");
 export const DuplicateTaskBodySchema = z.object({ idempotencyKey: z.string().min(8).max(128) });
-export const ArchiveTaskBodySchema = z.object({ expectedRevision: z.number().int().nonnegative(), confirmDiscardDirty: z.boolean().optional() }).strict();
+export const ArchiveTaskBodySchema = z.object({ expectedRevision: z.number().int().nonnegative(), confirmDiscardDirty: z.boolean().optional() });
 
 export const TaskReleaseResponseSchema = z.object({
   id: z.string(), status: z.enum(["reconciling", "draft", "ready", "blocked"]), failureCode: ReleaseFailureCodeSchema.nullable(), failureSummary: z.string().nullable(), retryAt: z.string().nullable(), repository: z.string(), baseBranch: z.string(), headBranch: z.string(), baseSha: z.string(), headSha: z.string(), headTree: z.string(), reviewedCommit: z.object({ abbreviated: z.string(), full: z.string() }), reviewedTree: z.object({ abbreviated: z.string(), full: z.string() }), pullRequestNumber: z.number().nullable(), pullRequestUrl: z.string().url().nullable(), isDraft: z.boolean(), reused: z.boolean(), bodyArtifactId: z.string().nullable(), title: z.string(), bodyPreview: z.string().nullable(), operation: z.object({ kind: z.string(), status: z.string(), attempt: z.number().nullable(), startedAt: z.string().nullable(), observedAt: z.string().nullable(), completedAt: z.string().nullable() }).nullable(),

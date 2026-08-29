@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -106,9 +106,11 @@ test("a missing-worktree retry recreates from the local source head without losi
   expect(git(retried.worktreePath, "rev-parse", "HEAD")).toBe(localHead);
 });
 
-test("adoption rejects true local and remote divergence on retry", async () => {
+test("adoption rebases local source work onto remote movement on retry", async () => {
   process.env.FORGE_MIN_FREE_DISK_GB = "0"; const value = fixture(); const manager = new WorktreeManager();
   const adopted = await manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main" });
   commit(adopted.worktreePath, "local.txt", "local\n", "local work"); advanceRemote(value, "other.txt");
-  await expect(manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main", preserveLocal: true })).rejects.toMatchObject({ code: "source-branch-diverged" });
+  const retried = await manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main", preserveLocal: true });
+  expect(readFileSync(join(retried.worktreePath, "local.txt"), "utf8")).toBe("local\n");
+  expect(readFileSync(join(retried.worktreePath, "other.txt"), "utf8")).toBe("remote\n");
 });

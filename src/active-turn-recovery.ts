@@ -88,9 +88,12 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
         }
         db.prepare("UPDATE forge_herdr_turns SET result_sha256 = ?, task_complete_seen_at = ?, status = 'completed', finished_at = ?, updated_at = ? WHERE turn_id = ? AND status <> 'completed'").run(sha256(handoffBytes), now(), now(), now(), turn.turnId);
       });
-      if (turn.role === "developer" && turn.executionStatus === "failed" && bytes) {
-        await (deps.reconcileDeveloper ?? reconcileIssueDeveloperDelivery)(config, turn.workflowId, { expectedRevision: turn.revision, actorUserId: "system", commandId: `late-result-${turn.turnId}`, reconcileOnly: true });
-      }
+    }
+    // A result that arrived after Forge failed the execution is still the
+    // Developer's delivery: reopen the execution through the reconcile-only
+    // retry. The execution leaves `failed` once adopted, so this fires once.
+    if (turn.role === "developer" && turn.executionStatus === "failed" && bytes) {
+      await (deps.reconcileDeveloper ?? reconcileIssueDeveloperDelivery)(config, turn.workflowId, { expectedRevision: turn.revision, actorUserId: "system", commandId: `late-result-${turn.turnId}`, reconcileOnly: true }).catch(() => undefined);
     }
     outcomes.push({ taskId: turn.taskId, turnId: turn.turnId, role: turn.role, action, idempotencyKey: classified.idempotencyKey, evidence: classified.evidence });
   }

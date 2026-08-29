@@ -43,3 +43,21 @@ test("adopts a valid turn outcome idempotently", async () => {
   expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = 'turn'").get())).toEqual({ status: "completed" });
   expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_herdr_turns").get())).toEqual(rows);
 });
+
+test("a late result for a failed Developer execution triggers one reconcile-only retry", async () => {
+  const { database, config } = await fixture();
+  const now = "2026-08-27T00:00:00.000Z";
+  database.authQuery((db) => {
+    db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, status, created_at, updated_at) VALUES ('dev-session', 'task', 'developer', 1, 1, 'codex', 'ready', ?, ?)").run(now, now);
+    db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at, finished_at, failure_code) VALUES ('dev-execution', 'task', 'company', 'workflow', 1, 1, 'failed', 'work/x', '/missing', ?, ?, ?, ?, 'prompt-not-accepted')").run("d".repeat(40), now, now, now);
+    db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES ('dev-turn', 'task', 'dev-session', 'builder', 'developer', 'dev-execution', 'implementation', ?, 'herdr-results/task/developer/result-dev-turn.json', 0, 'completed', ?, ?)").run("e".repeat(64), now, now);
+  });
+  await mkdir(join(config.runtimeRoot, "herdr-results/task/developer"), { recursive: true });
+  await writeFile(join(config.runtimeRoot, "herdr-results/task/developer/result-dev-turn.json"), JSON.stringify({ kind: "delivery" }));
+  const calls: unknown[] = [];
+  const reconcileDeveloper = async (_config: unknown, workflowId: string, input: unknown) => { calls.push({ workflowId, input }); database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', failure_code = NULL WHERE id = 'dev-execution'").run()); return {} as never; };
+  const herdr = { getAgent: async () => null };
+  await reconcileActiveTurns(database, config, { herdr: herdr as never, reconcileDeveloper: reconcileDeveloper as never });
+  await reconcileActiveTurns(database, config, { herdr: herdr as never, reconcileDeveloper: reconcileDeveloper as never });
+  expect(calls).toEqual([{ workflowId: "workflow", input: { expectedRevision: 1, actorUserId: "system", commandId: "late-result-dev-turn", reconcileOnly: true } }]);
+});

@@ -8,12 +8,11 @@ import { TaskFailure, type TaskService } from "../../tasks.js";
 import { GithubReleaseFailure, type ReleaseService } from "../../github-release.js";
 import { routedIssueCommands, type IssueCommand } from "../../commands/registry.js";
 import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, HttpPlanDecisionBodySchema, ResolveDecisionBlockerBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
-import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, DuplicateTaskBodySchema, PlanRevisionBodySchema, TaskActivityResponseSchema, TaskAgentsBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskDeveloperDiffResponseSchema, TaskDiagnosticsResponseSchema, TaskListResponseSchema, TaskPaneResponseSchema, TaskReleaseResponseSchema, TaskRescueResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, DuplicateTaskBodySchema, PlanRevisionBodySchema, TaskActivityResponseSchema, TaskAgentsBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskDeveloperDiffResponseSchema, TaskDiagnosticsResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskRescueResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
 import { TaskRescueService } from "../../task-rescue.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { ForgeConfig } from "../../config.js";
 import { signalIssueGithubPullRequestSync } from "../../temporal/service.js";
-import { CliHerdrClient } from "../../herdr-client.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;
@@ -112,11 +111,6 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
     const etag = `\"${result.etag}\"`;
     if (request.headers["if-none-match"] === etag) return reply.code(304).header("ETag", etag).header("Cache-Control", "private, no-cache").send(null);
     return reply.header("ETag", etag).header("Cache-Control", "private, no-cache").send(result.diff);
-  });
-  typed.get("/api/tasks/:taskId/pane", { schema: { params: TaskIdParamsSchema, querystring: z.object({ role: z.enum(["developer", "lead"]) }), response: { 200: TaskPaneResponseSchema } } }, async (request, reply) => {
-    tasks.getTask(request.forgeUser.id, request.params.taskId);
-    const agentName = options.database?.authQuery((db) => (db.prepare("SELECT agent_name FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(request.params.taskId, request.query.role) as { agent_name: string | null } | undefined)?.agent_name);
-    return reply.send({ text: agentName ? await new CliHerdrClient().readAgent(agentName, "recent-unwrapped", 120).catch(() => "") : "" });
   });
   for (const descriptor of routedIssueCommands) {
     typed.post(`/api/tasks/:taskId/${descriptor.slug!}`, { schema: { params: TaskIdParamsSchema, body: descriptor.body!, response: { 200: TaskResponseSchema } } }, async (request, reply) => {

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 
 import { Button } from "../components/ui/button.js";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
+import { Field, FieldGroup, FieldLabel } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { SettingsLayout } from "../components/app/settings-layout.js";
 import { StatusLight } from "../components/app/status-light.js";
@@ -13,7 +15,7 @@ type Provider = { id: "codex" | "claude" | "openrouter"; label: string; harnessL
 type HealthCheck = { id: string; status: "healthy" | "warning" | "unhealthy"; summary: string };
 
 const columns: SettingsTableColumn[] = [
-  { key: "provider", label: "Provider", width: 170 }, { key: "harness", label: "Harness", width: 180 }, { key: "status", label: "Status", width: 82 }, { key: "detail", label: "Detail", width: 300 }, { key: "actions", label: "Actions", width: 420 },
+  { key: "provider", label: "Provider", width: 170 }, { key: "harness", label: "Harness", width: 180 }, { key: "status", label: "Status", width: 82 }, { key: "detail", label: "Detail", width: 300 }, { key: "actions", label: "Actions", width: 120 },
 ];
 
 function statusLevel(check: HealthCheck | undefined): "green" | "amber" | "red" {
@@ -33,6 +35,8 @@ export function ProviderSettingsView(): ReactElement {
   const companyId = currentCompany?.id ?? "";
   const [providers, setProviders] = useState<Provider[]>([]);
   const [key, setKey] = useState("");
+  const [enableOpen, setEnableOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [checks, setChecks] = useState<HealthCheck[]>([]);
   const load = useCallback(async () => {
@@ -40,12 +44,23 @@ export function ProviderSettingsView(): ReactElement {
     setProviders(providerResponse.providers); setChecks(health.checks);
   }, []);
   useEffect(() => { void load(); }, [load]);
-  const action = async (path: string, method: "PUT" | "DELETE" | "POST", body?: unknown): Promise<void> => {
+  const action = async (path: string, method: "PUT" | "DELETE", body?: unknown): Promise<boolean> => {
+    setBusy(true);
     try {
-      const result = await readJson<{ summary?: string }>(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-      if (result.summary) setMessage(result.summary);
+      await readJson(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       setKey(""); await load();
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Provider action failed"); }
+      return true;
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Provider action failed"); return false; }
+    finally { setBusy(false); }
+  };
+  const enable = async (): Promise<void> => {
+    if (await action("/api/admin/providers/openrouter/credential", "PUT", { apiKey: key })) {
+      setEnableOpen(false);
+      setMessage("OpenRouter enabled");
+    }
+  };
+  const remove = async (): Promise<void> => {
+    if (await action("/api/admin/providers/openrouter/credential", "DELETE")) setMessage("OpenRouter credential removed");
   };
   return <SettingsLayout title="Providers" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/providers", companyId)}>
     <SettingsDataTable label="Providers" columns={columns} className="mt-5"><SettingsTableGroup label="Agent providers" count={providers.length} columnCount={columns.length}>{providers.map((provider) => {
@@ -54,9 +69,20 @@ export function ProviderSettingsView(): ReactElement {
       return <SettingsTableRow key={provider.id}>
         <SettingsTableCell>{provider.label}</SettingsTableCell><SettingsTableCell className="text-muted-foreground">{provider.harnessLabel}</SettingsTableCell><SettingsTableCell><StatusLight level={statusLevel(check)} label={`${provider.label}: ${check?.summary ?? "Health status is unavailable"}`} /></SettingsTableCell>
         <SettingsTableCell className="text-muted-foreground"><span className="block truncate">{check?.summary ?? "Health status is unavailable"}</span>{provider.credential.maskedKey ? <span className="block truncate text-[11px]">{provider.credential.maskedKey}{detail ? ` · ${detail}` : ""}</span> : null}</SettingsTableCell>
-        <SettingsTableCell>{provider.id === "openrouter" ? <div className="flex items-center gap-2"><Input aria-label="OpenRouter API key" type="password" value={key} onChange={(event) => setKey(event.target.value)} /><Button size="sm" disabled={!key.trim()} onClick={() => void action("/api/admin/providers/openrouter/credential", "PUT", { apiKey: key })}>Save</Button>{provider.credential.configured ? <Button size="sm" variant="outline" onClick={() => void action("/api/admin/providers/openrouter/credential", "DELETE")}>Clear</Button> : null}<Button size="sm" variant="outline" onClick={() => void action("/api/admin/providers/openrouter/test", "POST")}>Test</Button></div> : "Local CLI login"}</SettingsTableCell>
+        <SettingsTableCell>{provider.id === "openrouter" ? provider.credential.configured ? <Button size="sm" variant="destructive" disabled={busy} onClick={() => void remove()}>{busy ? "Removing…" : "Remove"}</Button> : <Button size="sm" disabled={busy} onClick={() => setEnableOpen(true)}>Enable</Button> : "Local CLI login"}</SettingsTableCell>
       </SettingsTableRow>;
     })}</SettingsTableGroup></SettingsDataTable>
     {message ? <p className="pt-2 text-[12px] text-muted-foreground" role="status">{message}</p> : null}
+    <Dialog open={enableOpen} onOpenChange={(open) => { setEnableOpen(open); if (!open) setKey(""); }}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Enable OpenRouter</DialogTitle><DialogDescription>Add an OpenRouter API key for agent model access.</DialogDescription></DialogHeader>
+        <form onSubmit={(event) => { event.preventDefault(); void enable(); }}>
+          <FieldGroup>
+            <Field><FieldLabel htmlFor="openrouter-api-key">API key</FieldLabel><Input id="openrouter-api-key" autoFocus type="password" autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)} /></Field>
+            <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={busy || !key.trim()}>{busy ? "Enabling…" : "Enable"}</Button></DialogFooter>
+          </FieldGroup>
+        </form>
+      </DialogContent>
+    </Dialog>
   </SettingsLayout>;
 }

@@ -43,5 +43,5 @@ export function AgentsLeaderboard(): ReactElement | null {
   });
 
   if (agents.length === 0) return null;
-  return <SidebarGroup><SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Agents</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{agents.map((agent, index) => <AgentRow key={agent.id} agent={agent} index={index} />)}</SidebarMenu></SidebarGroupContent></SidebarGroup>;
+  return <SidebarGroup><SidebarGroupLabel>Agents</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{agents.map((agent, index) => <AgentRow key={agent.id} agent={agent} index={index} />)}</SidebarMenu></SidebarGroupContent></SidebarGroup>;
 }

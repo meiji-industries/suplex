@@ -14,7 +14,7 @@ import { ForgeDatabase } from "./database.js";
 import { jsonRequired } from "./task-utils.js";
 import { createGithubReleasePort, type GithubReleasePort } from "./github-release.js";
 import { TaskSourceService, type TaskSourceSelector } from "./task-sources.js";
-import type { AgentProviderKind } from "./agent-providers/provider.js";
+import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from "./agent-providers/provider.js";
 import { seedDefaultTaskTemplates } from "./default-task-templates.js";
 
 const execFileAsync = promisify(execFile);
@@ -589,6 +589,7 @@ export class ProjectService {
     const model = input.model.trim();
     const capacity = input.capacity ?? null;
     const provider = input.provider ?? "codex";
+    if (!AGENT_PROVIDER_KINDS.includes(provider)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-provider", "provider", "Provider is unknown")]);
     const catalogModel = this.database.authQuery((db) => db.prepare("SELECT model_id FROM forge_models WHERE model_id = ? AND provider = ? AND status = 'active'").get(model, provider) as { model_id: string } | undefined);
     if (!modelIdPattern.test(model) || secretPattern.test(model) || !catalogModel) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-model", "model", "Select an active model from the catalog")]);
     if (!["low", "medium", "high", "xhigh"].includes(input.reasoningLevel)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-reasoning", "reasoningLevel", "Reasoning level is invalid")]);

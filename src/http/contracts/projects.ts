@@ -9,7 +9,7 @@ const OptionalCapacitySchema = z.preprocess((value) => value === "" ? null : val
 
 export const ProfileBodySchema = z.object({
   name: z.string().default(""),
-  provider: z.enum(["codex", "claude"]).default("codex"),
+  provider: z.enum(AGENT_PROVIDER_KINDS).default("codex"),
   model: z.string().default(""),
   reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]),
   servicePriority: z.enum(["standard", "priority", "fast"]),

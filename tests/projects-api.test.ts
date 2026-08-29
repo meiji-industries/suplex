@@ -119,3 +119,40 @@ test.skip("project API activates valid configuration, redacts typed failures, an
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("profile API accepts OpenRouter models and rejects unknown providers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-openrouter-profile-api-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  const config = createTestConfig(root, { reachableAddress: "https://forge.tailnet.ts.net:4111" });
+  const auth = new AuthService(database, config, { webAuthn: webAuthn() });
+  const projects = new ProjectService(database, auth, config, { github });
+  const app = createApp({ config, auth, projects, capacity: new CapacityManager(database, config), health: {
+    temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }),
+    database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
+    artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
+    worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }),
+    codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }),
+    ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
+  } });
+  try {
+    const invitation = auth.ensureBootstrapInvitation()!;
+    const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });
+    const enrolled = await app.inject({ method: "POST", url: "/api/auth/bootstrap/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: "admin-openrouter-api", type: "public-key" } } });
+    const headers = { cookie: sessionCookie(enrolled), origin: config.reachableAddress };
+    const model = await app.inject({ method: "POST", url: "/api/admin/models", headers, payload: { id: "acme/coder-1", provider: "openrouter", displayName: "Acme Coder" } });
+    expect(model.statusCode).toBe(201);
+    const payload = { name: "OpenRouter profile", provider: "openrouter", model: "acme/coder-1", reasoningLevel: "medium", servicePriority: "standard" };
+    const created = await app.inject({ method: "POST", url: "/api/admin/profiles", headers, payload });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ provider: "openrouter", model: "acme/coder-1" });
+    const updated = await app.inject({ method: "PATCH", url: `/api/admin/profiles/${created.json().id as string}`, headers, payload: { ...payload, name: "Updated OpenRouter profile" } });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({ name: "Updated OpenRouter profile", provider: "openrouter", model: "acme/coder-1" });
+    const unknown = await app.inject({ method: "POST", url: "/api/admin/profiles", headers, payload: { ...payload, name: "Unknown profile", provider: "hermes" } });
+    expect(unknown.statusCode).toBe(400);
+  } finally {
+    await app.close();
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

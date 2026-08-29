@@ -8,6 +8,7 @@ import { AuthService } from "../src/auth.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { ProjectService, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects.js";
+import type { AgentProviderKind } from "../src/agent-providers/provider.js";
 import type { GithubAdapter } from "../src/github.js";
 import { jsonRequired } from "../src/task-utils.js";
 
@@ -98,6 +99,9 @@ test("maintains the model catalog and only creates profiles from active models",
     const custom = value.projects.createModel(value.adminId, { id: "acme-codex-1", displayName: "Acme Codex 1" });
     expect(custom).toMatchObject({ id: "acme-codex-1", status: "active" });
     expect(value.projects.createProfile(value.adminId, { name: "Custom", model: custom.id, reasoningLevel: "high", servicePriority: "priority", capacity: 1 })).toMatchObject({ model: custom.id });
+    const openrouter = value.projects.createModel(value.adminId, { id: "acme/coder-1", provider: "openrouter", displayName: "Acme Coder" });
+    expect(value.projects.createProfile(value.adminId, { name: "OpenRouter", provider: "openrouter", model: openrouter.id, reasoningLevel: "medium", servicePriority: "standard", capacity: 1 })).toMatchObject({ provider: "openrouter", model: openrouter.id });
+    expect(() => value.projects.createProfile(value.adminId, { name: "Unknown", provider: "nope" as AgentProviderKind, model: openrouter.id, reasoningLevel: "medium", servicePriority: "standard", capacity: 1 })).toThrowError("Profile configuration is invalid");
     value.projects.setModelStatus(value.adminId, custom.id, "retired");
     expect(value.projects.listModels(value.adminId).map((model) => model.id)).not.toContain(custom.id);
     expect(value.projects.listModels(value.adminId, true)).toEqual(expect.arrayContaining([expect.objectContaining({ id: custom.id, status: "retired" })]));

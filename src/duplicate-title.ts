@@ -1,0 +1,1 @@
+export function duplicateTitle(title: string, usedTitles: Set<string>): string { const match = title.match(/^(.*?)(?: \((\d+)\))?$/); const base = match?.[1]?.trimEnd() || title; let copyNumber = match?.[2] ? Number(match[2]) + 1 : 2; while (usedTitles.has(`${base} (${copyNumber})`)) copyNumber += 1; return `${base} (${copyNumber})`; }

@@ -32,6 +32,7 @@ import { prefillForTaskSource, preserveEditedPrefill, TaskSourcePicker, type Tas
 import { TaskRoleSelectors } from "../components/app/task-role-selectors.js";
 import { taskDeliveryTargetOptions } from "../components/app/task-delivery-target.js";
 import { readNewTaskMemory, writeNewTaskMemory, type NewTaskMemory } from "../components/app/new-task-memory.js";
+import { duplicateTaskDraft } from "../lib/duplicate-task-prefill.js";
 
 async function fileAsImage(file: File): Promise<{ filename: string; mimeType: string; base64: string }> {
   return await new Promise((resolve, reject) => {
@@ -368,13 +369,28 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   };
   const duplicateTask = async (): Promise<void> => {
     if (!selected) return;
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setCreateError("");
     try {
-      const duplicate = await readJson<ApiTask>(`/api/tasks/${encodeURIComponent(selected.id)}/duplicate`, { method: "POST", body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }) });
-      navigate(withCompany(`/tasks/${encodeURIComponent(duplicate.id)}`, companyId));
+      const usedTitles = new Set(tasks.filter((task) => task.projectId === selected.projectId).map((task) => task.title));
+      const draft = duplicateTaskDraft(selected, usedTitles);
+      setProjectId(draft.projectId); setRoleAgentOverrides(draft.roleAgents); setAutoApprovePlan(draft.autoApprovePlan); setDeliveryTarget(draft.deliveryTarget); setRunProjectTests(draft.runProjectTests); setVisualEvidence(draft.visualEvidence); setSupplementalReview(draft.supplementalReview); setTitle(draft.title); setDescription(draft.description);
+      setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" };
+      if (draft.source) {
+        try {
+          const result = await readJson<{ sources: TaskSourceSummary[] }>(`/api/projects/${encodeURIComponent(draft.projectId)}/task-sources?kind=${draft.source.kind}`);
+          const summary = result.sources.find((candidate) => draft.source?.kind === "pull_request" ? candidate.kind === "pull_request" && candidate.number === draft.source.number : candidate.kind === "branch" && candidate.branch === draft.source?.branch);
+          if (summary) { setSource(draft.source); setSourceSummary(summary); }
+        } catch { /* The source was removed or cannot currently be discovered. */ }
+      }
+      const duplicateImages = await Promise.all(selected.images.map(async (image) => {
+        const response = await fetch(`/api/tasks/${encodeURIComponent(selected.id)}/images/${encodeURIComponent(image.artifactId)}`, { credentials: "same-origin" });
+        if (!response.ok) throw new Error(`Unable to load image ${image.filename}`);
+        return fileAsImage(new File([await response.blob()], image.filename, { type: image.mimeType }));
+      }));
+      setImages(duplicateImages); setCreateOpen(true);
     } catch (reason) {
       if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
-      setError(reason instanceof Error ? reason.message : "Unable to duplicate task");
+      setError(`Unable to duplicate task${reason instanceof Error ? `: ${reason.message}` : ""}`);
     } finally { setBusy(false); }
   };
   const saveTaskAsTemplate = async (): Promise<void> => {
@@ -463,13 +479,15 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     finally { setBusy(false); }
   };
 
+  const newTaskDialog = <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); else { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; resetNewTaskSettings(); } }} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setRoleAgentOverrides({}); }} sourceSummary={sourceSummary} onSourceSelect={selectSource} onSourceClear={() => { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => { const next = { ...current, [role]: agentId }; if (role === "reviewer" && !agentId) setSupplementalReview(false); return next; })} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} autoApprovePlan={autoApprovePlan} onAutoApprovePlanChange={setAutoApprovePlan} deliveryTarget={deliveryTarget} onDeliveryTargetChange={setDeliveryTarget} runProjectTests={runProjectTests} onRunProjectTestsChange={setRunProjectTests} visualEvidence={visualEvidence} onVisualEvidenceChange={setVisualEvidence} supplementalReview={supplementalReview} onSupplementalReviewChange={setSupplementalReview} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} onApplyTemplate={applyTemplate} />;
+
   if (routeTaskId && loading) return <TaskDetailsSkeleton />;
   if (routeTaskId && !companyId) return <TaskDetailsNotFound companyId="" returnTo={mode} />;
   if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
   if (routeTaskId && detailNotFound) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
   if (routeTaskId && !selected) return <TaskDetailsSkeleton />;
-  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} onMarkReady={markReady} onMerge={mergePullRequest} onDuplicate={duplicateTask} onUpdateDetails={updateTaskDetails} onRefresh={refreshTask} onRescue={rescueTask} onSaveTemplate={saveTaskAsTemplate} />;
+  if (routeTaskId && selected) return <><TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} onMarkReady={markReady} onMerge={mergePullRequest} onDuplicate={duplicateTask} onUpdateDetails={updateTaskDetails} onRefresh={refreshTask} onRescue={rescueTask} onSaveTemplate={saveTaskAsTemplate} />{newTaskDialog}</>;
 
   if (mode === "board") {
     return (
@@ -585,7 +603,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
           })}
         </div> : null}
         {!currentCompany && scopeLoaded ? <div className="px-4 py-8 text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</div> : null}
-        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); else { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; resetNewTaskSettings(); } }} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setRoleAgentOverrides({}); }} sourceSummary={sourceSummary} onSourceSelect={selectSource} onSourceClear={() => { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => { const next = { ...current, [role]: agentId }; if (role === "reviewer" && !agentId) setSupplementalReview(false); return next; })} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} autoApprovePlan={autoApprovePlan} onAutoApprovePlanChange={setAutoApprovePlan} deliveryTarget={deliveryTarget} onDeliveryTargetChange={setDeliveryTarget} runProjectTests={runProjectTests} onRunProjectTestsChange={setRunProjectTests} visualEvidence={visualEvidence} onVisualEvidenceChange={setVisualEvidence} supplementalReview={supplementalReview} onSupplementalReviewChange={setSupplementalReview} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} onApplyTemplate={applyTemplate} />
+        {newTaskDialog}
       </div>
     </ApplicationFrame>
   );

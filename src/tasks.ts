@@ -959,7 +959,14 @@ export class TaskService {
         : user.role === "admin" ? query.all() : query.all(actorUserId);
       return result as TaskRow[];
     });
-    return rows.map((row) => this.taskListSummary(row));
+    // One task with an unreadable legacy snapshot must not take the whole list down: skip it and log.
+    return rows.flatMap((row) => {
+      try { return [this.taskListSummary(row)]; }
+      catch (error) {
+        if (error instanceof TaskFailure && error.findings.some((item) => item.code === "projection-integrity")) { console.warn("Skipping task with unreadable workflow snapshot", row.id); return []; }
+        throw error;
+      }
+    });
   }
 
   getTask(actorUserId: string, taskId: string): ForgeTask {

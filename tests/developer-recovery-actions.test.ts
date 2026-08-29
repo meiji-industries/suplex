@@ -4,6 +4,7 @@ import { expect, test } from "vitest";
 
 import { DeveloperRecoveryActions } from "../src/frontend/components/app/developer-recovery-actions.js";
 import { DeveloperRecoveryStatus } from "../src/frontend/components/app/developer-recovery-status.js";
+import { TaskAttentionCard } from "../src/frontend/components/app/task-attention-card.js";
 import { PlanDecisionForm } from "../src/frontend/components/app/plan-decision-form.js";
 import { SystemHealthProvider } from "../src/frontend/components/app/system-health.js";
 import { NextAction, TaskActions } from "../src/frontend/views/task-details.js";
@@ -35,7 +36,7 @@ test("recovery actions render in the shared card footer", () => {
 
   expect(html).toContain('data-slot="card"');
   expect(html).toContain('data-slot="card-footer"');
-  expect(html.match(/<div data-slot="card-footer"[^>]*>/)?.[0]).toContain("justify-end");
+  expect(html.match(/<div data-slot="card-footer"[^>]*>/)?.[0]).toContain("justify-start");
   expect(html).toContain('role="alert"');
   expect(html).toContain('role="button"');
   expect(html).toContain('tabindex="0"');
@@ -43,6 +44,25 @@ test("recovery actions render in the shared card footer", () => {
   expect(html).toContain('data-panel-open=""');
   expect(html).toContain("Cancel development");
   expect(html).not.toContain("Developer result claimed.");
+});
+
+test("attention cards left-align content and omit repeated status text", () => {
+  const repeated = "Waiting for a codex agent slot (2 active, position 1)";
+  const html = renderToStaticMarkup(createElement(TaskAttentionCard, {
+    card: {
+      kind: "generic",
+      title: repeated,
+      explanation: repeated,
+      evidence: [{ kind: "text", ref: repeated }],
+      primaryAction: { command: "cancel_development", label: "Cancel development" },
+      secondaryAction: { command: "cancel_issue", label: "Cancel issue", destructive: true },
+    },
+    onAction: async () => undefined,
+  }));
+
+  expect(html.match(new RegExp(repeated.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
+  expect(html.match(/<section[^>]*>/)?.[0]).toContain("w-full");
+  expect(html.match(/<section[^>]*>/)?.[0]).toContain("text-left");
 });
 
 test("keeps actionable Developer recovery summaries", () => {

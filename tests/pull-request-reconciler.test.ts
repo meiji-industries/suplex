@@ -28,5 +28,13 @@ describe("pull request reconciler", () => {
   test("offers changes-requested context to the planner without blocking", () => expect(result("ready", { reviewDecision: "CHANGES_REQUESTED", reviewLogin: "octocat" })).toMatchObject({ phase: "Done", actions: expect.arrayContaining([{ kind: "send_planner_note", message: "Changes requested on GitHub by octocat" }]) }));
   test("adopts GitHub merges", () => expect(result("draft", { state: "merged", mergedSha: "b".repeat(40) })).toMatchObject({ phase: "Done", pendingAction: "Merged" }));
   test("blocks closed PRs with a retry", () => expect(result("merged", { state: "closed" })).toMatchObject({ phase: "Blocked", allowedCommands: ["publish_draft", "cancel_issue"] }));
-  test("does not repeat an adopted feed row", () => expect(reconcile({ observed: observed(), target: "ready", current: { adoptedObservationKey: `1484:open:false:${"a".repeat(40)}:none` } }).actions).toEqual([]));
+  test("does not repeat an adopted feed row", () => expect(reconcile({ observed: observed(), target: "ready", current: { adoptedObservationKey: `1484:open:false:${"a".repeat(40)}:none:success` } }).actions).toEqual([]));
+});
+
+test("retains a human CI decision until GitHub changes", () => {
+  const failed = observed({ checks: "failed" });
+  const current = { phase: "ci_repair_required", owner: "human" as const, pendingAction: "Required check failed: Test suite", adoptedObservationKey: `1484:open:false:${"a".repeat(40)}:none:failed` };
+
+  expect(reconcile({ observed: failed, target: "merged", current })).toMatchObject({ unchanged: true, actions: [] });
+  expect(reconcile({ observed: { ...failed, checks: "pending" }, target: "merged", current })).toMatchObject({ phase: "Waiting for CI", owner: "lead" });
 });

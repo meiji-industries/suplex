@@ -11,5 +11,5 @@ describe("live GitHub heads", () => {
   });
   test("treats a merged changed head as done", () => expect(reconcile({ observed: observed({ state: "merged" }), target: "merged", current: { headSha: sha("a") } }).phase).toBe("Done"));
   test("keeps closed pull requests blocked", () => expect(reconcile({ observed: observed({ state: "closed" }), target: "merged", current: { headSha: sha("a") } }).phase).toBe("Blocked"));
-  test("does nothing for an unchanged ready pull request", () => expect(reconcile({ observed: observed({ headSha: sha("a") }), target: "ready", current: { headSha: sha("a"), adoptedObservationKey: `7:open:false:${sha("a")}:none` } }).actions).toEqual([]));
+  test("does nothing for an unchanged ready pull request", () => expect(reconcile({ observed: observed({ headSha: sha("a") }), target: "ready", current: { headSha: sha("a"), adoptedObservationKey: `7:open:false:${sha("a")}:none:success` } }).actions).toEqual([]));
 });

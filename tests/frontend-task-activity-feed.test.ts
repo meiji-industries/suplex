@@ -20,6 +20,19 @@ test("compacts live heartbeats, duplicate activity, and command labels", () => {
   expect(activitySentence({ eventType: "member_action", metadata: { command: "retry_development" }, actor: { id: "user" } }, activityRole({ eventType: "member_action", metadata: { command: "retry_development" }, actor: { id: "user" } }))).toBe("You retried development");
 });
 
+test("labels and compacts repeated human CI decisions", () => {
+  const entry = { eventType: "phase_ci_repair_required", metadata: { pendingAction: "Required check failed: Test suite" } };
+  expect(activitySentence(entry, activityRole(entry))).toBe("CI failed — needs a decision: Required check failed: Test suite");
+  expect(compactActivityRows([
+    { id: "ci-1", at: "2026-08-29T12:00:00.000Z", role: "builder", eventType: entry.eventType, pendingAction: entry.metadata.pendingAction, text: activitySentence(entry, "builder") },
+    { id: "ci-2", at: "2026-08-29T12:00:59.000Z", role: "builder", eventType: entry.eventType, pendingAction: entry.metadata.pendingAction, text: activitySentence(entry, "builder") },
+  ])).toMatchObject([{ id: "ci-1", count: 2 }]);
+  expect(compactActivityRows([
+    { id: "ci-1", at: "2026-08-29T12:00:00.000Z", role: "builder", eventType: entry.eventType, pendingAction: entry.metadata.pendingAction, text: activitySentence(entry, "builder") },
+    { id: "ci-2", at: "2026-08-29T12:01:01.000Z", role: "builder", eventType: entry.eventType, pendingAction: entry.metadata.pendingAction, text: activitySentence(entry, "builder") },
+  ]).map((row) => row.id)).toEqual(["ci-1", "ci-2"]);
+});
+
 test("removes legacy materiality suffixes from plan summaries", () => {
   expect(withoutLegacyMaterialitySummary("Plan the update (Material plan: user_visible_behavior)")).toBe("Plan the update");
   expect(withoutLegacyMaterialitySummary("Plan the update (Routine plan)")).toBe("Plan the update");

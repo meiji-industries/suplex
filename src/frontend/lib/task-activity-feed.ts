@@ -14,6 +14,8 @@ export type ActivityFeedRow = {
   at: string;
   role: ActivityRole;
   text: string;
+  eventType?: string;
+  pendingAction?: string;
   revision?: number;
   link?: { href: string; label: string };
   count?: number;
@@ -122,6 +124,7 @@ export function activitySentence(entry: ActivityEntry, role: ActivityRole): stri
   }
   if (entry.eventType === "phase_development") return "Builder started work";
   if (entry.eventType === "phase_ci_waiting") return "Integrator is waiting for CI";
+  if (entry.eventType === "phase_ci_repair_required") return typeof entry.metadata.pendingAction === "string" && entry.metadata.pendingAction ? `CI failed — needs a decision: ${entry.metadata.pendingAction}` : "CI failed — needs a decision";
   if (entry.eventType === "phase_delivery_reviewed") return "Reviewer approved the delivery";
   if (entry.eventType === "phase_repair_required") return "Reviewer asked for fixes";
   if (entry.eventType === "phase_done" && entry.metadata.deliveryTarget === "pull_request_draft") return "Integrator completed the task · Draft PR";
@@ -140,7 +143,8 @@ export function compactActivityRows(rows: ActivityFeedRow[]): ActivityFeedRow[] 
       previous.role = row.role;
       return compact;
     }
-    if (previous && !row.live && !previous.live && previous.role !== "planner" && previous.role === row.role && previous.text === row.text) {
+    const samePhase = previous !== undefined && previous.eventType === row.eventType && row.eventType?.startsWith("phase_") && previous.pendingAction === row.pendingAction && Date.parse(row.at) - Date.parse(previous.at) <= 60_000;
+    if (previous && !row.live && !previous.live && (samePhase || (!row.eventType?.startsWith("phase_") && !previous.eventType?.startsWith("phase_") && previous.role !== "planner" && previous.role === row.role && previous.text === row.text))) {
       previous.at = row.at;
       previous.count = (previous.count ?? 1) + (row.count ?? 1);
       return compact;

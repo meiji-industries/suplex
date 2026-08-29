@@ -106,7 +106,7 @@ export function TaskActivity({ taskId = "", timeline, release, ci, agentInvocati
       const link = timelineLink(entry, release, ci);
       const commands = feed?.commands.filter((command) => command.stepId === entry.id) ?? [];
       const activity = entry.eventType === "phase_done" ? { ...entry, metadata: { ...entry.metadata, deliveryTarget: deliveryTarget ?? "" } } : entry;
-      return { id: entry.id, at: entry.createdAt, role, text: activitySentence(activity, role), revision: entry.revision, ...(commands.length ? { commands } : {}), ...(isAutomaticActivity(entry, role) ? { automatic: true } : {}), ...(link ? { link } : {}) };
+      return { id: entry.id, at: entry.createdAt, role, text: activitySentence(activity, role), eventType: entry.eventType, ...(typeof entry.metadata.pendingAction === "string" ? { pendingAction: entry.metadata.pendingAction } : {}), revision: entry.revision, ...(commands.length ? { commands } : {}), ...(isAutomaticActivity(entry, role) ? { automatic: true } : {}), ...(link ? { link } : {}) };
     });
     const live = (feed?.events ?? []).map((event, index): FeedRow => {
       const command = commandOutput(event);

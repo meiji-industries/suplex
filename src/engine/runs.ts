@@ -39,6 +39,46 @@ export class Wakeable {
     ]);
   }
 }
+function isAutomaticCommand(workflowId: string, commandId: string): boolean {
+  return commandId.startsWith(`${workflowId}:auto-`);
+}
+
+const AGENT_OWNED_PHASES: Record<string, true> = {
+  planning: true, supplemental_review: true, plan_consolidation: true, development: true, reviewing_delivery: true, repair_required: true,
+  releasing: true, merge_conflict_reviewing: true, merge_conflict_required: true, merge_conflict_resolving: true, ci_repair_planning: true,
+  ci_repairing: true, final_review: true, delivery_ready: true,
+};
+
+function recoverInterruptedOperation(state: IssueWorkflowState, database: ForgeDatabase): IssueWorkflowState {
+  if (!state.activeOperation || !AGENT_OWNED_PHASES[state.phase]) return state;
+  const live = database.authQuery((db) => Boolean(db.prepare(`
+    SELECT 1 FROM forge_developer_executions execution
+    JOIN forge_herdr_turns turn ON turn.ledger = 'developer' AND turn.execution_id = execution.id AND turn.task_id = execution.task_id
+    JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.task_id = execution.task_id
+    WHERE execution.task_id = ? AND execution.company_id = ? AND execution.workflow_id = ?
+      AND execution.status IN ('starting', 'running')
+      AND session.is_current = 1 AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human')
+    UNION ALL
+    SELECT 1 FROM forge_agent_executions execution
+    JOIN forge_herdr_turns turn ON turn.ledger = 'agent' AND turn.execution_id = execution.id AND turn.task_id = execution.task_id
+    JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.task_id = execution.task_id
+    WHERE execution.task_id = ? AND execution.company_id = ? AND execution.workflow_id = ?
+      AND execution.status IN ('starting', 'running')
+      AND session.is_current = 1 AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human')
+    LIMIT 1`).get(state.issueId, state.companyId, state.workflowId, state.issueId, state.companyId, state.workflowId)));
+  if (live) return state;
+  const revision = state.revision + 1;
+  // Keep these projections aligned with the non-completed paths in the handlers.
+  // A resumed run has no suspended handler to perform that transition itself.
+  if (state.phase === "development") return IssueWorkflowStateSchema.parse({ ...state, revision, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer execution was interrupted — retry is available", activeOperation: null, developerRecoveryStatus: "interrupted", developerRecoveryReasonCode: "execution_not_live", developerRecoverySummary: "Developer execution was interrupted.", lastEventId: `${state.workflowId}:${revision}` });
+  if (state.phase === "repair_required" || (state.phase === "delivery_blocked" && state.developerTurnKind === "repair")) return IssueWorkflowStateSchema.parse({ ...state, revision, phase: "delivery_blocked", owner: "human", allowedCommands: ["repair_delivery", "retry_development", "cancel_issue"], pendingAction: "Developer repair was interrupted — retry is available", activeOperation: null, developerRecoveryStatus: "interrupted", developerRecoveryReasonCode: "execution_not_live", developerRecoverySummary: "Developer repair was interrupted.", lastEventId: `${state.workflowId}:${revision}` });
+  if (state.phase === "merge_conflict_reviewing" || state.phase === "merge_conflict_resolving") return IssueWorkflowStateSchema.parse({ ...state, revision, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution was interrupted — retry is available", activeOperation: null, developerRecoveryStatus: "interrupted", developerRecoveryReasonCode: "execution_not_live", developerRecoverySummary: "Developer conflict resolution was interrupted.", lastEventId: `${state.workflowId}:${revision}` });
+  if (["planning", "supplemental_review", "plan_consolidation"].includes(state.phase)) return IssueWorkflowStateSchema.parse({ ...state, revision, phase: "planning", owner: "human", allowedCommands: ["start_planning", "cancel_issue"], pendingAction: "Planning was interrupted — retry is available", activeOperation: null, lastEventId: `${state.workflowId}:${revision}` });
+  if (["reviewing_delivery", "delivery_ready", "final_review"].includes(state.phase)) return IssueWorkflowStateSchema.parse({ ...state, revision, phase: "delivery_ready", owner: "human", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Delivery review was interrupted — retry is available", activeOperation: null, lastEventId: `${state.workflowId}:${revision}` });
+  if (["ci_repair_planning", "ci_repairing"].includes(state.phase)) return IssueWorkflowStateSchema.parse({ ...state, revision, phase: "ci_repair_required", owner: "human", allowedCommands: ["repair_ci", "reconcile_ci", "cancel_issue"], pendingAction: "CI repair was interrupted — retry is available", activeOperation: null, lastEventId: `${state.workflowId}:${revision}` });
+  return IssueWorkflowStateSchema.parse({ ...state, revision, owner: "human", pendingAction: "Agent operation was interrupted — human action is required", activeOperation: null, lastEventId: `${state.workflowId}:${revision}` });
+}
+
 
 export class IssueRun {
   readonly runId = randomUUID();
@@ -63,7 +103,9 @@ export class IssueRun {
     private readonly logger = new StructuredLogger(),
   ) {
     // A continuation snapshot is a partial state: layer it over the initial state as the workflow always did.
-    this.initialState = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState(input), activeOperation: null, processedCommandIds: [], ...(input.continuationState ?? {}) });
+    const initial = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState(input), activeOperation: null, processedCommandIds: [], ...(input.continuationState ?? {}) });
+    this.initialState = recoverInterruptedOperation(initial, database);
+    if (this.initialState !== initial) this.input.continuationState = this.initialState;
   }
   get workflowId(): string { return this.input.workflowId; }
   get state(): IssueWorkflowState {
@@ -128,7 +170,7 @@ export class IssueRun {
   execute(name: string, input: unknown, commandId = "legacy-command"): Promise<IssueWorkflowState> {
     const operation = this.chain.then(async () => {
       await this.ready();
-      const automatic = commandId.includes("auto-");
+      const automatic = isAutomaticCommand(this.workflowId, commandId);
       if (this.runawayHalted && !automatic && commandId !== "legacy-command") {
         this.runawayHalted = false;
         this.projectionTimes = [];

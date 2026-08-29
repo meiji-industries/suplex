@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
-import { startIssueWorkflow } from "../src/engine/service.js";
+import { executeIssueCommand, startIssueWorkflow } from "../src/engine/service.js";
 import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
 
 test("a no-progress merge-conflict auto-chain becomes a human action", async () => {
@@ -21,5 +21,10 @@ test("a no-progress merge-conflict auto-chain becomes a human action", async () 
     const state = await h.settle(started.workflowId, (next) => next.owner === "human");
 
     expect(state).toMatchObject({ phase: "merge_conflict_required", owner: "human", lastHandlerError: { command: "resolve_merge_conflict", reason: "An owned Developer execution and forward-merge evidence are required" } });
+    await expect(executeIssueCommand(h.config, started.workflowId, "resolve_merge_conflict", { expectedRevision: state.revision, actorUserId: engineFixture.actorUserId })).resolves.toMatchObject({
+      phase: "merge_conflict_required",
+      owner: "human",
+      lastHandlerError: { command: "resolve_merge_conflict" },
+    });
   } finally { await h.stop(); }
 });

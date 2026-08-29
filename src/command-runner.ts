@@ -5,7 +5,7 @@ import type { ForgeDatabase } from "./database.js";
 import { StructuredLogger, redact } from "./logging.js";
 
 const OUTPUT_TAIL_BYTES = 8 * 1024;
-const logger = new StructuredLogger();
+let logger = new StructuredLogger();
 
 export type CommandStreamEntry = { stream: "stdout" | "stderr"; text: string };
 export type CommandRunResult = {
@@ -25,6 +25,8 @@ export type RunCommandInput = {
   /** Null is a worker-level observation: emit a structured log but no task activity row. */
   taskId: string | null;
   stepId: string | null;
+  /** Non-zero exit is an expected answer (probe); log at debug instead of error. */
+  expectNonZero?: boolean;
   command: string;
   args: readonly string[];
   cwd?: string;
@@ -37,6 +39,11 @@ let database: ForgeDatabase | undefined;
 /** Connects worker command observations to the task activity projection. */
 export function configureCommandActivityStore(value: ForgeDatabase): void {
   database = value;
+}
+
+/** Replaces the command logger for focused tests. */
+export function setCommandRunnerLogger(value: StructuredLogger): void {
+  logger = value;
 }
 
 function tail(value: string): string {
@@ -91,6 +98,12 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
   record(input, result);
   const context = { ...(input.taskId ? { taskId: input.taskId } : {}), command: result.command, exitCode: result.exitCode, durationMs: result.durationMs };
   if (result.exitCode === 0 && !result.timedOut) logger.info(`Command completed: ${result.command}`, context);
-  else logger.error("Command failed", input.taskId ? { taskId: input.taskId } : {}, context);
+  else {
+    const stderrTail = tail(result.stderr).trim().split("\n").slice(-3).join("\n");
+    const message = `Command failed: ${result.command} (exit ${result.exitCode ?? "signal"}${result.timedOut ? ", timed out" : ""})`;
+    const details = { ...context, ...(stderrTail ? { error: stderrTail } : {}) };
+    if (input.expectNonZero) logger.debug(message, details);
+    else logger.error(message, input.taskId ? { taskId: input.taskId } : {}, details);
+  }
   return result;
 }

@@ -268,8 +268,8 @@ export class BrowserProofService {
     const repository = await runCommand({ taskId: null, stepId: null, command: "git", args: ["rev-parse", "--is-inside-work-tree"], cwd: worktreePath, timeout: 8_000 });
     if (repository.exitCode !== 0 || repository.stdout.trim() !== "true") throw new BrowserProofFailure("invalid-proof", "Browser proof Git boundary could not be verified");
     for (const path of paths) {
-      const indexed = await runCommand({ taskId: null, stepId: null, command: "git", args: ["ls-files", "--error-unmatch", "--", path], cwd: worktreePath, timeout: 8_000 });
-      const inHead = await runCommand({ taskId: null, stepId: null, command: "git", args: ["cat-file", "-e", `HEAD:${path}`], cwd: worktreePath, timeout: 8_000 });
+      const indexed = await runCommand({ taskId: null, stepId: null, expectNonZero: true, command: "git", args: ["ls-files", "--error-unmatch", "--", path], cwd: worktreePath, timeout: 8_000 });
+      const inHead = await runCommand({ taskId: null, stepId: null, expectNonZero: true, command: "git", args: ["cat-file", "-e", `HEAD:${path}`], cwd: worktreePath, timeout: 8_000 });
       if (indexed.exitCode !== 0 && indexed.exitCode !== 1) throw new BrowserProofFailure("invalid-proof", "Browser proof Git boundary could not be verified");
       if (indexed.exitCode === 0 || inHead.exitCode === 0) throw new BrowserProofFailure("invalid-proof", "Browser proof must not be staged, tracked, or committed");
     }

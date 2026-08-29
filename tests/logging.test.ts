@@ -84,6 +84,18 @@ test("prints error messages with an indented stack", () => {
   }, { color: false, component: "worker" })).toBe("12:34:56  ERROR worker     Builder launch failed  executionId=exec-1 error=process exited 1\n    Error: process exited 1\n        at launch (runner.ts:1:1)");
 });
 
+test("prints command failure detail", () => {
+  const line = formatDevLogLine({
+    level: 50,
+    timestamp: new Date(2026, 7, 22, 12, 34, 56).getTime(),
+    msg: "Command failed: git cat-file -e HEAD:x (exit 1)",
+    error: "fatal: Not a valid object name",
+  }, { color: false, component: "worker" });
+
+  expect(line).toContain("Command failed: git cat-file -e HEAD:x (exit 1)");
+  expect(line).toContain("error=fatal: Not a valid object name");
+});
+
 test("NO_COLOR disables ANSI formatting", () => {
   const original = process.env.NO_COLOR;
   process.env.NO_COLOR = "1";

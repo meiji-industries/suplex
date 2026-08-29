@@ -48,14 +48,14 @@ async function git(args: string[], cwd: string, timeout = 8_000): Promise<string
 export async function finalizeDeveloperSourceCommit(worktreePath: string, targetBaseSha: string, reportedPaths: string[]): Promise<{ headSha: string; treeSha: string }> {
   reportedPaths = [...new Set(reportedPaths.map(normalizeBrowserProofPath))];
   for (const path of reportedPaths) {
-    const indexed = await runCommand({ taskId: null, stepId: null, command: "git", args: ["ls-files", "--error-unmatch", "--", path], cwd: worktreePath, timeout: 8_000 });
+    const indexed = await runCommand({ taskId: null, stepId: null, expectNonZero: true, command: "git", args: ["ls-files", "--error-unmatch", "--", path], cwd: worktreePath, timeout: 8_000 });
     if (indexed.exitCode !== 0) continue;
-    const existedAtBase = await runCommand({ taskId: null, stepId: null, command: "git", args: ["cat-file", "-e", `${targetBaseSha}:${path}`], cwd: worktreePath, timeout: 8_000 });
+    const existedAtBase = await runCommand({ taskId: null, stepId: null, expectNonZero: true, command: "git", args: ["cat-file", "-e", `${targetBaseSha}:${path}`], cwd: worktreePath, timeout: 8_000 });
     if (existedAtBase.exitCode !== 0) await git(["rm", "--cached", "--ignore-unmatch", "--", path], worktreePath, 30_000);
   }
   await git(["add", "-A", "--", ".", ":(exclude).forge-proof", ":(exclude).forge-proof/**"], worktreePath, 30_000);
   const sourcePathspec = [".", ":(exclude).forge-proof", ":(exclude).forge-proof/**"];
-  const staged = await runCommand({ taskId: null, stepId: null, command: "git", args: ["diff", "--cached", "--quiet", "--", ...sourcePathspec], cwd: worktreePath, timeout: 30_000 });
+  const staged = await runCommand({ taskId: null, stepId: null, expectNonZero: true, command: "git", args: ["diff", "--cached", "--quiet", "--", ...sourcePathspec], cwd: worktreePath, timeout: 30_000 });
   if (staged.exitCode === 1) await git(["-c", "user.name=Forge Builder", "-c", "user.email=builder@forge.invalid", "commit", "-m", "wip: builder", "--", ...sourcePathspec], worktreePath, 30_000);
   else if (staged.exitCode !== 0) throw new AgentFailure("developer-git-state-invalid", "Developer staged state could not be inspected");
   return { headSha: await git(["rev-parse", "HEAD"], worktreePath), treeSha: await git(["rev-parse", "HEAD^{tree}"], worktreePath) };

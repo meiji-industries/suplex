@@ -167,7 +167,8 @@ function exactRegisteredWorktree(output: string, worktreePath: string, branchNam
 }
 
 const branchFetches = new Map<string, number>();
-const branchFetchIntervalMs = 60_000;
+const branchConflictProbes = new Map<string, { conflictsWithBase: boolean; probedAt: number }>();
+const branchProbeIntervalMs = 60_000;
 
 const defaultGit: GitAdapter = {
   async run(args, cwd, activity, options) {
@@ -426,7 +427,7 @@ export class WorktreeManager {
     const baseRef = `refs/remotes/origin/${baseBranch}`;
     const fetch = async (branch: string, ref: string, force = false): Promise<void> => {
       const key = `${canonical}\0${branch}`;
-      if ((branchFetches.get(key) ?? 0) + branchFetchIntervalMs > Date.now()) return;
+      if ((branchFetches.get(key) ?? 0) + branchProbeIntervalMs > Date.now()) return;
       await this.git.run(["fetch", "--no-tags", "origin", `${force ? "+" : ""}refs/heads/${branch}:${ref}`], canonical);
       branchFetches.set(key, Date.now());
     };
@@ -435,12 +436,20 @@ export class WorktreeManager {
       .then((counts) => counts.split(/\s+/).map(Number))
       .catch(() => [0, 0]);
     const [behindBase = 0, aheadOfBase = 0] = baseCounts;
-    const conflictsWithBase = observedConflict ?? await this.git.run(["merge-tree", "--write-tree", baseRef, branchName], canonical)
-      .then(() => false)
-      .catch((error: unknown) => {
+    const conflictsWithBase = observedConflict ?? await (async () => {
+      const baseSha = await this.git.run(["rev-parse", "--verify", `${baseRef}^{commit}`], canonical);
+      const key = `${canonical}\0${branchName}\0${baseSha}`;
+      const probe = branchConflictProbes.get(key);
+      if (probe && probe.probedAt + branchProbeIntervalMs > Date.now()) return probe.conflictsWithBase;
+      const conflictsWithBase = await this.git.run(["merge-tree", "--write-tree", baseRef, branchName], canonical, undefined, {
+        expectNonZero: (result) => result.exitCode === 1,
+      }).then(() => false).catch((error: unknown) => {
         if (error && typeof error === "object" && "code" in error && error.code === 1) return true;
         throw error;
       });
+      branchConflictProbes.set(key, { conflictsWithBase, probedAt: Date.now() });
+      return conflictsWithBase;
+    })();
     const remoteExists = await this.git.run(["ls-remote", "--exit-code", "--heads", "origin", branchName], canonical, undefined, {
       expectNonZero: (result) => result.exitCode === 2,
     }).then(() => true).catch((error: unknown) => {

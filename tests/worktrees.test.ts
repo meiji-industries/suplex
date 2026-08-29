@@ -106,6 +106,8 @@ test("inspects local branch sync and pushes it to origin", async () => {
 test("reports base drift and dry-run merge conflicts", async () => {
   const value = await remoteFixture();
   const branchName = "feat/conflict";
+  const logs: string[] = [];
+  setCommandRunnerLogger(new StructuredLogger((line) => logs.push(line)));
   try {
     await git(["switch", "-c", branchName], value.repositoryPath);
     await writeFile(join(value.repositoryPath, "README.md"), "branch\n");
@@ -118,7 +120,34 @@ test("reports base drift and dry-run merge conflicts", async () => {
     await writeFile(join(peer, "README.md"), "base\n");
     await git(["commit", "-am", "base change"], peer);
     await git(["push", "origin", "main"], peer);
-    await expect(new WorktreeManager().inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ aheadOfBase: 1, behindBase: 1, conflictsWithBase: true });
+    const manager = new WorktreeManager();
+    await expect(manager.inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ aheadOfBase: 1, behindBase: 1, conflictsWithBase: true });
+    await expect(manager.inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ aheadOfBase: 1, behindBase: 1, conflictsWithBase: true });
+    const records = logs.map((line) => JSON.parse(line));
+    expect(records).not.toContainEqual(expect.objectContaining({ level: 50 }));
+  } finally {
+    setCommandRunnerLogger(new StructuredLogger());
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("rate-limits merge-tree conflict probes per base revision", async () => {
+  const value = await fixture();
+  let mergeTreeRuns = 0;
+  const manager = new WorktreeManager({
+    async run(args) {
+      if (args[0] === "merge-tree") {
+        mergeTreeRuns += 1;
+        throw Object.assign(new Error("conflict"), { code: 1 });
+      }
+      if (args[0] === "rev-parse") return "a".repeat(40);
+      return "1 1";
+    },
+  });
+  try {
+    await expect(manager.inspectSync(value.repositoryPath, "main", "main")).resolves.toMatchObject({ conflictsWithBase: true });
+    await expect(manager.inspectSync(value.repositoryPath, "main", "main")).resolves.toMatchObject({ conflictsWithBase: true });
+    expect(mergeTreeRuns).toBe(1);
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
 test("assigns Cargo task worktrees a mode-0700 shared per-project target directory", async () => {

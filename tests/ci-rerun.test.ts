@@ -4,7 +4,7 @@ import { boundedLogTail, ciRunIdFromDetailsUrl, createGithubCiProvider, CI_FAILE
 import { CiRepairPlanSchema } from "../src/engine/contracts/primitives.js";
 import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/engine/issue-contracts.js";
 import { reconcile } from "../src/pull-request-reconciler.js";
-import { ciDeadlineBlockedState, deferCiReconciliation, CI_RERUN_LIMIT } from "../src/engine/workflow/register-ci.js";
+import { adoptCiPullRequestRelease, ciDeadlineBlockedState, deferCiReconciliation, CI_RERUN_LIMIT } from "../src/engine/workflow/register-ci.js";
 
 test("extracts the Actions run id from a check-run details url", () => {
   expect(ciRunIdFromDetailsUrl("https://github.com/o/r/actions/runs/32485824288/job/96781973569?pr=479")).toBe("32485824288");
@@ -51,6 +51,16 @@ test("missing CI head evidence defers to human reconciliation controls", () => {
 
   expect(waiting).toMatchObject({ phase: "ci_waiting", owner: "human", revision: 4, allowedCommands: ["reconcile_ci", "repair_ci", "cancel_issue"], pendingAction: "Waiting for CI — release evidence is unavailable", lastEventId: "workflow:4" });
   expect(reconcile({ observed: { exists: true, number: 76, state: "merged", isDraft: false, headSha: "a".repeat(40), mergeable: null, checks: "failed", reviewDecision: null, autoMergeEnabled: false }, target: "merged", current: { phase: waiting.phase } }).phase).toBe("Done");
+});
+
+test("CI recovery adopts an observed pull request release without publishing", () => {
+  const state = IssueWorkflowStateSchema.parse({
+    ...buildInitialIssueWorkflowState({ workflowId: "workflow", companyId: "company", projectId: "project", issueId: "task", projectRevisionId: "revision", briefArtifactId: "brief", briefSha256: "a".repeat(64), imageArtifactIds: [], requestHash: "b".repeat(64), roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }),
+    phase: "ci_waiting", revision: 3, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for CI", releaseId: null, releaseRepository: "acme/forge", branchName: "forge/issue/adopt", baseBranch: "main", expectedHeadSha: null, expectedHeadTree: null, lastEventId: "workflow:3",
+  });
+  const adopted = adoptCiPullRequestRelease(state, { releaseId: "release-adopted", repository: "acme/forge", baseBranch: "main", targetBaseSha: "a".repeat(40), pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", headSha: "b".repeat(40), headTree: "c".repeat(40) });
+
+  expect(adopted).toMatchObject({ releaseId: "release-adopted", expectedHeadSha: "b".repeat(40), expectedHeadTree: "c".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40), releaseStatus: "ready" });
 });
 
 test("a failed CI deadline requires human repair controls", () => {

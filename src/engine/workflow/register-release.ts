@@ -6,12 +6,19 @@ import * as stateTransitions from "./state-transitions.js";
 import { issueUpdates } from "../issue-updates.js";
 import { githubPullRequestObservationFields } from "../../github-pull-request-observation.js";
 import type { IssueWorkflowContext } from "./context.js";
+import { GithubReleaseFailure } from "../../github-release.js";
+import { ReleaseFailureCodeSchema } from "../../release-failures.js";
 export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const blockDelivery = async (failure: GithubReleaseFailure): Promise<contracts.IssueWorkflowState> => {
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: failure.summary, releaseStatus: "blocked", releaseFailureCode: failure.code, releaseFailureSummary: failure.summary, releaseRetryAt: failure.retryAt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    await ctx.project();
+    return ctx.state;
+  };
   const runPublishTurn = async (): Promise<contracts.IssueWorkflowState> => {
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "releasing", owner: "lead", allowedCommands: [], pendingAction: "Opening the pull request", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
-    if (!ctx.state.deliveryReviewId || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree) throw new Error("Approved exact delivery is required before publishing");
+    if (!ctx.state.deliveryReviewId || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree) return blockDelivery(new GithubReleaseFailure("stale-reviewed-revision", "Approved exact delivery is required before publishing"));
     // New histories observe first: a PR opened from GitHub is provider truth,
     // while the existing publish activity retains its historical adoption path.
     let observed = true && ctx.state.releaseRepository
@@ -34,7 +41,14 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
     // on GitHub. This patch preserves histories created before the extra
     // activity existed; new histories record it before PR creation.
     if (true) {
-      await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName, commitSha: ctx.state.resultCommit });
+      try {
+        await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName, commitSha: ctx.state.resultCommit });
+      } catch (error) {
+        const failure = ctx.permanentActivityFailure(error);
+        const code = ReleaseFailureCodeSchema.safeParse(failure?.code);
+        const releaseFailure = code.success ? new GithubReleaseFailure(code.data, failure?.summary ?? "The reviewed branch is unavailable for pushing") : null;
+        return blockDelivery(releaseFailure ?? new GithubReleaseFailure("provider-unavailable", failure?.summary ?? "The reviewed branch is unavailable for pushing"));
+      }
     }
     const typedReleaseResult = true;
     const publishInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, reviewId: ctx.state.deliveryReviewId, developerExecutionId: ctx.state.developerExecutionId!, branchName: ctx.state.branchName, targetBaseSha: ctx.state.targetBaseSha, subjectCommit: ctx.state.resultCommit, subjectTree: ctx.state.resultTree, pullRequestMode: ctx.input.pullRequestMode ?? "draft", ...(ctx.state.releaseId ? { releaseId: ctx.state.releaseId } : {}) };

@@ -7,6 +7,7 @@ import { CancelledFailure } from "./failures.js";
 import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, buildInitialIssueWorkflowState, type IssueWorkflowInput, type IssueWorkflowState } from "./issue-contracts.js";
 import { issueWorkflow } from "./workflows.js";
 import { runExecution, type Handler, type RunExecutionContext } from "./registry.js";
+import { StructuredLogger } from "../logging.js";
 
 export interface EngineClock {
   now(): number;
@@ -56,15 +57,15 @@ export class IssueRun {
     private readonly database: ForgeDatabase,
     private readonly caller: ActivityCaller,
     private readonly clock: EngineClock = realClock,
+    private readonly logger = new StructuredLogger(),
   ) {
     // A continuation snapshot is a partial state: layer it over the initial state as the workflow always did.
     this.initialState = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState(input), activeOperation: null, processedCommandIds: [], ...(input.continuationState ?? {}) });
   }
-
   get workflowId(): string { return this.input.workflowId; }
   get state(): IssueWorkflowState {
     const query = this.queries.get("issueState");
-    return IssueWorkflowStateSchema.parse(query ? query() : this.initialState);
+    return IssueWorkflowStateSchema.parse(this.loopError ? this.initialState : query ? query() : this.initialState);
   }
   get error(): unknown { return this.loopError; }
 
@@ -83,8 +84,16 @@ export class IssueRun {
     };
     this.executionContext = context;
     this.workflowPromise = runExecution.run(context, () => issueWorkflow(this.input));
-    void this.workflowPromise.catch((error) => {
-      if (!this.controller.signal.aborted) this.loopError = error;
+    void this.workflowPromise.catch(async (error) => {
+      if (this.controller.signal.aborted) return;
+      this.loopError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error("Issue workflow run failed", { workflowId: this.workflowId }, { error: message, stack: error instanceof Error ? error.stack : undefined });
+      const current = this.state;
+      const now = new Date(this.clock.now()).toISOString();
+      const state = IssueWorkflowStateSchema.parse({ ...current, revision: current.revision + 1, owner: "human", allowedCommands: [...new Set([...current.allowedCommands, "cancel_issue"])], pendingAction: message, lastHandlerError: { command: "workflow", reason: message, at: now }, stateChangedAt: now, lastEventId: `${current.workflowId}:${current.revision + 1}` });
+      this.initialState = state;
+      await this.caller.call("projectIssueState", [{ schemaVersion: 1, runId: this.runId, eventId: state.lastEventId, state }], { startToCloseTimeout: "1 minute", retry: { maximumAttempts: 5, initialInterval: "1 second", maximumInterval: "15 seconds" } }, this.controller.signal, this.workflowId).catch((projectionError) => this.logger.error("Issue workflow failure projection failed", { workflowId: this.workflowId }, { error: projectionError instanceof Error ? projectionError.message : String(projectionError), stack: projectionError instanceof Error ? projectionError.stack : undefined }));
     });
   }
 

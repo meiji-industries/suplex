@@ -178,6 +178,11 @@ export const { publishRelease } = proxyActivities<IssueActivities>({
   retry: { maximumAttempts: 5, initialInterval: "5 seconds", maximumInterval: "1 minute" },
 });
 
+export const { adoptPullRequestRelease } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "1 minute",
+  retry: BOOKKEEPING_RETRY_POLICY,
+});
+
 export const { loadTaskSourcePullRequest, observeGithubPullRequest, applyGithubPullRequestAction } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
   heartbeatTimeout: "15 seconds",

@@ -1,4 +1,4 @@
-import type { ReleaseActivities, PublishReleaseActivityInput } from "../contracts/activities/release.js";
+import type { ReleaseActivities, PublishReleaseActivityInput, AdoptPullRequestReleaseActivityInput } from "../contracts/activities/release.js";
 import { z } from "zod";
 import type { ActivityContext } from "./context.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
@@ -33,6 +33,7 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
   void [database, config, options, createHash, randomBytes, ApplicationFailure, CancelledFailure, Context, z, projectionStateHash, ArtifactStore, redact, AgentFailure, AgentService, DeveloperService, cancelDeveloperExecution, reconcileDeveloperExecutions, cancelAgentExecution, reconcileAgentExecutions, AcceptanceFailure, AcceptanceService, CiFailure, CiProviderFailure, CiService, createGithubCiProvider, createGithubReleasePort, GithubReleaseFailure, ReleaseService, ForwardMergeFailure, ForwardMergeService, parseAcceptedProjectRevision, runPinnedVerification, createGitCommandGuard, ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, ArtifactReferenceSchema, CreateSuccessorActivityInputSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeliveryOperationBlockCodeSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PreparePlanRevisionActivityInputSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, RevisedExecutionCoordinatesSchema, SafeSummarySchema, createInitialIssueWorkflowState, normalizeSafeSummary, PlanGovernanceConflict, PlanGovernanceRepository, StructuredLogger, activityLogContext, CapacityFailure, CapacityManager, CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema, WorktreeFailure, WorktreeManager, startIssueWorkflow, logger, defaultAgent, githubRelease, defaultDeveloper, artifacts, release, ci, acceptance, legacyForwardMerge, capacity, activityWorktrees, activityWorktreesByBranch, worktrees, agent, developer, attentionFailure, agentCategory, invokeAgent, bindCapacityExecution, runSupervised, latestWorktree, cancellationSignal, agentRuntime, pinnedProjectRevision, normalizeReviewResult, normalizeRepairResult, durableArtifactReference, verifiedArtifactBytes, artifactReference, registerArtifact, reconcileBlocker, asNonRetryableCapacityFailure, asNonRetryableApplicationFailure, asRetryableAgentFailure, DeveloperDeliverySchema];
   return {
     async pushDeliveryBranch(input) {
+      try {
       const context = database.authQuery((db) => db.prepare(`SELECT d.worktree_path AS worktreePath
         FROM forge_tasks t
         JOIN forge_developer_executions d ON d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id AND d.branch_name = ? AND d.result_commit = ? AND d.status = 'completed'
@@ -41,7 +42,28 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
       let pinned: ReturnType<typeof pinnedProjectRevision>;
       try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "The task project configuration is incomplete"); }
       await release.pushBranch({ repository: pinned.repository, worktreePath: context.worktreePath, branchName: input.branchName, commitSha: input.commitSha });
-      return { repository: pinned.repository, branchName: input.branchName, commitSha: input.commitSha };
+        return { repository: pinned.repository, branchName: input.branchName, commitSha: input.commitSha };
+      } catch (error) {
+        if (error instanceof GithubReleaseFailure) throw ApplicationFailure.nonRetryable(error.summary, error.code, { code: error.code, summary: error.summary });
+        throw error;
+      }
+    },
+    async adoptPullRequestRelease(input: AdoptPullRequestReleaseActivityInput) {
+      if (!githubRelease.getCommitTree) throw new GithubReleaseFailure("provider-unavailable", "GitHub commit inspection is unavailable");
+      const pullRequest = await githubRelease.getPullRequest({ repository: input.repository, number: input.pullRequestNumber });
+      if (pullRequest.state !== "open" || pullRequest.repository.toLowerCase() !== input.repository.toLowerCase() || pullRequest.headBranch !== input.branchName || pullRequest.headSha.toLowerCase() !== input.headSha.toLowerCase() || pullRequest.baseBranch !== input.baseBranch) throw new GithubReleaseFailure("stale-reviewed-revision", "The pull request no longer matches the observed CI head");
+      const headTree = await githubRelease.getCommitTree({ repository: input.repository, commitSha: input.headSha });
+      const releaseKey = createHash("sha256").update([input.workflowId, input.projectRevisionId, input.repository, input.branchName, input.baseBranch, input.headSha, headTree].join("|"), "utf8").digest("hex");
+      const now = new Date().toISOString();
+      const releaseId = `release_${randomBytes(12).toString("hex")}`;
+      database.authTransaction((db) => {
+        db.prepare(`INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, reused, title, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, 1, ?, ?, ?)
+          ON CONFLICT(release_key) DO UPDATE SET repository = excluded.repository, head_branch = excluded.head_branch, base_branch = excluded.base_branch, base_sha = excluded.base_sha, head_sha = excluded.head_sha, head_tree = excluded.head_tree, status = 'ready', pr_number = excluded.pr_number, pr_url = excluded.pr_url, reused = 1, title = excluded.title, updated_at = excluded.updated_at`)
+          .run(releaseId, input.taskId, input.companyId, input.workflowId, releaseKey, input.repository, input.branchName, input.baseBranch, pullRequest.baseSha, input.headSha, headTree, pullRequest.number, pullRequest.url, pullRequest.title || `Pull request #${pullRequest.number}`, now, now);
+      });
+      const release = database.authQuery((db) => db.prepare("SELECT id FROM forge_releases WHERE release_key = ?").get(releaseKey) as { id: string });
+      return { releaseId: release.id, repository: input.repository, branchName: input.branchName, baseBranch: input.baseBranch, targetBaseSha: pullRequest.baseSha, headSha: input.headSha, headTree, pullRequestNumber: pullRequest.number, pullRequestUrl: pullRequest.url };
     },
     async publishRelease(input: PublishReleaseActivityInput) {
       let identity = { repository: "", branchName: input.branchName, headSha: input.subjectCommit, headTree: input.subjectTree };

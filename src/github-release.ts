@@ -105,6 +105,7 @@ export interface GithubReleasePort {
   checkAuthentication(): Promise<void>;
   getRemoteRepository(input: { cwd: string }): Promise<string>;
   getBranchHead(input: { repository: string; branch: string }): Promise<string | null>;
+  getCommitTree?(input: { repository: string; commitSha: string }): Promise<string>;
   inspectLocalRevision(input: { cwd: string }): Promise<LocalRevision>;
   pushNormal(input: { cwd: string; branch: string }): Promise<void>;
   reconcileBranch?(input: { cwd: string; repository: string; branch: string }): Promise<LocalRevision>;
@@ -144,6 +145,7 @@ export interface GithubReleasePortOptions {
 }
 
 const BranchResponseSchema = z.object({ commit: z.object({ sha: z.string().regex(shaPattern) }) });
+const CommitResponseSchema = z.object({ tree: z.object({ sha: z.string().regex(shaPattern) }) });
 const RepositorySchema = z.string().regex(repositoryPattern).transform((value) => value.toLowerCase());
 const RestErrorSchema = z.object({
   message: z.string().min(1),
@@ -392,6 +394,14 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       } catch (error) {
         if (error instanceof GithubReleaseFailure) throw error;
         throw providerFailure("invalid-provider-response", "GitHub branch response is malformed");
+      }
+    },
+    async getCommitTree(input) {
+      try {
+        return CommitResponseSchema.parse(await api(["api", `repos/${input.repository}/git/commits/${input.commitSha}`], "commit observation")).tree.sha;
+      } catch (error) {
+        if (error instanceof GithubReleaseFailure) throw error;
+        throw providerFailure("invalid-provider-response", "GitHub commit response is malformed");
       }
     },
     async inspectLocalRevision(input) {

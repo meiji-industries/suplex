@@ -5,6 +5,7 @@ import type { ForgeDatabase } from "./database.js";
 import { TERMINAL_PHASES } from "./issue-phases.js";
 import type { IssueCommand } from "./commands/registry.js";
 import { connectEngine, reconcileIssueDeveloperDelivery } from "./engine/service.js";
+import { getIssueEngine } from "./engine/index.js";
 import { issueStateQuery } from "./engine/workflows.js";
 import { IssueWorkflowStateSchema } from "./engine/issue-contracts.js";
 import type { ForgeTask, TaskService } from "./tasks.js";
@@ -79,8 +80,18 @@ export class TaskRescueService {
         steps.push(this.record(task, "Reconcile Developer delivery", "failed", error instanceof Error ? error.message.slice(0, 300) : "Could not reconcile the Developer execution."));
       }
     } else steps.push(this.record(task, "Reconcile Developer delivery", "skipped", "Task is not in a Developer recovery phase."));
-    const diagnostics = await this.diagnostics(actorUserId, taskId);
-    steps.push(this.record(task, "Re-dispatch workflow", "skipped", diagnostics.workflow.status === "running" ? "The in-process run is active." : "Restart the Forge process to reload the durable snapshot."));
+    let run;
+    try { run = getIssueEngine(this.config).runs.get(task.workflowId); } catch { /* Engine may be unavailable during rescue. */ }
+    if (run?.error) {
+      const input = { ...run.input, continuationState: run.state };
+      run.dispose();
+      getIssueEngine(this.config).runs.delete(task.workflowId);
+      await getIssueEngine(this.config).create(input);
+      steps.push(this.record(task, "Re-dispatch workflow", "completed", "Restarted the stalled in-process workflow from its projected state."));
+    } else {
+      const diagnostics = await this.diagnostics(actorUserId, taskId);
+      steps.push(this.record(task, "Re-dispatch workflow", "skipped", diagnostics.workflow.status === "running" ? "The in-process run is active." : "Restart the Forge process to reload the durable snapshot."));
+    }
     steps.push(this.record(task, "Release stale bookkeeping", "skipped", "Process PID rescue is unavailable for Herdr executions."));
     task = this.task(actorUserId, taskId);
     const command = retryCommands.find((candidate) => task.allowedCommands.includes(candidate));

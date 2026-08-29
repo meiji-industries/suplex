@@ -35,7 +35,31 @@ export const PublishReleaseActivityResultSchema = z.discriminatedUnion("outcome"
 ]);
 export type PublishReleaseActivityResult = z.infer<typeof PublishReleaseActivityResultSchema>;
 
+export interface AdoptPullRequestReleaseActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  projectRevisionId: string;
+  repository: string;
+  branchName: string;
+  baseBranch: string;
+  pullRequestNumber: number;
+  headSha: string;
+}
+export interface AdoptPullRequestReleaseActivityResult {
+  releaseId: string;
+  repository: string;
+  branchName: string;
+  baseBranch: string;
+  targetBaseSha: string;
+  headSha: string;
+  headTree: string;
+  pullRequestNumber: number;
+  pullRequestUrl: string;
+}
+
 export interface ReleaseActivities {
   publishRelease(input: PublishReleaseActivityInput): Promise<PublishReleaseActivityResult>;
   pushDeliveryBranch(input: { taskId: string; companyId: string; workflowId: string; branchName: string; commitSha: string }): Promise<{ repository: string; branchName: string; commitSha: string }>;
+  adoptPullRequestRelease(input: AdoptPullRequestReleaseActivityInput): Promise<AdoptPullRequestReleaseActivityResult>;
 }

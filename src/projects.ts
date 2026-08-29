@@ -13,6 +13,7 @@ import { ForgeDatabase } from "./database.js";
 import { jsonRequired } from "./task-utils.js";
 import { createGithubReleasePort, type GithubReleasePort } from "./github-release.js";
 import { TaskSourceService, type TaskSourceSelector } from "./task-sources.js";
+import type { AgentProviderKind } from "./agent-providers/provider.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -44,7 +45,7 @@ export class ProjectFailure extends Error {
 export interface CodexProfile {
   id: string;
   name: string;
-  provider: "codex" | "claude";
+  provider: AgentProviderKind;
   model: string;
   reasoningLevel: ReasoningLevel;
   servicePriority: ServicePriority;
@@ -54,7 +55,7 @@ export interface CodexProfile {
   updatedAt: string;
 }
 
-type ProfileInput = { name: string; provider?: "codex" | "claude"; model: string; reasoningLevel: ReasoningLevel; servicePriority: ServicePriority; capacity?: number | null };
+type ProfileInput = { name: string; provider?: AgentProviderKind; model: string; reasoningLevel: ReasoningLevel; servicePriority: ServicePriority; capacity?: number | null };
 
 export interface Agent {
   id: string;
@@ -76,7 +77,7 @@ export type ModelStatus = "active" | "retired";
 
 export interface CodexModel {
   id: string;
-  provider: "codex" | "claude";
+  provider: AgentProviderKind;
   displayName: string;
   description: string;
   status: ModelStatus;
@@ -172,7 +173,7 @@ interface ProjectRow {
 interface ProfileRow {
   id: string;
   name: string;
-  provider: "codex" | "claude";
+  provider: AgentProviderKind;
   model: string;
   reasoning_level: ReasoningLevel;
   service_priority: ServicePriority;
@@ -196,7 +197,7 @@ export interface AgentRow {
 
 interface ModelRow {
   model_id: string;
-  provider: "codex" | "claude";
+  provider: AgentProviderKind;
   display_name: string;
   description: string;
   status: ModelStatus;
@@ -211,7 +212,7 @@ const namePattern = /^[\p{L}\p{N}](?:[\p{L}\p{N} ._'-]{0,78}[\p{L}\p{N}])?$/u;
 const repositoryPattern = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})\/[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})$/;
 const branchPattern = /^(?![./])(?!.*(?:\.\.|\.$|\.lock$|\/\/|\s|[~^:?*\[\\]))[A-Za-z0-9._/-]+$/;
 const secretPattern = /(?:gh[pousr]_|github_pat_|token\s*=|password\s*=|secret\s*=|BEGIN [A-Z ]+ PRIVATE KEY|sk-[A-Za-z0-9])/i;
-const modelIdPattern = /^[a-z0-9][a-z0-9._-]{1,119}$/;
+const modelIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,119})?$/;
 const avatarSeedPattern = /^[a-f0-9]{32}$/;
 // Agent names also carry duplication suffixes such as "Planner (copy 2)".
 const agentNamePattern = /^[\p{L}\p{N}](?:[\p{L}\p{N} ._'()-]{0,78}[\p{L}\p{N})])?$/u;
@@ -753,7 +754,7 @@ export class ProjectService {
       return rows.map(publicModel);
     });
   }
-  createModel(actorUserId: string, input: { id: string; provider?: "codex" | "claude"; displayName: string; description?: string; sortOrder?: number }): CodexModel {
+  createModel(actorUserId: string, input: { id: string; provider?: AgentProviderKind; displayName: string; description?: string; sortOrder?: number }): CodexModel {
     this.requireAdmin(actorUserId);
     const id = input.id.trim().toLowerCase();
     const displayName = input.displayName.trim();

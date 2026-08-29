@@ -149,6 +149,7 @@ function removeAuthenticationState(snapshotPath: string): void {
       snapshot.prepare("DELETE FROM forge_credentials").run();
       snapshot.prepare("DELETE FROM forge_invitations").run();
       snapshot.prepare("DELETE FROM forge_external_agent_credentials").run();
+      snapshot.prepare("DELETE FROM forge_provider_credentials").run();
       snapshot.prepare("DELETE FROM forge_hermes_pairing_codes").run();
     })();
   } finally {
@@ -189,7 +190,7 @@ export class BackupService {
         },
         entries,
         database: { path: "app/forge.sqlite", integrity: "ok" },
-        secretsExcluded: ["credential registrations", "passkeys", "sessions", "challenges", "invitation tokens", "external agent credentials", "external agent pairing codes", "cookies", "private keys", "provider tokens", "Temporal API keys", "generated environment files"],
+        secretsExcluded: ["credential registrations", "passkeys", "sessions", "challenges", "invitation tokens", "external agent credentials", "provider API keys", "external agent pairing codes", "cookies", "private keys", "provider tokens", "Temporal API keys", "generated environment files"],
         requiredConfiguration: ["accessMode", "reachableAddress", "databasePath", "artifactRoot", "temporalTarget", "temporalAddress", "temporalNamespace", "taskQueue", "installationId"],
       };
       await writeFile(join(root, "manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });

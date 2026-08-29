@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -10,6 +10,7 @@ import { runCommand } from "../src/command-runner.js";
 import { HerdrFailure, type HerdrAgent, type Pane } from "../src/herdr-client.js";
 import { agentName, developerPaneEnvironment, HerdrSessionStore, herdrLabel, launchFingerprint, type RoleSessionTask } from "../src/herdr-session-store.js";
 import { claudeRuntime } from "../src/agent-providers/herdr-runtime.js";
+import { ProviderCredentialStore } from "../src/provider-credentials.js";
 
 test("labels and agent names are bounded, stable, and valid", () => {
   expect(herdrLabel("ACME / Issue 12!")).toBe("acme-issue-12");
@@ -40,6 +41,34 @@ test("developer pane replacement clears secrets and preserves terminal and local
   expect(command).toContain("TERM='xterm-256color'");
   expect(command).toContain("/bin/sh -c");
   expect(command).not.toContain("SECRET");
+});
+
+test("OpenRouter developer preparation sources the secret file without writing its value", () => {
+  const command = developerPaneEnvironment({
+    guardDirectory: "/guard",
+    gitRealBin: "/usr/bin/git",
+    env: { PATH: "/usr/bin" },
+    secretsFile: "/runtime/secrets/openrouter-session.env",
+  });
+  expect(command).toContain(". '/runtime/secrets/openrouter-session.env';");
+  expect(command).toContain('OPENROUTER_API_KEY="$OPENROUTER_API_KEY"');
+  expect(command).not.toContain("sk-openrouter-secret");
+});
+
+test("removes a retired OpenRouter secret file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-openrouter-secret-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  const path = join(root, "secrets", "openrouter-session-1.env");
+  try {
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await writeFile(path, "export OPENROUTER_API_KEY='sk-openrouter-secret'\n", { mode: 0o600 });
+    const store = new HerdrSessionStore(database, {} as never);
+    await store.removeSecrets(root, "session-1");
+    await expect(readFile(path)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("role sessions use workflow-compatible session identifiers", async () => {
@@ -248,6 +277,33 @@ const startupSettings = { model: "gpt", reasoningLevel: "high", serviceTier: "pr
 const taskFor = (runtimeRoot: string): RoleSessionTask => ({
   ...startupTask,
   runtimeRoot,
+});
+
+test("an OpenRouter session rejects a missing key before it creates a pane", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  const store = new HerdrSessionStore(value.database, herdr as never);
+  try {
+    await expect(store.ensureRoleSession(taskFor(value.root), "lead", { provider: "openrouter", model: "anthropic/claude-sonnet-4.5", reasoningLevel: "high", serviceTier: "default" })).rejects.toMatchObject({
+      code: "authentication-required", message: expect.stringContaining("Settings > Providers"),
+    });
+    expect(herdr.panes).toEqual([]);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("an OpenRouter lead sources a protected secret file without exposing its key", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  const credentials = new ProviderCredentialStore(value.database);
+  credentials.set("openrouter", "sk-openrouter-session-secret");
+  const store = new HerdrSessionStore(value.database, herdr as never, process.env, undefined, undefined, credentials);
+  try {
+    await store.ensureRoleSession(taskFor(value.root), "lead", { provider: "openrouter", model: "anthropic/claude-sonnet-4.5", reasoningLevel: "high", serviceTier: "default" });
+    const file = join(value.root, "secrets", (await readdir(join(value.root, "secrets")))[0]!);
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect(herdr.commands.join("\n")).toContain(file);
+    expect(herdr.commands.join("\n")).not.toContain("sk-openrouter-session-secret");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
 test("starts a fresh session without waiting for its lazy Codex identity", async () => {

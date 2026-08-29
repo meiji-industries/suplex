@@ -1,4 +1,5 @@
 import { runCommand } from "./command-runner.js";
+import type { HerdrAgentKind } from "./agent-providers/provider.js";
 import { json } from "./task-utils.js";
 type ExecFileRunner = (
   file: string,
@@ -194,7 +195,7 @@ export interface HerdrClient {
   startAgent(input: {
     name: string;
     paneId: string;
-    kind: "codex" | "claude";
+    kind: HerdrAgentKind;
     args: string[];
   }): Promise<HerdrAgent>;
 }
@@ -234,6 +235,9 @@ export class CliHerdrClient implements HerdrClient {
         stdout?: string;
         stderr?: string;
       };
+      const output = `${detail.stdout ?? ""} ${detail.stderr ?? ""}`;
+      if (args[0] === "agent" && args[1] === "start" && args.includes("omp") && /(?:omp.*(?:not found|ENOENT)|(?:not found|ENOENT).*omp)/i.test(output))
+        throw new HerdrFailure("provider-unavailable", false, "omp is not installed on the Forge host");
       const bodies = [detail.stdout, detail.stderr]
         .map((stream) => json<Json | undefined>(stream ?? "", undefined))
         .filter((candidate): candidate is Json => candidate !== undefined);
@@ -471,12 +475,11 @@ export class CliHerdrClient implements HerdrClient {
   async startAgent(input: {
     name: string;
     paneId: string;
-    kind: "codex" | "claude";
+    kind: HerdrAgentKind;
     args: string[];
   }): Promise<HerdrAgent> {
-    return agent(
-      value<Json>(
-        await this.call([
+    try {
+      return agent(value<Json>(await this.call([
           "agent",
           "start",
           input.name,
@@ -488,9 +491,11 @@ export class CliHerdrClient implements HerdrClient {
           "120000",
           "--",
           ...input.args,
-        ]),
-        "agent",
-      ),
-    );
+        ]), "agent"));
+    } catch (error) {
+      const output = `${String((error as { stderr?: unknown }).stderr ?? "")} ${String((error as { message?: unknown }).message ?? "")}`;
+      if (input.kind === "omp" && /(?:omp.*(?:not found|ENOENT)|(?:not found|ENOENT).*omp)/i.test(output)) throw new HerdrFailure("provider-unavailable", false, "omp is not installed on the Forge host");
+      throw error;
+    }
   }
 }

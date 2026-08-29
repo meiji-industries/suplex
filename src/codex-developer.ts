@@ -3,6 +3,7 @@ import { realpath } from "node:fs/promises";
 import { relative, sep } from "node:path";
 
 import { z } from "zod";
+import type { AgentProviderKind } from "./agent-providers/provider.js";
 import type Database from "better-sqlite3";
 
 import type { ForgeConfig } from "./config.js";
@@ -146,7 +147,7 @@ interface DeveloperContext {
 interface DeveloperProfile {
   id: string;
   model: string;
-  provider: "codex" | "claude";
+  provider: AgentProviderKind;
   reasoningLevel: "low" | "medium" | "high" | "xhigh";
   servicePriority: "standard" | "priority" | "fast";
 }

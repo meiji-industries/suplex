@@ -6,6 +6,7 @@ import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import type { HealthCheck } from "./health.js";
 import { resolveAgentProvider } from "./agent-providers/index.js";
+import { HerdrOpenRouterProvider } from "./agent-providers/herdr-openrouter.js";
 import { checkGithubAuthentication } from "./provider-readiness.js";
 import { checkBackupHealth } from "./backup.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
@@ -128,6 +129,7 @@ export function createHostHealthDependencies(config: ForgeConfig, database: Forg
   const temporal = new TemporalHealthProbe(config);
   const agent = resolveAgentProvider().readinessProbe();
   const claude = resolveAgentProvider("claude").readinessProbe();
+  const openrouter = new HerdrOpenRouterProvider(database).readinessProbe();
   return {
     temporal: () => temporal.check(),
     database: () => checkDatabase(database),
@@ -135,6 +137,7 @@ export function createHostHealthDependencies(config: ForgeConfig, database: Forg
     worker: async () => checkWorker(database, config.taskQueue, config.installationId, workflowBundleBuildId(config.installationId, await buildProductionWorkflowBundle())),
     codexAuth: () => agent.check(),
     claudeAuth: () => claude.check(),
+    openrouterAuth: () => openrouter.check(),
     herdrReadiness: () => checkHerdrReadiness(),
     ghAuth: checkGithubAuthentication(process.env.FORGE_GH_COMMAND ?? "gh"),
     backup: () => checkBackupHealth(config),

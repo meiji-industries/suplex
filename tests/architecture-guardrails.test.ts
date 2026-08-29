@@ -97,6 +97,10 @@ const budgets: Record<string, number> = {
   "src/agent-providers/herdr-runtime.ts": 120,
   "src/agent-providers/herdr-claude.ts": 60,
   "src/agent-providers/claude-readiness.ts": 80,
+  "src/agent-providers/openrouter-readiness.ts": 80,
+  "src/agent-providers/herdr-openrouter.ts": 60,
+  "src/provider-credentials.ts": 160,
+  "src/omp-rollout.ts": 200,
 };
 for (const [file, budget] of Object.entries(budgets)) {
   test(`${file} stays within ${budget} lines`, () => {
@@ -109,4 +113,10 @@ test("navigation links do not render through the Button primitive", () => {
   for (const file of globSync("src/frontend/**/*.tsx")) {
     expect(readFileSync(file, "utf8"), file).not.toMatch(/<Button\b[^>]*\brender=\{<a\b/);
   }
+});
+
+test("workflow capacity contracts import provider kinds without provider runtime dependencies", () => {
+  const source = readFileSync("src/capacity-contracts.ts", "utf8");
+  expect(source).toContain('from "./agent-providers/kinds.js"');
+  expect(source).not.toContain('from "./agent-providers/provider.js"');
 });

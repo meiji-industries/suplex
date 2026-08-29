@@ -1,4 +1,4 @@
-import { Activity, ChevronRight, CircleHelp, Database, GitBranch, HardDrive, RefreshCw, Terminal, Workflow, type LucideIcon } from "lucide-react";
+import { Activity, ChevronRight, CircleHelp, Database, GitBranch, HardDrive, Plug, RefreshCw, Terminal, Workflow, type LucideIcon } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import type { HealthCheck, HealthSnapshot } from "../../../health.js";
@@ -8,6 +8,7 @@ import { Button } from "../ui/button.js";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert.js";
 import { Collapsible } from "../ui/collapsible.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "../ui/dialog.js";
+import { StatusLight } from "./status-light.js";
 import { SidebarMenuButton } from "../ui/sidebar.js";
 
 export type HealthFreshness = "checking" | "current" | "stale";
@@ -29,6 +30,8 @@ const icons: Record<string, LucideIcon> = {
   "artifact-root": HardDrive,
   worker: Activity,
   "codex-auth": Terminal,
+  "claude-auth": Terminal,
+  "openrouter-auth": Plug,
   "gh-auth": GitBranch,
 };
 
@@ -165,17 +168,13 @@ export function SystemHealthIndicator({ sidebar = false }: { sidebar?: boolean }
   if (!health) return null;
   const level = getSystemHealthLevel(health.snapshot, health.freshness);
   const label = level === "green" ? "Healthy" : level === "amber" ? "Degraded" : "Unavailable";
-  const lightClass = level === "green" ? "bg-emerald-500" : level === "amber" ? "bg-amber-500" : "bg-rose-500";
   const healthyCount = health.snapshot?.checks.filter((check) => check.status === "healthy").length ?? 0;
   const checkCount = health.snapshot?.checks.length ?? 0;
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={sidebar ? <SidebarMenuButton aria-label={`System health: ${label}`} title={`System health: ${label}`} data-system-health data-status={level} /> : <Button variant="ghost" size="icon" aria-label={`System health: ${label}`} title={`System health: ${label}`} data-system-health data-status={level} />}>
         <span className="flex size-4 shrink-0 items-center justify-center">
-          <span className="relative flex size-2">
-            <span className={`absolute -inset-0.5 inline-flex size-3 rounded-full opacity-50 motion-safe:animate-ping ${lightClass}`} />
-            <span className={`relative inline-flex size-2 rounded-full motion-safe:animate-pulse ${lightClass}`} />
-          </span>
+          <StatusLight level={level} label={label} />
         </span>
         {sidebar ? <span>{label}</span> : null}
       </DialogTrigger>

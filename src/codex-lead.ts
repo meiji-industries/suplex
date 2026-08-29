@@ -5,6 +5,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { z } from "zod";
+import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from "./agent-providers/provider.js";
 
 import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
@@ -132,13 +133,13 @@ export function deliveryBlockCode(failure: AgentFailure): import("./temporal/iss
   return "preflight-failed";
 }
 
-function safeBlockSummary(code: import("./temporal/issue-contracts.js").DeliveryOperationBlockCode, correctionExhausted = false, reason?: string): string {
+export function safeBlockSummary(code: import("./temporal/issue-contracts.js").DeliveryOperationBlockCode, correctionExhausted = false, reason?: string): string {
   if (correctionExhausted) return "The Lead returned invalid review output after one format correction; retry the review.";
   const summaries: Record<import("./temporal/issue-contracts.js").DeliveryOperationBlockCode, string> = {
     "invalid-output": "The Lead review was not machine-readable; retry the review.",
     "correction-exhausted": "The Lead returned invalid review output after one format correction; retry the review.",
     "session-conflict": "The Lead review returned a different session identity; retry the review.",
-    "authentication-required": "Agent provider authentication is unavailable; sign in again, then retry.",
+    "authentication-required": reason ?? "Agent provider authentication is unavailable; sign in again, then retry.",
     "rate-limited": "Agent provider rate limiting prevented the review from completing; retry later.",
     "process-failed": "The Lead review process did not complete; inspect the evidence and retry.",
     "preflight-failed": reason ?? "The Lead review preflight failed; inspect the evidence and retry.",
@@ -182,7 +183,7 @@ interface PlanningRow {
 interface ProfileSettings {
   id: string;
   name: string;
-  provider: "codex" | "claude";
+  provider: AgentProviderKind;
   model: string;
   reasoningLevel: string;
   servicePriority: string;
@@ -388,7 +389,7 @@ export class AgentService {
     const pinned = resumeSessionRef ? this.database.authQuery((db) => db.prepare("SELECT e.profile_id AS profileId, COALESCE(e.provider, p.provider, 'codex') AS provider, e.resolved_model AS model, e.resolved_reasoning_level AS reasoningLevel, e.resolved_service_priority AS servicePriority FROM forge_agent_executions e LEFT JOIN forge_profiles p ON p.id = e.profile_id WHERE e.session_ref = ? AND e.company_id = ? AND e.role = 'planner' AND e.resolved_model IS NOT NULL ORDER BY e.started_at DESC LIMIT 1").get(resumeSessionRef, input.companyId) as { profileId: string | null; provider: string; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const persisted = pinned;
     let leadProfile = persisted
-      ? { id: persisted.profileId ?? input.roleProfiles.planner ?? "pinned-lead", name: "Pinned Lead", provider: persisted.provider as "codex" | "claude", model: persisted.model, reasoningLevel: persisted.reasoningLevel, servicePriority: persisted.servicePriority, capacity: 0 }
+      ? { id: persisted.profileId ?? input.roleProfiles.planner ?? "pinned-lead", name: "Pinned Lead", provider: persisted.provider as AgentProviderKind, model: persisted.model, reasoningLevel: persisted.reasoningLevel, servicePriority: persisted.servicePriority, capacity: 0 }
       : profileSettings.find((profile) => profile.id === input.roleProfiles.planner);
     if (!leadProfile) throw new AgentFailure("profile-unavailable", "The configured Lead profile is unavailable");
     const revisionRequest = input.revisionRequestId ? this.database.authQuery((db) => db.prepare(`SELECT r.disposition, r.worktree_path AS worktreePath, r.branch_name AS branchName, r.base_sha AS baseSha, r.head_sha AS headSha, r.tree_sha AS treeSha, r.exact_base_sha AS exactBaseSha, a.storage_path AS reasonPath, a.sha256 AS reasonSha
@@ -396,7 +397,7 @@ export class AgentService {
       WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { disposition: "reuse" | "new"; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null; reasonPath: string; reasonSha: string } | undefined) : undefined;
     if (input.revisionRequestId && !revisionRequest) throw new AgentFailure("revision-request-missing", "The plan revision request is unavailable");
     const revisionContext = revisionRequest ? { ...revisionRequest, reason: (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: revisionRequest.reasonPath, sha256: revisionRequest.reasonSha })).toString("utf8") } : undefined;
-    if (!["codex", "claude"].includes(leadProfile.provider) || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(leadProfile.model) || !["low", "medium", "high", "xhigh"].includes(leadProfile.reasoningLevel) || !["standard", "priority", "fast"].includes(leadProfile.servicePriority)) {
+    if (!AGENT_PROVIDER_KINDS.includes(leadProfile.provider) || !/^[a-z0-9][a-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,119})?$/.test(leadProfile.model) || !["low", "medium", "high", "xhigh"].includes(leadProfile.reasoningLevel) || !["standard", "priority", "fast"].includes(leadProfile.servicePriority)) {
       throw new AgentFailure("scope_configuration", "The configured Lead profile has invalid turn settings", { nonRetryable: true });
     }
     const repositoryEvidence = await this.repositoryEvidence(repositoryPath);
@@ -1034,20 +1035,20 @@ export class AgentService {
     catch { throw new AgentFailure("scoped-input-missing", "Consolidation repository is unavailable"); }
   }
 
-  private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string, role: "planner" | "reviewer" | "integrator" = "planner"): Promise<{ id: string; provider: "codex" | "claude"; model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }> {
+  private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string, role: "planner" | "reviewer" | "integrator" = "planner"): Promise<{ id: string; provider: AgentProviderKind; model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }> {
     const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT e.profile_id AS profileId, COALESCE(e.provider, p.provider, 'codex') AS provider, e.resolved_model AS model, e.resolved_reasoning_level AS reasoningLevel, e.resolved_service_priority AS servicePriority FROM forge_agent_executions e LEFT JOIN forge_profiles p ON p.id = e.profile_id WHERE e.session_ref = ? AND e.role = ? AND e.resolved_model IS NOT NULL ORDER BY e.started_at DESC LIMIT 1").get(sessionRef, role) as { profileId: string | null; provider: string; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const profile = pinned ? undefined : this.database.authQuery((db) => (profileId
       ? db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId)
-      : db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE provider = ? ORDER BY id LIMIT 1").get("codex")) as { id: string; provider: "codex" | "claude"; model: string; reasoningLevel: string; servicePriority: string } | undefined);
+      : db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE provider = ? ORDER BY id LIMIT 1").get("codex")) as { id: string; provider: AgentProviderKind; model: string; reasoningLevel: string; servicePriority: string } | undefined);
     if (!pinned && !profile) throw new AgentFailure("profile-unavailable", `${label} profile is unavailable`);
     const model = pinned?.model ?? profile!.model;
     const reasoningLevel = pinned?.reasoningLevel ?? profile!.reasoningLevel;
     const servicePriority = pinned?.servicePriority ?? profile!.servicePriority;
     const provider = pinned?.provider ?? profile!.provider;
-    if (!["codex", "claude"].includes(provider) || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(model) || !["low", "medium", "high", "xhigh"].includes(reasoningLevel) || !["standard", "priority", "fast"].includes(servicePriority)) {
+    if (!AGENT_PROVIDER_KINDS.includes(provider as AgentProviderKind) || !/^[a-z0-9][a-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,119})?$/.test(model) || !["low", "medium", "high", "xhigh"].includes(reasoningLevel) || !["standard", "priority", "fast"].includes(servicePriority)) {
       throw new AgentFailure("scope_configuration", `${label} profile has invalid pinned turn settings`, { nonRetryable: true });
     }
-    return { id: pinned?.profileId ?? profile!.id, provider: provider as "codex" | "claude", model, reasoningLevel: reasoningLevel as "low" | "medium" | "high" | "xhigh", servicePriority: servicePriority as "standard" | "priority" | "fast" };
+    return { id: pinned?.profileId ?? profile!.id, provider: provider as AgentProviderKind, model, reasoningLevel: reasoningLevel as "low" | "medium" | "high" | "xhigh", servicePriority: servicePriority as "standard" | "priority" | "fast" };
   }
 
   private async ensureResultSchema(name: string, schema: z.ZodType): Promise<string> {

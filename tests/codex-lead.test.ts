@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 import { ApplicationFailure } from "@temporalio/activity";
 
 import { ArtifactStore } from "../src/artifacts.js";
-import { AgentFailure, AgentService, deliveryBlockCode, isAgentExecutionActiveLeaseCollision, LeadOutputSchema } from "../src/codex-lead.js";
+import { AgentFailure, AgentService, deliveryBlockCode, isAgentExecutionActiveLeaseCollision, LeadOutputSchema, safeBlockSummary } from "../src/codex-lead.js";
 import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
 import { isDeveloperExecutionActiveLeaseCollision } from "../src/codex-developer.js";
@@ -43,6 +43,11 @@ test("recognizes the real SQLite error for an active agent execution lease", () 
 test("delivery failure codes identify malformed output and failed turns", () => {
   expect(deliveryBlockCode(new AgentFailure("invalid-output-schema", "invalid"))).toBe("invalid-output");
   expect(deliveryBlockCode(new AgentFailure("turn-failed", "failed"))).toBe("process-failed");
+});
+
+test("an OpenRouter missing-key planner failure keeps its actionable attention summary", () => {
+  const summary = safeBlockSummary("authentication-required", false, "OpenRouter API key is not configured. Add it in Settings > Providers and retry.");
+  expect(summary).toContain("OpenRouter API key is not configured");
 });
 
 test("recognizes the real SQLite error for an active developer execution lease", () => {

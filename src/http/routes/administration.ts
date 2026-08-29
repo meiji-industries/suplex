@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { type ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 
@@ -12,6 +12,10 @@ import { ProjectionRebuildFailure, ProjectionRebuildService } from "../../projec
 import { AuditEventListResponseSchema, CredentialIdParamsSchema, CredentialListResponseSchema, ErrorResponseSchema, InvitationResponseSchema, InvitationSummaryListResponseSchema, UserIdParamsSchema, UserListResponseSchema } from "../contracts/common.js";
 import { DisplayNameBodySchema } from "../contracts/auth.js";
 import { AdminCapacityListResponseSchema, AgentBodySchema, AgentPatchBodySchema, AgentResponseSchema, ModelBodySchema, ModelIdParamsSchema, ModelListResponseSchema, ModelResponseSchema, ModelStatusBodySchema, ProfileBodySchema, ProfileCapacityBodySchema, ProfileResponseSchema } from "../contracts/projects.js";
+import { ProviderCredentialBodySchema, ProviderListResponseSchema, ProviderTestResponseSchema } from "../contracts/providers.js";
+import { PROVIDER_HARNESSES, type AgentProviderKind } from "../../agent-providers/provider.js";
+import { ProviderCredentialStore } from "../../provider-credentials.js";
+import { OpenRouterReadinessProbe } from "../../agent-providers/openrouter-readiness.js";
 
 const ProjectionRebuildBodySchema = z.object({ companyId: z.string().optional(), taskId: z.string().optional() }).default({});
 
@@ -27,6 +31,20 @@ export interface AdministrationRoutesOptions {
 const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (app, options) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const { auth, projects, database, attention, config, capacity } = options;
+  const requireAdmin = (role: string, reply: FastifyReply): boolean => {
+    if (role === "admin") return true;
+    reply.code(403).send({ error: "Administrator access required" });
+    return false;
+  };
+  typed.get("/api/admin/providers", { schema: { response: { 200: ProviderListResponseSchema } } }, async (_request, reply) => {
+    if (!requireAdmin(_request.forgeUser.role, reply)) return;
+    if (!database) return reply.send({ providers: [] });
+    const credentials = new ProviderCredentialStore(database);
+    return reply.send({ providers: (Object.entries(PROVIDER_HARNESSES) as [AgentProviderKind, typeof PROVIDER_HARNESSES[AgentProviderKind]][]).map(([id, provider]) => ({ id, ...provider, credential: id === "openrouter" ? { required: true, ...credentials.describe("openrouter") } : { required: false, configured: false, maskedKey: null, lastTestedAt: null, lastTestStatus: null, lastTestSummary: null } })) });
+  });
+  typed.put("/api/admin/providers/openrouter/credential", { schema: { body: ProviderCredentialBodySchema } }, async (request, reply) => { if (!requireAdmin(request.forgeUser.role, reply)) return; if (!database) throw new Error("Database is unavailable"); new ProviderCredentialStore(database).set("openrouter", request.body.apiKey); return reply.header("Cache-Control", "private, no-store").code(204).send(); });
+  typed.delete("/api/admin/providers/openrouter/credential", async (request, reply) => { if (!requireAdmin(request.forgeUser.role, reply)) return; if (!database) throw new Error("Database is unavailable"); new ProviderCredentialStore(database).clear("openrouter"); return reply.header("Cache-Control", "private, no-store").code(204).send(); });
+  typed.post("/api/admin/providers/openrouter/test", { schema: { response: { 200: ProviderTestResponseSchema } } }, async (request, reply) => { if (!requireAdmin(request.forgeUser.role, reply)) return; if (!database) throw new Error("Database is unavailable"); const check = await new OpenRouterReadinessProbe(undefined, new ProviderCredentialStore(database)).check(); return reply.header("Cache-Control", "private, no-store").send({ ok: check.status === "healthy", summary: check.summary, check }); });
   typed.post("/api/admin/invitations", { schema: { body: DisplayNameBodySchema, response: { 201: InvitationResponseSchema } } }, async (request, reply) => reply.code(201).send(auth.inviteUser(request.forgeUser.id, { displayName: request.body.displayName })));
   typed.get("/api/admin/invitations", { schema: { response: { 200: InvitationSummaryListResponseSchema } } }, async (request, reply) => reply.send({ invitations: auth.listInvitations(request.forgeUser.id) }));
   typed.get("/api/admin/users", { schema: { response: { 200: UserListResponseSchema } } }, async (request, reply) => reply.send({ users: auth.listUsers(request.forgeUser.id) }));

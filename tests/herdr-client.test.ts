@@ -83,6 +83,18 @@ test("client preserves retryable Herdr timeout details", async () => {
   });
 });
 
+test("client reports a missing omp binary as an unavailable provider", async () => {
+  const client = new CliHerdrClient("herdr", async () => {
+    throw { code: 1, stderr: "omp: command not found" };
+  });
+
+  await expect(client.startAgent({ name: "forge-openrouter", paneId: "w1:p1", kind: "omp", args: [] })).rejects.toMatchObject({
+    code: "provider-unavailable",
+    retryable: false,
+    message: "omp is not installed on the Forge host",
+  });
+});
+
 test("pane run accepts an empty successful response", async () => {
   const client = new CliHerdrClient("herdr", async () => ({ stdout: "" }));
 

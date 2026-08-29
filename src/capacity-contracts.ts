@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AGENT_PROVIDER_KINDS } from "./agent-providers/kinds.js";
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
@@ -35,7 +36,7 @@ export type CapacityTerminalReason = z.infer<typeof CapacityTerminalReasonSchema
 
 export const CapacitySettingsSchema = z.object({
   profileId: durableId,
-  provider: z.literal("codex"),
+  provider: z.enum(AGENT_PROVIDER_KINDS),
   model: z.string().min(1).max(256),
   reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]),
   servicePriority: z.enum(["standard", "priority", "fast"]),
@@ -49,7 +50,7 @@ export const WorkflowCapacityStateSchema = z.object({
   operation: CapacityOperationSchema,
   role: PersistedCapacityRoleSchema,
   profileId: durableId,
-  laneKey: z.string().regex(/^codex:[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  laneKey: z.string().regex(/^(codex|claude|openrouter):[A-Za-z0-9][A-Za-z0-9._:-]*$/),
   status: CapacityRequestStatusSchema,
   position: z.number().int().positive().nullable(),
   reason: CapacityWaitReasonSchema.nullable(),
@@ -78,11 +79,11 @@ export const CapacityRequestSnapshotSchema = z.object({
   operation: CapacityOperationSchema,
   role: CapacityRoleSchema,
   profileId: durableId,
-  provider: z.literal("codex"),
+  provider: z.enum(AGENT_PROVIDER_KINDS),
   model: z.string().min(1).max(256),
   reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]),
   servicePriority: z.enum(["standard", "priority", "fast"]),
-  laneKey: z.string().regex(/^codex:[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  laneKey: z.string().regex(/^(codex|claude|openrouter):[A-Za-z0-9][A-Za-z0-9._:-]*$/),
   requestedCapacity: z.number().int().min(1).max(32),
   status: CapacityRequestStatusSchema,
   waitReason: CapacityWaitReasonSchema.nullable(),
@@ -151,7 +152,7 @@ export type PublicCapacityStatus = z.infer<typeof PublicCapacityStatusSchema>;
 export const AdminCapacityLaneSchema = z.object({
   profileId: durableId,
   profileName: z.string().min(1).max(120),
-  provider: z.literal("codex"),
+  provider: z.enum(AGENT_PROVIDER_KINDS),
   capacity: z.number().int().min(1).max(32).nullable(),
   effectiveCapacity: z.number().int().min(1).max(32),
   activeCount: z.number().int().nonnegative(),

@@ -14,6 +14,7 @@ import { HerdrFailure, type HerdrClient } from "./herdr-client.js";
 import type { IssueTimelineEvents } from "./issue-timeline-events.js";
 import type { EnsuredRoleSession, HerdrSessionStore, RoleSessionRole } from "./herdr-session-store.js";
 import { herdrRuntime, type HerdrProviderRuntime } from "./agent-providers/herdr-runtime.js";
+import type { AgentProviderKind } from "./agent-providers/provider.js";
 import { redact } from "./logging.js";
 import { jsonRequired } from "./task-utils.js";
 
@@ -30,7 +31,7 @@ const responseStyleBlock = `Forge response style
 export interface HerdrTurnInput<T> {
   task: { taskId: string; projectId: string; projectSlug: string; issueKey?: string; worktreePath: string; runtimeRoot: string };
   sessionRole: Role; executionRole: ExecutionRole; ledger: "agent" | "developer"; executionId: string; promptKind: string; prompt: string;
-  profile: { provider?: "codex" | "claude"; model: string; reasoningLevel: string; servicePriority: string }; resultSchema: z.ZodType<T>; schemaPath: string;
+  profile: { provider?: AgentProviderKind; model: string; reasoningLevel: string; servicePriority: string }; resultSchema: z.ZodType<T>; schemaPath: string;
   companyId: string; workflowId: string; revision: number; signal?: AbortSignal | undefined;
 }
 export interface HerdrTurnOutput<T> { turnId: string; sessionId: string; roleSessionId: string; result: T; resultHash: string; }
@@ -40,7 +41,7 @@ const artifactChunkBytes = 512 * 1024;
 /** Result-file completion for a single interactive Codex turn. Pane text is never a result. */
 export class HerdrTurnRunner {
   private readonly activeTurnIds = new Map<string, string | undefined>();
-  private readonly runtimes: (kind: "codex" | "claude") => HerdrProviderRuntime = herdrRuntime;
+  private readonly runtimes: (kind: AgentProviderKind) => HerdrProviderRuntime = herdrRuntime;
   constructor(
     private readonly database: ForgeDatabase,
     private readonly herdr: HerdrClient,
@@ -110,7 +111,7 @@ export class HerdrTurnRunner {
       if (error instanceof HerdrFailure) throw new AgentFailure(error.code, error.message, { nonRetryable: !error.retryable });
       throw error;
     } finally {
-      if (input.sessionRole === "reviewer" && session) await this.closeReviewer(session).catch(() => undefined);
+      if (input.sessionRole === "reviewer" && session) await this.closeReviewer(session, input.task.runtimeRoot).catch(() => undefined);
       if (session && turnId) this.clearAttention(session.id, turnId);
     }
   }
@@ -393,8 +394,9 @@ export class HerdrTurnRunner {
     if (existing) return existing;
     return this.artifacts!.putWithId(input.companyId, `artifact_${kind}_${sha256}`, kind, { filename: `${sha256}.${mimeType === "application/gzip" ? "jsonl.gz" : "json"}`, mimeType, bytes, taskId: input.task.taskId });
   }
-  private async closeReviewer(session: EnsuredRoleSession): Promise<void> {
+  private async closeReviewer(session: EnsuredRoleSession, runtimeRoot: string): Promise<void> {
     await this.herdr.closePane(session.paneId);
+    await this.sessions.removeSecrets(runtimeRoot, session.id);
     this.update("UPDATE forge_herdr_role_sessions SET pane_id = NULL, status = 'closed', is_current = 0, updated_at = ? WHERE id = ? AND codex_session_id = ?", iso(), session.id, session.codexSessionId);
   }
   private interruptedGeneration(turnId: string): number | undefined { return this.database.authQuery((db) => (db.prepare("SELECT interrupted_generation FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { interrupted_generation: number | null } | undefined)?.interrupted_generation ?? undefined); }

@@ -8,10 +8,12 @@ import {
   type HerdrClient,
 } from "./herdr-client.js";
 import { herdrRuntime, type HerdrProviderRuntime } from "./agent-providers/herdr-runtime.js";
+import type { AgentProviderKind, HerdrAgentKind } from "./agent-providers/provider.js";
+import { ProviderCredentialStore } from "./provider-credentials.js";
 import { createGitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
 export type RoleSessionRole = "lead" | "developer" | "reviewer";
 export interface LaunchSettings {
-  provider?: "codex" | "claude";
+  provider?: AgentProviderKind;
   model: string;
   reasoningLevel: string;
   serviceTier: "default" | "priority" | "fast";
@@ -26,7 +28,7 @@ export interface RoleSessionTask {
 }
 export interface EnsuredRoleSession {
   id: string;
-  provider: "codex" | "claude";
+  provider: AgentProviderKind;
   agentName: string;
   paneId: string;
   codexSessionId: string | null;
@@ -73,13 +75,14 @@ export function agentName(
 }
 export function launchFingerprint(settings: LaunchSettings, cwd = ""): string {
   const { provider, ...profile } = settings;
-  return createHash("sha256").update(JSON.stringify({ ...profile, ...(provider === "claude" ? { provider } : {}), cwd })).digest("hex");
+  return createHash("sha256").update(JSON.stringify({ ...profile, ...(provider !== "codex" ? { provider } : {}), cwd })).digest("hex");
 }
 export function developerPaneEnvironment(input: {
   guardDirectory: string;
   gitRealBin: string;
   env: NodeJS.ProcessEnv;
   readinessSentinel?: string;
+  secretsFile?: string;
 }): string {
   const keys = [
     "HOME",
@@ -120,9 +123,10 @@ export function developerPaneEnvironment(input: {
     values.FORGE_HERDR_READINESS_SENTINEL = input.readinessSentinel;
   const shell = "/bin/zsh";
   const script = `exec ${quote(shell)} -i`;
-  return `exec env -i ${Object.entries(values)
+  const command = `exec env -i ${Object.entries(values)
     .map(([key, value]) => `${key}=${quote(value)}`)
-    .join(" ")} /bin/sh -c ${quote(script)}`;
+    .join(" ")}${input.secretsFile ? " OPENROUTER_API_KEY=\"$OPENROUTER_API_KEY\"" : ""} /bin/sh -c ${quote(script)}`;
+  return input.secretsFile ? `. ${quote(input.secretsFile)}; ${command}` : command;
 }
 export class HerdrSessionStore {
   private readonly ensuring = new Map<string, Promise<void>>();
@@ -132,7 +136,8 @@ export class HerdrSessionStore {
     private readonly environment: NodeJS.ProcessEnv = process.env,
     private readonly wait: (ms: number) => Promise<void> = (ms) =>
       new Promise((resolve) => setTimeout(resolve, ms)),
-    private readonly runtimes: (kind: "codex" | "claude") => HerdrProviderRuntime = herdrRuntime,
+    private readonly runtimes: (kind: AgentProviderKind) => HerdrProviderRuntime = herdrRuntime,
+    private readonly credentials: ProviderCredentialStore = new ProviderCredentialStore(database),
   ) {}
   readRoleSession(id: string): Record<string, unknown> | null {
     return this.database.authQuery((db) =>
@@ -150,6 +155,7 @@ export class HerdrSessionStore {
     const provider = settings.provider ?? "codex";
     if (existing && existing.provider_kind !== provider) {
       if (existing.pane_id) await this.closeRecordedPane(existing.id, existing.pane_id);
+      if (existing.provider_kind === "openrouter") await this.removeSecrets(task.runtimeRoot, existing.id);
       this.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0, status = 'closed', pane_id = NULL, agent_name = NULL, updated_at = ? WHERE id = ?").run(now(), existing.id));
     }
     const reserved = this.reserve(task, role, { ...settings, provider });
@@ -179,6 +185,8 @@ export class HerdrSessionStore {
     role: RoleSessionRole,
     settings: LaunchSettings,
   ): Promise<EnsuredRoleSession> {
+    if (settings.provider === "openrouter" && !this.credentials.get("openrouter"))
+      throw new HerdrFailure("authentication-required", false, "OpenRouter API key is not configured. Add it in Settings > Providers and retry.");
     const fingerprint = launchFingerprint(settings, task.worktreePath);
     let closedPaneId: string | undefined;
     let paneMismatch = false;
@@ -216,6 +224,7 @@ export class HerdrSessionStore {
     if (row.pane_id && !existing && row.pane_id !== closedPaneId)
       await this.closeRecordedPane(row.id, row.pane_id);
     let paneId: string | undefined;
+    let secretsFile: string | undefined;
     try {
       const pane = await this.herdr.splitPane({
         paneId: tab.shellPaneId,
@@ -237,6 +246,16 @@ export class HerdrSessionStore {
       let preparation = `export FORGE_HERDR_READINESS_SENTINEL=${quote(readinessPath)}; exec ${quote(shell)} -ic ${quote(
         `printf ok > "$FORGE_HERDR_READINESS_SENTINEL"; exec ${quote(shell)} -f`,
       )}`;
+      if (settings.provider === "openrouter") {
+        const credential = this.credentials.get("openrouter");
+        if (!credential) throw new HerdrFailure("authentication-required", false, "OpenRouter API key is not configured. Add it in Settings > Providers and retry.");
+        const directory = join(task.runtimeRoot, "secrets");
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        secretsFile = join(directory, `openrouter-${row.id}.env`);
+        await writeFile(secretsFile, `export OPENROUTER_API_KEY=${quote(credential.secret)}\n`, { mode: 0o600 });
+        await chmod(secretsFile, 0o600);
+        if (role !== "developer") preparation = `. ${quote(secretsFile)}; ${preparation}`;
+      }
       if (role === "developer") {
         const guard = await createGitCommandGuard(task.runtimeRoot, `developer-guard-${row.id}`);
         const gitRealBin = guard.gitRealBin ?? guard.env.FORGE_GIT_REAL_BIN;
@@ -252,6 +271,7 @@ export class HerdrSessionStore {
           gitRealBin,
           env: withWorktreeMiseTrust(this.environment, task.worktreePath),
           readinessSentinel: readinessPath,
+          ...(secretsFile ? { secretsFile } : {}),
         });
         await this.preparePane(
           pane.paneId,
@@ -312,6 +332,7 @@ export class HerdrSessionStore {
         fingerprint,
       );
     } catch (error) {
+      if (secretsFile) await this.removeSecrets(task.runtimeRoot, row.id);
       if (
         paneId &&
         !(error instanceof HerdrFailure && error.code === "agent_blocked")
@@ -368,6 +389,9 @@ export class HerdrSessionStore {
         .run(now(), id, paneId),
     );
   }
+  async removeSecrets(runtimeRoot: string, sessionId: string): Promise<void> {
+    await rm(join(resolve(runtimeRoot), "secrets", `openrouter-${sessionId}.env`), { force: true }).catch(() => undefined);
+  }
   private deriveAgentName(
     task: RoleSessionTask,
     role: RoleSessionRole,
@@ -410,7 +434,7 @@ export class HerdrSessionStore {
     sessionId: string;
     name: string;
     paneId: string;
-    kind: "codex" | "claude";
+    kind: HerdrAgentKind;
     args: string[];
     task: RoleSessionTask;
     tab: { shellPaneId: string };
@@ -756,7 +780,7 @@ if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READ
     );
     return {
       id: row.id,
-      provider: row.provider_kind as "codex" | "claude",
+      provider: row.provider_kind as AgentProviderKind,
       agentName: live.name,
       paneId: live.paneId,
       codexSessionId:

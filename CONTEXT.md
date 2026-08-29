@@ -54,7 +54,9 @@ _Avoid_: Unvalidated project, first-task setup failure, mid-flight configuration
 
 **Local GitHub login**:
 The host OS user's existing GitHub CLI OAuth session, used by Forge only through `gh` commands and validated by Forge health checks. Forge does not copy its token into configuration, artifacts, prompts, or workflow history.
-_Avoid_: Stored PAT, GitHub App for the pilot, UI-collected provider credential
+_Avoid_: Stored PAT, GitHub App for the pilot, UI-collected GitHub credential
+
+**Provider credential**: An OpenRouter API key is stored locally, excluded from backups, and passed to omp through a protected environment file.
 
 **Instance administrator**:
 The single setup-and-recovery authority with visibility across all companies and power to manage users and system configuration. It is not the normal path for company work.

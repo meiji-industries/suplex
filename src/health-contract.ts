@@ -5,6 +5,7 @@ export const HEALTH_CHECK_IDS = [
   "worker",
   "codex-auth",
   "claude-auth",
+  "openrouter-auth",
   "herdr-readiness",
   "gh-auth",
   "backup",

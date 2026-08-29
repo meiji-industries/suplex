@@ -40,7 +40,7 @@ Forge runs as two locally supervised Node processes that share one SQLite databa
                                                + worktrees
 ```
 
-Content stays out of Temporal history by design: workflow payloads carry only small IDs, hashes, summaries, and artifact references, and a payload boundary interceptor (`src/temporal/payload-boundary-interceptors.ts`) enforces the size limit. Plans, reviews, transcripts, briefs, and delivery evidence live as immutable, hash-verified files in the company-scoped artifact store; provider credentials (GitHub CLI, Codex) are never stored anywhere — Forge uses the host's existing local sessions.
+Content stays out of Temporal history by design: workflow payloads carry only small IDs, hashes, summaries, and artifact references, and a payload boundary interceptor (`src/temporal/payload-boundary-interceptors.ts`) enforces the size limit. Plans, reviews, transcripts, briefs, and delivery evidence live as immutable, hash-verified files in the company-scoped artifact store; GitHub CLI and Codex use host local sessions. OpenRouter requires `omp` on PATH at version 18.0.0 or later (or `FORGE_OMP_COMMAND`) and an API key in Settings > Providers. Add OpenRouter `vendor/model` IDs in Settings > Models.
 
 ### The durable issue workflow and its read models
 

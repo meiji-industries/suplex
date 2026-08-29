@@ -1,0 +1,2 @@
+import type { ReactElement } from "react";
+export function StatusLight({ level, label }: { level: "green" | "amber" | "red"; label: string }): ReactElement { const color = level === "green" ? "bg-emerald-500" : level === "amber" ? "bg-amber-500" : "bg-red-500"; return <span className="relative inline-flex size-3" aria-label={label}><span className={`absolute -inset-0.5 inline-flex size-3 rounded-full opacity-50 motion-safe:animate-ping ${color}`} /><span className={`relative inline-flex size-2.5 rounded-full ${color}`} /></span>; }

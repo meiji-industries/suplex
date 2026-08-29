@@ -1,6 +1,7 @@
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import type { AdminCapacityLane, PublicCapacityStatus } from "./capacity-contracts.js";
+import type { AgentProviderKind } from "./agent-providers/provider.js";
 
 
 export class CapacityFailure extends Error {
@@ -46,14 +47,14 @@ export class CapacityManager {
   statusForTask(_taskId: string): PublicCapacityStatus | null { return null; }
 
   listAdminLanes(): AdminCapacityLane[] {
-    return this.database.authQuery((db) => (db.prepare("SELECT id, name, capacity FROM forge_profiles ORDER BY name, id").all() as Array<{ id: string; name: string; capacity: number | null }>).map((profile) => ({
+    return this.database.authQuery((db) => (db.prepare("SELECT id, name, provider, capacity FROM forge_profiles ORDER BY name, id").all() as Array<{ id: string; name: string; provider: AgentProviderKind; capacity: number | null }>).map((profile) => ({
       profileId: profile.id,
       profileName: profile.name,
-      provider: "codex" as const,
+      provider: profile.provider,
       capacity: profile.capacity,
       effectiveCapacity: profile.capacity ?? this.config.externalTurnCapacity,
-      activeCount: this.active.get("codex") ?? 0,
-      queuedCount: this.waiters.get("codex")?.length ?? 0,
+      activeCount: this.active.get(profile.provider) ?? 0,
+      queuedCount: this.waiters.get(profile.provider)?.length ?? 0,
       rateLimitedCount: 0,
       oldestQueuedAt: null,
     })));

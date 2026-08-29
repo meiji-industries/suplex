@@ -29,6 +29,7 @@ export interface HostHealthDependencies {
   worker: () => Promise<HealthCheck>;
   codexAuth: () => Promise<HealthCheck>;
   claudeAuth?: () => Promise<HealthCheck>;
+  openrouterAuth?: () => Promise<HealthCheck>;
   herdrReadiness?: () => Promise<HealthCheck>;
   ghAuth: () => Promise<HealthCheck>;
   backup?: () => Promise<HealthCheck>;
@@ -56,6 +57,7 @@ export async function inspectHostHealth(config: ForgeConfig, dependencies: HostH
     safelyCheck("worker", "Worker and task queue", dependencies.worker),
     safelyCheck("codex-auth", "Codex authentication", dependencies.codexAuth),
     ...(dependencies.claudeAuth ? [safelyCheck("claude-auth", "Claude Code authentication", dependencies.claudeAuth)] : []),
+    ...(dependencies.openrouterAuth ? [safelyCheck("openrouter-auth", "OpenRouter readiness", dependencies.openrouterAuth)] : []),
     ...(dependencies.herdrReadiness ? [safelyCheck("herdr-readiness", "Herdr readiness", dependencies.herdrReadiness)] : []),
     safelyCheck("gh-auth", "GitHub CLI authentication", dependencies.ghAuth),
     ...(dependencies.backup ? [safelyCheck("backup", "Backup verification", dependencies.backup)] : []),

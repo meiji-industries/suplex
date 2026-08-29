@@ -11,12 +11,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Skeleton } from ".././components/ui/skeleton.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { SettingsLayout } from ".././components/app/settings-layout.js";
+import { useSystemHealth } from ".././components/app/system-health.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, SettingsToolbarAction, type SettingsTableColumn } from ".././components/app/settings-table.js";
 import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { readJson, withCompany, type ApiUser } from ".././lib/api.js";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { adminDate, type ApiAgent, type ApiCredential, type ApiHermesAgent, type ApiInvitation, type ApiModel, type ApiProfile, type ApiProject } from "../lib/view-shared.js";
 import { Archive, ArchiveRestore, Check, Copy, Ellipsis, Key, Pencil, RotateCw, Save, ShieldAlert } from "lucide-react";
+import { PROVIDER_HARNESSES } from "../../agent-providers/provider.js";
+import type { AgentProviderKind } from "../../agent-providers/provider.js";
 
 import { PromptSettings } from "./prompt-settings.js";
 const USER_COLUMNS: SettingsTableColumn[] = [
@@ -125,6 +128,7 @@ function AgentNameEditor({ agent, onSave }: { agent: ApiAgent; onSave: (name: st
 
 export function AdminView(): ReactElement {
   const { user, companies, currentCompany, loading } = useCompanyContext();
+  const { snapshot: health } = useSystemHealth();
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [invitations, setInvitations] = useState<ApiInvitation[]>([]);
   const [credentials, setCredentials] = useState<ApiCredential[]>([]);
@@ -137,7 +141,7 @@ export function AdminView(): ReactElement {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileModel, setProfileModel] = useState("gpt-5.6-sol");
-  const [profileProvider, setProfileProvider] = useState<"codex" | "claude">("codex");
+  const [profileProvider, setProfileProvider] = useState<AgentProviderKind>("codex");
   const [profileReasoning, setProfileReasoning] = useState("medium");
   const [profilePriority, setProfilePriority] = useState("standard");
   const [profileCapacity, setProfileCapacity] = useState("");
@@ -154,7 +158,7 @@ export function AdminView(): ReactElement {
   const [capacityEdits, setCapacityEdits] = useState<Record<string, string>>({});
   const [modelId, setModelId] = useState("");
   const [modelName, setModelName] = useState("");
-  const [modelProvider, setModelProvider] = useState<"codex" | "claude">("codex");
+  const [modelProvider, setModelProvider] = useState<AgentProviderKind>("codex");
   const [modelOpen, setModelOpen] = useState(false);
   const [inviteToken, setInviteToken] = useState("");
   const [inviteExpiresAt, setInviteExpiresAt] = useState("");
@@ -580,7 +584,7 @@ export function AdminView(): ReactElement {
                     return (
                       <SettingsTableRow aria-label={`Edit ${profile.name}`} key={profile.id} onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input")) openEditProfile(profile); }} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); openEditProfile(profile); } }} tabIndex={0}>
                         <SettingsTableCell><span className="flex min-w-0 items-center gap-3"><span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{profile.name[0]?.toUpperCase()}</span><span className="min-w-0"><span className="block truncate">{profile.name}</span><span className="block truncate text-[10px] leading-3 text-muted-foreground">{profile.capacity === null ? `Default · ${profile.effectiveCapacity} slots effective` : `Override · ${profile.capacity} slots`} · {lane?.activeCount ?? 0} active / {lane?.queuedCount ?? 0} queued</span></span></span></SettingsTableCell>
-                        <SettingsTableCell className="capitalize">{profile.provider === "claude" ? "Claude Code" : "Codex"}</SettingsTableCell>
+                        <SettingsTableCell>{PROVIDER_HARNESSES[profile.provider].label}</SettingsTableCell>
                         <SettingsTableCell className="truncate">{profile.model}</SettingsTableCell>
                         <SettingsTableCell className="truncate text-muted-foreground">{profile.reasoningLevel}</SettingsTableCell>
                         <SettingsTableCell className="truncate text-muted-foreground">{profile.servicePriority}</SettingsTableCell>
@@ -600,7 +604,8 @@ export function AdminView(): ReactElement {
                 <form onSubmit={(event) => { event.preventDefault(); void saveProfile(); }}>
                   <FieldGroup>
                     <Field><FieldLabel htmlFor="profile-name">Profile name</FieldLabel><Input id="profile-name" autoFocus value={profileName} onChange={(event) => setProfileName(event.target.value)} /></Field>
-                    <Field><FieldLabel htmlFor="profile-provider">Provider</FieldLabel><Select value={profileProvider} onValueChange={(value) => { const provider = value as "codex" | "claude"; setProfileProvider(provider); if (!models.some((model) => model.status === "active" && model.provider === provider && model.id === profileModel)) setProfileModel(""); }}><SelectTrigger id="profile-provider"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="codex">Codex</SelectItem><SelectItem value="claude">Claude Code</SelectItem></SelectContent></Select></Field>
+                    <Field><FieldLabel htmlFor="profile-provider">Provider</FieldLabel><Select value={profileProvider} onValueChange={(value) => { const provider = value as AgentProviderKind; setProfileProvider(provider); if (!models.some((model) => model.status === "active" && model.provider === provider && model.id === profileModel)) setProfileModel(""); }}><SelectTrigger id="profile-provider"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(PROVIDER_HARNESSES).map(([id, provider]) => <SelectItem key={id} value={id}>{provider.label}</SelectItem>)}</SelectContent></Select></Field>
+                    {(() => { const provider = PROVIDER_HARNESSES[profileProvider]; const check = health?.checks.find((item) => item.id === provider.healthCheckId); return check?.status === "healthy" ? null : <Alert><AlertDescription>{provider.label} is not available: {check?.summary ?? "Health status is unavailable"}. Tasks using this profile will fail until it is configured.</AlertDescription></Alert>; })()}
                     <Field><FieldLabel htmlFor="profile-model">Model</FieldLabel><Select value={profileModel || null} onValueChange={(value) => setProfileModel(value ?? "")}><SelectTrigger id="profile-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{models.filter((model) => model.status === "active" && model.provider === profileProvider).map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field>
                     <Field><FieldLabel htmlFor="profile-reasoning">Reasoning level</FieldLabel><Select value={profileReasoning} onValueChange={(value) => setProfileReasoning(value ?? "medium")}><SelectTrigger id="profile-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem><SelectItem value="xhigh">XHigh</SelectItem></SelectContent></Select></Field>
                     <Field><FieldLabel htmlFor="profile-priority">Service priority</FieldLabel><Select value={profilePriority} onValueChange={(value) => setProfilePriority(value ?? "standard")}><SelectTrigger id="profile-priority"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="standard">Standard</SelectItem><SelectItem value="priority">Priority</SelectItem><SelectItem value="fast">Fast</SelectItem></SelectContent></Select></Field>
@@ -954,7 +959,7 @@ export function AdminView(): ReactElement {
                   {models.map((model) => (
                     <SettingsTableRow key={model.id} size="member">
                       <SettingsTableCell className="truncate"><code className="text-[11px] text-muted-foreground">{model.id}</code></SettingsTableCell>
-                      <SettingsTableCell className="capitalize">{model.provider === "claude" ? "Claude Code" : "Codex"}</SettingsTableCell>
+                      <SettingsTableCell>{PROVIDER_HARNESSES[model.provider].label}</SettingsTableCell>
                       <SettingsTableCell className="truncate">{model.displayName}{model.description ? <span className="ml-1 text-muted-foreground">· {model.description}</span> : null}</SettingsTableCell>
                       <SettingsTableCell className="text-muted-foreground">{model.status}</SettingsTableCell>
                       <SettingsTableCell className="text-muted-foreground">{model.sortOrder}</SettingsTableCell>
@@ -966,7 +971,7 @@ export function AdminView(): ReactElement {
                 {models.length === 0 ? <SettingsTableEmpty columnCount={MODEL_COLUMNS.length}>No models configured.</SettingsTableEmpty> : null}
               </SettingsDataTable>
             </section>
-            <Dialog open={modelOpen} onOpenChange={setModelOpen}><DialogContent><DialogHeader><DialogTitle>Add model</DialogTitle><DialogDescription>Make a model available to new profiles.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void createModel(); }}><FieldGroup><Field><FieldLabel htmlFor="model-id">Model ID</FieldLabel><Input id="model-id" autoFocus placeholder="gpt-5-codex" value={modelId} onChange={(event) => setModelId(event.target.value)} /></Field><Field><FieldLabel htmlFor="model-provider">Provider</FieldLabel><Select value={modelProvider} onValueChange={(value) => setModelProvider((value ?? "codex") as "codex" | "claude")}><SelectTrigger id="model-provider"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="codex">Codex</SelectItem><SelectItem value="claude">Claude Code</SelectItem></SelectContent></Select></Field><Field><FieldLabel htmlFor="model-display-name">Display name</FieldLabel><Input id="model-display-name" value={modelName} onChange={(event) => setModelName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!modelId.trim() || !modelName.trim()}>Add model</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
+            <Dialog open={modelOpen} onOpenChange={setModelOpen}><DialogContent><DialogHeader><DialogTitle>Add model</DialogTitle><DialogDescription>Make a model available to new profiles.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void createModel(); }}><FieldGroup><Field><FieldLabel htmlFor="model-id">Model ID</FieldLabel><Input id="model-id" autoFocus placeholder={modelProvider === "openrouter" ? "vendor/model" : "gpt-5-codex"} value={modelId} onChange={(event) => setModelId(event.target.value)} /></Field><Field><FieldLabel htmlFor="model-provider">Provider</FieldLabel><Select value={modelProvider} onValueChange={(value) => setModelProvider((value ?? "codex") as AgentProviderKind)}><SelectTrigger id="model-provider"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(PROVIDER_HARNESSES).map(([id, provider]) => <SelectItem key={id} value={id}>{provider.label}</SelectItem>)}</SelectContent></Select></Field><Field><FieldLabel htmlFor="model-display-name">Display name</FieldLabel><Input id="model-display-name" value={modelName} onChange={(event) => setModelName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!modelId.trim() || !modelName.trim()}>Add model</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
           </>
         ) : null}
 

@@ -238,6 +238,28 @@ test("a thrown developer turn finalizes its execution and conflict claims are no
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+
+test("a worker-restart orphan is reopened in place while different coordinates still conflict", async () => {
+  const value = await fixture();
+  const worktree = join(value.root, "worktrees", "task_1");
+  const targetBaseSha = await command("git", ["rev-parse", "HEAD"], join(value.root, "repo"));
+  const branchName = buildGitBranchName({ branchSlug: fallbackGitPresentation("Fixture").branchSlug, taskId: "task_1" });
+  const fake = fakeTurnRunner(async () => {
+    await writeFile(join(worktree, "MARKER.md"), "recovered\n");
+    await command("git", ["add", "MARKER.md"], worktree);
+    await command("git", ["commit", "-m", "recover orphan"], worktree);
+    return { kind: "delivery", summary: "Recovered orphan", steps: [{ number: 1, status: "completed", filesChanged: ["MARKER.md"], commandsRun: [], testResults: [], notes: "done" }], authorizedStepsNotCompleted: [], resultCommit: "a".repeat(40), resultTree: "b".repeat(40), dirtyState: "clean", blocker: null };
+  });
+  try {
+    const now = new Date().toISOString();
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at, finished_at, failure_code, failure_summary) VALUES (?, 'task_1', 'company_1', 'workflow_1', 1, 1, 'failed', ?, ?, ?, ?, ?, ?, 'worker-restart-orphan', 'worker stopped')").run("developer_orphan", branchName, worktree, targetBaseSha, now, now, now));
+    await expect(new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run({ ...value.input, developerTurnExecutionId: "developer_orphan", developerAttempt: 1 })).resolves.toMatchObject({ developerExecutionId: "developer_orphan", outcome: "completed" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = 'developer_orphan'").get())).toEqual({ status: "completed", failure_code: null });
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, supersedes_execution_id, started_at, heartbeat_at, finished_at, failure_code, failure_summary) VALUES (?, 'task_1', 'company_1', 'workflow_1', 1, 2, 'failed', ?, ?, ?, 'developer_other', ?, ?, ?, 'worker-restart-orphan', 'worker stopped')").run("developer_conflict", branchName, worktree, targetBaseSha, now, now, now));
+    await expect(new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run({ ...value.input, developerTurnExecutionId: "developer_conflict", developerAttempt: 2 })).rejects.toMatchObject({ code: "developer-execution-identity-conflict" });
+    expect(fake.calls).toHaveLength(1);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
 test("a retry returns its recorded claim without rerunning the Developer", async () => {
   const value = await fixture();
   const fake = fakeTurnRunner(() => new Error("runner must not start"));

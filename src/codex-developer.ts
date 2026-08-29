@@ -163,6 +163,23 @@ interface PriorDeveloperExecution {
   target_base_sha: string;
 }
 
+interface DeveloperExecutionIdentity {
+  taskId: string | null;
+  companyId: string | null;
+  workflowId: string | null;
+  planRevision: number | null;
+  attempt: number | null;
+  status: string;
+  failureCode: string | null;
+  branchName: string | null;
+  worktreePath: string | null;
+  targetBaseSha: string | null;
+  supersedesExecutionId: string | null;
+  sessionRef: string | null;
+}
+
+type DeveloperExecutionCoordinates = Omit<DeveloperExecutionIdentity, "status" | "failureCode">;
+
 export interface DeveloperServiceOptions {
   command?: string;
   provider?: AgentProvider;
@@ -253,6 +270,16 @@ export class DeveloperService {
     return profile;
   }
 
+  private reAdoptWorkerRestartOrphan(executionId: string, existing: DeveloperExecutionIdentity, coordinates: Partial<DeveloperExecutionCoordinates>, startedAt: string): boolean {
+    const matches = (Object.keys(coordinates) as Array<keyof DeveloperExecutionCoordinates>).every((key) => existing[key] === null || existing[key] === coordinates[key]);
+    if (!matches || existing.status !== "failed" || existing.failureCode !== "worker-restart-orphan") return false;
+    return this.database.authTransaction((db) => db.prepare(`UPDATE forge_developer_executions
+      SET status = 'starting', failure_code = NULL, failure_summary = NULL, finished_at = NULL, started_at = ?, heartbeat_at = ?, current_step = NULL
+      WHERE id = ? AND status = 'failed' AND failure_code = 'worker-restart-orphan'
+        AND NOT EXISTS (SELECT 1 FROM forge_developer_result_claims WHERE execution_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM forge_developer_result_conflicts WHERE execution_id = ?)`).run(startedAt, startedAt, executionId, executionId, executionId).changes === 1);
+  }
+
   async run(rawInput: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<DeveloperExecutionResult> {
     const input = rawInput;
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256, e.id AS outputId, e.original_plan_revision AS originalPlanRevision, e.output_revision AS outputRevision, e.final_version AS finalVersion, e.output_artifact_id AS artifactId, pa.sha256 AS artifactSha256, e.session_ref AS leadSessionRef, e.id AS leadExecutionId, e.evidence_manifest_artifact_id AS evidenceManifestArtifactId, em.sha256 AS evidenceManifestSha256
@@ -294,7 +321,7 @@ export class DeveloperService {
     }
     const claimedResult = this.database.authQuery((db) => db.prepare("SELECT activity_result_json AS activityResultJson FROM forge_developer_result_claims WHERE execution_id = ?").get(executionId) as { activityResultJson: string } | undefined);
     if (claimedResult) return jsonRequired(claimedResult.activityResultJson) as DeveloperExecutionResult;
-    const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; planRevision: number; attempt: number; status: string; branchName: string; worktreePath: string; targetBaseSha: string; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
+    const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, failure_code AS failureCode, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as DeveloperExecutionIdentity | undefined);
     const sourceBranch = taskConfiguration.source?.kind === "pull_request" ? taskConfiguration.source.headBranch : taskConfiguration.source?.kind === "branch" ? taskConfiguration.source.branch : undefined;
     const pinnedBase = existing?.targetBaseSha ?? prior?.target_base_sha ?? (revisionAuthorization?.disposition === "new" ? revisionAuthorization.exactBaseSha : revisionAuthorization?.baseSha);
     // Build on the base branch as it is right now: the project-revision snapshot goes stale
@@ -304,11 +331,14 @@ export class DeveloperService {
     let branchName = sourceBranch ?? prior?.branch_name ?? buildGitBranchName({ branchSlug: fallbackGitPresentation(context.title).branchSlug, taskId: input.taskId });
     const worktreeRoot = await scopedRepository(this.config.worktreeRoot, projectRevision.data.worktreeRoot);
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
-    if (existing && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== branchName || existing.targetBaseSha !== targetBaseSha || existing.supersedesExecutionId !== (prior?.id ?? null) || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic Developer execution ID is already bound to different coordinates", { nonRetryable: true });
+    const supersedesExecutionId = prior?.id === executionId ? null : prior?.id ?? null;
+    const startedAt = this.now().toISOString();
+    const reopened = existing ? this.reAdoptWorkerRestartOrphan(executionId, existing, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, attempt, branchName, targetBaseSha, supersedesExecutionId }, startedAt) : false;
+    if (existing && !reopened && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== branchName || existing.targetBaseSha !== targetBaseSha || existing.supersedesExecutionId !== supersedesExecutionId || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic Developer execution ID is already bound to different coordinates", { nonRetryable: true });
     let worktree;
     try {
-      if (existing) {
-        worktree = { branchName: existing.branchName, worktreePath: await scopedRepository(this.config.worktreeRoot, existing.worktreePath), targetBaseSha: existing.targetBaseSha };
+      if (existing && !reopened) {
+        worktree = { branchName: existing.branchName!, worktreePath: await scopedRepository(this.config.worktreeRoot, existing.worktreePath!), targetBaseSha: existing.targetBaseSha! };
       } else if (sourceBranch) {
         worktree = await this.worktrees.adopt({ repositoryPath, worktreeRoot, taskId: input.taskId, branchName: sourceBranch, baseBranch: projectRevision.data.baseBranch, ...(taskConfiguration.source?.headSha ? { sourceHeadSha: taskConfiguration.source.headSha } : {}), preserveLocal: Boolean(prior || input.reuseWorktree) });
       } else if (revisionAuthorization?.disposition === "reuse") {
@@ -327,17 +357,17 @@ export class DeveloperService {
       if (error instanceof Error && "code" in error) throw new AgentFailure(String((error as { code: string }).code), error.message);
       throw error;
     }
-    const startedAt = this.now().toISOString();
     this.database.authTransaction((db) => {
-      db.prepare(`INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, NULL, NULL, ?, ?, ?, NULL)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, prior?.id ?? null, startedAt, startedAt);
-      this.bindCapacityInTransaction(db, input, executionId, existing?.sessionRef ?? undefined, worktree.worktreePath);
+      if (reopened) db.prepare("UPDATE forge_developer_executions SET task_id = ?, company_id = ?, workflow_id = ?, plan_revision = ?, attempt = ?, branch_name = ?, worktree_path = ?, target_base_sha = ?, supersedes_execution_id = ? WHERE id = ?").run(input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, supersedesExecutionId, executionId);
+      db.prepare(`INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, NULL, NULL, ?, ?, ?, NULL)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, supersedesExecutionId, startedAt, startedAt);
+      this.bindCapacityInTransaction(db, input, executionId, existing && !reopened ? existing.sessionRef ?? undefined : undefined, worktree.worktreePath);
     });
     const prompt = this.prompt(context.title, brief, planText, leadEvidence, worktree, input.runProjectTests, input.visualEvidence, input.operatorNote, input.continuation);
     const evidenceLines = [
       JSON.stringify({ type: "forge.prompt", text: redact(prompt) }),
       ...(promptsRepinned ? [JSON.stringify({ type: "forge.prompts", promptsRepinned: true })] : []),
     ];
-    let sessionRef: string | undefined = existing?.sessionRef ?? undefined;
+    let sessionRef: string | undefined = existing && !reopened ? existing.sessionRef ?? undefined : undefined;
     try {
         const task = this.taskContext(input);
         const priorTerminalExecutions = this.database.authQuery((db) => db.prepare("SELECT status, result_commit AS resultCommit FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status IN ('blocked', 'completed') AND id <> ? ORDER BY started_at DESC LIMIT 2").all(input.taskId, input.companyId, input.workflowId, executionId) as Array<{ status: string; resultCommit: string | null }>);
@@ -423,11 +453,13 @@ export class DeveloperService {
     this.requireDeveloperSession(input.developerSessionRef);
     const executionId = input.developerTurnExecutionId ?? `developer_${randomBytes(12).toString("hex")}`;
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
-    const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; planRevision: number; attempt: number; status: string; branchName: string; worktreePath: string; targetBaseSha: string; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
-    if (existing && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== input.branchName || existing.worktreePath !== input.worktreePath || existing.targetBaseSha !== input.targetBaseSha || existing.supersedesExecutionId !== input.developerExecutionId || existing.sessionRef !== input.developerSessionRef || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic merge-resolution ID is already bound to different coordinates", { nonRetryable: true });
-    const guard = await createGitCommandGuard(this.config.runtimeRoot);
+    const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, failure_code AS failureCode, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as DeveloperExecutionIdentity | undefined);
     const startedAt = this.now().toISOString();
+    const reopened = existing ? this.reAdoptWorkerRestartOrphan(executionId, existing, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, attempt, branchName: input.branchName, worktreePath: input.worktreePath, targetBaseSha: input.targetBaseSha, supersedesExecutionId: input.developerExecutionId, sessionRef: input.developerSessionRef }, startedAt) : false;
+    if (existing && !reopened && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== input.branchName || existing.worktreePath !== input.worktreePath || existing.targetBaseSha !== input.targetBaseSha || existing.supersedesExecutionId !== input.developerExecutionId || existing.sessionRef !== input.developerSessionRef || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic merge-resolution ID is already bound to different coordinates", { nonRetryable: true });
+    const guard = await createGitCommandGuard(this.config.runtimeRoot);
     this.database.authTransaction((db) => {
+      if (reopened) db.prepare("UPDATE forge_developer_executions SET task_id = ?, company_id = ?, workflow_id = ?, plan_revision = ?, attempt = ?, branch_name = ?, worktree_path = ?, target_base_sha = ?, supersedes_execution_id = ?, session_ref = ? WHERE id = ?").run(input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, input.worktreePath, input.targetBaseSha, input.developerExecutionId, input.developerSessionRef, executionId);
       db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at, execution_kind) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'forward_merge')").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, input.worktreePath, input.targetBaseSha, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, input.developerSessionRef, input.worktreePath);
     });
@@ -515,16 +547,18 @@ export class DeveloperService {
     const priorSubject = DeliveryReviewSubjectSchema.parse({ planRevision: review.plan_revision, targetBaseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, developerExecutionId: prior.id, deliveryArtifactId: prior.delivery_artifact_id, developerEvidenceArtifactId: prior.evidence_artifact_id, leadSessionRef: review.session_ref, developerSessionRef: prior.session_ref });
     const profile = this.executionProfile(input);
     const executionId = input.developerTurnExecutionId ?? `developer_${randomBytes(12).toString("hex")}`;
-    const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; planRevision: number; attempt: number; status: string; branchName: string; worktreePath: string; targetBaseSha: string; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
+    const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, failure_code AS failureCode, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as DeveloperExecutionIdentity | undefined);
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
-    if (existing && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== input.branchName || existing.targetBaseSha !== input.targetBaseSha || existing.supersedesExecutionId !== input.developerExecutionId || existing.sessionRef !== input.developerSessionRef || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic Developer repair ID is already bound to different coordinates", { nonRetryable: true });
     const startedAt = this.now().toISOString();
+    const reopened = existing ? this.reAdoptWorkerRestartOrphan(executionId, existing, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, attempt, branchName: input.branchName, targetBaseSha: input.targetBaseSha, supersedesExecutionId: input.developerExecutionId, sessionRef: input.developerSessionRef }, startedAt) : false;
+    if (existing && !reopened && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== input.branchName || existing.targetBaseSha !== input.targetBaseSha || existing.supersedesExecutionId !== input.developerExecutionId || existing.sessionRef !== input.developerSessionRef || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic Developer repair ID is already bound to different coordinates", { nonRetryable: true });
     const repairAttemptId = `delivery_repair_${executionId.slice("developer_".length)}`;
     let repairRowCreated = false;
     let worktreePath = input.worktreePath;
     const evidenceLines: string[] = [];
     try {
       this.database.authTransaction((db) => {
+        if (reopened) db.prepare("UPDATE forge_developer_executions SET task_id = ?, company_id = ?, workflow_id = ?, plan_revision = ?, attempt = ?, branch_name = ?, worktree_path = ?, target_base_sha = ?, supersedes_execution_id = ?, session_ref = ? WHERE id = ?").run(input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, worktreePath, input.targetBaseSha, input.developerExecutionId, input.developerSessionRef, executionId);
         db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL)").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, worktreePath, input.targetBaseSha, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt);
         db.prepare("INSERT OR IGNORE INTO forge_delivery_repairs (id, task_id, company_id, workflow_id, review_id, developer_execution_id, cycle, status, subject_commit, subject_tree, developer_session_ref, branch_name, worktree_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?)").run(repairAttemptId, input.taskId, input.companyId, input.workflowId, input.reviewId, executionId, input.cycle, input.subjectCommit, input.subjectTree, input.developerSessionRef, input.branchName, worktreePath, startedAt);
         this.bindCapacityInTransaction(db, input, executionId, input.developerSessionRef, worktreePath);

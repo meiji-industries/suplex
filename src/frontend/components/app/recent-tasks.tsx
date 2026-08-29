@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 
 import { withCompany } from "../../lib/api.js";
-import { invalidateTaskList, readTaskList } from "../../lib/task-list.js";
+import { readTaskList, subscribeTaskListInvalidations } from "../../lib/task-list.js";
 import { type ApiTaskSummary } from "../../lib/view-shared.js";
 import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar.js";
 import { taskIsProcessing, taskPresentationPhase, TaskStatusIcon } from "./task-status.js";
@@ -39,11 +39,9 @@ export function RecentTasks({ close }: { close?: () => void }): ReactElement | n
   }, [companyId, visible]);
   useEffect(() => { if (visible) void reload(); }, [reload, visible]);
   useEffect(() => {
-    if (!visible) return;
-    const events = new EventSource("/api/tasks/events");
-    events.addEventListener("invalidate", () => { if (companyId) invalidateTaskList(companyId); void reload(); });
-    return () => events.close();
-  }, [reload, visible]);
+    if (!visible || !companyId) return;
+    return subscribeTaskListInvalidations(companyId, () => void reload());
+  }, [companyId, reload, visible]);
 
   if (!visible || tasks.length === 0) return null;
   return <SidebarGroup><SidebarGroupLabel>Recent</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{tasks.map((task) => { const pr = pullRequestStatus(task); const phase = taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands }); const processing = taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status }); return <SidebarMenuItem key={task.id}><SidebarMenuButton render={<a href={withCompany(`/tasks/${encodeURIComponent(task.id)}`, companyId)} onClick={close} aria-label={`${task.title}${pr ? `, pull request ${pr.label}` : ""}`}><span className="flex min-w-0 flex-1 items-center gap-2"><TaskStatusIcon phase={phase} processing={processing} pullRequestState={task.githubPullRequest?.state} /><span className="min-w-0 flex-1 truncate">{task.title}</span>{pr ? <span className="relative inline-flex size-4 shrink-0 items-center justify-center" title={`Pull request ${pr.label}`}><GitPullRequest aria-hidden="true" className="size-4" /><span aria-hidden="true" className={`absolute bottom-0 right-0 size-1.5 rounded-full ring-2 ring-sidebar ${pr.dotClass}`} /></span> : null}</span></a>} isActive={window.location.pathname === `/tasks/${task.id}`} tooltip={task.title} /></SidebarMenuItem>; })}</SidebarMenu></SidebarGroupContent></SidebarGroup>;

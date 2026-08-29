@@ -21,7 +21,7 @@ import { useCompanyContext } from ".././components/app/company-context.js";
 import { getWorkerHealthFailure, useSystemHealth } from ".././components/app/system-health.js";
 import { ACTIVE_INVOCATION_STATUSES, TaskStatus, TaskStatusIcon, taskPresentationPhase, taskStatusAppearance, taskStatusLabel } from ".././components/app/task-status.js";
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
-import { invalidateTaskList, readTaskList } from ".././lib/task-list.js";
+import { readTaskList, subscribeTaskListInvalidations } from ".././lib/task-list.js";
 import { navigate } from ".././lib/navigation.js";
 import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES as blockedTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
 import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, FileText, Filter, FolderKanban, Layers3, ListFilter, Plus } from "lucide-react";
@@ -201,6 +201,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const [detailNotFound, setDetailNotFound] = useState(false);
   const selectedRef = useRef<ApiTask | undefined>(undefined);
   const requestToken = useRef(0);
+  const taskListToken = useRef(0);
   const companyId = currentCompany?.id ?? "";
   const routeBase = mode === "board" ? "/board" : "/tasks";
   const detailPrefix = `${routeBase}/`;
@@ -222,6 +223,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
 
   const reload = useCallback(async (): Promise<void> => {
     const token = ++requestToken.current;
+    taskListToken.current += 1;
     setError("");
     if (!companyId || loading) { setLoadedCompanyId(""); setProjects([]); setTasks([]); return; }
     try {
@@ -273,13 +275,20 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     selectedRef.current = undefined;
     setSelected(undefined); setProjectId(""); setRoleAgentOverrides({}); setTitle(""); setDescription(""); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; resetNewTaskSettings(); setImages([]); setCreateError(""); setDetailNotFound(false);
   }, [companyId]);
+  const reloadTasks = useCallback(async (): Promise<void> => {
+    const token = ++taskListToken.current;
+    if (!companyId) { setTasks([]); return; }
+    try {
+      const tasks = await readTaskList(companyId, taskFilter === "archived");
+      if (token !== taskListToken.current) return;
+      setTasks(tasks);
+      setDetailNotFound(Boolean(routeTaskId) && !tasks.some((task) => task.id === routeTaskId));
+    } catch { /* The mount reload already surfaces load errors. */ }
+  }, [companyId, routeTaskId, taskFilter]);
   useEffect(() => {
-    const events = new EventSource("/api/tasks/events");
-    const refresh = (): void => { if (companyId) invalidateTaskList(companyId); void reload(); };
-    events.addEventListener("ready", refresh);
-    events.addEventListener("invalidate", refresh);
-    return () => events.close();
-  }, [reload]);
+    if (!companyId) return;
+    return subscribeTaskListInvalidations(companyId, () => void reloadTasks());
+  }, [companyId, reloadTasks]);
 
   const scopeLoaded = Boolean(companyId) && loadedCompanyId === companyId;
   const visibleProjects = scopeLoaded ? projects : [];

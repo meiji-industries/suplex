@@ -12,7 +12,7 @@ import { ApplicationFrame } from "../components/app/application-frame.js";
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import { useCompanyContext } from "../components/app/company-context.js";
 import { readJson, withCompany } from "../lib/api.js";
-import { invalidateTaskList, readTaskList } from "../lib/task-list.js";
+import { readTaskList, subscribeTaskListInvalidations } from "../lib/task-list.js";
 import type { ApiProject, ApiTaskSummary } from "../lib/view-shared.js";
 
 type RangePreset = "today" | "7-days" | "30-days" | "custom";
@@ -501,10 +501,9 @@ export function TimelineView(): ReactElement {
     return () => window.clearInterval(timer);
   }, []);
   useEffect(() => {
-    const events = new EventSource("/api/tasks/events");
-    events.addEventListener("invalidate", () => { if (companyId) invalidateTaskList(companyId); void reload(); });
-    return () => events.close();
-  }, [reload]);
+    if (!companyId) return;
+    return subscribeTaskListInvalidations(companyId, () => void reload());
+  }, [companyId, reload]);
 
   const today = dateInputValue(new Date(now));
   const sourceRange = useMemo(() => preset === "custom" ? customRange(customStart, customEnd) : presetRange(preset, dateFromInput(today)), [customEnd, customStart, preset, today]);

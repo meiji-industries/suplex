@@ -439,7 +439,7 @@ export class HerdrTurnRunner {
         // ponytail: 1s slack — Linux stamps mtimes from a coarse clock that trails Date.now() by a tick, and some filesystems only keep whole seconds.
         : !promptSentAt || first.mtimeMs < Date.parse(promptSentAt) - 1_000
     ) return undefined;
-    await delay(250);
+    await this.sleep(250);
     return version === await this.resultVersion(path) ? readFile(path).catch(() => undefined) : undefined;
   }
 }

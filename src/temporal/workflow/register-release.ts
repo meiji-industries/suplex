@@ -1,4 +1,4 @@
-import { ApplicationFailure, setHandler } from "@temporalio/workflow";
+import { ApplicationFailure, setHandler, sleep } from "@temporalio/workflow";
 import * as contracts from "../issue-contracts.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
@@ -13,9 +13,16 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
     if (!ctx.state.deliveryReviewId || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree) throw new Error("Approved exact delivery is required before publishing");
     // New histories observe first: a PR opened from GitHub is provider truth,
     // while the existing publish activity retains its historical adoption path.
-    const observed = ctx.patched("forge-github-sync-v1") && ctx.state.releaseRepository
+    let observed = ctx.patched("forge-github-sync-v1") && ctx.state.releaseRepository
       ? await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
       : null;
+    // GitHub reports a freshly pushed head with a short delay. Re-observe before treating the
+    // difference as a foreign change to the branch.
+    const tolerateHeadLag = ctx.patched("forge-live-head-lag-v1");
+    for (let attempt = 0; tolerateHeadLag && attempt < 3 && observed?.state === "open" && observed.headSha && ctx.state.expectedHeadSha && observed.headSha.toLowerCase() !== ctx.state.expectedHeadSha.toLowerCase(); attempt += 1) {
+      await sleep("5 seconds");
+      observed = await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository!, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
+    }
     if (ctx.patched("forge-live-head-v1") && observed?.state === "open" && observed.headSha && ctx.state.expectedHeadSha && observed.headSha.toLowerCase() !== ctx.state.expectedHeadSha.toLowerCase()) {
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...githubPullRequestObservationFields(observed, new Date().toISOString()), revision: ctx.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", resultCommit: observed.headSha, resultTree: null, expectedHeadSha: observed.headSha, expectedHeadTree: null, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();

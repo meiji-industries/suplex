@@ -16,8 +16,11 @@ import { ProviderCredentialBodySchema, ProviderListResponseSchema, ProviderTestR
 import { PROVIDER_HARNESSES, type AgentProviderKind } from "../../agent-providers/provider.js";
 import { ProviderCredentialStore } from "../../provider-credentials.js";
 import { OpenRouterReadinessProbe } from "../../agent-providers/openrouter-readiness.js";
+import { MAX_MIN_FREE_DISK_GB, readEnvironmentSettings, updateEnvironmentSettings } from "../../environment-settings.js";
 
 const ProjectionRebuildBodySchema = z.object({ companyId: z.string().optional(), taskId: z.string().optional() }).default({});
+const EnvironmentSettingsSchema = z.object({ minFreeDiskGb: z.number() });
+const EnvironmentSettingsBodySchema = z.object({ minFreeDiskGb: z.number().finite().min(0).max(MAX_MIN_FREE_DISK_GB) });
 
 export interface AdministrationRoutesOptions {
   auth: AuthService;
@@ -36,6 +39,19 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     reply.code(403).send({ error: "Administrator access required" });
     return false;
   };
+  typed.get("/api/admin/environment", { schema: { response: { 200: EnvironmentSettingsSchema, 403: ErrorResponseSchema } } }, async (request, reply) => {
+    if (!requireAdmin(request.forgeUser.role, reply)) return;
+    if (!database) throw new Error("Database is unavailable");
+    return reply.header("Cache-Control", "private, no-store").send(readEnvironmentSettings(database));
+  });
+  typed.patch("/api/admin/environment", { schema: { body: EnvironmentSettingsBodySchema, response: { 200: EnvironmentSettingsSchema, 403: ErrorResponseSchema } } }, async (request, reply) => {
+    if (!requireAdmin(request.forgeUser.role, reply)) return;
+    if (!database) throw new Error("Database is unavailable");
+    const previous = readEnvironmentSettings(database);
+    const updated = updateEnvironmentSettings(database, request.body);
+    auth.recordAuditEvent(request.forgeUser.id, "environment_settings_updated", undefined, undefined, { previousMinFreeDiskGb: String(previous.minFreeDiskGb), minFreeDiskGb: String(updated.minFreeDiskGb) });
+    return reply.header("Cache-Control", "private, no-store").send(updated);
+  });
   typed.get("/api/admin/providers", { schema: { response: { 200: ProviderListResponseSchema } } }, async (_request, reply) => {
     if (!requireAdmin(_request.forgeUser.role, reply)) return;
     if (!database) return reply.send({ providers: [] });

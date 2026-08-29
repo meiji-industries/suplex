@@ -15,10 +15,12 @@ import { TimelineView } from "../../views/timeline.js";
 import { PromptSettings } from "../../views/prompt-settings.js";
 import { TaskTemplateSettings } from "../../views/task-template-settings.js";
 import { ProviderSettingsView } from "../../views/provider-settings.js";
+import { EnvironmentSettingsView } from "../../views/environment-settings.js";
 
 function AppView(): ReactElement {
   const pathname = window.location.pathname;
   if (pathname === "/admin/providers") return <ProviderSettingsView />;
+  if (pathname === "/admin/environment") return <EnvironmentSettingsView />;
   if (pathname === "/admin" || pathname === "/admin/profiles" || pathname === "/admin/agents" || pathname === "/admin/models" || pathname === "/admin/companies" || pathname === "/admin/invitations" || pathname === "/admin/passkeys" || pathname === "/admin/prompts") return <AdminView />;
   if (/^\/companies\/[^/]+\/settings$/.test(pathname)) return <CompanySettingsView />;
   if (pathname === "/profile") return <ProfileView />;

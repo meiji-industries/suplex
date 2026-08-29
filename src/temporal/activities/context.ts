@@ -52,6 +52,7 @@ import { StructuredLogger, activityLogContext } from "../../logging.js";
 import { CapacityFailure, CapacityManager } from "../../capacity.js";
 import { CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema } from "../../capacity-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "../../worktrees.js";
+import { readEnvironmentSettings } from "../../environment-settings.js";
 import { startIssueWorkflow } from "../service.js";
 import { jsonRequired } from "../../task-utils.js";
 import { claimOperation, operationKey, settleOperation } from "../../operation-claims.js";
@@ -178,7 +179,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   const capacity = new CapacityManager(database, config);
   const activityWorktrees = new Map<string, string>();
   const activityWorktreesByBranch = new Map<string, string>();
-  const worktrees = new WorktreeManager();
+  const worktrees = new WorktreeManager(undefined, () => readEnvironmentSettings(database).minFreeDiskGb);
   capacity.reconcileFromLedgers();
   const agent = options.agent;
   const developer = options.developer ?? defaultDeveloper;

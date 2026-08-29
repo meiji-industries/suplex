@@ -6,6 +6,7 @@ import { access, constants, lstat, mkdir, readFile, realpath, rm, stat, statfs, 
 import { delimiter, join, relative, resolve, sep } from "node:path";
 
 import type { ForgeDatabase } from "./database.js";
+import { DEFAULT_MIN_FREE_DISK_GB } from "./environment-settings.js";
 import { claimOperation, operationKey, settleOperation } from "./operation-claims.js";
 import { OwnedWorktreeSchema, type OwnedWorktree } from "./developer-contracts.js";
 import { runCommand } from "./command-runner.js";
@@ -170,7 +171,6 @@ const defaultGit: GitAdapter = {
   },
 };
 
-const defaultMinFreeDiskGb = 10;
 const liveDiffMaxBytes = 2 * 1024 * 1024;
 const liveUntrackedFileMaxBytes = 256 * 1024;
 
@@ -191,9 +191,9 @@ function untrackedPatch(path: string, bytes: Buffer): string {
   return `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n${rendered}${suffix}\n`;
 }
 
-export async function assertWorktreeDiskHeadroom(worktreeRoot: string, statfsFn: typeof statfs = statfs): Promise<void> {
+export async function assertWorktreeDiskHeadroom(worktreeRoot: string, statfsFn: typeof statfs = statfs, configuredMinFreeDiskGb = DEFAULT_MIN_FREE_DISK_GB): Promise<void> {
   const envGb = Number.parseFloat(process.env.FORGE_MIN_FREE_DISK_GB ?? "");
-  const thresholdGb = Number.isFinite(envGb) && envGb >= 0 ? envGb : defaultMinFreeDiskGb;
+  const thresholdGb = Number.isFinite(envGb) && envGb >= 0 ? envGb : configuredMinFreeDiskGb;
   const filesystem = await statfsFn(worktreeRoot);
   const freeBytes = Number(filesystem.bavail) * Number(filesystem.bsize);
   const thresholdBytes = thresholdGb * 1024 * 1024 * 1024;
@@ -214,7 +214,7 @@ async function canonicalDirectory(raw: string, code: string): Promise<string> {
 }
 
 export class WorktreeManager {
-  constructor(private readonly git: GitAdapter = defaultGit) {}
+  constructor(private readonly git: GitAdapter = defaultGit, private readonly minFreeDiskGb: () => number = () => DEFAULT_MIN_FREE_DISK_GB) {}
 
   async remove(repositoryPath: string, worktreePath: string): Promise<void> {
     const repository = await canonicalDirectory(repositoryPath, "repository-unavailable");
@@ -289,7 +289,7 @@ export class WorktreeManager {
       } catch (error) {
         if (error instanceof WorktreeFailure) throw error;
       }
-      await assertWorktreeDiskHeadroom(worktreeRoot);
+      await assertWorktreeDiskHeadroom(worktreeRoot, statfs, this.minFreeDiskGb());
       await this.git.run(["worktree", "add", "-b", branchName, worktreePath, input.targetBaseSha], repositoryPath, activity);
       const canonicalWorktree = await realpath(worktreePath);
       if (canonicalWorktree !== worktreePath) throw new WorktreeFailure("worktree-symlink", "Created worktree path resolved through a symbolic link");
@@ -374,7 +374,7 @@ export class WorktreeManager {
     }
     if (localExists && localBehindOrEqual) await this.git.run(["branch", "-f", input.branchName, remoteRef], repositoryPath, activity);
     else if (!localExists) await this.git.run(["branch", "--track", input.branchName, remoteRef], repositoryPath, activity);
-    await assertWorktreeDiskHeadroom(worktreeRoot);
+    await assertWorktreeDiskHeadroom(worktreeRoot, statfs, this.minFreeDiskGb());
     try { await this.git.run(["worktree", "add", worktreePath, input.branchName], repositoryPath, activity); }
     catch (error) {
       const detail = String(error && typeof error === "object" && "stderr" in error ? error.stderr : error instanceof Error ? error.message : error);
@@ -594,7 +594,7 @@ export class WorktreeManager {
       canonicalWorktree = await canonicalDirectory(worktreePath, "worktree-unavailable");
     } catch (error) {
       if (!(error instanceof WorktreeFailure) || error.code !== "worktree-unavailable") throw error;
-      await assertWorktreeDiskHeadroom(worktreeRoot);
+      await assertWorktreeDiskHeadroom(worktreeRoot, statfs, this.minFreeDiskGb());
       try {
         await this.git.run(["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repositoryPath);
         await this.git.run(["worktree", "add", worktreePath, branchName], repositoryPath);
@@ -648,7 +648,7 @@ export class WorktreeManager {
     const branchExists = Boolean(before?.branchHead);
     if (!before?.pathExists) {
       // Reattach an existing task branch so its commits survive a missing worktree.
-      await assertWorktreeDiskHeadroom(worktreeRoot);
+      await assertWorktreeDiskHeadroom(worktreeRoot, statfs, this.minFreeDiskGb());
       const add = branchExists ? ["worktree", "add", validated.worktreePath, validated.branchName] : ["worktree", "add", "-b", validated.branchName, validated.worktreePath, validated.startingSha];
       try { await this.git.run(add, repositoryPath); } catch {
         const afterFailure = await this.inspectOwned(validated, repositoryPath).catch(() => undefined);

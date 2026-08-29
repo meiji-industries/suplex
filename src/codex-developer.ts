@@ -18,6 +18,7 @@ import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import type { GithubReleasePort } from "./github-release.js";
 import { createGitCommandGuard, WorktreeFailure, WorktreeManager } from "./worktrees.js";
+import { readEnvironmentSettings } from "./environment-settings.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { runPinnedVerification } from "./verification.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
@@ -218,7 +219,7 @@ export class DeveloperService {
     const herdr = new CliHerdrClient();
     this.roleSessions = new HerdrSessionStore(database, herdr);
     this.turnRunner = options.turnRunner ?? new HerdrTurnRunner(database, herdr, this.roleSessions, new IssueTimelineEvents(database), undefined, undefined, undefined, undefined, config);
-    this.worktrees = options.worktrees ?? new WorktreeManager();
+    this.worktrees = options.worktrees ?? new WorktreeManager(undefined, () => readEnvironmentSettings(database).minFreeDiskGb);
     this.now = options.now ?? (() => new Date());
     this.github = options.github;
     this.prompts = options.prompts ?? loadDefaultPrompts();

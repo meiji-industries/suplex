@@ -58,6 +58,10 @@ const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
     if (!(await requirePageSession(request, reply))) return reply;
     return sendHtml(request, reply, renderApplicationPage("admin", assetMode));
   });
+  app.get("/admin/environment", async (request, reply) => {
+    if (!(await requirePageSession(request, reply))) return reply;
+    return sendHtml(request, reply, renderApplicationPage("admin", assetMode));
+  });
   app.get("/admin/companies", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
     return sendHtml(request, reply, renderApplicationPage("admin", assetMode));

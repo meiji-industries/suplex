@@ -26,6 +26,7 @@ import { isVersionedPromptSet } from "./prompt-resolution.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { jsonRequired } from "./task-utils.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
+import { readEnvironmentSettings } from "./environment-settings.js";
 import { BrowserProofService } from "./browser-proof.js";
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
@@ -230,7 +231,7 @@ export class AgentService {
     this.now = options.now ?? (() => new Date());
     const herdr = new CliHerdrClient();
     this.turnRunner = options.turnRunner ?? new HerdrTurnRunner(database, herdr, new HerdrSessionStore(database, herdr), new IssueTimelineEvents(database), this.artifacts, undefined, undefined, undefined, config);
-    this.worktrees = options.worktrees ?? new WorktreeManager();
+    this.worktrees = options.worktrees ?? new WorktreeManager(undefined, () => readEnvironmentSettings(database).minFreeDiskGb);
   }
 
   private renderTaskPrompt(input: { taskId: string; companyId: string }, path: string, values: Record<string, string>): string {

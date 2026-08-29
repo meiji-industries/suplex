@@ -427,7 +427,7 @@ export class HerdrTurnRunner {
   }
   private async closeReviewer(session: EnsuredRoleSession, runtimeRoot: string): Promise<void> {
     await this.herdr.closePane(session.paneId);
-    if (session.provider === "openrouter") await this.sessions.removeSecrets(runtimeRoot, session.id);
+    await this.sessions.removeSecrets(runtimeRoot, session.id);
     this.update("UPDATE forge_herdr_role_sessions SET pane_id = NULL, status = 'closed', is_current = 0, updated_at = ? WHERE id = ? AND codex_session_id = ?", iso(), session.id, session.codexSessionId);
   }
   private interruptedGeneration(turnId: string): number | undefined { return this.database.authQuery((db) => (db.prepare("SELECT interrupted_generation FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { interrupted_generation: number | null } | undefined)?.interrupted_generation ?? undefined); }

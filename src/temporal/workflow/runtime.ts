@@ -359,6 +359,8 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
     const command = retryOnlyBlockerCommand(ctx);
     if (command && ctx.patched("forge-repair-no-progress-v1")) {
       const summary = ctx.state.deliveryRepairBlockerSummary ?? "Temporary provider failure persisted after automatic retries.";
+      // Record the exhausted blocker once; re-projecting it on every loop pass is a hot loop.
+      if (ctx.state.blocker?.category === "provider_connectivity_exhausted" && ctx.state.pendingAction === summary) return false;
       ctx.state = IssueWorkflowStateSchema.parse({
         ...ctx.state,
         revision: ctx.state.revision + 1,

@@ -387,6 +387,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         if (patched("forge-pr-reconciler-v1")) await syncGithubPullRequest();
         // CI reconciliation needs a release; without one the PR sync above is the only observer. Never throw from the loop.
         if (workflowContext.state.phase === "ci_waiting" && workflowContext.state.releaseId) await workflowContext.reconcileCiTurn();
+        else if (workflowContext.state.phase === "ci_waiting" && patched("forge-ci-waiting-without-release-v1") && workflowContext.state.resultCommit && workflowContext.state.branchName && !workflowContext.state.deliveryReviewId) {
+          // ci_waiting without a release is a dead end: an unreleased exact delivery goes back through review and publish.
+          workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision: workflowContext.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", ciNextPollAt: null, lastEventId: `${workflowContext.state.workflowId}:${workflowContext.state.revision + 1}` });
+          await workflowContext.project();
+        }
         else if (workflowContext.state.phase === "ci_waiting") await sleep("60 seconds");
         continue;
       }

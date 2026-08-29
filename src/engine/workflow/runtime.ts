@@ -179,6 +179,7 @@ export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): 
   // Routine (non-material) plans land in ready_for_development without going through autoApprovePlan's
   // auto-start, so this table entry needs its own gate to keep old histories that parked here replayable.
   if (ctx.state.phase === "ready_for_development" && !true) return null;
+  if (haltedChains.has(command) && true) return null;
   if (runExecution.current().autoActionsHalted()) return null;
   const commandId = `${ctx.state.workflowId}:auto-${command}:${ctx.state.revision}`;
   return ctx.commandAlreadyProcessed(commandId) ? null : { command, commandId };

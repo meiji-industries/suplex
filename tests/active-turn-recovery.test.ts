@@ -59,5 +59,5 @@ test("a late result for a failed Developer execution triggers one reconcile-only
   const herdr = { getAgent: async () => null };
   await reconcileActiveTurns(database, config, { herdr: herdr as never, reconcileDeveloper: reconcileDeveloper as never });
   await reconcileActiveTurns(database, config, { herdr: herdr as never, reconcileDeveloper: reconcileDeveloper as never });
-  expect(calls).toEqual([{ workflowId: "workflow", input: { expectedRevision: 1, actorUserId: "system", commandId: "late-result-dev-turn", reconcileOnly: true } }]);
+  expect(calls).toEqual([{ workflowId: "workflow", input: { expectedRevision: 1, actorUserId: "system", commandId: "late-result-dev-turn-2026-08-27T00:00:00.000Z", reconcileOnly: true } }]);
 });

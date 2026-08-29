@@ -67,13 +67,15 @@ export class HerdrTurnRunner {
         let prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
         session = await this.ensure(input, { path: this.promptPath(resultPath), content: prompt });
         const existing = this.existingTurn(input, correction);
-        const resumed = existing?.promptSentAt ? existing : undefined;
+        // The reconciler completes a turn from its result file without a prompt timestamp; that turn is still resumable.
+        const resumed = existing?.promptSentAt || existing?.status === "completed" ? existing : undefined;
         resultPath = existing
           ? this.existingResultPath(input, existing.resultRelativePath)
           : initialResultPath;
         prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
         if (resumed?.status === "completed") {
-          const bytes = await this.stableResult(resultPath, undefined, resumed.promptSentAt, false);
+          const recorded = resumed.resultHash ? await readFile(resultPath).catch(() => undefined) : undefined;
+          const bytes = recorded && hash(recorded) === resumed.resultHash ? recorded : await this.stableResult(resultPath, undefined, resumed.promptSentAt, false);
           if (!bytes) throw new AgentFailure("recovery-result-invalid", "The completed Forge turn has no stable schema-valid result", { nonRetryable: true });
           const parsed = input.resultSchema.safeParse(jsonRequired(bytes.toString("utf8")));
           if (!parsed.success) throw new AgentFailure("recovery-result-invalid", "The completed Forge turn has no stable schema-valid result", { nonRetryable: true });

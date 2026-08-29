@@ -20,7 +20,7 @@ export interface ActiveTurnOutcome {
   evidence: string[];
 }
 
-type Turn = { turnId: string; taskId: string; role: "lead" | "developer"; status: DurableTaskFacts["turn"] extends infer T ? T extends { status: infer S } ? S : never : never; resultRelativePath: string; executionId: string; executionStatus: string | null; ledger: "agent" | "developer"; executionRole: string; revision: number; phase: string; workflowId: string; agentName: string | null; branchName: string | null; worktreePath: string | null; lastReviewedCommit: string | null; correctionIndex: number };
+type Turn = { turnId: string; taskId: string; role: "lead" | "developer"; status: DurableTaskFacts["turn"] extends infer T ? T extends { status: infer S } ? S : never : never; resultRelativePath: string; executionId: string; executionStatus: string | null; executionFinishedAt: string | null; ledger: "agent" | "developer"; executionRole: string; revision: number; phase: string; workflowId: string; agentName: string | null; branchName: string | null; worktreePath: string | null; lastReviewedCommit: string | null; correctionIndex: number };
 
 // Keep completed turns with a durable result in the scan so an unchanged second
 // reconciliation reports the same idempotent outcome without writing again.
@@ -47,7 +47,7 @@ function sessionObservation(status: string | undefined, missing: boolean): LiveO
 }
 
 function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
-  return database.authQuery((db) => db.prepare(`SELECT turn.turn_id AS turnId, turn.task_id AS taskId, session.session_role AS role, turn.status, turn.result_relative_path AS resultRelativePath, turn.execution_id AS executionId, developer.status AS executionStatus, turn.ledger, turn.execution_role AS executionRole, projection.revision, projection.phase, projection.workflow_id AS workflowId, session.agent_name AS agentName, worktree.branch_name AS branchName, worktree.worktree_path AS worktreePath, review.subject_commit AS lastReviewedCommit, turn.correction_index AS correctionIndex
+  return database.authQuery((db) => db.prepare(`SELECT turn.turn_id AS turnId, turn.task_id AS taskId, session.session_role AS role, turn.status, turn.result_relative_path AS resultRelativePath, turn.execution_id AS executionId, developer.status AS executionStatus, developer.finished_at AS executionFinishedAt, turn.ledger, turn.execution_role AS executionRole, projection.revision, projection.phase, projection.workflow_id AS workflowId, session.agent_name AS agentName, worktree.branch_name AS branchName, worktree.worktree_path AS worktreePath, review.subject_commit AS lastReviewedCommit, turn.correction_index AS correctionIndex
     FROM forge_herdr_turns turn
     JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.is_current = 1
     JOIN forge_issue_projections projection ON projection.task_id = turn.task_id
@@ -93,7 +93,7 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
     // Developer's delivery: reopen the execution through the reconcile-only
     // retry. The execution leaves `failed` once adopted, so this fires once.
     if (turn.role === "developer" && turn.executionStatus === "failed" && bytes) {
-      await (deps.reconcileDeveloper ?? reconcileIssueDeveloperDelivery)(config, turn.workflowId, { expectedRevision: turn.revision, actorUserId: "system", commandId: `late-result-${turn.turnId}`, reconcileOnly: true }).catch(() => undefined);
+      await (deps.reconcileDeveloper ?? reconcileIssueDeveloperDelivery)(config, turn.workflowId, { expectedRevision: turn.revision, actorUserId: "system", commandId: `late-result-${turn.turnId}-${turn.executionFinishedAt ?? "unknown"}`, reconcileOnly: true }).catch(() => undefined);
     }
     outcomes.push({ taskId: turn.taskId, turnId: turn.turnId, role: turn.role, action, idempotencyKey: classified.idempotencyKey, evidence: classified.evidence });
   }

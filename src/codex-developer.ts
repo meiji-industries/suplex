@@ -429,12 +429,19 @@ export class DeveloperService {
 
   async runMergeConflictResolution(rawInput: MergeConflictResolutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<MergeConflictResolutionActivityResult> {
     const input = { ...rawInput };
+    // Workflow state may contain a deterministic turn ID from an interrupted
+    // attempt. It is not proof that a matching execution was ever persisted.
+    // The ledger is the source of truth for the worktree owner.
     const prior = this.database.authQuery((db) => db.prepare(`SELECT id, status, session_ref, branch_name, worktree_path, delivery_artifact_id, evidence_artifact_id
-      FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; status: string; session_ref: string | null; branch_name: string; worktree_path: string; delivery_artifact_id: string | null; evidence_artifact_id: string | null } | undefined);
+      FROM forge_developer_executions
+      WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND branch_name = ?
+        AND (status IN ('completed', 'blocked') OR (status = 'failed' AND (failure_code LIKE 'merge-%' OR failure_code LIKE 'merge_%')))
+      ORDER BY COALESCE(finished_at, started_at) DESC, rowid DESC LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.branchName) as { id: string; status: string; session_ref: string | null; branch_name: string; worktree_path: string; delivery_artifact_id: string | null; evidence_artifact_id: string | null } | undefined);
     const planRow = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'merge-conflict-plan'").get(input.planArtifactId, input.companyId) as { storage_path: string; sha256: string } | undefined);
     if (!prior || !planRow || !["completed", "blocked"].includes(prior.status) || prior.session_ref !== input.developerSessionRef || prior.branch_name !== input.branchName || (input.worktreePath && prior.worktree_path !== input.worktreePath)) {
       throw new AgentFailure("merge-resolution-identity-mismatch", "Merge-conflict resolution coordinates do not match the owned Developer worktree");
     }
+    input.developerExecutionId = prior.id;
     input.worktreePath ||= prior.worktree_path;
     try {
       const inspected = await this.worktrees.inspectDelivery(input.worktreePath, input.branchName);
@@ -454,9 +461,15 @@ export class DeveloperService {
       throw new AgentFailure("merge-resolution-evidence-corrupt", "Forward-merge conflict evidence failed integrity validation");
     }
     if (conflict.priorHead.toLowerCase() !== input.priorHead.toLowerCase() || conflict.observedBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase() || conflict.conflictFiles.length !== input.conflictFileCount) throw new AgentFailure("merge-resolution-identity-mismatch", "Forward-merge conflict evidence does not match the owned merge");
-    const mergeState = await this.mergeState(input.worktreePath);
-    if (mergeState.head !== input.priorHead || mergeState.mergeHead !== input.targetBaseSha || JSON.stringify(mergeState.conflicts) !== JSON.stringify([...conflict.conflictFiles].sort())) {
-      throw new AgentFailure("merge_state_ownership_mismatch", "The in-progress merge no longer matches the recorded forward-merge operation");
+    const inspectedWorktree = await this.worktrees.inspectDelivery(input.worktreePath, input.branchName);
+    const baseIncluded = await runCommand({ taskId: null, stepId: null, expectNonZero: true, command: "git", args: ["merge-base", "--is-ancestor", input.targetBaseSha, "HEAD"], cwd: input.worktreePath, timeout: 8_000 });
+    const cleanMerge = await runCommand({ taskId: null, stepId: null, expectNonZero: true, command: "git", args: ["merge-tree", "--write-tree", input.targetBaseSha, "HEAD"], cwd: input.worktreePath, timeout: 8_000 });
+    const adoptingResolvedWorktree = inspectedWorktree.branchName === input.branchName && inspectedWorktree.dirtyState === "clean" && baseIncluded.exitCode === 0 && cleanMerge.exitCode === 0;
+    if (!adoptingResolvedWorktree) {
+      const mergeState = await this.mergeState(input.worktreePath);
+      if (mergeState.head !== input.priorHead || mergeState.mergeHead !== input.targetBaseSha || JSON.stringify(mergeState.conflicts) !== JSON.stringify([...conflict.conflictFiles].sort())) {
+        throw new AgentFailure("merge_state_ownership_mismatch", "The in-progress merge no longer matches the recorded forward-merge operation");
+      }
     }
     const plan = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: planRow.storage_path, sha256: planRow.sha256 })).toString("utf8");
     const profile = this.executionProfile(input);
@@ -479,8 +492,9 @@ export class DeveloperService {
     let completedMerge: { headSha: string; treeSha: string } | undefined;
     try {
       const task = this.taskContext(input);
-      const turn = await this.turnRunner.run({ task: { ...task, worktreePath: input.worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "integrator", ledger: "developer", executionId, promptKind: "merge-conflict-resolution", prompt: mergePrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperMergeConflictResolutionReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "merge-conflict-resolution", DeveloperMergeConflictResolutionReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision });
-      const report = turn.result;
+      const report = adoptingResolvedWorktree
+        ? { summary: "Adopted an already-resolved forward merge from the owned worktree", resolvedFiles: conflict.conflictFiles, resultCommit: inspectedWorktree.headSha, resultTree: inspectedWorktree.treeSha, blocker: null }
+        : (await this.turnRunner.run({ task: { ...task, worktreePath: input.worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "integrator", ledger: "developer", executionId, promptKind: "merge-conflict-resolution", prompt: mergePrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperMergeConflictResolutionReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "merge-conflict-resolution", DeveloperMergeConflictResolutionReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision })).result;
       const missingFiles = conflict.conflictFiles.filter((file) => !report.resolvedFiles.includes(file));
       if (missingFiles.length || report.blocker !== null) throw new AgentFailure("merge-resolution-incomplete", missingFiles.length ? `The Developer did not resolve: ${missingFiles.join(", ")}` : report.blocker ?? "Merge-conflict resolution is blocked");
       const gitState = await this.worktrees.inspectDelivery(input.worktreePath, input.branchName);

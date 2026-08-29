@@ -10,6 +10,8 @@ import {
 import { herdrRuntime, type HerdrProviderRuntime } from "./agent-providers/herdr-runtime.js";
 import type { AgentProviderKind, HerdrAgentKind } from "./agent-providers/provider.js";
 import { ProviderCredentialStore } from "./provider-credentials.js";
+import { SUPPORTED_NODE_VERSION } from "./config.js";
+import { runCommand } from "./command-runner.js";
 import { createGitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
 export type RoleSessionRole = "planner" | "builder" | "reviewer" | "integrator";
 export interface LaunchSettings {
@@ -280,7 +282,7 @@ export class HerdrSessionStore {
             false,
             "Developer Git guard is incomplete",
           );
-        await this.writeDeveloperZshrc(guard.directory);
+        await this.writeDeveloperZshrc(guard.directory, task.worktreePath);
         preparation = developerPaneEnvironment({
           guardDirectory: guard.directory,
           gitRealBin,
@@ -626,11 +628,16 @@ export class HerdrSessionStore {
     await chmod(path, 0o600);
     return path;
   }
-  private async writeDeveloperZshrc(directory: string): Promise<void> {
+  private async writeDeveloperZshrc(directory: string, worktreePath: string): Promise<void> {
+    const miseNode = await runCommand({ taskId: null, stepId: null, expectNonZero: true, command: "mise", args: ["which", "node"], cwd: worktreePath, env: withWorktreeMiseTrust(this.environment, worktreePath), timeout: 8_000 });
+    const nodeDirectory = dirname(miseNode.exitCode === 0 && miseNode.stdout.trim() ? miseNode.stdout.trim() : process.execPath);
     await writeFile(
       join(directory, ".zshrc"),
       `if [ -r "$HOME/.zshrc" ]; then source "$HOME/.zshrc"; fi
-export PATH="$FORGE_GIT_GUARD_DIR:$PATH"
+export PATH="$FORGE_GIT_GUARD_DIR:${nodeDirectory}:$PATH"
+if [ "$(node -v 2>/dev/null)" != "v${SUPPORTED_NODE_VERSION}" ]; then
+  printf 'Forge error: developer pane Node version mismatch (node=%s, node_path=%s, mise_node_path=%s, expected=v${SUPPORTED_NODE_VERSION})\\n' "$(node -v 2>/dev/null || printf missing)" "$(command -v node 2>/dev/null || printf missing)" "${nodeDirectory}/node" >&2
+fi
 if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READINESS_SENTINEL"; fi
 `,
       { mode: 0o600 },

@@ -123,3 +123,21 @@ for (const [matrix, phases] of Object.entries(restartCases)) test(`interruption 
     } finally { await h.stop(); }
   }
 });
+
+test("failed merge-resolution turns retain the last persisted Developer ID across retries", async () => {
+  const h = await createEngineHarness({
+    projectIssueState: async (event) => event.state,
+    resolveMergeConflictSupervised: async (value) => ({ status: "failed" as const, developerExecutionId: value.developerTurnExecutionId, reasonCode: "merge-resolution-incomplete", summary: "Resolution failed", evidenceArtifactId: "evidence" }),
+  });
+  const issueId = "merge-prior-id";
+  h.seedTask(issueId);
+  try {
+    const state = { ...baseState(h, issueId, "merge_conflict_required", 20), allowedCommands: ["resolve_merge_conflict" as const, "cancel_issue" as const], leadSessionRef: "lead-session", leadOutputArtifactId: "plan", planRevision: 1, mergeResolutionPlanArtifactId: "conflict-plan", developerExecutionId: "developer-persisted", developerSessionRef: "developer-session", worktreePath: join(h.root, "worktrees", issueId), branchName: `forge/issue/${issueId}`, targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, dirtyState: "clean" as const, forwardMergeId: "forward", forwardMergePriorHead: engineFixture.commit, forwardMergePriorTree: engineFixture.tree, forwardMergeTargetBaseSha: nextBase, forwardMergeConflictArtifact: { id: "conflict", kind: "forward-merge-conflict" as const }, forwardMergeConflictFileCount: 1 };
+    const started = await startIssueWorkflow(h.config, input(issueId, state));
+    let result = await h.settle(started.workflowId, (value) => value.phase === "merge_conflict_required" && value.owner === "human");
+    expect(result.developerExecutionId).toBe("developer-persisted");
+    result = await executeIssueCommand(h.config, started.workflowId, "resolve_merge_conflict", { expectedRevision: result.revision, actorUserId: engineFixture.actorUserId });
+    result = await h.settle(started.workflowId, (value) => value.phase === "merge_conflict_required" && value.owner === "human");
+    expect(result.developerExecutionId).toBe("developer-persisted");
+  } finally { await h.stop(); }
+});

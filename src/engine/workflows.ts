@@ -1,4 +1,4 @@
-import { allHandlersFinished, CancellationScope, condition, defineQuery, isCancellation, log, setHandler, sleep, workflowInfo } from "./registry.js";
+import { allHandlersFinished, CancellationScope, condition, defineQuery, isCancellation, log, runExecution, setHandler, sleep, workflowInfo } from "./registry.js";
 import { ProbeWorkflowInputSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, normalizeSafeSummary, type IssueBlocker, type IssueBlockerAction, type IssueCommand, type IssueWorkflowInput, type IssueWorkflowState, type LeadPlanningResult, type ReconcileTargetBaseActivityResult, type TargetBaseCheckpoint } from "./issue-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
@@ -221,6 +221,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(issueStateQuery, () => state);
   setHandler(syncGithubPullRequestSignal, () => { githubSyncRequested = true; });
   const syncGithubPullRequest = async (): Promise<void> => {
+    if (runExecution.current().autoActionsHalted()) return;
     if (!state.releaseRepository && !sourcePullRequest && true) sourcePullRequest = await loadTaskSourcePullRequest({ taskId: state.issueId, companyId: state.companyId }).then((source) => sourcePullRequestState(source, true), () => undefined);
     if (!state.releaseRepository && sourcePullRequest) { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, sourcePullRequest)); await projectIssueState(state); }
     if (!state.releaseRepository || !state.branchName) return;

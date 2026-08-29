@@ -102,6 +102,7 @@ export class IssueRun {
       wait: (milliseconds: number) => this.wakeable.wait(milliseconds, this.controller.signal, this.clock),
       now: () => this.clock.now(),
       wake: () => this.wakeable.wake(),
+      autoActionsHalted: () => this.runawayHalted,
     };
     this.executionContext = context;
     this.workflowPromise = runExecution.run(context, () => issueWorkflow(this.input));
@@ -127,7 +128,8 @@ export class IssueRun {
   execute(name: string, input: unknown, commandId = "legacy-command"): Promise<IssueWorkflowState> {
     const operation = this.chain.then(async () => {
       await this.ready();
-      if (this.runawayHalted) {
+      const automatic = commandId.includes("auto-");
+      if (this.runawayHalted && !automatic && commandId !== "legacy-command") {
         this.runawayHalted = false;
         this.projectionTimes = [];
         this.projectionSignatures = [];
@@ -150,6 +152,7 @@ export class IssueRun {
 
   async signal(name: string, ...args: unknown[]): Promise<void> {
     await this.ready();
+    if (this.runawayHalted) return;
     const handler = this.commands.get(name);
     if (!handler) throw new Error(`Unknown issue signal: ${name}`);
     await runExecution.run(this.executionContext!, () => handler(...args as never[]));

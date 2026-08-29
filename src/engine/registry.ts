@@ -13,6 +13,7 @@ export interface RunExecutionContext {
   wait(milliseconds: number): Promise<void>;
   now(): number;
   wake(): void;
+  autoActionsHalted(): boolean;
 }
 export interface ActivityCallOptions {
   startToCloseTimeout?: string | number;

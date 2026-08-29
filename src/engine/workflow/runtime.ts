@@ -1,4 +1,4 @@
-import { isCancellation, log, sleep } from "../registry.js";
+import { isCancellation, log, runExecution, sleep } from "../registry.js";
 import { ActivityFailure, ApplicationFailure } from "../failures.js";
 
 import {
@@ -179,7 +179,7 @@ export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): 
   // Routine (non-material) plans land in ready_for_development without going through autoApprovePlan's
   // auto-start, so this table entry needs its own gate to keep old histories that parked here replayable.
   if (ctx.state.phase === "ready_for_development" && !true) return null;
-  if (haltedChains.has(command) && true) return null;
+  if (runExecution.current().autoActionsHalted()) return null;
   const commandId = `${ctx.state.workflowId}:auto-${command}:${ctx.state.revision}`;
   return ctx.commandAlreadyProcessed(commandId) ? null : { command, commandId };
 }
@@ -190,16 +190,33 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   // entry and marks itself once its state mutation lands, so pre-marking here would make it a
   // silent no-op before it ever runs.
   if (chained.command !== "start_development") ctx.markCommandProcessed(chained.commandId);
+  const before = { phase: ctx.state.phase, owner: ctx.state.owner, pendingAction: ctx.state.pendingAction };
   const command = { expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId ?? ctx.input.autoApprovePlanActorUserId ?? "forge-auto-chain", commandId: chained.commandId };
+  let failure: unknown;
   try {
     if (chained.command === "review_delivery") await reviewDelivery(ctx, command);
     else if (chained.command === "publish_draft") await ctx.runPublishTurn();
     else if (chained.command === "repair_delivery") await repairDelivery(ctx, command);
     else if (chained.command === "start_development") await startDevelopment(ctx, command);
     else await resolveMergeConflict(ctx, command);
-  } catch {
-    haltedChains.add(chained.command); // the manual button stays in allowedCommands for a retry
+  } catch (error) {
+    failure = error;
   }
+  const unchanged = ctx.state.phase === before.phase && ctx.state.owner === before.owner && ctx.state.pendingAction === before.pendingAction;
+  if (!failure && !unchanged) return;
+  const reason = failure instanceof Error ? failure.message : failure ? String(failure) : `Automatic ${chained.command.replaceAll("_", " ")} made no progress`;
+  haltedChains.add(chained.command);
+  ctx.state = IssueWorkflowStateSchema.parse({
+    ...ctx.state,
+    revision: ctx.state.revision + 1,
+    owner: "human",
+    allowedCommands: [...new Set([...ctx.state.allowedCommands, "cancel_issue"])],
+    pendingAction: reason.slice(0, 256),
+    lastHandlerError: { command: chained.command, reason: reason.slice(0, 256), at: new Date().toISOString() },
+    stateChangedAt: new Date().toISOString(),
+    lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
+  });
+  await ctx.project();
 }
 
 function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" | "repair_delivery" | "repair_ci" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation" | null {
@@ -218,6 +235,7 @@ function retryScope(ctx: IssueWorkflowContext, command: string): string | null {
 }
 
 export function canAutoRetryDeliveryBlocker(ctx: IssueWorkflowContext): boolean {
+  if (runExecution.current().autoActionsHalted()) return false;
   if (!true) return false;
   const command = retryOnlyBlockerCommand(ctx);
   const scope = command ? retryScope(ctx, command) : null;

@@ -44,7 +44,8 @@ test("developer pane replacement clears secrets and preserves terminal and local
   expect(command).toContain("/bin/sh -c");
   expect(command).not.toContain("SECRET");
   expect(command).toContain("HERDR_SOCKET_PATH='/tmp/herdr.sock'");
-  expect(command).toContain("HERDR_PANE_ID='pane-1'");
+  expect(command).toContain('HERDR_PANE_ID="$HERDR_PANE_ID"');
+  expect(command).not.toContain("pane-1");
 });
 
 test("OpenRouter developer preparation sources the secret file without writing its value", () => {

@@ -128,8 +128,10 @@ export function developerPaneEnvironment(input: {
   // CI images can omit zsh. Keep the guarded environment usable with sh.
   // The fallback also writes the readiness file because it does not read zshrc.
   const script = `if [ -x ${quote(shell)} ]; then exec ${quote(shell)} -i; fi; PATH="$FORGE_GIT_GUARD_DIR:/usr/bin"; export PATH; printf '%s\\n' "$PATH"; command -v git; if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READINESS_SENTINEL"; fi; exec /bin/sh -i`;
+  // Pane identity must be the target pane's own, not the worker's: Herdr's agent hooks report state to HERDR_PANE_ID.
+  const paneIdentity = new Set(["HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID", "HERDR_TERMINAL_ID"]);
   const command = `exec env -i ${Object.entries(values)
-    .map(([key, value]) => `${key}=${quote(value)}`)
+    .map(([key, value]) => paneIdentity.has(key) ? `${key}="$${key}"` : `${key}=${quote(value)}`)
     .join(" ")}${input.secretsFile ? " OPENROUTER_API_KEY=\"$OPENROUTER_API_KEY\"" : ""} /bin/sh -c ${quote(script)}`;
   return input.secretsFile ? `. ${quote(input.secretsFile)}; ${command}` : command;
 }

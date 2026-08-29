@@ -197,7 +197,7 @@ export interface HerdrClient {
   listAgents(): Promise<HerdrAgent[]>;
   snapshot(): Promise<HerdrAgent[]>;
   getAgent(name: string): Promise<HerdrAgent | null>;
-  readAgent(name: string, source?: "recent-unwrapped", lines?: number): Promise<string>;
+  readAgent(name: string, source?: "recent-unwrapped", lines?: number, format?: "text" | "ansi"): Promise<string>;
   waitAgent(name: string): Promise<HerdrAgent>;
   prompt(name: string, text: string): Promise<HerdrAgent>;
   sendKeys(name: string, keys: ["ctrl+c"]): Promise<void>;
@@ -480,9 +480,9 @@ export class CliHerdrClient implements HerdrClient {
       agent(value<Json>(await this.call(["agent", "get", name], true), "agent")),
     );
   }
-  async readAgent(name: string, source = "recent-unwrapped" as const, lines?: number): Promise<string> {
+  async readAgent(name: string, source = "recent-unwrapped" as const, lines?: number, format?: "text" | "ansi"): Promise<string> {
     // `agent read` prints plain text; older builds wrapped it in the JSON envelope.
-    const { stdout } = await this.runner(this.binary, ["agent", "read", name, "--source", source, ...(lines ? ["--lines", String(lines)] : [])], { maxBuffer: 1024 * 1024 });
+    const { stdout } = await this.runner(this.binary, ["agent", "read", name, "--source", source, ...(lines ? ["--lines", String(lines)] : []), ...(format ? ["--format", format] : [])], { maxBuffer: 1024 * 1024 });
     const parsed = json(stdout, undefined) as Json | undefined;
     const result = parsed && typeof parsed === "object" ? ((parsed.result as Json | undefined) ?? parsed) : undefined;
     return typeof result?.text === "string" ? result.text : stdout;

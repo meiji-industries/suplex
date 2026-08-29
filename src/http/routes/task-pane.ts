@@ -20,7 +20,7 @@ const taskPane: FastifyPluginAsync<TaskPaneRoutesOptions> = async (app, options)
   typed.get("/api/tasks/:taskId/pane", { schema: { params: TaskIdParamsSchema, querystring: z.object({ role: z.enum(["developer", "lead"]) }), response: { 200: TaskPaneResponseSchema } } }, async (request, reply) => {
     options.tasks.getTask(request.forgeUser.id, request.params.taskId);
     const agentName = options.database.authQuery((db) => (db.prepare("SELECT agent_name FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(request.params.taskId, request.query.role) as { agent_name: string | null } | undefined)?.agent_name);
-    return reply.send({ text: agentName ? await herdr.readAgent(agentName, "recent-unwrapped", 120).catch(() => "") : "" });
+    return reply.send({ text: agentName ? await herdr.readAgent(agentName, "recent-unwrapped", 120, "ansi").catch(() => "") : "" });
   });
 };
 

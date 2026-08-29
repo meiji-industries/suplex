@@ -15,7 +15,6 @@ import { HerdrTurnRunner, type HerdrTurnInput } from "../src/herdr-turn-runner.j
 import { IssueTimelineEvents } from "../src/issue-timeline-events.js";
 import { runCommand } from "../src/command-runner.js";
 import { DeveloperDeliverySchema } from "../src/developer-contracts.js";
-import { createTestConfig } from "../src/config.js";
 
 const ResultSchema = z.object({ status: z.enum(["ok", "blocked"]) }).strict();
 const task = { taskId: "task", projectId: "project", projectSlug: "project", worktreePath: "/worktree", runtimeRoot: "" };
@@ -183,95 +182,7 @@ test("accepts a fresh argv prompt from a title-prefixed OMP transcript reported 
   }
 });
 
-test("recycles a rejected existing omp session and starts its prompt from argv", async () => {
-  const setup = await fixture();
-  const replacement: FakeSession = {
-    ...setup.session,
-    id: "replacement",
-    provider: "openrouter",
-    agentName: "replacement",
-    paneId: "replacement-pane",
-    codexSessionId: "omp-session",
-    launched: true,
-    live: { name: "replacement", paneId: "replacement-pane", agentSession: "omp-session", status: "working" },
-  };
-  setup.session = { ...setup.session, provider: "openrouter", launched: false, live: { ...setup.session.live, status: "idle" } };
-  setup.input = { ...setup.input, profile: { ...setup.input.profile, provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } };
-  let initialPrompt: { path: string; content: string } | undefined;
-  let freshGets = 0;
-  let ensures = 0;
-  const herdr = {
-    prompt: async () => setup.session.live,
-    getAgent: async (name: string) => {
-      if (name !== replacement.agentName) return setup.session.live;
-      freshGets += 1;
-      if (freshGets === 1) {
-        const prompt = initialPrompt!;
-        await appendFile(replacement.rolloutPath!, `${JSON.stringify({ type: "message", id: "omp-turn", timestamp: "2026-08-28T12:00:00.000Z", role: "user", message: { content: [{ type: "text", text: marker(prompt.content) }] } })}\n${JSON.stringify({ type: "message", timestamp: "2026-08-28T12:00:01.000Z", role: "assistant", stopReason: "stop", message: { content: [{ type: "text", text: "done" }] } })}\n`);
-      } else if (freshGets === 2) {
-        await writeFile(resultPath(initialPrompt!.content), JSON.stringify({ status: "ok" }));
-      }
-      return replacement.live;
-    },
-  };
-  const sessions = {
-    ensureRoleSession: async (_task: unknown, _role: unknown, _settings: unknown, options?: { initialPrompt?: { path: string; content: string } }) => {
-      ensures += 1;
-      if (ensures === 1) return setup.session;
-      initialPrompt = options?.initialPrompt;
-      return replacement;
-    },
-    retireRoleSession: async () => {
-      const now = new Date().toISOString();
-      setup.database.authQuery((db) => {
-        db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0 WHERE id = 'session'").run();
-        db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, codex_session_id, agent_name, pane_id, rollout_path, status, created_at, updated_at) VALUES ('replacement', 'task', 'lead', 2, 1, 'openrouter', 'omp-session', 'replacement', 'replacement-pane', ?, 'ready', ?, ?)").run(replacement.rolloutPath, now, now);
-      });
-      return true;
-    },
-  };
-  const runner = new HerdrTurnRunner(setup.database, herdr as never, sessions as never, new IssueTimelineEvents(setup.database), undefined, undefined, async () => {});
-  try {
-    await expect(runner.run(setup.input)).resolves.toMatchObject({ roleSessionId: "replacement", result: { status: "ok" } });
-    expect(initialPrompt?.content).toMatch(/^\[forge-turn:/);
-    expect(setup.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_herdr_turns").get() as { count: number }).count).toBe(1);
-    expect(setup.database.authQuery((db) => db.prepare("SELECT role_session_id AS roleSessionId FROM forge_herdr_turns").get() as { roleSessionId: string }).roleSessionId).toBe("replacement");
-  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
-});
 
-test("reports prompt-not-accepted when a recycled session stays idle", async () => {
-  const setup = await fixture();
-  const replacement = { ...setup.session, id: "replacement", provider: "openrouter" as const, agentName: "replacement", launched: false, live: { ...setup.session.live, name: "replacement", status: "idle" } };
-  setup.session = { ...setup.session, provider: "openrouter", launched: false, live: { ...setup.session.live, status: "idle" } };
-  setup.input = { ...setup.input, profile: { ...setup.input.profile, provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } };
-  let retired = 0;
-  let ensures = 0;
-  const sessions = {
-    ensureRoleSession: async () => ++ensures === 1 ? setup.session : replacement,
-    retireRoleSession: async () => {
-      retired += 1;
-      const now = new Date().toISOString();
-      setup.database.authQuery((db) => {
-        db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0 WHERE id = 'session'").run();
-        db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, codex_session_id, agent_name, pane_id, rollout_path, status, created_at, updated_at) VALUES ('replacement', 'task', 'lead', 2, 1, 'openrouter', 'omp-session', 'replacement', 'pane', ?, 'ready', ?, ?)").run(replacement.rolloutPath, now, now);
-      });
-      return true;
-    },
-  };
-  const runner = new HerdrTurnRunner(
-    setup.database,
-    { prompt: async () => setup.session.live, getAgent: async (name: string) => name === replacement.agentName ? replacement.live : setup.session.live } as never,
-    sessions as never,
-    new IssueTimelineEvents(setup.database),
-    undefined,
-    undefined,
-    async () => {},
-  );
-  try {
-    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "prompt-not-accepted", nonRetryable: true });
-    expect(retired).toBe(1);
-  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
-});
 
 test("follows a preassigned Claude transcript after its cwd changes", async () => {
   const setup = await fixture();
@@ -473,27 +384,6 @@ test("multiple marker candidates prefer Herdr's report, otherwise the newest", a
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("identity deadline failures are retryable and Herdr's reported session wins stale markers", async () => {
-  const setup = await freshIdentityFixture();
-  const missing = new HerdrTurnRunner(setup.database, { prompt: async () => setup.session.live, getAgent: async () => setup.session.live } as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database), undefined, async () => setup.candidates, async () => {});
-  const ambiguous = new HerdrTurnRunner(setup.database, { prompt: async () => { await freshRollout(setup, "first-session"); await freshRollout(setup, "second-session"); return setup.session.live; }, getAgent: async () => setup.session.live } as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database), undefined, async () => setup.candidates, async () => {});
-  const reported = new HerdrTurnRunner(setup.database, {
-    prompt: async (_name: string, prompt: string) => {
-      const path = await freshRollout(setup, "different-session");
-      await appendFile(path, line({ type: "user_message", message: marker(prompt) }));
-      await freshRollout(setup, "reported-session");
-      setup.session = { ...setup.session, rolloutPath: path };
-      await complete({ ...setup.session, rolloutPath: join(setup.root, "reported-session.jsonl") }, prompt, { status: "ok" });
-      return setup.session.live;
-    },
-    getAgent: async () => ({ ...setup.session.live, agentSession: "reported-session" }),
-  } as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database), undefined, async () => setup.candidates);
-  try {
-    await expect(missing.run(setup.input)).rejects.toMatchObject({ code: "session-identity-missing", nonRetryable: false });
-    await expect(ambiguous.run({ ...setup.input, executionId: "ambiguous" })).rejects.toMatchObject({ code: "session-identity-ambiguous", nonRetryable: false });
-    await expect(reported.run(setup.input)).resolves.toMatchObject({ sessionId: "reported-session" });
-  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
-});
 
 test("binds the Forge marker to its following Codex task_started turn", async () => {
   const outcome = await runScenario(async (prompt, session) => complete(session, prompt, { status: "ok" }));
@@ -518,47 +408,6 @@ test("styles the effective dispatched prompt and records its identity", async ()
   } finally { outcome.database.close(); await rm(outcome.root, { recursive: true, force: true }); }
 });
 
-test("re-sends an unobserved prompt before recording awaiting-human attention", async () => {
-  const setup = await fixture();
-  let now = new Date();
-  const prompts: string[] = [];
-  let sleeps = 0;
-  const herdr = {
-    prompt: async (_name: string, prompt: string) => {
-      prompts.push(prompt);
-      if (prompts.length === 2) {
-        const turn = "re-sent";
-        await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(prompt) })}${line({ type: "task_started", turn_id: turn })}`);
-        await writeFile(resultPath(prompt), JSON.stringify({ status: "ok" }));
-        await appendFile(setup.session.rolloutPath!, line({ type: "task_complete", turn_id: turn, duration_ms: 1 }));
-      }
-      return setup.session.live;
-    },
-    getAgent: async () => ({ ...setup.session.live, status: "idle" }),
-  };
-  const runner = new HerdrTurnRunner(
-    setup.database,
-    herdr as never,
-    { ensureRoleSession: async () => setup.session } as never,
-    new IssueTimelineEvents(setup.database),
-    undefined,
-    undefined,
-    async () => {
-      sleeps += 1;
-      if (sleeps === 1) {
-        expect(setup.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt FROM forge_herdr_turns").get())).toEqual({ status: "waiting", attention_excerpt: null });
-        now = new Date(now.getTime() + 15_000);
-      }
-    },
-    () => now,
-  );
-  try {
-    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
-    expect(prompts).toHaveLength(2);
-    expect(prompts[1]).toBe(prompts[0]);
-    for (const prompt of prompts) expect(prompt.match(/Forge response style/g)).toHaveLength(1);
-  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
-});
 
 test("binds a marker to the active Codex turn when task_started arrives first", async () => {
   const outcome = await runScenario(async (prompt, session) => {
@@ -883,82 +732,7 @@ test("recognizes explicit options blocks without a trailing question mark", asyn
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("surfaces an unbound turn only after all prompt delivery attempts go unobserved", async () => {
-  const setup = await fixture();
-  let now = new Date();
-  let sent = "";
-  let sleeps = 0;
-  const herdr = {
-    prompt: async (_name: string, prompt: string) => {
-      sent = prompt;
-      await appendFile(setup.session.rolloutPath!, `${line({ type: "task_started", turn_id: "idle" })}${line({ type: "agent_message", message: "I am reviewing the repository." })}`);
-      return setup.session.live;
-    },
-    getAgent: async () => ({ ...setup.session.live, status: "idle" }),
-  };
-  const runner = new HerdrTurnRunner(
-    setup.database,
-    herdr as never,
-    { ensureRoleSession: async () => setup.session } as never,
-    new IssueTimelineEvents(setup.database),
-    undefined,
-    undefined,
-    async () => {
-      sleeps += 1;
-      if (sleeps <= 3) now = new Date(now.getTime() + [15_000, 30_000, 60_000][sleeps - 1]!);
-      if (sleeps === 5) {
-        expect(setup.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt FROM forge_herdr_turns").get())).toEqual({ status: "awaiting_human", attention_excerpt: "Prompt was not accepted by the agent after 4 attempts" });
-        const row = setup.database.authQuery((db) => db.prepare("SELECT result_relative_path FROM forge_herdr_turns").get()) as { result_relative_path: string };
-        await writeFile(join(setup.root, row.result_relative_path), JSON.stringify({ status: "ok" }));
-        await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(sent) })}${line({ type: "task_complete", turn_id: "idle", duration_ms: 1 })}`);
-      }
-    },
-    () => now,
-  );
-  try {
-    const running = runner.run(setup.input);
-    await expect(running).resolves.toMatchObject({ result: { status: "ok" } });
-  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
-});
 
-test("does not resend an idle prompt while its rollout advances", async () => {
-  const setup = await fixture();
-  let now = new Date();
-  let prompts = 0;
-  let sent = "";
-  let getCalls = 0;
-  const herdr = {
-    prompt: async (_name: string, prompt: string) => {
-      prompts += 1;
-      sent = prompt;
-      return setup.session.live;
-    },
-    getAgent: async () => {
-      getCalls += 1;
-      if (getCalls < 3) {
-        await appendFile(setup.session.rolloutPath!, line({ type: "agent_message", message: `still working ${getCalls}` }));
-      } else if (getCalls === 3) {
-        await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(sent) })}${line({ type: "task_started", turn_id: "advancing" })}${line({ type: "task_complete", turn_id: "advancing", duration_ms: 1 })}`);
-        await writeFile(resultPath(sent), JSON.stringify({ status: "ok" }));
-      }
-      return { ...setup.session.live, status: "idle" };
-    },
-  };
-  const runner = new HerdrTurnRunner(
-    setup.database,
-    herdr as never,
-    { ensureRoleSession: async () => setup.session } as never,
-    new IssueTimelineEvents(setup.database),
-    undefined,
-    undefined,
-    async () => { now = new Date(now.getTime() + 60_000); },
-    () => now,
-  );
-  try {
-    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
-    expect(prompts).toBe(1);
-  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
-});
 
 test("does not surface a momentarily idle unbound turn that resumes work", async () => {
   const setup = await fixture();
@@ -986,7 +760,7 @@ test("does not surface a momentarily idle unbound turn that resumes work", async
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("surfaces a completed idle turn that did not write its result file", async () => {
+test("idle with no result sends one nudge, awaits human, and adopts the late result", async () => {
   const setup = await fixture();
   let prompts = 0;
   const herdr = {
@@ -995,14 +769,14 @@ test("surfaces a completed idle turn that did not write its result file", async 
       await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(prompt) })}${line({ type: "task_started", turn_id: "silent" })}${line({ type: "task_complete", turn_id: "silent", duration_ms: 1 })}`);
       return setup.session.live;
     },
-    getAgent: async () => ({ ...setup.session.live, status: "idle" }),
+    getAgent: async () => ({ ...setup.session.live, status: "idle", screenDetectionSkipped: true }),
   };
   const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
   try {
     const running = runner.run(setup.input);
     await new Promise((resolve) => setTimeout(resolve, 75));
     const row = setup.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt, result_relative_path FROM forge_herdr_turns").get() as { status: string; attention_excerpt: string; result_relative_path: string });
-    expect(row).toMatchObject({ status: "awaiting_human", attention_excerpt: expect.stringContaining(`Finished without writing ${join(setup.root, row.result_relative_path)}`) });
+    expect(row).toMatchObject({ status: "awaiting_human", attention_excerpt: expect.stringContaining(`Agent remained idle without writing ${join(setup.root, row.result_relative_path)}`) });
     expect(prompts).toBe(2);
     setTimeout(() => void writeFile(join(setup.root, row.result_relative_path), JSON.stringify({ status: "ok" })), 1_050);
     await expect(running).resolves.toMatchObject({ result: { status: "ok" } });
@@ -1032,56 +806,8 @@ test("synthesizes one Developer delivery from a clean Git handoff", async () => 
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("does not synthesize a Developer delivery from a dirty worktree", async () => {
-  const setup = await developerTurnFixture(true);
-  const herdr = {
-    prompt: async (_name: string, prompt: string) => {
-      await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(prompt) })}${line({ type: "task_started", turn_id: "developer" })}${line({ type: "task_complete", turn_id: "developer", duration_ms: 1 })}`);
-      return { ...setup.session.live, status: "idle" };
-    },
-    getAgent: async () => ({ ...setup.session.live, status: "idle" }),
-  };
-  const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
-  try {
-    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "turn_outcome_missing", message: expect.stringContaining("uncommitted files") });
-    expect(setup.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns").get())).not.toEqual({ status: "completed" });
-  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
-});
 
-test("fails a live turn that does not make progress within the configured liveness bound", async () => {
-  const setup = await fixture();
-  let now = new Date();
-  const herdr = { prompt: async () => setup.session.live, getAgent: async () => ({ ...setup.session.live, status: "working" }) };
-  const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database), undefined, undefined, async () => { now = new Date(now.getTime() + 10_000); }, () => now, createTestConfig(setup.root, { turnStallTimeoutMs: 60_000 }));
-  try {
-    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "turn_stalled", nonRetryable: false });
-  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
-});
 
-test("does not stall a working session that is quiet for five minutes with default config", async () => {
-  const setup = await fixture();
-  let now = new Date();
-  let prompt = "";
-  let sleeps = 0;
-  const herdr = {
-    prompt: async (_name: string, value: string) => { prompt = value; return setup.session.live; },
-    getAgent: async () => ({ ...setup.session.live, status: "working" }),
-  };
-  const runner = new HerdrTurnRunner(
-    setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never,
-    new IssueTimelineEvents(setup.database), undefined, undefined,
-    async () => {
-      sleeps += 1;
-      now = new Date(now.getTime() + 10_000);
-      if (sleeps === 31) await complete(setup.session, prompt, { status: "ok" });
-    },
-    () => now,
-    createTestConfig(setup.root),
-  );
-  try {
-    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
-  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
-});
 
 test("adopts a persisted waiting turn after marker-start-completion without prompting again", async () => {
   const setup = await fixture();
@@ -1103,35 +829,6 @@ test("adopts a persisted waiting turn after marker-start-completion without prom
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("re-prompts once for each newly interrupted session generation", async () => {
-  const setup = await fixture();
-  let generation = 1;
-  let agentChecks = 0;
-  const prompts: string[] = [];
-  const session = () => ({ ...setup.session, generation, live: { ...setup.session.live, status: "working" } });
-  const herdr = {
-    prompt: async (_name: string, prompt: string) => {
-      prompts.push(prompt);
-      if (prompts.length === 3 && generation === 3) await complete(session(), prompts[0]!, { status: "ok" });
-      return session().live;
-    },
-    getAgent: async () => {
-      agentChecks += 1;
-      if (agentChecks === 1 || agentChecks === 3) { generation += 1; return null; }
-      if (agentChecks === 2) return null;
-      return session().live;
-    },
-  };
-  const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => session() } as never, new IssueTimelineEvents(setup.database));
-  try {
-    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
-    expect(prompts).toHaveLength(3);
-    for (const prompt of prompts) {
-      expect(prompt).toContain("Plan this");
-      expect(prompt.match(/Forge response style/g)).toHaveLength(1);
-    }
-  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
-});
 
 test("stores sanitized content-addressed rollout manifests and reuses chunks", async () => {
   const setup = await fixture();

@@ -230,7 +230,7 @@ export class AgentService {
     this.browserProof = new BrowserProofService(database, this.artifacts);
     this.now = options.now ?? (() => new Date());
     const herdr = new CliHerdrClient();
-    this.turnRunner = options.turnRunner ?? new HerdrTurnRunner(database, herdr, new HerdrSessionStore(database, herdr), new IssueTimelineEvents(database), this.artifacts, undefined, undefined, undefined, config);
+    this.turnRunner = options.turnRunner ?? new HerdrTurnRunner(database, herdr, new HerdrSessionStore(database, herdr), new IssueTimelineEvents(database), this.artifacts);
     this.worktrees = options.worktrees ?? new WorktreeManager(undefined, () => readEnvironmentSettings(database).minFreeDiskGb);
   }
 

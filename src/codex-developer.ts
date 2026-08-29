@@ -235,7 +235,7 @@ export class DeveloperService {
     this.browserProof = new BrowserProofService(database, this.artifacts);
     const herdr = new CliHerdrClient();
     this.roleSessions = new HerdrSessionStore(database, herdr);
-    this.turnRunner = options.turnRunner ?? new HerdrTurnRunner(database, herdr, this.roleSessions, new IssueTimelineEvents(database), undefined, undefined, undefined, undefined, config);
+    this.turnRunner = options.turnRunner ?? new HerdrTurnRunner(database, herdr, this.roleSessions, new IssueTimelineEvents(database));
     this.worktrees = options.worktrees ?? new WorktreeManager(undefined, () => readEnvironmentSettings(database).minFreeDiskGb);
     this.now = options.now ?? (() => new Date());
     this.github = options.github;
@@ -270,12 +270,12 @@ export class DeveloperService {
     return profile;
   }
 
-  private reAdoptWorkerRestartOrphan(executionId: string, existing: DeveloperExecutionIdentity, coordinates: Partial<DeveloperExecutionCoordinates>, startedAt: string): boolean {
+  private reAdoptOrphanExecution(executionId: string, existing: DeveloperExecutionIdentity, coordinates: Partial<DeveloperExecutionCoordinates>, startedAt: string): boolean {
     const matches = (Object.keys(coordinates) as Array<keyof DeveloperExecutionCoordinates>).every((key) => existing[key] === null || existing[key] === coordinates[key]);
-    if (!matches || existing.status !== "failed" || existing.failureCode !== "worker-restart-orphan") return false;
+    if (!matches || existing.status !== "failed") return false;
     return this.database.authTransaction((db) => db.prepare(`UPDATE forge_developer_executions
       SET status = 'starting', failure_code = NULL, failure_summary = NULL, finished_at = NULL, started_at = ?, heartbeat_at = ?, current_step = NULL
-      WHERE id = ? AND status = 'failed' AND failure_code = 'worker-restart-orphan'
+      WHERE id = ? AND status = 'failed'
         AND NOT EXISTS (SELECT 1 FROM forge_developer_result_claims WHERE execution_id = ?)
         AND NOT EXISTS (SELECT 1 FROM forge_developer_result_conflicts WHERE execution_id = ?)`).run(startedAt, startedAt, executionId, executionId, executionId).changes === 1);
   }
@@ -333,7 +333,7 @@ export class DeveloperService {
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
     const supersedesExecutionId = prior?.id === executionId ? null : prior?.id ?? null;
     const startedAt = this.now().toISOString();
-    const reopened = existing ? this.reAdoptWorkerRestartOrphan(executionId, existing, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, attempt, branchName, targetBaseSha, supersedesExecutionId }, startedAt) : false;
+    const reopened = existing ? this.reAdoptOrphanExecution(executionId, existing, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, attempt, branchName, targetBaseSha, supersedesExecutionId }, startedAt) : false;
     if (existing && !reopened && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== branchName || existing.targetBaseSha !== targetBaseSha || existing.supersedesExecutionId !== supersedesExecutionId || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic Developer execution ID is already bound to different coordinates", { nonRetryable: true });
     let worktree;
     try {
@@ -455,7 +455,7 @@ export class DeveloperService {
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
     const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, failure_code AS failureCode, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as DeveloperExecutionIdentity | undefined);
     const startedAt = this.now().toISOString();
-    const reopened = existing ? this.reAdoptWorkerRestartOrphan(executionId, existing, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, attempt, branchName: input.branchName, worktreePath: input.worktreePath, targetBaseSha: input.targetBaseSha, supersedesExecutionId: input.developerExecutionId, sessionRef: input.developerSessionRef }, startedAt) : false;
+    const reopened = existing ? this.reAdoptOrphanExecution(executionId, existing, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, attempt, branchName: input.branchName, worktreePath: input.worktreePath, targetBaseSha: input.targetBaseSha, supersedesExecutionId: input.developerExecutionId, sessionRef: input.developerSessionRef }, startedAt) : false;
     if (existing && !reopened && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== input.branchName || existing.worktreePath !== input.worktreePath || existing.targetBaseSha !== input.targetBaseSha || existing.supersedesExecutionId !== input.developerExecutionId || existing.sessionRef !== input.developerSessionRef || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic merge-resolution ID is already bound to different coordinates", { nonRetryable: true });
     const guard = await createGitCommandGuard(this.config.runtimeRoot);
     this.database.authTransaction((db) => {
@@ -550,7 +550,7 @@ export class DeveloperService {
     const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, failure_code AS failureCode, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as DeveloperExecutionIdentity | undefined);
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
     const startedAt = this.now().toISOString();
-    const reopened = existing ? this.reAdoptWorkerRestartOrphan(executionId, existing, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, attempt, branchName: input.branchName, targetBaseSha: input.targetBaseSha, supersedesExecutionId: input.developerExecutionId, sessionRef: input.developerSessionRef }, startedAt) : false;
+    const reopened = existing ? this.reAdoptOrphanExecution(executionId, existing, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, attempt, branchName: input.branchName, targetBaseSha: input.targetBaseSha, supersedesExecutionId: input.developerExecutionId, sessionRef: input.developerSessionRef }, startedAt) : false;
     if (existing && !reopened && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== input.branchName || existing.targetBaseSha !== input.targetBaseSha || existing.supersedesExecutionId !== input.developerExecutionId || existing.sessionRef !== input.developerSessionRef || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic Developer repair ID is already bound to different coordinates", { nonRetryable: true });
     const repairAttemptId = `delivery_repair_${executionId.slice("developer_".length)}`;
     let repairRowCreated = false;

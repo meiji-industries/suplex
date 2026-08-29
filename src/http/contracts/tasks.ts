@@ -137,6 +137,7 @@ export const TaskListResponseSchema = z.object({ tasks: z.array(TaskListTaskSche
 export const ContinueWorkResponseSchema = z.object({ original: TaskResponseSchema, successor: TaskResponseSchema });
 export const ImageResponseSchema = z.object({ artifactId: z.string(), filename: z.string(), mimeType: z.string(), byteSize: z.number() });
 export const TaskDeveloperDiffResponseSchema = z.object({ patch: z.string(), branchName: z.string(), repository: z.string().optional(), baseSha: z.string(), headSha: z.string() });
+export const TaskPaneResponseSchema = z.object({ text: z.string() });
 export const DeveloperExecutionEventsResponseSchema = z.object({ events: z.array(DeveloperExecutionEventResponseSchema), hasMore: z.boolean() });
 export const TaskActivityCommandSchema = z.object({ id: z.string(), stepId: z.string(), command: z.string(), cwd: z.string().nullable(), exitCode: z.number().nullable(), durationMs: z.number().int().nonnegative(), stdout: z.string(), stderr: z.string(), entries: z.array(z.object({ stream: z.enum(["stdout", "stderr"]), text: z.string() })), at: z.string() });
 export const TaskActivityResponseSchema = z.object({ execution: z.object({ id: z.string(), role: z.enum(["planner", "builder", "reviewer", "integrator"]), status: z.string(), currentStep: z.string().nullable() }).nullable(), events: z.array(z.object({ at: z.string(), kind: z.enum(["thinking", "command", "output", "message", "status"]), text: z.string(), exitCode: z.number().optional() })), commands: z.array(TaskActivityCommandSchema) });

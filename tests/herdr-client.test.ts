@@ -214,6 +214,13 @@ test("client accepts the legacy bare agent session form", async () => {
   });
 });
 
+test("snapshot normalizes Herdr agent state", async () => {
+  const client = new CliHerdrClient("herdr", async () => ({
+    stdout: JSON.stringify({ id: "cli:snapshot", result: { agents: [{ name: "forge-developer", pane_id: "pane", agent_status: "working", agent_session: { value: "session" }, screen_detection_skipped: true, state_change_seq: 7 }] } }),
+  }));
+  await expect(client.snapshot()).resolves.toEqual([expect.objectContaining({ name: "forge-developer", paneId: "pane", status: "working", agentSession: "session", screenDetectionSkipped: true, state_change_seq: 7 })]);
+});
+
 test("agent startup allows Codex interactive readiness under load", async () => {
   const argv: string[][] = [];
   const client = new CliHerdrClient("herdr", async (_file, args) => {

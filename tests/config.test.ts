@@ -24,12 +24,6 @@ test("loads a Tailscale-only configuration and exposes the reachable address", (
   expect(config.worktreeRoot).toBe(join(homedir(), "forge", "worktrees"));
   expect(config.temporalNamespace).toBe("test.account");
   expect(config.taskQueue).toBe("tasks-test-installation");
-  expect(config.turnStallTimeoutMs).toBe(1_200_000);
-});
-
-test("configures a bounded live-turn quiet period", () => {
-  expect(loadConfig({ ...baseEnvironment, FORGE_TURN_STALL_TIMEOUT_MS: "60000" }).turnStallTimeoutMs).toBe(60_000);
-  expect(() => loadConfig({ ...baseEnvironment, FORGE_TURN_STALL_TIMEOUT_MS: "59999" })).toThrow(/turnStallTimeoutMs/);
 });
 
 test("configures a TLS-authenticated hosted Temporal connection", () => {

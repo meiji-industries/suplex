@@ -9,6 +9,7 @@ import { type HerdrClient, CliHerdrClient } from "./herdr-client.js";
 import { reconcileHerdrSessions } from "./herdr-recovery.js";
 import { classifyRecovery, type DurableTaskFacts, type LiveObservations } from "./recovery/convergence.js";
 import { json } from "./task-utils.js";
+import { reconcileIssueDeveloperDelivery } from "./temporal/service.js";
 
 export interface ActiveTurnOutcome {
   taskId: string;
@@ -19,7 +20,7 @@ export interface ActiveTurnOutcome {
   evidence: string[];
 }
 
-type Turn = { turnId: string; taskId: string; role: "lead" | "developer"; status: DurableTaskFacts["turn"] extends infer T ? T extends { status: infer S } ? S : never : never; resultRelativePath: string; executionId: string; ledger: "agent" | "developer"; executionRole: string; revision: number; phase: string; agentName: string | null; branchName: string | null; worktreePath: string | null; lastReviewedCommit: string | null; correctionIndex: number };
+type Turn = { turnId: string; taskId: string; role: "lead" | "developer"; status: DurableTaskFacts["turn"] extends infer T ? T extends { status: infer S } ? S : never : never; resultRelativePath: string; executionId: string; executionStatus: string | null; ledger: "agent" | "developer"; executionRole: string; revision: number; phase: string; workflowId: string; agentName: string | null; branchName: string | null; worktreePath: string | null; lastReviewedCommit: string | null; correctionIndex: number };
 
 // Keep completed turns with a durable result in the scan so an unchanged second
 // reconciliation reports the same idempotent outcome without writing again.
@@ -46,17 +47,18 @@ function sessionObservation(status: string | undefined, missing: boolean): LiveO
 }
 
 function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
-  return database.authQuery((db) => db.prepare(`SELECT turn.turn_id AS turnId, turn.task_id AS taskId, session.session_role AS role, turn.status, turn.result_relative_path AS resultRelativePath, turn.execution_id AS executionId, turn.ledger, turn.execution_role AS executionRole, projection.revision, projection.phase, session.agent_name AS agentName, worktree.branch_name AS branchName, worktree.worktree_path AS worktreePath, review.subject_commit AS lastReviewedCommit, turn.correction_index AS correctionIndex
+  return database.authQuery((db) => db.prepare(`SELECT turn.turn_id AS turnId, turn.task_id AS taskId, session.session_role AS role, turn.status, turn.result_relative_path AS resultRelativePath, turn.execution_id AS executionId, developer.status AS executionStatus, turn.ledger, turn.execution_role AS executionRole, projection.revision, projection.phase, projection.workflow_id AS workflowId, session.agent_name AS agentName, worktree.branch_name AS branchName, worktree.worktree_path AS worktreePath, review.subject_commit AS lastReviewedCommit, turn.correction_index AS correctionIndex
     FROM forge_herdr_turns turn
     JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.is_current = 1
     JOIN forge_issue_projections projection ON projection.task_id = turn.task_id
     LEFT JOIN forge_issue_worktrees worktree ON worktree.task_id = turn.task_id AND worktree.status <> 'released'
+    LEFT JOIN forge_developer_executions developer ON developer.id = turn.execution_id AND turn.ledger = 'developer'
     LEFT JOIN forge_delivery_reviews review ON review.id = (SELECT id FROM forge_delivery_reviews WHERE workflow_id = projection.workflow_id ORDER BY created_at DESC, id DESC LIMIT 1)
     WHERE turn.status IN (${activeStatuses}) AND (projection.phase NOT IN ('done', 'cancelled', 'failed') OR session.updated_at >= datetime('now', '-1 day'))${taskId ? " AND turn.task_id = ?" : ""}
     ORDER BY turn.task_id, turn.turn_id`).all(...(taskId ? [taskId] : [])) as Turn[]);
 }
 
-export async function reconcileActiveTurns(database: ForgeDatabase, config: ForgeConfig, deps: { herdr?: HerdrClient; detectHandoff?: typeof detectGitHandoff; now?: () => string } = {}, taskId?: string): Promise<ActiveTurnOutcome[]> {
+export async function reconcileActiveTurns(database: ForgeDatabase, config: ForgeConfig, deps: { herdr?: HerdrClient; detectHandoff?: typeof detectGitHandoff; now?: () => string; reconcileDeveloper?: typeof reconcileIssueDeveloperDelivery } = {}, taskId?: string): Promise<ActiveTurnOutcome[]> {
   const herdr = deps.herdr ?? new CliHerdrClient();
   const detectHandoff = deps.detectHandoff ?? detectGitHandoff;
   const now = deps.now ?? (() => new Date().toISOString());
@@ -86,6 +88,9 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
         }
         db.prepare("UPDATE forge_herdr_turns SET result_sha256 = ?, task_complete_seen_at = ?, status = 'completed', finished_at = ?, updated_at = ? WHERE turn_id = ? AND status <> 'completed'").run(sha256(handoffBytes), now(), now(), now(), turn.turnId);
       });
+      if (turn.role === "developer" && turn.executionStatus === "failed" && bytes) {
+        await (deps.reconcileDeveloper ?? reconcileIssueDeveloperDelivery)(config, turn.workflowId, { expectedRevision: turn.revision, actorUserId: "system", commandId: `late-result-${turn.turnId}`, reconcileOnly: true });
+      }
     }
     outcomes.push({ taskId: turn.taskId, turnId: turn.turnId, role: turn.role, action, idempotencyKey: classified.idempotencyKey, evidence: classified.evidence });
   }

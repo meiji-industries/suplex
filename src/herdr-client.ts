@@ -70,6 +70,7 @@ export interface HerdrAgent {
   tabId?: string;
   agentSession?: string;
   status?: string;
+  screenDetectionSkipped?: boolean;
   [key: string]: unknown;
 }
 type Json = Record<string, unknown>;
@@ -149,6 +150,7 @@ function agent(raw: Json): HerdrAgent {
         ? { agentSession: session }
       : {}),
     ...(typeof status === "string" ? { status } : {}),
+    ...(typeof raw.screen_detection_skipped === "boolean" ? { screenDetectionSkipped: raw.screen_detection_skipped } : {}),
   };
 }
 export interface HerdrClient {
@@ -193,8 +195,9 @@ export interface HerdrClient {
   sendPaneKeys(id: string, keys: string[]): Promise<void>;
   closePane(id: string): Promise<void>;
   listAgents(): Promise<HerdrAgent[]>;
+  snapshot(): Promise<HerdrAgent[]>;
   getAgent(name: string): Promise<HerdrAgent | null>;
-  readAgent(name: string): Promise<string>;
+  readAgent(name: string, source?: "recent-unwrapped", lines?: number): Promise<string>;
   waitAgent(name: string): Promise<HerdrAgent>;
   prompt(name: string, text: string): Promise<HerdrAgent>;
   sendKeys(name: string, keys: ["ctrl+c"]): Promise<void>;
@@ -204,6 +207,17 @@ export interface HerdrClient {
     kind: HerdrAgentKind;
     args: string[];
   }): Promise<HerdrAgent>;
+}
+const snapshots = new WeakMap<HerdrClient, { at: number; agents: HerdrAgent[]; pending?: Promise<HerdrAgent[]> }>();
+export async function snapshotAgents(client: HerdrClient): Promise<HerdrAgent[]> {
+  const cached = snapshots.get(client);
+  if (cached && Date.now() - cached.at < 1_000) return cached.pending ?? cached.agents;
+  const load = typeof client.snapshot === "function" ? () => client.snapshot() : typeof client.listAgents === "function" ? () => client.listAgents() : async () => [];
+  const pending = load().catch(async () => typeof client.listAgents === "function" ? client.listAgents() : []);
+  snapshots.set(client, { at: Date.now(), agents: cached?.agents ?? [], pending });
+  const agents = await pending;
+  snapshots.set(client, { at: Date.now(), agents });
+  return agents;
 }
 export class CliHerdrClient implements HerdrClient {
   constructor(
@@ -456,14 +470,19 @@ export class CliHerdrClient implements HerdrClient {
       .filter((raw) => typeof raw.name === "string")
       .map(agent);
   }
+  async snapshot(): Promise<HerdrAgent[]> {
+    return (((await this.call(["api", "snapshot"])).agents as Json[]) ?? [])
+      .filter((raw) => typeof raw.name === "string")
+      .map(agent);
+  }
   async getAgent(name: string): Promise<HerdrAgent | null> {
     return this.optional(async () =>
       agent(value<Json>(await this.call(["agent", "get", name], true), "agent")),
     );
   }
-  async readAgent(name: string): Promise<string> {
+  async readAgent(name: string, source = "recent-unwrapped" as const, lines?: number): Promise<string> {
     return String(
-      (await this.call(["agent", "read", name, "--source", "recent-unwrapped"]))
+      (await this.call(["agent", "read", name, "--source", source, ...(lines ? ["--lines", String(lines)] : [])]))
         .text ?? "",
     );
   }

@@ -63,6 +63,14 @@ const isAgentStartupTimeout = (error: unknown): boolean => {
       message === "Herdr command failed: timed out waiting for agent startup")
   );
 };
+const isClaudeResumeSummaryPrompt = (value: string): boolean => {
+  const prompt = value.replace(/\s+/g, " ");
+  return (
+    prompt.includes("Resume from summary (recommended)") &&
+    prompt.includes("Resume full session as-is") &&
+    prompt.includes("Enter to confirm")
+  );
+};
 export function herdrLabel(value: string): string {
   return (
     value
@@ -617,6 +625,10 @@ export class HerdrSessionStore {
     try {
       return await this.herdr.startAgent(input);
     } catch (error) {
+      if (error instanceof HerdrFailure && error.code === "agent_not_ready") {
+        const resumed = await this.resumeClaudeSummaryPrompt(input);
+        if (resumed) return resumed;
+      }
       if (input.adoptTimedOutArgvPrompt && isAgentStartupTimeout(error)) {
         let live = await this.getRecordedAgentByName(input.name);
         if (!live) {
@@ -632,6 +644,22 @@ export class HerdrSessionStore {
           return live;
       }
       throw error;
+    }
+  }
+  private async resumeClaudeSummaryPrompt(input: {
+    name: string;
+    paneId: string;
+  }): Promise<HerdrAgent | null> {
+    try {
+      const prompt = await this.herdr.readPane(input.paneId);
+      if (!isClaudeResumeSummaryPrompt(prompt)) return null;
+      await this.herdr.sendPaneKeys(input.paneId, ["enter"]);
+      const live = await this.herdr.waitAgent(input.name);
+      if (!live || live.name !== input.name || live.paneId !== input.paneId)
+        return null;
+      return live;
+    } catch {
+      return null;
     }
   }
   private isInactiveRecordedName(error: unknown): boolean {

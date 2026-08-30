@@ -186,6 +186,8 @@ class StartupHerdrFake {
   readonly startAttempts: string[] = [];
   readonly renamed: Array<{ target: string; name: string }> = [];
   readonly getAgentTargets: string[] = [];
+  readonly paneKeys: Array<{ paneId: string; keys: string[] }> = [];
+  readonly waitAgentTargets: string[] = [];
   readonly metadataReports: HerdrPaneMetadataReport[] = [];
   failStartOnce = false;
   startFailure: unknown;
@@ -198,9 +200,20 @@ class StartupHerdrFake {
   runtimeAgents: HerdrAgent[] | undefined;
   runtimePanes: Pane[] | undefined;
   getAgentFailure: HerdrFailure | undefined;
+  waitAgentResponse: HerdrAgent | null = null;
+  waitAgentFailure: unknown;
   paneText = "";
 
   async readPane() { return this.paneText; }
+  async sendPaneKeys(paneId: string, keys: string[]) {
+    this.paneKeys.push({ paneId, keys });
+  }
+  async waitAgent(name: string) {
+    this.waitAgentTargets.push(name);
+    if (this.waitAgentFailure) throw this.waitAgentFailure;
+    if (this.waitAgentResponse) return this.waitAgentResponse;
+    throw new HerdrFailure("agent_not_found", false, `agent ${name} was not found`);
+  }
 
   async getAgent(_name: string) {
     this.getAgentTargets.push(_name);
@@ -467,7 +480,75 @@ test("keeps an agent pane open and records its startup trust prompt", async () =
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
     await expect(store.ensureRoleSession(taskFor(value.root), "planner", startupSettings)).rejects.toMatchObject({ code: "agent_startup_blocked" });
     expect(value.database.authQuery((db) => db.prepare("SELECT status, pane_id, attention_excerpt FROM forge_herdr_role_sessions WHERE task_id = 'task'").get())).toEqual({ status: "blocked", pane_id: "pane-1", attention_excerpt: "Do you trust the contents of this directory? 1. Yes, continue" });
+    expect(herdr.paneKeys).toEqual([]);
+    expect(herdr.waitAgentTargets).toEqual([]);
     expect(herdr.closed).toEqual([]);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("accepts Claude's recommended resume-summary choice and adopts the same agent pane", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  herdr.startFailure = new HerdrFailure("agent_not_ready", false, "agent is blocked during startup and is not ready for prompts");
+  herdr.paneText = [
+    "This session is 2 days old and has 120000 tokens.",
+    "Resuming the full session will consume a substantial portion of your usage limits. We recommend resuming from a summary.",
+    "1. Resume from summary (recommended)",
+    "2. Resume full session as-is",
+    "3. Don't ask me again",
+    "Enter to confirm",
+  ].join("\n");
+  herdr.waitAgentResponse = { name: "task-planner", paneId: "pane-1", status: "idle" };
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
+
+    await expect(
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
+    ).resolves.toMatchObject({
+      agentName: "task-planner",
+      paneId: "pane-1",
+      launched: true,
+      live: { name: "task-planner", paneId: "pane-1", status: "idle" },
+    });
+
+    expect(herdr.paneKeys).toEqual([{ paneId: "pane-1", keys: ["enter"] }]);
+    expect(herdr.waitAgentTargets).toEqual(["task-planner"]);
+    expect(herdr.closed).toEqual([]);
+    expect(value.database.authQuery((db) =>
+      db.prepare("SELECT status, agent_name, pane_id, attention_excerpt FROM forge_herdr_role_sessions WHERE task_id = 'task'").get(),
+    )).toEqual({ status: "ready", agent_name: "task-planner", pane_id: "pane-1", attention_excerpt: null });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("keeps a resume-summary pane blocked when adoption fails after Enter", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  herdr.startFailure = new HerdrFailure("agent_not_ready", false, "agent is blocked during startup and is not ready for prompts");
+  herdr.paneText = [
+    "1. Resume from summary (recommended)",
+    "2. Resume full session as-is",
+    "Enter to confirm",
+  ].join("\n");
+  herdr.waitAgentFailure = new HerdrFailure("agent_not_found", false, "resumed agent was not found");
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
+
+    await expect(
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
+    ).rejects.toMatchObject({ code: "agent_startup_blocked" });
+
+    expect(herdr.paneKeys).toEqual([{ paneId: "pane-1", keys: ["enter"] }]);
+    expect(herdr.waitAgentTargets).toEqual(["task-planner"]);
+    expect(herdr.closed).toEqual([]);
+    expect(value.database.authQuery((db) =>
+      db.prepare("SELECT status, pane_id FROM forge_herdr_role_sessions WHERE task_id = 'task'").get(),
+    )).toEqual({ status: "blocked", pane_id: "pane-1" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

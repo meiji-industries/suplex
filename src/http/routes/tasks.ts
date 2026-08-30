@@ -8,7 +8,7 @@ import { TaskFailure, type TaskService } from "../../tasks.js";
 import { GithubReleaseFailure, type ReleaseService } from "../../github-release.js";
 import { routedIssueCommands, type IssueCommand } from "../../commands/registry.js";
 import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, HttpPlanDecisionBodySchema, ResolveDecisionBlockerBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
-import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, DuplicateTaskBodySchema, PlanRevisionBodySchema, TaskActivityResponseSchema, TaskAgentsBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskDeveloperDiffResponseSchema, TaskDiagnosticsResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskRescueResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, DuplicateTaskBodySchema, MAX_TASK_REQUEST_BYTES, PlanRevisionBodySchema, TaskActivityResponseSchema, TaskAgentsBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskDeveloperDiffResponseSchema, TaskDiagnosticsResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskRescueResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
 import { TaskRescueService } from "../../task-rescue.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { ForgeConfig } from "../../config.js";
@@ -28,7 +28,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   const taskResponse = { response: { 200: TaskResponseSchema } };
   typed.get("/api/tasks", { schema: { querystring: z.object({ archived: z.coerce.boolean().optional() }), response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, undefined, request.query.archived === true) }));
   typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, querystring: z.object({ archived: z.coerce.boolean().optional() }), response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId, request.query.archived === true) }));
-  typed.post("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, body: TaskBodySchema, response: { 200: TaskResponseSchema, 201: TaskResponseSchema } } }, async (request, reply) => {
+  typed.post("/api/companies/:companyId/tasks", { bodyLimit: MAX_TASK_REQUEST_BYTES, schema: { params: CompanyIdParamsSchema, body: TaskBodySchema, response: { 200: TaskResponseSchema, 201: TaskResponseSchema } } }, async (request, reply) => {
     const { roleAgents: rawRoleAgents, ...body } = request.body;
     const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, { ...body, ...(rawRoleAgents ? { roleAgents: rawRoleAgents } : {}) });
     return reply.code(result.created ? 201 : 200).send(result.task);

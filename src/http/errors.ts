@@ -60,6 +60,10 @@ export function installHttpErrorHandlers(app: FastifyInstance): void {
       sendDomainFailure(reply, error);
       return;
     }
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "FST_ERR_CTP_BODY_TOO_LARGE") {
+      request.log.warn({ requestId: request.id, statusCode: 413 }, "Request rejected");
+      reply.code(413).send({ error: "Request is too large", findings: [{ code: "request-too-large", field: "images", message: "Attach fewer or smaller images and submit again" }] }); return;
+    }
     if (isResponseSerializationError(error)) {
       request.log.error({ requestId: request.id, method: error.method, url: error.url, issues: error.cause.issues.map((issue) => ({ path: issue.path.join("."), code: issue.code, message: issue.message })) }, "Response doesn't match the schema");
       reply.code(500).send({ error: "Internal server error" });

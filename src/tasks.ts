@@ -31,6 +31,7 @@ import type { HermesPrincipal } from "./hermes-agents.js";
 import type { HermesSafeTaskProjection } from "./http/contracts/hermes.js";
 import { TaskSourceFailure, type TaskSourceSelector } from "./task-sources.js";
 import { BrowserProofService, type BrowserProofProjection } from "./browser-proof.js";
+import { MAX_TASK_IMAGES, MAX_TASK_IMAGE_BYTES, MAX_TASK_IMAGE_BASE64_LENGTH } from "./task-attachment-limits.js";
 import { attentionCardFromBlocker } from "./recovery/attention-card.js";
 import type { AttentionCard } from "./recovery/convergence.js";
 import { creationRequestHash, duplicateTitle, finding, id, json, normalizeText, parseImageIds, parseMetadata, parseRoleAgents, shaAbbrev, type TaskFinding, jsonRequired } from "./task-utils.js";
@@ -1858,7 +1859,7 @@ export class TaskService {
     if (!titlePattern.test(input.title.trim())) findings.push(finding("invalid-title", "title", "Title must contain 1 to 160 characters"));
     if (!input.description.trim() || input.description.length > 200_000) findings.push(finding("invalid-description", "description", "Markdown description is required and must be at most 200,000 characters"));
     if (!idempotencyPattern.test(input.idempotencyKey.trim())) findings.push(finding("invalid-idempotency-key", "idempotencyKey", "Idempotency key must be 8 to 128 safe characters"));
-    if (!Array.isArray(input.images) || input.images.length > 8) findings.push(finding("invalid-images", "images", "At most eight images may be attached"));
+    if (!Array.isArray(input.images) || input.images.length > MAX_TASK_IMAGES) findings.push(finding("invalid-images", "images", "At most eight images may be attached"));
     if (input.deliveryTarget !== undefined && !["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"].includes(input.deliveryTarget)) findings.push(finding("invalid-delivery-target", "deliveryTarget", "Delivery target is unavailable"));
     if (input.visualEvidence !== undefined && !["off", "capture", "required"].includes(input.visualEvidence)) findings.push(finding("invalid-visual-evidence", "visualEvidence", "Visual evidence setting is unavailable"));
     if (input.runProjectTests !== undefined && typeof input.runProjectTests !== "boolean") findings.push(finding("invalid-project-tests", "runProjectTests", "Project test setting must be enabled or disabled"));
@@ -1866,7 +1867,7 @@ export class TaskService {
     for (const image of input.images) {
       if (!imageMimeTypes.has(image.mimeType)) findings.push(finding("invalid-image-type", "images", "Only PNG, JPEG, WebP, and GIF images are accepted"));
       if (!image.filename || image.filename.includes("/") || image.filename.includes("\\") || image.filename.includes("..")) findings.push(finding("invalid-image-filename", "images", "Image filenames cannot contain paths"));
-      if (typeof image.base64 !== "string" || image.base64.length > 12_000_000) findings.push(finding("invalid-image-data", "images", "Image data is invalid or too large"));
+      if (typeof image.base64 !== "string" || image.base64.length > MAX_TASK_IMAGE_BASE64_LENGTH) findings.push(finding("invalid-image-data", "images", "Image data is invalid or too large"));
     }
     return findings;
   }
@@ -1902,7 +1903,7 @@ export class TaskService {
       if (!encoded || encoded.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) throw new Error("base64");
       const bytes = Buffer.from(encoded, "base64");
       if (bytes.toString("base64") !== encoded) throw new Error("base64");
-      if (!bytes.length || bytes.length > 8 * 1024 * 1024) throw new Error("size");
+      if (!bytes.length || bytes.length > MAX_TASK_IMAGE_BYTES) throw new Error("size");
       const magic = image.mimeType === "image/png"
         ? bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
         : image.mimeType === "image/jpeg"

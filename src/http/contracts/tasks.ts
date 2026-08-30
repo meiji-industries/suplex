@@ -8,6 +8,7 @@ import { DeliveryOperationBlockCodeSchema, DeliveryWorkflowBlockCodeSchema } fro
 import { ReleaseFailureCodeSchema } from "../../release-failures.js";
 import { CapacityWaitReasonSchema } from "../../capacity-contracts.js";
 import { AttentionCardSchema } from "./attention.js";
+export { MAX_TASK_REQUEST_BYTES } from "../../task-attachment-limits.js";
 
 const HashSchema = z.string().regex(/^[a-f0-9]{40,64}$/i);
 const ReviewFindingResponseSchema = z.object({ id: z.string(), severity: z.enum(["blocking", "advisory"]), rationale: z.string(), evidenceRef: z.string(), disposition: z.enum(["open", "accepted", "repaired"]), repairInstruction: z.string().nullable() });

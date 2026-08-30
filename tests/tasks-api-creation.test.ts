@@ -73,6 +73,9 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
     expect(created.statusCode).toBe(201); expect(created.json()).toMatchObject({ issueKey: "APIC-1", title: "API creation task", phase: "backlog", revision: 0, allowedCommands: ["start_planning", "cancel_issue", "send_planner_note"] });
     const duplicate = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload });
     expect(duplicate.statusCode).toBe(200); expect(duplicate.json()).toMatchObject({ id: created.json().id, workflowId: created.json().workflowId });
+    const largePng = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(2 * 1024 * 1024 - 8)]);
+    const largeCreation = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload: { ...payload, title: "Large image task", idempotencyKey: "api-creation-0002", images: [{ filename: "large.png", mimeType: "image/png", base64: largePng.toString("base64") }] } });
+    expect(largeCreation.statusCode).toBe(201); expect(largeCreation.json().images).toEqual([expect.objectContaining({ byteSize: 2_097_152 })]);
     const task = created.json() as { id: string; workflowId: string };
     const proofRoot = join(repositoryPath, ".forge-proof"); await mkdir(proofRoot, { recursive: true });
     const proofBytes = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from([0, 0, 0, 13]), Buffer.from("IHDR"), Buffer.alloc(17), Buffer.from([0, 0, 0, 0]), Buffer.from("IEND"), Buffer.alloc(4)]);

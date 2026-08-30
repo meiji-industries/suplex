@@ -38,7 +38,7 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
         FROM forge_tasks t
         JOIN forge_developer_executions d ON d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id AND d.branch_name = ? AND d.result_commit = ? AND d.status = 'completed'
         WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(input.branchName, input.commitSha, input.taskId, input.companyId, input.workflowId) as { worktreePath: string } | undefined);
-      if (!context) throw new GithubReleaseFailure("stale-reviewed-revision", "The reviewed branch is unavailable for pushing");
+      if (!context) throw new GithubReleaseFailure("stale-reviewed-revision", "The reviewed revision does not match a completed Developer execution");
       let pinned: ReturnType<typeof pinnedProjectRevision>;
       try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "The task project configuration is incomplete"); }
       await release.pushBranch({ repository: pinned.repository, worktreePath: context.worktreePath, branchName: input.branchName, commitSha: input.commitSha });

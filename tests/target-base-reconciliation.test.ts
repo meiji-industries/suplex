@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { ForgeDatabase } from "../src/database.js";
 import { ArtifactStore } from "../src/artifacts.js";
@@ -20,13 +22,10 @@ const sha = (letter: string) => letter.repeat(40);
 const artifact = { id: "artifact_forward", kind: "forward-merge-delivery" as const };
 
 async function gitRepository(root: string): Promise<{ base: string; head: string }> {
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
   const run = promisify(execFile);
   await run("git", ["init", "-b", "main"], { cwd: root });
   await run("git", ["config", "user.name", "Forge Test"], { cwd: root });
   await run("git", ["config", "user.email", "forge@example.test"], { cwd: root });
-  const { writeFile } = await import("node:fs/promises");
   await writeFile(join(root, "base.txt"), "base\n");
   await run("git", ["add", "."], { cwd: root });
   await run("git", ["commit", "-m", "base"], { cwd: root });
@@ -119,6 +118,69 @@ describe("target-base reconciliation contracts", () => {
       database.authQuery((db) => db.prepare("UPDATE forge_tasks SET project_configuration_artifact_id = ?, project_configuration_captured_at = ? WHERE id = 'task-1'").run(configuration.id, now));
       const activities = createActivities(database, config, { githubRelease: { getRemoteRepository: async () => "acme/project", getBranchHead: async () => repository.base } as never });
       await expect(activities.reconcileTargetBase({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: "revision-1", checkpoint: "pre_acceptance", developerExecutionId: "developer-1", expectedBaseSha: repository.base, expectedHeadSha: repository.head, expectedHeadTree: repository.head })).resolves.not.toMatchObject({ outcome: "blocked", code: "artifact_unavailable" });
+    } finally {
+      database.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("adopts and pushes a stored forward merge without weakening exact revision checks", async () => {
+    const root = await mkdtemp(join(tmpdir(), "forge-target-base-push-"));
+    const config = createTestConfig(root, { artifactRoot: join(root, "artifacts") });
+    const database = new ForgeDatabase(config.databasePath);
+    const repositoryPath = join(root, "repository");
+    await mkdir(repositoryPath, { recursive: true });
+    const repository = await gitRepository(repositoryPath);
+    const run = promisify(execFile);
+    const priorTree = (await run("git", ["rev-parse", "HEAD^{tree}"], { cwd: repositoryPath })).stdout.trim();
+    const now = new Date().toISOString();
+    try {
+      await run("git", ["checkout", "main"], { cwd: repositoryPath });
+      await writeFile(join(repositoryPath, "advanced.txt"), "advanced\n");
+      await run("git", ["add", "advanced.txt"], { cwd: repositoryPath });
+      await run("git", ["commit", "-m", "advance base"], { cwd: repositoryPath });
+      const targetBase = (await run("git", ["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
+      await run("git", ["checkout", "issue/task-1"], { cwd: repositoryPath });
+      await run("git", ["merge", "--no-ff", "--no-edit", targetBase], { cwd: repositoryPath });
+      const mergedHead = (await run("git", ["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
+      const mergedTree = (await run("git", ["rev-parse", "HEAD^{tree}"], { cwd: repositoryPath })).stdout.trim();
+
+      database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-1', 'Company', 'active', ?)").run(now);
+        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project-1', 'company-1', 'Project', ?, ?, 'main', 'main', 'true', 'true', '[]', '{}', 'active', ?, ?)").run(repositoryPath, repositoryPath, now, now);
+        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-1', 'company-1', 'task-brief', 'brief.md', 'text/markdown', 1, ?, 'company-1/brief-1', ?)").run("a".repeat(64), now);
+        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-1', 'company-1', 'project-1', 'Task', 'brief-1', '[]', '{}', 0, 'workflow-1', 'revision-1', 'task-key', ?, ?)").run(now, now);
+      });
+      const artifacts = new ArtifactStore(config.artifactRoot, database);
+      const configuration = await artifacts.putArtifact("company-1", "task-project-configuration", { taskId: "task-1", filename: "configuration.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ projectId: "project-1", projectName: "Project", repositoryPath, worktreeRoot: repositoryPath, repository: "acme/project", baseBranch: "main", targetBranch: "main", baseSha: repository.base, targetSha: repository.base, setupCommand: "true", verificationCommand: "true", requiredChecks: [], roleAgents: { builder: "builder" }, roleProfiles: { builder: "builder" }, capturedAt: now })) });
+      const delivery = await artifacts.putArtifact("company-1", "developer-delivery", { taskId: "task-1", filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from("{}") });
+      const evidence = await artifacts.putArtifact("company-1", "agent-evidence", { taskId: "task-1", filename: "evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") });
+      const verification = await artifacts.putArtifact("company-1", "forward-merge-verification", { taskId: "task-1", filename: "verification.json", mimeType: "application/json", bytes: Buffer.from("{}") });
+      database.authTransaction((db) => {
+        db.prepare("UPDATE forge_tasks SET project_revision_id = ?, project_configuration_artifact_id = ?, project_configuration_captured_at = ? WHERE id = 'task-1'").run(configuration.id, configuration.id, now);
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-1', 'task-1', 'company-1', 'workflow-1', 1, 1, 'completed', 'issue/task-1', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?, ?)").run(repositoryPath, repository.base, now, now, repository.head, priorTree, delivery.id, evidence.id);
+        db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, delivery_artifact_id, updated_at) VALUES ('merge-1', 'task-1', 'company-1', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow-1', ?, 'pre_release', 'operation-1', ?, ?, ?, 'developer-1', ?, ?, ?)").run(repository.base, targetBase, repository.head, mergedHead, mergedTree, now, configuration.id, priorTree, mergedHead, mergedTree, verification.id, delivery.id, now);
+      });
+
+      let pushedHead: string | null = null;
+      let pushCount = 0;
+      const activities = createActivities(database, config, { githubRelease: {
+        async checkAuthentication() {},
+        async getRemoteRepository() { return "acme/project"; },
+        async inspectLocalRevision() { return { branch: "issue/task-1", headSha: mergedHead, treeSha: mergedTree, clean: true }; },
+        async getBranchHead({ branch }: { branch: string }) { return branch === "issue/task-1" ? pushedHead : targetBase; },
+        async pushNormal() { pushCount += 1; pushedHead = mergedHead; },
+      } as never });
+      const input = { taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: configuration.id, checkpoint: "pre_release" as const, developerExecutionId: "developer-1", expectedBaseSha: repository.base, expectedHeadSha: mergedHead, expectedHeadTree: mergedTree, forwardMergeId: "merge-1", verificationOnly: true };
+
+      await expect(activities.reconcileTargetBase(input)).resolves.toMatchObject({ outcome: "revalidated", developerExecutionId: "developer-1", headSha: mergedHead, headTree: mergedTree });
+      await expect(activities.pushDeliveryBranch({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", branchName: "issue/task-1", commitSha: mergedHead })).resolves.toMatchObject({ commitSha: mergedHead });
+      expect(pushCount).toBe(1);
+      expect(database.authQuery((db) => db.prepare("SELECT result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = 'developer-1'").get())).toEqual({ resultCommit: mergedHead, resultTree: mergedTree });
+
+      await expect(activities.pushDeliveryBranch({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", branchName: "issue/task-1", commitSha: repository.head })).rejects.toMatchObject({ type: "stale-reviewed-revision", message: "The reviewed revision does not match a completed Developer execution" });
+      await expect(activities.reconcileTargetBase({ ...input, expectedBaseSha: targetBase })).resolves.toMatchObject({ outcome: "revalidated", developerExecutionId: "developer-1", headSha: mergedHead, headTree: mergedTree });
+      expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_developer_executions WHERE task_id = 'task-1'").get())).toEqual({ count: 1 });
     } finally {
       database.close();
       await rm(root, { recursive: true, force: true });

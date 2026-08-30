@@ -1,17 +1,14 @@
 import { access, cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
-import { promisify } from "node:util";
-import { execFile } from "node:child_process";
 
+import { runCommand } from "../command-runner.js";
 import type { ForgeConfig } from "../config.js";
 import type { ForgeDatabase } from "../database.js";
 import { connectEngine } from "../engine/service.js";
 import { issueStateQuery } from "../engine/workflows.js";
 import { IssueWorkflowStateSchema } from "../engine/issue-contracts.js";
 import { jsonRequired } from "../task-utils.js";
-
-const execFileAsync = promisify(execFile);
 
 type RecordValue = Record<string, unknown>;
 export type TaskDiagnostic = RecordValue;
@@ -135,7 +132,8 @@ export async function writeTaskBundle(config: ForgeConfig, database: ForgeDataba
       try { await access(source); await cp(source, join(staging, "executions", basename(source)), { recursive: true, filter: (path) => !/(secret|token|credential|\.env)/i.test(path) }); } catch { /* stale worktree paths are useful diagnostics, not bundle failures */ }
     }
     await (await import("node:fs/promises")).mkdir(destination, { recursive: true });
-    await execFileAsync("tar", ["-C", staging, "-czf", archive, "."]);
+    const archiveResult = await runCommand({ taskId: null, stepId: null, command: "tar", args: ["-C", staging, "-czf", archive, "."] });
+    if (archiveResult.exitCode !== 0) throw new Error("Failed to create diagnostic archive");
     return relative(process.cwd(), archive);
   } finally { await rm(staging, { recursive: true, force: true }); }
 }

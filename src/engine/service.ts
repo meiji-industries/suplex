@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { ForgeConfig } from "../config.js";
 import { issueCommands, type IssueCommand } from "../commands/registry.js";
 import { runtimeIdentifiers } from "../runtime-identifiers.js";
+import { jsonRequired } from "../task-utils.js";
 import { getIssueEngine } from "./index.js";
 import { issueUpdates, syncGithubPullRequestSignal } from "./issue-updates.js";
 import { ContinueWorkCommandSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, SendPlannerNoteInputSchema, StartPlanningInputSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type SendPlannerNoteInput, type StartPlanningInput } from "./issue-contracts.js";
@@ -23,7 +24,7 @@ export async function startIssueWorkflow(config: ForgeConfig, input: Omit<IssueW
   const engine = getIssueEngine(config);
   const snapshot = engine.database.authQuery((db) => db.prepare("SELECT state_json, run_id FROM forge_workflow_snapshots WHERE workflow_id = ? ORDER BY revision DESC LIMIT 1").get(workflowId) as { state_json: string; run_id: string } | undefined);
   if (snapshot || engine.runs.has(workflowId)) {
-    const state = snapshot ? IssueWorkflowStateSchema.parse(JSON.parse(snapshot.state_json)) : engine.run(workflowId).state;
+    const state = snapshot ? IssueWorkflowStateSchema.parse(jsonRequired(snapshot.state_json)) : engine.run(workflowId).state;
     if (state.issueId !== validated.issueId || state.companyId !== validated.companyId || state.projectId !== validated.projectId || state.projectRevisionId !== validated.projectRevisionId) throw new IssueWorkflowStartFailure("workflow_identity_conflict", false);
     return { workflowId, runId: snapshot?.run_id ?? engine.run(workflowId).runId, existing: true };
   }
@@ -62,7 +63,7 @@ export async function queryIssueWorkflow(config: ForgeConfig, workflowId: string
 export async function signalIssueGithubPullRequestSync(config: ForgeConfig, workflowId: string): Promise<void> { assertScoped(config, workflowId); await getIssueEngine(config).run(workflowId).signal(syncGithubPullRequestSignal); }
 export async function recoverClosedProjection(config: ForgeConfig, workflowId: string): Promise<IssueWorkflowState> {
   const engine = getIssueEngine(config); const row = engine.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE workflow_id = ? ORDER BY revision DESC LIMIT 1").get(workflowId) as { state_json: string } | undefined);
-  if (!row) throw new IssueWorkflowStartFailure("workflow_not_started", true); return IssueWorkflowStateSchema.parse(JSON.parse(row.state_json));
+  if (!row) throw new IssueWorkflowStartFailure("workflow_not_started", true); return IssueWorkflowStateSchema.parse(jsonRequired(row.state_json));
 }
 
 export async function connectEngine(config: ForgeConfig) {

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { ForgeConfig } from "../config.js";
 import type { ForgeDatabase } from "../database.js";
 import { resolveAgentProfiles } from "../projects.js";
+import { jsonRequired } from "../task-utils.js";
 import { createActivities, createActivityCaller, type ActivityCaller } from "./activities.js";
 import { CancelledFailure } from "./failures.js";
 import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, buildInitialIssueWorkflowState, type IssueWorkflowInput, type IssueWorkflowState } from "./issue-contracts.js";
@@ -55,7 +56,7 @@ const AGENT_OWNED_PHASES: Record<string, true> = {
 export function issueRunInputFromSnapshotRow(db: Parameters<typeof resolveAgentProfiles>[0], row: Record<string, unknown>, state: IssueWorkflowState): IssueWorkflowInput {
   return IssueWorkflowInputSchema.parse({
     workflowId: state.workflowId, companyId: state.companyId, projectId: state.projectId, issueId: state.issueId, projectRevisionId: state.projectRevisionId,
-    briefArtifactId: row.brief_artifact_id, imageArtifactIds: JSON.parse(String(row.image_artifact_ids_json)), roleProfiles: resolveAgentProfiles(db, JSON.parse(String(row.role_agents_json))),
+    briefArtifactId: row.brief_artifact_id, imageArtifactIds: jsonRequired(String(row.image_artifact_ids_json)), roleProfiles: resolveAgentProfiles(db, jsonRequired(String(row.role_agents_json))),
     supplementalReview: Boolean(row.supplemental_review), requestHash: row.request_hash ?? undefined, predecessorTaskId: row.predecessor_task_id ?? undefined,
     autoApprovePlan: Boolean(row.auto_approve_plan), pullRequestMode: row.pull_request_mode ?? undefined, deliveryTarget: row.delivery_target ?? undefined,
     runProjectTests: Boolean(row.run_project_tests), visualEvidence: row.visual_evidence ?? undefined, continuationState: state,
@@ -200,7 +201,7 @@ export class IssueRun {
   execute(name: string, input: unknown, commandId = "legacy-command"): Promise<IssueWorkflowState> {
     if (commandId !== "legacy-command") {
       const stored = this.database.authQuery((db) => db.prepare("SELECT result_json FROM forge_engine_commands WHERE command_id = ? AND workflow_id = ?").get(commandId, this.workflowId) as { result_json: string } | undefined);
-      if (stored) return Promise.resolve(IssueWorkflowStateSchema.parse(JSON.parse(stored.result_json)));
+      if (stored) return Promise.resolve(IssueWorkflowStateSchema.parse(jsonRequired(stored.result_json)));
     }
     this.start();
     const interruptible = this.interrupts.has(name);
@@ -223,7 +224,7 @@ export class IssueRun {
       }
       if (commandId !== "legacy-command") {
         const stored = this.database.authQuery((db) => db.prepare("SELECT result_json FROM forge_engine_commands WHERE command_id = ? AND workflow_id = ?").get(commandId, this.workflowId) as { result_json: string } | undefined);
-        if (stored) return IssueWorkflowStateSchema.parse(JSON.parse(stored.result_json));
+        if (stored) return IssueWorkflowStateSchema.parse(jsonRequired(stored.result_json));
       }
       const handler = this.commands.get(name);
       if (!handler) throw new Error(`Unknown issue command: ${name}`);
@@ -288,7 +289,7 @@ export class IssueEngine {
     const input = this.database.authQuery((db) => {
       const row = db.prepare(`SELECT s.task_id, s.state_json, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.request_hash, t.predecessor_task_id, t.auto_approve_plan, t.pull_request_mode, t.delivery_target, t.run_project_tests, t.visual_evidence FROM forge_workflow_snapshots s JOIN forge_tasks t ON t.id = s.task_id WHERE s.workflow_id = ? ORDER BY s.revision DESC LIMIT 1`).get(workflowId) as Record<string, unknown> | undefined;
       if (!row) throw new Error(`Issue run not loaded: ${workflowId}`);
-      const state = IssueWorkflowStateSchema.parse(JSON.parse(String(row.state_json)));
+      const state = IssueWorkflowStateSchema.parse(jsonRequired(String(row.state_json)));
       return issueRunInputFromSnapshotRow(db, row, state);
     });
     const run = new IssueRun(input, this.database, this.caller, this.clock);

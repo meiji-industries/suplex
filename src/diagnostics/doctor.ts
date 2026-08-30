@@ -5,6 +5,7 @@ import type { ForgeDatabase } from "../database.js";
 import { getIssueEngine } from "../engine/index.js";
 import { IssueWorkflowStateSchema } from "../engine/issue-contracts.js";
 import { loadPromptCatalog, type PromptTemplate } from "../prompts.js";
+import { json } from "../task-utils.js";
 
 export type DoctorCheck = { status: "PASS" | "WARN" | "FAIL"; name: string; detail: string };
 
@@ -59,10 +60,10 @@ export async function runDoctor(config: ForgeConfig, database: ForgeDatabase, op
     }
   }
   const snapshots = database.authQuery((db) => db.prepare("SELECT task_id taskId, workflow_id workflowId, state_json stateJson FROM forge_workflow_snapshots WHERE (task_id, revision) IN (SELECT task_id, max(revision) FROM forge_workflow_snapshots GROUP BY task_id)").all() as Array<{ taskId: string; workflowId: string; stateJson: string }>);
-  const invalid = snapshots.filter((row) => !IssueWorkflowStateSchema.safeParse(JSON.parse(row.stateJson)).success);
+  const invalid = snapshots.filter((row) => !IssueWorkflowStateSchema.safeParse(json(row.stateJson, undefined)).success);
   checks.push({ status: invalid.length ? "FAIL" : "PASS", name: "engine snapshots", detail: invalid.length ? invalid.map((row) => row.taskId).join(", ") : `${snapshots.length} latest snapshot(s) parse` });
   const engine = getIssueEngine(config);
-  const open = snapshots.filter((row) => !["done", "cancelled", "failed"].includes(String(JSON.parse(row.stateJson).phase)));
+  const open = snapshots.filter((row) => !["done", "cancelled", "failed"].includes(String(json<Record<string, unknown>>(row.stateJson, {}).phase)));
   const missing = open.filter((row) => !engine.runs.has(row.workflowId));
   checks.push({ status: missing.length ? "WARN" : "PASS", name: "engine runs", detail: missing.length ? `${missing.length} open run(s) are not loaded` : `${engine.runs.size} run(s) loaded` });
   const inFlight = database.authQuery((db) => (db.prepare("SELECT count(*) count FROM forge_engine_activities").get() as { count: number }).count);

@@ -3,6 +3,7 @@ import { loadConfig, type ForgeConfig } from "../config.js";
 import { ForgeDatabase } from "../database.js";
 import { StructuredLogger } from "../logging.js";
 import { runtimeIdentifiers } from "../runtime-identifiers.js";
+import { json } from "../task-utils.js";
 import { installIssueEngine } from "./index.js";
 import { IssueWorkflowStateSchema } from "./issue-contracts.js";
 import { IssueEngine, issueRunInputFromSnapshotRow } from "./runs.js";
@@ -38,7 +39,7 @@ export async function loadIssueRuns(engine: IssueEngine): Promise<number> {
   const rows = engine.database.authQuery((db) => db.prepare(`SELECT s.task_id, s.state_json, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.request_hash, t.predecessor_task_id, t.auto_approve_plan, t.pull_request_mode, t.delivery_target, t.run_project_tests, t.visual_evidence FROM forge_workflow_snapshots s JOIN forge_tasks t ON t.id = s.task_id JOIN (SELECT task_id, max(revision) revision FROM forge_workflow_snapshots GROUP BY task_id) latest ON latest.task_id=s.task_id AND latest.revision=s.revision WHERE json_extract(s.state_json, '$.phase') NOT IN ('done','cancelled','failed')`).all() as Array<Record<string, unknown>>);
   for (const row of rows) {
     // A snapshot that no longer matches the schema must not stop every other issue from loading.
-    const parsed = IssueWorkflowStateSchema.safeParse(JSON.parse(String(row.state_json)));
+    const parsed = IssueWorkflowStateSchema.safeParse(json(String(row.state_json), undefined));
     if (!parsed.success) { new StructuredLogger().warn("Skipping issue snapshot that fails the state schema", {}, { taskId: String(row.task_id ?? ""), issues: parsed.error.issues.slice(0, 3).map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ") }); continue; }
     const state = parsed.data;
     if (engine.runs.has(state.workflowId)) continue;

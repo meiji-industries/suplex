@@ -4,6 +4,7 @@ const shared = { environment: "node" as const, testTimeout: 30_000 };
 
 export default defineConfig({
   test: {
+    retry: 0,
     projects: [
       {
         test: {

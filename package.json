@@ -24,14 +24,15 @@
     "smoke": "tsx scripts/smoke.mts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "check": "pnpm run typecheck && pnpm run lint && vitest run --project unit tests/forge-guardrails.test.ts",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run test",
+    "check:full": "pnpm run check && pnpm run test:engine && pnpm run test:browser",
     "test": "vitest run --project unit",
     "test:engine": "vitest run --project engine",
     "test:governance-real": "vitest run --project real tests/plan-governance.real.test.ts",
     "verify-ticket-07": "pnpm run test:governance-real",
     "test:browser": "pnpm run build && vitest run --config vitest.browser.config.ts",
-    "verify": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:engine && pnpm run test:browser",
-    "test:all": "pnpm run verify",
+    "verify": "pnpm run check:full",
+    "test:all": "pnpm run check:full",
     "test:release:lead": "pnpm run build && vitest run tests/codex-lead.real.test.ts --reporter=dot"
   },
   "dependencies": {

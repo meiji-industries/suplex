@@ -265,6 +265,80 @@ describe("target-base reconciliation contracts", () => {
     }
   });
 
+  test("resurfaces a failed persisted merge from the ordinary no-drift retry without adopting it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "forge-target-base-no-drift-verification-blocker-"));
+    const config = createTestConfig(root, { artifactRoot: join(root, "artifacts") });
+    const database = new ForgeDatabase(config.databasePath);
+    const repositoryPath = join(root, "repository");
+    await mkdir(repositoryPath, { recursive: true });
+    const repository = await gitRepository(repositoryPath);
+    const run = promisify(execFile);
+    await run("git", ["remote", "add", "origin", repositoryPath], { cwd: repositoryPath });
+    const priorTree = (await run("git", ["rev-parse", "HEAD^{tree}"], { cwd: repositoryPath })).stdout.trim();
+    const now = new Date().toISOString();
+    const later = new Date(Date.parse(now) + 1_000).toISOString();
+    const failureCode = "verification_failed";
+    const failureSummary = "Pinned forward-merge verification failed";
+    try {
+      await run("git", ["checkout", "main"], { cwd: repositoryPath });
+      await writeFile(join(repositoryPath, "advanced.txt"), "advanced\n");
+      await run("git", ["add", "advanced.txt"], { cwd: repositoryPath });
+      await run("git", ["commit", "-m", "advance base"], { cwd: repositoryPath });
+      const targetBase = (await run("git", ["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
+      await run("git", ["checkout", "issue/task-1"], { cwd: repositoryPath });
+      await run("git", ["merge", "--no-ff", "--no-edit", targetBase], { cwd: repositoryPath });
+      const mergedHead = (await run("git", ["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
+      const mergedTree = (await run("git", ["rev-parse", "HEAD^{tree}"], { cwd: repositoryPath })).stdout.trim();
+
+      database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-1', 'Company', 'active', ?)").run(now);
+        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project-1', 'company-1', 'Project', ?, ?, 'main', 'main', 'true', 'true', '[]', '{}', 'active', ?, ?)").run(repositoryPath, repositoryPath, now, now);
+        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-1', 'company-1', 'task-brief', 'brief.md', 'text/markdown', 1, ?, 'company-1/brief-1', ?)").run("a".repeat(64), now);
+        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-1', 'company-1', 'project-1', 'Task', 'brief-1', '[]', '{}', 0, 'workflow-1', 'revision-1', 'task-key', ?, ?)").run(now, now);
+      });
+      const artifacts = new ArtifactStore(config.artifactRoot, database);
+      const configuration = await artifacts.putArtifact("company-1", "task-project-configuration", { taskId: "task-1", filename: "configuration.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ projectId: "project-1", projectName: "Project", repositoryPath, worktreeRoot: repositoryPath, repository: "acme/project", baseBranch: "main", targetBranch: "main", baseSha: repository.base, targetSha: repository.base, setupCommand: "true", verificationCommand: "true", requiredChecks: [], roleAgents: { builder: "builder" }, roleProfiles: { builder: "builder" }, capturedAt: now })) });
+      const evidence = await artifacts.putArtifact("company-1", "agent-evidence", { taskId: "task-1", filename: "evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") });
+      const verification = await artifacts.putArtifact("company-1", "forward-merge-verification", { taskId: "task-1", filename: "verification.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ outcome: "failed", code: failureCode, summary: failureSummary, commands: [] })) });
+      const noDriftOperationKey = `workflow-1:pre_release:${configuration.id}:${targetBase}:${targetBase}:${mergedHead}`;
+      database.authTransaction((db) => {
+        db.prepare("UPDATE forge_tasks SET project_revision_id = ?, project_configuration_artifact_id = ?, project_configuration_captured_at = ? WHERE id = 'task-1'").run(configuration.id, configuration.id, now);
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, evidence_artifact_id) VALUES ('developer-1', 'task-1', 'company-1', 'workflow-1', 1, 1, 'completed', 'issue/task-1', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?)").run(repositoryPath, repository.base, now, now, repository.head, priorTree, evidence.id);
+        db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, failure_code, failure_summary, updated_at) VALUES ('merge-failed', 'task-1', 'company-1', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow-1', ?, 'pre_release', 'failed-operation-1', ?, ?, ?, 'developer-1', ?, ?, ?, ?)").run(repository.base, targetBase, repository.head, mergedHead, mergedTree, now, configuration.id, priorTree, mergedHead, mergedTree, verification.id, failureCode, failureSummary, now);
+        db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, developer_execution_id, updated_at) VALUES ('merge-no-drift', 'task-1', 'company-1', ?, ?, ?, NULL, NULL, 'no_drift', '[]', ?, 'workflow-1', ?, 'pre_release', ?, ?, 'developer-1', ?)").run(targetBase, targetBase, mergedHead, later, configuration.id, noDriftOperationKey, mergedTree, later);
+      });
+
+      const activities = createActivities(database, config, { githubRelease: {
+        async getRemoteRepository() { return "acme/project"; },
+        async getBranchHead() { return targetBase; },
+      } as never });
+      const input = { taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: configuration.id, checkpoint: "pre_release" as const, developerExecutionId: "developer-1", expectedBaseSha: targetBase, expectedHeadSha: mergedHead, expectedHeadTree: mergedTree, forwardMergeId: "merge-no-drift" };
+      const executionBefore = database.authQuery((db) => db.prepare("SELECT status, result_commit AS resultCommit, result_tree AS resultTree, failure_code AS failureCode, failure_summary AS failureSummary FROM forge_developer_executions WHERE id = 'developer-1'").get());
+      const changesBefore = database.authQuery((db) => Number(db.prepare("SELECT total_changes()").pluck().get()));
+
+      await expect(activities.reconcileTargetBase(input)).resolves.toEqual({
+        outcome: "blocked",
+        checkId: "merge-failed",
+        checkpoint: "pre_release",
+        code: failureCode,
+        owner: "lead",
+        retryable: true,
+        summary: failureSummary,
+        evidenceArtifact: { id: verification.id, kind: "forward-merge-verification" },
+        observedBaseSha: targetBase,
+        priorHead: repository.head,
+        priorTree,
+        resultHead: mergedHead,
+        resultTree: mergedTree,
+      });
+      expect(database.authQuery((db) => db.prepare("SELECT status, result_commit AS resultCommit, result_tree AS resultTree, failure_code AS failureCode, failure_summary AS failureSummary FROM forge_developer_executions WHERE id = 'developer-1'").get())).toEqual(executionBefore);
+      expect(database.authQuery((db) => Number(db.prepare("SELECT total_changes()").pluck().get()))).toBe(changesBefore);
+    } finally {
+      database.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("allows a recorded forward merge to repair a stale workflow execution id", () => {
     const input = ReconcileTargetBaseActivityInputSchema.parse({
       taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: "revision-1", checkpoint: "pre_release",

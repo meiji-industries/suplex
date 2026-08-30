@@ -9,6 +9,36 @@ function isVerificationBlockerCode(code: string | null): code is VerificationBlo
   return verificationBlockerCodes.some((candidate) => candidate === code);
 }
 
+type NoDriftMergedDelivery = {
+  id: string;
+  projectRevisionId: string | null;
+  expectedBaseSha: string;
+  targetBaseSha: string;
+  priorHead: string;
+  priorTree: string | null;
+  mergeCommit: string | null;
+  tree: string | null;
+  resultHead: string | null;
+  resultTree: string | null;
+  developerExecutionId: string | null;
+  verificationArtifactId: string | null;
+  deliveryArtifactId: string | null;
+  failureCode: string | null;
+  failureSummary: string | null;
+  executionId: string | null;
+  executionStatus: string | null;
+  executionTargetBaseSha: string | null;
+  executionResultCommit: string | null;
+  executionResultTree: string | null;
+  executionFailureCode: string | null;
+  executionFailureSummary: string | null;
+  executionDeliveryArtifactId: string | null;
+};
+
+function sameRevision(left: string | null | undefined, right: string | null | undefined): boolean {
+  return !!left && !!right && left.toLowerCase() === right.toLowerCase();
+}
+
 export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActivities {
   const { database, config, options, createHash, randomBytes, ApplicationFailure, CancelledFailure, Context, z, projectionStateHash, ArtifactStore, redact, AgentFailure, AgentService, DeveloperService, cancelDeveloperExecution, reconcileDeveloperExecutions, cancelAgentExecution, reconcileAgentExecutions, AcceptanceFailure, AcceptanceService, CiFailure, CiProviderFailure, CiService, createGithubCiProvider, createGithubReleasePort, GithubReleaseFailure, ReleaseService, ForwardMergeFailure, ForwardMergeService, parseAcceptedProjectRevision, runPinnedVerification, createGitCommandGuard, ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, ArtifactReferenceSchema, CreateSuccessorActivityInputSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeliveryOperationBlockCodeSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PreparePlanRevisionActivityInputSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, RevisedExecutionCoordinatesSchema, SafeSummarySchema, createInitialIssueWorkflowState, normalizeSafeSummary, PlanGovernanceConflict, PlanGovernanceRepository, StructuredLogger, activityLogContext, CapacityFailure, CapacityManager, CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema, WorktreeFailure, WorktreeManager, startIssueWorkflow, logger, defaultAgent, githubRelease, defaultDeveloper, artifacts, release, ci, acceptance, legacyForwardMerge, capacity, activityWorktrees, activityWorktreesByBranch, worktrees, agent, developer, attentionFailure, agentCategory, invokeAgent, bindCapacityExecution, runSupervised, latestWorktree, cancellationSignal, agentRuntime, pinnedProjectRevision, normalizeReviewResult, normalizeRepairResult, durableArtifactReference, verifiedArtifactBytes, artifactReference, registerArtifact, reconcileBlocker, asNonRetryableCapacityFailure, asNonRetryableApplicationFailure, asRetryableAgentFailure, DeveloperDeliverySchema } = ctx;
   void [database, config, options, createHash, randomBytes, ApplicationFailure, CancelledFailure, Context, z, projectionStateHash, ArtifactStore, redact, AgentFailure, AgentService, DeveloperService, cancelDeveloperExecution, reconcileDeveloperExecutions, cancelAgentExecution, reconcileAgentExecutions, AcceptanceFailure, AcceptanceService, CiFailure, CiProviderFailure, CiService, createGithubCiProvider, createGithubReleasePort, GithubReleaseFailure, ReleaseService, ForwardMergeFailure, ForwardMergeService, parseAcceptedProjectRevision, runPinnedVerification, createGitCommandGuard, ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, ArtifactReferenceSchema, CreateSuccessorActivityInputSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeliveryOperationBlockCodeSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PreparePlanRevisionActivityInputSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, RevisedExecutionCoordinatesSchema, SafeSummarySchema, createInitialIssueWorkflowState, normalizeSafeSummary, PlanGovernanceConflict, PlanGovernanceRepository, StructuredLogger, activityLogContext, CapacityFailure, CapacityManager, CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema, WorktreeFailure, WorktreeManager, startIssueWorkflow, logger, defaultAgent, githubRelease, defaultDeveloper, artifacts, release, ci, acceptance, legacyForwardMerge, capacity, activityWorktrees, activityWorktreesByBranch, worktrees, agent, developer, attentionFailure, agentCategory, invokeAgent, bindCapacityExecution, runSupervised, latestWorktree, cancellationSignal, agentRuntime, pinnedProjectRevision, normalizeReviewResult, normalizeRepairResult, durableArtifactReference, verifiedArtifactBytes, artifactReference, registerArtifact, reconcileBlocker, asNonRetryableCapacityFailure, asNonRetryableApplicationFailure, asRetryableAgentFailure, DeveloperDeliverySchema];
@@ -97,15 +127,74 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
         }
       }
       if (merge.status === "no_drift") {
-        const mergedDelivery = database.authQuery((db) => db.prepare(`SELECT developer_execution_id AS developerExecutionId, prior_head AS priorHead, prior_tree AS priorTree, result_head AS resultHead, result_tree AS resultTree
-          FROM forge_forward_merges
-          WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND developer_execution_id = ? AND status = 'merged'
-            AND lower(result_head) = lower(?) AND lower(result_tree) = lower(?)
-            AND lower(merge_commit) = lower(result_head) AND lower(tree) = lower(result_tree)
-          ORDER BY updated_at DESC, id DESC LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, developerExecutionId, input.expectedHeadSha, input.expectedHeadTree) as { developerExecutionId: string | null; priorHead: string; priorTree: string | null; resultHead: string; resultTree: string } | undefined);
+        const mergedDelivery = database.authQuery((db) => db.prepare(`SELECT
+            m.id, m.project_revision_id AS projectRevisionId, m.expected_base_sha AS expectedBaseSha, m.current_base_sha AS targetBaseSha,
+            m.prior_head AS priorHead, m.prior_tree AS priorTree, m.merge_commit AS mergeCommit, m.tree,
+            m.result_head AS resultHead, m.result_tree AS resultTree, m.developer_execution_id AS developerExecutionId,
+            m.verification_artifact_id AS verificationArtifactId, m.delivery_artifact_id AS deliveryArtifactId,
+            m.failure_code AS failureCode, m.failure_summary AS failureSummary,
+            d.id AS executionId, d.status AS executionStatus, d.target_base_sha AS executionTargetBaseSha,
+            d.result_commit AS executionResultCommit, d.result_tree AS executionResultTree,
+            d.failure_code AS executionFailureCode, d.failure_summary AS executionFailureSummary,
+            d.delivery_artifact_id AS executionDeliveryArtifactId
+          FROM forge_forward_merges m
+          LEFT JOIN forge_developer_executions d
+            ON d.id = m.developer_execution_id AND d.task_id = m.task_id AND d.company_id = m.company_id AND d.workflow_id = m.workflow_id
+          WHERE m.task_id = ? AND m.company_id = ? AND m.workflow_id = ? AND m.status = 'merged'
+            AND (lower(m.result_head) = lower(?) OR lower(m.merge_commit) = lower(?))
+          ORDER BY CASE
+            WHEN m.developer_execution_id = ? AND m.project_revision_id = ? THEN 0
+            WHEN m.developer_execution_id = ? THEN 1
+            ELSE 2
+          END, COALESCE(m.updated_at, m.created_at) DESC, m.id DESC
+          LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.expectedHeadSha, input.expectedHeadSha, developerExecutionId, input.projectRevisionId, developerExecutionId) as NoDriftMergedDelivery | undefined);
         if (mergedDelivery) {
-          if (!mergedDelivery.developerExecutionId || !mergedDelivery.priorTree || !adoptStoredDelivery({ developerExecutionId: mergedDelivery.developerExecutionId, priorHead: mergedDelivery.priorHead, priorTree: mergedDelivery.priorTree, resultHead: mergedDelivery.resultHead, resultTree: mergedDelivery.resultTree })) {
-            return blocked("merge_state_ownership_mismatch", "human", false, "The completed Developer revision does not match the recorded forward merge", undefined, { observedBaseSha: merge.targetBaseSha, priorHead: mergedDelivery.priorHead, ...(mergedDelivery.priorTree ? { priorTree: mergedDelivery.priorTree } : {}), resultHead: mergedDelivery.resultHead, resultTree: mergedDelivery.resultTree }, merge.forwardMergeId ?? checkId);
+          const coordinates = { observedBaseSha: merge.targetBaseSha, priorHead: mergedDelivery.priorHead, ...(mergedDelivery.priorTree ? { priorTree: mergedDelivery.priorTree } : {}), ...(mergedDelivery.resultHead ? { resultHead: mergedDelivery.resultHead } : {}), ...(mergedDelivery.resultTree ? { resultTree: mergedDelivery.resultTree } : {}) };
+          const executionAtPrior = sameRevision(mergedDelivery.executionResultCommit, mergedDelivery.priorHead) && sameRevision(mergedDelivery.executionResultTree, mergedDelivery.priorTree);
+          const executionAtResult = sameRevision(mergedDelivery.executionResultCommit, mergedDelivery.resultHead) && sameRevision(mergedDelivery.executionResultTree, mergedDelivery.resultTree);
+          const executionBaseMatches = executionAtPrior
+            ? sameRevision(mergedDelivery.executionTargetBaseSha, mergedDelivery.expectedBaseSha)
+            : executionAtResult && (sameRevision(mergedDelivery.executionTargetBaseSha, mergedDelivery.expectedBaseSha) || sameRevision(mergedDelivery.executionTargetBaseSha, mergedDelivery.targetBaseSha));
+          const ownsMergedDelivery = mergedDelivery.projectRevisionId === input.projectRevisionId
+            && !!mergedDelivery.developerExecutionId && mergedDelivery.developerExecutionId === developerExecutionId
+            && mergedDelivery.executionId === mergedDelivery.developerExecutionId && context.developerExecutionId === mergedDelivery.developerExecutionId
+            && mergedDelivery.executionStatus === context.developerStatus && !!mergedDelivery.executionStatus && ["completed", "blocked"].includes(mergedDelivery.executionStatus)
+            && (mergedDelivery.executionStatus === "completed" ? executionAtPrior || executionAtResult : executionAtResult)
+            && sameRevision(mergedDelivery.executionResultCommit, context.resultCommit) && sameRevision(mergedDelivery.executionResultTree, context.resultTree)
+            && sameRevision(mergedDelivery.executionTargetBaseSha, context.targetBaseSha) && executionBaseMatches
+            && !!mergedDelivery.priorTree && sameRevision(mergedDelivery.targetBaseSha, merge.targetBaseSha)
+            && sameRevision(mergedDelivery.resultHead, input.expectedHeadSha) && sameRevision(mergedDelivery.resultTree, input.expectedHeadTree)
+            && sameRevision(mergedDelivery.mergeCommit, mergedDelivery.resultHead) && sameRevision(mergedDelivery.tree, mergedDelivery.resultTree)
+            && sameRevision(merge.priorHead, mergedDelivery.resultHead) && sameRevision(merge.priorTree, mergedDelivery.resultTree);
+          if (!ownsMergedDelivery) {
+            return blocked("merge_state_ownership_mismatch", "human", false, "The Developer revision does not match the recorded forward merge", undefined, coordinates, mergedDelivery.id);
+          }
+          const mergedArtifacts = (mergedDelivery.verificationArtifactId || mergedDelivery.deliveryArtifactId)
+            ? database.authQuery((db) => db.prepare("SELECT id, kind FROM forge_artifacts WHERE company_id = ? AND (id = ? OR id = ?) ORDER BY id").all(input.companyId, mergedDelivery.verificationArtifactId, mergedDelivery.deliveryArtifactId) as Array<{ id: string; kind: string }>)
+            : [];
+          const mergedVerificationArtifact = mergedArtifacts.find((artifact) => artifact.id === mergedDelivery.verificationArtifactId && artifact.kind === "forward-merge-verification");
+          const mergedDeliveryArtifact = mergedArtifacts.find((artifact) => artifact.id === mergedDelivery.deliveryArtifactId && artifact.kind === "developer-delivery");
+          if (mergedDelivery.failureCode !== null || mergedDelivery.failureSummary !== null) {
+            const failureCode = mergedDelivery.failureCode;
+            const failureSummary = mergedDelivery.failureSummary;
+            const blockedExecutionMatches = mergedDelivery.executionStatus !== "blocked"
+              || (mergedDelivery.executionFailureCode === failureCode && mergedDelivery.executionFailureSummary === failureSummary && context.developerFailureCode === failureCode && context.developerFailureSummary === failureSummary);
+            if (!isVerificationBlockerCode(failureCode) || !failureSummary || !blockedExecutionMatches) {
+              return blocked("merge_state_ownership_mismatch", "human", false, "The recorded forward merge is not an exact verification failure", undefined, coordinates, mergedDelivery.id);
+            }
+            if (!mergedVerificationArtifact) {
+              return blocked("artifact_unavailable", "human", false, "The stored forward-merge verification artifact is unavailable", undefined, coordinates, mergedDelivery.id);
+            }
+            return blocked(failureCode, "lead", true, failureSummary, artifactReference({ id: mergedVerificationArtifact.id, kind: "forward-merge-verification" }), coordinates, mergedDelivery.id);
+          }
+          if (mergedDelivery.executionStatus !== "completed") {
+            return blocked("merge_state_ownership_mismatch", "human", false, "The completed Developer revision does not match the recorded forward merge", undefined, coordinates, mergedDelivery.id);
+          }
+          if (!mergedVerificationArtifact || !mergedDeliveryArtifact || mergedDelivery.executionDeliveryArtifactId !== mergedDelivery.deliveryArtifactId) {
+            return blocked("artifact_unavailable", "human", false, "The stored forward-merge delivery artifacts are unavailable", undefined, coordinates, mergedDelivery.id);
+          }
+          if (!adoptStoredDelivery({ developerExecutionId: mergedDelivery.developerExecutionId!, priorHead: mergedDelivery.priorHead, priorTree: mergedDelivery.priorTree!, resultHead: mergedDelivery.resultHead!, resultTree: mergedDelivery.resultTree! })) {
+            return blocked("merge_state_ownership_mismatch", "human", false, "The completed Developer revision does not match the recorded forward merge", undefined, coordinates, mergedDelivery.id);
           }
         }
         return { outcome: "no_drift", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree };

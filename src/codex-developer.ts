@@ -438,7 +438,7 @@ export class DeveloperService {
         AND (status IN ('completed', 'blocked') OR (status = 'failed' AND (failure_code LIKE 'merge-%' OR failure_code LIKE 'merge_%')))
       ORDER BY COALESCE(finished_at, started_at) DESC, rowid DESC LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.branchName) as { id: string; status: string; session_ref: string | null; branch_name: string; worktree_path: string; delivery_artifact_id: string | null; evidence_artifact_id: string | null } | undefined);
     const planRow = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'merge-conflict-plan'").get(input.planArtifactId, input.companyId) as { storage_path: string; sha256: string } | undefined);
-    if (!prior || !planRow || !["completed", "blocked"].includes(prior.status) || prior.session_ref !== input.developerSessionRef || prior.branch_name !== input.branchName || (input.worktreePath && prior.worktree_path !== input.worktreePath)) {
+    if (!prior || !planRow || !["completed", "blocked", "failed"].includes(prior.status) || prior.session_ref !== input.developerSessionRef || prior.branch_name !== input.branchName || (input.worktreePath && prior.worktree_path !== input.worktreePath)) {
       throw new AgentFailure("merge-resolution-identity-mismatch", "Merge-conflict resolution coordinates do not match the owned Developer worktree");
     }
     input.developerExecutionId = prior.id;

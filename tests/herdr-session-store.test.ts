@@ -7,7 +7,7 @@ import { expect, test, vi } from "vitest";
 
 import { ForgeDatabase } from "../src/database.js";
 import { runCommand } from "../src/command-runner.js";
-import { HerdrFailure, type HerdrAgent, type Pane } from "../src/herdr-client.js";
+import { HerdrFailure, type HerdrAgent, type HerdrPaneMetadataReport, type HerdrRuntimeSnapshot, type Pane } from "../src/herdr-client.js";
 import { agentName, developerPaneEnvironment, HerdrSessionStore, herdrLabel, launchFingerprint, type RoleSessionTask } from "../src/herdr-session-store.js";
 import { claudeRuntime } from "../src/agent-providers/herdr-runtime.js";
 import { ProviderCredentialStore } from "../src/provider-credentials.js";
@@ -185,18 +185,25 @@ class StartupHerdrFake {
   readonly closeFailures = new Map<string, HerdrFailure>();
   readonly startAttempts: string[] = [];
   readonly renamed: Array<{ target: string; name: string }> = [];
+  readonly getAgentTargets: string[] = [];
+  readonly metadataReports: HerdrPaneMetadataReport[] = [];
   failStartOnce = false;
   startFailure: unknown;
   renameFailure: unknown;
+  metadataFailure: unknown;
+  runtimeSnapshotFailure: unknown;
   inactiveNameOnStart = false;
   writeReadiness = true;
   responses: Array<HerdrAgent | null> = [];
+  runtimeAgents: HerdrAgent[] | undefined;
+  runtimePanes: Pane[] | undefined;
   getAgentFailure: HerdrFailure | undefined;
   paneText = "";
 
   async readPane() { return this.paneText; }
 
   async getAgent(_name: string) {
+    this.getAgentTargets.push(_name);
     if (this.getAgentFailure) throw this.getAgentFailure;
     return this.responses.shift() ?? this.agents.get(_name) ?? null;
   }
@@ -205,6 +212,22 @@ class StartupHerdrFake {
     if (this.renameFailure) throw this.renameFailure;
   }
   async listAgents() { return [...this.agents.values()]; }
+  async runtimeSnapshot(): Promise<HerdrRuntimeSnapshot> {
+    if (this.runtimeSnapshotFailure) throw this.runtimeSnapshotFailure;
+    const agents = this.runtimeAgents ?? [...this.agents.values()];
+    return {
+      agents,
+      panes: this.runtimePanes ?? agents.map((candidate) => ({
+        paneId: candidate.paneId,
+        ...(candidate.agentSession ? { agentSession: candidate.agentSession } : {}),
+        ...(candidate.status ? { status: candidate.status } : {}),
+      })),
+    };
+  }
+  async reportPaneMetadata(input: HerdrPaneMetadataReport) {
+    this.metadataReports.push(input);
+    if (this.metadataFailure) throw this.metadataFailure;
+  }
   async getWorkspace() { return null; }
   async createWorkspace() {
     return { workspace: { workspaceId: "workspace", label: "project" }, tab: { tabId: "tab", label: "task" }, rootPane: { paneId: "workspace-root" } };
@@ -335,12 +358,52 @@ test("starts a fresh session without waiting for its lazy Codex identity", async
   const herdr = new StartupHerdrFake();
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
-    await expect(
-      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
-    ).resolves.toMatchObject({ codexSessionId: null, paneId: "pane-1" });
+    const session = await store.ensureRoleSession(
+      taskFor(value.root),
+      "planner",
+      startupSettings,
+    );
+    expect(session).toMatchObject({ codexSessionId: null, paneId: "pane-1" });
     expect(herdr.panes).toEqual(["pane-1"]);
     expect(herdr.starts).toHaveLength(1);
     expect(herdr.commands[0]).toContain("/herdr-ready/");
+    expect(herdr.metadataReports).toEqual([{
+      paneId: "pane-1",
+      source: "forge",
+      title: "TASK planner",
+      tokens: {
+        forge_binding_id: session.id,
+        forge_task_id: "task",
+        forge_role: "planner",
+        forge_generation: "1",
+      },
+    }]);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("metadata publication failure does not fail a durable pane binding", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  herdr.metadataFailure = new HerdrFailure(
+    "unavailable",
+    true,
+    "metadata transport is unavailable",
+  );
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
+
+    await expect(
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
+    ).resolves.toMatchObject({ paneId: "pane-1", launched: true });
+
+    expect(herdr.metadataReports).toHaveLength(1);
+    expect(value.database.authQuery((db) =>
+      db.prepare("SELECT pane_id, status FROM forge_herdr_role_sessions WHERE task_id = 'task'").get(),
+    )).toEqual({ pane_id: "pane-1", status: "ready" });
+    expect(herdr.closed).toEqual([]);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -494,10 +557,18 @@ test("a retired Developer session is replaced by a new generation", async () => 
   }
 });
 
-test("adopts a recorded live agent with a matching fingerprint without splitting", async () => {
+test("adopts by pane when the stored name is stale and collides elsewhere", async () => {
   const value = await startupFixture();
   const herdr = new StartupHerdrFake();
-  herdr.responses = [{ name: "task-planner", paneId: "pane-recorded", status: "starting" }];
+  herdr.agents.set("stale-planner", {
+    name: "stale-planner",
+    paneId: "foreign-pane",
+    status: "starting",
+  });
+  herdr.runtimeAgents = [
+    { name: "renamed-planner", paneId: "pane-recorded", status: "starting" },
+    { name: "stale-planner", paneId: "foreign-pane", status: "starting" },
+  ];
   try {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
     const row = (store as unknown as {
@@ -506,7 +577,7 @@ test("adopts a recorded live agent with a matching fingerprint without splitting
     value.database.authQuery((db) =>
       db
         .prepare(
-          "UPDATE forge_herdr_role_sessions SET agent_name = 'task-planner', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?",
+          "UPDATE forge_herdr_role_sessions SET agent_name = 'stale-planner', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?",
         )
         .run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
     );
@@ -516,7 +587,89 @@ test("adopts a recorded live agent with a matching fingerprint without splitting
     expect(herdr.closed).toEqual([]);
     expect(herdr.panes).toEqual([]);
     expect(herdr.starts).toHaveLength(0);
-    expect(value.database.authQuery((db) => db.prepare("SELECT agent_name, pane_id FROM forge_herdr_role_sessions WHERE id = ?").get(row.id))).toEqual({ agent_name: "task-planner", pane_id: "pane-recorded" });
+    expect(herdr.getAgentTargets).toEqual([]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT agent_name, pane_id FROM forge_herdr_role_sessions WHERE id = ?").get(row.id))).toEqual({ agent_name: "renamed-planner", pane_id: "pane-recorded" });
+    expect(herdr.metadataReports).toEqual([{
+      paneId: "pane-recorded",
+      source: "forge",
+      title: "TASK planner",
+      tokens: {
+        forge_binding_id: row.id,
+        forge_task_id: "task",
+        forge_role: "planner",
+        forge_generation: "0",
+      },
+    }]);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("rejects a pane-first adoption with a conflicting native session", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  herdr.runtimeAgents = [{
+    name: "renamed-planner",
+    paneId: "pane-recorded",
+    status: "working",
+  }];
+  herdr.runtimePanes = [{
+    paneId: "pane-recorded",
+    agentSession: "foreign-session",
+    status: "working",
+  }];
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
+    const row = (store as unknown as {
+      reserve(task: RoleSessionTask, role: "planner"): { id: string };
+    }).reserve(taskFor(value.root), "planner");
+    value.database.authQuery((db) =>
+      db.prepare(
+        "UPDATE forge_herdr_role_sessions SET codex_session_id = 'recorded-session', agent_name = 'stale-planner', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?",
+      ).run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
+    );
+
+    await expect(
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
+    ).rejects.toMatchObject({ code: "session_identity_conflict", retryable: false });
+
+    expect(herdr.panes).toEqual([]);
+    expect(herdr.metadataReports).toEqual([]);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("adopts a legacy name-only binding and durably records its live pane", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  herdr.agents.set("legacy-planner", {
+    name: "legacy-planner",
+    paneId: "legacy-pane",
+    status: "idle",
+  });
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
+    const row = (store as unknown as {
+      reserve(task: RoleSessionTask, role: "planner"): { id: string };
+    }).reserve(taskFor(value.root), "planner");
+    value.database.authQuery((db) =>
+      db.prepare(
+        "UPDATE forge_herdr_role_sessions SET agent_name = 'legacy-planner', launch_fingerprint = ? WHERE id = ?",
+      ).run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
+    );
+
+    await expect(
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
+    ).resolves.toMatchObject({ agentName: "legacy-planner", paneId: "legacy-pane", launched: false });
+
+    expect(herdr.getAgentTargets).toEqual(["legacy-planner"]);
+    expect(herdr.panes).toEqual([]);
+    expect(value.database.authQuery((db) =>
+      db.prepare("SELECT agent_name, pane_id FROM forge_herdr_role_sessions WHERE id = ?").get(row.id),
+    )).toEqual({ agent_name: "legacy-planner", pane_id: "legacy-pane" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

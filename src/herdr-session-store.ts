@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import type { ForgeDatabase } from "./database.js";
 import {
   HerdrFailure,
+  snapshotHerdrRuntime,
   type HerdrAgent,
   type HerdrClient,
 } from "./herdr-client.js";
@@ -216,13 +217,14 @@ export class HerdrSessionStore {
     const fingerprint = launchFingerprint(settings, task.worktreePath);
     let closedPaneId: string | undefined;
     let paneMismatch = false;
-    let existing = row.agent_name
-      ? await this.getRecordedAgent(row.agent_name)
-      : null;
-    if (existing && existing.paneId === row.pane_id) {
+    let existing = await this.getRecordedAgent(row);
+    if (existing && (!row.pane_id || existing.paneId === row.pane_id)) {
       this.assertIdentity(row, existing);
-      if (row.launch_fingerprint === fingerprint)
-        return this.ready(row, existing, fingerprint, false);
+      if (row.launch_fingerprint === fingerprint) {
+        const ready = this.ready(row, existing, fingerprint, false);
+        await this.reportBindingMetadata(task, role, ready);
+        return ready;
+      }
       await this.closeRecordedPane(row.id, existing.paneId);
       closedPaneId = existing.paneId;
       existing = null;
@@ -350,12 +352,14 @@ export class HerdrSessionStore {
       }
       this.assertIdentity(row, live);
       this.started(row, live, fingerprint);
-      return this.ready(
+      const ready = this.ready(
         { ...row, agent_name: name, pane_id: live.paneId, generation: Number(row.generation) + 1 },
         live,
         fingerprint,
         true,
       );
+      await this.reportBindingMetadata(task, role, ready);
+      return ready;
     } catch (error) {
       if (secretsFile) await this.removeSecrets(task.runtimeRoot, row.id);
       if (paneId && error instanceof HerdrFailure && error.code === "agent_not_ready") {
@@ -405,7 +409,56 @@ export class HerdrSessionStore {
         "Herdr reported a different agent session",
       );
   }
-  private async getRecordedAgent(name: string): Promise<HerdrAgent | null> {
+  private async getRecordedAgent(
+    row: Record<string, any>,
+  ): Promise<HerdrAgent | null> {
+    if (typeof row.pane_id === "string" && row.pane_id) {
+      try {
+        const snapshot = await snapshotHerdrRuntime(this.herdr);
+        const panes = snapshot.panes.filter(
+          (candidate) => candidate.paneId === row.pane_id,
+        );
+        const agents = snapshot.agents.filter(
+          (candidate) => candidate.paneId === row.pane_id,
+        );
+        if (panes.length === 1 && agents.length === 1) {
+          const pane = panes[0]!;
+          const live = agents[0]!;
+          if (
+            pane.agentSession &&
+            live.agentSession &&
+            pane.agentSession !== live.agentSession
+          )
+            throw new HerdrFailure(
+              "session_identity_conflict",
+              false,
+              "Herdr snapshot reported conflicting agent sessions for the recorded pane",
+            );
+          return {
+            ...live,
+            ...(pane.agentSession && !live.agentSession
+              ? { agentSession: pane.agentSession }
+              : {}),
+            ...(pane.status && !live.status ? { status: pane.status } : {}),
+          };
+        }
+      } catch (error) {
+        if (
+          error instanceof HerdrFailure &&
+          error.code === "session_identity_conflict"
+        )
+          throw error;
+        // A legacy or transiently unavailable snapshot can still use the
+        // recorded name, but the caller must also validate its pane target.
+      }
+    }
+    return typeof row.agent_name === "string" && row.agent_name
+      ? this.getRecordedAgentByName(row.agent_name)
+      : null;
+  }
+  private async getRecordedAgentByName(
+    name: string,
+  ): Promise<HerdrAgent | null> {
     return this.getRecorded(() => this.herdr.getAgent(name));
   }
   private async getRecorded<T>(read: () => Promise<T>): Promise<T | null> {
@@ -446,6 +499,28 @@ export class HerdrSessionStore {
       collision,
       generation,
     );
+  }
+  private async reportBindingMetadata(
+    task: RoleSessionTask,
+    role: RoleSessionRole,
+    session: EnsuredRoleSession,
+  ): Promise<void> {
+    try {
+      await this.herdr.reportPaneMetadata({
+        paneId: session.paneId,
+        source: "forge",
+        title: `${task.issueKey || task.taskId} ${role}`,
+        tokens: {
+          forge_binding_id: session.id,
+          forge_task_id: task.taskId,
+          forge_role: role,
+          forge_generation: String(session.generation),
+        },
+      });
+    } catch {
+      // Herdr metadata is a display-only diagnostic hint. SQLite remains the
+      // authoritative binding, so publication must never fail an ensure.
+    }
   }
   private started(
     row: Record<string, any>,
@@ -509,7 +584,7 @@ export class HerdrSessionStore {
           !error.message.includes("not an available shell"))
       )
         throw error;
-      const live = await this.getRecordedAgent(input.name);
+      const live = await this.getRecordedAgentByName(input.name);
       if (live && live.paneId === input.paneId) return live;
       await this.closeRecordedPane(input.sessionId, input.paneId);
       const pane = await this.allocateRolePane(
@@ -543,10 +618,10 @@ export class HerdrSessionStore {
       return await this.herdr.startAgent(input);
     } catch (error) {
       if (input.adoptTimedOutArgvPrompt && isAgentStartupTimeout(error)) {
-        let live = await this.getRecordedAgent(input.name);
+        let live = await this.getRecordedAgentByName(input.name);
         if (!live) {
           await this.herdr.renameAgent(input.paneId, input.name);
-          live = await this.getRecordedAgent(input.name);
+          live = await this.getRecordedAgentByName(input.name);
         }
         if (
           live &&

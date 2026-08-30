@@ -38,6 +38,49 @@ async function gitRepository(root: string): Promise<{ base: string; head: string
   return { base, head };
 }
 
+async function targetBaseActivityFixture(prefix: string) {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  const config = createTestConfig(root, { artifactRoot: join(root, "artifacts") });
+  const database = new ForgeDatabase(config.databasePath);
+  const repositoryPath = join(root, "repository");
+  await mkdir(repositoryPath, { recursive: true });
+  const repository = await gitRepository(repositoryPath);
+  const run = promisify(execFile);
+  await run("git", ["remote", "add", "origin", repositoryPath], { cwd: repositoryPath });
+  const priorTree = (await run("git", ["rev-parse", "HEAD^{tree}"], { cwd: repositoryPath })).stdout.trim();
+  await run("git", ["checkout", "main"], { cwd: repositoryPath });
+  await writeFile(join(repositoryPath, "advanced.txt"), "advanced\n");
+  await run("git", ["add", "advanced.txt"], { cwd: repositoryPath });
+  await run("git", ["commit", "-m", "advance base"], { cwd: repositoryPath });
+  const targetBase = (await run("git", ["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
+  await run("git", ["checkout", "issue/task-1"], { cwd: repositoryPath });
+  const now = new Date().toISOString();
+  database.authTransaction((db) => {
+    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-1', 'Company', 'active', ?)").run(now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project-1', 'company-1', 'Project', ?, ?, 'main', 'main', 'true', 'true', '[]', '{}', 'active', ?, ?)").run(repositoryPath, repositoryPath, now, now);
+    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-1', 'company-1', 'task-brief', 'brief.md', 'text/markdown', 1, ?, 'company-1/brief-1', ?)").run("a".repeat(64), now);
+    db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-1', 'company-1', 'project-1', 'Task', 'brief-1', '[]', '{}', 0, 'workflow-1', 'revision-1', 'task-key', ?, ?)").run(now, now);
+  });
+  const artifacts = new ArtifactStore(config.artifactRoot, database);
+  const configuration = await artifacts.putArtifact("company-1", "task-project-configuration", { taskId: "task-1", filename: "configuration.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ projectId: "project-1", projectName: "Project", repositoryPath, worktreeRoot: repositoryPath, repository: "acme/project", baseBranch: "main", targetBranch: "main", baseSha: repository.base, targetSha: repository.base, setupCommand: "true", verificationCommand: "true", requiredChecks: [], roleAgents: { builder: "builder" }, roleProfiles: { builder: "builder" }, capturedAt: now })) });
+  const delivery = await artifacts.putArtifact("company-1", "developer-delivery", { taskId: "task-1", filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from("{}") });
+  const evidence = await artifacts.putArtifact("company-1", "agent-evidence", { taskId: "task-1", filename: "evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") });
+  database.authQuery((db) => db.prepare("UPDATE forge_tasks SET project_revision_id = ?, project_configuration_artifact_id = ?, project_configuration_captured_at = ? WHERE id = 'task-1'").run(configuration.id, configuration.id, now));
+  return { root, config, database, repositoryPath, repository, run, priorTree, targetBase, now, artifacts, configuration, delivery, evidence };
+}
+
+async function mergeTargetBase(fixture: Awaited<ReturnType<typeof targetBaseActivityFixture>>) {
+  await fixture.run("git", ["merge", "--no-ff", "--no-edit", fixture.targetBase], { cwd: fixture.repositoryPath });
+  const mergedHead = (await fixture.run("git", ["rev-parse", "HEAD"], { cwd: fixture.repositoryPath })).stdout.trim();
+  const mergedTree = (await fixture.run("git", ["rev-parse", "HEAD^{tree}"], { cwd: fixture.repositoryPath })).stdout.trim();
+  return { mergedHead, mergedTree };
+}
+
+async function closeTargetBaseActivityFixture(fixture: Awaited<ReturnType<typeof targetBaseActivityFixture>>): Promise<void> {
+  fixture.database.close();
+  await rm(fixture.root, { recursive: true, force: true });
+}
+
 describe("target-base reconciliation contracts", () => {
   test("accepts every checkpoint and discriminated outcome", () => {
     const input = ReconcileTargetBaseActivityInputSchema.parse({
@@ -121,6 +164,97 @@ describe("target-base reconciliation contracts", () => {
     } finally {
       database.close();
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("runs pinned verification for a fresh merged operation linked to a blocked execution", async () => {
+    const fixture = await targetBaseActivityFixture("forge-target-base-fresh-blocked-");
+    try {
+      fixture.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-current', 'task-1', 'company-1', 'workflow-1', 1, 1, 'blocked', 'issue/task-1', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?, ?)").run(fixture.repositoryPath, fixture.repository.base, fixture.now, fixture.now, fixture.repository.head, fixture.priorTree, fixture.delivery.id, fixture.evidence.id));
+      const activities = createActivities(fixture.database, fixture.config, { githubRelease: {
+        async getRemoteRepository() { return "acme/project"; },
+        async getBranchHead() { return fixture.targetBase; },
+      } as never });
+
+      const result = await activities.reconcileTargetBase({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: fixture.configuration.id, checkpoint: "pre_release", developerExecutionId: "developer-current", expectedBaseSha: fixture.repository.base, expectedHeadSha: fixture.repository.head, expectedHeadTree: fixture.priorTree });
+
+      expect(result).toMatchObject({ outcome: "revalidated", observedBaseSha: fixture.targetBase, priorHead: fixture.repository.head, priorTree: fixture.priorTree, deliveryArtifact: { id: fixture.delivery.id, kind: "developer-delivery" }, developerEvidenceArtifactId: fixture.evidence.id });
+      if (result.outcome !== "revalidated") throw new Error("Expected fresh reconciliation to pass verification");
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT status, delivery_artifact_id AS deliveryArtifactId, failure_code AS failureCode, failure_summary AS failureSummary FROM forge_developer_executions WHERE id = 'developer-current'").get())).toEqual({ status: "blocked", deliveryArtifactId: fixture.delivery.id, failureCode: null, failureSummary: null });
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT status, failure_code AS failureCode, failure_summary AS failureSummary, verification_artifact_id AS verificationArtifactId, developer_execution_id AS developerExecutionId FROM forge_forward_merges WHERE id = ?").get(result.checkId))).toEqual({ status: "merged", failureCode: null, failureSummary: null, verificationArtifactId: result.verificationArtifact.id, developerExecutionId: result.developerExecutionId });
+    } finally {
+      await closeTargetBaseActivityFixture(fixture);
+    }
+  });
+
+  test("ignores a stale input forward-merge id during ordinary reconciliation", async () => {
+    const fixture = await targetBaseActivityFixture("forge-target-base-stale-input-");
+    try {
+      const staleVerification = await fixture.artifacts.putArtifact("company-1", "forward-merge-verification", { taskId: "task-1", filename: "stale-verification.json", mimeType: "application/json", bytes: Buffer.from("{}") });
+      fixture.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-current', 'task-1', 'company-1', 'workflow-1', 1, 1, 'blocked', 'issue/task-1', ?, ?, 'current-session', ?, ?, ?, ?, 'clean', ?, ?)").run(fixture.repositoryPath, fixture.repository.base, fixture.now, fixture.now, fixture.repository.head, fixture.priorTree, fixture.delivery.id, fixture.evidence.id);
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-stale', 'task-1', 'company-1', 'workflow-1', 1, 2, 'blocked', 'issue/task-1', ?, ?, 'stale-session', ?, ?, ?, ?, 'clean')").run(fixture.repositoryPath, fixture.repository.base, fixture.now, fixture.now, fixture.repository.head, fixture.priorTree);
+        db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, failure_code, failure_summary, updated_at) VALUES ('merge-stale', 'task-1', 'company-1', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow-1', ?, 'pre_release', 'stale-operation', ?, ?, ?, 'developer-stale', ?, 'verification_failed', 'Stale verification failed', ?)").run(fixture.repository.base, fixture.targetBase, fixture.repository.head, fixture.repository.head, fixture.priorTree, fixture.now, fixture.configuration.id, fixture.priorTree, fixture.repository.head, fixture.priorTree, staleVerification.id, fixture.now);
+      });
+      const activities = createActivities(fixture.database, fixture.config, { githubRelease: {
+        async getRemoteRepository() { return "acme/project"; },
+        async getBranchHead() { return fixture.targetBase; },
+      } as never });
+
+      const result = await activities.reconcileTargetBase({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: fixture.configuration.id, checkpoint: "pre_release", developerExecutionId: "developer-current", expectedBaseSha: fixture.repository.base, expectedHeadSha: fixture.repository.head, expectedHeadTree: fixture.priorTree, forwardMergeId: "merge-stale" });
+
+      expect(result).toMatchObject({ outcome: "revalidated", observedBaseSha: fixture.targetBase });
+      if (result.outcome !== "revalidated") throw new Error("Expected ordinary reconciliation to ignore the stale merge id");
+      expect(result.checkId).not.toBe("merge-stale");
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT developer_execution_id AS developerExecutionId, failure_code AS failureCode, failure_summary AS failureSummary FROM forge_forward_merges WHERE id = 'merge-stale'").get())).toEqual({ developerExecutionId: "developer-stale", failureCode: "verification_failed", failureSummary: "Stale verification failed" });
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT supersedes_execution_id AS supersedesExecutionId FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toEqual({ supersedesExecutionId: "developer-current" });
+    } finally {
+      await closeTargetBaseActivityFixture(fixture);
+    }
+  });
+
+  test("inherits the nearest exact lineage delivery for a blocked merged execution", async () => {
+    const fixture = await targetBaseActivityFixture("forge-target-base-lineage-");
+    try {
+      const { mergedHead, mergedTree } = await mergeTargetBase(fixture);
+      const ancestorEvidence = await fixture.artifacts.putArtifact("company-1", "agent-evidence", { taskId: "task-1", filename: "ancestor-evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("ancestor\n") });
+      fixture.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-ancestor', 'task-1', 'company-1', 'workflow-1', 1, 1, 'completed', 'issue/task-1', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?, ?)").run(fixture.repositoryPath, fixture.repository.base, fixture.now, fixture.now, fixture.repository.head, fixture.priorTree, fixture.delivery.id, ancestorEvidence.id);
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, supersedes_execution_id, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, evidence_artifact_id, execution_kind) VALUES ('developer-current', 'task-1', 'company-1', 'workflow-1', 1, 2, 'blocked', 'issue/task-1', ?, ?, 'developer-ancestor', 'developer-session', ?, ?, ?, ?, 'clean', ?, 'forward_merge')").run(fixture.repositoryPath, fixture.targetBase, fixture.now, fixture.now, mergedHead, mergedTree, fixture.evidence.id);
+        db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, result_head, result_tree, developer_execution_id, updated_at) VALUES ('merge-lineage', 'task-1', 'company-1', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow-1', ?, 'pre_release', 'lineage-operation', ?, ?, ?, 'developer-current', ?)").run(fixture.repository.base, fixture.targetBase, fixture.repository.head, mergedHead, mergedTree, fixture.now, fixture.configuration.id, fixture.priorTree, mergedHead, mergedTree, fixture.now);
+      });
+      const oldExecutions = fixture.database.authQuery((db) => db.prepare("SELECT id, status, result_commit AS resultCommit, result_tree AS resultTree, delivery_artifact_id AS deliveryArtifactId, evidence_artifact_id AS evidenceArtifactId, failure_code AS failureCode, failure_summary AS failureSummary FROM forge_developer_executions ORDER BY id").all());
+      const activities = createActivities(fixture.database, fixture.config, { githubRelease: {} as never });
+
+      const result = await activities.reconcileTargetBase({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: fixture.configuration.id, checkpoint: "pre_release", developerExecutionId: "developer-current", expectedBaseSha: fixture.repository.base, expectedHeadSha: mergedHead, expectedHeadTree: mergedTree, forwardMergeId: "merge-lineage", verificationOnly: true });
+
+      expect(result).toMatchObject({ outcome: "revalidated", checkId: "merge-lineage", headSha: mergedHead, headTree: mergedTree, deliveryArtifact: { id: fixture.delivery.id, kind: "developer-delivery" }, developerEvidenceArtifactId: fixture.evidence.id });
+      if (result.outcome !== "revalidated") throw new Error("Expected exact lineage delivery inheritance");
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT id, status, result_commit AS resultCommit, result_tree AS resultTree, delivery_artifact_id AS deliveryArtifactId, evidence_artifact_id AS evidenceArtifactId, failure_code AS failureCode, failure_summary AS failureSummary FROM forge_developer_executions WHERE id IN ('developer-ancestor', 'developer-current') ORDER BY id").all())).toEqual(oldExecutions);
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT status, supersedes_execution_id AS supersedesExecutionId, result_commit AS resultCommit, result_tree AS resultTree, delivery_artifact_id AS deliveryArtifactId, evidence_artifact_id AS evidenceArtifactId, execution_kind AS executionKind FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toEqual({ status: "completed", supersedesExecutionId: "developer-current", resultCommit: mergedHead, resultTree: mergedTree, deliveryArtifactId: fixture.delivery.id, evidenceArtifactId: fixture.evidence.id, executionKind: "forward_merge" });
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT developer_execution_id AS developerExecutionId, delivery_artifact_id AS deliveryArtifactId, supersedes_delivery_artifact_id AS supersedesDeliveryArtifactId, supersedes_evidence_artifact_id AS supersedesEvidenceArtifactId, verification_artifact_id AS verificationArtifactId FROM forge_forward_merges WHERE id = 'merge-lineage'").get())).toEqual({ developerExecutionId: result.developerExecutionId, deliveryArtifactId: fixture.delivery.id, supersedesDeliveryArtifactId: fixture.delivery.id, supersedesEvidenceArtifactId: fixture.evidence.id, verificationArtifactId: result.verificationArtifact.id });
+    } finally {
+      await closeTargetBaseActivityFixture(fixture);
+    }
+  });
+
+  test("blocks delivery inheritance across a mismatched plan lineage", async () => {
+    const fixture = await targetBaseActivityFixture("forge-target-base-lineage-mismatch-");
+    try {
+      const { mergedHead, mergedTree } = await mergeTargetBase(fixture);
+      fixture.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-other-plan', 'task-1', 'company-1', 'workflow-1', 2, 1, 'completed', 'issue/task-1', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?, ?)").run(fixture.repositoryPath, fixture.repository.base, fixture.now, fixture.now, fixture.repository.head, fixture.priorTree, fixture.delivery.id, fixture.evidence.id);
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, supersedes_execution_id, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, evidence_artifact_id, execution_kind) VALUES ('developer-current', 'task-1', 'company-1', 'workflow-1', 1, 1, 'blocked', 'issue/task-1', ?, ?, 'developer-other-plan', 'developer-session', ?, ?, ?, ?, 'clean', ?, 'forward_merge')").run(fixture.repositoryPath, fixture.targetBase, fixture.now, fixture.now, mergedHead, mergedTree, fixture.evidence.id);
+        db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, result_head, result_tree, developer_execution_id, updated_at) VALUES ('merge-mismatched-lineage', 'task-1', 'company-1', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow-1', ?, 'pre_release', 'mismatched-lineage-operation', ?, ?, ?, 'developer-current', ?)").run(fixture.repository.base, fixture.targetBase, fixture.repository.head, mergedHead, mergedTree, fixture.now, fixture.configuration.id, fixture.priorTree, mergedHead, mergedTree, fixture.now);
+      });
+      const activities = createActivities(fixture.database, fixture.config, { githubRelease: {} as never });
+
+      await expect(activities.reconcileTargetBase({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: fixture.configuration.id, checkpoint: "pre_release", developerExecutionId: "developer-current", expectedBaseSha: fixture.repository.base, expectedHeadSha: mergedHead, expectedHeadTree: mergedTree, forwardMergeId: "merge-mismatched-lineage", verificationOnly: true })).resolves.toMatchObject({ outcome: "blocked", checkId: "merge-mismatched-lineage", code: "artifact_unavailable", owner: "human", retryable: false });
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_developer_executions").get())).toEqual({ count: 2 });
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT status, delivery_artifact_id AS deliveryArtifactId FROM forge_developer_executions WHERE id = 'developer-current'").get())).toEqual({ status: "blocked", deliveryArtifactId: null });
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT developer_execution_id AS developerExecutionId, delivery_artifact_id AS deliveryArtifactId FROM forge_forward_merges WHERE id = 'merge-mismatched-lineage'").get())).toEqual({ developerExecutionId: "developer-current", deliveryArtifactId: null });
+    } finally {
+      await closeTargetBaseActivityFixture(fixture);
     }
   });
 
@@ -233,7 +367,7 @@ describe("target-base reconciliation contracts", () => {
       const verification = await artifacts.putArtifact("company-1", "forward-merge-verification", { taskId: "task-1", filename: "verification.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ outcome: "failed", code: failureCode, summary: failureSummary, commands: [] })) });
       database.authTransaction((db) => {
         db.prepare("UPDATE forge_tasks SET project_revision_id = ?, project_configuration_artifact_id = ?, project_configuration_captured_at = ? WHERE id = 'task-1'").run(configuration.id, configuration.id, now);
-        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, failure_code, failure_summary, evidence_artifact_id, execution_kind) VALUES ('developer-1', 'task-1', 'company-1', 'workflow-1', 1, 1, 'blocked', 'issue/task-1', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?, ?, ?, 'forward_merge')").run(repositoryPath, targetBase, now, now, mergedHead, mergedTree, failureCode, failureSummary, evidence.id);
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, evidence_artifact_id, execution_kind) VALUES ('developer-1', 'task-1', 'company-1', 'workflow-1', 1, 1, 'blocked', 'issue/task-1', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?, 'forward_merge')").run(repositoryPath, targetBase, now, now, mergedHead, mergedTree, evidence.id);
         db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, failure_code, failure_summary, updated_at) VALUES ('merge-1', 'task-1', 'company-1', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow-1', ?, 'pre_release', 'operation-1', ?, ?, ?, 'developer-1', ?, ?, ?, ?)").run(repository.base, targetBase, repository.head, mergedHead, mergedTree, now, configuration.id, priorTree, mergedHead, mergedTree, verification.id, failureCode, failureSummary, now);
       });
 
@@ -241,6 +375,7 @@ describe("target-base reconciliation contracts", () => {
       const input = { taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: configuration.id, checkpoint: "pre_release" as const, developerExecutionId: "developer-1", expectedBaseSha: repository.base, expectedHeadSha: mergedHead, expectedHeadTree: mergedTree, forwardMergeId: "merge-1", verificationOnly: true };
       const executionBefore = database.authQuery((db) => db.prepare("SELECT status, plan_revision AS planRevision, result_commit AS resultCommit, result_tree AS resultTree, failure_code AS failureCode, failure_summary AS failureSummary FROM forge_developer_executions WHERE id = 'developer-1'").get());
       const changesBefore = database.authQuery((db) => Number(db.prepare("SELECT total_changes()").pluck().get()));
+      expect(executionBefore).toEqual({ status: "blocked", planRevision: 1, resultCommit: mergedHead, resultTree: mergedTree, failureCode: null, failureSummary: null });
 
       await expect(activities.reconcileTargetBase(input)).resolves.toEqual({
         outcome: "blocked",

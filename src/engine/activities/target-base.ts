@@ -44,10 +44,11 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
     async reconcileTargetBase(rawInput: ReconcileTargetBaseActivityInput): Promise<ReconcileTargetBaseActivityResult> {
       const input = ReconcileTargetBaseActivityInputSchema.parse(rawInput);
       const checkId = `target_base_${randomBytes(12).toString("hex")}`;
-      const recordedExecutionId = input.forwardMergeId
+      const requestedForwardMergeId = input.verificationOnly ? input.forwardMergeId : undefined;
+      const recordedExecutionId = requestedForwardMergeId
         ? (database.authQuery((db) => db.prepare(`SELECT developer_execution_id AS developerExecutionId FROM forge_forward_merges
             WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND project_revision_id = ? AND checkpoint = ?
-              AND result_head = ? AND result_tree = ?`).get(input.forwardMergeId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId, input.checkpoint, input.expectedHeadSha, input.expectedHeadTree) as { developerExecutionId: string | null } | undefined)?.developerExecutionId)
+              AND result_head = ? AND result_tree = ?`).get(requestedForwardMergeId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId, input.checkpoint, input.expectedHeadSha, input.expectedHeadTree) as { developerExecutionId: string | null } | undefined)?.developerExecutionId)
         : undefined;
       const developerExecutionId = recordedExecutionId ?? input.developerExecutionId;
       const context = database.authQuery((db) => db.prepare(`SELECT
@@ -55,13 +56,12 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           d.branch_name AS branchName, d.worktree_path AS worktreePath, d.target_base_sha AS targetBaseSha,
           d.result_commit AS resultCommit, d.result_tree AS resultTree, d.plan_revision AS planRevision,
           d.delivery_artifact_id AS deliveryArtifactId, da.sha256 AS deliveryArtifactSha256,
-          d.evidence_artifact_id AS evidenceArtifactId, d.failure_code AS developerFailureCode,
-          d.failure_summary AS developerFailureSummary
+          d.evidence_artifact_id AS evidenceArtifactId
         FROM forge_tasks t
         JOIN forge_developer_executions d ON d.id = ? AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
         LEFT JOIN forge_artifacts da ON da.id = d.delivery_artifact_id AND da.company_id = d.company_id AND da.kind = 'developer-delivery'
-        WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(developerExecutionId, input.taskId, input.companyId, input.workflowId) as { developerExecutionId: string; developerStatus: string; developerSessionRef: string | null; branchName: string; worktreePath: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null; planRevision: number; deliveryArtifactId: string | null; deliveryArtifactSha256: string | null; evidenceArtifactId: string | null; developerFailureCode: string | null; developerFailureSummary: string | null } | undefined);
-      const blocked = (code: TargetBaseBlockerCode, owner: "human" | "provider" | "lead", retryable: boolean, summary: string, evidenceArtifact?: ReturnType<typeof artifactReference>, coordinates?: { observedBaseSha?: string; priorHead?: string; priorTree?: string; resultHead?: string; resultTree?: string }, operationId = input.forwardMergeId ?? checkId): ReconcileTargetBaseActivityResult => ({ outcome: "blocked", checkId: operationId, checkpoint: input.checkpoint, code, owner, retryable, summary: normalizeSafeSummary(summary, 200), ...(evidenceArtifact ? { evidenceArtifact } : {}), ...(coordinates ?? {}) });
+        WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(developerExecutionId, input.taskId, input.companyId, input.workflowId) as { developerExecutionId: string; developerStatus: string; developerSessionRef: string | null; branchName: string; worktreePath: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null; planRevision: number; deliveryArtifactId: string | null; deliveryArtifactSha256: string | null; evidenceArtifactId: string | null } | undefined);
+      const blocked = (code: TargetBaseBlockerCode, owner: "human" | "provider" | "lead", retryable: boolean, summary: string, evidenceArtifact?: ReturnType<typeof artifactReference>, coordinates?: { observedBaseSha?: string; priorHead?: string; priorTree?: string; resultHead?: string; resultTree?: string }, operationId = requestedForwardMergeId ?? checkId): ReconcileTargetBaseActivityResult => ({ outcome: "blocked", checkId: operationId, checkpoint: input.checkpoint, code, owner, retryable, summary: normalizeSafeSummary(summary, 200), ...(evidenceArtifact ? { evidenceArtifact } : {}), ...(coordinates ?? {}) });
       const adoptStoredDelivery = (delivery: { developerExecutionId: string; priorHead: string; priorTree: string; resultHead: string; resultTree: string }): boolean => database.authTransaction((db) => {
         const updated = db.prepare(`UPDATE forge_developer_executions SET result_commit = ?, result_tree = ?
           WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND status = 'completed'
@@ -94,13 +94,14 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
         if (merge.conflictEvidenceTooLarge || !merge.conflictArtifact) return blocked("conflict_evidence_too_large", "lead", false, "Conflict evidence exceeded the safe artifact limit", undefined, { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree }, merge.forwardMergeId ?? checkId);
         return { outcome: "conflict", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, conflictFileCount: merge.conflictFiles.length, conflictArtifact: artifactReference(merge.conflictArtifact) };
       }
-      const storedDelivery = (input.forwardMergeId ?? merge.forwardMergeId) ? database.authQuery((db) => db.prepare(`SELECT m.developer_execution_id AS developerExecutionId, d.evidence_artifact_id AS developerEvidenceArtifactId, m.expected_base_sha AS expectedBaseSha, m.result_head AS resultHead, m.result_tree AS resultTree, m.verification_artifact_id AS verificationArtifactId, m.delivery_artifact_id AS deliveryArtifactId, m.failure_code AS failureCode, m.failure_summary AS failureSummary FROM forge_forward_merges m LEFT JOIN forge_developer_executions d ON d.id = m.developer_execution_id AND d.task_id = m.task_id AND d.company_id = m.company_id AND d.workflow_id = m.workflow_id WHERE m.id = ? AND m.task_id = ? AND m.company_id = ?`).get(input.forwardMergeId ?? merge.forwardMergeId, input.taskId, input.companyId) as { developerExecutionId: string | null; developerEvidenceArtifactId: string | null; expectedBaseSha: string; resultHead: string | null; resultTree: string | null; verificationArtifactId: string | null; deliveryArtifactId: string | null; failureCode: string | null; failureSummary: string | null } | undefined) : undefined;
+      const storedMergeId = input.verificationOnly ? input.forwardMergeId : merge.forwardMergeId;
+      const storedDelivery = storedMergeId ? database.authQuery((db) => db.prepare(`SELECT m.developer_execution_id AS developerExecutionId, d.evidence_artifact_id AS developerEvidenceArtifactId, m.expected_base_sha AS expectedBaseSha, m.result_head AS resultHead, m.result_tree AS resultTree, m.verification_artifact_id AS verificationArtifactId, m.delivery_artifact_id AS deliveryArtifactId, m.failure_code AS failureCode, m.failure_summary AS failureSummary FROM forge_forward_merges m LEFT JOIN forge_developer_executions d ON d.id = m.developer_execution_id AND d.task_id = m.task_id AND d.company_id = m.company_id AND d.workflow_id = m.workflow_id WHERE m.id = ? AND m.task_id = ? AND m.company_id = ? AND m.workflow_id = ? AND m.project_revision_id = ? AND m.checkpoint = ?`).get(storedMergeId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId, input.checkpoint) as { developerExecutionId: string | null; developerEvidenceArtifactId: string | null; expectedBaseSha: string; resultHead: string | null; resultTree: string | null; verificationArtifactId: string | null; deliveryArtifactId: string | null; failureCode: string | null; failureSummary: string | null } | undefined) : undefined;
       const storedArtifacts = storedDelivery && (storedDelivery.verificationArtifactId || storedDelivery.deliveryArtifactId)
         ? database.authQuery((db) => db.prepare("SELECT id, kind FROM forge_artifacts WHERE company_id = ? AND (id = ? OR id = ?) ORDER BY id").all(input.companyId, storedDelivery.verificationArtifactId, storedDelivery.deliveryArtifactId) as Array<{ id: string; kind: string }>)
         : [];
       const verificationArtifact = storedDelivery ? storedArtifacts.find((artifact) => artifact.id === storedDelivery.verificationArtifactId && artifact.kind === "forward-merge-verification") : undefined;
       const deliveryArtifact = storedDelivery ? storedArtifacts.find((artifact) => artifact.id === storedDelivery.deliveryArtifactId && artifact.kind === "developer-delivery") : undefined;
-      if (merge.status === "merged" && storedDelivery?.developerExecutionId && context.developerStatus === "blocked") {
+      if (merge.status === "merged" && storedDelivery?.developerExecutionId && (storedDelivery.failureCode !== null || storedDelivery.failureSummary !== null)) {
         const coordinates = { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, ...(storedDelivery.resultHead ? { resultHead: storedDelivery.resultHead } : {}), ...(storedDelivery.resultTree ? { resultTree: storedDelivery.resultTree } : {}) };
         const failureCode = storedDelivery.failureCode;
         const failureSummary = storedDelivery.failureSummary;
@@ -110,8 +111,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           && input.expectedHeadSha.toLowerCase() === storedDelivery.resultHead.toLowerCase() && input.expectedHeadTree.toLowerCase() === storedDelivery.resultTree.toLowerCase()
           && context.resultCommit.toLowerCase() === storedDelivery.resultHead.toLowerCase() && context.resultTree.toLowerCase() === storedDelivery.resultTree.toLowerCase()
           && storedDelivery.resultHead.toLowerCase() === merge.mergeCommit.toLowerCase() && storedDelivery.resultTree.toLowerCase() === merge.tree.toLowerCase()
-          && isVerificationBlockerCode(failureCode) && context.developerFailureCode === failureCode
-          && !!failureSummary && context.developerFailureSummary === failureSummary;
+          && isVerificationBlockerCode(failureCode) && !!failureSummary;
         if (!ownsStoredVerificationFailure) return blocked("merge_state_ownership_mismatch", "human", false, "The blocked Developer revision does not match the recorded forward-merge verification failure", undefined, coordinates, merge.forwardMergeId ?? checkId);
         if (!verificationArtifact) return blocked("artifact_unavailable", "human", false, "The stored forward-merge verification artifact is unavailable", undefined, coordinates, merge.forwardMergeId ?? checkId);
         return blocked(failureCode, "lead", true, failureSummary, artifactReference({ id: verificationArtifact.id, kind: "forward-merge-verification" }), coordinates, merge.forwardMergeId ?? checkId);
@@ -213,14 +213,34 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           return blocked(verification.code === "verification_timed_out" ? "verification_timed_out" : verification.code === "verification_evidence_too_large" ? "verification_evidence_too_large" : "verification_failed", "lead", true, verification.summary, artifactReference(verificationArtifact), { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: merge.mergeCommit!, resultTree: merge.tree! }, merge.forwardMergeId ?? checkId);
         }
         await service.assertMergedOwnership({ worktreePath: context.worktreePath, branchName: context.branchName, priorHead: merge.priorHead, targetBaseSha: merge.targetBaseSha, mergeCommit: merge.mergeCommit!, tree: merge.tree! });
-        if (!context.deliveryArtifactId || !context.deliveryArtifactSha256 || !context.evidenceArtifactId) return blocked("artifact_unavailable", "human", false, "The prior Developer delivery artifact is unavailable", artifactReference(verificationArtifact), { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: merge.mergeCommit!, resultTree: merge.tree! }, merge.forwardMergeId ?? checkId);
-        const deliveryArtifact = { id: context.deliveryArtifactId, sha256: context.deliveryArtifactSha256, kind: "developer-delivery" as const };
+        const inheritedDeliveryArtifact = !context.deliveryArtifactId ? database.authQuery((db) => db.prepare(`WITH RECURSIVE execution_lineage(id, supersedes_execution_id, delivery_artifact_id, depth, path) AS (
+            SELECT id, supersedes_execution_id, delivery_artifact_id, 0, '|' || id || '|'
+            FROM forge_developer_executions
+            WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND plan_revision = ?
+            UNION ALL
+            SELECT prior.id, prior.supersedes_execution_id, prior.delivery_artifact_id, lineage.depth + 1, lineage.path || prior.id || '|'
+            FROM execution_lineage lineage
+            JOIN forge_developer_executions prior ON prior.id = lineage.supersedes_execution_id
+              AND prior.task_id = ? AND prior.company_id = ? AND prior.workflow_id = ? AND prior.plan_revision = ?
+            WHERE lineage.depth < 100 AND instr(lineage.path, '|' || prior.id || '|') = 0
+          )
+          SELECT artifact.id, artifact.sha256
+          FROM execution_lineage lineage
+          JOIN forge_artifacts artifact ON artifact.id = lineage.delivery_artifact_id
+            AND artifact.company_id = ? AND artifact.kind = 'developer-delivery'
+          WHERE lineage.depth > 0 AND length(artifact.sha256) = 64 AND lower(artifact.sha256) NOT GLOB '*[^0-9a-f]*'
+          ORDER BY lineage.depth ASC
+          LIMIT 1`).get(context.developerExecutionId, input.taskId, input.companyId, input.workflowId, context.planRevision, input.taskId, input.companyId, input.workflowId, context.planRevision, input.companyId) as { id: string; sha256: string } | undefined) : undefined;
+        const deliveryArtifact = context.deliveryArtifactId && context.deliveryArtifactSha256 && /^[a-f0-9]{64}$/i.test(context.deliveryArtifactSha256)
+          ? { id: context.deliveryArtifactId, sha256: context.deliveryArtifactSha256, kind: "developer-delivery" as const }
+          : inheritedDeliveryArtifact ? { ...inheritedDeliveryArtifact, kind: "developer-delivery" as const } : undefined;
+        if (!deliveryArtifact || !context.evidenceArtifactId) return blocked("artifact_unavailable", "human", false, "The prior Developer delivery artifact is unavailable", artifactReference(verificationArtifact), { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: merge.mergeCommit!, resultTree: merge.tree! }, merge.forwardMergeId ?? checkId);
         const newExecutionId = `developer_${randomBytes(12).toString("hex")}`;
         const now = new Date().toISOString();
         const nextAttempt = Number((database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, context.planRevision) as { attempt: number })).attempt) + 1;
         database.authTransaction((db) => {
-          db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, supersedes_execution_id, session_ref, started_at, finished_at, heartbeat_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id, execution_kind) VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'clean', ?, ?, 'forward_merge')").run(newExecutionId, input.taskId, input.companyId, input.workflowId, context.planRevision, nextAttempt, context.branchName, context.worktreePath, merge.targetBaseSha, input.developerExecutionId, context.developerSessionRef, now, now, now, merge.mergeCommit, merge.tree, deliveryArtifact.id, context.evidenceArtifactId);
-          db.prepare("UPDATE forge_forward_merges SET result_head = ?, result_tree = ?, developer_execution_id = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, delivery_artifact_id = ?, delivery_artifact_sha256 = ?, supersedes_delivery_artifact_id = ?, supersedes_evidence_artifact_id = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(merge.mergeCommit, merge.tree, newExecutionId, verificationArtifact.id, verificationArtifact.sha256, deliveryArtifact.id, deliveryArtifact.sha256, context.deliveryArtifactId, context.evidenceArtifactId, now, merge.forwardMergeId ?? "", input.taskId, input.companyId);
+          db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, supersedes_execution_id, session_ref, started_at, finished_at, heartbeat_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id, execution_kind) VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'clean', ?, ?, 'forward_merge')").run(newExecutionId, input.taskId, input.companyId, input.workflowId, context.planRevision, nextAttempt, context.branchName, context.worktreePath, merge.targetBaseSha, context.developerExecutionId, context.developerSessionRef, now, now, now, merge.mergeCommit, merge.tree, deliveryArtifact.id, context.evidenceArtifactId);
+          db.prepare("UPDATE forge_forward_merges SET result_head = ?, result_tree = ?, developer_execution_id = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, delivery_artifact_id = ?, delivery_artifact_sha256 = ?, supersedes_delivery_artifact_id = ?, supersedes_evidence_artifact_id = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(merge.mergeCommit, merge.tree, newExecutionId, verificationArtifact.id, verificationArtifact.sha256, deliveryArtifact.id, deliveryArtifact.sha256, deliveryArtifact.id, context.evidenceArtifactId, now, merge.forwardMergeId ?? "", input.taskId, input.companyId);
         });
         return { outcome: "revalidated", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, headSha: merge.mergeCommit!, headTree: merge.tree!, developerExecutionId: newExecutionId, deliveryArtifact: artifactReference(deliveryArtifact), verificationArtifact: artifactReference(verificationArtifact), developerEvidenceArtifactId: context.evidenceArtifactId };
       } catch (error) {

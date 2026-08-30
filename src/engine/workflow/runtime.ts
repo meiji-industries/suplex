@@ -304,16 +304,13 @@ export function createGuarded(
   return <A extends unknown[], R>(fn: (...args: A) => Promise<R>, command?: string) => async (...args: A): Promise<R> => {
     const before = store.get();
     try {
-      const result = await fn(...args);
       const commandId = (args[0] as { commandId?: unknown } | undefined)?.commandId;
       const automatic = typeof commandId === "string" && commandId.startsWith(`${before.workflowId}:auto-`);
-      if (!automatic && store.get().lastHandlerError) {
-        const cleared = IssueWorkflowStateSchema.parse({ ...store.get(), lastHandlerError: null });
-        store.set(cleared);
-        await options.project(cleared);
-        return cleared as R;
-      }
-      return result;
+      // A successful human command supersedes a prior handler error. Clear it
+      // before the command runs so its regular projection carries the change;
+      // a standalone clear must never consume a workflow revision.
+      if (!automatic && before.lastHandlerError) store.set(IssueWorkflowStateSchema.parse({ ...before, lastHandlerError: null }));
+      return await fn(...args);
     } catch (error) {
       const state = store.get();
       if (isCancellation(error)) throw error;

@@ -21,10 +21,15 @@ test("a no-progress merge-conflict auto-chain becomes a human action", async () 
     const state = await h.settle(started.workflowId, (next) => next.owner === "human");
 
     expect(state).toMatchObject({ phase: "merge_conflict_required", owner: "human", lastHandlerError: { command: "resolve_merge_conflict", reason: "An owned Developer execution and forward-merge evidence are required" } });
-    await expect(executeIssueCommand(h.config, started.workflowId, "resolve_merge_conflict", { expectedRevision: state.revision, actorUserId: engineFixture.actorUserId })).resolves.toMatchObject({
+    const retried = await executeIssueCommand(h.config, started.workflowId, "resolve_merge_conflict", { expectedRevision: state.revision, actorUserId: engineFixture.actorUserId });
+    // A human command clears the automatic-chain halt. This task still cannot
+    // resolve without an owned Developer execution, so its own handler returns
+    // it to the human with a fresh blocker.
+    expect(retried).toMatchObject({
       phase: "merge_conflict_required",
       owner: "human",
-      lastHandlerError: { command: "resolve_merge_conflict" },
+      lastHandlerError: { command: "resolve_merge_conflict", reason: "An owned Developer execution and forward-merge evidence are required" },
     });
+    expect(retried.revision).toBeGreaterThan(state.revision);
   } finally { await h.stop(); }
 });

@@ -228,11 +228,18 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
 export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
   setHandler(issueUpdates.start_development, ctx.guarded(async (rawInput: any) => {
     assertPayloadWithinLimit("start development command", rawInput);
-    return startDevelopment(ctx, contracts.StartPlanningInputSchema.parse(rawInput));
+    const command = contracts.StartPlanningInputSchema.parse(rawInput);
+    // An HTTP command can arrive just after the automatic chain claimed the
+    // same revision. Treat that request as joining the in-flight start rather
+    // than rejecting an otherwise current UI action as stale.
+    if (ctx.state.phase === "development" && ctx.state.activeOperation?.kind === "development" && ctx.state.activeOperation.commandId.startsWith(`${ctx.state.workflowId}:auto-start_development:`) && command.expectedRevision + 1 === ctx.state.revision) return ctx.state;
+    return startDevelopment(ctx, command);
   }), { validator(rawInput) {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (ctx.commandAlreadyProcessed(command.commandId)) return;
-    if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
+    const joinsAutomaticStart = ctx.state.phase === "development" && ctx.state.activeOperation?.kind === "development" && ctx.state.activeOperation.commandId.startsWith(`${ctx.state.workflowId}:auto-start_development:`) && command.expectedRevision + 1 === ctx.state.revision;
+    if (command.expectedRevision !== ctx.state.revision && !joinsAutomaticStart) throw new Error("Stale workflow revision");
+    if (joinsAutomaticStart) return;
     if (ctx.state.phase !== "ready_for_development") throw new Error("Development can only start after plan approval");
     if (ctx.state.planMaterial === null || ctx.state.planMaterial === undefined || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef) throw new Error("A validated Lead plan is required before development");
     if (ctx.state.planApproved !== true) throw new Error("A plan must be approved before development");

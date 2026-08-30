@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 
 import type { ForgeConfig } from "../config.js";
-import type { ForgeDatabase } from "../database.js";
+import { ProjectionPersistenceFailure, type ForgeDatabase } from "../database.js";
 import { resolveAgentProfiles } from "../projects.js";
 import { jsonRequired } from "../task-utils.js";
 import { createActivities, createActivityCaller, type ActivityCaller } from "./activities.js";
 import { CancelledFailure } from "./failures.js";
-import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, buildInitialIssueWorkflowState, type IssueWorkflowInput, type IssueWorkflowState } from "./issue-contracts.js";
+import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, buildInitialIssueWorkflowState, type IssueProjectionEvent, type IssueWorkflowInput, type IssueWorkflowState } from "./issue-contracts.js";
 import { issueWorkflow } from "./workflows.js";
 import { runExecution, type Handler, type InterruptHandler, type RunExecutionContext } from "./registry.js";
 import { StructuredLogger } from "../logging.js";
@@ -45,7 +45,9 @@ export class Wakeable {
 function isAutomaticCommand(workflowId: string, commandId: string): boolean {
   return commandId.startsWith(`${workflowId}:auto-`);
 }
-type InterruptOutcome = { accepted: boolean; result: unknown };
+type DeferredProjection = { event: IssueProjectionEvent; options: Parameters<ActivityCaller["call"]>[2] };
+type InterruptOutcome = { accepted: boolean; result: unknown; deferredProjections?: DeferredProjection[] };
+type CommandExecutionContext = RunExecutionContext & { deferredProjections?: DeferredProjection[] };
 
 const AGENT_OWNED_PHASES: Record<string, true> = {
   planning: true, supplemental_review: true, plan_consolidation: true, development: true, reviewing_delivery: true, repair_required: true,
@@ -108,7 +110,7 @@ export class IssueRun {
   private loopError?: unknown;
   private initialState: IssueWorkflowState;
   private executionContext?: RunExecutionContext;
-  private activeCommand: { name: string; controller: AbortController } | undefined;
+  private activeCommand: { name: string; controller: AbortController; deferredProjections: DeferredProjection[] } | undefined;
   private interrupting = new Map<string, Promise<InterruptOutcome>>();
   private projectionTimes: number[] = [];
   private projectionSignatures: string[] = [];
@@ -145,23 +147,29 @@ export class IssueRun {
       acceptedInterrupt: undefined,
       interruptResult: undefined,
       activity: (name: string, args: unknown[], options: Parameters<ActivityCaller["call"]>[2]) => {
+        const execution = runExecution.current() as CommandExecutionContext;
         if (name === "projectIssueState") {
           const now = this.clock.now();
           this.projectionTimes = this.projectionTimes.filter((time) => now - time <= 10_000);
           this.projectionSignatures = this.projectionSignatures.slice(-this.projectionTimes.length);
           this.projectionTimes.push(now);
-          const event = args[0] as { schemaVersion: number; runId: string; eventId: string; state: IssueWorkflowState };
+          let event = args[0] as IssueProjectionEvent;
           this.projectionSignatures.push(`${event.state.phase}\u0000${event.state.pendingAction}`);
           if (this.projectionTimes.length > 50 && !this.runawayHalted && new Set(this.projectionSignatures).size <= 2 && this.projectionSignatures.every((signature) => signature.startsWith("merge_conflict_required\u0000") || signature.startsWith("merge_conflict_resolving\u0000"))) {
             this.runawayHalted = true;
             const state = IssueWorkflowStateSchema.parse({ ...event.state, owner: "human", allowedCommands: [...new Set([...event.state.allowedCommands, "cancel_issue"])], pendingAction: "Runaway transition loop halted", lastHandlerError: { command: "workflow", reason: "Runaway transition loop halted", at: new Date(now).toISOString() } });
             this.initialState = state;
             this.logger.error("Runaway transition loop halted", { workflowId: this.workflowId, runId: this.runId });
-            return this.caller.call(name, [{ ...event, eventId: state.lastEventId, state }], options, runExecution.current().signal, this.workflowId);
+            event = { ...event, eventId: state.lastEventId, state };
           }
+          if (execution.deferredProjections) {
+            execution.deferredProjections.push({ event, options });
+            return Promise.resolve(event.state);
+          }
+          args = [event];
         }
         if (this.runawayHalted && name !== "projectIssueState") throw new Error("Runaway transition loop halted");
-        return this.caller.call(name, args, options, runExecution.current().signal, this.workflowId);
+        return this.caller.call(name, args, options, execution.signal, this.workflowId);
       },
       wait: (milliseconds: number) => this.wakeable.wait(milliseconds, runExecution.current().signal, this.clock),
       now: () => this.clock.now(),
@@ -195,14 +203,16 @@ export class IssueRun {
     if (!interrupt) return { accepted: false, result: undefined };
     const accepted = interrupt.validate ? runExecution.run(this.executionContext!, () => interrupt.validate!(input as never)) : undefined;
     if (accepted === false) return { accepted: false, result: undefined };
+    const deferredProjections = interrupt.cancelActive ? this.activeCommand?.deferredProjections : undefined;
     if (interrupt.cancelActive) this.activeCommand?.controller.abort();
     const result = interrupt.run ? await runExecution.run(this.executionContext!, () => interrupt.run!(input as never)) : undefined;
-    return { accepted: true, result };
+    return { accepted: true, result, ...(deferredProjections ? { deferredProjections } : {}) };
   }
 
   execute(name: string, input: unknown, commandId = "legacy-command"): Promise<IssueWorkflowState> {
     if (commandId !== "legacy-command") {
-      const stored = this.database.authQuery((db) => db.prepare("SELECT result_json FROM forge_engine_commands WHERE command_id = ? AND workflow_id = ?").get(commandId, this.workflowId) as { result_json: string } | undefined);
+      const stored = this.database.authQuery((db) => db.prepare("SELECT command, result_json FROM forge_engine_commands WHERE command_id = ? AND workflow_id = ?").get(commandId, this.workflowId) as { command: string; result_json: string } | undefined);
+      if (stored?.command !== undefined && stored.command !== name) throw new ProjectionPersistenceFailure("conflict", "Issue command identity already belongs to another command");
       if (stored) return Promise.resolve(IssueWorkflowStateSchema.parse(jsonRequired(stored.result_json)));
     }
     this.start();
@@ -226,17 +236,30 @@ export class IssueRun {
         this.projectionSignatures = [];
       }
       if (commandId !== "legacy-command") {
-        const stored = this.database.authQuery((db) => db.prepare("SELECT result_json FROM forge_engine_commands WHERE command_id = ? AND workflow_id = ?").get(commandId, this.workflowId) as { result_json: string } | undefined);
+        const stored = this.database.authQuery((db) => db.prepare("SELECT command, result_json FROM forge_engine_commands WHERE command_id = ? AND workflow_id = ?").get(commandId, this.workflowId) as { command: string; result_json: string } | undefined);
+        if (stored?.command !== undefined && stored.command !== name) throw new ProjectionPersistenceFailure("conflict", "Issue command identity already belongs to another command");
         if (stored) return IssueWorkflowStateSchema.parse(jsonRequired(stored.result_json));
       }
       const handler = this.commands.get(name);
       if (!handler) throw new Error(`Unknown issue command: ${name}`);
       const controller = new AbortController();
-      const context = { ...this.executionContext!, signal: AbortSignal.any([this.controller.signal, controller.signal]), acceptedInterrupt: interruptOutcome?.accepted ? name : undefined, interruptResult: interruptOutcome?.result };
-      this.activeCommand = { name, controller };
+      const deferredProjections: DeferredProjection[] = commandId === "legacy-command" ? [] : [...(interruptOutcome?.deferredProjections ?? [])];
+      const context: CommandExecutionContext = { ...this.executionContext!, signal: AbortSignal.any([this.controller.signal, controller.signal]), acceptedInterrupt: interruptOutcome?.accepted ? name : undefined, interruptResult: interruptOutcome?.result, ...(commandId === "legacy-command" ? {} : { deferredProjections }) };
+      this.activeCommand = { name, controller, deferredProjections };
       try {
-        const result = IssueWorkflowStateSchema.parse(await runExecution.run(context, () => handler(input as never)));
-        if (commandId !== "legacy-command") this.database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_engine_commands (command_id, workflow_id, command, result_json, created_at) VALUES (?, ?, ?, ?, ?)").run(commandId, this.workflowId, name, JSON.stringify(result), new Date(this.clock.now()).toISOString()));
+        let result = IssueWorkflowStateSchema.parse(await runExecution.run(context, () => handler(input as never)));
+        if (commandId !== "legacy-command") {
+          const durableRevision = this.database.authQuery((db) => (db.prepare("SELECT revision FROM forge_issue_projections WHERE workflow_id = ?").get(this.workflowId) as { revision: number } | undefined)?.revision ?? -1);
+          const committedProjections: DeferredProjection[] = [];
+          for (const projection of deferredProjections) {
+            if (projection.event.state.revision <= durableRevision) continue;
+            const prior = committedProjections.at(-1);
+            if (prior?.event.eventId === projection.event.eventId && prior.event.state.revision === projection.event.state.revision) committedProjections[committedProjections.length - 1] = projection;
+            else committedProjections.push(projection);
+          }
+          result = this.database.commitIssueCommand({ commandId, workflowId: this.workflowId, runId: this.runId, command: name, result, events: committedProjections.map((projection) => projection.event), createdAt: new Date(this.clock.now()).toISOString() });
+          for (const projection of committedProjections) await this.caller.call("projectIssueState", [projection.event], projection.options, context.signal, this.workflowId);
+        }
         this.initialState = result;
         this.wakeable.wake();
         return result;

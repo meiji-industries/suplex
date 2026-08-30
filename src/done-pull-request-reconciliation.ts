@@ -22,8 +22,9 @@ export async function reconcileDonePullRequests(database: ForgeDatabase, github:
   if (!github.observePullRequest) return { inspected: candidates.length, changed };
   for (const candidate of candidates) {
     const observed = await github.observePullRequest({ repository: candidate.repository, branch: candidate.branch, pullRequestNumber: candidate.pullRequestNumber });
-    const next = IssueWorkflowStateSchema.parse({ ...candidate.state, ...githubPullRequestObservationFields(observed, now()), ...(observed.state === "merged" ? { pendingAction: "Merged", mergeOutcome: "merged" } : {}) });
-    database.projectIssueEvent({ schemaVersion: 1, runId: candidate.state.workflowId, eventId: candidate.state.lastEventId, state: next });
+    const observedAt = now(), revision = candidate.state.revision + 1, lastEventId = `${candidate.state.workflowId}:${revision}`;
+    const next = IssueWorkflowStateSchema.parse({ ...candidate.state, ...githubPullRequestObservationFields(observed, observedAt), revision, lastEventId, stateChangedAt: observedAt, ...(observed.state === "merged" ? { pendingAction: "Merged", mergeOutcome: "merged" } : {}) });
+    database.projectIssueEvent({ schemaVersion: 1, runId: `${candidate.state.workflowId}:done-pr-reconciliation`, eventId: lastEventId, state: next });
     changed.push({ taskId: candidate.taskId, pullRequestNumber: observed.number ?? candidate.pullRequestNumber, state: observed.state });
   }
   return { inspected: candidates.length, changed };

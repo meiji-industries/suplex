@@ -490,7 +490,7 @@ test("surfaces the durable handler reason when a plan decision is rejected", asy
     value.stateByTask.set(created.task.id, approval);
     projectState(value.database, approval);
     value.workflow.execute = async () => {
-      const rejected = IssueWorkflowStateSchema.parse({ ...approval, lastHandlerError: { command: "approve_plan", reason: "The plan references an unavailable target branch", at: "2026-08-24T00:00:00.000Z" } });
+      const rejected = IssueWorkflowStateSchema.parse({ ...approval, revision: 2, lastEventId: `${approval.workflowId}:2`, lastHandlerError: { command: "approve_plan", reason: "The plan references an unavailable target branch", at: "2026-08-24T00:00:00.000Z" } });
       value.stateByTask.set(created.task.id, rejected);
       projectState(value.database, rejected);
       throw new Error("workflow rejected the update");
@@ -515,7 +515,7 @@ test("shows the current target-base blocker instead of stale Developer recovery 
   }
 });
 
-test("repairs the legacy revision-zero seed before applying the Engine initial projection", async () => {
+test("repairs the legacy revision-zero seed without rewinding the latest projection", async () => {
   const value = await fixture();
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Legacy seed", description: "body", idempotencyKey: "legacy-seed-0001", images: [] });
@@ -543,7 +543,7 @@ test("repairs the legacy revision-zero seed before applying the Engine initial p
     }));
     expect(jsonRequired(repaired.snapshot.state_json)).toEqual(canonical);
     expect(repaired.timeline.event_hash).toBe(projectionStateHash(canonical));
-    expect(repaired.projection).toEqual({ revision: 0, event_hash: projectionStateHash(canonical) });
+    expect(repaired.projection).toEqual({ revision: 2, event_hash: projectionStateHash(approval) });
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }
@@ -626,7 +626,12 @@ test("continues terminal work as a new linked issue without rewriting the origin
     value.auth.setCompanyIssueCode(value.adminId, value.companyId, "acme");
     const original = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Finished issue", description: "Preserve this history.", idempotencyKey: "continue-task-0001", images: [] });
     const initialSnapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(original.task.id) as { state_json: string });
-    const terminalState = { ...jsonRequired(initialSnapshot.state_json), phase: "done", revision: 7, owner: "human", allowedCommands: [], pendingAction: null, lastEventId: `${original.task.workflowId}:7` } as IssueWorkflowState;
+    const initialState = jsonRequired(initialSnapshot.state_json) as IssueWorkflowState;
+    for (let revision = 1; revision < 7; revision += 1) {
+      const state = IssueWorkflowStateSchema.parse({ ...initialState, phase: "planning", revision, owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${original.task.workflowId}:${revision}` });
+      value.database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state }));
+    }
+    const terminalState = IssueWorkflowStateSchema.parse({ ...initialState, phase: "done", revision: 7, owner: "human", allowedCommands: [], pendingAction: null, lastEventId: `${original.task.workflowId}:7` });
     value.database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: terminalState.lastEventId, state: terminalState }));
     const continued = await value.tasks.continueWork(value.adminId, original.task.id, 7, "Continue implementation after the completed issue.");
     expect([continued.original.issueKey, continued.successor.issueKey]).toEqual(["ACME-1", "ACME-2"]);

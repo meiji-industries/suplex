@@ -41,7 +41,18 @@ function seedFoundation(database: ForgeDatabase, root: string): void {
 export async function createEngineHarness(overrides: Partial<IssueActivities> = {}, suppliedClock?: ImmediateClock): Promise<EngineHarness> {
   const root = await mkdtemp(join(tmpdir(), "forge-engine-")); const config = createTestConfig(root); const clock = suppliedClock ?? new ImmediateClock(); const calls = new Map<string, number>(); const activities: Partial<IssueActivities> = { ...overrides };
   let database = new ForgeDatabase(config.databasePath); seedFoundation(database, root);
-  const activityProxy = new Proxy({}, { get: (_target, property) => async (...args: unknown[]) => { const name = String(property); calls.set(name, (calls.get(name) ?? 0) + 1); const activity = activities[name as keyof IssueActivities] as ((...values: unknown[]) => unknown) | undefined; if (!activity) throw new Error(`Activity function ${name} is not registered`); return activity(...args); } });
+  const activityProxy = new Proxy({}, { get: (_target, property) => async (...args: unknown[]) => {
+    const name = String(property);
+    calls.set(name, (calls.get(name) ?? 0) + 1);
+    const activity = activities[name as keyof IssueActivities] as ((...values: unknown[]) => unknown) | undefined;
+    if (name === "projectIssueState") {
+      const event = args[0] as Parameters<IssueActivities["projectIssueState"]>[0];
+      database.projectIssueEvent(event);
+      return activity ? activity(...args) : event.state;
+    }
+    if (!activity) throw new Error(`Activity function ${name} is not registered`);
+    return activity(...args);
+  } });
   let engine = new IssueEngine(config, database, { activities: activityProxy, clock }); installIssueEngine(config, engine);
   const harness: EngineHarness = {
     root, config, clock, activities, calls,

@@ -98,6 +98,24 @@ test("stale replays are idempotent and conflicting workflow history is immutable
   }
 });
 
+test("projection CAS rejects missing predecessors and future revision jumps", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-projection-cas-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    expectProjectionConflict(() => database.projectIssueEvent(createEvent(1, "planning", "workflow-integrity:1")));
+    expect(durableProjection(database)).toEqual({ projection: undefined, timeline: [], snapshots: [] });
+
+    database.projectIssueEvent(createEvent(0, "backlog", "workflow-integrity:0"));
+    const before = durableProjection(database);
+    expectProjectionConflict(() => database.projectIssueEvent(createEvent(2, "planning", "workflow-integrity:2")));
+    expect(durableProjection(database)).toEqual(before);
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a successful projection clears a stale workflow stall", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-projection-stall-test-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
@@ -257,6 +275,28 @@ test("projection activity rolls back retention and durable rows when observation
   }
 });
 
+test("command receipt failure rolls back projection transition and observation atomically", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-command-projection-transaction-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    database.projectIssueEvent(createEvent(0, "backlog", "workflow-integrity:0"));
+    const before = durableProjection(database);
+    const planning = createEvent(1, "planning", "workflow-integrity:1");
+    database.authQuery((db) => db.exec(`CREATE TRIGGER fail_engine_command_receipt
+      BEFORE INSERT ON forge_engine_commands
+      WHEN NEW.command_id = 'command-projection-failure'
+      BEGIN SELECT RAISE(ABORT, 'injected command receipt failure'); END`));
+
+    expect(() => database.commitIssueCommand({ commandId: "command-projection-failure", workflowId: planning.state.workflowId, runId: planning.runId, command: "start_planning", result: planning.state, events: [planning], createdAt: "2026-08-30T12:00:00.000Z" })).toThrow(ProjectionPersistenceFailure);
+    expect(durableProjection(database)).toEqual(before);
+    expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_engine_commands WHERE command_id = ?").get("command-projection-failure"))).toEqual({ count: 0 });
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("valid projection activity replay and observation are idempotent", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-projection-replay-test-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
@@ -282,8 +322,9 @@ test("projectIssueState fails closed when a reset reuses an older revision", asy
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   try {
     fixture(database);
-    const newer = createEvent(26, "planning", "workflow-integrity:26");
-    database.projectIssueEvent(newer);
+    for (let revision = 0; revision <= 26; revision += 1) {
+      database.projectIssueEvent(createEvent(revision, revision === 0 ? "backlog" : "planning", `workflow-integrity:${revision}`));
+    }
     const before = durableProjection(database);
     const reset = createEvent(25, "planning", "workflow-integrity:25");
     reset.state.pendingAction = "Workflow reset state";
@@ -358,20 +399,23 @@ test("a reset workflow cannot rewrite a persisted revision from an earlier run",
   }
 });
 
-test("workflow snapshots keep revision 0 and only the newest 50 revisions per task", async () => {
+test("metadata timeline rows coexist with pruned repeated-phase command replay proof", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-projection-integrity-test-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   try {
     fixture(database);
     database.projectIssueEvent(createEvent(0, "backlog", "workflow-integrity:0"));
-    const retainedTransition = createEvent(1, "planning", "workflow-integrity:1");
-    database.projectIssueEvent(retainedTransition);
-    for (let revision = 2; revision <= 80; revision += 1) database.projectIssueEvent(createEvent(revision, "planning", `workflow-integrity:${revision}`));
+    database.projectIssueEvent(createEvent(1, "ci_waiting", "workflow-integrity:1"));
+    const repeatedPhase = createEvent(2, "ci_waiting", "workflow-integrity:2");
+    database.commitIssueCommand({ commandId: "repeat-ci-waiting", workflowId: repeatedPhase.state.workflowId, runId: repeatedPhase.runId, command: "reconcile_ci", result: repeatedPhase.state, events: [repeatedPhase], createdAt: "2026-08-30T12:00:00.000Z" });
+    database.authQuery((db) => db.prepare("INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, run_id, revision, source, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, ?, 2, 'workflow', 'worktree_cleaned', ?, ?, '')").run("worktree-cleaned-at-2", repeatedPhase.state.issueId, repeatedPhase.state.companyId, repeatedPhase.state.workflowId, repeatedPhase.runId, JSON.stringify({ worktreePath: "/tmp/worktree" }), "2026-08-30T12:00:01.000Z"));
+    for (let revision = 3; revision <= 80; revision += 1) database.projectIssueEvent(createEvent(revision, "ci_waiting", `workflow-integrity:${revision}`));
     const revisions = database.authQuery((db) => db.prepare("SELECT revision FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision").all("task-integrity") as Array<{ revision: number }>).map((row) => row.revision);
     expect(revisions[0]).toBe(0);
     expect(revisions.slice(1)).toEqual(Array.from({ length: 50 }, (_, index) => 31 + index));
+    expect(database.authQuery((db) => db.prepare("SELECT id, event_type FROM forge_issue_timeline WHERE workflow_id = ? AND revision = 2").get("workflow-integrity"))).toEqual({ id: "worktree-cleaned-at-2", event_type: "worktree_cleaned" });
     const beforeReplay = durableProjection(database);
-    expect(() => database.projectIssueEvent(retainedTransition)).not.toThrow();
+    expect(() => database.projectIssueEvent(repeatedPhase)).not.toThrow();
     expect(durableProjection(database)).toEqual(beforeReplay);
   } finally { database.close(); await rm(root, { recursive: true, force: true }); }
 });

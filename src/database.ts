@@ -460,9 +460,9 @@ export class ForgeDatabase {
     return operation(this.db);
   }
 
-  private projectionTransaction(label: string, operation: () => void): void {
+  private projectionTransaction<T>(label: string, operation: () => T): T {
     try {
-      this.db.transaction(operation)();
+      return this.db.transaction(operation)();
     } catch (error) {
       if (error instanceof ProjectionPersistenceFailure) throw error;
       throw new ProjectionPersistenceFailure("write-failed", `${label} failed`, error);
@@ -478,10 +478,19 @@ export class ForgeDatabase {
       throw new ProjectionPersistenceFailure("identity-mismatch", "Workflow projection task identity does not match");
     }
     const eventById = database.prepare("SELECT task_id, company_id, workflow_id, run_id, revision, source, event_type, event_hash FROM forge_issue_timeline WHERE id = ?").get(parsed.lastEventId) as { task_id: string; company_id: string; workflow_id: string; run_id: string | null; revision: number; source: string; event_type: string; event_hash: string } | undefined;
-    const eventByRevision = database.prepare("SELECT id, task_id, company_id, run_id, event_type, event_hash FROM forge_issue_timeline WHERE workflow_id = ? AND revision = ? AND source = 'workflow'").get(parsed.workflowId, parsed.revision) as { id: string; task_id: string; company_id: string; run_id: string | null; event_type: string; event_hash: string } | undefined;
+    const eventByRevision = database.prepare("SELECT id, task_id, company_id, run_id, event_type, event_hash FROM forge_issue_timeline WHERE workflow_id = ? AND revision = ? AND source = 'workflow' AND CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.stateHash') END IS NOT NULL").get(parsed.workflowId, parsed.revision) as { id: string; task_id: string; company_id: string; run_id: string | null; event_type: string; event_hash: string } | undefined;
     const snapshotByEventId = database.prepare("SELECT task_id, workflow_id, run_id, revision FROM forge_workflow_snapshots WHERE CASE WHEN json_valid(state_json) THEN json_extract(state_json, '$.lastEventId') END = ? LIMIT 1").get(parsed.lastEventId) as { task_id: string; workflow_id: string; run_id: string | null; revision: number } | undefined;
     const snapshot = database.prepare("SELECT company_id, workflow_id, run_id, state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = ?").get(parsed.issueId, parsed.revision) as { company_id: string; workflow_id: string; run_id: string | null; state_json: string } | undefined;
     const current = database.prepare("SELECT revision, event_hash, last_event_id, last_run_id FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string; last_event_id: string; last_run_id: string | null } | undefined;
+    const commandReplay = !snapshot && !eventById
+      ? database.prepare("SELECT result_json FROM forge_engine_commands WHERE workflow_id = ? AND CASE WHEN json_valid(result_json) THEN json_extract(result_json, '$.revision') END = ? AND CASE WHEN json_valid(result_json) THEN json_extract(result_json, '$.lastEventId') END = ?").all(parsed.workflowId, parsed.revision, parsed.lastEventId) as Array<{ result_json: string }>
+      : [];
+    const commandReplayMatches = commandReplay.some((row) => {
+      let result: unknown;
+      try { result = jsonRequired(row.result_json); } catch { return false; }
+      const stored = IssueWorkflowStateSchema.safeParse(result);
+      return stored.success && projectionStateHash(stored.data) === stateHash;
+    });
 
     if (eventById && (eventById.source !== "workflow" || eventById.task_id !== parsed.issueId || eventById.company_id !== parsed.companyId || eventById.workflow_id !== parsed.workflowId || eventById.run_id !== runId || eventById.revision !== parsed.revision || eventById.event_type !== eventType || eventById.event_hash !== stateHash)) {
       throw new ProjectionPersistenceFailure("conflict", "Workflow projection event identity already has conflicting content");
@@ -509,11 +518,14 @@ export class ForgeDatabase {
       if (!snapshotMatches) throw new ProjectionPersistenceFailure("conflict", "Workflow projection revision already has a conflicting snapshot");
     }
     if (current && current.revision > parsed.revision) {
-      if (!snapshotMatches && !eventById) throw new ProjectionPersistenceFailure("conflict", "Workflow projection cannot reuse a pruned or unpersisted revision");
+      if (!snapshotMatches && !eventById && !commandReplayMatches) throw new ProjectionPersistenceFailure("conflict", "Workflow projection cannot reuse a pruned or unpersisted revision");
       return false;
     }
     if (current?.revision === parsed.revision && (current.event_hash !== stateHash || current.last_event_id !== parsed.lastEventId || current.last_run_id !== runId)) {
       throw new ProjectionPersistenceFailure("conflict", "Workflow projection revision already has conflicting latest state");
+    }
+    if ((!current && parsed.revision !== 0) || (current && parsed.revision > current.revision + 1)) {
+      throw new ProjectionPersistenceFailure("conflict", "Workflow projection revision does not have the exact durable predecessor");
     }
 
     const priorPhase = database.prepare("SELECT json_extract(metadata_json, '$.phase') AS phase, json_extract(metadata_json, '$.pendingAction') AS pendingAction FROM forge_issue_timeline WHERE workflow_id = ? AND source = 'workflow' AND event_type LIKE 'phase_%' AND revision < ? ORDER BY revision DESC, stream_id DESC LIMIT 1").get(parsed.workflowId, parsed.revision) as { phase: string; pendingAction: string } | undefined;
@@ -524,13 +536,16 @@ export class ForgeDatabase {
     if (!snapshot) database.prepare(`INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, run_id, revision, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(parsed.issueId, parsed.companyId, parsed.workflowId, runId, parsed.revision, JSON.stringify(parsed), updatedAt);
     // Snapshots are a bounded history: keep revision 0 (the creation record) and the newest 50. A hot loop once grew one task to 2.7M rows.
     if (!current || current.revision < parsed.revision) database.prepare("DELETE FROM forge_workflow_snapshots WHERE task_id = ? AND revision > 0 AND revision <= ?").run(parsed.issueId, parsed.revision - 50);
-    if (!current || current.revision < parsed.revision) database.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, projected_at, blocker_json, state_changed_at, projection_status, reconciled_at, last_run_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, project_id = excluded.project_id, workflow_id = excluded.workflow_id, revision = excluded.revision, phase = excluded.phase, owner = excluded.owner, allowed_commands_json = excluded.allowed_commands_json, pending_action = excluded.pending_action, updated_at = excluded.updated_at, last_event_id = excluded.last_event_id, event_hash = excluded.event_hash, projected_at = excluded.projected_at, blocker_json = excluded.blocker_json, state_changed_at = excluded.state_changed_at, projection_status = excluded.projection_status, projection_status_message = NULL, reconciled_at = excluded.reconciled_at, last_run_id = excluded.last_run_id
-      WHERE forge_issue_projections.revision < excluded.revision
-      `).run(
-      parsed.issueId, parsed.companyId, parsed.projectId, parsed.workflowId, parsed.revision, parsed.phase, parsed.owner, JSON.stringify(parsed.allowedCommands), parsed.pendingAction, updatedAt, parsed.lastEventId, stateHash, updatedAt, parsed.blocker === undefined ? null : JSON.stringify(parsed.blocker), parsed.stateChangedAt ?? null, "current", updatedAt, runId,
-    );
+    if (!current || current.revision < parsed.revision) {
+      const projection = database.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, projected_at, blocker_json, state_changed_at, projection_status, reconciled_at, last_run_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, project_id = excluded.project_id, workflow_id = excluded.workflow_id, revision = excluded.revision, phase = excluded.phase, owner = excluded.owner, allowed_commands_json = excluded.allowed_commands_json, pending_action = excluded.pending_action, updated_at = excluded.updated_at, last_event_id = excluded.last_event_id, event_hash = excluded.event_hash, projected_at = excluded.projected_at, blocker_json = excluded.blocker_json, state_changed_at = excluded.state_changed_at, projection_status = excluded.projection_status, projection_status_message = NULL, reconciled_at = excluded.reconciled_at, last_run_id = excluded.last_run_id
+        WHERE forge_issue_projections.revision = excluded.revision - 1
+        `).run(
+        parsed.issueId, parsed.companyId, parsed.projectId, parsed.workflowId, parsed.revision, parsed.phase, parsed.owner, JSON.stringify(parsed.allowedCommands), parsed.pendingAction, updatedAt, parsed.lastEventId, stateHash, updatedAt, parsed.blocker === undefined ? null : JSON.stringify(parsed.blocker), parsed.stateChangedAt ?? null, "current", updatedAt, runId,
+      );
+      if (projection.changes !== 1) throw new ProjectionPersistenceFailure("conflict", "Workflow projection lost its expected-revision comparison");
+    }
     if (parsed.phase === "done" && parsed.resultCommit && (parsed.pendingAction === "Done — kept in worktree" || parsed.pendingAction === "Done — branch pushed")) {
       database.prepare("UPDATE forge_tasks SET delivery_worktree_path = ?, delivery_branch_name = ?, delivery_commit = ?, updated_at = ? WHERE id = ? AND company_id = ?").run(parsed.worktreePath ?? null, parsed.branchName ?? null, parsed.resultCommit, updatedAt, parsed.issueId, parsed.companyId);
     }
@@ -557,7 +572,7 @@ export class ForgeDatabase {
   private normalizeLegacyInitialProjection(database: Database.Database, parsed: IssueWorkflowState, stateHash: string, runId: string): void {
     if (parsed.revision !== 0 || parsed.phase !== "backlog" || parsed.repairCycle !== 0) return;
     const snapshot = database.prepare("SELECT run_id, state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(parsed.issueId) as { run_id: string | null; state_json: string } | undefined;
-    if (!snapshot || (snapshot.run_id !== null && snapshot.run_id !== "legacy-unknown")) return;
+    if (!snapshot || (snapshot.run_id !== null && snapshot.run_id !== "legacy-unknown" && snapshot.run_id !== runId)) return;
     let stored: unknown;
     try { stored = jsonRequired(snapshot.state_json); } catch { return; }
     if (!stored || typeof stored !== "object") return;
@@ -568,12 +583,13 @@ export class ForgeDatabase {
       if (projectionStateHash(normalizedStored) !== stateHash) return;
       const storedHash = projectionStateHash(canonical.data);
       const timeline = database.prepare("SELECT run_id, event_hash FROM forge_issue_timeline WHERE id = ? AND workflow_id = ? AND revision = 0 AND source = 'workflow'").get(parsed.lastEventId, parsed.workflowId) as { run_id: string | null; event_hash: string } | undefined;
-      if (!timeline || (timeline.run_id !== null && timeline.run_id !== "legacy-unknown") || timeline.event_hash !== storedHash) return;
+      if (!timeline || (timeline.run_id !== null && timeline.run_id !== "legacy-unknown" && timeline.run_id !== runId) || timeline.event_hash !== storedHash) return;
+      if (storedHash === stateHash && snapshot.run_id === runId && timeline.run_id === runId) return;
       const current = database.prepare("SELECT revision, event_hash, authoritative_event_hash, last_run_id FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string; authoritative_event_hash: string; last_run_id: string | null } | undefined;
-      if (current?.revision === 0 && ((current.last_run_id !== null && current.last_run_id !== "legacy-unknown") || (current.event_hash !== storedHash && current.event_hash !== stateHash))) return;
-      database.prepare("UPDATE forge_workflow_snapshots SET run_id = ?, state_json = ? WHERE task_id = ? AND revision = 0 AND (run_id IS NULL OR run_id = 'legacy-unknown') AND state_json = ?").run(runId, JSON.stringify(parsed), parsed.issueId, snapshot.state_json);
-      database.prepare("UPDATE forge_issue_timeline SET run_id = ?, event_hash = ?, metadata_json = ? WHERE id = ? AND workflow_id = ? AND revision = 0 AND source = 'workflow' AND (run_id IS NULL OR run_id = 'legacy-unknown') AND event_hash = ?").run(runId, stateHash, JSON.stringify({ revision: 0, phase: parsed.phase, stateHash }), parsed.lastEventId, parsed.workflowId, storedHash);
-      if (current?.revision === 0) database.prepare("UPDATE forge_issue_projections SET last_run_id = ?, event_hash = ?, authoritative_event_hash = CASE WHEN authoritative_event_hash = ? THEN ? ELSE authoritative_event_hash END WHERE task_id = ? AND revision = 0 AND (last_run_id IS NULL OR last_run_id = 'legacy-unknown') AND event_hash = ?").run(runId, stateHash, storedHash, stateHash, parsed.issueId, storedHash);
+      if (current?.revision === 0 && ((current.last_run_id !== null && current.last_run_id !== "legacy-unknown" && current.last_run_id !== runId) || (current.event_hash !== storedHash && current.event_hash !== stateHash))) return;
+      database.prepare("UPDATE forge_workflow_snapshots SET run_id = ?, state_json = ? WHERE task_id = ? AND revision = 0 AND (run_id IS NULL OR run_id = 'legacy-unknown' OR run_id = ?) AND state_json = ?").run(runId, JSON.stringify(parsed), parsed.issueId, runId, snapshot.state_json);
+      database.prepare("UPDATE forge_issue_timeline SET run_id = ?, event_hash = ?, metadata_json = ? WHERE id = ? AND workflow_id = ? AND revision = 0 AND source = 'workflow' AND (run_id IS NULL OR run_id = 'legacy-unknown' OR run_id = ?) AND event_hash = ?").run(runId, stateHash, JSON.stringify({ revision: 0, phase: parsed.phase, stateHash }), parsed.lastEventId, parsed.workflowId, runId, storedHash);
+      if (current?.revision === 0) database.prepare("UPDATE forge_issue_projections SET last_run_id = ?, event_hash = ?, authoritative_event_hash = CASE WHEN authoritative_event_hash = ? THEN ? ELSE authoritative_event_hash END WHERE task_id = ? AND revision = 0 AND (last_run_id IS NULL OR last_run_id = 'legacy-unknown' OR last_run_id = ?) AND event_hash = ?").run(runId, stateHash, storedHash, stateHash, parsed.issueId, runId, storedHash);
       return;
     }
     if (legacy.issueId !== undefined || legacy.taskId !== parsed.issueId || legacy.repairCycle !== undefined) return;
@@ -582,14 +598,14 @@ export class ForgeDatabase {
 
     const legacyHash = projectionStateHash(legacy);
     const timeline = database.prepare("SELECT run_id, event_hash FROM forge_issue_timeline WHERE id = ? AND workflow_id = ? AND revision = 0 AND source = 'workflow'").get(parsed.lastEventId, parsed.workflowId) as { run_id: string | null; event_hash: string } | undefined;
-    if (!timeline || (timeline.run_id !== null && timeline.run_id !== "legacy-unknown") || timeline.event_hash !== legacyHash) return;
+    if (!timeline || (timeline.run_id !== null && timeline.run_id !== "legacy-unknown" && timeline.run_id !== runId) || timeline.event_hash !== legacyHash) return;
     const current = database.prepare("SELECT revision, event_hash, authoritative_event_hash, last_run_id FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string; authoritative_event_hash: string; last_run_id: string | null } | undefined;
-    if (current?.revision === 0 && ((current.last_run_id !== null && current.last_run_id !== "legacy-unknown") || (current.event_hash !== legacyHash && current.event_hash !== stateHash))) return;
+    if (current?.revision === 0 && ((current.last_run_id !== null && current.last_run_id !== "legacy-unknown" && current.last_run_id !== runId) || (current.event_hash !== legacyHash && current.event_hash !== stateHash))) return;
 
-    database.prepare("UPDATE forge_workflow_snapshots SET run_id = ?, state_json = ? WHERE task_id = ? AND revision = 0 AND (run_id IS NULL OR run_id = 'legacy-unknown') AND state_json = ?").run(runId, JSON.stringify(parsed), parsed.issueId, snapshot.state_json);
-    database.prepare("UPDATE forge_issue_timeline SET run_id = ?, event_hash = ?, metadata_json = ? WHERE id = ? AND workflow_id = ? AND revision = 0 AND source = 'workflow' AND (run_id IS NULL OR run_id = 'legacy-unknown') AND event_hash = ?").run(runId, stateHash, JSON.stringify({ revision: 0, phase: parsed.phase, stateHash }), parsed.lastEventId, parsed.workflowId, legacyHash);
+    database.prepare("UPDATE forge_workflow_snapshots SET run_id = ?, state_json = ? WHERE task_id = ? AND revision = 0 AND (run_id IS NULL OR run_id = 'legacy-unknown' OR run_id = ?) AND state_json = ?").run(runId, JSON.stringify(parsed), parsed.issueId, runId, snapshot.state_json);
+    database.prepare("UPDATE forge_issue_timeline SET run_id = ?, event_hash = ?, metadata_json = ? WHERE id = ? AND workflow_id = ? AND revision = 0 AND source = 'workflow' AND (run_id IS NULL OR run_id = 'legacy-unknown' OR run_id = ?) AND event_hash = ?").run(runId, stateHash, JSON.stringify({ revision: 0, phase: parsed.phase, stateHash }), parsed.lastEventId, parsed.workflowId, runId, legacyHash);
     if (current?.revision === 0) {
-      database.prepare("UPDATE forge_issue_projections SET last_run_id = ?, event_hash = ?, authoritative_event_hash = CASE WHEN authoritative_event_hash = ? THEN ? ELSE authoritative_event_hash END WHERE task_id = ? AND revision = 0 AND (last_run_id IS NULL OR last_run_id = 'legacy-unknown') AND event_hash = ?").run(runId, stateHash, legacyHash, stateHash, parsed.issueId, legacyHash);
+      database.prepare("UPDATE forge_issue_projections SET last_run_id = ?, event_hash = ?, authoritative_event_hash = CASE WHEN authoritative_event_hash = ? THEN ? ELSE authoritative_event_hash END WHERE task_id = ? AND revision = 0 AND (last_run_id IS NULL OR last_run_id = 'legacy-unknown' OR last_run_id = ?) AND event_hash = ?").run(runId, stateHash, legacyHash, stateHash, parsed.issueId, runId, legacyHash);
     }
   }
 
@@ -612,6 +628,62 @@ export class ForgeDatabase {
       if (this.applyIssueProjection(this.db, validated.data.state, new Date().toISOString(), validated.data.runId)) {
         this.applyIssueProjectionObservation(this.db, validated.data.state, validated.data.runId);
       }
+    });
+  }
+
+  commitIssueCommand(input: { commandId: string; workflowId: string; runId: string; command: string; result: IssueWorkflowState; events: IssueProjectionEvent[]; createdAt: string }): IssueWorkflowState {
+    const result = IssueWorkflowStateSchema.safeParse(input.result);
+    if (!result.success) throw new ProjectionPersistenceFailure("invalid-input", "Issue command result failed schema validation", result.error);
+    const validatedEvents: IssueProjectionEvent[] = [];
+    for (const event of input.events) {
+      const parsed = IssueProjectionEventSchema.safeParse(event);
+      if (!parsed.success) throw new ProjectionPersistenceFailure("invalid-input", "Issue command projection failed schema validation", parsed.error);
+      validatedEvents.push(parsed.data);
+    }
+    if (result.data.workflowId !== input.workflowId || validatedEvents.some((event) => event.runId !== input.runId || event.state.workflowId !== input.workflowId)) {
+      throw new ProjectionPersistenceFailure("identity-mismatch", "Issue command projection identity does not match");
+    }
+    const lastEvent = validatedEvents.at(-1);
+    if (lastEvent && projectionStateHash(lastEvent.state) !== projectionStateHash(result.data)) {
+      throw new ProjectionPersistenceFailure("identity-mismatch", "Issue command result does not match its final projection");
+    }
+
+    return this.projectionTransaction("Issue command commit", () => {
+      const existing = this.db.prepare("SELECT workflow_id, command, result_json FROM forge_engine_commands WHERE command_id = ?").get(input.commandId) as { workflow_id: string; command: string; result_json: string } | undefined;
+      if (existing) {
+        let stored: unknown;
+        try { stored = jsonRequired(existing.result_json); } catch {
+          throw new ProjectionPersistenceFailure("conflict", "Issue command identity has an unreadable receipt");
+        }
+        const parsed = IssueWorkflowStateSchema.safeParse(stored);
+        if (existing.workflow_id === input.workflowId && existing.command === input.command && parsed.success) return parsed.data;
+        throw new ProjectionPersistenceFailure("conflict", "Issue command identity already has a conflicting receipt");
+      }
+
+      for (const event of validatedEvents) {
+        if (this.applyIssueProjection(this.db, event.state, input.createdAt, event.runId)) this.applyIssueProjectionObservation(this.db, event.state, event.runId);
+      }
+      const current = this.db.prepare("SELECT revision, event_hash, last_event_id FROM forge_issue_projections WHERE workflow_id = ?").get(input.workflowId) as { revision: number; event_hash: string; last_event_id: string } | undefined;
+      if (!current) throw new ProjectionPersistenceFailure("not-durable", "Issue command result has no authoritative projection");
+      let settled = result.data;
+      if (current.revision > result.data.revision) {
+        const snapshot = this.db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE workflow_id = ? AND revision = ?").get(input.workflowId, current.revision) as { state_json: string } | undefined;
+        let stored: unknown;
+        try { stored = snapshot ? jsonRequired(snapshot.state_json) : undefined; } catch { stored = undefined; }
+        const parsed = IssueWorkflowStateSchema.safeParse(stored);
+        if (!parsed.success || parsed.data.lastEventId !== current.last_event_id || projectionStateHash(parsed.data) !== current.event_hash) {
+          throw new ProjectionPersistenceFailure("not-durable", "Issue command supersession has no matching durable snapshot");
+        }
+        settled = parsed.data;
+      } else {
+        const projectedResultDiffers = validatedEvents.length > 0 && current.event_hash !== projectionStateHash(result.data);
+        if (current.revision !== result.data.revision || current.last_event_id !== result.data.lastEventId || projectedResultDiffers) {
+          throw new ProjectionPersistenceFailure("not-durable", "Issue command result has no matching authoritative projection");
+        }
+      }
+      const receipt = this.db.prepare("INSERT INTO forge_engine_commands (command_id, workflow_id, command, result_json, created_at) VALUES (?, ?, ?, ?, ?)").run(input.commandId, input.workflowId, input.command, JSON.stringify(settled), input.createdAt);
+      if (receipt.changes !== 1) throw new ProjectionPersistenceFailure("write-failed", "Issue command receipt was not persisted");
+      return settled;
     });
   }
 

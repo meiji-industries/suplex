@@ -1618,7 +1618,6 @@ export class TaskService {
     try {
       const state = await this.workflow.revisePlan(task.workflowId, input);
       this.recordTaskCommand(task, actorUserId, "revise_plan", state.revision);
-      this.projectState(state);
       return this.getTask(actorUserId, taskId);
     } catch (error) {
       const stale = error instanceof Error && /stale workflow revision/i.test(error.message);
@@ -1660,7 +1659,6 @@ export class TaskService {
           // Approval is durable; retain its existing manual retry action if Developer admission is temporarily unavailable.
         }
       }
-      this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state });
       return this.getTask(actorUserId, taskId);
     } catch (error) {
       if (error instanceof Error && /stale|subject|conflict|idempotency/i.test(error.message)) await this.artifacts.discardStaged(staged);
@@ -1687,7 +1685,6 @@ export class TaskService {
     try {
       const state = await this.workflow.continueWork(original.workflowId, { expectedRevision, actorUserId, reason });
       this.recordTaskCommand(original, actorUserId, "continue_work", state.revision);
-      this.projectState(state);
       const successorId = state.successorReference?.successorTaskId ?? state.successorTaskId;
       if (!successorId) throw new TaskFailure("Continue work is awaiting reconciliation", [finding("successor-reconciliation", "workflow", "The successor is being reconciled; retry this request")], 503, original);
       return { original: this.getTask(actorUserId, original.id), successor: this.getTask(actorUserId, successorId) };
@@ -1703,9 +1700,6 @@ export class TaskService {
     }
   }
   async resyncProjection(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> { const task = this.getTask(actorUserId, taskId); const state = await this.workflow.resyncProjection(task.workflowId, { expectedRevision, actorUserId }); this.recordTaskCommand(task, actorUserId, "resync_projection", state.revision); return this.getTask(actorUserId, taskId); }
-  private projectState(state: IssueWorkflowState): void {
-    this.database.projectIssueEvent({ schemaVersion: 1, runId: state.workflowId, eventId: state.lastEventId, state });
-  }
 
   private recordTaskCommand(task: ForgeTask, actorUserId: string, command: IssueCommand, revision: number, automatic = false): void {
     this.auth.recordAuditEvent(actorUserId, "task_command", undefined, task.companyId, { taskId: task.id, workflowId: task.workflowId, command, actionLabel: issueCommands[command].label, revision: String(revision), ...(automatic ? { automatic: "true" } : {}) });

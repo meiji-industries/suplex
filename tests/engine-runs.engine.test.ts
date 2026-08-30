@@ -3,7 +3,7 @@ import { activityContext } from "../src/engine/activity-context.js";
 import { createActivityCaller } from "../src/engine/activities.js";
 import { ApplicationFailure, CancelledFailure } from "../src/engine/failures.js";
 import { durableCommand, executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/engine/service.js";
-import { buildInitialIssueWorkflowState, type DeveloperTurnActivityOutcome, type IssueWorkflowInput, type LeadPlanningResult, type WorkflowDeveloperExecutionResult } from "../src/engine/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema, type DeveloperTurnActivityOutcome, type IssueWorkflowInput, type LeadPlanningResult, type WorkflowDeveloperExecutionResult } from "../src/engine/issue-contracts.js";
 import { Wakeable } from "../src/engine/runs.js";
 import { createEngineHarness, engineFixture, type EngineHarness } from "./helpers/engine-harness.js";
 
@@ -32,6 +32,17 @@ function workflowInput(issueId: string, continuationState?: IssueWorkflowInput["
     supplementalReview: false,
     ...(continuationState ? { continuationState } : {}),
   };
+}
+
+function persistContinuation(harness: EngineHarness, issueId: string, continuation: NonNullable<IssueWorkflowInput["continuationState"]>): void {
+  const workflowId = harness.workflowId(issueId);
+  const initial = IssueWorkflowStateSchema.parse(buildInitialIssueWorkflowState({ workflowId, ...workflowInput(issueId) }));
+  for (let revision = 0; revision <= (continuation.revision ?? 0); revision += 1) {
+    const state = revision === continuation.revision
+      ? IssueWorkflowStateSchema.parse({ ...initial, ...continuation })
+      : IssueWorkflowStateSchema.parse({ ...initial, revision, phase: revision === 0 ? "backlog" : "planning", owner: revision === 0 ? "human" : "lead", allowedCommands: revision === 0 ? ["start_planning"] : [], pendingAction: revision === 0 ? "Start planning" : "Lead planning", lastEventId: `${workflowId}:${revision}` });
+    harness.database.projectIssueEvent({ schemaVersion: 1, runId: `seed-${issueId}`, eventId: state.lastEventId, state });
+  }
 }
 
 function leadPlan(workflowId: string, issueId: string): LeadPlanningResult {
@@ -231,6 +242,7 @@ test("development cancellation invokes the cancel hook before held completion", 
     leadOutputArtifactId: "plan-artifact",
   };
   try {
+    persistContinuation(harness, issueId, ready);
     const started = await startIssueWorkflow(harness.config, workflowInput(issueId, ready));
     const developmentCommand = executeIssueCommand(harness.config, started.workflowId, "start_development", {
       expectedRevision: 1,
@@ -298,8 +310,11 @@ test("cancellation interrupts coalesce by target across command IDs and types", 
   harness.seedTask(firstIssueId);
   harness.seedTask(secondIssueId);
   try {
-    const firstRun = await startIssueWorkflow(harness.config, activeInput(firstIssueId, "developer-target-a"));
-    const secondRun = await startIssueWorkflow(harness.config, activeInput(secondIssueId, "developer-target-b"));
+    const firstInput = activeInput(firstIssueId, "developer-target-a"), secondInput = activeInput(secondIssueId, "developer-target-b");
+    persistContinuation(harness, firstIssueId, firstInput.continuationState!);
+    persistContinuation(harness, secondIssueId, secondInput.continuationState!);
+    const firstRun = await startIssueWorkflow(harness.config, firstInput);
+    const secondRun = await startIssueWorkflow(harness.config, secondInput);
     const firstActive = await queryIssueWorkflow(harness.config, firstRun.workflowId);
     const secondActive = await queryIssueWorkflow(harness.config, secondRun.workflowId);
     const firstCommand = { expectedRevision: firstActive.revision, actorUserId: engineFixture.actorUserId, commandId: "cancel-target-a-first" };
@@ -403,6 +418,7 @@ test("concurrent duplicate commands recheck the durable receipt inside the seria
     expect(first.phase).toBe("approval");
     expect(planningCalls).toBe(1);
     expect(commandReceiptCount(harness, command.commandId)).toBe(1);
+    expect(() => harness.engine.run(started.workflowId).execute("cancelIssue", command, command.commandId)).toThrow("Issue command identity already belongs to another command");
   } finally {
     await harness.stop();
   }

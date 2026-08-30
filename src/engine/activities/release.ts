@@ -1,4 +1,5 @@
 import type { ReleaseActivities, PublishReleaseActivityInput, AdoptPullRequestReleaseActivityInput } from "../contracts/activities/release.js";
+import type Database from "better-sqlite3";
 import { z } from "zod";
 import type { ActivityContext } from "./context.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
@@ -28,16 +29,182 @@ export function releaseDeliveryProjection(value: unknown): { summary?: string; c
   };
 }
 
+type ReleaseContextInput = {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  branchName: string;
+  subjectCommit: string;
+} & ({ kind: "push" } | {
+  kind: "publish";
+  reviewId: string;
+  developerExecutionId: string;
+  targetBaseSha: string;
+  subjectTree: string;
+});
+
+type DeliveryArtifactContext = {
+  id: string;
+  storagePath: string;
+  sha256: string;
+};
+
+type ReleaseContext = {
+  developerExecutionId: string;
+  worktreePath: string;
+  branchName: string;
+  targetBaseSha: string;
+  subjectCommit: string;
+  subjectTree: string | null;
+  reviewId: string | null;
+  title: string;
+  delivery: DeliveryArtifactContext | null;
+};
+
+type ForwardMergeReleaseCandidate = {
+  title: string;
+  forwardMergeId: string;
+  expectedBaseSha: string;
+  currentBaseSha: string;
+  priorHead: string;
+  priorTree: string | null;
+  mergeCommit: string | null;
+  mergeTree: string | null;
+  resultHead: string | null;
+  resultTree: string | null;
+  developerExecutionId: string;
+  developerStatus: string;
+  branchName: string;
+  worktreePath: string;
+  developerTargetBaseSha: string;
+  developerResultCommit: string | null;
+  developerResultTree: string | null;
+  reviewId: string;
+  reviewBaseSha: string;
+  reviewSubjectCommit: string;
+  reviewSubjectTree: string;
+};
+
+function sameRevision(left: string | null | undefined, right: string | null | undefined): boolean {
+  return !!left && !!right && left.toLowerCase() === right.toLowerCase();
+}
+
+function deliveryArtifactFromLineage(db: Database.Database, input: ReleaseContextInput, executionId: string): DeliveryArtifactContext | undefined {
+  const visited = new Set<string>();
+  let currentId: string | null = executionId;
+  while (currentId) {
+    if (visited.has(currentId)) return undefined;
+    visited.add(currentId);
+    const execution = db.prepare(`SELECT delivery_artifact_id AS deliveryArtifactId, supersedes_execution_id AS supersedesExecutionId
+      FROM forge_developer_executions
+      WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(currentId, input.taskId, input.companyId, input.workflowId) as { deliveryArtifactId: string | null; supersedesExecutionId: string | null } | undefined;
+    if (!execution) return undefined;
+    if (execution.deliveryArtifactId) {
+      return db.prepare(`SELECT id, storage_path AS storagePath, sha256
+        FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'developer-delivery'`).get(execution.deliveryArtifactId, input.companyId) as DeliveryArtifactContext | undefined;
+    }
+    currentId = execution.supersedesExecutionId;
+  }
+  return undefined;
+}
+
+function directReleaseContext(db: Database.Database, input: ReleaseContextInput): ReleaseContext | undefined {
+  if (input.kind === "push") {
+    const direct = db.prepare(`SELECT d.id AS developerExecutionId, d.worktree_path AS worktreePath, d.branch_name AS branchName,
+        d.target_base_sha AS targetBaseSha, d.result_commit AS subjectCommit, d.result_tree AS subjectTree, t.title
+      FROM forge_tasks t
+      JOIN forge_developer_executions d
+        ON d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
+        AND d.branch_name = ? AND lower(d.result_commit) = lower(?) AND d.status = 'completed'
+      WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(input.branchName, input.subjectCommit, input.taskId, input.companyId, input.workflowId) as Omit<ReleaseContext, "delivery" | "reviewId"> | undefined;
+    return direct ? { ...direct, reviewId: null, delivery: null } : undefined;
+  }
+  const direct = db.prepare(`SELECT d.id AS developerExecutionId, d.worktree_path AS worktreePath, d.branch_name AS branchName,
+      d.target_base_sha AS targetBaseSha, d.result_commit AS subjectCommit, d.result_tree AS subjectTree,
+      da.id AS deliveryArtifactId, da.storage_path AS deliveryStoragePath, da.sha256 AS deliverySha,
+      r.id AS reviewId, t.title
+    FROM forge_tasks t
+    JOIN forge_developer_executions d
+      ON d.id = ? AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
+      AND d.status = 'completed' AND d.branch_name = ?
+      AND lower(d.target_base_sha) = lower(?) AND lower(d.result_commit) = lower(?) AND lower(d.result_tree) = lower(?)
+    JOIN forge_delivery_reviews r
+      ON r.id = ? AND r.task_id = t.id AND r.company_id = t.company_id AND r.workflow_id = t.workflow_id
+      AND lower(r.base_sha) = lower(?) AND lower(r.subject_commit) = lower(?) AND lower(r.subject_tree) = lower(?)
+      AND (r.outcome = 'approved' OR EXISTS (SELECT 1 FROM forge_delivery_decisions dd WHERE dd.task_id = t.id AND dd.workflow_id = t.workflow_id AND dd.created_at >= r.created_at))
+    JOIN forge_artifacts da
+      ON da.id = d.delivery_artifact_id AND da.company_id = d.company_id
+      AND da.kind IN ('developer-delivery', 'developer-repair', 'forward-merge-delivery')
+    WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(input.developerExecutionId, input.branchName, input.targetBaseSha, input.subjectCommit, input.subjectTree, input.reviewId, input.targetBaseSha, input.subjectCommit, input.subjectTree, input.taskId, input.companyId, input.workflowId) as (Omit<ReleaseContext, "delivery"> & { deliveryArtifactId: string; deliveryStoragePath: string; deliverySha: string }) | undefined;
+  if (!direct) return undefined;
+  return { ...direct, delivery: { id: direct.deliveryArtifactId, storagePath: direct.deliveryStoragePath, sha256: direct.deliverySha } };
+}
+
+function forwardMergeReleaseContext(db: Database.Database, input: ReleaseContextInput): ReleaseContext | undefined {
+  const candidates = db.prepare(`SELECT t.title, m.id AS forwardMergeId, m.expected_base_sha AS expectedBaseSha,
+      m.current_base_sha AS currentBaseSha, m.prior_head AS priorHead, m.prior_tree AS priorTree,
+      m.merge_commit AS mergeCommit, m.tree AS mergeTree, m.result_head AS resultHead, m.result_tree AS resultTree,
+      d.id AS developerExecutionId, d.status AS developerStatus, d.branch_name AS branchName,
+      d.worktree_path AS worktreePath, d.target_base_sha AS developerTargetBaseSha,
+      d.result_commit AS developerResultCommit, d.result_tree AS developerResultTree,
+      r.id AS reviewId, r.base_sha AS reviewBaseSha, r.subject_commit AS reviewSubjectCommit,
+      r.subject_tree AS reviewSubjectTree
+    FROM forge_tasks t
+    JOIN forge_forward_merges m
+      ON m.task_id = t.id AND m.company_id = t.company_id AND m.workflow_id = t.workflow_id
+      AND m.status = 'merged' AND lower(m.result_head) = lower(?)
+    JOIN forge_developer_executions d
+      ON d.id = m.developer_execution_id AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
+      AND d.branch_name = ?
+    JOIN forge_delivery_reviews r
+      ON r.task_id = t.id AND r.company_id = t.company_id AND r.workflow_id = t.workflow_id
+      AND r.outcome = 'approved' AND lower(r.subject_commit) = lower(?)
+    JOIN forge_artifacts verification
+      ON verification.id = m.verification_artifact_id AND verification.company_id = m.company_id
+      AND verification.kind = 'forward-merge-verification'
+    WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?
+    ORDER BY COALESCE(m.updated_at, m.created_at) DESC, m.id DESC`).all(input.subjectCommit, input.branchName, input.subjectCommit, input.taskId, input.companyId, input.workflowId) as ForwardMergeReleaseCandidate[];
+  const contexts: ReleaseContext[] = [];
+  for (const candidate of candidates) {
+    const executionAtPrior = sameRevision(candidate.developerResultCommit, candidate.priorHead) && sameRevision(candidate.developerResultTree, candidate.priorTree);
+    const executionAtResult = sameRevision(candidate.developerResultCommit, candidate.resultHead) && sameRevision(candidate.developerResultTree, candidate.resultTree);
+    const executionBaseCompatible = executionAtPrior
+      ? sameRevision(candidate.developerTargetBaseSha, candidate.expectedBaseSha)
+      : executionAtResult && (sameRevision(candidate.developerTargetBaseSha, candidate.expectedBaseSha) || sameRevision(candidate.developerTargetBaseSha, candidate.currentBaseSha));
+    if (!sameRevision(candidate.resultHead, input.subjectCommit)
+      || !sameRevision(candidate.mergeCommit, candidate.resultHead)
+      || !sameRevision(candidate.mergeTree, candidate.resultTree)
+      || !sameRevision(candidate.reviewSubjectCommit, candidate.resultHead)
+      || !sameRevision(candidate.reviewSubjectTree, candidate.resultTree)
+      || !sameRevision(candidate.reviewBaseSha, candidate.currentBaseSha)
+      || !["completed", "blocked"].includes(candidate.developerStatus)
+      || !(executionAtPrior || executionAtResult)
+      || !executionBaseCompatible
+      || input.kind === "publish" && (candidate.developerExecutionId !== input.developerExecutionId
+        || candidate.reviewId !== input.reviewId
+        || !sameRevision(candidate.resultTree, input.subjectTree)
+        || !sameRevision(candidate.currentBaseSha, input.targetBaseSha))) continue;
+    const delivery = deliveryArtifactFromLineage(db, input, candidate.developerExecutionId);
+    if (!delivery) continue;
+    contexts.push({ developerExecutionId: candidate.developerExecutionId, worktreePath: candidate.worktreePath, branchName: candidate.branchName, targetBaseSha: candidate.currentBaseSha, subjectCommit: candidate.resultHead!, subjectTree: candidate.resultTree, reviewId: candidate.reviewId, title: candidate.title, delivery });
+  }
+  const [context] = contexts;
+  if (!context) return undefined;
+  const identity = [context.developerExecutionId, context.worktreePath, context.branchName, context.targetBaseSha, context.subjectCommit, context.subjectTree, context.reviewId, context.delivery!.id].join("|");
+  return contexts.every((candidate) => [candidate.developerExecutionId, candidate.worktreePath, candidate.branchName, candidate.targetBaseSha, candidate.subjectCommit, candidate.subjectTree, candidate.reviewId, candidate.delivery!.id].join("|") === identity) ? context : undefined;
+}
+
+function resolveReleaseContext(db: Database.Database, input: ReleaseContextInput): ReleaseContext | undefined {
+  return directReleaseContext(db, input) ?? forwardMergeReleaseContext(db, input);
+}
+
 export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities {
   const { database, config, options, createHash, randomBytes, ApplicationFailure, CancelledFailure, Context, z, projectionStateHash, ArtifactStore, redact, AgentFailure, AgentService, DeveloperService, cancelDeveloperExecution, reconcileDeveloperExecutions, cancelAgentExecution, reconcileAgentExecutions, AcceptanceFailure, AcceptanceService, CiFailure, CiProviderFailure, CiService, createGithubCiProvider, createGithubReleasePort, GithubReleaseFailure, ReleaseService, ForwardMergeFailure, ForwardMergeService, parseAcceptedProjectRevision, runPinnedVerification, createGitCommandGuard, ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, ArtifactReferenceSchema, CreateSuccessorActivityInputSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeliveryOperationBlockCodeSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PreparePlanRevisionActivityInputSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, RevisedExecutionCoordinatesSchema, SafeSummarySchema, createInitialIssueWorkflowState, normalizeSafeSummary, PlanGovernanceConflict, PlanGovernanceRepository, StructuredLogger, activityLogContext, CapacityFailure, CapacityManager, CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema, WorktreeFailure, WorktreeManager, startIssueWorkflow, logger, defaultAgent, githubRelease, defaultDeveloper, artifacts, release, ci, acceptance, legacyForwardMerge, capacity, activityWorktrees, activityWorktreesByBranch, worktrees, agent, developer, attentionFailure, agentCategory, invokeAgent, bindCapacityExecution, runSupervised, latestWorktree, cancellationSignal, agentRuntime, pinnedProjectRevision, normalizeReviewResult, normalizeRepairResult, durableArtifactReference, verifiedArtifactBytes, artifactReference, registerArtifact, reconcileBlocker, asNonRetryableCapacityFailure, asNonRetryableApplicationFailure, asRetryableAgentFailure, DeveloperDeliverySchema } = ctx;
   void [database, config, options, createHash, randomBytes, ApplicationFailure, CancelledFailure, Context, z, projectionStateHash, ArtifactStore, redact, AgentFailure, AgentService, DeveloperService, cancelDeveloperExecution, reconcileDeveloperExecutions, cancelAgentExecution, reconcileAgentExecutions, AcceptanceFailure, AcceptanceService, CiFailure, CiProviderFailure, CiService, createGithubCiProvider, createGithubReleasePort, GithubReleaseFailure, ReleaseService, ForwardMergeFailure, ForwardMergeService, parseAcceptedProjectRevision, runPinnedVerification, createGitCommandGuard, ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, ArtifactReferenceSchema, CreateSuccessorActivityInputSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeliveryOperationBlockCodeSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PreparePlanRevisionActivityInputSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, RevisedExecutionCoordinatesSchema, SafeSummarySchema, createInitialIssueWorkflowState, normalizeSafeSummary, PlanGovernanceConflict, PlanGovernanceRepository, StructuredLogger, activityLogContext, CapacityFailure, CapacityManager, CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema, WorktreeFailure, WorktreeManager, startIssueWorkflow, logger, defaultAgent, githubRelease, defaultDeveloper, artifacts, release, ci, acceptance, legacyForwardMerge, capacity, activityWorktrees, activityWorktreesByBranch, worktrees, agent, developer, attentionFailure, agentCategory, invokeAgent, bindCapacityExecution, runSupervised, latestWorktree, cancellationSignal, agentRuntime, pinnedProjectRevision, normalizeReviewResult, normalizeRepairResult, durableArtifactReference, verifiedArtifactBytes, artifactReference, registerArtifact, reconcileBlocker, asNonRetryableCapacityFailure, asNonRetryableApplicationFailure, asRetryableAgentFailure, DeveloperDeliverySchema];
   return {
     async pushDeliveryBranch(input) {
       try {
-      const context = database.authQuery((db) => db.prepare(`SELECT d.worktree_path AS worktreePath
-        FROM forge_tasks t
-        JOIN forge_developer_executions d ON d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id AND d.branch_name = ? AND d.result_commit = ? AND d.status = 'completed'
-        WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(input.branchName, input.commitSha, input.taskId, input.companyId, input.workflowId) as { worktreePath: string } | undefined);
+      const context = database.authQuery((db) => resolveReleaseContext(db, { kind: "push", taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, branchName: input.branchName, subjectCommit: input.commitSha }));
       if (!context) throw new GithubReleaseFailure("stale-reviewed-revision", "The reviewed revision does not match a completed Developer execution");
       let pinned: ReturnType<typeof pinnedProjectRevision>;
       try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "The task project configuration is incomplete"); }
@@ -68,19 +235,14 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
     async publishRelease(input: PublishReleaseActivityInput) {
       let identity = { repository: "", branchName: input.branchName, headSha: input.subjectCommit, headTree: input.subjectTree };
       try {
-        const context = database.authQuery((db) => db.prepare(`SELECT d.id AS developerExecutionId, d.worktree_path AS worktreePath, d.branch_name AS branchName, r2.base_sha AS targetBaseSha, r2.subject_commit AS subjectCommit, r2.subject_tree AS subjectTree, d.delivery_artifact_id AS deliveryArtifactId, da.storage_path AS deliveryStoragePath, da.sha256 AS deliverySha, r2.id AS reviewId, t.title
-          FROM forge_tasks t
-          JOIN forge_developer_executions d ON d.id = ? AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id AND d.status = 'completed'
-          JOIN forge_delivery_reviews r2 ON r2.id = ? AND r2.task_id = t.id AND r2.company_id = t.company_id AND r2.workflow_id = t.workflow_id AND (r2.outcome = 'approved' OR EXISTS (SELECT 1 FROM forge_delivery_decisions dd WHERE dd.task_id = t.id AND dd.workflow_id = t.workflow_id AND dd.created_at >= r2.created_at))
-          JOIN forge_artifacts da ON da.id = d.delivery_artifact_id AND da.company_id = d.company_id AND da.kind IN ('developer-delivery', 'developer-repair', 'forward-merge-delivery')
-          WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(input.developerExecutionId, input.reviewId, input.taskId, input.companyId, input.workflowId) as { developerExecutionId: string; worktreePath: string; branchName: string; targetBaseSha: string; subjectCommit: string; subjectTree: string; deliveryArtifactId: string; deliveryStoragePath: string; deliverySha: string; reviewId: string; title: string } | undefined);
-        if (!context) throw new GithubReleaseFailure("stale-reviewed-revision", "The exact approved Developer revision is unavailable");
+        const context = database.authQuery((db) => resolveReleaseContext(db, { kind: "publish", taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, branchName: input.branchName, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree, reviewId: input.reviewId, developerExecutionId: input.developerExecutionId }));
+        if (!context?.delivery || !context.reviewId || !context.subjectTree) throw new GithubReleaseFailure("stale-reviewed-revision", "The exact approved Developer revision is unavailable");
         identity = { repository: "", branchName: context.branchName, headSha: context.subjectCommit, headTree: context.subjectTree };
         let pinned: ReturnType<typeof pinnedProjectRevision> & { artifactId: string };
         try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "The task project configuration is incomplete"); }
         identity.repository = pinned.repository;
         let delivery: ReturnType<typeof releaseDeliveryProjection>;
-        try { delivery = releaseDeliveryProjection(jsonRequired(artifacts.getArtifactSync({ companyId: input.companyId, storagePath: context.deliveryStoragePath, sha256: context.deliverySha }).toString("utf8"))); }
+        try { delivery = releaseDeliveryProjection(jsonRequired(artifacts.getArtifactSync({ companyId: input.companyId, storagePath: context.delivery.storagePath, sha256: context.delivery.sha256 }).toString("utf8"))); }
         catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "Completed delivery artifact is unavailable"); }
         const result = await release.publish({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, ...(input.releaseId ? { releaseId: input.releaseId } : {}), coordinates: { projectRevisionId: pinned.artifactId, repositoryPath: pinned.repositoryPath, worktreePath: context.worktreePath, repository: pinned.repository, owner: pinned.repository.split("/")[0]!, headBranch: context.branchName, baseBranch: pinned.baseBranch, expectedBaseSha: context.targetBaseSha }, reviewedRevision: { reviewId: context.reviewId, developerExecutionId: context.developerExecutionId, commitSha: context.subjectCommit, treeSha: context.subjectTree }, taskTitle: context.title, delivery });
         if (input.pullRequestMode !== undefined && input.pullRequestMode !== "draft") await release.markReadyForReview({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, releaseId: result.releaseId, repository: result.repository, pullRequestNumber: result.pullRequest.number });

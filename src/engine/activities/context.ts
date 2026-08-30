@@ -252,11 +252,13 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     operation: (service: Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">) => Promise<T>,
   ): Promise<DeveloperTurnActivityOutcome<T>> => {
     const key = operationKey(["turn", input.taskId, input.developerTurnExecutionId]);
+    const terminalOutcome = (result: unknown | null): DeveloperTurnActivityOutcome<T> => {
+      if (result === null) throw ApplicationFailure.nonRetryable("Developer turn claim is terminal without a reusable result", "operation-result-missing", { key });
+      return result as DeveloperTurnActivityOutcome<T>;
+    };
     const claim = claimOperation(database, { key, taskId: input.taskId, kind: "turn" });
-    if (!claim.claimed && claim.status === "settled" && claim.result !== null) return claim.result as DeveloperTurnActivityOutcome<T>;
-    if (!claim.claimed && claim.status === "failed" && (claim.result as { reasonCode?: unknown } | null)?.reasonCode === "cancelled") {
-      return claim.result as DeveloperTurnActivityOutcome<T>;
-    }
+    if (claim.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} is already in progress`, "operation-in-progress", { key });
+    if (claim.status !== "acquired") return terminalOutcome(claim.result);
     try {
       const result = await operation(developer as DeveloperService);
       await bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId }, result);
@@ -265,14 +267,14 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
         result,
         resultHash: createHash("sha256").update(JSON.stringify(result)).digest("hex"),
       };
-      settleOperation(database, key, "settled", outcome);
-      return outcome;
+      const settlement = settleOperation(database, key, "settled", outcome);
+      return settlement.applied ? outcome : terminalOutcome(settlement.result);
     } catch (error) {
       if (error instanceof AgentFailure) {
         const evidence = database.authQuery((db) => (db.prepare("SELECT evidence_artifact_id AS evidenceArtifactId FROM forge_developer_executions WHERE id = ?").get(input.developerTurnExecutionId) as { evidenceArtifactId: string | null } | undefined)?.evidenceArtifactId ?? null);
         const outcome: DeveloperTurnActivityOutcome<T> = { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: error.code, summary: SafeSummarySchema.parse(error.message), evidenceArtifactId: evidence };
-        settleOperation(database, key, "failed", outcome);
-        return outcome;
+        const settlement = settleOperation(database, key, "failed", outcome);
+        return settlement.applied ? outcome : terminalOutcome(settlement.result);
       }
       throw error;
     }

@@ -7,7 +7,7 @@ import { afterEach, expect, test } from "vitest";
 import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { integrateRemoteBranch } from "../src/remote-branch-integration.js";
+import { integrateRemoteBranch, type RemoteIntegration } from "../src/remote-branch-integration.js";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -88,6 +88,86 @@ test("merged", async () => {
   expect((await git(value.worktreePath, "rev-list", "--parents", "-n", "1", "HEAD")).split(" ")).toHaveLength(3);
   expect(await git(value.worktreePath, "status", "--porcelain")).toBe("");
   await expect(integrate(value, remoteHead)).resolves.toEqual(result);
+});
+
+test("concurrent integrations execute one merge and reuse its result", async () => {
+  const value = await fixture();
+  const remoteHead = "b".repeat(40);
+  const mergeCommit = "c".repeat(40);
+  let merged = false;
+  let mergeCalls = 0;
+  let loserCalls = 0;
+  let signalStarted!: () => void;
+  let release = () => {};
+  let first: Promise<RemoteIntegration> | undefined;
+  try {
+    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    first = integrate(value, remoteHead, {
+      git: async (args) => {
+        if (args[0] === "status") {
+          signalStarted();
+          await gate;
+          return { ok: true, stdout: "", stderr: "" };
+        }
+        if (args[0] === "fetch") return { ok: true, stdout: "", stderr: "" };
+        if (args[0] === "rev-parse") return { ok: true, stdout: merged ? mergeCommit : "a".repeat(40), stderr: "" };
+        if (args[0] === "merge-base") return { ok: false, stdout: "", stderr: "" };
+        if (args[0] === "merge" && args[1] === "--no-edit") {
+          mergeCalls += 1;
+          merged = true;
+          return { ok: true, stdout: "", stderr: "" };
+        }
+        throw new Error(`Unexpected git command: ${args.join(" ")}`);
+      },
+    });
+    await started;
+
+    await expect(integrate(value, remoteHead, {
+      git: async () => {
+        loserCalls += 1;
+        return { ok: true, stdout: "", stderr: "" };
+      },
+    })).rejects.toThrow("Remote branch integration is already in progress");
+    expect(loserCalls).toBe(0);
+
+    release();
+    const outcome = await first;
+    expect(outcome).toEqual({ kind: "merged", mergeCommit, remoteHead });
+    expect(mergeCalls).toBe(1);
+
+    await expect(integrate(value, remoteHead, {
+      git: async () => {
+        loserCalls += 1;
+        return { ok: true, stdout: "", stderr: "" };
+      },
+    })).resolves.toEqual(outcome);
+    expect(loserCalls).toBe(0);
+  } finally {
+    release();
+    await first?.catch(() => undefined);
+    value.database.close();
+  }
+});
+
+test("failed integrations reject deterministically without rerunning git", async () => {
+  const value = await fixture();
+  const remoteHead = "d".repeat(40);
+  try {
+    await expect(integrate(value, remoteHead, {
+      git: async () => ({ ok: false, stdout: "", stderr: "unavailable" }),
+    })).rejects.toThrow("Could not inspect task worktree");
+    let retryCalls = 0;
+    await expect(integrate(value, remoteHead, {
+      git: async () => {
+        retryCalls += 1;
+        return { ok: true, stdout: "", stderr: "" };
+      },
+    })).rejects.toThrow("Remote branch integration previously failed: Could not inspect task worktree");
+    expect(retryCalls).toBe(0);
+  } finally {
+    value.database.close();
+  }
 });
 
 test("dirty_worktree", async () => {

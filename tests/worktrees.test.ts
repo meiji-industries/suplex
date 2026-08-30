@@ -4,9 +4,12 @@ import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
+import { createTestConfig } from "../src/config.js";
+import { ForgeDatabase } from "../src/database.js";
 import { asNonRetryableApplicationFailure } from "../src/engine/activities/context.js";
 import { runCommand, setCommandRunnerLogger } from "../src/command-runner.js";
 import { StructuredLogger } from "../src/logging.js";
+import { cancelOperation, operationKey } from "../src/operation-claims.js";
 import { createGitCommandGuard, reserveOwnedWorktree, withWorktreeBuildCaches, WorktreeFailure, WorktreeManager } from "../src/worktrees.js";
 
 async function command(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
@@ -99,6 +102,81 @@ test("inspects local branch sync and pushes it to origin", async () => {
     expect(logs.map((line) => JSON.parse(line)).filter((line) => line.message.includes(`+refs/heads/${branchName}:refs/remotes/origin/${branchName}`))).toHaveLength(1);
   } finally {
     setCommandRunnerLogger(new StructuredLogger());
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent claimed pushes execute git once and reuse settlement", async () => {
+  const value = await fixture();
+  const database = new ForgeDatabase(createTestConfig(value.root).databasePath);
+  const branchName = "feat/claimed-push";
+  let pushes = 0;
+  let signalStarted!: () => void;
+  let release = () => {};
+  let first: Promise<void> | undefined;
+  try {
+    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const manager = new WorktreeManager({
+      async run(args: string[]) {
+        if (args[0] === "rev-parse") return value.baseSha;
+        if (args[0] === "push") {
+          pushes += 1;
+          if (pushes === 1) {
+            signalStarted();
+            await gate;
+          }
+          return "";
+        }
+        throw new Error(`Unexpected git command: ${args.join(" ")}`);
+      },
+    });
+    const claims = { database, taskId: "task_1" };
+    first = manager.push(value.repositoryPath, branchName, claims);
+    await started;
+
+    await expect(manager.push(value.repositoryPath, branchName, claims)).rejects.toMatchObject({ code: "operation-in-progress" });
+    expect(pushes).toBe(1);
+
+    release();
+    await first;
+    await expect(manager.push(value.repositoryPath, branchName, claims)).resolves.toBeUndefined();
+    expect(pushes).toBe(1);
+  } finally {
+    release();
+    await first?.catch(() => undefined);
+    database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("a failed terminal claim wins after git push succeeds", async () => {
+  const value = await fixture();
+  const database = new ForgeDatabase(createTestConfig(value.root).databasePath);
+  const branchName = "feat/cancelled-push";
+  const taskId = "task_1";
+  const key = operationKey(["push", taskId, branchName, value.baseSha]);
+  let pushes = 0;
+  try {
+    const manager = new WorktreeManager({
+      async run(args: string[]) {
+        if (args[0] === "rev-parse") return value.baseSha;
+        if (args[0] === "push") {
+          pushes += 1;
+          cancelOperation(database, { key, taskId, kind: "push" });
+          return "";
+        }
+        throw new Error(`Unexpected git command: ${args.join(" ")}`);
+      },
+    });
+    const claims = { database, taskId };
+
+    await expect(manager.push(value.repositoryPath, branchName, claims)).rejects.toMatchObject({ code: "operation-failed" });
+    expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_operation_claims WHERE operation_key = ?").get(key))).toEqual({ status: "failed" });
+    await expect(manager.push(value.repositoryPath, branchName, claims)).rejects.toMatchObject({ code: "operation-failed" });
+    expect(pushes).toBe(1);
+  } finally {
+    database.close();
     await rm(value.root, { recursive: true, force: true });
   }
 });

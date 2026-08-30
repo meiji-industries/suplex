@@ -31,6 +31,17 @@ function stored(value: unknown): RemoteIntegration | undefined {
   return value && typeof value === "object" && "kind" in value ? value as RemoteIntegration : undefined;
 }
 
+function terminalIntegration(claim: { status: "settled" | "failed"; result: unknown | null }): RemoteIntegration {
+  if (claim.status === "settled") {
+    const prior = stored(claim.result);
+    if (prior) return prior;
+    throw new Error("Remote branch integration settled without a reusable result");
+  }
+  const failure = claim.result as { message?: unknown; summary?: unknown } | null;
+  const detail = typeof failure?.message === "string" ? failure.message : typeof failure?.summary === "string" ? failure.summary : "";
+  throw new Error(`Remote branch integration previously failed${detail ? `: ${detail}` : ""}`);
+}
+
 export async function integrateRemoteBranch(database: ForgeDatabase, config: ForgeConfig, input: { taskId: string; companyId: string; workflowId: string; repository: string; branchName: string; remoteHead: string; worktreePath: string | null; targetBaseSha: string | null }, deps: { git?: Git; now?: () => string } = {}): Promise<RemoteIntegration> {
   const worktreePath = input.worktreePath ? resolve(input.worktreePath) : null;
   const owned = worktreePath && database.authQuery((db) => db.prepare("SELECT worktree_root AS worktreeRoot, branch_name AS branchName FROM forge_issue_worktrees WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND worktree_path = ? AND status <> 'released'").get(input.taskId, input.companyId, input.workflowId, worktreePath) as { worktreeRoot: string; branchName: string } | undefined);
@@ -39,11 +50,8 @@ export async function integrateRemoteBranch(database: ForgeDatabase, config: For
   if (active(database, input.taskId)) return { kind: "skipped_active_turn" };
   const key = operationKey(["remote-integration", input.taskId, input.remoteHead]);
   const claim = claimOperation(database, { key, taskId: input.taskId, kind: "merge" });
-  if (!claim.claimed) {
-    const prior = stored(claim.result);
-    if (claim.status === "settled" && prior) return prior;
-    return { kind: "skipped_active_turn" };
-  }
+  if (claim.status === "in_progress") throw new Error("Remote branch integration is already in progress");
+  if (claim.status !== "acquired") return terminalIntegration(claim);
   const git: Git = deps.git ?? (async (args, cwd, taskId) => {
     const result = await runCommand({ taskId, stepId: `remote-integration:${input.remoteHead}`, command: "git", args, cwd, env: withWorktreeMiseTrust(process.env, cwd), timeout: 30_000 });
     return { ok: result.exitCode === 0 && !result.timedOut, stdout: result.stdout.trim(), stderr: result.stderr };
@@ -96,10 +104,11 @@ export async function integrateRemoteBranch(database: ForgeDatabase, config: For
       const now = (deps.now ?? (() => new Date().toISOString()))();
       database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, source, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, ?, 'workflow', ?, ?, ?, ?)").run(`${input.workflowId}:remote_integration:${input.remoteHead}`, input.taskId, input.companyId, input.workflowId, revision, eventType, metadata, now, createHash("sha256").update(metadata).digest("hex")));
     }
-    settleOperation(database, key, "settled", outcome);
-    return outcome;
+    const settlement = settleOperation(database, key, "settled", outcome);
+    return settlement.applied ? outcome : terminalIntegration(settlement);
   } catch (error) {
-    settleOperation(database, key, "failed", { message: error instanceof Error ? error.message : String(error) });
+    const settlement = settleOperation(database, key, "failed", { message: error instanceof Error ? error.message : String(error) });
+    if (!settlement.applied) return terminalIntegration(settlement);
     throw error;
   }
 }

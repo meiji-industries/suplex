@@ -481,15 +481,28 @@ export class WorktreeManager {
     const key = claims ? operationKey(["push", claims.taskId, branchName, headSha]) : undefined;
     if (claims && key) {
       const claim = claimOperation(claims.database, { key, taskId: claims.taskId, kind: "push" });
-      if (!claim.claimed && claim.status === "settled") return;
+      if (claim.status === "settled") return;
+      if (claim.status === "in_progress") throw new WorktreeFailure("operation-in-progress", "Git push is already in progress");
+      if (claim.status === "failed") {
+        const failure = claim.result as { message?: unknown; summary?: unknown } | null;
+        const detail = typeof failure?.message === "string" ? failure.message : typeof failure?.summary === "string" ? failure.summary : "";
+        throw new WorktreeFailure("operation-failed", `Git push previously failed${detail ? `: ${detail}` : ""}`);
+      }
     }
     try {
       await this.git.run(["push", "--set-upstream", "origin", branchName], canonical);
-      branchFetches.delete(`${canonical}\0${branchName}`);
-      if (claims && key) settleOperation(claims.database, key, "settled");
     } catch (error) {
       if (claims && key) settleOperation(claims.database, key, "failed", { message: error instanceof Error ? error.message : String(error) });
       throw error;
+    }
+    branchFetches.delete(`${canonical}\0${branchName}`);
+    if (claims && key) {
+      const settlement = settleOperation(claims.database, key, "settled");
+      if (!settlement.applied && settlement.status === "failed") {
+        const failure = settlement.result as { message?: unknown; summary?: unknown } | null;
+        const detail = typeof failure?.message === "string" ? failure.message : typeof failure?.summary === "string" ? failure.summary : "";
+        throw new WorktreeFailure("operation-failed", `Git push previously failed${detail ? `: ${detail}` : ""}`);
+      }
     }
   }
 

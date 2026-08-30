@@ -32,7 +32,6 @@ import { ensureResultSchema } from "./result-schema-files.js";
 import { claimDeveloperResult, DeveloperResultConflict } from "./developer-result-claims.js";
 import { runCommand } from "./command-runner.js";
 import { BrowserProofFailure, BrowserProofInputSchema, BrowserProofService, normalizeBrowserProofPath, normalizeBrowserProofPaths, type DurableBrowserProof } from "./browser-proof.js";
-import { claimOperation, operationKey } from "./operation-claims.js";
 
 export function isDeveloperExecutionActiveLeaseCollision(error: unknown): boolean {
   const sqliteError = error as { code?: unknown; message?: unknown };
@@ -315,10 +314,6 @@ export class DeveloperService {
       FROM forge_plan_revision_requests WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { id: string; disposition: "reuse" | "new"; status: "accepted" | "authorized"; authorizedPlanRevision: number | null; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null } | undefined) : undefined;
     if (input.revisionRequestId && (!revisionAuthorization || revisionAuthorization.status !== "authorized" || revisionAuthorization.authorizedPlanRevision !== input.planRevision)) throw new AgentFailure("revision-not-authorized", "Developer execution is not authorized for this plan revision");
     const executionId = input.developerTurnExecutionId ?? input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
-    const operation = claimOperation(this.database, { key: operationKey(["turn", input.taskId, executionId]), taskId: input.taskId, kind: "turn" });
-    if (!operation.claimed && operation.status === "failed" && (operation.result as { reasonCode?: unknown } | null)?.reasonCode === "cancelled") {
-      throw new AgentFailure("cancelled", "Developer execution was cancelled before it started", { nonRetryable: true });
-    }
     const claimedResult = this.database.authQuery((db) => db.prepare("SELECT activity_result_json AS activityResultJson FROM forge_developer_result_claims WHERE execution_id = ?").get(executionId) as { activityResultJson: string } | undefined);
     if (claimedResult) return jsonRequired(claimedResult.activityResultJson) as DeveloperExecutionResult;
     const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, failure_code AS failureCode, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as DeveloperExecutionIdentity | undefined);

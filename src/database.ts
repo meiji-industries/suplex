@@ -631,6 +631,33 @@ export class ForgeDatabase {
     });
   }
 
+  bootstrapIssueProjection(event: IssueProjectionEvent): void {
+    const validated = IssueProjectionEventSchema.safeParse(event);
+    if (!validated.success) throw new ProjectionPersistenceFailure("invalid-input", "Workflow projection bootstrap failed schema validation", validated.error);
+    this.projectionTransaction("Workflow projection bootstrap", () => {
+      this.db.prepare("UPDATE forge_workflow_snapshots SET run_id = ? WHERE task_id = ? AND revision = ? AND (run_id IS NULL OR run_id = 'legacy-unknown')").run(validated.data.runId, validated.data.state.issueId, validated.data.state.revision);
+      if (this.applyIssueProjection(this.db, validated.data.state, new Date().toISOString(), validated.data.runId)) {
+        this.applyIssueProjectionObservation(this.db, validated.data.state, validated.data.runId);
+      }
+    });
+  }
+
+  projectIssueEvents(events: IssueProjectionEvent[]): void {
+    const validated: IssueProjectionEvent[] = [];
+    for (const event of events) {
+      const parsed = IssueProjectionEventSchema.safeParse(event);
+      if (!parsed.success) throw new ProjectionPersistenceFailure("invalid-input", "Workflow projection batch failed schema validation", parsed.error);
+      validated.push(parsed.data);
+    }
+    if (validated.length === 0) return;
+    this.projectionTransaction("Workflow projection batch write", () => {
+      const updatedAt = new Date().toISOString();
+      for (const event of validated) {
+        if (this.applyIssueProjection(this.db, event.state, updatedAt, event.runId)) this.applyIssueProjectionObservation(this.db, event.state, event.runId);
+      }
+    });
+  }
+
   commitIssueCommand(input: { commandId: string; workflowId: string; runId: string; command: string; result: IssueWorkflowState; events: IssueProjectionEvent[]; createdAt: string }): IssueWorkflowState {
     const result = IssueWorkflowStateSchema.safeParse(input.result);
     if (!result.success) throw new ProjectionPersistenceFailure("invalid-input", "Issue command result failed schema validation", result.error);
@@ -664,26 +691,12 @@ export class ForgeDatabase {
         if (this.applyIssueProjection(this.db, event.state, input.createdAt, event.runId)) this.applyIssueProjectionObservation(this.db, event.state, event.runId);
       }
       const current = this.db.prepare("SELECT revision, event_hash, last_event_id FROM forge_issue_projections WHERE workflow_id = ?").get(input.workflowId) as { revision: number; event_hash: string; last_event_id: string } | undefined;
-      if (!current) throw new ProjectionPersistenceFailure("not-durable", "Issue command result has no authoritative projection");
-      let settled = result.data;
-      if (current.revision > result.data.revision) {
-        const snapshot = this.db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE workflow_id = ? AND revision = ?").get(input.workflowId, current.revision) as { state_json: string } | undefined;
-        let stored: unknown;
-        try { stored = snapshot ? jsonRequired(snapshot.state_json) : undefined; } catch { stored = undefined; }
-        const parsed = IssueWorkflowStateSchema.safeParse(stored);
-        if (!parsed.success || parsed.data.lastEventId !== current.last_event_id || projectionStateHash(parsed.data) !== current.event_hash) {
-          throw new ProjectionPersistenceFailure("not-durable", "Issue command supersession has no matching durable snapshot");
-        }
-        settled = parsed.data;
-      } else {
-        const projectedResultDiffers = validatedEvents.length > 0 && current.event_hash !== projectionStateHash(result.data);
-        if (current.revision !== result.data.revision || current.last_event_id !== result.data.lastEventId || projectedResultDiffers) {
-          throw new ProjectionPersistenceFailure("not-durable", "Issue command result has no matching authoritative projection");
-        }
+      if (!current || current.revision !== result.data.revision || current.last_event_id !== result.data.lastEventId || current.event_hash !== projectionStateHash(result.data)) {
+        throw new ProjectionPersistenceFailure("not-durable", "Issue command result has no matching authoritative projection");
       }
-      const receipt = this.db.prepare("INSERT INTO forge_engine_commands (command_id, workflow_id, command, result_json, created_at) VALUES (?, ?, ?, ?, ?)").run(input.commandId, input.workflowId, input.command, JSON.stringify(settled), input.createdAt);
+      const receipt = this.db.prepare("INSERT INTO forge_engine_commands (command_id, workflow_id, command, result_json, created_at) VALUES (?, ?, ?, ?, ?)").run(input.commandId, input.workflowId, input.command, JSON.stringify(result.data), input.createdAt);
       if (receipt.changes !== 1) throw new ProjectionPersistenceFailure("write-failed", "Issue command receipt was not persisted");
-      return settled;
+      return result.data;
     });
   }
 

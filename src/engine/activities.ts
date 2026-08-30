@@ -11,7 +11,7 @@ import { ActivityFailure, ApplicationFailure, CancelledFailure } from "./failure
 import { durationMs, type ActivityCallOptions } from "./registry.js";
 
 export interface ActivityCaller {
-  call(name: string, args: unknown[], options: ActivityCallOptions, runSignal: AbortSignal, workflowId: string): Promise<unknown>;
+  call(name: string, args: unknown[], options: ActivityCallOptions, runSignal: AbortSignal, workflowId: string, beforeAttempt?: () => void): Promise<unknown>;
 }
 
 function failureType(error: unknown): string | undefined {
@@ -28,7 +28,7 @@ export function createActivityCaller(database: ForgeDatabase, activities: object
 }): ActivityCaller {
   const logger = new StructuredLogger();
   return {
-    async call(name, args, options, runSignal, workflowId) {
+    async call(name, args, options, runSignal, workflowId, beforeAttempt) {
       const operation = (activities as Record<string, (...values: unknown[]) => unknown>)[name];
       if (typeof operation !== "function") throw new Error(`Unknown activity: ${name}`);
       const attempts = options.retry?.maximumAttempts ?? 1;
@@ -36,19 +36,25 @@ export function createActivityCaller(database: ForgeDatabase, activities: object
       const maxDelay = durationMs(options.retry?.maximumInterval) ?? delay;
       let lastError: unknown;
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        if (runSignal.aborted) throw new CancelledFailure("Activity cancelled");
+        beforeAttempt?.();
+        if (runSignal.aborted) throw new CancelledFailure("Activity cancelled");
         const id = randomUUID();
         const startedAt = new Date().toISOString();
         const timeoutController = new AbortController();
         const signal = AbortSignal.any([runSignal, timeoutController.signal]);
+        if (signal.aborted) throw new CancelledFailure("Activity cancelled");
         const timeout = durationMs(options.startToCloseTimeout);
         const timer = timeout === undefined ? undefined : setTimeout(() => timeoutController.abort(), timeout);
         database.authTransaction((db) => db.prepare("INSERT INTO forge_engine_activities (id, workflow_id, activity, started_at, heartbeat_at) VALUES (?, ?, ?, ?, ?)").run(id, workflowId, name, startedAt, startedAt));
         try {
-          return await activityContext.run({
+          const result = await activityContext.run({
             signal,
             heartbeat: () => database.authTransaction((db) => db.prepare("UPDATE forge_engine_activities SET heartbeat_at = ? WHERE id = ?").run(new Date().toISOString(), id)),
             log: logger,
           }, () => Promise.resolve(operation(...args)));
+          if (signal.aborted) throw new CancelledFailure("Activity cancelled");
+          return result;
         } catch (error) {
           lastError = signal.aborted ? new CancelledFailure(timeoutController.signal.aborted && !runSignal.aborted ? `Activity ${name} timed out` : "Activity cancelled") : error;
           logger.warn("Activity attempt failed", { workflowId }, {

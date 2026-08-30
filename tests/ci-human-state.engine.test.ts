@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 
 import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
+import { ApplicationFailure } from "../src/engine/failures.js";
 import { executeIssueCommand, queryIssueWorkflow, signalIssueGithubPullRequestSync, startIssueWorkflow } from "../src/engine/service.js";
 import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
 
@@ -129,13 +130,64 @@ test.each([
   } finally { await h.stop(); }
 });
 
+test("missing-release CI recovery forwards pinned base and preserves reviewed identity when adoption rejects drift", async () => {
+  const issueId = "ci-missing-release-authoritative-base-drift";
+  const branchName = `forge/issue/${issueId}`;
+  let adoptionInput: { expectedBaseSha?: string } | undefined;
+  const h = await createEngineHarness({
+    projectIssueState: async (event) => event.state,
+    observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.test/42", state: "open" as const, isDraft: false, headSha: head, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, autoMergeEnabled: false, reviewDecision: null }),
+    adoptPullRequestRelease: async (input) => {
+      adoptionInput = input;
+      throw ApplicationFailure.nonRetryable("The pull request no longer matches the observed CI identity", "stale-reviewed-revision");
+    },
+    reconcileCi: async () => { throw new Error("failed adoption must not reach CI reconciliation"); },
+  });
+  h.seedTask(issueId);
+  try {
+    const continuationState = {
+      ...buildInitialIssueWorkflowState({ workflowId: `workflow-${issueId}`, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
+      phase: "delivery_blocked" as const,
+      revision: 20,
+      owner: "human" as const,
+      allowedCommands: ["reconcile_ci" as const, "cancel_issue" as const],
+      pendingAction: "Retry CI",
+      releaseRepository: "acme/forge",
+      branchName,
+      baseBranch: "main",
+      pullRequestNumber: 42,
+      expectedHeadSha: head,
+      expectedHeadTree: engineFixture.tree,
+      targetBaseSha: engineFixture.base,
+      resultCommit: head,
+      resultTree: engineFixture.tree,
+      deliveryReviewId: "review-a",
+      processedCommandIds: [`${h.workflowId(issueId)}:auto-review_delivery:23`],
+      lastEventId: `workflow-${issueId}:20`,
+    };
+    const started = await startIssueWorkflow(h.config, { companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false, continuationState });
+
+    const failed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: 20, actorUserId: engineFixture.actorUserId });
+
+    expect(adoptionInput).toMatchObject({ expectedBaseSha: engineFixture.base });
+    expect(failed).toMatchObject({ expectedHeadSha: head, expectedHeadTree: engineFixture.tree, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: "review-a", lastHandlerError: { command: "reconcile_ci", reason: "Activity adoptPullRequestRelease failed" } });
+    expect(failed).not.toHaveProperty("releaseId");
+    expect(h.calls.get("adoptPullRequestRelease")).toBe(1);
+    expect(h.calls.get("reconcileCi") ?? 0).toBe(0);
+  } finally { await h.stop(); }
+});
+
 test("missing-release CI recovery adopts an unpinned legacy pull request identity", async () => {
   const issueId = "ci-missing-release-legacy";
   const branchName = `forge/issue/${issueId}`;
+  let adoptionInput: { expectedBaseSha?: string } | undefined;
   const h = await createEngineHarness({
     projectIssueState: async (event) => event.state,
     observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.test/42", state: "open" as const, isDraft: false, headSha: head, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
-    adoptPullRequestRelease: async () => ({ releaseId: "release-adopted", repository: "acme/forge", branchName, baseBranch: "main", targetBaseSha: engineFixture.base, headSha: head, headTree: engineFixture.tree, pullRequestNumber: 42, pullRequestUrl: "https://github.test/42" }),
+    adoptPullRequestRelease: async (input) => {
+      adoptionInput = input;
+      return { releaseId: "release-adopted", repository: "acme/forge", branchName, baseBranch: "main", targetBaseSha: engineFixture.base, headSha: head, headTree: engineFixture.tree, pullRequestNumber: 42, pullRequestUrl: "https://github.test/42" };
+    },
     reconcileCi: async (input) => ({ runId: "ci-run", attemptId: "ci-attempt", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: null, outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Waiting for CI", retryAt: "2026-08-29T00:01:00.000Z", nextPollAt: "2026-08-29T00:01:00.000Z", propagationDeadline: null, overallDeadline: null }),
   });
   h.seedTask(issueId);
@@ -161,5 +213,6 @@ test("missing-release CI recovery adopts an unpinned legacy pull request identit
     expect(adopted).toMatchObject({ releaseId: "release-adopted", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: engineFixture.tree });
     expect(h.calls.get("adoptPullRequestRelease")).toBe(1);
     expect(h.calls.get("reconcileCi")).toBe(1);
+    expect(adoptionInput).not.toHaveProperty("expectedBaseSha");
   } finally { await h.stop(); }
 });

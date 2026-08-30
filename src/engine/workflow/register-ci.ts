@@ -71,6 +71,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     return ctx.state;
   };
   const reconcileCiTurn = async (): Promise<contracts.IssueWorkflowState> => {
+    const expectedBaseSha = ctx.state.targetBaseSha;
     let observed = ctx.state.releaseRepository && ctx.state.branchName
       ? await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
       : null;
@@ -81,7 +82,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (!ctx.state.releaseId) {
-      if (observed?.exists && observed.state === "open" && ((ctx.state.expectedHeadSha && observed.headSha?.toLowerCase() !== ctx.state.expectedHeadSha.toLowerCase()) || (ctx.state.targetBaseSha && observed.baseSha?.toLowerCase() !== ctx.state.targetBaseSha.toLowerCase()))) {
+      if (observed?.exists && observed.state === "open" && ((ctx.state.expectedHeadSha && observed.headSha?.toLowerCase() !== ctx.state.expectedHeadSha.toLowerCase()) || (expectedBaseSha && observed.baseSha?.toLowerCase() !== expectedBaseSha.toLowerCase()))) {
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
         await ctx.project();
         return ctx.state;
@@ -91,7 +92,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
         await ctx.project();
         return ctx.state;
       }
-      const adopted = await activityProxies.adoptPullRequestRelease({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, repository: ctx.state.releaseRepository, branchName: ctx.state.branchName, baseBranch: ctx.state.baseBranch, pullRequestNumber: observed.number, headSha: observed.headSha });
+      const adopted = await activityProxies.adoptPullRequestRelease({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, repository: ctx.state.releaseRepository, branchName: ctx.state.branchName, baseBranch: ctx.state.baseBranch, ...(expectedBaseSha ? { expectedBaseSha } : {}), pullRequestNumber: observed.number, headSha: observed.headSha });
       ctx.state = adoptCiPullRequestRelease(ctx.state, adopted);
       await ctx.project();
       observed = null;

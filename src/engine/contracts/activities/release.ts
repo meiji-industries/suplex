@@ -43,6 +43,7 @@ export interface AdoptPullRequestReleaseActivityInput {
   repository: string;
   branchName: string;
   baseBranch: string;
+  expectedBaseSha?: string;
   pullRequestNumber: number;
   headSha: string;
 }

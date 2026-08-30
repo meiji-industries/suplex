@@ -51,7 +51,7 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
     async adoptPullRequestRelease(input: AdoptPullRequestReleaseActivityInput) {
       if (!githubRelease.getCommitTree) throw new GithubReleaseFailure("provider-unavailable", "GitHub commit inspection is unavailable");
       const pullRequest = await githubRelease.getPullRequest({ repository: input.repository, number: input.pullRequestNumber });
-      if (pullRequest.state !== "open" || pullRequest.repository.toLowerCase() !== input.repository.toLowerCase() || pullRequest.headBranch !== input.branchName || pullRequest.headSha.toLowerCase() !== input.headSha.toLowerCase() || pullRequest.baseBranch !== input.baseBranch) throw new GithubReleaseFailure("stale-reviewed-revision", "The pull request no longer matches the observed CI head");
+      if (pullRequest.state !== "open" || pullRequest.repository.toLowerCase() !== input.repository.toLowerCase() || pullRequest.headBranch !== input.branchName || pullRequest.headSha.toLowerCase() !== input.headSha.toLowerCase() || pullRequest.baseBranch !== input.baseBranch || (input.expectedBaseSha && pullRequest.baseSha.toLowerCase() !== input.expectedBaseSha.toLowerCase())) throw new GithubReleaseFailure("stale-reviewed-revision", "The pull request no longer matches the observed CI identity");
       const headTree = await githubRelease.getCommitTree({ repository: input.repository, commitSha: input.headSha });
       const releaseKey = createHash("sha256").update([input.workflowId, input.projectRevisionId, input.repository, input.branchName, input.baseBranch, input.headSha, headTree].join("|"), "utf8").digest("hex");
       const now = new Date().toISOString();

@@ -51,6 +51,15 @@ export function createActivityCaller(database: ForgeDatabase, activities: object
           }, () => Promise.resolve(operation(...args)));
         } catch (error) {
           lastError = signal.aborted ? new CancelledFailure(timeoutController.signal.aborted && !runSignal.aborted ? `Activity ${name} timed out` : "Activity cancelled") : error;
+          logger.warn("Activity attempt failed", { workflowId }, {
+            activity: name,
+            attempt,
+            attempts,
+            error: lastError instanceof Error ? lastError.message : String(lastError),
+            ...(lastError && typeof lastError === "object" && "code" in lastError && typeof lastError.code === "string" ? { code: lastError.code } : {}),
+            ...(lastError instanceof Error && lastError.stack ? { stack: lastError.stack } : {}),
+            ...(lastError instanceof Error && lastError.cause instanceof Error ? { cause: lastError.cause.message } : {}),
+          });
           const type = failureType(lastError);
           if (runSignal.aborted || lastError instanceof ApplicationFailure && lastError.nonRetryable || type && options.retry?.nonRetryableErrorTypes?.includes(type) || attempt === attempts) break;
           await wait(Math.min(delay, maxDelay), runSignal);

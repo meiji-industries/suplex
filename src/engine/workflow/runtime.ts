@@ -114,7 +114,8 @@ export function permanentActivityFailure(error: unknown, recoverExhausted = fals
   }
   if (!(error instanceof ActivityFailure)) return undefined;
   if (!(error.cause instanceof ApplicationFailure) || !error.cause.nonRetryable) {
-    return recoverExhausted ? { code: "activity-failed", summary: "The operation failed after its retry attempts." } : undefined;
+    const cause = error.cause instanceof Error ? error.cause.message : String(error.cause);
+    return recoverExhausted ? { code: "activity-failed", summary: `The operation failed after its retry attempts: ${cause}` } : undefined;
   }
   const detail = error.cause.details?.[0];
   if (detail && typeof detail === "object") {

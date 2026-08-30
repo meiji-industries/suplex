@@ -5,6 +5,9 @@ import { loadTaskConfiguration } from "../../task-project-configuration.js";
 import { proveForwardMergeLineage, type ForwardMergeLineageProof } from "./forward-merge-lineage.js";
 
 type VerificationBlockerCode = Extract<TargetBaseBlockerCode, "verification_failed" | "verification_timed_out" | "verification_evidence_too_large">;
+type DeliveryArtifactKind = "developer-delivery" | "forward-merge-delivery";
+const deliveryArtifactKinds: readonly DeliveryArtifactKind[] = ["developer-delivery", "forward-merge-delivery"];
+function isDeliveryArtifactKind(kind: string | null | undefined): kind is DeliveryArtifactKind { return deliveryArtifactKinds.includes(kind as DeliveryArtifactKind); }
 const verificationBlockerCodes: readonly VerificationBlockerCode[] = ["verification_failed", "verification_timed_out", "verification_evidence_too_large"];
 function isVerificationBlockerCode(code: string | null): code is VerificationBlockerCode {
   return verificationBlockerCodes.some((candidate) => candidate === code);
@@ -50,12 +53,12 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           d.id AS developerExecutionId, d.status AS developerStatus, d.session_ref AS developerSessionRef,
           d.branch_name AS branchName, d.worktree_path AS worktreePath, d.target_base_sha AS targetBaseSha,
           d.result_commit AS resultCommit, d.result_tree AS resultTree, d.plan_revision AS planRevision,
-          d.delivery_artifact_id AS deliveryArtifactId, da.sha256 AS deliveryArtifactSha256,
+          d.delivery_artifact_id AS deliveryArtifactId, da.kind AS deliveryArtifactKind, da.sha256 AS deliveryArtifactSha256,
           d.evidence_artifact_id AS evidenceArtifactId
         FROM forge_tasks t
         JOIN forge_developer_executions d ON d.id = ? AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
-        LEFT JOIN forge_artifacts da ON da.id = d.delivery_artifact_id AND da.company_id = d.company_id AND da.kind = 'developer-delivery'
-        WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(developerExecutionId, input.taskId, input.companyId, input.workflowId) as { developerExecutionId: string; developerStatus: string; developerSessionRef: string | null; branchName: string; worktreePath: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null; planRevision: number; deliveryArtifactId: string | null; deliveryArtifactSha256: string | null; evidenceArtifactId: string | null } | undefined);
+        LEFT JOIN forge_artifacts da ON da.id = d.delivery_artifact_id AND da.company_id = d.company_id AND da.kind IN ('developer-delivery', 'forward-merge-delivery')
+        WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(developerExecutionId, input.taskId, input.companyId, input.workflowId) as { developerExecutionId: string; developerStatus: string; developerSessionRef: string | null; branchName: string; worktreePath: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null; planRevision: number; deliveryArtifactId: string | null; deliveryArtifactKind: string | null; deliveryArtifactSha256: string | null; evidenceArtifactId: string | null } | undefined);
       const blocked = (code: TargetBaseBlockerCode, owner: "human" | "provider" | "lead", retryable: boolean, summary: string, evidenceArtifact?: ReturnType<typeof artifactReference>, coordinates?: { observedBaseSha?: string; priorHead?: string; priorTree?: string; resultHead?: string; resultTree?: string }, operationId = requestedForwardMergeId ?? checkId): ReconcileTargetBaseActivityResult => ({ outcome: "blocked", checkId: operationId, checkpoint: input.checkpoint, code, owner, retryable, summary: normalizeSafeSummary(summary, 200), ...(evidenceArtifact ? { evidenceArtifact } : {}), ...(coordinates ?? {}) });
       const adoptStoredDelivery = (delivery: { developerExecutionId: string; priorHead: string; priorTree: string; resultHead: string; resultTree: string }): boolean => database.authTransaction((db) => {
         const updated = db.prepare(`UPDATE forge_developer_executions SET result_commit = ?, result_tree = ?
@@ -95,7 +98,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
         ? database.authQuery((db) => db.prepare("SELECT id, kind FROM forge_artifacts WHERE company_id = ? AND (id = ? OR id = ?) ORDER BY id").all(input.companyId, storedDelivery.verificationArtifactId, storedDelivery.deliveryArtifactId) as Array<{ id: string; kind: string }>)
         : [];
       const verificationArtifact = storedDelivery ? storedArtifacts.find((artifact) => artifact.id === storedDelivery.verificationArtifactId && artifact.kind === "forward-merge-verification") : undefined;
-      const deliveryArtifact = storedDelivery ? storedArtifacts.find((artifact) => artifact.id === storedDelivery.deliveryArtifactId && artifact.kind === "developer-delivery") : undefined;
+      const deliveryArtifact = storedDelivery ? storedArtifacts.find((artifact) => artifact.id === storedDelivery.deliveryArtifactId && isDeliveryArtifactKind(artifact.kind)) : undefined;
       const storedLineage = merge.status === "merged" && storedMergeId && storedDelivery?.developerExecutionId
         ? database.authQuery((db) => proveForwardMergeLineage(db, { currentMergeId: storedMergeId, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, checkpoint: input.checkpoint, developerExecutionId: storedDelivery.developerExecutionId! }))
         : undefined;
@@ -120,7 +123,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
         if (verificationArtifact && deliveryArtifact) {
           const adopted = storedLineageMatchesMerge && (storedLineage!.kind === "transitive" || adoptStoredDelivery({ developerExecutionId: storedDelivery.developerExecutionId, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: storedDelivery.resultHead, resultTree: storedDelivery.resultTree }));
           if (!adopted) return blocked("merge_state_ownership_mismatch", "human", false, "The completed Developer revision does not match the recorded forward merge", undefined, { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: storedDelivery.resultHead, resultTree: storedDelivery.resultTree }, merge.forwardMergeId ?? checkId);
-          return { outcome: "revalidated", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, headSha: storedDelivery.resultHead, headTree: storedDelivery.resultTree, developerExecutionId: storedDelivery.developerExecutionId, deliveryArtifact: artifactReference({ id: deliveryArtifact.id, kind: "developer-delivery" }), verificationArtifact: artifactReference({ id: verificationArtifact.id, kind: "forward-merge-verification" }), ...(storedDelivery.developerEvidenceArtifactId ? { developerEvidenceArtifactId: storedDelivery.developerEvidenceArtifactId } : {}) };
+          return { outcome: "revalidated", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, headSha: storedDelivery.resultHead, headTree: storedDelivery.resultTree, developerExecutionId: storedDelivery.developerExecutionId, deliveryArtifact: artifactReference({ id: deliveryArtifact.id, kind: deliveryArtifact.kind as DeliveryArtifactKind }), verificationArtifact: artifactReference({ id: verificationArtifact.id, kind: "forward-merge-verification" }), ...(storedDelivery.developerEvidenceArtifactId ? { developerEvidenceArtifactId: storedDelivery.developerEvidenceArtifactId } : {}) };
         }
       }
       if (merge.status === "merged" && !storedLineageMatchesMerge) {
@@ -138,6 +141,8 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
             AND (lower(m.result_head) = lower(?) OR lower(m.merge_commit) = lower(?))
           ORDER BY m.id`).all(input.taskId, input.companyId, input.workflowId, input.expectedHeadSha, input.expectedHeadSha) as NoDriftMergedDelivery[]);
         const provenDeliveries: Array<{ mergedDelivery: NoDriftMergedDelivery; lineage: ForwardMergeLineageProof }> = [];
+        let reusedDeliveryArtifact: { id: string; kind: DeliveryArtifactKind; sha256: string } | undefined;
+        let reusedVerificationArtifact: { id: string; kind: "forward-merge-verification"; sha256?: string } | undefined;
         for (const mergedDelivery of mergedDeliveries) {
           if (!mergedDelivery.developerExecutionId) continue;
           const lineage = database.authQuery((db) => proveForwardMergeLineage(db, { currentMergeId: mergedDelivery.id, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, checkpoint: input.checkpoint, developerExecutionId: mergedDelivery.developerExecutionId! }));
@@ -162,7 +167,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
             ? database.authQuery((db) => db.prepare("SELECT id, kind FROM forge_artifacts WHERE company_id = ? AND (id = ? OR id = ?) ORDER BY id").all(input.companyId, mergedDelivery.verificationArtifactId, mergedDelivery.deliveryArtifactId) as Array<{ id: string; kind: string }>)
             : [];
           const mergedVerificationArtifact = mergedArtifacts.find((artifact) => artifact.id === mergedDelivery.verificationArtifactId && artifact.kind === "forward-merge-verification");
-          const mergedDeliveryArtifact = mergedArtifacts.find((artifact) => artifact.id === mergedDelivery.deliveryArtifactId && artifact.kind === "developer-delivery");
+          const mergedDeliveryArtifact = mergedArtifacts.find((artifact) => artifact.id === mergedDelivery.deliveryArtifactId && isDeliveryArtifactKind(artifact.kind));
           if (mergedDelivery.failureCode !== null || mergedDelivery.failureSummary !== null) {
             const failureCode = mergedDelivery.failureCode;
             const failureSummary = mergedDelivery.failureSummary;
@@ -180,11 +185,16 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           if (!mergedVerificationArtifact || !mergedDeliveryArtifact || context.deliveryArtifactId !== mergedDelivery.deliveryArtifactId) {
             return blocked("artifact_unavailable", "human", false, "The stored forward-merge delivery artifacts are unavailable", undefined, coordinates, mergedDelivery.id);
           }
+          const deliverySha = database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(mergedDeliveryArtifact.id, input.companyId) as { sha256: string } | undefined)?.sha256;
+          if (!deliverySha) return blocked("artifact_unavailable", "human", false, "The stored forward-merge delivery artifact is unavailable", undefined, coordinates, mergedDelivery.id);
+          reusedDeliveryArtifact = { id: mergedDeliveryArtifact.id, kind: mergedDeliveryArtifact.kind as DeliveryArtifactKind, sha256: deliverySha };
+          const verificationSha = database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(mergedVerificationArtifact.id, input.companyId) as { sha256: string } | undefined)?.sha256;
+          reusedVerificationArtifact = { id: mergedVerificationArtifact.id, kind: "forward-merge-verification", ...(verificationSha ? { sha256: verificationSha } : {}) };
           if (lineage.kind !== "transitive" && !adoptStoredDelivery({ developerExecutionId: lineage.developer.id, priorHead: lineage.current.priorHead, priorTree: lineage.current.priorTree, resultHead: lineage.current.resultHead, resultTree: lineage.current.resultTree })) {
             return blocked("merge_state_ownership_mismatch", "human", false, "The completed Developer revision does not match the recorded forward merge", undefined, coordinates, mergedDelivery.id);
           }
         }
-        return { outcome: "no_drift", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree };
+        return { outcome: "no_drift", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree, ...(provedDelivery && reusedDeliveryArtifact && reusedVerificationArtifact ? { developerExecutionId: provedDelivery.mergedDelivery.developerExecutionId!, deliveryArtifact: artifactReference(reusedDeliveryArtifact), verificationArtifact: artifactReference(reusedVerificationArtifact) } : {}) };
       }
       const guard = await createGitCommandGuard(config.runtimeRoot);
       try {
@@ -216,16 +226,16 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
               AND prior.task_id = ? AND prior.company_id = ? AND prior.workflow_id = ? AND prior.plan_revision = ?
             WHERE lineage.depth < 100 AND instr(lineage.path, '|' || prior.id || '|') = 0
           )
-          SELECT artifact.id, artifact.sha256
+          SELECT artifact.id, artifact.sha256, artifact.kind
           FROM execution_lineage lineage
           JOIN forge_artifacts artifact ON artifact.id = lineage.delivery_artifact_id
-            AND artifact.company_id = ? AND artifact.kind = 'developer-delivery'
+            AND artifact.company_id = ? AND artifact.kind IN ('developer-delivery', 'forward-merge-delivery')
           WHERE lineage.depth > 0 AND length(artifact.sha256) = 64 AND lower(artifact.sha256) NOT GLOB '*[^0-9a-f]*'
           ORDER BY lineage.depth ASC
-          LIMIT 1`).get(context.developerExecutionId, input.taskId, input.companyId, input.workflowId, context.planRevision, input.taskId, input.companyId, input.workflowId, context.planRevision, input.companyId) as { id: string; sha256: string } | undefined) : undefined;
+          LIMIT 1`).get(context.developerExecutionId, input.taskId, input.companyId, input.workflowId, context.planRevision, input.taskId, input.companyId, input.workflowId, context.planRevision, input.companyId) as { id: string; sha256: string; kind: string } | undefined) : undefined;
         const deliveryArtifact = context.deliveryArtifactId && context.deliveryArtifactSha256 && /^[a-f0-9]{64}$/i.test(context.deliveryArtifactSha256)
-          ? { id: context.deliveryArtifactId, sha256: context.deliveryArtifactSha256, kind: "developer-delivery" as const }
-          : inheritedDeliveryArtifact ? { ...inheritedDeliveryArtifact, kind: "developer-delivery" as const } : undefined;
+          ? (isDeliveryArtifactKind(context.deliveryArtifactKind) ? { id: context.deliveryArtifactId, sha256: context.deliveryArtifactSha256, kind: context.deliveryArtifactKind } : undefined)
+          : inheritedDeliveryArtifact && isDeliveryArtifactKind(inheritedDeliveryArtifact.kind) ? inheritedDeliveryArtifact : undefined;
         if (!deliveryArtifact || !context.evidenceArtifactId) return blocked("artifact_unavailable", "human", false, "The prior Developer delivery artifact is unavailable", artifactReference(verificationArtifact), { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: merge.mergeCommit!, resultTree: merge.tree! }, merge.forwardMergeId ?? checkId);
         const newExecutionId = `developer_${randomBytes(12).toString("hex")}`;
         const now = new Date().toISOString();

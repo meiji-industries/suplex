@@ -9,6 +9,7 @@ import { defaultProcessController, inspectProcessOnce, signalOwnedProcess, type 
 
 const OUTPUT_TAIL_BYTES = 8 * 1024;
 const TERMINATION_GRACE_MS = 250;
+const POST_TERMINATION_CLOSE_MS = 500;
 let logger = new StructuredLogger();
 
 export type CommandStreamEntry = { stream: "stdout" | "stderr"; text: string };
@@ -24,6 +25,21 @@ export type CommandRunResult = {
   finishedAt: string;
   timedOut: boolean;
 };
+
+export class CommandCleanupError extends Error {
+  readonly result: CommandRunResult;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly timedOut = true;
+
+  constructor(result: CommandRunResult) {
+    super(`Command hard-stopped after timeout because cleanup could not be proven: ${result.command}`);
+    this.name = "CommandCleanupError";
+    this.result = result;
+    this.stdout = result.stdout;
+    this.stderr = result.stderr;
+  }
+}
 
 export type RunCommandInput = {
   /** Null is a worker-level observation: emit a structured log but no task activity row. */
@@ -89,6 +105,19 @@ function display(command: string, args: readonly string[]): string {
   return [command, ...args].map((value) => /\s/.test(value) ? JSON.stringify(value) : value).join(" ");
 }
 
+async function waitForClose(closed: Promise<number | null>, timeout: number): Promise<number | null | "timeout"> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), timeout);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([closed, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function record(input: RunCommandInput, result: CommandRunResult): void {
   if (!database || !input.taskId || !input.stepId) return;
   database.authQuery((db) => db.prepare(`INSERT INTO forge_task_command_activity
@@ -121,8 +150,24 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
     if (stream === "stdout") stdout += text;
     else stderr += text;
   };
-  child.stdout.on("data", (chunk: Buffer) => append("stdout", chunk));
-  child.stderr.on("data", (chunk: Buffer) => append("stderr", chunk));
+  const onStdout = (chunk: Buffer): void => append("stdout", chunk);
+  const onStderr = (chunk: Buffer): void => append("stderr", chunk);
+  child.stdout.on("data", onStdout);
+  child.stderr.on("data", onStderr);
+  const stopReading = (destroy: boolean): void => {
+    child.stdout.off("data", onStdout);
+    child.stderr.off("data", onStderr);
+    if (destroy) {
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
+  };
+
+  const closeController = new AbortController();
+  const closed = once(child, "close", { signal: closeController.signal }).then(
+    ([code]) => typeof code === "number" ? code : null,
+    () => null,
+  );
 
   const terminate = async (): Promise<void> => {
     if (!child.pid) return;
@@ -173,26 +218,35 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
     await signalOwnedProcess(owned, "SIGKILL", controller);
   };
 
-  const closed = once(child, "close").then(
-    ([code]) => typeof code === "number" ? code : null,
-    () => null,
-  );
   let exitCode: number | null;
-  if (input.timeout) {
-    const outcome = await Promise.race([
-      closed,
-      delay(input.timeout, "timeout" as const, { ref: false }),
-    ]);
-    if (outcome === "timeout") {
-      timedOut = true;
-      await terminate();
-      exitCode = await closed;
+  let cleanupUnproven = false;
+  try {
+    if (input.timeout) {
+      const outcome = await waitForClose(closed, input.timeout);
+      if (outcome === "timeout") {
+        timedOut = true;
+        await terminate();
+        const terminated = await waitForClose(closed, POST_TERMINATION_CLOSE_MS);
+        if (terminated === "timeout") {
+          cleanupUnproven = true;
+          exitCode = null;
+          closeController.abort();
+          stopReading(true);
+        } else {
+          exitCode = terminated;
+        }
+      } else {
+        exitCode = outcome;
+      }
     } else {
-      exitCode = outcome;
+      exitCode = await closed;
     }
-  } else {
-    exitCode = await closed;
+  } catch (error) {
+    closeController.abort();
+    stopReading(true);
+    throw error;
   }
+  if (!cleanupUnproven) stopReading(false);
 
   const redactedEntries: EntryTail = { entries: [], bytes: 0 };
   for (const entry of entryTail.entries) {
@@ -212,6 +266,14 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
   };
   record(input, result);
   const context = { ...(input.taskId ? { taskId: input.taskId } : {}), command: result.command, exitCode: result.exitCode, durationMs: result.durationMs };
+  if (cleanupUnproven) {
+    const stderrTail = tail(result.stderr).trim().split("\n").slice(-3).join("\n");
+    logger.error(`Command hard-stopped after timeout because cleanup could not be proven: ${result.command}`, input.taskId ? { taskId: input.taskId } : {}, {
+      ...context,
+      ...(stderrTail ? { error: stderrTail } : {}),
+    });
+    throw new CommandCleanupError(result);
+  }
   if (result.exitCode === 0 && !result.timedOut) logger.info(`Command completed: ${result.command}`, context);
   else {
     const stderrTail = tail(result.stderr).trim().split("\n").slice(-3).join("\n");

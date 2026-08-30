@@ -20,6 +20,7 @@ import { observeHerdrSessions, type HerdrSessionObservation } from "../herdr-rec
 type ExecutionConvergenceCounts = { agentExecutions: number; developerExecutions: number };
 
 const workerRestartOrphanCode = "worker-restart-orphan";
+const reviewRestartOrphanCode = "process-failed";
 const reviewRestartOrphanSummary = "The delivery review stopped because its linked agent process was not resumable after the Forge worker restarted.";
 const terminalHerdrLifecycle = /(?:^|[\s_-])(?:done|complete|completed|cancelled|canceled|failed|failure|error|errored|exited|stopped|terminated)(?:$|[\s_-])/i;
 const resumableTurnPredicate = "turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating')";
@@ -36,7 +37,7 @@ export function reclaimOrphanedHerdrExecutions(database: ForgeDatabase, recovera
   return database.authTransaction((db) => {
     const agentIds = (db.prepare(`UPDATE forge_agent_executions SET status = 'failed', failure_code = '${workerRestartOrphanCode}', finished_at = COALESCE(finished_at, ?) WHERE status IN ('starting', 'running', 'cancelling') AND NOT EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'agent' AND turn.execution_id = forge_agent_executions.id AND turn.task_id = forge_agent_executions.task_id AND session.is_current = 1 AND ${recoverable} AND ${resumableTurnPredicate}) RETURNING id`).all(now, ...sessionIds) as Array<{ id: string }>).map((row) => row.id);
     const developerIds = (db.prepare(`UPDATE forge_developer_executions SET status = 'failed', failure_code = '${workerRestartOrphanCode}', finished_at = COALESCE(finished_at, ?) WHERE status IN ('starting', 'running', 'cancelling') AND NOT EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'developer' AND turn.execution_id = forge_developer_executions.id AND turn.task_id = forge_developer_executions.task_id AND session.is_current = 1 AND ${recoverable} AND ${resumableTurnPredicate}) RETURNING id`).all(now, ...sessionIds) as Array<{ id: string }>).map((row) => row.id);
-    if (agentIds.length) db.prepare(`UPDATE forge_delivery_review_attempts SET status = 'failed', failure_code = ?, failure_summary = ?, finished_at = COALESCE(finished_at, ?) WHERE status = 'running' AND lead_execution_id IN (${agentIds.map(() => "?").join(", ")})`).run(workerRestartOrphanCode, reviewRestartOrphanSummary, now, ...agentIds);
+    if (agentIds.length) db.prepare(`UPDATE forge_delivery_review_attempts SET status = 'failed', failure_code = ?, failure_summary = ?, finished_at = COALESCE(finished_at, ?) WHERE status = 'running' AND lead_execution_id IN (${agentIds.map(() => "?").join(", ")})`).run(reviewRestartOrphanCode, reviewRestartOrphanSummary, now, ...agentIds);
     return { agentExecutions: agentIds.length, developerExecutions: developerIds.length };
   });
 }
@@ -46,7 +47,7 @@ export function recoverOrphanedHerdrExecutions(database: ForgeDatabase, recovera
   return database.authTransaction((db) => {
     const agentIds = (db.prepare(`UPDATE forge_agent_executions SET status = 'running', failure_code = NULL, failure_summary = NULL, finished_at = NULL WHERE status = 'failed' AND failure_code = '${workerRestartOrphanCode}' AND EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'agent' AND turn.execution_id = forge_agent_executions.id AND turn.task_id = forge_agent_executions.task_id AND session.is_current = 1 AND ${recoverable} AND ${resumableTurnPredicate}) RETURNING id`).all(...sessionIds) as Array<{ id: string }>).map((row) => row.id);
     const developerIds = (db.prepare(`UPDATE forge_developer_executions SET status = 'running', failure_code = NULL, failure_summary = NULL, finished_at = NULL WHERE status = 'failed' AND failure_code = '${workerRestartOrphanCode}' AND EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'developer' AND turn.execution_id = forge_developer_executions.id AND turn.task_id = forge_developer_executions.task_id AND session.is_current = 1 AND ${recoverable} AND ${resumableTurnPredicate}) RETURNING id`).all(...sessionIds) as Array<{ id: string }>).map((row) => row.id);
-    if (agentIds.length) db.prepare(`UPDATE forge_delivery_review_attempts SET status = 'running', failure_code = NULL, failure_summary = NULL, finished_at = NULL WHERE status = 'failed' AND failure_code = ? AND lead_execution_id IN (${agentIds.map(() => "?").join(", ")})`).run(workerRestartOrphanCode, ...agentIds);
+    if (agentIds.length) db.prepare(`UPDATE forge_delivery_review_attempts SET status = 'running', failure_code = NULL, failure_summary = NULL, finished_at = NULL WHERE status = 'failed' AND failure_code IN (?, ?) AND lead_execution_id IN (${agentIds.map(() => "?").join(", ")})`).run(reviewRestartOrphanCode, workerRestartOrphanCode, ...agentIds);
     return { agentExecutions: agentIds.length, developerExecutions: developerIds.length };
   });
 }

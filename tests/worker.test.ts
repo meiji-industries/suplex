@@ -146,7 +146,7 @@ test("startup converges terminal Herdr state before issue runs can resume", asyn
       async loadRuns() {
         events.push("load-runs");
         expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_agent_executions WHERE id = 'terminal-execution'").get())).toEqual({ status: "failed", failure_code: "worker-restart-orphan" });
-        expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, failure_summary, finished_at FROM forge_delivery_review_attempts WHERE id = 'terminal-attempt'").get())).toMatchObject({ status: "failed", failure_code: "worker-restart-orphan", failure_summary: expect.any(String), finished_at: expect.any(String) });
+        expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, failure_summary, finished_at FROM forge_delivery_review_attempts WHERE id = 'terminal-attempt'").get())).toMatchObject({ status: "failed", failure_code: "process-failed", failure_summary: expect.any(String), finished_at: expect.any(String) });
         expect(() => value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES ('replacement-execution', 'terminal-task', 'company', 'workflow-terminal-task', 'reviewer', 'starting', 2, ?)").run(stamp))).not.toThrow();
         return 1;
       },
@@ -237,7 +237,7 @@ test("a live reused role pane does not preserve an execution whose own linked tu
       { id: "later-recovery-attempt", status: "running", failure_code: null, failure_summary: null, finished_at: null },
       { id: "stale-blocked-attempt", status: "blocked", failure_code: "review-blocked", failure_summary: "needs input", finished_at: stamp },
       { id: "stale-completed-attempt", status: "completed", failure_code: null, failure_summary: null, finished_at: stamp },
-      { id: "stale-running-attempt", status: "failed", failure_code: "worker-restart-orphan", failure_summary: "The delivery review stopped because its linked agent process was not resumable after the Forge worker restarted.", finished_at: expect.any(String) },
+      { id: "stale-running-attempt", status: "failed", failure_code: "process-failed", failure_summary: "The delivery review stopped because its linked agent process was not resumable after the Forge worker restarted.", finished_at: expect.any(String) },
     ]);
   } finally {
     value.database.close();
@@ -288,7 +288,7 @@ test("linked review-attempt failure and recovery are atomic and preserve termina
     expect(value.database.authQuery((db) => db.prepare("SELECT id, status, failure_code, failure_summary, finished_at FROM forge_delivery_review_attempts ORDER BY id").all())).toEqual([
       { id: "attempt-blocked", status: "blocked", failure_code: "review-blocked", failure_summary: "needs input", finished_at: stamp },
       { id: "attempt-completed", status: "completed", failure_code: null, failure_summary: null, finished_at: stamp },
-      { id: "attempt-running", status: "failed", failure_code: "worker-restart-orphan", failure_summary: "The delivery review stopped because its linked agent process was not resumable after the Forge worker restarted.", finished_at: reclaimedAt },
+      { id: "attempt-running", status: "failed", failure_code: "process-failed", failure_summary: "The delivery review stopped because its linked agent process was not resumable after the Forge worker restarted.", finished_at: reclaimedAt },
     ]);
 
     value.database.authTransaction((db) => db.exec("CREATE TRIGGER abort_review_recovery BEFORE UPDATE OF status ON forge_delivery_review_attempts WHEN OLD.id = 'attempt-running' AND NEW.status = 'running' BEGIN SELECT RAISE(ABORT, 'review recovery rollback'); END"));

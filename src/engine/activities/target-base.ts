@@ -139,12 +139,9 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           ORDER BY m.id`).all(input.taskId, input.companyId, input.workflowId, input.expectedHeadSha, input.expectedHeadSha) as NoDriftMergedDelivery[]);
         const provenDeliveries: Array<{ mergedDelivery: NoDriftMergedDelivery; lineage: ForwardMergeLineageProof }> = [];
         for (const mergedDelivery of mergedDeliveries) {
-          if (!mergedDelivery.developerExecutionId || mergedDelivery.developerExecutionId !== developerExecutionId) continue;
-          const lineage = database.authQuery((db) => proveForwardMergeLineage(db, { currentMergeId: mergedDelivery.id, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, checkpoint: input.checkpoint, developerExecutionId }));
+          if (!mergedDelivery.developerExecutionId) continue;
+          const lineage = database.authQuery((db) => proveForwardMergeLineage(db, { currentMergeId: mergedDelivery.id, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, checkpoint: input.checkpoint, developerExecutionId: mergedDelivery.developerExecutionId! }));
           const ownsMergedDelivery = !!lineage
-            && lineage.developer.id === context.developerExecutionId && lineage.developer.status === context.developerStatus
-            && sameRevision(lineage.developer.resultHead, context.resultCommit) && sameRevision(lineage.developer.resultTree, context.resultTree)
-            && sameRevision(lineage.developer.targetBaseSha, context.targetBaseSha)
             && sameRevision(lineage.current.currentBaseSha, merge.targetBaseSha)
             && sameRevision(lineage.current.resultHead, input.expectedHeadSha) && sameRevision(lineage.current.resultTree, input.expectedHeadTree)
             && sameRevision(merge.priorHead, lineage.current.resultHead) && sameRevision(merge.priorTree, lineage.current.resultTree);

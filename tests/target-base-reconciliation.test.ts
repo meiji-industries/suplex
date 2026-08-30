@@ -81,6 +81,26 @@ async function closeTargetBaseActivityFixture(fixture: Awaited<ReturnType<typeof
   await rm(fixture.root, { recursive: true, force: true });
 }
 
+async function inheritedNoDriftVerificationFixture(prefix: string) {
+  const fixture = await targetBaseActivityFixture(prefix);
+  const { mergedHead, mergedTree } = await mergeTargetBase(fixture);
+  const verification = await fixture.artifacts.putArtifact("company-1", "forward-merge-verification", { taskId: "task-1", filename: "verification.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ outcome: "failed", code: "verification_failed", summary: "Inherited forward-merge verification failed" })) });
+  const later = new Date(Date.parse(fixture.now) + 1_000).toISOString();
+  const noDriftOperationKey = `workflow-1:pre_release:${fixture.configuration.id}:${fixture.targetBase}:${fixture.targetBase}:${mergedHead}`;
+  fixture.database.authTransaction((db) => {
+    db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-original', 'task-1', 'company-1', 'workflow-1', 1, 1, 'completed', 'issue/task-1', ?, ?, 'developer-original-session', ?, ?, ?, ?, 'clean', ?, ?)").run(fixture.repositoryPath, fixture.repository.base, fixture.now, fixture.now, fixture.repository.head, fixture.priorTree, fixture.delivery.id, fixture.evidence.id);
+    db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, supersedes_execution_id, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id, execution_kind) VALUES ('developer-forward', 'task-1', 'company-1', 'workflow-1', 1, 2, 'blocked', 'issue/task-1', ?, ?, 'developer-original', 'developer-forward-session', ?, ?, ?, ?, 'clean', ?, ?, 'forward_merge')").run(fixture.repositoryPath, fixture.targetBase, later, later, mergedHead, mergedTree, fixture.delivery.id, fixture.evidence.id);
+    db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, failure_code, failure_summary, updated_at) VALUES ('merge-inherited-failure', 'task-1', 'company-1', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow-1', ?, 'pre_release', 'inherited-failure-operation', ?, ?, ?, 'developer-forward', ?, 'verification_failed', 'Inherited forward-merge verification failed', ?)").run(fixture.repository.base, fixture.targetBase, fixture.repository.head, mergedHead, mergedTree, fixture.now, fixture.configuration.id, fixture.priorTree, mergedHead, mergedTree, verification.id, fixture.now);
+    db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, developer_execution_id, updated_at) VALUES ('merge-inherited-no-drift', 'task-1', 'company-1', ?, ?, ?, NULL, NULL, 'no_drift', '[]', ?, 'workflow-1', ?, 'pre_release', ?, ?, 'developer-original', ?)").run(fixture.targetBase, fixture.targetBase, mergedHead, later, fixture.configuration.id, noDriftOperationKey, mergedTree, later);
+  });
+  const activities = createActivities(fixture.database, fixture.config, { githubRelease: {
+    async getRemoteRepository() { return "acme/project"; },
+    async getBranchHead() { return fixture.targetBase; },
+  } as never });
+  const input = { taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: fixture.configuration.id, checkpoint: "pre_release" as const, developerExecutionId: "developer-original", expectedBaseSha: fixture.targetBase, expectedHeadSha: mergedHead, expectedHeadTree: mergedTree, forwardMergeId: "merge-inherited-no-drift" };
+  return { fixture, activities, input, mergedHead, mergedTree, verification };
+}
+
 describe("target-base reconciliation contracts", () => {
   test("accepts every checkpoint and discriminated outcome", () => {
     const input = ReconcileTargetBaseActivityInputSchema.parse({
@@ -475,6 +495,50 @@ describe("target-base reconciliation contracts", () => {
     } finally {
       database.close();
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("resurfaces an exact no-drift blocker owned by a later forward-merge execution", async () => {
+    const value = await inheritedNoDriftVerificationFixture("forge-target-base-inherited-no-drift-");
+    try {
+      const rowsBefore = value.fixture.database.authQuery((db) => db.prepare("SELECT id, status, supersedes_execution_id AS supersedesExecutionId, result_commit AS resultCommit, result_tree AS resultTree, failure_code AS failureCode, failure_summary AS failureSummary FROM forge_developer_executions ORDER BY id").all());
+      const changesBefore = value.fixture.database.authQuery((db) => Number(db.prepare("SELECT total_changes()").pluck().get()));
+
+      await expect(value.activities.reconcileTargetBase(value.input)).resolves.toEqual({
+        outcome: "blocked",
+        checkId: "merge-inherited-failure",
+        checkpoint: "pre_release",
+        code: "verification_failed",
+        owner: "lead",
+        retryable: true,
+        summary: "Inherited forward-merge verification failed",
+        evidenceArtifact: { id: value.verification.id, kind: "forward-merge-verification" },
+        observedBaseSha: value.fixture.targetBase,
+        priorHead: value.fixture.repository.head,
+        priorTree: value.fixture.priorTree,
+        resultHead: value.mergedHead,
+        resultTree: value.mergedTree,
+      });
+      expect(value.fixture.database.authQuery((db) => db.prepare("SELECT id, status, supersedes_execution_id AS supersedesExecutionId, result_commit AS resultCommit, result_tree AS resultTree, failure_code AS failureCode, failure_summary AS failureSummary FROM forge_developer_executions ORDER BY id").all())).toEqual(rowsBefore);
+      expect(value.fixture.database.authQuery((db) => Number(db.prepare("SELECT total_changes()").pluck().get()))).toBe(changesBefore);
+    } finally {
+      await closeTargetBaseActivityFixture(value.fixture);
+    }
+  });
+
+  test.each([
+    ["an untyped verification artifact", (value: Awaited<ReturnType<typeof inheritedNoDriftVerificationFixture>>) => value.fixture.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET kind = 'agent-evidence' WHERE id = ?").run(value.verification.id)), "artifact_unavailable"],
+    ["ambiguous exact candidates", (value: Awaited<ReturnType<typeof inheritedNoDriftVerificationFixture>>) => value.fixture.database.authQuery((db) => db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, failure_code, failure_summary, updated_at) SELECT 'merge-inherited-failure-copy', task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, NULL, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, failure_code, failure_summary, updated_at FROM forge_forward_merges WHERE id = 'merge-inherited-failure'").run()), "merge_state_ownership_mismatch"],
+    ["a wrong project revision", (value: Awaited<ReturnType<typeof inheritedNoDriftVerificationFixture>>) => value.fixture.database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET project_revision_id = 'wrong-revision' WHERE id = 'merge-inherited-failure'").run()), "merge_state_ownership_mismatch"],
+    ["a wrong checkpoint", (value: Awaited<ReturnType<typeof inheritedNoDriftVerificationFixture>>) => value.fixture.database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET checkpoint = 'pre_acceptance' WHERE id = 'merge-inherited-failure'").run()), "merge_state_ownership_mismatch"],
+    ["unprovable execution lineage", (value: Awaited<ReturnType<typeof inheritedNoDriftVerificationFixture>>) => value.fixture.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET target_base_sha = ? WHERE id = 'developer-forward'").run(sha("9"))), "merge_state_ownership_mismatch"],
+  ] as const)("rejects inherited no-drift recovery with %s", async (_label, mutate, code) => {
+    const value = await inheritedNoDriftVerificationFixture("forge-target-base-rejected-inheritance-");
+    try {
+      mutate(value);
+      await expect(value.activities.reconcileTargetBase(value.input)).resolves.toMatchObject({ outcome: "blocked", code, owner: "human", retryable: false });
+    } finally {
+      await closeTargetBaseActivityFixture(value.fixture);
     }
   });
 

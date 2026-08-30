@@ -26,8 +26,8 @@ function makeController(overrides: Partial<ProcessController> = {}): ProcessCont
   };
 }
 
-test("shutdown signals only the recorded owned process identities", async () => {
-  const owned: OwnedProcess = {
+function makeOwned(overrides: Partial<OwnedProcess> = {}): OwnedProcess {
+  return {
     name: "forge-worker",
     pid: 4101,
     command: "/usr/local/bin/node worker.js",
@@ -36,205 +36,165 @@ test("shutdown signals only the recorded owned process identities", async () => 
     startTime: "Tue 10 Aug 00:00:00 2026",
     executable: "node",
     argv: ["/usr/local/bin/node", "worker.js"],
+    ...overrides,
   };
-  const unrelated: OwnedProcess = {
-    name: "unrelated-worker-like-process",
-    pid: 4102,
-    command: "/usr/local/bin/node worker-like.js",
-    startedAt: "2026-08-10T00:00:01.000Z",
-    processGroup: 4102,
-    startTime: "Tue 10 Aug 00:00:01 2026",
-  };
-  const signalled: number[] = [];
-  let ownedStopped = false;
+}
+
+test("shutdown signals a matching recorded identity", async () => {
+  const owned = makeOwned();
+  const signalled: Array<"SIGTERM" | "SIGKILL"> = [];
+  let running = true;
   const controller = makeController({
-    async inspect(pid) {
-      if (pid === owned.pid) return ownedStopped ? undefined : makeInspection(owned);
-      if (pid === unrelated.pid) return makeInspection(unrelated);
-      return undefined;
+    async inspect() {
+      return running ? makeInspection(owned) : undefined;
     },
-    async signal(pid, signal) {
-      expect(signal).toBe("SIGTERM");
+    async signal(_pid, signal) {
+      signalled.push(signal);
+      running = false;
+    },
+  });
+
+  await expect(stopOwnedProcesses({ version: 1, processes: [owned] }, controller)).resolves.toEqual({
+    stopped: [owned.pid],
+    skipped: [],
+  });
+  expect(signalled).toEqual(["SIGTERM"]);
+});
+
+test("shutdown targets only the recorded PID when it did not lead its process group", async () => {
+  const owned = makeOwned({ processGroup: 5101 });
+  let running = true;
+  const signalled: number[] = [];
+  const controller = makeController({
+    async inspect() {
+      return running ? makeInspection(owned) : undefined;
+    },
+    async signal(pid) {
       signalled.push(pid);
-      ownedStopped = true;
+      running = false;
+    },
+    async signalGroup() {
+      throw new Error("a process group not created by Forge must not be signalled");
     },
   });
 
   await stopOwnedProcesses({ version: 1, processes: [owned] }, controller);
-
   expect(signalled).toEqual([owned.pid]);
-  expect(signalled.includes(unrelated.pid)).toBe(false);
 });
 
-test("shutdown signals the recorded live PID even when it has a detached process group", async () => {
-  const owned: OwnedProcess = {
-    name: "forge-worker",
-    pid: 4101,
-    command: "/usr/local/bin/node worker.js",
-    startedAt: "2026-08-10T00:00:00.000Z",
-    processGroup: 5101,
-    startTime: "Tue 10 Aug 00:00:00 2026",
-    executable: "node",
-    argv: ["/usr/local/bin/node", "worker.js"],
-  };
-  let leaderRunning = true;
-  let groupRunning = true;
-  const signalledGroups: number[] = [];
+test("shutdown refuses PID reuse immediately before SIGTERM", async () => {
+  const owned = makeOwned();
+  let inspections = 0;
+  const signalled: string[] = [];
   const controller = makeController({
-    async inspect(pid) {
-      return pid === owned.pid && leaderRunning ? makeInspection(owned) : undefined;
+    async inspect() {
+      inspections += 1;
+      return inspections === 1
+        ? makeInspection(owned)
+        : { ...makeInspection(owned), startTime: "Tue 11 Aug 00:00:00 2026" };
     },
-    async signal(pid) {
-      expect(pid).toBe(owned.pid);
-      leaderRunning = false;
-      groupRunning = false;
+    async signal(_pid, signal) {
+      signalled.push(signal);
     },
-    async signalGroup(processGroup) {
-      signalledGroups.push(processGroup);
-      leaderRunning = false;
-      groupRunning = false;
+  });
+
+  await expect(stopOwnedProcesses({ version: 1, processes: [owned] }, controller))
+    .rejects.toThrow(/ownership is wrong start time/i);
+  expect(signalled).toEqual([]);
+});
+
+test("shutdown refuses PID reuse between SIGTERM and SIGKILL", async () => {
+  const owned = makeOwned();
+  let inspections = 0;
+  const signalled: string[] = [];
+  const controller = makeController({
+    async inspect() {
+      inspections += 1;
+      return inspections < 4
+        ? makeInspection(owned)
+        : { ...makeInspection(owned), startTime: "Tue 11 Aug 00:00:00 2026" };
     },
-    async isProcessGroupAlive(processGroup) {
+    async signal(_pid, signal) {
+      signalled.push(signal);
+    },
+  });
+
+  await expect(stopOwnedProcesses({ version: 1, processes: [owned] }, controller))
+    .rejects.toThrow(/ownership is wrong start time/i);
+  expect(signalled).toEqual(["SIGTERM"]);
+});
+
+test("shutdown escalates a matching identity from SIGTERM to SIGKILL", async () => {
+  const owned = makeOwned();
+  let running = true;
+  const signalled: string[] = [];
+  const controller = makeController({
+    async inspect() {
+      return running ? makeInspection(owned) : undefined;
+    },
+    async signal(_pid, signal) {
+      signalled.push(signal);
+      if (signal === "SIGKILL") running = false;
+    },
+  });
+
+  await stopOwnedProcesses({ version: 1, processes: [owned] }, controller);
+  expect(signalled).toEqual(["SIGTERM", "SIGKILL"]);
+});
+
+test("shutdown refuses a live legacy record without exact ownership identity", async () => {
+  const inspected = makeOwned();
+  const legacy = makeOwned({ startTime: undefined, executable: undefined, argv: undefined });
+  const signalled: string[] = [];
+  const controller = makeController({
+    async inspect() {
+      return makeInspection(inspected);
+    },
+    async signal(_pid, signal) {
+      signalled.push(signal);
+    },
+  });
+
+  await expect(stopOwnedProcesses({ version: 1, processes: [legacy] }, controller))
+    .rejects.toThrow(/ownership is incomplete identity/i);
+  expect(signalled).toEqual([]);
+});
+
+test("shutdown can stop an independently proven orphaned Forge process group", async () => {
+  const owned = makeOwned();
+  let groupRunning = true;
+  const signalled: string[] = [];
+  const controller = makeController({
+    async inspect() {
+      return undefined;
+    },
+    async signal() {
+      throw new Error("an orphaned group has no leader PID to signal");
+    },
+    async signalGroup(processGroup, signal) {
       expect(processGroup).toBe(owned.processGroup);
+      signalled.push(signal);
+      groupRunning = false;
+    },
+    async isProcessGroupAlive() {
       return groupRunning;
     },
   });
 
   await stopOwnedProcesses({ version: 1, processes: [owned] }, controller);
-
-  expect(signalledGroups).toEqual([]);
+  expect(signalled).toEqual(["SIGTERM"]);
 });
 
-test("shutdown reports a live PID that survives termination", async () => {
-  const owned: OwnedProcess = {
-    name: "forge-worker",
-    pid: 4101,
-    command: "/usr/local/bin/node worker.js",
-    startedAt: "2026-08-10T00:00:00.000Z",
-    processGroup: 5101,
-    startTime: "Tue 10 Aug 00:00:00 2026",
-    executable: "node",
-    argv: ["/usr/local/bin/node", "worker.js"],
-  };
-  let leaderRunning = true;
-  const controller = makeController({
-    async inspect() {
-      return leaderRunning ? makeInspection(owned) : undefined;
-    },
-    async signalGroup() {
-      leaderRunning = false;
-    },
-    async isProcessGroupAlive() {
-      return true;
-    },
-  });
-
-  await expect(stopOwnedProcesses({ version: 1, processes: [owned] }, controller))
-    .rejects.toThrow(/did not exit after SIGKILL/i);
-});
-
-test("shutdown stops a reused live PID without an ownership verdict", async () => {
-  const signalled: number[] = [];
-  const controller = makeController({
-    async inspect() {
-      return { pid: 4101, command: "/usr/local/bin/node unrelated.js", executable: "node", argv: ["/usr/local/bin/node", "unrelated.js"], processGroup: 4101, startTime: "Tue 11 Aug 00:00:00 2026" };
-    },
-    async signal(pid) {
-      signalled.push(pid);
-    },
-  });
-
-  await expect(stopOwnedProcesses({
-    version: 1,
-    processes: [{
-      name: "forge-worker",
-      pid: 4101,
-      command: "/usr/local/bin/node worker.js",
-      startedAt: "2026-08-10T00:00:00.000Z",
-      processGroup: 4101,
-      startTime: "Tue 10 Aug 00:00:00 2026",
-    }],
-  }, controller)).rejects.toThrow(/did not exit after SIGKILL/i);
-
-  expect(signalled).toEqual([4101, 4101]);
-});
-
-test("shutdown stops a live legacy process record", async () => {
-  const signalled: number[] = [];
-  const controller = makeController({
-    async inspect() {
-      return {
-        pid: 4101,
-        command: "/usr/local/bin/node worker.js",
-        executable: "/usr/local/bin/node",
-        argv: ["/usr/local/bin/node", "worker.js"],
-        processGroup: 4101,
-        startTime: "Tue 10 Aug 00:00:00 2026",
-      };
-    },
-    async signal(pid) {
-      signalled.push(pid);
-    },
-  });
-
-  await expect(stopOwnedProcesses({
-    version: 1,
-    processes: [{
-      name: "forge-worker",
-      pid: 4101,
-      command: "/usr/local/bin/node worker.js",
-      startedAt: "2026-08-10T00:00:00.000Z",
-      processGroup: 4101,
-    }],
-  }, controller)).rejects.toThrow(/did not exit after SIGKILL/i);
-
-  expect(signalled).toEqual([4101, 4101]);
-});
-
-test("shutdown stops a live PID despite changed start metadata", async () => {
-  const signalled: number[] = [];
-  const controller = makeController({
-    async inspect() {
-      return { pid: 4101, command: "/usr/local/bin/node worker.js", executable: "node", argv: ["/usr/local/bin/node", "worker.js"], processGroup: 4101, startTime: "Tue 11 Aug 00:00:00 2026" };
-    },
-    async signal(pid) {
-      signalled.push(pid);
-    },
-  });
-
-  await expect(stopOwnedProcesses({
-    version: 1,
-    processes: [{
-      name: "forge-worker",
-      pid: 4101,
-      command: "/usr/local/bin/node worker.js",
-      startedAt: "2026-08-10T00:00:00.000Z",
-      processGroup: 4101,
-      startTime: "Tue 10 Aug 00:00:00 2026",
-    }],
-  }, controller)).rejects.toThrow(/did not exit after SIGKILL/i);
-
-  expect(signalled).toEqual([4101, 4101]);
-});
-
-test("shutdown reports a live PID that does not exit", async () => {
-  const owned: OwnedProcess = {
-    name: "forge-worker",
-    pid: 4101,
-    command: "/usr/local/bin/node worker.js",
-    startedAt: "2026-08-10T00:00:00.000Z",
-    processGroup: 4101,
-    startTime: "Tue 10 Aug 00:00:00 2026",
-    executable: "node",
-    argv: ["/usr/local/bin/node", "worker.js"],
-  };
+test("shutdown reports a matching identity that survives SIGKILL", async () => {
+  const owned = makeOwned();
   const controller = makeController({
     async inspect() {
       return makeInspection(owned);
     },
   });
 
-  await expect(stopOwnedProcesses({ version: 1, processes: [owned] }, controller)).rejects.toThrow(/did not exit after SIGKILL/i);
+  await expect(stopOwnedProcesses({ version: 1, processes: [owned] }, controller))
+    .rejects.toThrow(/did not exit after SIGKILL/i);
 });
 
 test("shutdown passes the recorded Serve backend to cleanup", async () => {

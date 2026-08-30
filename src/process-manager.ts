@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 
 import { ProcessRegistrySchema, TailscaleServeStatusSchema } from "./schemas.js";
@@ -70,6 +71,7 @@ export interface StopReport {
   skipped: Array<{ pid: number; reason: "missing" }>;
 }
 
+const shutdownGraceMs = 250;
 const shutdownVerificationAttempts = 10;
 const shutdownVerificationDelayMs = 100;
 const processInspectionAttempts = 60;
@@ -92,7 +94,7 @@ async function processField(pid: number, field: string): Promise<string | undefi
   }
 }
 
-async function inspectProcessOnce(pid: number): Promise<ProcessInspection | undefined> {
+export async function inspectProcessOnce(pid: number): Promise<ProcessInspection | undefined> {
   const [ownerUidValue, command, pgidValue, startTime, executable] = await Promise.all([
     processField(pid, "uid="),
     processField(pid, "command="),
@@ -121,7 +123,7 @@ export const defaultProcessController: ProcessController = {
       const inspection = await inspectProcessOnce(pid);
       if (inspection) return inspection;
       if (attempt + 1 < processInspectionAttempts) {
-        await new Promise((resolve) => setTimeout(resolve, processInspectionRetryDelayMs));
+        await delay(processInspectionRetryDelayMs);
       }
     }
     return undefined;
@@ -185,32 +187,66 @@ export function hasCompleteProcessIdentity(owned: OwnedProcess): boolean {
     && owned.argv !== undefined;
 }
 
+function ownershipError(owned: OwnedProcess, comparison: ProcessIdentityComparison): Error {
+  const reason = comparison.kind === "incomplete_identity"
+    ? `incomplete identity (${comparison.field})`
+    : comparison.kind.replaceAll("_", " ");
+  return new Error(`Refusing to signal recorded Forge process ${owned.name} (${owned.pid}); ownership is ${reason}`);
+}
+
+async function ownedOrphanedGroupIsAlive(owned: OwnedProcess, controller: ProcessController): Promise<boolean> {
+  if (
+    !hasCompleteProcessIdentity(owned)
+    || owned.processGroup !== owned.pid
+    || !controller.signalGroup
+    || !controller.isProcessGroupAlive
+  ) return false;
+  // A Forge-created process group has PGID === its recorded leader PID. If the
+  // leader is gone while that group remains live, the OS cannot reuse the PGID;
+  // this is the only leaderless target whose ownership is independently proven.
+  return controller.isProcessGroupAlive(owned.processGroup);
+}
+
 export async function signalOwnedProcess(
   owned: OwnedProcess,
   signal: "SIGTERM" | "SIGKILL",
   controller: ProcessController,
 ): Promise<void> {
-  if (owned.processGroup !== undefined && controller.signalGroup) {
-    await controller.signalGroup(owned.processGroup, signal);
+  const comparison = compareProcessIdentity(owned, await controller.inspect(owned.pid));
+  if (comparison.kind === "exact_match") {
+    if (comparison.inspection.processGroup === owned.pid && controller.signalGroup) {
+      await controller.signalGroup(comparison.inspection.processGroup, signal);
+    } else {
+      await controller.signal(comparison.inspection.pid, signal);
+    }
     return;
   }
-  await controller.signal(owned.pid, signal);
+  if (comparison.kind === "not_running") {
+    if (await ownedOrphanedGroupIsAlive(owned, controller)) {
+      await controller.signalGroup!(owned.processGroup!, signal);
+    }
+    return;
+  }
+  throw ownershipError(owned, comparison);
 }
 
 export async function ownedProcessIsRunning(owned: OwnedProcess, controller: ProcessController): Promise<boolean> {
   return Boolean(await controller.inspect(owned.pid));
 }
 
+async function ownedTargetIsRunning(owned: OwnedProcess, controller: ProcessController): Promise<boolean> {
+  const comparison = compareProcessIdentity(owned, await controller.inspect(owned.pid));
+  if (comparison.kind === "exact_match") return true;
+  if (comparison.kind === "not_running") return ownedOrphanedGroupIsAlive(owned, controller);
+  throw ownershipError(owned, comparison);
+}
+
 async function waitForOwnedProcessToStop(owned: OwnedProcess, controller: ProcessController): Promise<void> {
-  for (let attempt = 0; attempt < shutdownVerificationAttempts; attempt += 1) {
-    if (!await ownedProcessIsRunning(owned, controller)) return;
-    await new Promise((resolve) => setTimeout(resolve, shutdownVerificationDelayMs));
-  }
-  await controller.signal(owned.pid, "SIGKILL").catch(() => undefined);
-  for (let attempt = 0; attempt < shutdownVerificationAttempts; attempt += 1) {
-    if (!await ownedProcessIsRunning(owned, controller)) return;
-    await new Promise((resolve) => setTimeout(resolve, shutdownVerificationDelayMs));
-  }
+  await delay(shutdownGraceMs);
+  if (!await ownedTargetIsRunning(owned, controller)) return;
+  await signalOwnedProcess(owned, "SIGKILL", controller);
+  await delay(shutdownGraceMs);
+  if (!await ownedTargetIsRunning(owned, controller)) return;
   throw new Error(`Recorded Forge process ${owned.name} (${owned.pid}) did not exit after SIGKILL`);
 }
 
@@ -220,7 +256,7 @@ async function waitForServeToStop(serve: TailscaleServe, controller: ProcessCont
   }
   for (let attempt = 0; attempt < shutdownVerificationAttempts; attempt += 1) {
     if (!await controller.isServeConfigured(serve)) return;
-    await new Promise((resolve) => setTimeout(resolve, shutdownVerificationDelayMs));
+    await delay(shutdownVerificationDelayMs);
   }
   throw new Error("Could not prove recorded Tailscale Serve route stopped before removing its registry");
 }
@@ -228,15 +264,15 @@ async function waitForServeToStop(serve: TailscaleServe, controller: ProcessCont
 export async function stopOwnedProcesses(registry: ProcessRegistry, controller: ProcessController = defaultProcessController): Promise<StopReport> {
   const report: StopReport = { stopped: [], skipped: [] };
   for (const ownedProcess of registry.processes) {
-    const inspection = await controller.inspect(ownedProcess.pid);
-    if (!inspection) {
+    const comparison = compareProcessIdentity(ownedProcess, await controller.inspect(ownedProcess.pid));
+    if (comparison.kind === "not_running" && !await ownedOrphanedGroupIsAlive(ownedProcess, controller)) {
       report.skipped.push({ pid: ownedProcess.pid, reason: "missing" });
       continue;
     }
-    // Forge is a single-operator system: a live recorded PID is always the
-    // process to replace. Identity metadata remains useful for diagnostics,
-    // but is not an authorization gate.
-    await controller.signal(ownedProcess.pid, "SIGTERM");
+    if (comparison.kind !== "exact_match" && comparison.kind !== "not_running") {
+      throw ownershipError(ownedProcess, comparison);
+    }
+    await signalOwnedProcess(ownedProcess, "SIGTERM", controller);
     await waitForOwnedProcessToStop(ownedProcess, controller);
     report.stopped.push(ownedProcess.pid);
   }

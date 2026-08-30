@@ -308,7 +308,7 @@ describe("target-base reconciliation contracts", () => {
       });
       const artifacts = new ArtifactStore(config.artifactRoot, database);
       const configuration = await artifacts.putArtifact("company-1", "task-project-configuration", { taskId: "task-1", filename: "configuration.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ projectId: "project-1", projectName: "Project", repositoryPath, worktreeRoot: repositoryPath, repository: "acme/project", baseBranch: "main", targetBranch: "main", baseSha: repository.base, targetSha: repository.base, setupCommand: "true", verificationCommand: "true", requiredChecks: [], roleAgents: { builder: "builder" }, roleProfiles: { builder: "builder" }, capturedAt: now })) });
-      const delivery = await artifacts.putArtifact("company-1", "developer-delivery", { taskId: "task-1", filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from("{}") });
+      const delivery = await artifacts.putArtifact("company-1", "forward-merge-delivery", { taskId: "task-1", filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from("{}") });
       const evidence = await artifacts.putArtifact("company-1", "agent-evidence", { taskId: "task-1", filename: "evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") });
       const verification = await artifacts.putArtifact("company-1", "forward-merge-verification", { taskId: "task-1", filename: "verification.json", mimeType: "application/json", bytes: Buffer.from("{}") });
       database.authTransaction((db) => {
@@ -329,7 +329,7 @@ describe("target-base reconciliation contracts", () => {
       const revalidatedInput = { taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: configuration.id, checkpoint: "pre_release" as const, developerExecutionId: "developer-1", expectedBaseSha: repository.base, expectedHeadSha: mergedHead, expectedHeadTree: mergedTree, forwardMergeId: "merge-1", verificationOnly: true };
       const noDriftInput = { ...revalidatedInput, expectedBaseSha: targetBase, forwardMergeId: undefined, verificationOnly: undefined };
 
-      await expect(activities.reconcileTargetBase(noDriftInput)).resolves.toMatchObject({ outcome: "no_drift", headSha: mergedHead, headTree: mergedTree });
+      await expect(activities.reconcileTargetBase(noDriftInput)).resolves.toMatchObject({ outcome: "no_drift", headSha: mergedHead, headTree: mergedTree, deliveryArtifact: { id: delivery.id, kind: "forward-merge-delivery" } });
       expect(database.authQuery((db) => db.prepare("SELECT result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = 'developer-1'").get())).toEqual({ resultCommit: mergedHead, resultTree: mergedTree });
       await expect(activities.pushDeliveryBranch({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", branchName: "issue/task-1", commitSha: mergedHead })).resolves.toMatchObject({ commitSha: mergedHead });
       expect(pushCount).toBe(1);
@@ -342,7 +342,7 @@ describe("target-base reconciliation contracts", () => {
       await expect(activities.reconcileTargetBase(noDriftInput)).resolves.toMatchObject({ outcome: "blocked", code: "merge_state_ownership_mismatch" });
 
       database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET result_commit = ?, result_tree = ? WHERE id = 'developer-1'").run(repository.head, priorTree));
-      await expect(activities.reconcileTargetBase(revalidatedInput)).resolves.toMatchObject({ outcome: "revalidated", developerExecutionId: "developer-1", headSha: mergedHead, headTree: mergedTree });
+      await expect(activities.reconcileTargetBase(revalidatedInput)).resolves.toMatchObject({ outcome: "revalidated", developerExecutionId: "developer-1", headSha: mergedHead, headTree: mergedTree, deliveryArtifact: { id: delivery.id, kind: "forward-merge-delivery" } });
       expect(database.authQuery((db) => db.prepare("SELECT result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = 'developer-1'").get())).toEqual({ resultCommit: mergedHead, resultTree: mergedTree });
       await expect(activities.pushDeliveryBranch({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", branchName: "issue/task-1", commitSha: repository.head })).rejects.toMatchObject({ type: "stale-reviewed-revision", message: "The reviewed revision does not match a completed Developer execution" });
       expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_developer_executions WHERE task_id = 'task-1'").get())).toEqual({ count: 1 });

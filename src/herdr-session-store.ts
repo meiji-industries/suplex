@@ -543,7 +543,11 @@ export class HerdrSessionStore {
       return await this.herdr.startAgent(input);
     } catch (error) {
       if (input.adoptTimedOutArgvPrompt && isAgentStartupTimeout(error)) {
-        const live = await this.getRecordedAgent(input.name);
+        let live = await this.getRecordedAgent(input.name);
+        if (!live) {
+          await this.herdr.renameAgent(input.paneId, input.name);
+          live = await this.getRecordedAgent(input.name);
+        }
         if (
           live &&
           live.paneId === input.paneId &&

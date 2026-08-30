@@ -197,6 +197,7 @@ export interface HerdrClient {
   listAgents(): Promise<HerdrAgent[]>;
   snapshot(): Promise<HerdrAgent[]>;
   getAgent(name: string): Promise<HerdrAgent | null>;
+  renameAgent(target: string, name: string): Promise<void>;
   readAgent(name: string, source?: "recent-unwrapped", lines?: number, format?: "text" | "ansi"): Promise<string>;
   waitAgent(name: string): Promise<HerdrAgent>;
   prompt(name: string, text: string): Promise<HerdrAgent>;
@@ -480,6 +481,9 @@ export class CliHerdrClient implements HerdrClient {
     return this.optional(async () =>
       agent(value<Json>(await this.call(["agent", "get", name], true), "agent")),
     );
+  }
+  renameAgent(target: string, name: string): Promise<void> {
+    return this.empty(["agent", "rename", target, name]);
   }
   async readAgent(name: string, source = "recent-unwrapped" as const, lines?: number, format?: "text" | "ansi"): Promise<string> {
     // `agent read` prints plain text; older builds wrapped it in the JSON envelope.

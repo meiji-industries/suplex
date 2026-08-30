@@ -10,6 +10,17 @@ test("client validates JSON envelopes and passes unambiguous argv", async () => 
   expect(argv).toEqual([["workspace", "get", "w1; rm -rf /"]]);
 });
 
+test("client renames detected agents by pane with argv", async () => {
+  const argv: string[][] = [];
+  const client = new CliHerdrClient("herdr", async (_file, args) => {
+    argv.push([...args]);
+    return { stdout: JSON.stringify({ id: "request", result: {} }) };
+  });
+
+  await expect(client.renameAgent("w1:p2", "task-builder")).resolves.toBeUndefined();
+  expect(argv).toEqual([["agent", "rename", "w1:p2", "task-builder"]]);
+});
+
 test("client fails closed for malformed output and classifies syntax failures", async () => {
   const malformed = new CliHerdrClient("herdr", async () => ({ stdout: "not-json" }));
   await expect(malformed.listWorkspaces()).rejects.toMatchObject({ code: "invalid_response", retryable: false });

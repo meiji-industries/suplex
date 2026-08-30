@@ -163,10 +163,9 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
         || Boolean(pushReviewedHead && ctx.input.deliveryTarget && ["pull_request_draft", "pull_request_ready", "merged"].includes(ctx.input.deliveryTarget) && ctx.state.pullRequestNumber && ctx.state.resultCommit && ctx.state.resultCommit.toLowerCase() !== ctx.state.expectedHeadSha?.toLowerCase()));
     if (shouldPushReviewedHead) await ctx.project();
     if (ctx.state.phase === "delivery_reviewed" && ctx.input.deliveryTarget === "remote_branch") {
-      await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName!, commitSha: ctx.state.resultCommit! });
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Done — branch pushed", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      await resumeReviewedDeliveryTarget(ctx);
     } else if (ctx.state.phase === "delivery_reviewed" && ctx.input.deliveryTarget === "local_worktree") {
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Done — kept in worktree", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      await resumeReviewedDeliveryTarget(ctx);
     } else if (ctx.state.phase === "delivery_reviewed" && pushReviewedHead && ctx.input.deliveryTarget && ["pull_request_draft", "pull_request_ready", "merged"].includes(ctx.input.deliveryTarget) && ctx.state.pullRequestNumber && ctx.state.resultCommit && ctx.state.resultCommit.toLowerCase() !== ctx.state.expectedHeadSha?.toLowerCase()) {
       await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName!, commitSha: ctx.state.resultCommit! });
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_reviewed", expectedHeadSha: ctx.state.resultCommit, expectedHeadTree: ctx.state.resultTree, allowedCommands: ctx.addRevisionCommand(ctx.state.allowedCommands), pendingAction: "Pushed the reviewed commit to the pull request", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
@@ -177,6 +176,23 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
     await ctx.project();
     void command;
     return ctx.state;
+}
+
+/** Resume the terminal delivery operation after a crash at delivery_reviewed.
+ * Remote/local targets must never enter the PR publication path.
+ */
+export async function resumeReviewedDeliveryTarget(ctx: IssueWorkflowContext): Promise<contracts.IssueWorkflowState> {
+  if (ctx.state.phase !== "delivery_reviewed") return ctx.state;
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  if (ctx.input.deliveryTarget === "remote_branch") {
+    await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName!, commitSha: ctx.state.resultCommit! });
+  } else if (ctx.input.deliveryTarget !== "local_worktree") {
+    return ctx.state;
+  }
+  const pendingAction = ctx.input.deliveryTarget === "remote_branch" ? "Done — branch pushed" : "Done — kept in worktree";
+  ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "done", owner: "human", allowedCommands: [], pendingAction, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+  await ctx.project();
+  return ctx.state;
 }
 
 export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void {

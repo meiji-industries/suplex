@@ -285,3 +285,25 @@ test("a foreign remote head fails closed without publication, observation, or ad
     expect(observeCalls).toBe(0);
   } finally { await harness.stop(); }
 });
+
+test.each([
+  ["remote_branch", true],
+  ["local_worktree", false],
+] as const)("delivery_reviewed restart resumes %s without creating a pull request", async (deliveryTarget, pushes) => {
+  let publishCalls = 0;
+  const issueId = `reviewed-resume-${deliveryTarget}`;
+  const harness = await createEngineHarness({
+    pushDeliveryBranch: async (input) => ({ repository: "acme/forge", branchName: input.branchName, commitSha: input.commitSha }),
+    publishRelease: async (input) => { publishCalls += 1; return completedRelease(input.branchName); },
+  });
+  harness.seedTask(issueId, { deliveryTarget });
+  const continuation = reviewedState(harness, issueId, { releaseId: null, pullRequestNumber: null, pullRequestUrl: null });
+  try {
+    persistContinuation(harness, issueId, continuation);
+    const started = await startIssueWorkflow(harness.config, workflowInput(issueId, continuation, deliveryTarget));
+    const done = await harness.settle(started.workflowId, (state) => state.phase === "done");
+    expect(done.pendingAction).toBe(pushes ? "Done — branch pushed" : "Done — kept in worktree");
+    expect(publishCalls).toBe(0);
+    expect(harness.calls.get("pushDeliveryBranch") ?? 0).toBe(pushes ? 1 : 0);
+  } finally { await harness.stop(); }
+});

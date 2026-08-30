@@ -8,7 +8,7 @@ import {
   type LeadPlanningResult,
   type StartPlanningInput,
 } from "../issue-contracts.js";
-import { repairDelivery, reviewDelivery } from "./register-delivery-review.js";
+import { repairDelivery, resumeReviewedDeliveryTarget, reviewDelivery } from "./register-delivery-review.js";
 import { startDevelopment } from "./register-development.js";
 import { resolveMergeConflict } from "./register-merge.js";
 import { evidencePointer, humanBlocker } from "./state-transitions.js";
@@ -196,17 +196,26 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   // start_development is the exception: it already gates on commandAlreadyProcessed at its own
   // entry and marks itself once its state mutation lands, so pre-marking here would make it a
   // silent no-op before it ever runs.
-  if (chained.command !== "start_development") ctx.markCommandProcessed(chained.commandId);
+  if (chained.command !== "start_development") {
+    ctx.markCommandProcessed(chained.commandId);
+    const revision = ctx.state.revision + 1;
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision, lastEventId: `${ctx.state.workflowId}:${revision}` });
+    await ctx.project();
+  }
   const before = { phase: ctx.state.phase, owner: ctx.state.owner, pendingAction: ctx.state.pendingAction };
   const command = { expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId ?? ctx.input.autoApprovePlanActorUserId ?? "forge-auto-chain", commandId: chained.commandId };
   let failure: unknown;
   try {
     if (chained.command === "review_delivery") await reviewDelivery(ctx, command);
-    else if (chained.command === "publish_draft") await ctx.runPublishTurn();
+    else if (chained.command === "publish_draft") {
+      if (ctx.state.phase === "delivery_reviewed" && (ctx.input.deliveryTarget === "remote_branch" || ctx.input.deliveryTarget === "local_worktree")) await resumeReviewedDeliveryTarget(ctx);
+      else await ctx.runPublishTurn();
+    }
     else if (chained.command === "repair_delivery") await repairDelivery(ctx, command);
     else if (chained.command === "start_development") await startDevelopment(ctx, command);
     else await resolveMergeConflict(ctx, command);
   } catch (error) {
+    if (isCancellation(error)) return;
     failure = error;
   }
   const unchanged = ctx.state.phase === before.phase && ctx.state.owner === before.owner && ctx.state.pendingAction === before.pendingAction;
@@ -291,6 +300,9 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
   const commandId = `${prefix}${attempt + 1}`;
   if (ctx.commandAlreadyProcessed(commandId)) return false;
   ctx.markCommandProcessed(commandId);
+  const claimRevision = ctx.state.revision + 1;
+  ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: claimRevision, lastEventId: `${ctx.state.workflowId}:${claimRevision}` });
+  await ctx.project();
   if (command === "retry_target_base_reconciliation" && ctx.state.releaseFailureCode === "target-base-drift") {
     const pendingAction = "Target base moved; reconciling automatically before publishing.";
     if (ctx.state.pendingAction !== pendingAction) {
@@ -329,10 +341,22 @@ export function createGuarded(
     try {
       const commandId = (args[0] as { commandId?: unknown } | undefined)?.commandId;
       const automatic = typeof commandId === "string" && commandId.startsWith(`${before.workflowId}:auto-`);
-      // A successful human command supersedes a prior handler error. Clear it
-      // before the command runs so its regular projection carries the change;
-      // a standalone clear must never consume a workflow revision.
-      if (!automatic && before.lastHandlerError) store.set(IssueWorkflowStateSchema.parse({ ...before, lastHandlerError: null }));
+      // Clearing a prior handler error changes the durable state, so it owns a
+      // fresh revision before the next command can authorize an external effect.
+      if (!automatic && before.lastHandlerError) {
+        const revision = before.revision + 1;
+        const cleared = IssueWorkflowStateSchema.parse({ ...before, revision, lastEventId: `${before.workflowId}:${revision}`, lastHandlerError: null });
+        store.set(cleared);
+        await options.project(cleared);
+        const first = args[0];
+        if (first && typeof first === "object") {
+          const rebased = { ...first } as Record<string, unknown>;
+          let changed = false;
+          if ("expectedRevision" in first && first.expectedRevision === before.revision) { rebased.expectedRevision = revision; changed = true; }
+          if ("expectedWorkflowRevision" in first && first.expectedWorkflowRevision === before.revision) { rebased.expectedWorkflowRevision = revision; changed = true; }
+          if (changed) (args as unknown[])[0] = rebased;
+        }
+      }
       return await fn(...args);
     } catch (error) {
       const state = store.get();
@@ -348,7 +372,8 @@ export function createGuarded(
           command: command ?? "unknown",
           reason,
         });
-        const recorded = IssueWorkflowStateSchema.parse({ ...state, lastHandlerError: { command: command ?? "unknown", reason, at: new Date().toISOString() } });
+        const revision = state.revision + 1;
+        const recorded = IssueWorkflowStateSchema.parse({ ...state, revision, lastEventId: `${state.workflowId}:${revision}`, lastHandlerError: { command: command ?? "unknown", reason, at: new Date().toISOString() } });
         store.set(recorded);
         await options.project(recorded);
         return recorded as R;

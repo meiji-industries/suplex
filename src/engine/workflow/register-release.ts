@@ -7,6 +7,7 @@ import { issueUpdates } from "../issue-updates.js";
 import { githubPullRequestObservationFields } from "../../github-pull-request-observation.js";
 import type { IssueWorkflowContext } from "./context.js";
 import { GithubReleaseFailure } from "../../github-release.js";
+import { resumeReviewedDeliveryTarget } from "./register-delivery-review.js";
 import { ReleaseFailureCodeSchema } from "../../release-failures.js";
 
 function githubPullRequestLifecycleFields(
@@ -105,6 +106,7 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
   };
   setHandler(issueUpdates.publish_draft, ctx.guarded(async (rawInput: any) => {
     contracts.StartPlanningInputSchema.parse(rawInput);
+    if (ctx.state.phase === "delivery_reviewed" && (ctx.input.deliveryTarget === "remote_branch" || ctx.input.deliveryTarget === "local_worktree")) return resumeReviewedDeliveryTarget(ctx);
     return runPublishTurn();
   }), { validator(rawInput) { const command = contracts.StartPlanningInputSchema.parse(rawInput); if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision"); if (!(ctx.state.phase === "delivery_reviewed" || (ctx.state.phase === "delivery_blocked" && ctx.state.releaseStatus === "blocked" && ctx.state.allowedCommands.includes("publish_draft"))) || !ctx.state.deliveryReviewId) throw new Error("Draft publication is not available in the current phase"); } });
 

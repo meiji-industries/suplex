@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 
-import { CliHerdrClient, HerdrFailure, snapshotAgents } from "../src/herdr-client.js";
+import {
+  CliHerdrClient,
+  HerdrFailure,
+  snapshotAgents,
+  snapshotHerdrRuntime,
+} from "../src/herdr-client.js";
 import type { CommandRunResult } from "../src/command-runner.js";
 
 test("client validates JSON envelopes and passes unambiguous argv", async () => {
@@ -249,6 +254,242 @@ test("snapshot normalizes Herdr agent state", async () => {
     stdout: JSON.stringify({ id: "cli:snapshot", result: { type: "api_snapshot", snapshot: { agents: [{ name: "forge-developer", pane_id: "pane", agent_status: "working", agent_session: { value: "session" }, screen_detection_skipped: true, state_change_seq: 7 }] } } }),
   }));
   await expect(client.snapshot()).resolves.toEqual([expect.objectContaining({ name: "forge-developer", paneId: "pane", status: "working", agentSession: "session", screenDetectionSkipped: true, state_change_seq: 7 })]);
+});
+
+test("runtime snapshot normalizes panes and agents from one Herdr call", async () => {
+  const argv: string[][] = [];
+  const nativeSession = {
+    kind: "id",
+    value: "session-1",
+    source: "herdr:codex",
+    agent: "codex",
+    future_session_field: "preserved",
+  };
+  const client = new CliHerdrClient("herdr", async (_file, args) => {
+    argv.push([...args]);
+    return {
+      stdout: JSON.stringify({
+        id: "cli:snapshot",
+        result: {
+          type: "api_snapshot",
+          snapshot: {
+            version: 17,
+            agents: [
+              {
+                name: "forge-developer",
+                pane_id: "w9:p2",
+                workspace_id: "w9",
+                tab_id: "w9:t1",
+                agent_status: "working",
+                agent_session: nativeSession,
+                future_agent_field: { retained: true },
+              },
+              { name: null, pane_id: "w9:p3", agent_status: "idle" },
+            ],
+            panes: [
+              {
+                pane_id: "w9:p2",
+                terminal_id: "terminal-2",
+                workspace_id: "w9",
+                tab_id: "w9:t1",
+                cwd: "/repo",
+                foreground_cwd: "/repo/src",
+                agent: "codex",
+                title: "Forge developer",
+                terminal_title: "codex terminal",
+                terminal_title_stripped: "codex",
+                display_agent: "Codex",
+                agent_status: "working",
+                state_labels: { working: "Reviewing logs" },
+                tokens: {
+                  forge_binding_id: "binding-1",
+                  forge_task_id: "task-1",
+                },
+                agent_session: nativeSession,
+                future_pane_field: { retained: true },
+              },
+            ],
+          },
+        },
+      }),
+    };
+  });
+
+  const snapshot = await client.runtimeSnapshot();
+
+  expect(argv).toEqual([["api", "snapshot"]]);
+  expect(snapshot).toMatchObject({ version: 17 });
+  expect(snapshot.agents).toEqual([
+    expect.objectContaining({
+      name: "forge-developer",
+      paneId: "w9:p2",
+      workspaceId: "w9",
+      tabId: "w9:t1",
+      status: "working",
+      agentSession: "session-1",
+      future_agent_field: { retained: true },
+    }),
+  ]);
+  expect(snapshot.panes).toEqual([
+    expect.objectContaining({
+      paneId: "w9:p2",
+      terminalId: "terminal-2",
+      workspaceId: "w9",
+      tabId: "w9:t1",
+      foregroundCwd: "/repo/src",
+      title: "Forge developer",
+      terminalTitle: "codex terminal",
+      terminalTitleStripped: "codex",
+      displayAgent: "Codex",
+      status: "working",
+      agentStatus: "working",
+      stateLabels: { working: "Reviewing logs" },
+      tokens: {
+        forge_binding_id: "binding-1",
+        forge_task_id: "task-1",
+      },
+      agentSession: "session-1",
+      agent_session: nativeSession,
+      future_pane_field: { retained: true },
+    }),
+  ]);
+});
+
+test("pane metadata reports use unambiguous argv for values and clears", async () => {
+  const argv: string[][] = [];
+  const client = new CliHerdrClient("herdr", async (_file, args) => {
+    argv.push([...args]);
+    return { stdout: "" };
+  });
+
+  await client.reportPaneMetadata({
+    paneId: "w9:p2; echo unsafe",
+    source: "forge",
+    agent: "codex --verbose",
+    appliesToSource: "herdr:codex",
+    title: "Review = now; still one arg",
+    displayAgent: "Codex worker",
+    stateLabels: {
+      working: "Reviewing=logs",
+      blocked: "Needs input",
+    },
+    tokens: {
+      forge_binding_id: "binding-1",
+      forge_task_id: "task=1",
+    },
+    seq: 42,
+    ttlMs: 60_000,
+  });
+  await client.reportPaneMetadata({
+    paneId: "w9:p2",
+    source: "forge",
+    clearTitle: true,
+    clearDisplayAgent: true,
+    clearStateLabels: true,
+    clearTokens: ["forge_binding_id", "forge_task_id"],
+  });
+
+  expect(argv).toEqual([
+    [
+      "pane",
+      "report-metadata",
+      "w9:p2; echo unsafe",
+      "--source",
+      "forge",
+      "--agent",
+      "codex --verbose",
+      "--applies-to-source",
+      "herdr:codex",
+      "--title",
+      "Review = now; still one arg",
+      "--display-agent",
+      "Codex worker",
+      "--state-label",
+      "working=Reviewing=logs",
+      "--state-label",
+      "blocked=Needs input",
+      "--token",
+      "forge_binding_id=binding-1",
+      "--token",
+      "forge_task_id=task=1",
+      "--seq",
+      "42",
+      "--ttl-ms",
+      "60000",
+    ],
+    [
+      "pane",
+      "report-metadata",
+      "w9:p2",
+      "--source",
+      "forge",
+      "--clear-title",
+      "--clear-display-agent",
+      "--clear-state-labels",
+      "--clear-token",
+      "forge_binding_id",
+      "--clear-token",
+      "forge_task_id",
+    ],
+  ]);
+});
+
+test("runtime snapshot helper prefers the live snapshot without duplicate calls", async () => {
+  const calls = { runtime: 0, legacy: 0, list: 0 };
+  const live = {
+    agents: [{ name: "forge-developer", paneId: "w9:p2" }],
+    panes: [{ paneId: "w9:p2", tokens: { forge_binding_id: "binding-1" } }],
+  };
+  const client = {
+    runtimeSnapshot: async () => {
+      calls.runtime += 1;
+      return live;
+    },
+    snapshot: async () => {
+      calls.legacy += 1;
+      return [];
+    },
+    listAgents: async () => {
+      calls.list += 1;
+      return [];
+    },
+  };
+
+  await expect(snapshotHerdrRuntime(client)).resolves.toBe(live);
+  await expect(snapshotAgents(client)).resolves.toEqual(live.agents);
+  expect(calls).toEqual({ runtime: 2, legacy: 0, list: 0 });
+});
+
+test("runtime snapshot helper bounds its legacy fallback to agent panes", async () => {
+  let calls = 0;
+  const legacyAgent = {
+    name: "forge-developer",
+    paneId: "w9:p2",
+    status: "idle",
+    agentSession: "session-1",
+    state_labels: { idle: "Ready" },
+    tokens: { forge_binding_id: "binding-1" },
+  };
+
+  const snapshot = await snapshotHerdrRuntime({
+    snapshot: async () => {
+      calls += 1;
+      return [legacyAgent];
+    },
+  });
+
+  expect(calls).toBe(1);
+  expect(snapshot.agents).toEqual([legacyAgent]);
+  expect(snapshot.panes).toEqual([
+    expect.objectContaining({
+      paneId: "w9:p2",
+      status: "idle",
+      agentStatus: "idle",
+      agentSession: "session-1",
+      stateLabels: { idle: "Ready" },
+      tokens: { forge_binding_id: "binding-1" },
+    }),
+  ]);
 });
 
 test("each explicit agent snapshot observes fresh state", async () => {

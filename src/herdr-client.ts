@@ -57,10 +57,22 @@ export interface Tab {
 }
 export interface Pane {
   paneId: string;
+  terminalId?: string;
   tabId?: string;
   workspaceId?: string;
   label?: string;
   cwd?: string;
+  foregroundCwd?: string;
+  agent?: string;
+  title?: string;
+  terminalTitle?: string;
+  terminalTitleStripped?: string;
+  displayAgent?: string;
+  status?: string;
+  agentStatus?: string;
+  stateLabels?: Record<string, string>;
+  tokens?: Record<string, string>;
+  agentSession?: string;
   [key: string]: unknown;
 }
 export interface HerdrAgent {
@@ -72,6 +84,32 @@ export interface HerdrAgent {
   status?: string;
   screenDetectionSkipped?: boolean;
   [key: string]: unknown;
+}
+/** A single live Herdr observation; pane display metadata is transient. */
+export interface HerdrRuntimeSnapshot {
+  agents: HerdrAgent[];
+  panes: Pane[];
+  [key: string]: unknown;
+}
+/**
+ * Display-only pane hints for Herdr. Herdr does not persist this metadata across
+ * server restarts, so callers must not treat it as durable Forge state.
+ */
+export interface HerdrPaneMetadataReport {
+  paneId: string;
+  source: string;
+  agent?: string;
+  appliesToSource?: string;
+  title?: string;
+  clearTitle?: boolean;
+  displayAgent?: string;
+  clearDisplayAgent?: boolean;
+  stateLabels?: Readonly<Record<string, string>>;
+  clearStateLabels?: boolean;
+  tokens?: Readonly<Record<string, string>>;
+  clearTokens?: readonly string[];
+  seq?: number;
+  ttlMs?: number;
 }
 type Json = Record<string, unknown>;
 const missing = new Set([
@@ -123,18 +161,59 @@ function tab(raw: Json): Tab {
     label: String(raw.label ?? ""),
   };
 }
+function optionalString(raw: Json, ...keys: string[]): string | undefined {
+  for (const key of keys)
+    if (typeof raw[key] === "string") return raw[key] as string;
+  return undefined;
+}
+function stringRecord(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  return Object.fromEntries(
+    Object.entries(raw).filter((entry): entry is [string, string] =>
+      typeof entry[1] === "string"
+    ),
+  );
+}
+function agentSession(raw: unknown): string | undefined {
+  if (typeof raw === "string") return raw;
+  if (!raw || typeof raw !== "object" || !("value" in raw)) return undefined;
+  return typeof (raw as Json).value === "string"
+    ? ((raw as Json).value as string)
+    : undefined;
+}
 function pane(raw: Json): Pane {
+  const status = optionalString(raw, "agent_status", "agentStatus", "status");
+  const session = agentSession(raw.agent_session ?? raw.agentSession);
   return {
     ...raw,
     paneId: id(raw, "pane_id", "paneId"),
+    ...(typeof raw.terminal_id === "string"
+      ? { terminalId: raw.terminal_id }
+      : {}),
     ...(typeof raw.tab_id === "string" ? { tabId: raw.tab_id } : {}),
     ...(typeof raw.workspace_id === "string"
       ? { workspaceId: raw.workspace_id }
       : {}),
+    ...(typeof raw.foreground_cwd === "string"
+      ? { foregroundCwd: raw.foreground_cwd }
+      : {}),
+    ...(typeof raw.terminal_title === "string"
+      ? { terminalTitle: raw.terminal_title }
+      : {}),
+    ...(typeof raw.terminal_title_stripped === "string"
+      ? { terminalTitleStripped: raw.terminal_title_stripped }
+      : {}),
+    ...(typeof raw.display_agent === "string"
+      ? { displayAgent: raw.display_agent }
+      : {}),
+    ...(status !== undefined ? { status, agentStatus: status } : {}),
+    stateLabels: stringRecord(raw.state_labels ?? raw.stateLabels),
+    tokens: stringRecord(raw.tokens),
+    ...(session !== undefined ? { agentSession: session } : {}),
   };
 }
 function agent(raw: Json): HerdrAgent {
-  const session = raw.agent_session;
+  const session = agentSession(raw.agent_session ?? raw.agentSession);
   const status = raw.agent_status ?? raw.status;
   return {
     ...raw,
@@ -144,11 +223,7 @@ function agent(raw: Json): HerdrAgent {
     ...(typeof raw.workspace_id === "string"
       ? { workspaceId: raw.workspace_id }
       : {}),
-    ...(typeof session === "object" && session && "value" in session
-      ? { agentSession: String((session as Json).value) }
-      : typeof session === "string"
-        ? { agentSession: session }
-      : {}),
+    ...(session !== undefined ? { agentSession: session } : {}),
     ...(typeof status === "string" ? { status } : {}),
     ...(typeof raw.screen_detection_skipped === "boolean" ? { screenDetectionSkipped: raw.screen_detection_skipped } : {}),
   };
@@ -194,7 +269,9 @@ export interface HerdrClient {
   waitPaneOutput(id: string, match: string): Promise<void>;
   sendPaneKeys(id: string, keys: string[]): Promise<void>;
   closePane(id: string): Promise<void>;
+  reportPaneMetadata(input: HerdrPaneMetadataReport): Promise<void>;
   listAgents(): Promise<HerdrAgent[]>;
+  runtimeSnapshot(): Promise<HerdrRuntimeSnapshot>;
   snapshot(): Promise<HerdrAgent[]>;
   getAgent(name: string): Promise<HerdrAgent | null>;
   renameAgent(target: string, name: string): Promise<void>;
@@ -209,15 +286,46 @@ export interface HerdrClient {
     args: string[];
   }): Promise<HerdrAgent>;
 }
-export async function snapshotAgents(client: HerdrClient): Promise<HerdrAgent[]> {
+type HerdrSnapshotClient = Partial<
+  Pick<HerdrClient, "runtimeSnapshot" | "snapshot" | "listAgents">
+>;
+function snapshotFromAgents(agents: HerdrAgent[]): HerdrRuntimeSnapshot {
+  return {
+    agents,
+    // Agent rows contain their pane identity and metadata. Deriving only those
+    // panes stays bounded; enumerating every legacy pane requires N workspace
+    // calls and is intentionally not attempted by the compatibility path.
+    panes: agents.map((entry) => pane(entry as Json)),
+  };
+}
+export async function snapshotHerdrRuntime(
+  client: HerdrSnapshotClient,
+): Promise<HerdrRuntimeSnapshot> {
+  if (typeof client.runtimeSnapshot === "function") {
+    try {
+      return await client.runtimeSnapshot();
+    } catch {
+      // Older Herdr servers do not expose the batched runtime snapshot.
+    }
+    const agents =
+      typeof client.listAgents === "function" ? await client.listAgents() : [];
+    return snapshotFromAgents(agents);
+  }
   if (typeof client.snapshot === "function") {
     try {
-      return await client.snapshot();
+      return snapshotFromAgents(await client.snapshot());
     } catch {
-      // Older Herdr versions do not expose the batched snapshot command.
+      // Older clients can still provide the bounded agent listing fallback.
     }
   }
-  return typeof client.listAgents === "function" ? client.listAgents() : [];
+  const agents =
+    typeof client.listAgents === "function" ? await client.listAgents() : [];
+  return snapshotFromAgents(agents);
+}
+export async function snapshotAgents(
+  client: HerdrSnapshotClient,
+): Promise<HerdrAgent[]> {
+  return (await snapshotHerdrRuntime(client)).agents;
 }
 export class CliHerdrClient implements HerdrClient {
   constructor(
@@ -465,17 +573,69 @@ export class CliHerdrClient implements HerdrClient {
   closePane(idValue: string): Promise<void> {
     return this.empty(["pane", "close", idValue]);
   }
+  reportPaneMetadata(input: HerdrPaneMetadataReport): Promise<void> {
+    const args = [
+      "pane",
+      "report-metadata",
+      input.paneId,
+      "--source",
+      input.source,
+    ];
+    if (input.agent !== undefined) args.push("--agent", input.agent);
+    if (input.appliesToSource !== undefined)
+      args.push("--applies-to-source", input.appliesToSource);
+    if (input.title !== undefined) args.push("--title", input.title);
+    else if (input.clearTitle) args.push("--clear-title");
+    if (input.displayAgent !== undefined)
+      args.push("--display-agent", input.displayAgent);
+    else if (input.clearDisplayAgent) args.push("--clear-display-agent");
+    if (input.clearStateLabels) args.push("--clear-state-labels");
+    for (const [status, text] of Object.entries(input.stateLabels ?? {}))
+      args.push("--state-label", `${status}=${text}`);
+    for (const name of input.clearTokens ?? [])
+      args.push("--clear-token", name);
+    for (const [name, value] of Object.entries(input.tokens ?? {}))
+      args.push("--token", `${name}=${value}`);
+    if (input.seq !== undefined) args.push("--seq", String(input.seq));
+    if (input.ttlMs !== undefined)
+      args.push("--ttl-ms", String(input.ttlMs));
+    return this.empty(args, true);
+  }
   async listAgents(): Promise<HerdrAgent[]> {
     return (((await this.call(["agent", "list"])).agents as Json[]) ?? [])
       .filter((raw) => typeof raw.name === "string")
       .map(agent);
   }
-  async snapshot(): Promise<HerdrAgent[]> {
+  async runtimeSnapshot(): Promise<HerdrRuntimeSnapshot> {
     const result = await this.call(["api", "snapshot"]);
-    const snapshot = result.snapshot && typeof result.snapshot === "object" ? result.snapshot as Json : result;
-    return ((snapshot.agents as Json[]) ?? [])
-      .filter((raw) => typeof raw.name === "string")
-      .map(agent);
+    const rawSnapshot =
+      result.snapshot &&
+      typeof result.snapshot === "object" &&
+      !Array.isArray(result.snapshot)
+        ? (result.snapshot as Json)
+        : result;
+    const agents = Array.isArray(rawSnapshot.agents)
+      ? rawSnapshot.agents.filter(
+          (raw): raw is Json =>
+            !!raw && typeof raw === "object" && !Array.isArray(raw),
+        )
+      : [];
+    const panes = Array.isArray(rawSnapshot.panes)
+      ? rawSnapshot.panes.filter(
+          (raw): raw is Json =>
+            !!raw && typeof raw === "object" && !Array.isArray(raw),
+        )
+      : [];
+    return {
+      ...rawSnapshot,
+      agents: agents
+        .filter((raw) => typeof raw.name === "string")
+        .map(agent),
+      panes: panes.map(pane),
+    };
+  }
+  async snapshot(): Promise<HerdrAgent[]> {
+    return (await this.runtimeSnapshot()).agents;
   }
   async getAgent(name: string): Promise<HerdrAgent | null> {
     return this.optional(async () =>

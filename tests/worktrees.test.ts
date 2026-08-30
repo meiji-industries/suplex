@@ -50,7 +50,7 @@ type RemoteFixture = {
 async function remoteFixture() {
   const value = await fixture();
   const remotePath = join(value.root, "origin.git");
-  await git(["init", "--bare", remotePath], value.root);
+  await git(["init", "--bare", "-b", "main", remotePath], value.root);
   await git(["remote", "add", "origin", remotePath], value.repositoryPath);
   await git(["push", "-u", "origin", "main"], value.repositoryPath);
   return { ...value, remotePath };

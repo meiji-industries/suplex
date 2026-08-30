@@ -400,7 +400,7 @@ test("developer launches the guarded environment from a short private script", a
     });
     expect(launched.exitCode).toBe(0);
     expect(launched.stdout).toContain(`${guard}:`);
-    expect(launched.stdout).toContain("node/26.7.0/bin:/usr/bin");
+    expect(launched.stdout).toContain(`${dirname(process.execPath)}:/usr/bin`);
     expect(launched.stdout).toContain(`${guard}/git`);
     await expect(readFile(herdr.launchPaths[0]!, "utf8")).rejects.toMatchObject({
       code: "ENOENT",

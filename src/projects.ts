@@ -16,13 +16,15 @@ import { createGithubReleasePort, type GithubReleasePort } from "./github-releas
 import { TaskSourceService, type TaskSourceSelector } from "./task-sources.js";
 import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from "./agent-providers/provider.js";
 import { seedDefaultTaskTemplates } from "./default-task-templates.js";
+import type { ServicePriority } from "./agent-providers/kinds.js";
+
+export type ProjectRole = "planner" | "builder" | "reviewer" | "integrator";
+export type { ServicePriority };
 
 const execFileAsync = promisify(execFile);
 
-export type ProjectRole = "planner" | "builder" | "reviewer" | "integrator";
 export type RoleAssignments = Partial<Record<ProjectRole, string | undefined>>;
 export type ReasoningLevel = "low" | "medium" | "high" | "xhigh";
-export type ServicePriority = "standard" | "priority" | "fast";
 
 export interface ProjectFinding {
   code: string;

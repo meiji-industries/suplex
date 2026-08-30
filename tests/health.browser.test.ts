@@ -101,6 +101,9 @@ test("mobile health page shows separate healthy and unhealthy states", { timeout
     const healthy = page.getByRole("button", { name: "System health: Healthy", exact: true });
     await healthy.waitFor();
     expect(await healthy.getAttribute("data-status")).toBe("green");
+    const desktopHealthy = desktop.getByRole("button", { name: "System health: Healthy", exact: true });
+    await desktopHealthy.waitFor();
+    expect(await desktopHealthy.getAttribute("data-status")).toBe("green");
 
     expect(await desktop.locator('[data-slot="sidebar"]').isVisible()).toBe(true);
     expect(await desktop.locator('[data-slot="health-row"]').count()).toBe(3);

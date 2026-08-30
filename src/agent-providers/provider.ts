@@ -1,7 +1,7 @@
 import type { HealthCheck } from "../health.js";
 import type { CommandRunner } from "../provider-readiness.js";
 import type { z } from "zod";
-export { AGENT_PROVIDER_KINDS, PROVIDER_HARNESSES, type AgentProviderKind, type HerdrAgentKind } from "./kinds.js";
+export { AGENT_PROVIDER_KINDS, PROVIDER_HARNESSES, SERVICE_PRIORITIES, servicePriorityLabel, type AgentProviderKind, type HerdrAgentKind, type ServicePriority } from "./kinds.js";
 import type { AgentProviderKind } from "./kinds.js";
 
 export interface AgentProfileSettings {

@@ -1,8 +1,12 @@
+import { dirname } from "node:path";
+
 import { StructuredLogger, redact } from "./logging.js";
 import { runCommand } from "./command-runner.js";
 import { createGitCommandGuard, type GitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
 
 const logger = new StructuredLogger();
+const runtimeNodeBinEnvironmentVariable = "FORGE_PINNED_VERIFICATION_RUNTIME_NODE_BIN";
+const runtimeNodePathPrelude = `export PATH="$${runtimeNodeBinEnvironmentVariable}:$PATH"; `;
 const tail = (value: string): string => value.length > 64 * 1024 ? value.slice(-64 * 1024) : value;
 const truncateBytes = (value: string, maxBytes: number): string => {
   const bytes = Buffer.from(value, "utf8");
@@ -34,6 +38,11 @@ export function commandArgv(command: string): readonly string[] | undefined {
   // so normal shell quoting and arguments remain available.
   return trimmed && !/[\r\n]/.test(trimmed) ? ["sh", "-lc", trimmed] : undefined;
 }
+
+const runtimePinnedCommandArgv = (command: string): readonly string[] | undefined => {
+  const argv = commandArgv(command);
+  return argv ? [argv[0]!, argv[1]!, `${runtimeNodePathPrelude}${argv[2]!}`] : undefined;
+};
 
 export type VerificationBlockerCode = "verification_failed" | "verification_timed_out" | "verification_evidence_too_large";
 
@@ -91,8 +100,9 @@ const defaultExecute: Execute = async (command, args, options) => {
 };
 
 export async function runPinnedVerification(input: PinnedVerificationInput, dependencies: VerificationDependencies = {}): Promise<VerificationResult> {
-  const setupArgv = commandArgv(input.setupCommand);
-  const verificationArgv = commandArgv(input.verificationCommand);
+  const setupArgv = runtimePinnedCommandArgv(input.setupCommand);
+  const verificationArgv = runtimePinnedCommandArgv(input.verificationCommand);
+  const rebuildArgv = runtimePinnedCommandArgv("pnpm rebuild")!;
   if (!setupArgv || !verificationArgv) return { outcome: "failed", code: "verification_failed", summary: "Project verification commands must be non-empty single lines", commands: [] };
   const execute = dependencies.execute ?? (input.taskId && input.stepId
     ? async (command: string, args: string[], options: ExecuteOptions) => {
@@ -114,7 +124,16 @@ export async function runPinnedVerification(input: PinnedVerificationInput, depe
       let signal: string | null = null;
       let timedOut = false;
       try {
-        const result = await execute(argv[0]!, [...argv.slice(1)], { cwd: input.worktreePath, env: withWorktreeMiseTrust(guard.env, input.worktreePath), timeout, maxBuffer: 4 * 1024 * 1024, shell: false });
+        const result = await execute(argv[0]!, [...argv.slice(1)], {
+          cwd: input.worktreePath,
+          env: {
+            ...withWorktreeMiseTrust(guard.env, input.worktreePath),
+            [runtimeNodeBinEnvironmentVariable]: dirname(process.execPath),
+          },
+          timeout,
+          maxBuffer: 4 * 1024 * 1024,
+          shell: false,
+        });
         stdout = result.stdout;
         stderr = result.stderr;
       } catch (error) {
@@ -151,7 +170,7 @@ export async function runPinnedVerification(input: PinnedVerificationInput, depe
     if (!/NODE_MODULE_VERSION|was compiled against a different Node\.js version|ERR_DLOPEN_FAILED/.test(`${verification.stdout}\n${verification.stderr}`)) return result(verification);
 
     logger.info("Native module ABI mismatch detected; rebuilding dependencies before retrying verification", input.taskId ? { taskId: input.taskId } : {});
-    const rebuild = await runStage("pnpm rebuild", ["sh", "-lc", "pnpm rebuild"], 20 * 60_000);
+    const rebuild = await runStage("pnpm rebuild", rebuildArgv, 20 * 60_000);
     const rebuildLimit = record(rebuild);
     if (rebuildLimit) return rebuildLimit;
     if (failed(rebuild)) return result(rebuild);

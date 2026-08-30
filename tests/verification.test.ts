@@ -1,11 +1,22 @@
+import { dirname } from "node:path";
+
 import { expect, test } from "vitest";
 
 import { commandArgv, runPinnedVerification } from "../src/verification.js";
+
+const runtimeNodeBinEnvironmentVariable = "FORGE_PINNED_VERIFICATION_RUNTIME_NODE_BIN";
+const runtimeNodePathPrelude = `export PATH="$${runtimeNodeBinEnvironmentVariable}:$PATH"; `;
+const pinnedShellInvocation = (command: string): [string, string, string] => ["sh", "-lc", `${runtimeNodePathPrelude}${command}`];
 
 test("runs project-owned single-line setup and verification commands", () => {
   expect(commandArgv("pnpm install --frozen-lockfile")).toEqual(["sh", "-lc", "pnpm install --frozen-lockfile"]);
   expect(commandArgv("mise run test")).toEqual(["sh", "-lc", "mise run test"]);
   expect(commandArgv("make test-local && pnpm typecheck")).toEqual(["sh", "-lc", "make test-local && pnpm typecheck"]);
+  expect(commandArgv("printf '%s' 'arbitrary project command' | sed 's/project/repo/'")).toEqual([
+    "sh",
+    "-lc",
+    "printf '%s' 'arbitrary project command' | sed 's/project/repo/'",
+  ]);
   expect(commandArgv("pnpm test\ngit push")).toBeUndefined();
 });
 
@@ -16,9 +27,14 @@ test("runs setup before verification and returns bounded redacted evidence", asy
     setupCommand: "pnpm install",
     verificationCommand: "pnpm test",
   }, {
-    guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
+    guard: {
+      directory: "/tmp/forge-test-guard",
+      env: { ...process.env, [runtimeNodeBinEnvironmentVariable]: "/inherited/wrong-node-bin" },
+      cleanup: async () => {},
+    },
     execute: async (command, args, options) => {
       expect(options.env.MISE_TRUSTED_CONFIG_PATHS).toContain("/worktrees/task-1");
+      expect(options.env[runtimeNodeBinEnvironmentVariable]).toBe(dirname(process.execPath));
       expect(options.maxBuffer).toBe(4 * 1024 * 1024);
       calls.push(`${command} ${args.join(" ")}`);
       return { stdout: `Bearer gho_secret ${"x".repeat(70_000)}`, stderr: "" };
@@ -28,7 +44,10 @@ test("runs setup before verification and returns bounded redacted evidence", asy
       return () => new Date(++value).toISOString();
     })(),
   });
-  expect(calls).toEqual(["sh -lc pnpm install", "sh -lc pnpm test"]);
+  expect(calls).toEqual([
+    pinnedShellInvocation("pnpm install").join(" "),
+    pinnedShellInvocation("pnpm test").join(" "),
+  ]);
   expect(result.outcome).toBe("passed");
   expect(JSON.stringify(result)).not.toContain("gho_secret");
   expect(JSON.stringify(result)).not.toContain("x".repeat(70_000));
@@ -45,7 +64,10 @@ test("runs mise tasks as configured", async () => {
     },
   });
 
-  expect(calls).toEqual(["sh -lc mise run setup", "sh -lc mise run test"]);
+  expect(calls).toEqual([
+    pinnedShellInvocation("mise run setup").join(" "),
+    pinnedShellInvocation("mise run test").join(" "),
+  ]);
   expect(result.outcome).toBe("passed");
 });
 
@@ -69,7 +91,7 @@ test("includes a redacted bounded output tail when final verification fails", as
   const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "pnpm install", verificationCommand: "pnpm test" }, {
     guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
     execute: async (_command, args) => {
-      if (args[1] === "pnpm install") return { stdout: "", stderr: "" };
+      if (args[1] === `${runtimeNodePathPrelude}pnpm install`) return { stdout: "", stderr: "" };
       throw Object.assign(new Error("missing manifest"), { code: 1, stderr: "ERR_PNPM_NO_PKG_MANIFEST No package.json found\nBearer gho_secret" });
     },
   });
@@ -80,20 +102,31 @@ test("includes a redacted bounded output tail when final verification fails", as
 });
 
 test("rebuilds native modules once and retries verification after an ABI mismatch", async () => {
-  const calls: string[] = [];
+  const calls: Array<{ command: string; args: string[]; runtimeNodeBin: string | undefined }> = [];
   const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "pnpm install", verificationCommand: "pnpm test" }, {
-    guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
-    execute: async (command, args) => {
-      const invocation = `${command} ${args.join(" ")}`;
+    guard: {
+      directory: "/tmp/forge-test-guard",
+      env: { ...process.env, [runtimeNodeBinEnvironmentVariable]: "/inherited/wrong-node-bin" },
+      cleanup: async () => {},
+    },
+    execute: async (command, args, options) => {
+      const invocation = { command, args, runtimeNodeBin: options.env[runtimeNodeBinEnvironmentVariable] };
       calls.push(invocation);
-      if (invocation === "sh -lc pnpm test" && calls.filter((call) => call === invocation).length === 1) {
+      const verificationCalls = calls.filter((call) => call.args[1] === `${runtimeNodePathPrelude}pnpm test`);
+      if (args[1] === `${runtimeNodePathPrelude}pnpm test` && verificationCalls.length === 1) {
         throw Object.assign(new Error("native module ABI mismatch"), { code: 1, stderr: "better-sqlite3 was compiled against a different Node.js version; NODE_MODULE_VERSION 127 requires 147" });
       }
       return { stdout: "", stderr: "" };
     },
   });
 
-  expect(calls).toEqual(["sh -lc pnpm install", "sh -lc pnpm test", "sh -lc pnpm rebuild", "sh -lc pnpm test"]);
+  expect(calls).toEqual([
+    { command: "sh", args: pinnedShellInvocation("pnpm install").slice(1), runtimeNodeBin: dirname(process.execPath) },
+    { command: "sh", args: pinnedShellInvocation("pnpm test").slice(1), runtimeNodeBin: dirname(process.execPath) },
+    { command: "sh", args: pinnedShellInvocation("pnpm rebuild").slice(1), runtimeNodeBin: dirname(process.execPath) },
+    { command: "sh", args: pinnedShellInvocation("pnpm test").slice(1), runtimeNodeBin: dirname(process.execPath) },
+  ]);
+  for (const call of calls) expect(call.args).toHaveLength(2);
   expect(result).toMatchObject({ outcome: "passed" });
 });
 
@@ -104,12 +137,15 @@ test("does not rebuild native modules for unrelated verification failures", asyn
     execute: async (command, args) => {
       const invocation = `${command} ${args.join(" ")}`;
       calls.push(invocation);
-      if (invocation === "sh -lc pnpm test") throw Object.assign(new Error("test failure"), { code: 1, stderr: "AssertionError: expected true to be false" });
+      if (args[1] === `${runtimeNodePathPrelude}pnpm test`) throw Object.assign(new Error("test failure"), { code: 1, stderr: "AssertionError: expected true to be false" });
       return { stdout: "", stderr: "" };
     },
   });
 
-  expect(calls).toEqual(["sh -lc pnpm install", "sh -lc pnpm test"]);
+  expect(calls).toEqual([
+    pinnedShellInvocation("pnpm install").join(" "),
+    pinnedShellInvocation("pnpm test").join(" "),
+  ]);
   expect(result).toMatchObject({ outcome: "failed", code: "verification_failed" });
 });
 

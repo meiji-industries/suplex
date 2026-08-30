@@ -50,11 +50,11 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
       };
       const local = await githubRelease.inspectLocalRevision({ cwd: context.worktreePath });
       const remoteHead = await githubRelease.getBranchHead({ repository: pinned.repository, branch: input.branchName });
-      if (local.headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase() && remoteHead?.toLowerCase() === local.headSha.toLowerCase()) {
-        const baseSha = await githubRelease.getBranchHead({ repository: pinned.repository, branch: pinned.baseBranch });
-        if (!baseSha) throw new Error("The updated CI base branch was not confirmed on the provider");
-        return adopt(baseSha, local.headSha, local.treeSha);
-      }
+      if (!local.clean
+        || local.branch !== input.branchName
+        || local.headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()
+        || local.treeSha.toLowerCase() !== input.expectedHeadTree.toLowerCase()
+        || remoteHead?.toLowerCase() !== input.expectedHeadSha.toLowerCase()) throw new CiFailure("stale-input");
       const service = new ForwardMergeService(database, githubRelease, new ArtifactStore(config.artifactRoot));
       const merge = await service.reconcile({
         worktreePath: context.worktreePath,

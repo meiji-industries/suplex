@@ -60,6 +60,16 @@ export const PullRequestObservationSchema = z.object({
 }).strict();
 export type PullRequestObservation = z.infer<typeof PullRequestObservationSchema>;
 
+export type ExpectedPullRequestIdentity = Pick<PullRequestObservation, "repository" | "number" | "baseBranch" | "headBranch" | "headSha">;
+
+export function hasExactPullRequestIdentity(expected: ExpectedPullRequestIdentity, observed: PullRequestObservation): boolean {
+  return observed.repository.toLowerCase() === expected.repository.toLowerCase()
+    && observed.number === expected.number
+    && observed.baseBranch === expected.baseBranch
+    && observed.headBranch === expected.headBranch
+    && observed.headSha.toLowerCase() === expected.headSha.toLowerCase();
+}
+
 export const CheckObservationSchema = z.object({
   providerCheckId: z.string().min(1).max(256),
   name: z.string().min(1),
@@ -136,20 +146,18 @@ function canonicalJson(value: unknown): string {
 export interface CiPolicy {
   projectRevisionId: string;
   requiredChecks: string[];
-  acceptedConclusions: ["success", "skipped"];
+  acceptedConclusions: ["success"];
 }
 
 export function buildCiPolicy(projectRevisionId: string, requiredChecks: readonly string[]): { policy: CiPolicy; policyJson: string; policyHash: string } {
   const normalized = [...new Set(requiredChecks.map((check) => check.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   if (!normalized.length) throw new CiFailure("invalid-policy");
-  const policy: CiPolicy = { projectRevisionId, requiredChecks: normalized, acceptedConclusions: ["success", "skipped"] };
+  const policy: CiPolicy = { projectRevisionId, requiredChecks: normalized, acceptedConclusions: [...CI_ACCEPTED_CONCLUSIONS] };
   const policyJson = canonicalJson(policy);
   return { policy, policyJson, policyHash: createHash("sha256").update(Buffer.from(policyJson, "utf8")).digest("hex") };
 }
 
 export interface CiEvaluationInput {
-  repository: string;
-  pullRequestNumber: number;
   expectedRepository: string;
   expectedPullRequestNumber: number;
   expectedHeadSha: string;
@@ -210,27 +218,32 @@ function evaluation(reason: string, outcome: CiOutcome, owner: CiOwner, repairab
 export function evaluateExactHead(input: CiEvaluationInput): CiEvaluationResult {
   const selectedChecks = selectLatestCheckRuns(input.checks, input.requiredChecks, input.expectedHeadSha);
   const pr = input.observedPullRequest;
-  if (pr.repository.toLowerCase() !== input.expectedRepository.toLowerCase() || pr.number !== input.expectedPullRequestNumber) return evaluation("pull_request_identity_changed", "stale_head", "human", false, selectedChecks, "Pull request identity changed");
+  if (!hasExactPullRequestIdentity({
+    repository: input.expectedRepository,
+    number: input.expectedPullRequestNumber,
+    baseBranch: input.expectedBaseBranch,
+    headBranch: input.expectedHeadBranch,
+    headSha: input.expectedHeadSha,
+  }, pr)) return evaluation("pull_request_identity_changed", "stale_head", "human", false, selectedChecks, "Pull request identity changed");
   if (pr.state !== "open" && !pr.mergedAt) return evaluation("pull_request_not_open", "stale_head", "human", false, selectedChecks, "Pull request closed without merge");
-  if (pr.mergedAt) return evaluation("checks_passed_merged", "passed", null, false, selectedChecks, "The pull request was merged");
   const exactSelected = selectedChecks.filter((check) => check.selectedForEvaluation && check.headSha.toLowerCase() === input.expectedHeadSha.toLowerCase());
   const missing = input.requiredChecks.filter((name) => !exactSelected.some((check) => check.name === name));
-  const notApplicable = missing.length > 0 && pr.mergeStateStatus === "CLEAN" && exactSelected.length > 0 && exactSelected.every((check) => check.status === "completed");
   const failed = exactSelected.filter((check) => check.conclusion === "failure");
   if (failed.length) return evaluation("required_check_failed", "failed", "integrator", true, selectedChecks, `Required checks failed: ${failed.map((check) => check.name).join(", ")}`);
-  if (missing.length && !notApplicable && Date.parse(input.now) < Date.parse(input.propagationDeadline)) return evaluation("checks_propagating", "waiting", "system", false, selectedChecks, "Required checks are still propagating", new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
-  if (notApplicable && exactSelected.every((check) => check.conclusion === "success" || check.conclusion === "skipped")) return evaluation("checks_passed_not_applicable", "passed", null, false, selectedChecks, `All reporting required checks passed; not applicable: ${missing.join(", ")} (did not report; GitHub merge state CLEAN)`);
-  if (missing.length && !notApplicable && Date.parse(input.now) >= Date.parse(input.overallDeadline)) return evaluation("poll_window_exhausted", "waiting", "system", false, selectedChecks, `Waiting for required checks after the initial CI window: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_MERGE_OBSERVATION_INTERVAL_MS).toISOString());
-  if (missing.length && !notApplicable) return evaluation("required_check_missing", "waiting", "system", false, selectedChecks, `Required checks are still missing: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
+  if (missing.length && Date.parse(input.now) < Date.parse(input.propagationDeadline)) return evaluation("checks_propagating", "waiting", "system", false, selectedChecks, "Required checks are still propagating", new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
+  if (missing.length && Date.parse(input.now) >= Date.parse(input.overallDeadline)) return evaluation("poll_window_exhausted", "waiting", "system", false, selectedChecks, `Waiting for required checks after the initial CI window: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_MERGE_OBSERVATION_INTERVAL_MS).toISOString());
+  if (missing.length) return evaluation("required_check_missing", "waiting", "system", false, selectedChecks, `Required checks are still missing: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
   const active = exactSelected.filter((check) => check.status !== "completed");
   if (active.length) return evaluation("checks_queued", "waiting", "system", false, selectedChecks, "Required checks are queued or running", new Date(Date.parse(input.now) + (Date.parse(input.now) >= Date.parse(input.overallDeadline) ? CI_MERGE_OBSERVATION_INTERVAL_MS : CI_POLL_INTERVAL_MS)).toISOString());
   const cancelled = exactSelected.find((check) => check.conclusion === "cancelled");
   if (cancelled) return evaluation("required_check_cancelled", "cancelled", "human", false, selectedChecks, `Required check cancelled: ${cancelled.name}`);
   const timedOut = exactSelected.find((check) => check.conclusion === "timed_out");
   if (timedOut) return evaluation("required_check_timed_out", "timed_out", "human", false, selectedChecks, `Required check timed out: ${timedOut.name}`);
-  const nonSuccess = exactSelected.find((check) => check.conclusion !== "success" && check.conclusion !== "skipped");
+  const nonSuccess = exactSelected.find((check) => check.conclusion !== "success");
   if (nonSuccess) return evaluation(`required_check_${nonSuccess.conclusion ?? "incomplete"}`, "non_success", "human", false, selectedChecks, `Required check did not succeed: ${nonSuccess.name}`);
-  return evaluation("checks_passed", "passed", null, false, selectedChecks, "All required checks passed on the current pull-request head");
+  return pr.mergedAt
+    ? evaluation("checks_passed_merged", "passed", null, false, selectedChecks, "All required checks passed on the exact merged pull-request head")
+    : evaluation("checks_passed", "passed", null, false, selectedChecks, "All required checks passed on the current pull-request head");
 }
 
 function parseJsonDocuments(stdout: string): unknown[] {
@@ -403,7 +416,7 @@ export class CiService {
       WHERE t.id = ? AND t.company_id = ?`).get(input.releaseId, input.companyId, input.taskId, input.companyId) as { projectId: string; projectRevisionId: string; repository: string; expectedHeadSha: string; expectedHeadTree: string; baseBranch: string; headBranch: string; pullRequestNumber: number | null; releaseStatus: string; releaseSupersededAt: string | null; normalizedJson: string; revisionState: string } | undefined);
     if (!context || context.releaseSupersededAt || !["draft", "ready", "releasing", "ci_waiting"].includes(context.releaseStatus) || context.pullRequestNumber === null || !this.artifacts) throw new CiFailure("stale-input");
     const revision = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input);
-    if (context.repository.toLowerCase() !== revision.repository.toLowerCase()) throw new CiFailure("stale-input");
+    if (context.repository.toLowerCase() !== revision.repository.toLowerCase() || context.expectedHeadSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) throw new CiFailure("stale-input");
     const { policy, policyJson, policyHash } = buildCiPolicy(context.projectRevisionId, revision.requiredChecks);
     let run = this.database.authQuery((db) => db.prepare("SELECT id, attempt, first_observed_at AS firstObservedAt, propagation_deadline AS propagationDeadline, overall_deadline AS overallDeadline, consecutive_provider_failures AS consecutiveProviderFailures FROM forge_ci_runs WHERE release_id = ? AND expected_head_sha = ? AND policy_hash = ? LIMIT 1").get(input.releaseId, input.expectedHeadSha, policyHash) as { id: string; attempt: number; firstObservedAt: string | null; propagationDeadline: string | null; overallDeadline: string | null; consecutiveProviderFailures: number } | undefined);
     const runId = run?.id ?? id();
@@ -418,35 +431,32 @@ export class CiService {
     if (!run) throw new CiFailure("scope");
     const attemptNumber = requestedAttempt;
     const cached = this.database.authQuery((db) => db.prepare("SELECT id, observed_head_sha AS observedHeadSha, evidence_artifact_id AS evidenceArtifactId, outcome, reason, owner, repairable, retry_at AS retryAt, summary, attempt_number AS attemptNumber FROM forge_ci_attempts WHERE run_id = ? AND attempt_number = ?").get(run.id, attemptNumber) as { id: string; observedHeadSha: string | null; evidenceArtifactId: string | null; outcome: CiOutcome; reason: string; owner: CiOwner; repairable: number; retryAt: string | null; summary: string; attemptNumber: number } | undefined);
-    if (cached && context.expectedHeadSha.toLowerCase() === input.expectedHeadSha.toLowerCase()) return { runId: run.id, attemptId: cached.id, attemptNumber: cached.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: cached.observedHeadSha, evidenceArtifactId: cached.evidenceArtifactId, policyHash, policy, propagationDeadline, overallDeadline, outcome: cached.outcome, reason: cached.reason, owner: cached.owner, repairable: cached.repairable === 1, retryAt: cached.retryAt, nextPollAt: cached.retryAt, selectedChecks: this.readAttemptChecks(cached.id), summary: cached.summary };
+    if (cached) return { runId: run.id, attemptId: cached.id, attemptNumber: cached.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: cached.observedHeadSha, evidenceArtifactId: cached.evidenceArtifactId, policyHash, policy, propagationDeadline, overallDeadline, outcome: cached.outcome, reason: cached.reason, owner: cached.owner, repairable: cached.repairable === 1, retryAt: cached.retryAt, nextPollAt: cached.retryAt, selectedChecks: this.readAttemptChecks(cached.id), summary: cached.summary };
     let observed: PullRequestObservation;
     try {
       observed = await this.provider.getPullRequest({ repository: revision.repository, pullRequestNumber: context.pullRequestNumber });
     } catch (error) { return this.persistProviderFailure({ ...input, attemptNumber }, run, policy, policyHash, firstObservedAt, propagationDeadline, overallDeadline, error); }
-    let effectiveInput = input;
-    if (observed.headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) {
-      this.database.authTransaction((db) => {
-        db.prepare("UPDATE forge_releases SET head_sha = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(observed.headSha, now, input.releaseId, input.taskId, input.companyId);
-        db.prepare("UPDATE forge_ci_runs SET expected_head_sha = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(observed.headSha, now, run!.id, input.taskId, input.companyId);
-      });
-      effectiveInput = { ...input, expectedHeadSha: observed.headSha };
-    } else if (context.expectedHeadSha.toLowerCase() !== observed.headSha.toLowerCase()) {
-      this.database.authTransaction((db) => db.prepare("UPDATE forge_releases SET head_sha = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(observed.headSha, now, input.releaseId, input.taskId, input.companyId));
-    }
+    const expectedPullRequest: ExpectedPullRequestIdentity = {
+      repository: revision.repository,
+      number: context.pullRequestNumber,
+      baseBranch: context.baseBranch,
+      headBranch: context.headBranch,
+      headSha: input.expectedHeadSha,
+    };
     const existing = this.database.authQuery((db) => db.prepare("SELECT id, observed_head_sha AS observedHeadSha, evidence_artifact_id AS evidenceArtifactId, outcome, reason, owner, repairable, retry_at AS retryAt, summary, attempt_number AS attemptNumber FROM forge_ci_attempts WHERE run_id = ? AND attempt_number = ?").get(run.id, attemptNumber) as { id: string; observedHeadSha: string | null; evidenceArtifactId: string | null; outcome: CiOutcome; reason: string; owner: CiOwner; repairable: number; retryAt: string | null; summary: string; attemptNumber: number } | undefined);
-    if (existing) return { runId: run.id, attemptId: existing.id, attemptNumber: existing.attemptNumber, expectedHeadSha: effectiveInput.expectedHeadSha, observedHeadSha: existing.observedHeadSha, evidenceArtifactId: existing.evidenceArtifactId, policyHash, policy, propagationDeadline, overallDeadline, outcome: existing.outcome, reason: existing.reason, owner: existing.owner, repairable: existing.repairable === 1, retryAt: existing.retryAt, nextPollAt: existing.retryAt, selectedChecks: this.readAttemptChecks(existing.id), summary: existing.summary };
+    if (existing) return { runId: run.id, attemptId: existing.id, attemptNumber: existing.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: existing.observedHeadSha, evidenceArtifactId: existing.evidenceArtifactId, policyHash, policy, propagationDeadline, overallDeadline, outcome: existing.outcome, reason: existing.reason, owner: existing.owner, repairable: existing.repairable === 1, retryAt: existing.retryAt, nextPollAt: existing.retryAt, selectedChecks: this.readAttemptChecks(existing.id), summary: existing.summary };
     let checks: CheckObservation[] = [];
-    if (observed.headSha.toLowerCase() === effectiveInput.expectedHeadSha.toLowerCase() && observed.repository.toLowerCase() === revision.repository.toLowerCase() && observed.number === context.pullRequestNumber) {
+    if (hasExactPullRequestIdentity(expectedPullRequest, observed)) {
       try {
-        const rawChecks = await this.provider.listChecks({ repository: revision.repository, headSha: observed.headSha });
+        const rawChecks = await this.provider.listChecks({ repository: revision.repository, headSha: input.expectedHeadSha });
         checks = rawChecks.map((check) => CheckObservationSchema.parse(check));
       } catch (error) { return this.persistProviderFailure({ ...input, attemptNumber }, run, policy, policyHash, firstObservedAt, propagationDeadline, overallDeadline, error); }
     }
-    let result = evaluateExactHead({ repository: revision.repository, pullRequestNumber: context.pullRequestNumber, expectedRepository: revision.repository, expectedPullRequestNumber: context.pullRequestNumber, expectedHeadSha: effectiveInput.expectedHeadSha, expectedBaseBranch: context.baseBranch, expectedHeadBranch: context.headBranch, requiredChecks: policy.requiredChecks, observedPullRequest: observed, checks, now, propagationDeadline, overallDeadline });
+    let result = evaluateExactHead({ expectedRepository: expectedPullRequest.repository, expectedPullRequestNumber: expectedPullRequest.number, expectedHeadSha: expectedPullRequest.headSha, expectedBaseBranch: expectedPullRequest.baseBranch, expectedHeadBranch: expectedPullRequest.headBranch, requiredChecks: policy.requiredChecks, observedPullRequest: observed, checks, now, propagationDeadline, overallDeadline });
     const nextRunFailures = 0;
     result = { ...result, retryAt: result.retryAt ?? null };
     const failedLogs = result.outcome === "failed" ? await this.failedRunLogs(revision.repository, result.selectedChecks) : [];
-    return this.persistObservation({ ...effectiveInput, attemptNumber }, run, policy, policyHash, observed, result, checks, firstObservedAt, propagationDeadline, overallDeadline, nextRunFailures, now, failedLogs);
+    return this.persistObservation({ ...input, attemptNumber }, run, policy, policyHash, observed, result, checks, firstObservedAt, propagationDeadline, overallDeadline, nextRunFailures, now, failedLogs);
   }
 
   /** GitHub Actions check-run summaries are empty; the failing job log is the only usable evidence. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildCiPolicy, createGithubCiProvider, evaluateExactHead, selectLatestCheckRuns, shouldUpdateFromBaseBeforeCiRepair } from "../src/ci.js";
+import { buildCiPolicy, createGithubCiProvider, evaluateExactHead, hasExactPullRequestIdentity, selectLatestCheckRuns, shouldUpdateFromBaseBeforeCiRepair } from "../src/ci.js";
 
 const head = "a".repeat(40);
 const otherHead = "b".repeat(40);
@@ -11,7 +11,7 @@ const overall = "2026-08-11T13:00:00.000Z";
 
 const pullRequest = (overrides: Record<string, unknown> = {}) => ({ repository: "acme/forge", number: 7, url: "https://github.com/acme/forge/pull/7", state: "open" as const, draft: true, baseBranch: "main", baseSha: base, headBranch: "feature/task", headSha: head, ...overrides });
 const check = (overrides: Record<string, unknown> = {}) => ({ providerCheckId: "1", name: "Tests / unit", headSha: head, status: "completed" as const, conclusion: "success" as const, detailsUrl: null, startedAt: now, completedAt: now, summary: "ok", ...overrides });
-const evaluate = (overrides: Record<string, unknown> = {}) => evaluateExactHead({ repository: "acme/forge", pullRequestNumber: 7, expectedRepository: "acme/forge", expectedPullRequestNumber: 7, expectedHeadSha: head, expectedBaseBranch: "main", expectedHeadBranch: "feature/task", requiredChecks: ["Tests / unit"], observedPullRequest: pullRequest(), checks: [check()], now, propagationDeadline: propagation, overallDeadline: overall, ...overrides });
+const evaluate = (overrides: Record<string, unknown> = {}) => evaluateExactHead({ expectedRepository: "acme/forge", expectedPullRequestNumber: 7, expectedHeadSha: head, expectedBaseBranch: "main", expectedHeadBranch: "feature/task", requiredChecks: ["Tests / unit"], observedPullRequest: pullRequest(), checks: [check()], now, propagationDeadline: propagation, overallDeadline: overall, ...overrides });
 
 describe("exact-head CI evaluator", () => {
   it("updates an advanced base before planning a repair, with a bounded cycle limit", () => {
@@ -25,7 +25,7 @@ describe("exact-head CI evaluator", () => {
     ["cancelled", "cancelled", false],
     ["timed_out", "timed_out", false],
     ["neutral", "non_success", false],
-    ["skipped", "passed", false],
+    ["skipped", "non_success", false],
     ["action_required", "non_success", false],
     ["stale", "non_success", false],
   ])("classifies %s", (conclusion, outcome, repairable) => {
@@ -45,38 +45,45 @@ describe("exact-head CI evaluator", () => {
   });
 
   it.each([
-    ["repository", { repository: "other/forge" }, "pull_request_identity_changed"],
-    ["number", { number: 8 }, "pull_request_identity_changed"],
-    ["closed state", { state: "closed" }, "pull_request_not_open"],
-  ])("rejects an unavailable PR %s", (_label, changed, reason) => {
-    expect(evaluate({ observedPullRequest: pullRequest(changed) }).reason).toBe(reason);
-  });
-
-  it.each([
+    ["repository", { repository: "other/forge" }],
+    ["number", { number: 8 }],
     ["base branch", { baseBranch: "develop" }],
     ["head branch", { headBranch: "other/task" }],
-  ])("adopts an open PR with a changed %s", (_label, changed) => {
-    expect(evaluate({ observedPullRequest: pullRequest(changed) }).outcome).toBe("passed");
+    ["head SHA", { headSha: otherHead }],
+  ])("rejects pull-request identity drift in the %s", (_label, changed) => {
+    expect(evaluate({ observedPullRequest: pullRequest(changed) })).toMatchObject({ outcome: "stale_head", reason: "pull_request_identity_changed" });
+  });
+
+  it("rejects a pull request closed without merge", () => {
+    expect(evaluate({ observedPullRequest: pullRequest({ state: "closed" }) })).toMatchObject({ outcome: "stale_head", reason: "pull_request_not_open" });
+  });
+
+  it("compares every immutable pull-request coordinate", () => {
+    expect(hasExactPullRequestIdentity({ repository: "ACME/forge", number: 7, baseBranch: "main", headBranch: "feature/task", headSha: head.toUpperCase() }, pullRequest())).toBe(true);
+    expect(hasExactPullRequestIdentity({ repository: "acme/forge", number: 7, baseBranch: "main", headBranch: "other/task", headSha: head }, pullRequest())).toBe(false);
   });
 
   it("continues evaluating an open PR after it becomes ready for review", () => {
     expect(evaluate({ observedPullRequest: pullRequest({ draft: false }) }).outcome).toBe("passed");
   });
 
-  it("accepts a merged exact PR as the completion authority", () => {
+  it("accepts only a merged exact PR whose required checks passed", () => {
     const merged = pullRequest({ state: "closed", mergedAt: "2026-08-11T12:01:00.000Z" });
     expect(evaluate({ observedPullRequest: merged })).toMatchObject({ outcome: "passed", reason: "checks_passed_merged" });
-    expect(evaluate({ observedPullRequest: merged, checks: [check({ conclusion: "failure" })] })).toMatchObject({ outcome: "passed", reason: "checks_passed_merged" });
+    expect(evaluate({ observedPullRequest: merged, checks: [check({ conclusion: "failure" })] })).toMatchObject({ outcome: "failed", reason: "required_check_failed" });
+    expect(evaluate({ observedPullRequest: pullRequest({ ...merged, headSha: otherHead }) })).toMatchObject({ outcome: "stale_head", reason: "pull_request_identity_changed" });
   });
 
-  it("treats a configured check that never reports as not applicable once GitHub reports a clean merge state", () => {
+  it("keeps a CLEAN pull request waiting when one configured check is missing", () => {
     const clean = pullRequest({ mergeStateStatus: "CLEAN" });
     const required = ["Tests / unit", "Mintlify Deployment"];
-    expect(evaluate({ observedPullRequest: clean, requiredChecks: required, now: propagation })).toMatchObject({ outcome: "passed", reason: "checks_passed_not_applicable" });
-    expect(evaluate({ observedPullRequest: clean, requiredChecks: required, now: propagation }).summary).toContain("Mintlify Deployment");
+    expect(evaluate({ observedPullRequest: clean, requiredChecks: required, now: propagation })).toMatchObject({ outcome: "waiting", reason: "required_check_missing" });
     expect(evaluate({ observedPullRequest: clean, requiredChecks: required, checks: [check({ conclusion: "failure" })], now: propagation })).toMatchObject({ outcome: "failed", reason: "required_check_failed" });
     expect(evaluate({ observedPullRequest: clean, requiredChecks: required, checks: [], now: propagation })).toMatchObject({ outcome: "waiting", reason: "required_check_missing" });
-    expect(evaluate({ requiredChecks: required, now: propagation })).toMatchObject({ outcome: "waiting", reason: "required_check_missing" });
+  });
+
+  it("does not count a required check from an old SHA", () => {
+    expect(evaluate({ checks: [check({ headSha: otherHead })], now: propagation })).toMatchObject({ outcome: "waiting", reason: "required_check_missing" });
   });
 
   it("routes a failed required check to repair even while another required check is missing", () => {
@@ -123,10 +130,10 @@ describe("exact-head CI evaluator", () => {
     expect(opaque.find((row) => row.selectedForEvaluation)?.providerCheckId).toBe("opaque-b");
   });
 
-  it("canonicalizes policy and rejects an empty required-check set", () => {
+  it("canonicalizes policy, accepts only success, and rejects an empty required-check set", () => {
     const first = buildCiPolicy("revision-1", [" Browser ", "Tests", "Browser"]);
     const second = buildCiPolicy("revision-1", ["Tests", "Browser"]);
-    expect(first.policy.requiredChecks).toEqual(["Browser", "Tests"]);
+    expect(first.policy).toMatchObject({ requiredChecks: ["Browser", "Tests"], acceptedConclusions: ["success"] });
     expect(first.policyHash).toBe(second.policyHash);
     expect(() => buildCiPolicy("revision-1", [" "])).toThrow("CI invalid-policy");
   });

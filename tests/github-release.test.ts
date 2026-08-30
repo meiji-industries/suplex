@@ -151,30 +151,6 @@ test("maps nullable authors, avatar fallbacks, and change stats", () => {
   expect(mapGithubPullRequestObservation({ ...observation, author: { login: "octocat", avatarUrl: null } }).author).toEqual({ login: "octocat", avatarUrl: "https://avatars.githubusercontent.com/octocat" });
 });
 
-test("reconciles a manually advanced branch by rebasing before a normal push", async () => {
-  const value = runnerFor([
-    { stdout: "", stderr: "" },
-    { stdout: "", stderr: "", error: true },
-    { stdout: "", stderr: "", error: true },
-    { stdout: "", stderr: "" },
-    { stdout: "issue/7\n", stderr: "" },
-    { stdout: `${headSha}\n`, stderr: "" },
-    { stdout: `${"c".repeat(40)}\n`, stderr: "" },
-    { stdout: "", stderr: "" },
-  ]);
-  const revision = await createGithubReleasePort({ runner: value.runner }).reconcileBranch!({ cwd: "/worktree", repository: "acme/forge", branch: "issue/7" });
-  expect(revision).toEqual({ branch: "issue/7", headSha, treeSha: "c".repeat(40), clean: true });
-  expect(value.calls.map(({ args }) => args)).toEqual([
-    ["fetch", "origin", "refs/heads/issue/7:refs/remotes/origin/issue/7"],
-    ["merge-base", "--is-ancestor", "HEAD", "refs/remotes/origin/issue/7"],
-    ["merge-base", "--is-ancestor", "refs/remotes/origin/issue/7", "HEAD"],
-    ["rebase", "refs/remotes/origin/issue/7"],
-    ["symbolic-ref", "--short", "HEAD"],
-    ["rev-parse", "HEAD"],
-    ["rev-parse", "HEAD^{tree}"],
-    ["status", "--porcelain=v1", "--untracked-files=all"],
-  ]);
-});
 
 test("adopts absent branch observations and validates rate limits", async () => {
   const absent = runnerFor([{ stdout: JSON.stringify({ message: "Not Found", documentation_url: "https://docs.github.com/rest/branches", status: 404 }), stderr: "", error: true }]);

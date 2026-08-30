@@ -35,16 +35,11 @@ jobs:
       - name: Install shell dependency
         run: sudo apt-get update && sudo apt-get install --yes zsh
 
-      - name: Install Temporal CLI
-        run: |
-          curl -sSfL https://temporal.download/cli.sh | sh -s -- --version 1.8.2
-          echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Run the complete test suite
-        run: pnpm run test:all
+      - name: Run the verification gate
+        run: pnpm verify

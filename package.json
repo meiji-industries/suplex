@@ -30,7 +30,8 @@
     "test:governance-real": "vitest run --project real tests/plan-governance.real.test.ts",
     "verify-ticket-07": "pnpm run test:governance-real",
     "test:browser": "pnpm run build && vitest run --config vitest.browser.config.ts",
-    "test:all": "pnpm run typecheck && pnpm run test && pnpm run test:engine && pnpm run test:browser",
+    "verify": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:engine && pnpm run test:browser",
+    "test:all": "pnpm run verify",
     "test:release:lead": "pnpm run build && vitest run tests/codex-lead.real.test.ts --reporter=dot"
   },
   "dependencies": {

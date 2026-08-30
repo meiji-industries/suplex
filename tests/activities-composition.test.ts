@@ -24,6 +24,7 @@ import { createWorktreeActivities } from "../src/engine/activities/worktree.js";
 
 const expectedActivityKeys = [
   "acceptDelivery",
+  "adoptPullRequestRelease",
   "applyGithubPullRequestAction",
   "authorizePlanRevision",
   "cancelDeveloperExecution",
@@ -32,6 +33,7 @@ const expectedActivityKeys = [
   "createSuccessor",
   "finalReview",
   "findActiveDeveloperExecution",
+  "findCompletedDeliveryReview",
   "findRecoverableDeveloperExecution",
   "loadTaskSourcePullRequest",
   "observeGithubPullRequest",
@@ -88,8 +90,8 @@ test("activity factories compose the frozen activity key set without overlap", a
       createCiActivities(context),
       createFinalReviewActivities(context),
       createAcceptanceActivities(context),
-    createMergeConflictActivities(context),
-    createWorktreeActivities(context),
+      createMergeConflictActivities(context),
+      createWorktreeActivities(context),
     ];
     const factoryKeys = factoryResults.flatMap((factory) => Object.keys(factory));
     const activities = createActivities(database, config);

@@ -481,6 +481,50 @@ test("cancelling a held production Developer turn prevents late resurrection", a
   }
 });
 
+test("cancelling explicit repair delivery preserves a complete receipt chain", async () => {
+  const repairStarted = deferred<void>(), releaseRepair = deferred<void>();
+  let repairCalls = 0;
+  const harness = await createEngineHarness({
+    projectIssueState: async (event) => event.state,
+    runDeveloperRepairSupervised: async (input) => {
+      repairCalls += 1;
+      repairStarted.resolve(undefined);
+      const signal = activityContext.current().signal;
+      await Promise.race([
+        releaseRepair.promise,
+        new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(new CancelledFailure()), { once: true })),
+      ]);
+      return { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: "late-repair", summary: "Late repair", evidenceArtifactId: null };
+    },
+    cancelDeveloperExecution: async (input) => ({ status: "cancelled_confirmed", executionId: input.executionId, exitCode: null, exitSignal: null, evidenceArtifactId: null }),
+  });
+  const issueId = "cancel-held-repair", workflowId = harness.workflowId(issueId);
+  harness.seedTask(issueId);
+  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), phase: "repair_required", revision: 1, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Repair delivery", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", developerExecutionId: "developer-original", developerSessionRef: "developer-session", branchName: "forge/issue/cancel-held-repair", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "developer-evidence", deliveryReviewId: "review", deliveryBlockingFindings: [{ findingId: "blocking-1", severity: "blocking", rationale: "Fix it", evidenceRef: "review", disposition: "open", repairInstruction: "Repair" }] });
+  try {
+    persistContinuation(harness, issueId, continuation);
+    const started = await startIssueWorkflow(harness.config, workflowInput(issueId, continuation));
+    const current = await queryIssueWorkflow(harness.config, workflowId);
+    const repair = executeIssueCommand(harness.config, workflowId, "repair_delivery", { expectedRevision: current.revision, actorUserId: engineFixture.actorUserId, commandId: "repair-held" });
+    await repairStarted.promise;
+    const active = await queryIssueWorkflow(harness.config, workflowId);
+    const cancelled = await executeIssueCommand(harness.config, workflowId, "cancel_issue", { expectedRevision: active.revision, actorUserId: engineFixture.actorUserId, commandId: "cancel-held-repair" });
+    await expect(repair).rejects.toBeInstanceOf(CancelledFailure);
+    expect(cancelled.phase).toBe("cancelled");
+    releaseRepair.resolve(undefined);
+    for (let attempt = 0; attempt < 20; attempt += 1) await Promise.resolve();
+    expect(await queryIssueWorkflow(harness.config, workflowId)).toMatchObject({ phase: "cancelled", revision: cancelled.revision });
+    expect(harness.engine.run(workflowId).error).toBeUndefined();
+    expect(commandReceiptCount(harness, "repair-held")).toBe(0);
+    expect(commandReceiptCount(harness, "cancel-held-repair")).toBe(1);
+    expect(repairCalls).toBe(1);
+    void started;
+  } finally {
+    releaseRepair.resolve(undefined);
+    await harness.stop();
+  }
+});
+
 test("reviewed delivery authority is durable before remote branch push", async () => {
   const pushStarted = deferred<void>(), releasePush = deferred<void>();
   const reviewedCommit = "e".repeat(40), reviewedTree = "f".repeat(40);

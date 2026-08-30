@@ -265,6 +265,7 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
         (value) => value.status === "completed" ? value.result.developerExecutionId : value.developerExecutionId,
       );
     } catch (error) {
+      if (isCancellation(error)) throw error;
       log.error("Developer repair turn failed after dispatch", { workflowId: ctx.input.workflowId, taskId: ctx.input.issueId, error: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined });
       let evidenceArtifactId: string | null = null;
       try { evidenceArtifactId = (await activityProxies.recordDeliveryBlocker({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, operation: "repair" })).artifactId; } catch { /* Keep the fixed state transition if blocker recording itself is unavailable. */ }

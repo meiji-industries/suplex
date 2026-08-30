@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
   blockSummary, DeliveryFindingSchema, DeliveryOperationBlockCodeSchema, DeliveryReviewSubjectSchema,
-  DurableArtifactReferenceSchema, durableId,
+  DurableArtifactReferenceSchema, durableId, exactSha,
 } from "../primitives.js";
 
 const DeliveryReviewActivityInputCoreSchema = z.object({
@@ -35,8 +35,7 @@ type ParsedDeliveryReviewActivityInput = z.infer<typeof DeliveryReviewActivityIn
 export type DeliveryReviewActivityInput = Omit<ParsedDeliveryReviewActivityInput, "supersedesReviewId"> & { supersedesReviewId?: string | null };
 export type DeliveryReviewServiceInput = DeliveryReviewActivityInput;
 
-export const DeliveryReviewActivityResultSchema = z.discriminatedUnion("outcome", [
-  z.object({
+const CompletedDeliveryReviewActivityResultSchema = z.object({
     outcome: z.literal("completed"),
     attemptId: durableId,
     correctionAttempts: z.number().int().min(0).max(1),
@@ -56,7 +55,10 @@ export const DeliveryReviewActivityResultSchema = z.discriminatedUnion("outcome"
       supersedesReviewId: durableId.nullable(),
       reviewArtifact: DurableArtifactReferenceSchema.optional(),
     }).strict(),
-  }).strict(),
+  }).strict();
+
+export const DeliveryReviewActivityResultSchema = z.discriminatedUnion("outcome", [
+  CompletedDeliveryReviewActivityResultSchema,
   z.object({
     outcome: z.literal("blocked"),
     attemptId: durableId,
@@ -91,6 +93,48 @@ export const CompletedDeliveryReviewLookupInputSchema = z.object({
 }).strict();
 
 export type CompletedDeliveryReviewLookupInput = z.infer<typeof CompletedDeliveryReviewLookupInputSchema>;
+
+export const RecoverRevalidatedDeliveryReviewInputSchema = z.object({
+  taskId: durableId,
+  companyId: durableId,
+  workflowId: durableId,
+  projectId: durableId,
+  projectRevisionId: durableId,
+  forwardMergeId: durableId,
+  developerExecutionId: durableId,
+  branchName: z.string().min(1).max(256),
+  worktreePath: z.string().min(1).max(1_000),
+  forwardMergePriorHead: exactSha,
+  forwardMergePriorTree: exactSha,
+  forwardMergeTargetBaseSha: exactSha,
+  developerSessionRef: durableId,
+  deliveryArtifactId: durableId,
+  developerEvidenceArtifactId: durableId,
+  leadSessionRef: durableId,
+  leadOutputArtifactId: durableId,
+}).strict();
+
+export type RecoverRevalidatedDeliveryReviewInput = z.infer<typeof RecoverRevalidatedDeliveryReviewInputSchema>;
+
+export const RecoverRevalidatedDeliveryReviewResultSchema = z.discriminatedUnion("outcome", [
+  z.object({
+    outcome: z.literal("recovered"),
+    forwardMergeId: durableId,
+    checkpoint: z.enum(["pre_release", "pre_final_review", "pre_acceptance", "ci_update_from_base"]),
+    developerExecutionId: durableId,
+    targetBaseSha: exactSha,
+    subjectCommit: exactSha,
+    subjectTree: exactSha,
+    review: CompletedDeliveryReviewActivityResultSchema,
+  }).strict(),
+  z.object({
+    outcome: z.literal("blocked"),
+    code: z.enum(["subject-changed", "worktree-unsafe"]),
+    summary: blockSummary,
+  }).strict(),
+]);
+
+export type RecoverRevalidatedDeliveryReviewResult = z.infer<typeof RecoverRevalidatedDeliveryReviewResultSchema>;
 
 /** Workflow-safe review input. The activity resolves the worktree from durable execution state. */
 export type WorkflowDeliveryReviewActivityInput = Omit<DeliveryReviewActivityInput, "worktreePath"> & { worktreePath?: string };
@@ -149,5 +193,6 @@ export interface DeliveryReviewActivities {
   planDeliveryRepair(input: DeliveryRepairPlanActivityInput): Promise<DeliveryRepairPlanResult>;
   reviewDelivery(input: WorkflowDeliveryReviewActivityInput): Promise<WorkflowDeliveryReviewResult>;
   findCompletedDeliveryReview(input: CompletedDeliveryReviewLookupInput): Promise<DeliveryReviewActivityResult | null>;
+  recoverRevalidatedDeliveryReview(input: RecoverRevalidatedDeliveryReviewInput): Promise<RecoverRevalidatedDeliveryReviewResult>;
   recordDeliveryDecision(input: DeliveryDecisionActivityInput): Promise<{ artifactId: string }>;
 }

@@ -55,6 +55,7 @@ const expectedActivityKeys = [
   "recordPlanDecision",
   "recordPlannerNote",
   "recordProbeStarted",
+  "recoverRevalidatedDeliveryReview",
   "recreateTaskWorktree",
   "rerunCi",
   "resolveMergeConflict",

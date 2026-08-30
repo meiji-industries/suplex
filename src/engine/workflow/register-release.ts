@@ -1,4 +1,4 @@
-import { setHandler, sleep } from "../registry.js";
+import { setHandler } from "../registry.js";
 import { ApplicationFailure } from "../failures.js";
 import * as contracts from "../issue-contracts.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
@@ -8,6 +8,17 @@ import { githubPullRequestObservationFields } from "../../github-pull-request-ob
 import type { IssueWorkflowContext } from "./context.js";
 import { GithubReleaseFailure } from "../../github-release.js";
 import { ReleaseFailureCodeSchema } from "../../release-failures.js";
+
+function githubPullRequestLifecycleFields(
+  observed: contracts.GithubPullRequestObservationResult,
+  observedAt: string,
+) {
+  const lifecycle = githubPullRequestObservationFields(observed, observedAt);
+  Reflect.deleteProperty(lifecycle, "expectedHeadSha");
+  Reflect.deleteProperty(lifecycle, "targetBaseSha");
+  return lifecycle;
+}
+
 export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
   const blockDelivery = async (failure: GithubReleaseFailure): Promise<contracts.IssueWorkflowState> => {
@@ -19,23 +30,6 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "releasing", owner: "lead", allowedCommands: [], pendingAction: "Opening the pull request", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     if (!ctx.state.deliveryReviewId || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree) return blockDelivery(new GithubReleaseFailure("stale-reviewed-revision", "Approved exact delivery is required before publishing"));
-    // New histories observe first: a PR opened from GitHub is provider truth,
-    // while the existing publish activity retains its historical adoption path.
-    let observed = true && ctx.state.releaseRepository
-      ? await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
-      : null;
-    // GitHub reports a freshly pushed head with a short delay. Re-observe before treating the
-    // difference as a foreign change to the branch.
-    const tolerateHeadLag = true;
-    for (let attempt = 0; tolerateHeadLag && attempt < 3 && observed?.state === "open" && observed.headSha && ctx.state.expectedHeadSha && observed.headSha.toLowerCase() !== ctx.state.expectedHeadSha.toLowerCase(); attempt += 1) {
-      await sleep("5 seconds");
-      observed = await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository!, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
-    }
-    if (true && observed?.state === "open" && observed.headSha && ctx.state.expectedHeadSha && observed.headSha.toLowerCase() !== ctx.state.expectedHeadSha.toLowerCase()) {
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...githubPullRequestObservationFields(observed, new Date().toISOString()), revision: ctx.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", resultCommit: observed.headSha, resultTree: null, expectedHeadSha: observed.headSha, expectedHeadTree: null, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
-      await ctx.project();
-      return ctx.state;
-    }
     if (!true && !(await ctx.runTargetBaseCheckpoint("pre_release"))) return ctx.state;
     // Publication always starts by making the exact reviewed branch observable
     // on GitHub. This patch preserves histories created before the extra
@@ -100,7 +94,7 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
     if (ctx.input.deliveryTarget === "pull_request_draft" || ctx.input.deliveryTarget === "pull_request_ready") {
       const ready = ctx.input.deliveryTarget === "pull_request_ready";
       const observed = true ? await activityProxies.observeGithubPullRequest({ repository: result.repository, branch: result.branchName, pullRequestNumber: result.pullRequestNumber }) : null;
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...(observed ? githubPullRequestObservationFields(observed, new Date().toISOString()) : {}), revision: ctx.state.revision + 1, phase: "done", owner: "human", allowedCommands: [], pendingAction: ready ? `Done — pull request #${result.pullRequestNumber} ready for review` : `Done — draft pull request #${result.pullRequestNumber} opened`, releaseStatus: ready ? "ready" : "draft", releaseFailureCode: null, releaseFailureSummary: null, releaseRetryAt: null, releaseOperationAttempt: result.attempt, releaseId: result.releaseId, releaseRepository: result.repository, baseBranch: result.baseBranch, pullRequestNumber: result.pullRequestNumber, pullRequestUrl: result.pullRequestUrl, expectedHeadSha: result.headSha, expectedHeadTree: result.headTree, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...(observed ? githubPullRequestLifecycleFields(observed, new Date().toISOString()) : {}), revision: ctx.state.revision + 1, phase: "done", owner: "human", allowedCommands: [], pendingAction: ready ? `Done — pull request #${result.pullRequestNumber} ready for review` : `Done — draft pull request #${result.pullRequestNumber} opened`, releaseStatus: ready ? "ready" : "draft", releaseFailureCode: null, releaseFailureSummary: null, releaseRetryAt: null, releaseOperationAttempt: result.attempt, releaseId: result.releaseId, releaseRepository: result.repository, baseBranch: result.baseBranch, pullRequestNumber: result.pullRequestNumber, pullRequestUrl: result.pullRequestUrl, expectedHeadSha: result.headSha, expectedHeadTree: result.headTree, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.state;
     }

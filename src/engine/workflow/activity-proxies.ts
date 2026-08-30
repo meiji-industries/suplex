@@ -152,6 +152,11 @@ export const { findCompletedDeliveryReview } = proxyActivities<IssueActivities>(
   retry: BOOKKEEPING_RETRY_POLICY,
 });
 
+export const { recoverRevalidatedDeliveryReview } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "2 minutes",
+  retry: { maximumAttempts: 3, initialInterval: "1 second", maximumInterval: "5 seconds" },
+});
+
 export const { reviewDelivery: reviewHerdrDelivery } = proxyActivities<IssueActivities>(herdrLeadActivityOptions);
 
 export const { recordDeliveryBlocker } = proxyActivities<DeliveryBlockerActivities>({

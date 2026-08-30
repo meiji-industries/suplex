@@ -267,6 +267,119 @@ test("accepts an OMP argv result written while Herdr waits for readiness", async
     await rm(setup.root, { recursive: true, force: true });
   }
 });
+
+test.each(["codex", "openrouter"] as const)("existing ambiguous %s turn fails before ensure or prompt", async (provider) => {
+  const setup = await fixture();
+  const turnId = `turn_${createHash("sha256").update(["execution", "plan", "0"].join("\0")).digest("hex").slice(0, 32)}`;
+  const now = new Date().toISOString();
+  setup.input = { ...setup.input, profile: { ...setup.input.profile, provider } };
+  setup.database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, 0, 'dispatching', ?, ?)").run(turnId, "a".repeat(64), join("herdr-results", "task", "planner", `result-${turnId}.json`), now, now));
+  let ensures = 0;
+  let prompts = 0;
+  const runner = makeRunner(
+    setup.database,
+    { prompt: async () => { prompts += 1; return setup.session.live; } } as never,
+    { ensureRoleSession: async () => { ensures += 1; return setup.session; } } as never,
+    new IssueTimelineEvents(setup.database),
+  );
+  try {
+    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "recovery-dispatch-ambiguous", nonRetryable: true });
+    expect(ensures).toBe(0);
+    expect(prompts).toBe(0);
+  } finally {
+    setup.database.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test("missing correction row fails before a correction prompt can be redispatched", async () => {
+  const setup = await fixture();
+  const turnId = `turn_${createHash("sha256").update(["execution", "plan", "0"].join("\0")).digest("hex").slice(0, 32)}`;
+  const now = new Date().toISOString();
+  setup.database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, 0, ?, 'correction_required', ?, ?)").run(turnId, "a".repeat(64), join("herdr-results", "task", "planner", `result-${turnId}.json`), now, now, now));
+  let ensures = 0;
+  let prompts = 0;
+  const runner = makeRunner(
+    setup.database,
+    { prompt: async () => { prompts += 1; return setup.session.live; } } as never,
+    { ensureRoleSession: async () => { ensures += 1; return setup.session; } } as never,
+    new IssueTimelineEvents(setup.database),
+  );
+  try {
+    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "recovery-dispatch-ambiguous", nonRetryable: true });
+    expect(ensures).toBe(0);
+    expect(prompts).toBe(0);
+  } finally {
+    setup.database.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test.each(["waiting", "completed"])("recovered OpenRouter %s turn relaunches without an argv prompt", async (status) => {
+  const setup = await fixture();
+  const turnId = `turn_${createHash("sha256").update(["execution", "plan", "0"].join("\0")).digest("hex").slice(0, 32)}`;
+  const now = new Date().toISOString();
+  setup.input = { ...setup.input, profile: { ...setup.input.profile, provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } };
+  setup.database.authQuery((db) => {
+    db.prepare("UPDATE forge_herdr_role_sessions SET provider_kind = 'openrouter', codex_session_id = NULL, rollout_path = NULL WHERE id = 'session'").run();
+    db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, 0, ?, ?, ?, ?)").run(turnId, "a".repeat(64), join("herdr-results", "task", "planner", `result-${turnId}.json`), now, status, now, now);
+  });
+  let initialPrompt: { path: string; content: string } | undefined;
+  let prompts = 0;
+  const runner = makeRunner(
+    setup.database,
+    { prompt: async () => { prompts += 1; return setup.session.live; } } as never,
+    {
+      ensureRoleSession: async (_task: unknown, _role: unknown, _settings: unknown, options?: { initialPrompt?: { path: string; content: string } }) => {
+        initialPrompt = options?.initialPrompt;
+        throw new Error("stop after simulated relaunch");
+      },
+    } as never,
+    new IssueTimelineEvents(setup.database),
+  );
+  try {
+    await expect(runner.run(setup.input)).rejects.toThrow("stop after simulated relaunch");
+    expect(initialPrompt).toBeUndefined();
+    expect(prompts).toBe(0);
+  } finally {
+    setup.database.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test("recovered OpenRouter agent absence never recycles with the original prompt", async () => {
+  const setup = await fixture();
+  const turnId = `turn_${createHash("sha256").update(["execution", "plan", "0"].join("\0")).digest("hex").slice(0, 32)}`;
+  const now = new Date().toISOString();
+  setup.session = { ...setup.session, provider: "openrouter", launched: true };
+  setup.input = { ...setup.input, profile: { ...setup.input.profile, provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } };
+  setup.database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, correction_index, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, ?, 0, ?, 'waiting', ?, ?)").run(turnId, "a".repeat(64), join("herdr-results", "task", "planner", `result-${turnId}.json`), setup.session.rolloutPath, now, now, now));
+  let initialPrompt: { path: string; content: string } | undefined;
+  let prompts = 0;
+  let retires = 0;
+  const runner = makeRunner(
+    setup.database,
+    { prompt: async () => { prompts += 1; return setup.session.live; }, getAgent: async () => undefined } as never,
+    {
+      ensureRoleSession: async (_task: unknown, _role: unknown, _settings: unknown, options?: { initialPrompt?: { path: string; content: string } }) => {
+        initialPrompt = options?.initialPrompt;
+        return setup.session;
+      },
+      retireRoleSession: async () => { retires += 1; },
+    } as never,
+    new IssueTimelineEvents(setup.database),
+  );
+  try {
+    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "recovery-agent-absent", nonRetryable: true });
+    expect(initialPrompt).toBeUndefined();
+    expect(prompts).toBe(0);
+    expect(retires).toBe(0);
+  } finally {
+    setup.database.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
 test("accepts a fresh argv prompt from a title-prefixed OMP transcript reported by path", async () => {
   const setup = await fixture();
   const ompHome = join(setup.root, "omp");

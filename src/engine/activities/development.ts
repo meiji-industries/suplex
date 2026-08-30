@@ -47,7 +47,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) });
     },
     async runDeveloperExecutionSupervised(input) {
-      return invokeAgent(input, () => runSupervised<WorkflowDeveloperExecutionResult>(input, async (service) => {
+      return invokeAgent(input, () => runSupervised<WorkflowDeveloperExecutionResult>(input, "implementation", async (service) => {
         const result = await service.run({ ...input, executionId: input.developerTurnExecutionId });
         activityWorktrees.set(result.developerExecutionId, result.worktreePath);
         activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
@@ -69,7 +69,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, summary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.summary)) });
     },
     async runDeveloperRepairSupervised(input) {
-      return invokeAgent(input, () => runSupervised<WorkflowDeveloperRepairResult>(input, async (service) => {
+      return invokeAgent(input, () => runSupervised<WorkflowDeveloperRepairResult>(input, "delivery-repair", async (service) => {
         const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null } | undefined) ?? { worktreePath: latestWorktree(input, input.developerExecutionId), branchName: input.branchName, targetBaseSha: input.targetBaseSha, resultCommit: input.subjectCommit, resultTree: input.subjectTree };
         const result = await service.runRepair({ ...input, blockingFindings: input.blockingFindings ?? [], worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree! });
         activityWorktrees.set(result.developerExecutionId, result.worktreePath);

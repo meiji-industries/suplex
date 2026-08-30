@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 
 import type { ForgeDatabase } from "./database.js";
 import { json } from "./task-utils.js";
@@ -18,7 +19,7 @@ export interface OperationOwnership {
 export type ClaimResult =
   | { status: "acquired"; ownership: OperationOwnership; coordinates: OperationCoordinates }
   | { status: "in_progress" }
-  | { status: "recoverable"; previousOwnership: OperationOwnership; coordinates: OperationCoordinates; legacy: boolean }
+  | { status: "recoverable"; previousOwnership: OperationOwnership; coordinates: OperationCoordinates }
   | { status: "settled" | "failed"; result: unknown | null };
 
 export type SettlementResult =
@@ -26,8 +27,22 @@ export type SettlementResult =
   | { applied: false; status: "in_progress"; result: null }
   | { applied: false; status: "settled" | "failed"; result: unknown | null };
 
-const processOwnerToken = randomUUID();
+const hostIdentity = createHash("sha256").update(hostname()).digest("hex");
+const processOwnerToken = `${hostIdentity}:${process.pid}:${randomUUID()}`;
 const identityFailure = { reasonCode: "operation-identity-drift", summary: "Operation recovery identity changed" };
+const ownerFailure = { reasonCode: "operation-owner-unverifiable", summary: "Operation owner identity could not be verified; manual recovery is required" };
+
+function ownerProcessState(ownerToken: string): "alive" | "dead" | "unknown" {
+  const [ownerHost, ownerPid, nonce, ...extra] = ownerToken.split(":");
+  const pid = Number(ownerPid);
+  if (extra.length || ownerHost !== hostIdentity || !nonce || !Number.isSafeInteger(pid) || pid <= 0) return "unknown";
+  try {
+    process.kill(pid, 0);
+    return "alive";
+  } catch (error) {
+    return error && typeof error === "object" && "code" in error && error.code === "ESRCH" ? "dead" : "alive";
+  }
+}
 
 export function operationKey(parts: Array<string | number | null | undefined>): string {
   return parts.map(String).join("|");
@@ -49,13 +64,20 @@ export function claimOperation(database: ForgeDatabase, input: { key: string; ta
       if (!rowIdentityMatches || (!coordinates && !input.allowLegacyTerminal) || (coordinates && !identityMatches)) return { status: "failed", result: identityFailure };
       return { status: existing.status, result: existing.resultJson ? json(existing.resultJson, null) : null };
     }
+    let ownerState: "alive" | "dead" | "unknown";
+    if (existing.ownerToken === null) ownerState = "dead";
+    else if (existing.ownerToken === ownerToken) ownerState = "alive";
+    else ownerState = ownerProcessState(existing.ownerToken);
+    if (ownerState === "alive") return { status: "in_progress" };
+    if (ownerState === "unknown") return { status: "failed", result: ownerFailure };
     if (!rowIdentityMatches || (!identityMatches && !(input.allowLegacyRecovery && !coordinates))) {
       const resultJson = JSON.stringify(identityFailure);
-      db.prepare("UPDATE forge_operation_claims SET status = 'failed', result_json = ?, updated_at = ? WHERE operation_key = ? AND status = 'claimed'").run(resultJson, now, input.key);
-      return { status: "failed", result: identityFailure };
+      const failed = existing.ownerToken === null
+        ? db.prepare("UPDATE forge_operation_claims SET status = 'failed', result_json = ?, updated_at = ? WHERE operation_key = ? AND status = 'claimed' AND generation = ? AND owner_token IS NULL").run(resultJson, now, input.key, existing.generation)
+        : db.prepare("UPDATE forge_operation_claims SET status = 'failed', result_json = ?, updated_at = ? WHERE operation_key = ? AND status = 'claimed' AND generation = ? AND owner_token = ?").run(resultJson, now, input.key, existing.generation, existing.ownerToken);
+      return failed.changes === 1 ? { status: "failed", result: identityFailure } : { status: "in_progress" };
     }
-    if (coordinates && existing.ownerToken === ownerToken) return { status: "in_progress" };
-    return { status: "recoverable", previousOwnership: { ownerToken: existing.ownerToken, generation: existing.generation }, coordinates: coordinates ?? input.coordinates, legacy: !coordinates };
+    return { status: "recoverable", previousOwnership: { ownerToken: existing.ownerToken, generation: existing.generation }, coordinates: coordinates ?? input.coordinates };
   });
 }
 
@@ -89,7 +111,8 @@ export function settleOperation(database: ForgeDatabase, key: string, ownership:
 
 /**
  * Persist a cancellation even when the activity has not yet acquired a local
- * worker slot. A terminal result always wins this race.
+ * worker slot. Unlike generic recovery, explicit cancellation intentionally
+ * overrides live ownership; a terminal result always wins this race.
  */
 export function cancelOperation(database: ForgeDatabase, input: { key: string; taskId: string; kind: OperationKind }): void {
   const result = { status: "failed", reasonCode: "cancelled", summary: "Cancelled before the turn started" };

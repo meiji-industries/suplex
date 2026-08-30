@@ -65,21 +65,29 @@ export class HerdrTurnRunner {
         let resultPath = initialResultPath;
         let prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
         const existingBeforeLaunch = this.existingTurn(input, correction);
+        if (existingBeforeLaunch?.status === "correction_required" && !this.existingTurn(input, correction + 1)) {
+          throw new AgentFailure("recovery-dispatch-ambiguous", "The durable turn does not prove whether its correction prompt was dispatched", { nonRetryable: true });
+        }
+        if (existingBeforeLaunch && !existingBeforeLaunch.promptSentAt && existingBeforeLaunch.status !== "completed") {
+          throw new AgentFailure("recovery-dispatch-ambiguous", "The durable turn does not prove whether its prompt was dispatched", { nonRetryable: true });
+        }
         if (!existingBeforeLaunch) {
           await mkdir(dirname(initialResultPath), { recursive: true, mode: 0o700 });
           await this.quarantine(initialResultPath);
         }
         const argvDispatchAt = this.now().toISOString();
-        session = await this.ensure(input, { path: this.promptPath(resultPath), content: prompt });
+        const initialPrompt = existingBeforeLaunch ? undefined : { path: this.promptPath(resultPath), content: prompt };
+        session = await this.ensure(input, initialPrompt);
         // A concurrent retry can create or complete this deterministic turn while
         // ensure waits for agent startup; dispatch must use that durable state.
         const existing = this.existingTurn(input, correction);
         const resumed = existing?.promptSentAt || existing?.status === "completed" ? existing : undefined;
+        if (existing && !resumed) throw new AgentFailure("recovery-dispatch-ambiguous", "The durable turn does not prove whether its prompt was dispatched", { nonRetryable: true });
         resultPath = existing
           ? this.existingResultPath(input, existing.resultRelativePath)
           : initialResultPath;
         prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
-        const promptInArgv = session.launched && session.provider === "openrouter";
+        const promptInArgv = initialPrompt !== undefined && session.launched && session.provider === "openrouter";
         if (resumed?.status === "completed") {
           const recorded = resumed.resultHash ? await readFile(resultPath).catch(() => undefined) : undefined;
           const bytes = recorded && hash(recorded) === resumed.resultHash ? recorded : await this.stableResult(resultPath, undefined, resumed.promptSentAt, false);
@@ -101,7 +109,8 @@ export class HerdrTurnRunner {
           this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", promptSentAt, promptSentAt, turnId);
           session = await this.resolveIdentity(session, input, turnId, candidates);
         }
-        const completion = await this.wait(input, session, turnId, marker, resultPath, prompt, promptInArgv, input.signal, resumed && await this.recoverCompletion(input, session, turnId, marker, resultPath));
+        const recoveredDispatch = resumed !== undefined;
+        const completion = await this.wait(input, session, turnId, marker, resultPath, prompt, promptInArgv, recoveredDispatch, input.signal, resumed && await this.recoverCompletion(input, session, turnId, marker, resultPath));
         session = completion.session ?? session;
         const bytes = await this.stableResult(resultPath, completion.resultVersion, this.promptSentAt(turnId), completion.steeredAfterCompletion);
         if (!bytes) continue;
@@ -127,7 +136,7 @@ export class HerdrTurnRunner {
     }
   }
 
-  private async wait(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, marker: string, resultPath: string, prompt: string, promptInArgv: boolean, signal?: AbortSignal, recovered?: Completion): Promise<Completion> {
+  private async wait(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, marker: string, resultPath: string, prompt: string, promptInArgv: boolean, recoveredDispatch: boolean, signal?: AbortSignal, recovered?: Completion): Promise<Completion> {
     const completion: Completion = recovered ?? { marker: false, completed: false, steeredAfterCompletion: false };
     let activeTurnId: string | undefined;
     let polls = 0;
@@ -142,6 +151,7 @@ export class HerdrTurnRunner {
       for (const event of drained.events) activeTurnId = await this.reduceCompletion(completion, activeTurnId, event, marker, resultPath);
       const live = (await snapshotAgents(this.herdr)).find((agent) => agent.name === session.agentName) ?? await this.herdr.getAgent(session.agentName);
       if (!live) {
+        if (recoveredDispatch) throw new AgentFailure("recovery-agent-absent", "The previously dispatched interactive turn has no live agent", { nonRetryable: true });
         if (session.provider === "openrouter") await this.recycleRejectedSession(input, prompt, resultPath, turnId);
         throw new AgentFailure("agent-absent", "Interactive agent is absent from Herdr");
       }

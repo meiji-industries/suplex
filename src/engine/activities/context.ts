@@ -309,39 +309,75 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   const bindCapacityExecution = async <T>(_capacityRequestId: string | undefined, _owner: { executionKind: "agent" | "developer"; executionId: string; sessionRef?: string | null; worktreePath?: string | null }, result: T): Promise<T> => result;
   const runSupervised = async <T extends { developerExecutionId: string; evidenceArtifactId: string | null; deliveryArtifactId?: string; verificationArtifact?: { id: string } }>(
     input: { taskId: string; companyId: string; workflowId: string; planRevision: number; capacityRequestId?: string; developerTurnExecutionId: string },
+    promptKind: "implementation" | "delivery-repair" | "merge-conflict-resolution" | "ci-repair",
     operation: (service: Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">) => Promise<T>,
   ): Promise<DeveloperTurnActivityOutcome<T>> => {
     const key = operationKey(["turn", input.taskId, input.developerTurnExecutionId]);
-    const terminalOutcome = (result: unknown | null): DeveloperTurnActivityOutcome<T> => {
-      if (result === null) throw ApplicationFailure.nonRetryable("Developer turn claim is terminal without a reusable result", "operation-result-missing", { key });
-      return result as DeveloperTurnActivityOutcome<T>;
+    const terminalOutcome = (status: "settled" | "failed", result: unknown | null): DeveloperTurnActivityOutcome<T> => {
+      if (status === "failed") {
+        let reasonCode = "operation-failed";
+        let summary = "Developer turn operation failed";
+        let evidenceArtifactId: string | null = null;
+        if (result && typeof result === "object") {
+          if ("reasonCode" in result && typeof result.reasonCode === "string") reasonCode = result.reasonCode;
+          if ("summary" in result && typeof result.summary === "string") {
+            const parsed = SafeSummarySchema.safeParse(result.summary);
+            if (parsed.success) summary = parsed.data;
+          }
+          if ("evidenceArtifactId" in result && (typeof result.evidenceArtifactId === "string" || result.evidenceArtifactId === null)) evidenceArtifactId = result.evidenceArtifactId;
+        }
+        return { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode, summary, evidenceArtifactId };
+      }
+      if (result && typeof result === "object" && "status" in result && result.status === "completed" && "result" in result && "resultHash" in result && typeof result.resultHash === "string") {
+        // The settled payload was produced by this same generic operation boundary.
+        const storedResult = result.result as T;
+        return { status: "completed", result: storedResult, resultHash: result.resultHash };
+      }
+      throw ApplicationFailure.nonRetryable("Developer turn claim is terminal without a reusable result", "operation-result-missing", { key });
     };
     const coordinates = {
-      identity: { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, executionId: input.developerTurnExecutionId, ledger: "developer" },
-      authority: { table: "forge_herdr_turns" },
+      identity: { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, executionId: input.developerTurnExecutionId, ledger: "developer", promptKind },
+      authority: { table: "forge_herdr_turns", promptKind },
     };
     const claim = claimOperation(database, { key, taskId: input.taskId, kind: "turn", coordinates, allowLegacyRecovery: true, allowLegacyTerminal: true });
     if (claim.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} is already in progress`, "operation-in-progress", { key });
-    if ("result" in claim) return terminalOutcome(claim.result);
+    if ("result" in claim) return terminalOutcome(claim.status, claim.result);
     let ownership: OperationOwnership;
     if (claim.status === "recoverable") {
-      const turns = database.authQuery((db) => db.prepare("SELECT task_id AS taskId, ledger FROM forge_herdr_turns WHERE execution_id = ?").all(input.developerTurnExecutionId) as Array<{ taskId: string; ledger: string }>);
+      const turns = database.authQuery((db) => db.prepare("SELECT task_id AS taskId, ledger, prompt_kind AS promptKind, correction_index AS correctionIndex, status, prompt_sent_at AS promptSentAt, result_sha256 AS resultSha256 FROM forge_herdr_turns WHERE execution_id = ?").all(input.developerTurnExecutionId) as Array<{ taskId: string; ledger: string; promptKind: string; correctionIndex: number; status: string; promptSentAt: string | null; resultSha256: string | null }>);
       const recovered = recoverOperation(database, key, claim.previousOwnership, undefined, coordinates);
       if (!recovered) throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} recovery was claimed concurrently`, "operation-in-progress", { key });
       ownership = recovered;
-      if (claim.legacy && turns.length === 0) {
-        const outcome: DeveloperTurnActivityOutcome<T> = { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: "operation-recovery-manual", summary: "Legacy Developer turn has no exact Herdr authority; manual retry is required", evidenceArtifactId: null };
+      if (turns.length === 0) {
+        const outcome: DeveloperTurnActivityOutcome<T> = { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: "operation-recovery-manual", summary: "Developer turn has no exact Herdr authority; manual retry is required", evidenceArtifactId: null };
         const settlement = settleOperation(database, key, ownership, "failed", outcome);
         if (settlement.applied) return outcome;
         if (settlement.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} recovery was claimed concurrently`, "operation-in-progress", { key });
-        return terminalOutcome(settlement.result);
+        return terminalOutcome(settlement.status, settlement.result);
       }
-      if (turns.some((turn) => turn.taskId !== input.taskId || turn.ledger !== "developer")) {
+      if (turns.some((turn) => turn.taskId !== input.taskId || turn.ledger !== "developer" || turn.promptKind !== promptKind)) {
         const outcome: DeveloperTurnActivityOutcome<T> = { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: "operation-identity-drift", summary: "Developer turn recovery identity changed", evidenceArtifactId: null };
         const settlement = settleOperation(database, key, ownership, "failed", outcome);
         if (settlement.applied) return outcome;
         if (settlement.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} recovery was claimed concurrently`, "operation-in-progress", { key });
-        return terminalOutcome(settlement.result);
+        return terminalOutcome(settlement.status, settlement.result);
+      }
+      const correctionIndices = new Set(turns.map((turn) => turn.correctionIndex));
+      const ambiguousDispatch = turns.some((turn) => turn.promptSentAt === null && (turn.status !== "completed" || turn.resultSha256 === null))
+        || turns.some((turn) => turn.status === "correction_required" && !correctionIndices.has(turn.correctionIndex + 1));
+      if (ambiguousDispatch) {
+        const outcome: DeveloperTurnActivityOutcome<T> = { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: "operation-recovery-manual", summary: "Developer turn dispatch authority is ambiguous; manual retry is required", evidenceArtifactId: null };
+        const settlement = settleOperation(database, key, ownership, "failed", outcome);
+        if (settlement.applied) return outcome;
+        if (settlement.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} recovery was claimed concurrently`, "operation-in-progress", { key });
+        return terminalOutcome(settlement.status, settlement.result);
+      }
+      if (promptKind === "ci-repair") {
+        const outcome: DeveloperTurnActivityOutcome<T> = { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: "operation-recovery-manual", summary: "CI repair recovery lacks a deterministic inner execution identity; manual retry is required", evidenceArtifactId: null };
+        const settlement = settleOperation(database, key, ownership, "failed", outcome);
+        if (settlement.applied) return outcome;
+        if (settlement.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} recovery was claimed concurrently`, "operation-in-progress", { key });
+        return terminalOutcome(settlement.status, settlement.result);
       }
     } else {
       ownership = claim.ownership;
@@ -357,7 +393,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       const settlement = settleOperation(database, key, ownership, "settled", outcome);
       if (settlement.applied) return outcome;
       if (settlement.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} settlement lost claim ownership`, "operation-in-progress", { key });
-      return terminalOutcome(settlement.result);
+      return terminalOutcome(settlement.status, settlement.result);
     } catch (error) {
       if (error instanceof AgentFailure) {
         const evidence = database.authQuery((db) => (db.prepare("SELECT evidence_artifact_id AS evidenceArtifactId FROM forge_developer_executions WHERE id = ?").get(input.developerTurnExecutionId) as { evidenceArtifactId: string | null } | undefined)?.evidenceArtifactId ?? null);
@@ -365,7 +401,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
         const settlement = settleOperation(database, key, ownership, "failed", outcome);
         if (settlement.applied) return outcome;
         if (settlement.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} settlement lost claim ownership`, "operation-in-progress", { key });
-        return terminalOutcome(settlement.result);
+        return terminalOutcome(settlement.status, settlement.result);
       }
       throw error;
     }

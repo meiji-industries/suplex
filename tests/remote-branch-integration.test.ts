@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, expect, test } from "vitest";
@@ -10,6 +10,8 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { claimOperation, operationKey } from "../src/operation-claims.js";
 import { integrateRemoteBranch, type RemoteIntegration } from "../src/remote-branch-integration.js";
+
+const deadOwnerToken = `${createHash("sha256").update(hostname()).digest("hex")}:2147483647:crashed-worker`;
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -105,7 +107,7 @@ test("abandoned merge claim executes once after exact authority proves no effect
   const remoteRef = "refs/heads/forge/task";
   const key = operationKey(["remote-integration", "task", remoteHead]);
   const coordinates = { identity: { companyId: "company", workflowId: "workflow", repository: "acme/forge", provider: "git-origin", remoteUrlSha256, remoteRef, intendedRemoteHead: remoteHead, targetBaseSha: "a".repeat(40) }, authority: { priorHead, priorStatusSha256: createHash("sha256").update("").digest("hex"), priorDirtyFileCount: 0 } };
-  claimOperation(value.database, { key, taskId: "task", kind: "merge", coordinates, ownerToken: "crashed-worker" });
+  claimOperation(value.database, { key, taskId: "task", kind: "merge", coordinates, ownerToken: deadOwnerToken });
   let mergeEffects = 0;
   const result = await integrate(value, remoteHead, {
     git: async (args, cwd, taskId) => {
@@ -138,7 +140,7 @@ test("completed merge settles an abandoned claim with zero new merge effects", a
   const remoteRef = "refs/heads/forge/task";
   const key = operationKey(["remote-integration", "task", remoteHead]);
   const coordinates = { identity: { companyId: "company", workflowId: "workflow", repository: "acme/forge", provider: "git-origin", remoteUrlSha256, remoteRef, intendedRemoteHead: remoteHead, targetBaseSha: "a".repeat(40) }, authority: { priorHead, priorStatusSha256: createHash("sha256").update("").digest("hex"), priorDirtyFileCount: 0 } };
-  claimOperation(value.database, { key, taskId: "task", kind: "merge", coordinates, ownerToken: "crashed-worker" });
+  claimOperation(value.database, { key, taskId: "task", kind: "merge", coordinates, ownerToken: deadOwnerToken });
   let mergeEffects = 0;
   const result = await integrate(value, remoteHead, {
     git: async (args, cwd, taskId) => {

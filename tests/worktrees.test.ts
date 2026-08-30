@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect, test } from "vitest";
@@ -12,6 +12,8 @@ import { runCommand, setCommandRunnerLogger } from "../src/command-runner.js";
 import { StructuredLogger } from "../src/logging.js";
 import { cancelOperation, claimOperation, operationKey } from "../src/operation-claims.js";
 import { createGitCommandGuard, reserveOwnedWorktree, withWorktreeBuildCaches, WorktreeFailure, WorktreeManager } from "../src/worktrees.js";
+
+const deadOwnerToken = `${createHash("sha256").update(hostname()).digest("hex")}:2147483647:crashed-worker`;
 
 async function command(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
   const result = await runCommand({ taskId: null, stepId: null, command, args, cwd, ...(env ? { env } : {}) });
@@ -185,7 +187,7 @@ test("abandoned push claims retry only after exact remote absence", async () => 
   let remoteHead: string | null = null;
   let pushes = 0;
   try {
-    claimOperation(database, { key, taskId: "task_1", kind: "push", coordinates, ownerToken: "crashed-worker" });
+    claimOperation(database, { key, taskId: "task_1", kind: "push", coordinates, ownerToken: deadOwnerToken });
     const manager = new WorktreeManager({
       async run(args: string[]) {
         if (args[0] === "rev-parse") return value.baseSha;
@@ -215,7 +217,7 @@ test("an observed intended remote commit settles an abandoned push without anoth
   const coordinates = { identity: { remoteUrlSha256, remoteRef, intendedCommit: value.baseSha }, authority: { remoteCommit: null } };
   let pushes = 0;
   try {
-    claimOperation(database, { key, taskId: "task_1", kind: "push", coordinates, ownerToken: "crashed-worker" });
+    claimOperation(database, { key, taskId: "task_1", kind: "push", coordinates, ownerToken: deadOwnerToken });
     const manager = new WorktreeManager({
       async run(args: string[]) {
         if (args[0] === "rev-parse") return value.baseSha;

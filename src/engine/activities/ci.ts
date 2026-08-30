@@ -87,7 +87,7 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
     },
     async runCiRepair(input: WorkflowCiRepairActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);
-      const supervised = await invokeAgent(input, () => runSupervised<WorkflowCiRepairActivityResult>(input, async (service) => {
+      const supervised = await invokeAgent(input, () => runSupervised<WorkflowCiRepairActivityResult>(input, "ci-repair", async (service) => {
         const { worktreePath: _worktreePath, ...result } = await service.runCiRepair({ ...input, worktreePath });
         void _worktreePath;
         return result;

@@ -3,8 +3,9 @@ import { activityContext } from "../src/engine/activity-context.js";
 import { createActivityCaller } from "../src/engine/activities.js";
 import { ApplicationFailure, CancelledFailure } from "../src/engine/failures.js";
 import { durableCommand } from "../src/engine/service.js";
+import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
 import { Wakeable } from "../src/engine/runs.js";
-import { createEngineHarness } from "./helpers/engine-harness.js";
+import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
 
 test("durable command IDs are stable", () => {
   const input = { expectedRevision: 0, actorUserId: "member" };
@@ -35,5 +36,24 @@ test("activity timeout aborts the activity signal and clears its ledger row", as
     await expect(caller.call("hanging", [], { startToCloseTimeout: 5 }, new AbortController().signal, "workflow")).rejects.toBeInstanceOf(CancelledFailure);
     expect(aborted).toBe(true);
     expect(harness.database.authQuery((db) => (db.prepare("SELECT count(*) count FROM forge_engine_activities").get() as { count: number }).count)).toBe(0);
+  } finally { await harness.stop(); }
+});
+
+test("IssueEngine loads an unstarted run from its snapshot", async () => {
+  const harness = await createEngineHarness({ projectIssueState: async (event) => event.state });
+  try {
+    const issueId = "lazy-run"; const workflowId = harness.workflowId(issueId); harness.seedTask(issueId);
+    const now = new Date(harness.clock.now()).toISOString();
+    harness.database.authQuery((db) => {
+      db.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('lazy-planner-agent', 'internal', 'Lazy Planner', 'planner', 'lazy-planner', 'profile', ?, ?)").run(now, now);
+      db.prepare("UPDATE forge_tasks SET role_agents_json = ? WHERE id = ?").run(JSON.stringify({ planner: "lazy-planner-agent" }), issueId);
+    });
+    const state = buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false, autoApprovePlan: false, pullRequestMode: "ready", deliveryTarget: "pull_request_ready", runProjectTests: false });
+    harness.database.authQuery((db) => db.prepare("INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, ?, ?, 0, ?, ?)").run(issueId, engineFixture.companyId, workflowId, JSON.stringify(state), new Date(harness.clock.now()).toISOString()));
+
+    const run = harness.engine.run(workflowId);
+    expect(run.state.issueId).toBe(issueId);
+    expect(run.input.roleProfiles.planner).toBe("profile");
+    expect(harness.engine.run(workflowId)).toBe(run);
   } finally { await harness.stop(); }
 });

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { ForgeConfig } from "../config.js";
 import type { ForgeDatabase } from "../database.js";
+import { resolveAgentProfiles } from "../projects.js";
 import { createActivities, createActivityCaller, type ActivityCaller } from "./activities.js";
 import { CancelledFailure } from "./failures.js";
 import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, buildInitialIssueWorkflowState, type IssueWorkflowInput, type IssueWorkflowState } from "./issue-contracts.js";
@@ -49,6 +50,16 @@ const AGENT_OWNED_PHASES: Record<string, true> = {
   releasing: true, merge_conflict_reviewing: true, merge_conflict_required: true, merge_conflict_resolving: true, ci_repair_planning: true,
   ci_repairing: true, final_review: true, delivery_ready: true,
 };
+
+export function issueRunInputFromSnapshotRow(db: Parameters<typeof resolveAgentProfiles>[0], row: Record<string, unknown>, state: IssueWorkflowState): IssueWorkflowInput {
+  return IssueWorkflowInputSchema.parse({
+    workflowId: state.workflowId, companyId: state.companyId, projectId: state.projectId, issueId: state.issueId, projectRevisionId: state.projectRevisionId,
+    briefArtifactId: row.brief_artifact_id, imageArtifactIds: JSON.parse(String(row.image_artifact_ids_json)), roleProfiles: resolveAgentProfiles(db, JSON.parse(String(row.role_agents_json))),
+    supplementalReview: Boolean(row.supplemental_review), requestHash: row.request_hash ?? undefined, predecessorTaskId: row.predecessor_task_id ?? undefined,
+    autoApprovePlan: Boolean(row.auto_approve_plan), pullRequestMode: row.pull_request_mode ?? undefined, deliveryTarget: row.delivery_target ?? undefined,
+    runProjectTests: Boolean(row.run_project_tests), visualEvidence: row.visual_evidence ?? undefined, continuationState: state,
+  });
+}
 
 function recoverInterruptedOperation(state: IssueWorkflowState, database: ForgeDatabase): IssueWorkflowState {
   if (!state.activeOperation || !AGENT_OWNED_PHASES[state.phase]) return state;
@@ -229,8 +240,17 @@ export class IssueEngine {
   }
 
   run(workflowId: string): IssueRun {
-    const run = this.runs.get(workflowId);
-    if (!run) throw new Error(`Issue run not loaded: ${workflowId}`);
+    const existing = this.runs.get(workflowId);
+    if (existing) return existing;
+    const input = this.database.authQuery((db) => {
+      const row = db.prepare(`SELECT s.task_id, s.state_json, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.request_hash, t.predecessor_task_id, t.auto_approve_plan, t.pull_request_mode, t.delivery_target, t.run_project_tests, t.visual_evidence FROM forge_workflow_snapshots s JOIN forge_tasks t ON t.id = s.task_id WHERE s.workflow_id = ? ORDER BY s.revision DESC LIMIT 1`).get(workflowId) as Record<string, unknown> | undefined;
+      if (!row) throw new Error(`Issue run not loaded: ${workflowId}`);
+      const state = IssueWorkflowStateSchema.parse(JSON.parse(String(row.state_json)));
+      return issueRunInputFromSnapshotRow(db, row, state);
+    });
+    const run = new IssueRun(input, this.database, this.caller, this.clock);
+    this.runs.set(workflowId, run);
+    run.start();
     return run;
   }
 

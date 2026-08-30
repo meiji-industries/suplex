@@ -4,8 +4,8 @@ import { ForgeDatabase } from "../database.js";
 import { StructuredLogger } from "../logging.js";
 import { runtimeIdentifiers } from "../runtime-identifiers.js";
 import { installIssueEngine } from "./index.js";
-import { IssueWorkflowInputSchema, IssueWorkflowStateSchema } from "./issue-contracts.js";
-import { IssueEngine } from "./runs.js";
+import { IssueWorkflowStateSchema } from "./issue-contracts.js";
+import { IssueEngine, issueRunInputFromSnapshotRow } from "./runs.js";
 import { reconcileActiveTurns } from "../active-turn-recovery.js";
 import { reconcileWorktrees } from "../worktree-reconciliation.js";
 import { reconcileGithubObservations } from "../github-observation-reconciliation.js";
@@ -38,7 +38,7 @@ export async function loadIssueRuns(engine: IssueEngine): Promise<number> {
     if (!parsed.success) { new StructuredLogger().warn("Skipping issue snapshot that fails the state schema", {}, { taskId: String(row.task_id ?? ""), issues: parsed.error.issues.slice(0, 3).map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ") }); continue; }
     const state = parsed.data;
     if (engine.runs.has(state.workflowId)) continue;
-    await engine.create(IssueWorkflowInputSchema.parse({ workflowId: state.workflowId, companyId: state.companyId, projectId: state.projectId, issueId: state.issueId, projectRevisionId: state.projectRevisionId, briefArtifactId: row.brief_artifact_id, imageArtifactIds: JSON.parse(String(row.image_artifact_ids_json)), roleProfiles: JSON.parse(String(row.role_agents_json)), supplementalReview: Boolean(row.supplemental_review), requestHash: row.request_hash ?? undefined, predecessorTaskId: row.predecessor_task_id ?? undefined, autoApprovePlan: Boolean(row.auto_approve_plan), pullRequestMode: row.pull_request_mode ?? undefined, deliveryTarget: row.delivery_target ?? undefined, runProjectTests: Boolean(row.run_project_tests), visualEvidence: row.visual_evidence ?? undefined, continuationState: state }));
+    await engine.create(engine.database.authQuery((db) => issueRunInputFromSnapshotRow(db, row, state)));
   }
   return rows.length;
 }

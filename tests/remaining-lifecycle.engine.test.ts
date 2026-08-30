@@ -71,3 +71,4 @@ test("host restarts resume CI reconciliation from the same persisted phase", asy
     expect(resumed.revision).toBeGreaterThan(waiting.revision); expect(resumed.lastHandlerError).toBeFalsy(); expect(polls).toBe(1);
   } finally { await h.stop(); }
 });
+

@@ -22,7 +22,7 @@ const labels: Record<DeveloperRecoveryView["status"], string> = {
   failed: "Failed",
 };
 
-export function DeveloperRecoveryStatus({ recovery, executionStatus, allowedCommands, busy, isAdmin, onAction, attentionCard, developmentStatus, children }: { recovery: DeveloperRecoveryView | undefined; executionStatus?: string | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction, note?: string) => Promise<void>; attentionCard?: AttentionCard; developmentStatus?: ReactNode; children?: ReactNode }): ReactElement | null {
+export function DeveloperRecoveryStatus({ recovery, executionStatus, allowedCommands, busy, isAdmin, onAction, attentionCard, developmentStatus, children }: { recovery: DeveloperRecoveryView | undefined; executionStatus?: string | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction, note?: string, idempotencyKey?: string) => Promise<void>; attentionCard?: AttentionCard; developmentStatus?: ReactNode; children?: ReactNode }): ReactElement | null {
   if (!recovery) return null;
   const interrupted = recovery.status === "interrupted";
   const failed = recovery.status === "failed";

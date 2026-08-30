@@ -8,6 +8,10 @@ import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { relativeTime, type ApiAttentionAction, type ApiAttentionCompany, type ApiAttentionItem } from "../lib/view-shared.js";
 import { RefreshCw } from "lucide-react";
 
+export function attentionActionBody(action: ApiAttentionAction, actionNote: string | undefined, idempotencyKey: string): Record<string, unknown> {
+  return { expectedRevision: action.expectedRevision, ...(actionNote ? { note: actionNote } : {}), ...(action.idempotency === "required" ? { idempotencyKey } : {}) };
+}
+
 export function AttentionView(): ReactElement {
   const { currentCompany } = useCompanyContext();
   const [companies, setCompanies] = useState<ApiAttentionCompany[]>([]);
@@ -20,12 +24,12 @@ export function AttentionView(): ReactElement {
   }, []);
   useEffect(() => { void reload(); const timer = window.setInterval(() => void reload(), 15_000); return () => window.clearInterval(timer); }, [reload]);
 
-  const performAction = useCallback(async (item: ApiAttentionItem, action: ApiAttentionAction, actionNote?: string): Promise<void> => {
+  const performAction = useCallback(async (item: ApiAttentionItem, action: ApiAttentionAction, actionNote: string | undefined, idempotencyKey: string): Promise<void> => {
     const path = action.command === "cancel_issue" ? "cancel" : action.command.replaceAll("_", "-");
     setActionBusy(`${item.taskId}:${action.command}`);
     setError("");
     try {
-      await readJson(`/api/tasks/${encodeURIComponent(item.taskId)}/${path}`, { method: "POST", body: JSON.stringify({ expectedRevision: action.expectedRevision, ...(actionNote ? { note: actionNote } : {}) }) });
+      await readJson(`/api/tasks/${encodeURIComponent(item.taskId)}/${path}`, { method: "POST", body: JSON.stringify(attentionActionBody(action, actionNote, idempotencyKey)) });
       setStatus(""); await reload();
     } catch (reason) {
       if (isApiError(reason, 409)) { setStatus("This issue changed. Refreshing the current attention state."); await reload(); }
@@ -33,7 +37,7 @@ export function AttentionView(): ReactElement {
     } finally { setActionBusy(""); }
   }, [reload]);
 
-  const cardAction = (item: ApiAttentionItem, cardAction: ApiAttentionItem["card"]["primaryAction"]): ApiAttentionAction => item.actions.find((action) => action.command === cardAction.command) ?? { command: cardAction.command as ApiAttentionAction["command"], label: cardAction.label, expectedRevision: item.sourceRevision, requiresNote: Boolean(cardAction.requiresNote), destructive: Boolean(cardAction.destructive) };
+  const cardAction = (item: ApiAttentionItem, cardAction: ApiAttentionItem["card"]["primaryAction"]): ApiAttentionAction => item.actions.find((action) => action.command === cardAction.command) ?? { command: cardAction.command as ApiAttentionAction["command"], label: cardAction.label, expectedRevision: item.sourceRevision, requiresNote: Boolean(cardAction.requiresNote), destructive: Boolean(cardAction.destructive), idempotency: "none" };
 
   const visibleCompanies = currentCompany ? companies.filter((company) => company.companyId === currentCompany.id) : companies;
   const companyId = currentCompany?.id ?? "";
@@ -44,7 +48,7 @@ export function AttentionView(): ReactElement {
         {visibleCompanies.map((company) => <section className="bg-background" key={company.companyId}>
           <div className="flex items-center justify-between border-y px-3 py-2 text-xs sm:px-4"><span className="font-medium">{company.companyName}</span><span className="text-muted-foreground">{company.attentionCount}</span></div>
           {company.attention.map((item) => <div className="grid gap-2 border-b px-3 py-2.5 text-xs sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-4" key={item.taskId}>
-            <div className="min-w-0"><a className="font-medium hover:underline" href={withCompany(`/tasks/${encodeURIComponent(item.taskId)}`, item.companyId)}>{item.taskTitle}</a><div className="mt-2"><TaskAttentionCard card={item.card} busy={Boolean(actionBusy)} onAction={(command, note) => void performAction(item, cardAction(item, { command, label: command }), note)} /></div></div>
+            <div className="min-w-0"><a className="font-medium hover:underline" href={withCompany(`/tasks/${encodeURIComponent(item.taskId)}`, item.companyId)}>{item.taskTitle}</a><div className="mt-2"><TaskAttentionCard card={item.card} busy={Boolean(actionBusy)} onAction={(command, note, idempotencyKey) => void performAction(item, cardAction(item, { command, label: command }), note, idempotencyKey)} /></div></div>
             <span className="whitespace-nowrap text-[11px] text-muted-foreground sm:self-end">{relativeTime(item.activatedAt)}</span>
           </div>)}
           {company.attention.length === 0 ? <div className="px-3 py-5 text-center text-xs text-muted-foreground sm:px-4">Nothing needs you right now.</div> : null}

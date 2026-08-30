@@ -1,4 +1,5 @@
 import { AuthService } from "./auth.js";
+import { issueCommands } from "./commands/registry.js";
 import type { ForgeDatabase } from "./database.js";
 import { type IssueCommand } from "./engine/issue-contracts.js";
 import { jsonRequired } from "./task-utils.js";
@@ -11,6 +12,7 @@ export interface AttentionAction {
   expectedRevision: number;
   requiresNote: boolean;
   destructive: boolean;
+  idempotency: "required" | "none";
 }
 
 export interface AttentionItem {
@@ -55,7 +57,7 @@ function actions(raw: string, expectedRevision: number): AttentionAction[] {
   try {
     const commands = jsonRequired(raw);
     if (!Array.isArray(commands) || !commands.every((command): command is IssueCommand => typeof command === "string")) return [];
-    return commands.map((command) => ({ command, label: command.replaceAll("_", " "), expectedRevision, requiresNote: NOTE_COMMANDS.has(command), destructive: command === "cancel_issue" }));
+    return commands.map((command) => ({ command, label: command.replaceAll("_", " "), expectedRevision, requiresNote: NOTE_COMMANDS.has(command), destructive: command === "cancel_issue", idempotency: issueCommands[command].idempotency }));
   } catch {
     return [];
   }

@@ -7,9 +7,9 @@ import type { AttentionCard } from "../../../recovery/convergence.js";
 
 export type DeveloperRecoveryAction = string;
 
-export function DeveloperRecoveryActions({ allowedCommands, busy, isAdmin, onAction, card }: { allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction, note?: string) => Promise<void>; card?: AttentionCard }): ReactElement {
+export function DeveloperRecoveryActions({ allowedCommands, busy, isAdmin, onAction, card }: { allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction, note?: string, idempotencyKey?: string) => Promise<void>; card?: AttentionCard }): ReactElement {
   void isAdmin;
-  if (card) return <TaskAttentionCard card={card} busy={busy} onAction={(command, note) => onAction(command.replaceAll("_", "-"), note)} />;
+  if (card) return <TaskAttentionCard card={card} busy={busy} onAction={(command, note, idempotencyKey) => onAction(command.replaceAll("_", "-"), note, idempotencyKey)} />;
   const [confirmAction, setConfirmAction] = useState<DeveloperRecoveryAction>();
   const [pendingAction, setPendingAction] = useState<DeveloperRecoveryAction>();
   const openConfirmation = (action: DeveloperRecoveryAction): void => setConfirmAction(action);

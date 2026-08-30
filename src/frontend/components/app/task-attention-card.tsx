@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from "react";
+import { useRef, useState, type ReactElement } from "react";
 
 import type { AttentionCard } from "../../../recovery/convergence.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../ui/alert-dialog.js";
@@ -7,12 +7,18 @@ import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogT
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group.js";
 import { Textarea } from "../ui/textarea.js";
 
-export function TaskAttentionCard({ card, onAction, busy = false }: { card: AttentionCard; onAction: (command: string, note?: string) => void | Promise<void>; busy?: boolean }): ReactElement {
+export function TaskAttentionCard({ card, onAction, busy = false }: { card: AttentionCard; onAction: (command: string, note: string | undefined, idempotencyKey: string) => void | Promise<void>; busy?: boolean }): ReactElement {
   const [choice, setChoice] = useState(card.decision?.recommendedChoiceId ?? "");
   const [freeText, setFreeText] = useState("");
   const [noteOpen, setNoteOpen] = useState(false);
   const [confirm, setConfirm] = useState<AttentionCard["primaryAction"] | AttentionCard["secondaryAction"]>();
-  const submit = (action: AttentionCard["primaryAction"], note?: string): void => { void onAction(action.command, note); };
+  const idempotencyKeys = useRef(new Map<string, string>());
+  const submit = (action: AttentionCard["primaryAction"], note?: string): void => {
+    const fingerprint = `${action.command}\0${note ?? ""}`;
+    const idempotencyKey = idempotencyKeys.current.get(fingerprint) ?? crypto.randomUUID();
+    idempotencyKeys.current.set(fingerprint, idempotencyKey);
+    void onAction(action.command, note, idempotencyKey);
+  };
   const request = (action: AttentionCard["primaryAction"]): void => {
     if (action.destructive) setConfirm(action);
     else if (action.requiresNote && !card.decision) setNoteOpen(true);

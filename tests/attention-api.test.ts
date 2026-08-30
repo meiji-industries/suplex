@@ -45,7 +45,7 @@ test("attention API queries human-owned projections and returns their count", as
     database.authQuery((db) => db.prepare("INSERT INTO forge_sessions (id, token_hash, user_id, expires_at, created_at, revoked_at, token_version) VALUES ('session-a', ?, 'admin', ?, ?, NULL, 1)").run(createHash("sha256").update(token).digest("hex"), new Date(Date.now() + 3_600_000).toISOString(), now));
     const response = await app.inject({ method: "GET", url: "/api/attention", headers: { cookie: `${SESSION_COOKIE_NAME}=${token}`, origin: config.reachableAddress } });
     expect(response.statusCode).toBe(200);
-    expect(response.json().companies[0]).toMatchObject({ attentionCount: 1, attention: [{ taskId: "task-human", taskTitle: "Needs a decision", summary: "Decision required", card: expect.objectContaining({ explanation: "Decision required" }), actions: expect.arrayContaining([expect.objectContaining({ command: "record_delivery_decision", expectedRevision: 7 })]) }] });
+    expect(response.json().companies[0]).toMatchObject({ attentionCount: 1, attention: [{ taskId: "task-human", taskTitle: "Needs a decision", summary: "Decision required", card: expect.objectContaining({ explanation: "Decision required" }), actions: expect.arrayContaining([expect.objectContaining({ command: "record_delivery_decision", expectedRevision: 7, idempotency: "required" })]) }] });
     expect(response.json().companies[0].attention.map((item: { taskId: string }) => item.taskId)).not.toContain("task-lead");
     await app.close();
   } finally { database.close(); await rm(root, { recursive: true, force: true }); }

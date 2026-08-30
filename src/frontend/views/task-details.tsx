@@ -161,6 +161,16 @@ export function formatDuration(milliseconds: number): string {
 export type TaskPlanAction = Exclude<IssueCommandSlug, "revise-plan" | "continue-work" | "record-progress" | "resolve-decision-blocker"> | "reject-plan";
 export type PlanRevisionInput = { reason: string };
 
+export function taskAttentionAction(commands: ApiTask["commands"], command: string, note?: string, idempotencyKey?: string): { path: TaskPlanAction; note?: string; payload?: Record<string, unknown> } {
+  const descriptor = commands.find((entry) => entry.name === command || entry.endpoint === command);
+  const path = (descriptor?.endpoint ?? command.replaceAll("_", "-")) as TaskPlanAction;
+  return {
+    path,
+    ...(note !== undefined ? { note } : {}),
+    ...(descriptor?.idempotency === "required" ? { payload: { idempotencyKey: idempotencyKey ?? crypto.randomUUID() } } : {}),
+  };
+}
+
 export function nextPullRequestReviewAction(allowedCommands: ApiTask["allowedCommands"]): TaskPlanAction | undefined {
   if (allowedCommands.includes("review_delivery")) return "review-delivery";
   if (allowedCommands.includes("final_review")) return "final-review";
@@ -651,9 +661,9 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                     <PlanningRunCard task={task} />
                     {showLastHandlerError ? <Alert variant="destructive"><AlertDescription>Last action failed: {task.lastHandlerError!.reason} ({relativeTime(task.lastHandlerError!.at)})</AlertDescription></Alert> : null}
                     {pullRequestInMain ? <div data-active-pull-request><GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} decisionControls={decisionControls} />}
-                    {task.attentionCard && task.owner === "human" && !task.developerRecovery ? <TaskAttentionCard card={task.attentionCard} busy={busy} onAction={async (command, note) => { const descriptor = task.commands.find((entry) => entry.name === command); await onPlanAction((descriptor?.endpoint ?? command.replaceAll("_", "-")) as TaskPlanAction, note); }} /> : null}
+                    {task.attentionCard && task.owner === "human" && !task.developerRecovery ? <TaskAttentionCard card={task.attentionCard} busy={busy} onAction={async (command, note, idempotencyKey) => { const action = taskAttentionAction(task.commands, command, note, idempotencyKey); await onPlanAction(action.path, action.note, action.payload); }} /> : null}
                     {task.phase === "delivery_blocked" ? <DeliveryReviewPanel task={task} /> : null}
-                    {task.developerRecovery ? <DeveloperRecoveryStatus recovery={task.developerRecovery} executionStatus={task.developerExecution?.status} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} {...(task.attentionCard ? { attentionCard: task.attentionCard } : {})} onAction={async (action: DeveloperRecoveryAction, note) => onPlanAction(action as TaskPlanAction, note)} /> : null}
+                    {task.developerRecovery ? <DeveloperRecoveryStatus recovery={task.developerRecovery} executionStatus={task.developerExecution?.status} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} {...(task.attentionCard ? { attentionCard: task.attentionCard } : {})} onAction={async (command: DeveloperRecoveryAction, note, idempotencyKey) => { const action = taskAttentionAction(task.commands, command, note, idempotencyKey); await onPlanAction(action.path, action.note, action.payload); }} /> : null}
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
                     {leadPlan}
                     {task.governance.supplementalReview ? <Card data-task-second-review size="sm" aria-label="Second review">

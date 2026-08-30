@@ -715,7 +715,7 @@ export class ReleaseService {
       if (confirmed?.toLowerCase() !== reviewed.commitSha.toLowerCase()) throw providerFailure(confirmed === null ? "provider-unavailable" : "remote-head-conflict", "Normal push did not produce the reviewed remote head");
     }
     let pullRequest = await this.github.getPullRequest({ repository: coordinates.repository, number: release.pullRequestNumber });
-    if (pullRequest.repository.toLowerCase() !== coordinates.repository || pullRequest.headBranch !== coordinates.headBranch || pullRequest.baseBranch !== coordinates.baseBranch || pullRequest.headSha.toLowerCase() !== reviewed.commitSha.toLowerCase() || pullRequest.state !== "open") throw providerFailure("ambiguous-provider-state", "Stored pull request no longer matches the reviewed revision");
+    if (pullRequest.repository.toLowerCase() !== coordinates.repository || pullRequest.headBranch !== coordinates.headBranch || pullRequest.baseBranch !== coordinates.baseBranch || pullRequest.baseSha.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase() || pullRequest.headSha.toLowerCase() !== reviewed.commitSha.toLowerCase() || pullRequest.state !== "open") throw providerFailure("ambiguous-provider-state", "Stored pull request no longer matches the reviewed revision");
     this.database.authTransaction((db) => {
       db.prepare("UPDATE forge_provider_operations SET status = 'completed', completed_at = ?, updated_at = ? WHERE operation_key = ?").run(now, now, operationKey);
       db.prepare("UPDATE forge_releases SET base_sha = ?, head_sha = ?, head_tree = ?, status = 'draft', title = ?, body_artifact_id = ?, reused = 1, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(coordinates.expectedBaseSha, reviewed.commitSha, reviewed.treeSha, projection.title, bodyArtifact.id, now, release.id, input.taskId, input.companyId, input.workflowId);
@@ -768,7 +768,7 @@ export class ReleaseService {
       } else this.updateOperation(pushKey, "completed");
 
       const identity = { repository: coordinates.repository, owner: coordinates.owner, headBranch: coordinates.headBranch, baseBranch: coordinates.baseBranch };
-      const openCandidate = (candidate: GithubPullRequest) => candidate.repository.toLowerCase() === coordinates.repository.toLowerCase() && candidate.headBranch === coordinates.headBranch && candidate.baseBranch === coordinates.baseBranch && candidate.headSha.toLowerCase() === reviewed.commitSha.toLowerCase() && candidate.state === "open";
+      const openCandidate = (candidate: GithubPullRequest) => candidate.repository.toLowerCase() === coordinates.repository.toLowerCase() && candidate.headBranch === coordinates.headBranch && candidate.baseBranch === coordinates.baseBranch && candidate.baseSha.toLowerCase() === coordinates.expectedBaseSha.toLowerCase() && candidate.headSha.toLowerCase() === reviewed.commitSha.toLowerCase() && candidate.state === "open";
       const candidates = await this.github.listPullRequests(identity);
       let pullRequest = candidates.find(openCandidate);
       let reused = true;

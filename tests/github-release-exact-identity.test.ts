@@ -128,6 +128,16 @@ test("release rejects an existing release whose pull-request head changed after 
   expect(value.database.authQuery((db) => db.prepare("SELECT head_sha AS headSha FROM forge_releases WHERE id = ?").get(published.releaseId))).toEqual({ headSha });
 });
 
+test("release rejects a replayed release whose pull-request base changed after review without overwriting it", async () => {
+  const value = await fixture();
+  const published = await value.service.publish(value.input);
+  const beforeReplay = value.database.authQuery((db) => db.prepare("SELECT base_sha AS baseSha, head_sha AS headSha, head_tree AS headTree, status, title, body_artifact_id AS bodyArtifactId, reused, updated_at AS updatedAt FROM forge_releases WHERE id = ?").get(published.releaseId));
+  value.setPullRequest({ ...published.pullRequest, baseSha: otherSha });
+
+  await expect(value.service.publish({ ...value.input, releaseId: published.releaseId })).rejects.toMatchObject({ code: "ambiguous-provider-state" });
+  expect(value.database.authQuery((db) => db.prepare("SELECT base_sha AS baseSha, head_sha AS headSha, head_tree AS headTree, status, title, body_artifact_id AS bodyArtifactId, reused, updated_at AS updatedAt FROM forge_releases WHERE id = ?").get(published.releaseId))).toEqual(beforeReplay);
+});
+
 test("release never reuses an open pull request whose head differs from the reviewed commit", async () => {
   const value = await fixture();
   value.setRemoteHead(headSha);
@@ -135,6 +145,15 @@ test("release never reuses an open pull request whose head differs from the revi
 
   await expect(value.service.publish(value.input)).rejects.toMatchObject({ code: "ambiguous-provider-state" });
   expect(value.database.authQuery((db) => db.prepare("SELECT head_sha AS headSha, pr_number AS pullRequestNumber FROM forge_releases WHERE task_id = 'task-a'").get())).toEqual({ headSha, pullRequestNumber: null });
+});
+
+test("release never reuses or persists an open pull request whose base differs from the reviewed base", async () => {
+  const value = await fixture();
+  value.setRemoteHead(headSha);
+  value.setPullRequest({ number: 7, url: "https://github.com/acme/forge/pull/7", repository: "acme/forge", headBranch: "feature/task", baseBranch: "main", headSha, baseSha: otherSha, isDraft: true, state: "open", mergedAt: null });
+
+  await expect(value.service.publish(value.input)).rejects.toMatchObject({ code: "ambiguous-provider-state" });
+  expect(value.database.authQuery((db) => db.prepare("SELECT base_sha AS baseSha, head_sha AS headSha, pr_number AS pullRequestNumber FROM forge_releases WHERE task_id = 'task-a'").get())).toEqual({ baseSha, headSha, pullRequestNumber: null });
 });
 
 test("release publishes the exact reviewed revision once and replays idempotently", async () => {

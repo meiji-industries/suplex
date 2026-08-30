@@ -81,6 +81,11 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (!ctx.state.releaseId) {
+      if (observed?.exists && observed.state === "open" && ((ctx.state.expectedHeadSha && observed.headSha?.toLowerCase() !== ctx.state.expectedHeadSha.toLowerCase()) || (ctx.state.targetBaseSha && observed.baseSha?.toLowerCase() !== ctx.state.targetBaseSha.toLowerCase()))) {
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+        await ctx.project();
+        return ctx.state;
+      }
       if (!observed?.exists || observed.state !== "open" || !observed.headSha || !observed.number || !observed.url || !ctx.state.releaseRepository || !ctx.state.branchName || !ctx.state.baseBranch) {
         ctx.state = deferCiReconciliation(ctx.state, new Date().toISOString());
         await ctx.project();

@@ -17,6 +17,17 @@ export const newTaskMemoryDefaults: NewTaskMemory = {
   roleAgents: {},
 };
 
+export function newTaskFormSettings(memory: NewTaskMemory): Omit<NewTaskMemory, "projectId"> {
+  return {
+    autoApprovePlan: memory.autoApprovePlan,
+    deliveryTarget: memory.deliveryTarget,
+    runProjectTests: memory.runProjectTests,
+    visualEvidence: memory.visualEvidence,
+    supplementalReview: memory.supplementalReview,
+    roleAgents: { ...memory.roleAgents },
+  };
+}
+
 const storageKey = "forge.newTask.lastSettings";
 const deliveryTargets = new Set<NewTaskMemory["deliveryTarget"]>(["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"]);
 const visualEvidenceValues = new Set<NewTaskMemory["visualEvidence"]>(["off", "capture", "required"]);

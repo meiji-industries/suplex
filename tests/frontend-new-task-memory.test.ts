@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { newTaskMemoryDefaults, readNewTaskMemory, resolveNewTaskProjectId, writeNewTaskMemory, type NewTaskMemory } from "../src/frontend/components/app/new-task-memory.js";
+import { newTaskFormSettings, newTaskMemoryDefaults, readNewTaskMemory, resolveNewTaskProjectId, writeNewTaskMemory, type NewTaskMemory } from "../src/frontend/components/app/new-task-memory.js";
 
 function memoryStorage(): Pick<Storage, "getItem" | "setItem"> {
   const values = new Map<string, string>();
@@ -17,6 +17,22 @@ test("round trips all new task settings", () => {
   writeNewTaskMemory(memory, storage);
 
   expect(readNewTaskMemory(storage)).toEqual(memory);
+});
+
+test("derives all form settings and remembered role agents", () => {
+  const memory: NewTaskMemory = { projectId: "project-1", deliveryTarget: "merged", autoApprovePlan: true, runProjectTests: false, visualEvidence: "required", supplementalReview: true, roleAgents: { builder: "cheap-agent" } };
+
+  expect(newTaskFormSettings(memory)).toEqual({ deliveryTarget: "merged", autoApprovePlan: true, runProjectTests: false, visualEvidence: "required", supplementalReview: true, roleAgents: { builder: "cheap-agent" } });
+});
+
+test("copies remembered role agents into a fresh object", () => {
+  const memory: NewTaskMemory = { ...newTaskMemoryDefaults, roleAgents: { builder: "cheap-agent" } };
+
+  expect(newTaskFormSettings(memory).roleAgents).not.toBe(memory.roleAgents);
+});
+
+test("derives empty role agents from new task defaults", () => {
+  expect(newTaskFormSettings(newTaskMemoryDefaults).roleAgents).toEqual({});
 });
 
 test("returns defaults when the key is missing", () => {

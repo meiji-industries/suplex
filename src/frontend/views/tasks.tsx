@@ -31,7 +31,7 @@ import { TaskDetailsPage, TaskDetailsNotFound, TaskDetailsSkeleton, type PlanRev
 import { prefillForTaskSource, preserveEditedPrefill, TaskSourcePicker, type TaskSourceSelector, type TaskSourceSummary } from "../components/app/task-source-picker.js";
 import { TaskRoleSelectors } from "../components/app/task-role-selectors.js";
 import { taskDeliveryTargetOptions } from "../components/app/task-delivery-target.js";
-import { readNewTaskMemory, resolveNewTaskProjectId, writeNewTaskMemory, type NewTaskMemory } from "../components/app/new-task-memory.js";
+import { newTaskFormSettings, readNewTaskMemory, resolveNewTaskProjectId, writeNewTaskMemory, type NewTaskMemory } from "../components/app/new-task-memory.js";
 import { duplicateTaskDraft } from "../lib/duplicate-task-prefill.js";
 
 async function fileAsImage(file: File): Promise<{ filename: string; mimeType: string; base64: string }> {
@@ -205,8 +205,8 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const detailPrefix = `${routeBase}/`;
   const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
   const resetNewTaskSettings = (): void => {
-    const memory = remembered.current;
-    setAutoApprovePlan(memory.autoApprovePlan); setDeliveryTarget(memory.deliveryTarget); setRunProjectTests(memory.runProjectTests); setVisualEvidence(memory.visualEvidence); setSupplementalReview(memory.supplementalReview);
+    const settings = newTaskFormSettings(remembered.current);
+    setAutoApprovePlan(settings.autoApprovePlan); setDeliveryTarget(settings.deliveryTarget); setRunProjectTests(settings.runProjectTests); setVisualEvidence(settings.visualEvidence); setSupplementalReview(settings.supplementalReview); setRoleAgentOverrides(settings.roleAgents);
   };
 
   useEffect(() => { selectedRef.current = selectedState; }, [selectedState]);
@@ -271,7 +271,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   }, [mode]);
   useEffect(() => {
     selectedRef.current = undefined;
-    setSelected(undefined); setProjectId(remembered.current.projectId ?? ""); setRoleAgentOverrides({}); setTitle(""); setDescription(""); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; resetNewTaskSettings(); setImages([]); setCreateError(""); setDetailNotFound(false);
+    setSelected(undefined); setProjectId(remembered.current.projectId ?? ""); setTitle(""); setDescription(""); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; resetNewTaskSettings(); setImages([]); setCreateError(""); setDetailNotFound(false);
   }, [companyId]);
   const reloadTasks = useCallback(async (): Promise<void> => {
     const token = ++taskListToken.current;

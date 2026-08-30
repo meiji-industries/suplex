@@ -22,9 +22,23 @@ function validationFindings(error: { validation?: ValidationIssue[] }): Array<{ 
   });
 }
 
-function isValidationError(error: unknown): error is { validation?: ValidationIssue[] } {
-  return Boolean(error && typeof error === "object" && "validation" in error);
+function isBodyParserFailure(error: unknown): error is { code: string; statusCode: number } {
+  if (!error || typeof error !== "object" || !("code" in error) || !("statusCode" in error)) return false;
+  const candidate = error as { code?: unknown; statusCode?: unknown };
+  return typeof candidate.code === "string" && candidate.code.startsWith("FST_ERR_CTP_")
+    && typeof candidate.statusCode === "number" && candidate.statusCode >= 400 && candidate.statusCode < 500;
 }
+
+// Fixed messages only: a raw parser message can contain a fragment of the request body.
+function bodyParserMessage(code: string): string {
+  if (code === "FST_ERR_CTP_BODY_TOO_LARGE") return "Request body is too large";
+  if (code === "FST_ERR_CTP_INVALID_MEDIA_TYPE") return "Unsupported media type";
+  return "Invalid request";
+}
+
+ function isValidationError(error: unknown): error is { validation?: ValidationIssue[] } {
+   return Boolean(error && typeof error === "object" && "validation" in error);
+ }
 
 function conflictSnapshot(task: TaskFailure["current"]): unknown {
   if (!task) return undefined;
@@ -60,9 +74,11 @@ export function installHttpErrorHandlers(app: FastifyInstance): void {
       sendDomainFailure(reply, error);
       return;
     }
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "FST_ERR_CTP_BODY_TOO_LARGE") {
-      request.log.warn({ requestId: request.id, statusCode: 413 }, "Request rejected");
-      reply.code(413).send({ error: "Request is too large", findings: [{ code: "request-too-large", field: "images", message: "Attach fewer or smaller images and submit again" }] }); return;
+    if (isBodyParserFailure(error)) {
+      request.log.warn({ requestId: request.id, method: request.method, url: request.url, code: error.code, statusCode: error.statusCode }, "Request rejected");
+      if (error.code === "FST_ERR_CTP_BODY_TOO_LARGE") reply.code(error.statusCode).send({ error: "Request is too large", findings: [{ code: "request-too-large", field: "images", message: "Attach fewer or smaller images and submit again" }] });
+      else reply.code(error.statusCode).send({ error: bodyParserMessage(error.code) });
+      return;
     }
     if (isResponseSerializationError(error)) {
       request.log.error({ requestId: request.id, method: error.method, url: error.url, issues: error.cause.issues.map((issue) => ({ path: issue.path.join("."), code: issue.code, message: issue.message })) }, "Response doesn't match the schema");

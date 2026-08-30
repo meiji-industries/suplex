@@ -68,9 +68,13 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
   const cookie = values.map((value) => value.split(";", 1)[0] ?? "").find((value) => value.startsWith(`${SESSION_COOKIE_NAME}=`)) ?? "";
   const origin = config.reachableAddress;
   try {
-    const payload = { projectId: project.id, title: "API creation task", description: "# Details", idempotencyKey: "api-creation-0001", supplementalReview: true, images: [{ filename: "note.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] };
+    const pngBytes = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.alloc(2 * 1024 * 1024 - 8)]);
+    const payload = { projectId: project.id, title: "API creation task", description: "# Details", idempotencyKey: "api-creation-0001", supplementalReview: true, images: [{ filename: "note.png", mimeType: "image/png", base64: pngBytes.toString("base64") }] };
     const created = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload });
     expect(created.statusCode).toBe(201); expect(created.json()).toMatchObject({ issueKey: "APIC-1", title: "API creation task", phase: "backlog", revision: 0, allowedCommands: ["start_planning", "cancel_issue", "send_planner_note"] });
+    expect(created.json().images[0]).toEqual({ artifactId: expect.any(String), filename: "note.png", mimeType: "image/png", byteSize: pngBytes.length });
+    const oversized = await app.inject({ method: "PATCH", url: `/api/tasks/${created.json().id}`, headers: { cookie, origin, "content-type": "application/json" }, payload: JSON.stringify({ description: "x".repeat(1_100_000) }) });
+    expect(oversized.statusCode).toBe(413); expect(oversized.json()).toEqual({ error: "Request is too large", findings: [{ code: "request-too-large", field: "images", message: "Attach fewer or smaller images and submit again" }] });
     const duplicate = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload });
     expect(duplicate.statusCode).toBe(200); expect(duplicate.json()).toMatchObject({ id: created.json().id, workflowId: created.json().workflowId });
     const largePng = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(2 * 1024 * 1024 - 8)]);

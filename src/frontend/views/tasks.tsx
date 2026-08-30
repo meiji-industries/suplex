@@ -24,7 +24,6 @@ import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/
 import { invalidateTaskList, readTaskList, subscribeTaskListInvalidations } from ".././lib/task-list.js";
 import { navigate } from ".././lib/navigation.js";
 import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES as blockedTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
-import { MAX_TASK_IMAGES, MAX_TASK_IMAGE_BYTES } from "../../task-attachment-limits.js";
 import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, FileText, Filter, FolderKanban, Layers3, ListFilter, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type ReactElement } from "react";
 import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiCompanyBranchSync, type ApiProject, type ApiTask, type ApiTaskSummary, type ApiTaskTemplate, type TaskPhase } from "../lib/view-shared.js";
@@ -33,6 +32,7 @@ import { prefillForTaskSource, preserveEditedPrefill, TaskSourcePicker, type Tas
 import { TaskRoleSelectors } from "../components/app/task-role-selectors.js";
 import { taskDeliveryTargetOptions } from "../components/app/task-delivery-target.js";
 import { newTaskFormSettings, readNewTaskMemory, resolveNewTaskProjectId, writeNewTaskMemory, type NewTaskMemory } from "../components/app/new-task-memory.js";
+import { newTaskImageError } from "../components/app/new-task-images.js";
 import { duplicateTaskDraft } from "../lib/duplicate-task-prefill.js";
 
 async function fileAsImage(file: File): Promise<{ filename: string; mimeType: string; base64: string }> {
@@ -314,9 +314,8 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const selectTask = (task: ApiTaskSummary): void => { setSelected(undefined); selectedRef.current = undefined; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`${routeBase}/${encodeURIComponent(task.id)}`, companyId)); window.dispatchEvent(new Event("forge:navigate")); };
   const addImages = async (files: File[]): Promise<void> => {
     setCreateError("");
-    if (images.length + files.length > MAX_TASK_IMAGES) { setCreateError("At most eight images may be attached"); return; }
-    if (files.some((file) => !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type))) { setCreateError("Only PNG, JPEG, WebP, and GIF images are accepted"); return; }
-    if (files.some((file) => file.size > MAX_TASK_IMAGE_BYTES)) { setCreateError("Each image must be smaller than 8 MB"); return; }
+    const imageError = newTaskImageError(images.length, files);
+    if (imageError) { setCreateError(imageError); return; }
     try { const nextImages = await Promise.all(files.map(fileAsImage)); setImages((current) => [...current, ...nextImages]); }
     catch { setCreateError("Unable to read image"); }
   };

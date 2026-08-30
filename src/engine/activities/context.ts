@@ -57,7 +57,7 @@ import { WorktreeFailure, WorktreeManager } from "../../worktrees.js";
 import { readEnvironmentSettings } from "../../environment-settings.js";
 import { startIssueWorkflow } from "../service.js";
 import { jsonRequired } from "../../task-utils.js";
-import { claimOperation, operationKey, settleOperation } from "../../operation-claims.js";
+import { claimOperation, operationKey, recoverOperation, settleOperation, type OperationOwnership } from "../../operation-claims.js";
 
 export interface ActivityOptions {
   agent?: Omit<Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "planDeliveryRepair" | "planMergeConflict" | "planCiRepair">>, "reviewDelivery"> & { reviewDelivery?: (input: DeliveryReviewServiceInput) => Promise<unknown> };
@@ -316,9 +316,36 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       if (result === null) throw ApplicationFailure.nonRetryable("Developer turn claim is terminal without a reusable result", "operation-result-missing", { key });
       return result as DeveloperTurnActivityOutcome<T>;
     };
-    const claim = claimOperation(database, { key, taskId: input.taskId, kind: "turn" });
+    const coordinates = {
+      identity: { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, executionId: input.developerTurnExecutionId, ledger: "developer" },
+      authority: { table: "forge_herdr_turns" },
+    };
+    const claim = claimOperation(database, { key, taskId: input.taskId, kind: "turn", coordinates, allowLegacyRecovery: true, allowLegacyTerminal: true });
     if (claim.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} is already in progress`, "operation-in-progress", { key });
-    if (claim.status !== "acquired") return terminalOutcome(claim.result);
+    if ("result" in claim) return terminalOutcome(claim.result);
+    let ownership: OperationOwnership;
+    if (claim.status === "recoverable") {
+      const turns = database.authQuery((db) => db.prepare("SELECT task_id AS taskId, ledger FROM forge_herdr_turns WHERE execution_id = ?").all(input.developerTurnExecutionId) as Array<{ taskId: string; ledger: string }>);
+      const recovered = recoverOperation(database, key, claim.previousOwnership, undefined, coordinates);
+      if (!recovered) throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} recovery was claimed concurrently`, "operation-in-progress", { key });
+      ownership = recovered;
+      if (claim.legacy && turns.length === 0) {
+        const outcome: DeveloperTurnActivityOutcome<T> = { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: "operation-recovery-manual", summary: "Legacy Developer turn has no exact Herdr authority; manual retry is required", evidenceArtifactId: null };
+        const settlement = settleOperation(database, key, ownership, "failed", outcome);
+        if (settlement.applied) return outcome;
+        if (settlement.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} recovery was claimed concurrently`, "operation-in-progress", { key });
+        return terminalOutcome(settlement.result);
+      }
+      if (turns.some((turn) => turn.taskId !== input.taskId || turn.ledger !== "developer")) {
+        const outcome: DeveloperTurnActivityOutcome<T> = { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: "operation-identity-drift", summary: "Developer turn recovery identity changed", evidenceArtifactId: null };
+        const settlement = settleOperation(database, key, ownership, "failed", outcome);
+        if (settlement.applied) return outcome;
+        if (settlement.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} recovery was claimed concurrently`, "operation-in-progress", { key });
+        return terminalOutcome(settlement.result);
+      }
+    } else {
+      ownership = claim.ownership;
+    }
     try {
       const result = await operation(developer as DeveloperService);
       await bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId }, result);
@@ -327,14 +354,18 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
         result,
         resultHash: createHash("sha256").update(JSON.stringify(result)).digest("hex"),
       };
-      const settlement = settleOperation(database, key, "settled", outcome);
-      return settlement.applied ? outcome : terminalOutcome(settlement.result);
+      const settlement = settleOperation(database, key, ownership, "settled", outcome);
+      if (settlement.applied) return outcome;
+      if (settlement.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} settlement lost claim ownership`, "operation-in-progress", { key });
+      return terminalOutcome(settlement.result);
     } catch (error) {
       if (error instanceof AgentFailure) {
         const evidence = database.authQuery((db) => (db.prepare("SELECT evidence_artifact_id AS evidenceArtifactId FROM forge_developer_executions WHERE id = ?").get(input.developerTurnExecutionId) as { evidenceArtifactId: string | null } | undefined)?.evidenceArtifactId ?? null);
         const outcome: DeveloperTurnActivityOutcome<T> = { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: error.code, summary: SafeSummarySchema.parse(error.message), evidenceArtifactId: evidence };
-        const settlement = settleOperation(database, key, "failed", outcome);
-        return settlement.applied ? outcome : terminalOutcome(settlement.result);
+        const settlement = settleOperation(database, key, ownership, "failed", outcome);
+        if (settlement.applied) return outcome;
+        if (settlement.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} settlement lost claim ownership`, "operation-in-progress", { key });
+        return terminalOutcome(settlement.result);
       }
       throw error;
     }

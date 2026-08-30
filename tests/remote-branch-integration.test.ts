@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import { afterEach, expect, test } from "vitest";
 import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
+import { claimOperation, operationKey } from "../src/operation-claims.js";
 import { integrateRemoteBranch, type RemoteIntegration } from "../src/remote-branch-integration.js";
 
 const roots: string[] = [];
@@ -90,59 +92,111 @@ test("merged", async () => {
   await expect(integrate(value, remoteHead)).resolves.toEqual(result);
 });
 
+test("abandoned merge claim executes once after exact authority proves no effect", async () => {
+  const value = await fixture();
+  await writeFile(join(value.peer, "REMOTE.md"), "remote\n");
+  await git(value.peer, "add", "REMOTE.md");
+  await git(value.peer, "commit", "-m", "remote");
+  const remoteHead = await git(value.peer, "rev-parse", "HEAD");
+  await git(value.peer, "push", "origin", "forge/task");
+  const priorHead = await git(value.worktreePath, "rev-parse", "HEAD");
+  const remoteUrl = await git(value.worktreePath, "remote", "get-url", "origin");
+  const remoteUrlSha256 = createHash("sha256").update(remoteUrl).digest("hex");
+  const remoteRef = "refs/heads/forge/task";
+  const key = operationKey(["remote-integration", "task", remoteHead]);
+  const coordinates = { identity: { companyId: "company", workflowId: "workflow", repository: "acme/forge", provider: "git-origin", remoteUrlSha256, remoteRef, intendedRemoteHead: remoteHead, targetBaseSha: "a".repeat(40) }, authority: { priorHead, priorStatusSha256: createHash("sha256").update("").digest("hex"), priorDirtyFileCount: 0 } };
+  claimOperation(value.database, { key, taskId: "task", kind: "merge", coordinates, ownerToken: "crashed-worker" });
+  let mergeEffects = 0;
+  const result = await integrate(value, remoteHead, {
+    git: async (args, cwd, taskId) => {
+      if (args[0] === "merge") mergeEffects += 1;
+      const command = await runCommand({ taskId, stepId: null, command: "git", args, cwd });
+      return { ok: command.exitCode === 0, stdout: command.stdout.trim(), stderr: command.stderr };
+    },
+  });
+  expect(result).toEqual({ kind: "fast_forwarded", from: priorHead, to: remoteHead });
+  expect(mergeEffects).toBe(1);
+  expect(value.database.authQuery((db) => db.prepare("SELECT status, generation FROM forge_operation_claims WHERE operation_key = ?").get(key))).toEqual({ status: "settled", generation: 2 });
+});
+
+test("completed merge settles an abandoned claim with zero new merge effects", async () => {
+  const value = await fixture();
+  await writeFile(join(value.worktreePath, "LOCAL.md"), "local\n");
+  await git(value.worktreePath, "add", "LOCAL.md");
+  await git(value.worktreePath, "commit", "-m", "local");
+  const priorHead = await git(value.worktreePath, "rev-parse", "HEAD");
+  await writeFile(join(value.peer, "REMOTE.md"), "remote\n");
+  await git(value.peer, "add", "REMOTE.md");
+  await git(value.peer, "commit", "-m", "remote");
+  const remoteHead = await git(value.peer, "rev-parse", "HEAD");
+  await git(value.peer, "push", "origin", "forge/task");
+  await git(value.worktreePath, "fetch", "origin", "forge/task");
+  await git(value.worktreePath, "merge", "--no-edit", remoteHead);
+  const mergeCommit = await git(value.worktreePath, "rev-parse", "HEAD");
+  const remoteUrl = await git(value.worktreePath, "remote", "get-url", "origin");
+  const remoteUrlSha256 = createHash("sha256").update(remoteUrl).digest("hex");
+  const remoteRef = "refs/heads/forge/task";
+  const key = operationKey(["remote-integration", "task", remoteHead]);
+  const coordinates = { identity: { companyId: "company", workflowId: "workflow", repository: "acme/forge", provider: "git-origin", remoteUrlSha256, remoteRef, intendedRemoteHead: remoteHead, targetBaseSha: "a".repeat(40) }, authority: { priorHead, priorStatusSha256: createHash("sha256").update("").digest("hex"), priorDirtyFileCount: 0 } };
+  claimOperation(value.database, { key, taskId: "task", kind: "merge", coordinates, ownerToken: "crashed-worker" });
+  let mergeEffects = 0;
+  const result = await integrate(value, remoteHead, {
+    git: async (args, cwd, taskId) => {
+      if (args[0] === "merge") mergeEffects += 1;
+      const command = await runCommand({ taskId, stepId: null, command: "git", args, cwd });
+      return { ok: command.exitCode === 0, stdout: command.stdout.trim(), stderr: command.stderr };
+    },
+  });
+  expect(result).toEqual({ kind: "merged", mergeCommit, remoteHead });
+  expect(mergeEffects).toBe(0);
+  expect(value.database.authQuery((db) => db.prepare("SELECT status, generation FROM forge_operation_claims WHERE operation_key = ?").get(key))).toEqual({ status: "settled", generation: 2 });
+});
+
 test("concurrent integrations execute one merge and reuse its result", async () => {
   const value = await fixture();
   const remoteHead = "b".repeat(40);
   const mergeCommit = "c".repeat(40);
+  const remoteRef = "refs/heads/forge/task";
   let merged = false;
   let mergeCalls = 0;
-  let loserCalls = 0;
   let signalStarted!: () => void;
   let release = () => {};
   let first: Promise<RemoteIntegration> | undefined;
+  const observation = async (args: string[]) => {
+    if (args[0] === "remote") return { ok: true, stdout: "/origin.git", stderr: "" };
+    if (args[0] === "ls-remote") return { ok: true, stdout: `${remoteHead}\t${remoteRef}`, stderr: "" };
+    if (args[0] === "status") return { ok: true, stdout: "", stderr: "" };
+    if (args[0] === "rev-parse") return { ok: true, stdout: merged ? mergeCommit : "a".repeat(40), stderr: "" };
+    if (args[0] === "fetch") return { ok: true, stdout: "", stderr: "" };
+    if (args[0] === "merge-base") return { ok: false, stdout: "", stderr: "" };
+    throw new Error(`Unexpected git command: ${args.join(" ")}`);
+  };
   try {
     const started = new Promise<void>((resolve) => { signalStarted = resolve; });
     const gate = new Promise<void>((resolve) => { release = resolve; });
     first = integrate(value, remoteHead, {
       git: async (args) => {
-        if (args[0] === "status") {
-          signalStarted();
-          await gate;
-          return { ok: true, stdout: "", stderr: "" };
-        }
-        if (args[0] === "fetch") return { ok: true, stdout: "", stderr: "" };
-        if (args[0] === "rev-parse") return { ok: true, stdout: merged ? mergeCommit : "a".repeat(40), stderr: "" };
-        if (args[0] === "merge-base") return { ok: false, stdout: "", stderr: "" };
         if (args[0] === "merge" && args[1] === "--no-edit") {
           mergeCalls += 1;
+          signalStarted();
+          await gate;
           merged = true;
           return { ok: true, stdout: "", stderr: "" };
         }
-        throw new Error(`Unexpected git command: ${args.join(" ")}`);
+        return observation(args);
       },
     });
     await started;
 
-    await expect(integrate(value, remoteHead, {
-      git: async () => {
-        loserCalls += 1;
-        return { ok: true, stdout: "", stderr: "" };
-      },
-    })).rejects.toThrow("Remote branch integration is already in progress");
-    expect(loserCalls).toBe(0);
+    await expect(integrate(value, remoteHead, { git: observation })).rejects.toThrow("Remote branch integration is already in progress");
 
     release();
     const outcome = await first;
     expect(outcome).toEqual({ kind: "merged", mergeCommit, remoteHead });
     expect(mergeCalls).toBe(1);
 
-    await expect(integrate(value, remoteHead, {
-      git: async () => {
-        loserCalls += 1;
-        return { ok: true, stdout: "", stderr: "" };
-      },
-    })).resolves.toEqual(outcome);
-    expect(loserCalls).toBe(0);
+    await expect(integrate(value, remoteHead, { git: observation })).resolves.toEqual(outcome);
+    expect(mergeCalls).toBe(1);
   } finally {
     release();
     await first?.catch(() => undefined);
@@ -150,21 +204,28 @@ test("concurrent integrations execute one merge and reuse its result", async () 
   }
 });
 
-test("failed integrations reject deterministically without rerunning git", async () => {
+test("conflicting exact provider observation fails the merge claim closed", async () => {
   const value = await fixture();
   const remoteHead = "d".repeat(40);
+  const remoteRef = "refs/heads/forge/task";
+  let remoteObservations = 0;
+  let mergeCalls = 0;
+  const adapter = async (args: string[]) => {
+    if (args[0] === "remote") return { ok: true, stdout: "/origin.git", stderr: "" };
+    if (args[0] === "ls-remote") {
+      remoteObservations += 1;
+      return { ok: true, stdout: `${remoteObservations === 2 ? "e".repeat(40) : remoteHead}\t${remoteRef}`, stderr: "" };
+    }
+    if (args[0] === "status") return { ok: true, stdout: "", stderr: "" };
+    if (args[0] === "rev-parse") return { ok: true, stdout: "a".repeat(40), stderr: "" };
+    if (args[0] === "merge") mergeCalls += 1;
+    return { ok: true, stdout: "", stderr: "" };
+  };
   try {
-    await expect(integrate(value, remoteHead, {
-      git: async () => ({ ok: false, stdout: "", stderr: "unavailable" }),
-    })).rejects.toThrow("Could not inspect task worktree");
-    let retryCalls = 0;
-    await expect(integrate(value, remoteHead, {
-      git: async () => {
-        retryCalls += 1;
-        return { ok: true, stdout: "", stderr: "" };
-      },
-    })).rejects.toThrow("Remote branch integration previously failed: Could not inspect task worktree");
-    expect(retryCalls).toBe(0);
+    await expect(integrate(value, remoteHead, { git: adapter })).rejects.toThrow("exact identity is ambiguous");
+    await expect(integrate(value, remoteHead, { git: adapter })).rejects.toThrow("Remote branch integration previously failed");
+    expect(mergeCalls).toBe(0);
+    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_operation_claims").get())).toEqual({ status: "failed" });
   } finally {
     value.database.close();
   }
@@ -173,8 +234,9 @@ test("failed integrations reject deterministically without rerunning git", async
 test("dirty_worktree", async () => {
   const value = await fixture();
   await writeFile(join(value.worktreePath, "DIRTY.md"), "do not touch\n");
+  const remoteHead = await git(value.worktreePath, "rev-parse", "HEAD");
   const calls: string[][] = [];
-  const result = await integrate(value, "b".repeat(40), {
+  const result = await integrate(value, remoteHead, {
     git: async (args, cwd, taskId) => {
       calls.push(args);
       const command = await runCommand({ taskId, stepId: null, command: "git", args, cwd });
@@ -184,8 +246,8 @@ test("dirty_worktree", async () => {
 
   expect(result).toEqual({ kind: "dirty_worktree", dirtyFileCount: 1 });
   expect(await git(value.worktreePath, "status", "--porcelain")).toBe("?? DIRTY.md");
-  expect(calls).toEqual([["status", "--porcelain=v1", "--untracked-files=all"]]);
-  await expect(integrate(value, "b".repeat(40))).resolves.toEqual(result);
+  expect(calls.some((args) => args[0] === "merge" || args[0] === "fetch")).toBe(false);
+  await expect(integrate(value, remoteHead)).resolves.toEqual(result);
 });
 
 test("skipped_active_turn", async () => {

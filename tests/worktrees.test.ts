@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { asNonRetryableApplicationFailure } from "../src/engine/activities/context.js";
 import { runCommand, setCommandRunnerLogger } from "../src/command-runner.js";
 import { StructuredLogger } from "../src/logging.js";
-import { cancelOperation, operationKey } from "../src/operation-claims.js";
+import { cancelOperation, claimOperation, operationKey } from "../src/operation-claims.js";
 import { createGitCommandGuard, reserveOwnedWorktree, withWorktreeBuildCaches, WorktreeFailure, WorktreeManager } from "../src/worktrees.js";
 
 async function command(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
@@ -106,10 +107,29 @@ test("inspects local branch sync and pushes it to origin", async () => {
   }
 });
 
+test("exact ref push preserves non-fast-forward rejection", async () => {
+  const value = await remoteFixture();
+  const branchName = "feat/non-destructive";
+  try {
+    await createSourceBranch(value, branchName);
+    const remoteHead = await rewriteSourceBranch(value, branchName);
+    await git(["switch", branchName], value.repositoryPath);
+    await writeFile(join(value.repositoryPath, "LOCAL.md"), "local\n");
+    await git(["add", "LOCAL.md"], value.repositoryPath);
+    await git(["commit", "-m", "local"], value.repositoryPath);
+
+    await expect(new WorktreeManager().push(value.repositoryPath, branchName)).rejects.toBeDefined();
+    expect((await git(["ls-remote", "origin", `refs/heads/${branchName}`], value.repositoryPath)).split(/\s+/)[0]).toBe(remoteHead);
+  } finally {
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("concurrent claimed pushes execute git once and reuse settlement", async () => {
   const value = await fixture();
   const database = new ForgeDatabase(createTestConfig(value.root).databasePath);
   const branchName = "feat/claimed-push";
+  let remoteHead: string | null = null;
   let pushes = 0;
   let signalStarted!: () => void;
   let release = () => {};
@@ -120,11 +140,14 @@ test("concurrent claimed pushes execute git once and reuse settlement", async ()
     const manager = new WorktreeManager({
       async run(args: string[]) {
         if (args[0] === "rev-parse") return value.baseSha;
+        if (args[0] === "remote") return "/remote.git";
+        if (args[0] === "ls-remote") return remoteHead ? `${remoteHead}\trefs/heads/${branchName}` : "";
         if (args[0] === "push") {
           pushes += 1;
           if (pushes === 1) {
             signalStarted();
             await gate;
+            remoteHead = value.baseSha;
           }
           return "";
         }
@@ -150,17 +173,146 @@ test("concurrent claimed pushes execute git once and reuse settlement", async ()
   }
 });
 
+test("abandoned push claims retry only after exact remote absence", async () => {
+  const value = await fixture();
+  const database = new ForgeDatabase(createTestConfig(value.root).databasePath);
+  const branchName = "feat/recover-push";
+  const remoteUrl = "/remote.git";
+  const remoteRef = `refs/heads/${branchName}`;
+  const remoteUrlSha256 = createHash("sha256").update(remoteUrl).digest("hex");
+  const key = operationKey(["push", "task_1", branchName, value.baseSha]);
+  const coordinates = { identity: { remoteUrlSha256, remoteRef, intendedCommit: value.baseSha }, authority: { remoteCommit: null } };
+  let remoteHead: string | null = null;
+  let pushes = 0;
+  try {
+    claimOperation(database, { key, taskId: "task_1", kind: "push", coordinates, ownerToken: "crashed-worker" });
+    const manager = new WorktreeManager({
+      async run(args: string[]) {
+        if (args[0] === "rev-parse") return value.baseSha;
+        if (args[0] === "remote") return remoteUrl;
+        if (args[0] === "ls-remote") return remoteHead ? `${remoteHead}\t${remoteRef}` : "";
+        if (args[0] === "push") { pushes += 1; remoteHead = value.baseSha; return ""; }
+        throw new Error(`Unexpected git command: ${args.join(" ")}`);
+      },
+    });
+    await expect(manager.push(value.repositoryPath, branchName, { database, taskId: "task_1" })).resolves.toBeUndefined();
+    expect(pushes).toBe(1);
+    expect(database.authQuery((db) => db.prepare("SELECT status, generation FROM forge_operation_claims WHERE operation_key = ?").get(key))).toEqual({ status: "settled", generation: 2 });
+  } finally {
+    database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("an observed intended remote commit settles an abandoned push without another push", async () => {
+  const value = await fixture();
+  const database = new ForgeDatabase(createTestConfig(value.root).databasePath);
+  const branchName = "feat/recover-completed-push";
+  const remoteUrl = "/remote.git";
+  const remoteRef = `refs/heads/${branchName}`;
+  const remoteUrlSha256 = createHash("sha256").update(remoteUrl).digest("hex");
+  const key = operationKey(["push", "task_1", branchName, value.baseSha]);
+  const coordinates = { identity: { remoteUrlSha256, remoteRef, intendedCommit: value.baseSha }, authority: { remoteCommit: null } };
+  let pushes = 0;
+  try {
+    claimOperation(database, { key, taskId: "task_1", kind: "push", coordinates, ownerToken: "crashed-worker" });
+    const manager = new WorktreeManager({
+      async run(args: string[]) {
+        if (args[0] === "rev-parse") return value.baseSha;
+        if (args[0] === "remote") return remoteUrl;
+        if (args[0] === "ls-remote") return `${value.baseSha}\t${remoteRef}`;
+        if (args[0] === "push") { pushes += 1; return ""; }
+        throw new Error(`Unexpected git command: ${args.join(" ")}`);
+      },
+    });
+    await expect(manager.push(value.repositoryPath, branchName, { database, taskId: "task_1" })).resolves.toBeUndefined();
+    expect(pushes).toBe(0);
+    expect(database.authQuery((db) => db.prepare("SELECT status, generation FROM forge_operation_claims WHERE operation_key = ?").get(key))).toEqual({ status: "settled", generation: 2 });
+  } finally {
+    database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("push command failure settles when exact re-observation proves the intended commit", async () => {
+  const value = await fixture();
+  const database = new ForgeDatabase(createTestConfig(value.root).databasePath);
+  const branchName = "feat/push-error-after-effect";
+  const remoteRef = `refs/heads/${branchName}`;
+  let remoteHead: string | null = null;
+  let pushes = 0;
+  try {
+    const manager = new WorktreeManager({
+      async run(args: string[]) {
+        if (args[0] === "rev-parse") return value.baseSha;
+        if (args[0] === "remote") return "/remote.git";
+        if (args[0] === "ls-remote") return remoteHead ? `${remoteHead}\t${remoteRef}` : "";
+        if (args[0] === "push") {
+          pushes += 1;
+          remoteHead = value.baseSha;
+          throw new Error("client disconnected after receive");
+        }
+        throw new Error(`Unexpected git command: ${args.join(" ")}`);
+      },
+    });
+    await expect(manager.push(value.repositoryPath, branchName, { database, taskId: "task_1" })).resolves.toBeUndefined();
+    expect(pushes).toBe(1);
+    expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_operation_claims").get())).toEqual({ status: "settled" });
+  } finally {
+    database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("push command failure with exact remote absence releases the claim for retry", async () => {
+  const value = await fixture();
+  const database = new ForgeDatabase(createTestConfig(value.root).databasePath);
+  const branchName = "feat/push-error-before-effect";
+  const remoteRef = `refs/heads/${branchName}`;
+  let remoteHead: string | null = null;
+  let pushAttempts = 0;
+  try {
+    const manager = new WorktreeManager({
+      async run(args: string[]) {
+        if (args[0] === "rev-parse") return value.baseSha;
+        if (args[0] === "remote") return "/remote.git";
+        if (args[0] === "ls-remote") return remoteHead ? `${remoteHead}\t${remoteRef}` : "";
+        if (args[0] === "push") {
+          pushAttempts += 1;
+          if (pushAttempts === 1) throw new Error("push failed before receive");
+          remoteHead = value.baseSha;
+          return "";
+        }
+        throw new Error(`Unexpected git command: ${args.join(" ")}`);
+      },
+    });
+    const claims = { database, taskId: "task_1" };
+    await expect(manager.push(value.repositoryPath, branchName, claims)).rejects.toThrow("push failed before receive");
+    expect(database.authQuery((db) => db.prepare("SELECT status, owner_token AS ownerToken FROM forge_operation_claims").get())).toEqual({ status: "claimed", ownerToken: null });
+    await expect(manager.push(value.repositoryPath, branchName, claims)).resolves.toBeUndefined();
+    expect(pushAttempts).toBe(2);
+    expect(remoteHead).toBe(value.baseSha);
+    expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_operation_claims").get())).toEqual({ status: "settled" });
+  } finally {
+    database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("a failed terminal claim wins after git push succeeds", async () => {
   const value = await fixture();
   const database = new ForgeDatabase(createTestConfig(value.root).databasePath);
   const branchName = "feat/cancelled-push";
   const taskId = "task_1";
+  const remoteUrl = "/remote.git";
   const key = operationKey(["push", taskId, branchName, value.baseSha]);
   let pushes = 0;
   try {
     const manager = new WorktreeManager({
       async run(args: string[]) {
         if (args[0] === "rev-parse") return value.baseSha;
+        if (args[0] === "remote") return remoteUrl;
+        if (args[0] === "ls-remote") return "";
         if (args[0] === "push") {
           pushes += 1;
           cancelOperation(database, { key, taskId, kind: "push" });

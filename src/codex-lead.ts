@@ -36,7 +36,7 @@ const PROJECT_VERIFICATION_FAILURE_PREFIX = "Project verification failed:";
 type MergeConflictPlanInput = MergeConflictPlanActivityInput;
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
-const LeadReviewResponseSchema = z.object({
+export const LeadReviewResponseSchema = z.object({
   version: z.literal(1),
   originalPlanRevision: z.number().int().nonnegative(),
   reviewArtifactId: durableId,
@@ -57,7 +57,7 @@ export const SupplementalReviewSchema = z.preprocess((value) => {
   concerns: z.array(z.object({ severity: z.enum(["blocking", "advisory"]), text: z.string().min(1), step: z.number().int().positive().optional() })),
 }));
 
-const DeliveryRepairLeadOutputSchema = z.object({
+export const DeliveryRepairLeadOutputSchema = z.object({
   kind: z.literal("delivery_repair_plan"),
   summary: z.string().min(1),
   steps: z.array(z.object({ number: z.number().int().positive(), instruction: z.string().min(1), verification: z.string().min(1) })).min(1),

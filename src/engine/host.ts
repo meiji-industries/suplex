@@ -77,9 +77,12 @@ export async function convergeOrphanedHerdrExecutions(database: ForgeDatabase, h
 export function logReconciliation(logger: Pick<StructuredLogger, "debug" | "info">, name: string, durationMs: number, changes: number, counts: Record<string, number>): void {
   logger[changes === 0 ? "debug" : "info"](`Worker periodic reconciliation ${changes === 0 ? "idle" : "changed state"}: ${name}`, { durationMs, ...counts } as never);
 }
-export function createNonOverlappingRunner(operation: () => Promise<unknown> | unknown): () => Promise<void> {
+export function logScheduledReconciliationFailure(logger: Pick<StructuredLogger, "error">, error: unknown): void {
+  logger.error("Worker periodic reconciliation failed", {}, { error: error instanceof Error ? error.message : String(error) });
+}
+export function createNonOverlappingRunner(operation: () => Promise<unknown> | unknown, onError: (error: unknown) => void = (error) => logScheduledReconciliationFailure(new StructuredLogger(), error)): () => Promise<void> {
   let active: Promise<void> | undefined;
-  return () => active ??= Promise.resolve().then(operation).then(() => undefined, () => undefined).finally(() => { active = undefined; });
+  return () => active ??= Promise.resolve().then(operation).then(() => undefined, onError).finally(() => { active = undefined; });
 }
 
 export async function loadIssueRuns(engine: IssueEngine): Promise<number> {
@@ -115,17 +118,18 @@ export async function startEngineHost(config: ForgeConfig, database = new ForgeD
   // Engine activity rows are process-local; Herdr-backed execution rows converge from live observation below.
   database.authTransaction((db) => db.prepare("DELETE FROM forge_engine_activities").run());
   const logger = options.logger ?? new StructuredLogger();
+  const errorLogger = logger instanceof StructuredLogger ? logger : new StructuredLogger();
   await convergeOrphanedHerdrExecutions(database, options.herdr ?? new CliHerdrClient(), logger);
   const engine = new IssueEngine(config, database); installIssueEngine(config, engine); await (options.loadRuns ?? loadIssueRuns)(engine);
   const workerId = `${runtimeIdentifiers(config.installationId).workerPrefix}-${process.pid}`;
   const registration = { workerId, taskQueue: runtimeIdentifiers(config.installationId).taskQueue, buildId: runtimeIdentifiers(config.installationId).buildId };
   database.registerWorker(registration);
   logger.info("Forge worker RUNNING and polling");
-  const schedule = options.schedule ?? ((milliseconds: number, operation: () => Promise<unknown> | unknown): void => { const run = createNonOverlappingRunner(operation); void run(); const timer = setInterval(() => void run(), milliseconds); timer.unref(); });
+  const schedule = options.schedule ?? ((milliseconds: number, operation: () => Promise<unknown> | unknown): void => { const run = createNonOverlappingRunner(operation, (error) => logScheduledReconciliationFailure(errorLogger, error)); void run(); const timer = setInterval(() => void run(), milliseconds); timer.unref(); });
   // The health page treats a worker whose heartbeat is older than its max age as unavailable.
   schedule(15_000, () => database.registerWorker(registration));
   schedule(60_000, () => reconcileTaskCreationIntents(database, config));
-  schedule(60_000, () => reconcileActiveTurns(database, config));
+  schedule(60_000, () => reconcileActiveTurns(database, config, { logger: errorLogger }));
   schedule(60_000, () => reconcileWorktrees(database, config));
   schedule(300_000, () => reconcileGithubObservations(database, config));
   schedule(60_000, () => reconcileWorkflowStalls(engine));

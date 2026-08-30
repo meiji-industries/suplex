@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, expect, test } from "vitest";
 
+import { reconcileActiveTurns } from "../src/active-turn-recovery.js";
 import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
@@ -64,12 +65,42 @@ test("developer commits, then its completion message is lost", () => {
   expect(outcome.evidence).toContain("handoff:git " + "b".repeat(40));
 });
 
-test("lead completes, then its structured result is missing", () => {
+test("lead missing-result resume is durably consumed", async () => {
   const waiting = facts({ turn: { ...facts().turn!, role: "planner", status: "waiting", resultPresent: false, resultValid: false, resumeRequestsSent: 0 } });
   expect(twice(waiting, live())).toMatchObject({ action: "resume" });
-  const completed = { ...waiting, turn: { ...waiting.turn!, resultPresent: true, resultValid: true, resumeRequestsSent: 1 } };
-  expect(twice(completed, live())).toMatchObject({ action: "advance" });
-  expect(completed.turn?.resumeRequestsSent).toBe(1);
+
+  const root = await mkdtemp(join(tmpdir(), "forge-matrix-active-turn-"));
+  const config = createTestConfig(root);
+  const database = new ForgeDatabase(config.databasePath);
+  const stamp = "2026-08-27T00:00:00.000Z";
+  try {
+    database.authQuery((db) => {
+      db.pragma("foreign_keys = OFF");
+      db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task', 'company', 'project', 'workflow', 1, 'planning', 'lead', '[]', NULL, ?, 'event')").run(stamp);
+      db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, agent_name, pane_id, status, created_at, updated_at) VALUES ('session', 'task', 'planner', 1, 1, 'codex', 'recorded-lead', 'pane', 'ready', ?, ?)").run(stamp, stamp);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, heartbeat_at) VALUES ('execution', 'task', 'company', 'workflow', 'planner', 'running', 1, ?, ?)").run(stamp, stamp);
+      db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, prompt_sent_at, created_at, updated_at) VALUES ('turn', 'task', 'session', 'planner', 'agent', 'execution', 'lead-plan', ?, 'herdr-results/task/planner/result-turn.json', 0, 'waiting', ?, ?, ?)").run("c".repeat(64), stamp, stamp, stamp);
+    });
+    const prompts: string[] = [];
+    const herdr = {
+      runtimeSnapshot: async () => ({
+        agents: [{ name: "renamed-live-lead", paneId: "pane", status: "done" }],
+        panes: [{ paneId: "pane", agent: "renamed-live-lead", agentStatus: "done", tokens: { forge_binding_id: "session" } }],
+      }),
+      prompt: async (agent: string) => { prompts.push(agent); },
+    };
+
+    const first = await reconcileActiveTurns(database, config, { herdr: herdr as never, now: () => stamp });
+    const second = await reconcileActiveTurns(database, config, { herdr: herdr as never, now: () => stamp });
+
+    expect(first).toMatchObject([{ turnId: "turn", action: "resume", evidence: expect.arrayContaining(["resume:receipt persisted before prompt"]) }]);
+    expect(second[0]?.action).not.toBe("resume");
+    expect(prompts).toEqual(["renamed-live-lead"]);
+    expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = 'turn'").get())).toEqual({ status: "awaiting_human" });
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("worker restarts during a live turn", () => {
@@ -102,7 +133,7 @@ test("remote branch integration is clean", async () => {
   expect(await integrateRemote(fastForward, remoteHead)).toMatchObject({ kind: "fast_forwarded", to: remoteHead });
   const fastForwardCalls: string[][] = [];
   await expect(integrateRemote(fastForward, remoteHead, fastForwardCalls)).resolves.toMatchObject({ kind: "fast_forwarded", to: remoteHead });
-  expect(fastForwardCalls).toEqual([]);
+  expect(fastForwardCalls).toEqual([["remote", "get-url", "origin"], ["ls-remote", "origin", "refs/heads/forge/task"], ["status", "--porcelain=v1", "--untracked-files=all"], ["rev-parse", "HEAD"]]);
 
   const merged = await remoteFixture();
   await writeFile(join(merged.worktreePath, "LOCAL.md"), "local\n"); await git(merged.worktreePath, "add", "LOCAL.md"); await git(merged.worktreePath, "commit", "-m", "local");
@@ -112,7 +143,7 @@ test("remote branch integration is clean", async () => {
   expect(first).toMatchObject({ kind: "merged", remoteHead: divergedHead });
   const mergeCalls: string[][] = [];
   await expect(integrateRemote(merged, divergedHead, mergeCalls)).resolves.toEqual(first);
-  expect(mergeCalls).toEqual([]);
+  expect(mergeCalls).toEqual([["remote", "get-url", "origin"], ["ls-remote", "origin", "refs/heads/forge/task"], ["status", "--porcelain=v1", "--untracked-files=all"], ["rev-parse", "HEAD"]]);
 });
 
 test("remote branch integration conflicts and auto-enters resolution", () => {

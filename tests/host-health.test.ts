@@ -7,7 +7,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { checkWorker } from "../src/host-health.js";
 import { CodexReadinessProbe, checkGithubAuthentication } from "../src/provider-readiness.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
-import { createNonOverlappingRunner, logReconciliation } from "../src/worker.js";
+import { createNonOverlappingRunner, logReconciliation, logScheduledReconciliationFailure } from "../src/worker.js";
 
 test("periodic work does not overlap itself", async () => {
   let release!: () => void;
@@ -27,6 +27,19 @@ test("periodic work does not overlap itself", async () => {
   await first;
   await run();
   expect(calls).toBe(2);
+});
+
+test("unexpected periodic rejection reaches structured logging", async () => {
+  const errors: Array<{ message: string; context: object; details: Record<string, unknown> }> = [];
+  const logger = { error(message: string, context: object = {}, details: Record<string, unknown> = {}) { errors.push({ message, context, details }); } };
+  const run = createNonOverlappingRunner(
+    async () => { throw new Error("active-turn reconciliation failed"); },
+    (error) => logScheduledReconciliationFailure(logger, error),
+  );
+
+  await run();
+
+  expect(errors).toEqual([{ message: "Worker periodic reconciliation failed", context: {}, details: { error: "active-turn reconciliation failed" } }]);
 });
 
 test("idle periodic reconciliations do not emit info logs", () => {

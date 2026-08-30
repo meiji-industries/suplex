@@ -17,7 +17,7 @@ import { TaskService } from "../src/tasks.js";
 import { IssueProjectionEventSchema } from "../src/engine/issue-contracts.js";
 import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 import { createWorkflowPortFake } from "./fakes/workflow-port.js";
-
+import { MAX_TASK_REQUEST_BYTES } from "../src/task-attachment-limits.js";
 async function git(args: string[], cwd: string): Promise<string> {
   const result = await runCommand({ taskId: null, stepId: null, command: "git", args, cwd });
   if (result.exitCode !== 0) throw new Error(result.stderr || "git failed");
@@ -106,4 +106,57 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
     const releaseBody = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/release/artifacts/${body.id}`, headers: { cookie, origin } });
     expect(releaseBody.statusCode).toBe(200); expect(releaseBody.body).toBe("## Summary\n\nAPI creation task");
   } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+async function createTaskEnvironment(companyName: string) {
+  const root = await mkdtemp(join(tmpdir(), "forge-task-api-creation-test-"));
+  const repositoryRoot = join(root, "repositories"); const worktreeRoot = join(root, "worktrees"); const repositoryPath = join(repositoryRoot, "repo");
+  await mkdir(repositoryPath, { recursive: true }); await mkdir(worktreeRoot, { recursive: true });
+  await git(["init", "-b", "main"], repositoryPath);
+  await git(["config", "user.name", "Forge Test"], repositoryPath);
+  await git(["config", "user.email", "forge-test@example.invalid"], repositoryPath);
+  await git(["config", "commit.gpgsign", "false"], repositoryPath);
+  await writeFile(join(repositoryPath, "README.md"), "base\n"); await git(["add", "README.md"], repositoryPath); await git(["commit", "-m", "base"], repositoryPath);
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin-1', 'Admin', 'admin@forge.local', 'admin', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run());
+  const config = createTestConfig(root, { repositoryRoot, worktreeRoot, reachableAddress: "http://127.0.0.1:4111" });
+  const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
+  const projects = new ProjectService(database, auth, config, { localRepository, github });
+  const company = auth.createCompany("admin-1", companyName);
+  auth.setCompanyIssueCode("admin-1", company.id, "apic");
+  const profile = projects.createProfile("admin-1", { name: "API creation profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
+  const planner = projects.createAgent("admin-1", { name: "Planner", role: "planner", profileId: profile.id });
+  const builder = projects.createAgent("admin-1", { name: "Builder", role: "builder", profileId: profile.id });
+  const reviewer = projects.createAgent("admin-1", { name: "Reviewer", role: "reviewer", profileId: profile.id });
+  const project = await projects.createProject("admin-1", company.id, { name: "API creation project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, reviewer: reviewer.id, builder: builder.id } });
+  const active = await projects.activateProject("admin-1", project.id);
+  const workflow = createWorkflowPortFake({ companyId: company.id, projectId: active.id, projectRevisionId: active.activeRevisionId!, projectState: (state) => { database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state })); return state; } });
+  const tasks = new TaskService(database, auth, projects, config, { workflow });
+  const app = createApp({ config, auth, projects, tasks, health: { engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }), database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }), artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }), worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }), codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }), ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }) } });
+  const invitation = auth.createRecoveryInvitation({ confirmed: true, initiationMethod: "local-cli", installationId: config.installationId });
+  const options = await app.inject({ method: "POST", url: "/api/auth/recovery/options", payload: { token: invitation.token } });
+  const enrolled = await app.inject({ method: "POST", url: "/api/auth/recovery/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: "api-creation-admin", type: "public-key" } } });
+  const rawCookie = enrolled.headers["set-cookie"]; const values = Array.isArray(rawCookie) ? rawCookie : typeof rawCookie === "string" ? [rawCookie] : [];
+  const cookie = values.map((value) => value.split(";", 1)[0] ?? "").find((value) => value.startsWith(`${SESSION_COOKIE_NAME}=`)) ?? "";
+  return { app, config, company, project: active, cookie, close: async () => { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); } };
+}
+
+test("task creation accepts a multi-megabyte image attachment", async () => {
+  const t = await createTaskEnvironment("Large Image Company");
+  try {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(2 * 1024 * 1024 - 8)]);
+    const created = await t.app.inject({ method: "POST", url: `/api/companies/${t.company.id}/tasks`, headers: { cookie: t.cookie, origin: t.config.reachableAddress }, payload: { projectId: t.project.id, title: "Large image task", description: "# Details", idempotencyKey: "large-image-0001", images: [{ filename: "big.png", mimeType: "image/png", base64: png.toString("base64") }] } });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ title: "Large image task", images: [expect.objectContaining({ filename: "big.png", byteSize: 2 * 1024 * 1024 })] });
+  } finally { await t.close(); }
+});
+
+test("task creation body larger than the route limit answers 413", async () => {
+  const t = await createTaskEnvironment("Oversize Company");
+  try {
+    const oversized = "A".repeat(MAX_TASK_REQUEST_BYTES + 1);
+    const rejected = await t.app.inject({ method: "POST", url: `/api/companies/${t.company.id}/tasks`, headers: { cookie: t.cookie, origin: t.config.reachableAddress }, payload: { projectId: t.project.id, title: "Oversize task", description: "# Details", idempotencyKey: "oversize-0001", images: [{ filename: "big.png", mimeType: "image/png", base64: oversized }] } });
+    expect(rejected.statusCode).toBe(413);
+    expect(rejected.json()).toMatchObject({ error: "Request is too large", findings: [{ code: "request-too-large", field: "images" }] });
+  } finally { await t.close(); }
 });

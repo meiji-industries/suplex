@@ -169,6 +169,30 @@ function reconcileBlocker(error: unknown): { code: TargetBaseBlockerCode; owner:
   };
   return mapped[code] ?? { code: "provider_unavailable", owner: "provider", retryable: true, summary: "Target-base reconciliation could not be completed" };
 }
+
+/**
+ * Projection-only feedback for a queued agent turn. Writes the queue hint into
+ * forge_issue_projections and returns a restore function that puts the previous
+ * pending action back. The restore is guarded on the hint text so a newer
+ * projection write (the normal pipeline) is never clobbered. Both directions
+ * are best effort: a stale or missing projection must never fail the activity.
+ */
+export function applyQueueHintProjection(database: ForgeDatabase, taskId: string, waiting: { provider: string; position: number; activeCount: number }): () => void {
+  const hint = `Waiting for a ${waiting.provider} agent slot (${waiting.activeCount} active, position ${waiting.position})`;
+  let previous: string | null = null;
+  try {
+    const now = new Date().toISOString();
+    const row = database.authQuery((db) => db.prepare("SELECT pending_action FROM forge_issue_projections WHERE task_id = ?").get(taskId));
+    if (row && typeof row === "object" && "pending_action" in row && (row.pending_action === null || typeof row.pending_action === "string")) previous = row.pending_action;
+    database.authTransaction((db) => db.prepare("UPDATE forge_issue_projections SET pending_action = ?, updated_at = ? WHERE task_id = ?").run(hint, now, taskId));
+  } catch { /* queued hint is best-effort */ }
+  return () => {
+    try {
+      database.authTransaction((db) => db.prepare("UPDATE forge_issue_projections SET pending_action = ?, updated_at = ? WHERE task_id = ? AND pending_action = ?").run(previous, new Date().toISOString(), taskId, hint));
+    } catch { /* queued hint is best-effort */ }
+  };
+}
+
 export function createActivityContext(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}) {
   const logger = new StructuredLogger(options.logSink);
   const defaultAgent = new AgentService(database, config);
@@ -200,17 +224,22 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     let heartbeat: ((details?: unknown) => void) | undefined;
     let interval: NodeJS.Timeout | undefined;
     let queueHint: NodeJS.Timeout | undefined;
+    let restoreQueueHint: (() => void) | undefined;
     try {
       const activityContext = Context.current();
       heartbeat = (details?: unknown) => {
         activityContext.heartbeat(details);
-        if (!queueHint && details && typeof details === "object" && (details as { queued?: unknown }).queued === true && "taskId" in input) {
+        if (!queueHint && details && typeof details === "object" && "queued" in details && details.queued === true && "taskId" in input) {
           queueHint = setTimeout(() => {
             // This is projection-only feedback. A stale/missing projection must
             // never turn a queued activity into a failed one.
             try {
-              const waiting = details as { provider: string; position: number; activeCount: number };
-              database.authTransaction((db) => db.prepare("UPDATE forge_issue_projections SET pending_action = ?, updated_at = ? WHERE task_id = ?").run(`Waiting for a ${waiting.provider} agent slot (${waiting.activeCount} active, position ${waiting.position})`, new Date().toISOString(), (input as { taskId: string }).taskId));
+              if ("taskId" in input && typeof input.taskId === "string" && details && typeof details === "object"
+                && "provider" in details && typeof details.provider === "string"
+                && "position" in details && typeof details.position === "number"
+                && "activeCount" in details && typeof details.activeCount === "number") {
+                restoreQueueHint = applyQueueHintProjection(database, input.taskId, { provider: details.provider, position: details.position, activeCount: details.activeCount });
+              }
             } catch { /* queued hint is best-effort */ }
           }, 10_000);
           queueHint.unref();
@@ -220,7 +249,13 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       interval.unref();
     } catch { /* direct unit calls do not have an Activity context */ }
     try {
-      return await capacity.run(operation, provider ?? providerForRole(input, "planner"), heartbeat, cancellationSignal());
+      return await capacity.run(async () => {
+        // The slot is acquired: stop the wait and put the previous pending
+        // action back so the queue hint cannot outlive the wait.
+        if (queueHint) { clearTimeout(queueHint); queueHint = undefined; }
+        restoreQueueHint?.();
+        return await operation();
+      }, provider ?? providerForRole(input, "planner"), heartbeat, cancellationSignal());
     } catch (error) {
       try {
         if (Context.current().cancellationSignal.aborted) throw new CancelledFailure("CANCELLED");

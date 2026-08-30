@@ -1,7 +1,8 @@
-import { beforeEach, expect, test } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 
 import { runCommand, setCommandRunnerLogger } from "../src/command-runner.js";
 import { StructuredLogger } from "../src/logging.js";
+import { defaultProcessController } from "../src/process-manager.js";
 import { json } from "../src/task-utils.js";
 
 let lines: string[];
@@ -104,10 +105,36 @@ test.skipIf(process.platform === "win32")("timeout escalates when the owned chil
   })]);
 });
 
+test.skipIf(process.platform === "win32")("does not complete a timeout when owned-group termination fails", async () => {
+  const originalKill = process.kill;
+  let processGroup: number | undefined;
+  const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (pid < 0 && signal === "SIGKILL") {
+      processGroup = -pid;
+      throw new Error("forced SIGKILL failure");
+    }
+    return originalKill(pid, signal);
+  });
+
+  try {
+    await expect(runCommand({
+      taskId: null,
+      stepId: null,
+      command: process.execPath,
+      args: ["-e", `process.on("SIGTERM", () => {}); require("node:net").createServer().listen(0)`],
+      timeout: 500,
+    })).rejects.toThrow("forced SIGKILL failure");
+  } finally {
+    kill.mockRestore();
+    if (processGroup !== undefined) originalKill(-processGroup, "SIGKILL");
+  }
+});
+
 // The held-pipe case depends on real process-group and descriptor lifetimes.
 test.skipIf(process.platform === "win32")("timeout kills an owned group when a descendant holds its pipes", async () => {
   const descendant = `process.on("SIGTERM", () => process.stderr.write("descendant-term\\n")); setInterval(() => {}, 1_000)`;
   const parent = `
+    process.stdout.write("group=" + process.pid + "\\n");
     const { spawn } = require("node:child_process");
     const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: ["ignore", "inherit", "inherit"] });
     child.unref();
@@ -122,6 +149,9 @@ test.skipIf(process.platform === "win32")("timeout kills an owned group when a d
   });
 
   expect(result).toMatchObject({ exitCode: null, timedOut: true });
+  const processGroup = Number(result.stdout.match(/group=(\d+)/)?.[1]);
+  expect(processGroup).toBeGreaterThan(0);
+  expect(await defaultProcessController.isProcessGroupAlive!(processGroup)).toBe(false);
   expect(result.stderr).toContain("descendant-term");
   expect(result.durationMs).toBeGreaterThanOrEqual(500);
   expect(result.durationMs).toBeLessThan(3_000);

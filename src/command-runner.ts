@@ -168,9 +168,9 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
           },
         }
       : { ...defaultProcessController, inspect: inspectProcessOnce };
-    await signalOwnedProcess(owned, "SIGTERM", controller).catch(() => undefined);
+    await signalOwnedProcess(owned, "SIGTERM", controller);
     await delay(TERMINATION_GRACE_MS);
-    await signalOwnedProcess(owned, "SIGKILL", controller).catch(() => undefined);
+    await signalOwnedProcess(owned, "SIGKILL", controller);
   };
 
   const closed = once(child, "close").then(
@@ -185,11 +185,8 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
     ]);
     if (outcome === "timeout") {
       timedOut = true;
-      await terminate().catch(() => undefined);
-      child.stdout.destroy();
-      child.stderr.destroy();
-      child.unref();
-      exitCode = null;
+      await terminate();
+      exitCode = await closed;
     } else {
       exitCode = outcome;
     }

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,7 @@ import { expect, test } from "vitest";
 
 import { AuthService } from "../src/auth.js";
 import { ArtifactStore } from "../src/artifacts.js";
+import { runCommand } from "../src/command-runner.js";
 import { createTestConfig, type ForgeConfig } from "../src/config.js";
 import { ForgeDatabase, projectionStateHash } from "../src/database.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
@@ -20,10 +21,17 @@ import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkfl
 import { TaskResponseSchema } from "../src/http/contracts/tasks.js";
 import { jsonRequired } from "../src/task-utils.js";
 import taskBranch from "../src/http/routes/task-branch.js";
+import { WorktreeManager } from "../src/worktrees.js";
 
 
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
 const github: GithubAdapter = { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } };
+
+async function git(args: string[], cwd: string): Promise<string> {
+  const result = await runCommand({ taskId: null, stepId: null, command: "git", args, cwd });
+  if (result.exitCode !== 0 || result.timedOut) throw new Error(result.stderr || "git failed");
+  return result.stdout.trim();
+}
 
 function projectState(database: ForgeDatabase, state: IssueWorkflowState, runId = "run-1"): void {
   database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId, eventId: state.lastEventId, state }));
@@ -657,6 +665,55 @@ test("re-resolves a pull request selector and pins source and PR base coordinate
     const scratch = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Scratch task", description: "No source.", idempotencyKey: "scratch-source-create-0001", images: [] });
     expect(value.tasks.getTask(value.adminId, scratch.task.id).source).toBeUndefined();
     expect(TaskResponseSchema.parse(value.tasks.getTask(value.adminId, scratch.task.id)).source).toBeUndefined();
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("Developer diff follows current release coordinates after a branch rebase", async () => {
+  const value = await fixture();
+  const repositoryPath = join(value.root, "repositories", "repo");
+  const worktreeRoot = join(value.root, "worktrees");
+  try {
+    await git(["init", "-b", "main"], repositoryPath);
+    await git(["config", "user.name", "Forge Test"], repositoryPath);
+    await git(["config", "user.email", "forge-test@example.invalid"], repositoryPath);
+    await git(["config", "commit.gpgsign", "false"], repositoryPath);
+    await writeFile(join(repositoryPath, "README.md"), "fixture\n");
+    await git(["add", "README.md"], repositoryPath);
+    await git(["commit", "-m", "fixture"], repositoryPath);
+    const staleBaseSha = await git(["rev-parse", "HEAD"], repositoryPath);
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Rebased diff", description: "body", idempotencyKey: "rebased-developer-diff", images: [] });
+    const manager = new WorktreeManager();
+    const worktree = await manager.create({ repositoryPath, worktreeRoot, taskId: created.task.id, targetBaseSha: staleBaseSha, branchName: "work/rebased-diff" });
+    await writeFile(join(worktree.worktreePath, "DELIVERY.md"), "delivery\n");
+    await git(["add", "DELIVERY.md"], worktree.worktreePath);
+    await git(["commit", "-m", "delivery"], worktree.worktreePath);
+    const recordedHeadSha = await git(["rev-parse", "HEAD"], worktree.worktreePath);
+    const recordedTreeSha = await git(["rev-parse", "HEAD^{tree}"], worktree.worktreePath);
+    await writeFile(join(repositoryPath, "BASE.md"), "new base\n");
+    await git(["add", "BASE.md"], repositoryPath);
+    await git(["commit", "-m", "advance base"], repositoryPath);
+    const currentBaseSha = await git(["rev-parse", "HEAD"], repositoryPath);
+    await git(["rebase", currentBaseSha], worktree.worktreePath);
+    const currentHeadSha = await git(["rev-parse", "HEAD"], worktree.worktreePath);
+    const currentTreeSha = await git(["rev-parse", "HEAD^{tree}"], worktree.worktreePath);
+    const now = new Date().toISOString();
+    value.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-rebased-diff', ?, ?, ?, 1, 1, 'completed', ?, ?, ?, ?, ?, ?, ?, 'clean')").run(created.task.id, value.companyId, created.task.workflowId, worktree.branchName, worktree.worktreePath, staleBaseSha, now, now, recordedHeadSha, recordedTreeSha);
+      db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, created_at, updated_at) VALUES ('release-rebased-diff', ?, ?, ?, 'release-rebased-diff-key', 'acme/forge', ?, 'main', ?, ?, ?, 'ready', 86, 'https://github.com/acme/forge/pull/86', 'Rebased diff', ?, ?)").run(created.task.id, value.companyId, created.task.workflowId, worktree.branchName, currentBaseSha, currentHeadSha, currentTreeSha, now, now);
+    });
+
+    const live = await value.tasks.getDeveloperDiff(value.adminId, created.task.id);
+    expect(live.diff).toMatchObject({ branchName: worktree.branchName, baseSha: currentBaseSha, headSha: currentHeadSha });
+    expect(live.diff.patch).toContain("diff --git a/DELIVERY.md b/DELIVERY.md");
+    expect(live.diff.patch).not.toContain("BASE.md");
+    expect(live.etag.startsWith(`${currentBaseSha}:${currentHeadSha}:`)).toBe(true);
+
+    await manager.remove(repositoryPath, worktree.worktreePath);
+    const recorded = await value.tasks.getDeveloperDiff(value.adminId, created.task.id);
+    expect(recorded.diff).toMatchObject({ branchName: worktree.branchName, baseSha: currentBaseSha, headSha: currentHeadSha });
+    expect(recorded.diff.patch).toContain("diff --git a/DELIVERY.md b/DELIVERY.md");
+    expect(recorded.diff.patch).not.toContain("BASE.md");
+    expect(recorded.etag).toBe(`${currentBaseSha}:${currentHeadSha}:missing:0`);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

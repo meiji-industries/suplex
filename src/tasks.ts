@@ -1034,20 +1034,22 @@ export class TaskService {
     if (!execution) throw new TaskFailure("Developer diff is not available until a worktree exists", [], 409);
     const project = this.projects.getProject(actorUserId, task.projectId);
     if (project.companyId !== task.companyId) throw new TaskFailure("Not found", [], 404);
+    const currentBaseSha = task.release?.baseSha ?? execution.targetBaseSha;
     try {
       const diff = await new WorktreeManager().liveDiff({
         repositoryPath: project.repositoryPath,
         worktreeRoot: project.worktreeRoot,
         worktreePath: execution.worktreePath,
         branchName: execution.branchName,
-        targetBaseSha: execution.targetBaseSha,
+        targetBaseSha: currentBaseSha,
         baseBranch: project.baseBranch,
       });
       return { diff: { patch: diff.patch, branchName: diff.branchName, repository: project.repository, baseSha: diff.baseSha, headSha: diff.headSha }, etag: diff.etag };
     } catch (error) {
       if (error instanceof WorktreeFailure && error.code === "worktree-unavailable" && recordedResult) {
-        const diff = await new WorktreeManager().commitDiff(project.repositoryPath, recordedResult.targetBaseSha, recordedResult.resultCommit);
-        return { diff: { patch: diff.patch, branchName: recordedResult.branchName, repository: project.repository, baseSha: recordedResult.targetBaseSha, headSha: diff.headSha }, etag: `${diff.headSha}:missing:0` };
+        const coordinates = task.release ? { branchName: task.release.headBranch, baseSha: task.release.baseSha, headSha: task.release.headSha } : { branchName: recordedResult.branchName, baseSha: recordedResult.targetBaseSha, headSha: recordedResult.resultCommit };
+        const diff = await new WorktreeManager().commitDiff(project.repositoryPath, coordinates.baseSha, coordinates.headSha);
+        return { diff: { patch: diff.patch, branchName: coordinates.branchName, repository: project.repository, baseSha: coordinates.baseSha, headSha: diff.headSha }, etag: `${coordinates.baseSha}:${diff.headSha}:missing:0` };
       }
       if (error instanceof WorktreeFailure) throw new TaskFailure(error.message, [finding(error.code, "developerExecution", error.message)], 409);
       throw error;

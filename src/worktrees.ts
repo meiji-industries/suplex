@@ -560,7 +560,7 @@ export class WorktreeManager {
         remaining -= Buffer.byteLength(patch);
       }
       const index = await stat(resolve(worktreePath, indexPath.trim()));
-      return { patch: patches.join(""), branchName: actualBranch.trim(), baseSha, headSha: headSha.trim(), etag: `${headSha.trim()}:${index.mtimeMs}:${untracked.length}` };
+      return { patch: patches.join(""), branchName: actualBranch.trim(), baseSha, headSha: headSha.trim(), etag: `${baseSha}:${headSha.trim()}:${index.mtimeMs}:${untracked.length}` };
     } catch (error) {
       if (error instanceof WorktreeFailure) throw error;
       throw new WorktreeFailure("diff-unavailable", "Git could not read the live Developer worktree diff");

@@ -22,7 +22,7 @@ const labels: Record<DeveloperRecoveryView["status"], string> = {
   failed: "Failed",
 };
 
-export function DeveloperRecoveryStatus({ taskId, recovery, executionStatus, allowedCommands, busy, isAdmin, onAction, attentionCard, developmentStatus, children }: { taskId: string; recovery: DeveloperRecoveryView | undefined; executionStatus?: string | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction, note?: string) => Promise<void>; attentionCard?: AttentionCard; developmentStatus?: ReactNode; children?: ReactNode }): ReactElement | null {
+export function DeveloperRecoveryStatus({ recovery, executionStatus, allowedCommands, busy, isAdmin, onAction, attentionCard, developmentStatus, children }: { recovery: DeveloperRecoveryView | undefined; executionStatus?: string | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction, note?: string) => Promise<void>; attentionCard?: AttentionCard; developmentStatus?: ReactNode; children?: ReactNode }): ReactElement | null {
   if (!recovery) return null;
   const interrupted = recovery.status === "interrupted";
   const failed = recovery.status === "failed";
@@ -31,7 +31,8 @@ export function DeveloperRecoveryStatus({ taskId, recovery, executionStatus, all
   const description = attention ? recovery.summary : null;
   const recoveryCommands = allowedCommands;
   const hasActions = recoveryCommands.includes("retry_development") || recoveryCommands.includes("cancel_development");
-  if (recovery.status === "active" && !hasActions) return null;
+  const idle = recovery.status === "starting" || recovery.status === "active" || recovery.status === "reconnecting" || recovery.status === "result_pending_claim";
+  if (!hasActions && idle) return null;
   return <Card data-developer-recovery role="alert" size="sm">
       <Collapsible.Root defaultOpen className="flex flex-col gap-(--card-spacing)">
         <Collapsible.Trigger nativeButton={false} render={<CardHeader className="group/developer-recovery-trigger cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset" />}>
@@ -43,7 +44,6 @@ export function DeveloperRecoveryStatus({ taskId, recovery, executionStatus, all
           <CardContent>
             {children}
             {recovery.lastHeartbeatAt ? <p className="mt-1 text-xs">Last heartbeat {new Date(recovery.lastHeartbeatAt).toLocaleString()}</p> : null}
-            {recovery.evidenceArtifactId ? <p className="mt-1 text-xs"><a href={`/api/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(recovery.evidenceArtifactId)}`} target="_blank" rel="noreferrer">Open retained evidence</a></p> : null}
           </CardContent>
           {hasActions ? <CardFooter className="justify-start border-t text-left"><DeveloperRecoveryActions allowedCommands={recoveryCommands} busy={busy} isAdmin={isAdmin} onAction={onAction} {...(attentionCard ? { card: attentionCard } : {})} /></CardFooter> : null}
         </Collapsible.Panel>

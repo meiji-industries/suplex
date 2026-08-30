@@ -210,8 +210,6 @@ test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at
       current = taskState(company.id, "failed", 9, { developerRecovery: { ...taskState(company.id, "failed").developerRecovery as object, evidenceArtifactId: "recovery-evidence" } });
       await reloadTask();
       await recovery.getByText("Failed", { exact: true }).waitFor();
-      const evidence = recovery.getByRole("link", { name: "Open retained evidence" });
-      expect(await evidence.getAttribute("href")).toBe(`/api/tasks/${taskId}/artifacts/recovery-evidence`);
       expect(await page.locator("body").innerText()).not.toMatch(/(?:\/tmp\/|\/Users\/|PID\s*\d+)/i);
       await page.close(); await context.close();
     } finally { await browser.close(); }

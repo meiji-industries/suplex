@@ -26,7 +26,6 @@ test("only Developer cancellation remains available while another task command i
 
 test("recovery actions render in the shared card footer", () => {
   const html = renderToStaticMarkup(createElement(DeveloperRecoveryStatus, {
-    taskId: "task-1",
     recovery: { status: "active", reasonCode: null, summary: "Developer result claimed.", lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: null, nextAction: null },
     allowedCommands: ["cancel_development"],
     busy: false,
@@ -67,8 +66,7 @@ test("attention cards left-align content and omit repeated status text", () => {
 
 test("keeps actionable Developer recovery summaries", () => {
   const html = renderToStaticMarkup(createElement(DeveloperRecoveryStatus, {
-    taskId: "task-1",
-    recovery: { status: "failed", reasonCode: "developer-failed", summary: "The Builder process exited before returning a result.", lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: null, nextAction: null },
+    recovery: { status: "failed", reasonCode: "developer-failed", summary: "The Builder process exited before returning a result.", lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: "evidence-1", nextAction: null },
     allowedCommands: ["retry_development"],
     busy: false,
     isAdmin: true,
@@ -76,11 +74,22 @@ test("keeps actionable Developer recovery summaries", () => {
   }));
 
   expect(html).toContain("The Builder process exited before returning a result.");
+  expect(html).not.toContain("Open retained evidence");
+});
+
+test("hides an idle starting Development card without actions", () => {
+  const html = renderToStaticMarkup(createElement(DeveloperRecoveryStatus, {
+    recovery: { status: "starting", reasonCode: null, summary: null, lastHeartbeatAt: "2026-08-29T00:00:00.000Z", currentOwner: "forge", evidenceArtifactId: "evidence-1", nextAction: null },
+    allowedCommands: [],
+    busy: false,
+    isAdmin: true,
+    onAction: async () => undefined,
+  }));
+  expect(html).toBe("");
 });
 
 test("labels a blocked delivery as awaiting a decision while keeping retry available", () => {
   const html = renderToStaticMarkup(createElement(DeveloperRecoveryStatus, {
-    taskId: "task-1",
     recovery: { status: "failed", reasonCode: "target-suite-failures", summary: "The target repository has unrelated failures.", lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: null, nextAction: null },
     executionStatus: "blocked",
     allowedCommands: ["retry_development"],
@@ -96,7 +105,6 @@ test("labels a blocked delivery as awaiting a decision while keeping retry avail
 
 test("keeps failed and cancelled Developer executions distinct", () => {
   const render = (status: "failed" | "cancelled", executionStatus: string): string => renderToStaticMarkup(createElement(DeveloperRecoveryStatus, {
-    taskId: "task-1",
     recovery: { status, reasonCode: null, summary: null, lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: null, nextAction: null },
     executionStatus,
     allowedCommands: ["retry_development"],
@@ -442,7 +450,6 @@ test("marks blocked action cards with the destructive status badge", () => {
 
 test("claimed Developer recovery does not remain an active Development card", () => {
   const html = renderToStaticMarkup(createElement(DeveloperRecoveryStatus, {
-    taskId: "task-1",
     recovery: { status: "active", reasonCode: null, summary: "Developer result claimed.", lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: "evidence-1", nextAction: null },
     allowedCommands: ["review_delivery"],
     busy: false,

@@ -30,8 +30,6 @@ type NoDriftMergedDelivery = {
   executionTargetBaseSha: string | null;
   executionResultCommit: string | null;
   executionResultTree: string | null;
-  executionFailureCode: string | null;
-  executionFailureSummary: string | null;
   executionDeliveryArtifactId: string | null;
 };
 
@@ -135,7 +133,6 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
             m.failure_code AS failureCode, m.failure_summary AS failureSummary,
             d.id AS executionId, d.status AS executionStatus, d.target_base_sha AS executionTargetBaseSha,
             d.result_commit AS executionResultCommit, d.result_tree AS executionResultTree,
-            d.failure_code AS executionFailureCode, d.failure_summary AS executionFailureSummary,
             d.delivery_artifact_id AS executionDeliveryArtifactId
           FROM forge_forward_merges m
           LEFT JOIN forge_developer_executions d
@@ -159,7 +156,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
             && !!mergedDelivery.developerExecutionId && mergedDelivery.developerExecutionId === developerExecutionId
             && mergedDelivery.executionId === mergedDelivery.developerExecutionId && context.developerExecutionId === mergedDelivery.developerExecutionId
             && mergedDelivery.executionStatus === context.developerStatus && !!mergedDelivery.executionStatus && ["completed", "blocked"].includes(mergedDelivery.executionStatus)
-            && (mergedDelivery.executionStatus === "completed" ? executionAtPrior || executionAtResult : executionAtResult)
+            && (executionAtPrior || executionAtResult)
             && sameRevision(mergedDelivery.executionResultCommit, context.resultCommit) && sameRevision(mergedDelivery.executionResultTree, context.resultTree)
             && sameRevision(mergedDelivery.executionTargetBaseSha, context.targetBaseSha) && executionBaseMatches
             && !!mergedDelivery.priorTree && sameRevision(mergedDelivery.targetBaseSha, merge.targetBaseSha)
@@ -177,9 +174,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           if (mergedDelivery.failureCode !== null || mergedDelivery.failureSummary !== null) {
             const failureCode = mergedDelivery.failureCode;
             const failureSummary = mergedDelivery.failureSummary;
-            const blockedExecutionMatches = mergedDelivery.executionStatus !== "blocked"
-              || (mergedDelivery.executionFailureCode === failureCode && mergedDelivery.executionFailureSummary === failureSummary && context.developerFailureCode === failureCode && context.developerFailureSummary === failureSummary);
-            if (!isVerificationBlockerCode(failureCode) || !failureSummary || !blockedExecutionMatches) {
+            if (!isVerificationBlockerCode(failureCode) || !failureSummary) {
               return blocked("merge_state_ownership_mismatch", "human", false, "The recorded forward merge is not an exact verification failure", undefined, coordinates, mergedDelivery.id);
             }
             if (!mergedVerificationArtifact) {

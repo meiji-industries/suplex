@@ -265,7 +265,10 @@ describe("target-base reconciliation contracts", () => {
     }
   });
 
-  test("resurfaces a failed persisted merge from the ordinary no-drift retry without adopting it", async () => {
+  test.each([
+    { executionState: "completed pre-merge", executionStatus: "completed" },
+    { executionState: "blocked pre-merge with no duplicated failure fields", executionStatus: "blocked" },
+  ] as const)("resurfaces a failed persisted merge from ordinary no-drift for a $executionState execution without adopting it", async ({ executionStatus }) => {
     const root = await mkdtemp(join(tmpdir(), "forge-target-base-no-drift-verification-blocker-"));
     const config = createTestConfig(root, { artifactRoot: join(root, "artifacts") });
     const database = new ForgeDatabase(config.databasePath);
@@ -303,7 +306,7 @@ describe("target-base reconciliation contracts", () => {
       const noDriftOperationKey = `workflow-1:pre_release:${configuration.id}:${targetBase}:${targetBase}:${mergedHead}`;
       database.authTransaction((db) => {
         db.prepare("UPDATE forge_tasks SET project_revision_id = ?, project_configuration_artifact_id = ?, project_configuration_captured_at = ? WHERE id = 'task-1'").run(configuration.id, configuration.id, now);
-        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, evidence_artifact_id) VALUES ('developer-1', 'task-1', 'company-1', 'workflow-1', 1, 1, 'completed', 'issue/task-1', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?)").run(repositoryPath, repository.base, now, now, repository.head, priorTree, evidence.id);
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, evidence_artifact_id) VALUES ('developer-1', 'task-1', 'company-1', 'workflow-1', 1, 1, ?, 'issue/task-1', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?)").run(executionStatus, repositoryPath, repository.base, now, now, repository.head, priorTree, evidence.id);
         db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, failure_code, failure_summary, updated_at) VALUES ('merge-failed', 'task-1', 'company-1', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow-1', ?, 'pre_release', 'failed-operation-1', ?, ?, ?, 'developer-1', ?, ?, ?, ?)").run(repository.base, targetBase, repository.head, mergedHead, mergedTree, now, configuration.id, priorTree, mergedHead, mergedTree, verification.id, failureCode, failureSummary, now);
         db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, developer_execution_id, updated_at) VALUES ('merge-no-drift', 'task-1', 'company-1', ?, ?, ?, NULL, NULL, 'no_drift', '[]', ?, 'workflow-1', ?, 'pre_release', ?, ?, 'developer-1', ?)").run(targetBase, targetBase, mergedHead, later, configuration.id, noDriftOperationKey, mergedTree, later);
       });
@@ -315,6 +318,7 @@ describe("target-base reconciliation contracts", () => {
       const input = { taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: configuration.id, checkpoint: "pre_release" as const, developerExecutionId: "developer-1", expectedBaseSha: targetBase, expectedHeadSha: mergedHead, expectedHeadTree: mergedTree, forwardMergeId: "merge-no-drift" };
       const executionBefore = database.authQuery((db) => db.prepare("SELECT status, result_commit AS resultCommit, result_tree AS resultTree, failure_code AS failureCode, failure_summary AS failureSummary FROM forge_developer_executions WHERE id = 'developer-1'").get());
       const changesBefore = database.authQuery((db) => Number(db.prepare("SELECT total_changes()").pluck().get()));
+      expect(executionBefore).toEqual({ status: executionStatus, resultCommit: repository.head, resultTree: priorTree, failureCode: null, failureSummary: null });
 
       await expect(activities.reconcileTargetBase(input)).resolves.toEqual({
         outcome: "blocked",

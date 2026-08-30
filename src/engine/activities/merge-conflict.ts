@@ -12,14 +12,14 @@ export function createMergeConflictActivities(ctx: ActivityContext): MergeConfli
     async planMergeConflict(input: WorkflowMergeConflictPlanActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input);
       const rawInput: MergeConflictPlanActivityInput = { ...input, worktreePath };
-      const result = await invokeAgent(input, () => agent?.planMergeConflict ? agent.planMergeConflict(rawInput) : defaultAgent.planMergeConflict(rawInput, agentRuntime()));
+      const result = await invokeAgent(input, () => agent?.planMergeConflict ? agent.planMergeConflict(rawInput) : defaultAgent.planMergeConflict(rawInput, agentRuntime()), input.executionRole ?? "integrator");
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef, worktreePath }, result);
     },
     async resolveMergeConflict(input: WorkflowMergeConflictResolutionActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
       const rawInput: MergeConflictResolutionActivityInput = { ...input, worktreePath };
       const operation = developer.runMergeConflictResolution ? developer.runMergeConflictResolution.bind(developer) : defaultDeveloper.runMergeConflictResolution.bind(defaultDeveloper);
-      const result = await invokeAgent(input, () => operation(rawInput));
+      const result = await invokeAgent(input, () => operation(rawInput), "integrator");
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath }, { ...result, worktreePath });
     },
     async resolveMergeConflictSupervised(input) {
@@ -27,7 +27,7 @@ export function createMergeConflictActivities(ctx: ActivityContext): MergeConfli
         const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
         const result = await service.runMergeConflictResolution({ ...input, worktreePath });
         return "outcome" in result ? result : { ...result, worktreePath };
-      }));
+      }), "integrator");
     },
   };
 }

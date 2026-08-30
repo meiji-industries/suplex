@@ -287,11 +287,11 @@ function normalizedInput(input: ProjectInput, paths: { repositoryPath: string; w
 
 
 
-export function effectiveProfileCapacity(profile: Pick<CodexProfile, "capacity">, config: Pick<ForgeConfig, "externalTurnCapacity">): number {
-  return profile.capacity ?? config.externalTurnCapacity;
+export function effectiveProfileCapacity(profile: Pick<CodexProfile, "capacity" | "provider">, config: Pick<ForgeConfig, "externalTurnCapacity" | "externalTurnCapacityByProvider">): number {
+  return profile.capacity ?? config.externalTurnCapacityByProvider[profile.provider] ?? config.externalTurnCapacity;
 }
 
-function publicProfile(row: ProfileRow, config: Pick<ForgeConfig, "externalTurnCapacity">): CodexProfile {
+function publicProfile(row: ProfileRow, config: Pick<ForgeConfig, "externalTurnCapacity" | "externalTurnCapacityByProvider">): CodexProfile {
   return {
     id: row.id,
     name: row.name,

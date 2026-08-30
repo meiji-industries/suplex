@@ -8,7 +8,7 @@ export function createDeliveryReviewActivities(ctx: ActivityContext): DeliveryRe
     async reviewDelivery(input: WorkflowDeliveryReviewActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.subject.developerExecutionId);
       const serviceInput = { ...input, worktreePath };
-      const result = await invokeAgent(input, async () => normalizeReviewResult(await (agent?.reviewDelivery ? agent.reviewDelivery(serviceInput) : defaultAgent.reviewDelivery(serviceInput, agentRuntime())), serviceInput));
+      const result = await invokeAgent(input, async () => normalizeReviewResult(await (agent?.reviewDelivery ? agent.reviewDelivery(serviceInput) : defaultAgent.reviewDelivery(serviceInput, agentRuntime())), serviceInput), "reviewer");
       if (result.outcome === "blocked") return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.executionId, sessionRef: result.sessionRef, worktreePath }, result);
       const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, result.review.opinionArtifactId, "delivery-review");
       const completed = DeliveryReviewActivityResultSchema.parse({ ...result, review: { ...result.review, summary: SafeSummarySchema.parse(normalizeSafeSummary(result.review.summary)), reviewArtifact } });
@@ -45,7 +45,7 @@ export function createDeliveryReviewActivities(ctx: ActivityContext): DeliveryRe
       });
     },
     async planDeliveryRepair(input) {
-      const result = await invokeAgent(input, () => (agent?.planDeliveryRepair ?? defaultAgent.planDeliveryRepair.bind(defaultAgent))(input));
+      const result = await invokeAgent(input, () => (agent?.planDeliveryRepair ?? defaultAgent.planDeliveryRepair.bind(defaultAgent))(input), "reviewer");
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef, worktreePath: input.worktreePath }, result);
     },
     async recordDeliveryDecision(rawInput) {

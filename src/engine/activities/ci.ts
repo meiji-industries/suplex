@@ -19,7 +19,7 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
       }
     },
     async planCiRepair(input) {
-      const result = await invokeAgent(input, () => (agent?.planCiRepair ?? defaultAgent.planCiRepair.bind(defaultAgent))(input));
+      const result = await invokeAgent(input, () => (agent?.planCiRepair ?? defaultAgent.planCiRepair.bind(defaultAgent))(input), input.executionRole ?? "integrator");
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, result);
     },
     async rerunCi(input) {
@@ -91,7 +91,7 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
         const { worktreePath: _worktreePath, ...result } = await service.runCiRepair({ ...input, worktreePath });
         void _worktreePath;
         return result;
-      }));
+      }), "integrator");
       if (supervised.status !== "completed") throw ApplicationFailure.nonRetryable(supervised.summary, supervised.reasonCode, { executionId: supervised.developerExecutionId });
       const result = supervised.result;
       activityWorktrees.set(result.developerExecutionId, worktreePath);

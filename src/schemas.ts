@@ -20,6 +20,7 @@ export const ForgeEnvironmentSchema = z.object({
   FORGE_DELIVERY_REPAIR_LIMIT: z.string().regex(/^\d+$/).optional(),
   FORGE_CODEX_CAPACITY: z.string().regex(/^\d+$/).optional(),
   FORGE_CLAUDE_CAPACITY: z.string().regex(/^\d+$/).optional(),
+  FORGE_OPENROUTER_CAPACITY: z.string().regex(/^\d+$/).optional(),
   FORGE_DEVELOPMENT_AUTO_LOGIN: z.literal("1").optional(),
   FORGE_CODEX_WAIT_LIMIT_MS: z.string().regex(/^\d+$/).optional(),
   FORGE_CODEX_RATE_LIMIT_ATTEMPTS: z.string().regex(/^\d+$/).optional(),

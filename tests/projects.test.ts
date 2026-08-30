@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 import { AuthService } from "../src/auth.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { ProjectService, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects.js";
+import { ProjectService, effectiveProfileCapacity, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { AgentProviderKind } from "../src/agent-providers/provider.js";
 import type { GithubAdapter } from "../src/github.js";
 import { jsonRequired } from "../src/task-utils.js";
@@ -123,6 +123,15 @@ test("preserves inherited capacity and applies integer profile overrides", async
   } finally {
     await close(value);
   }
+});
+
+test("inherited profile capacity uses the profile provider default", () => {
+  const config = createTestConfig("/tmp/forge-profile-capacity", {
+    externalTurnCapacity: 2,
+    externalTurnCapacityByProvider: { codex: 2, claude: 3, openrouter: 7 },
+  });
+
+  expect(effectiveProfileCapacity({ capacity: null, provider: "openrouter" }, config)).toBe(7);
 });
 
 test("sorts agents by active execution count", async () => {

@@ -16,7 +16,7 @@ import { AcceptanceFailure, AcceptanceService } from "../../acceptance.js";
 import { CiFailure, CiProviderFailure, CiService, createGithubCiProvider, type CiProvider } from "../../ci.js";
 import { createGithubReleasePort, GithubReleaseFailure, ReleaseService, type GithubReleaseAdapter } from "../../github-release.js";
 import { ForwardMergeFailure, ForwardMergeService } from "../../forward-merge.js";
-import { parseAcceptedProjectRevision, type AcceptedProjectRevision } from "../../projects.js";
+import { parseAcceptedProjectRevision, type AcceptedProjectRevision, type ProjectRole } from "../../projects.js";
 import { runPinnedVerification } from "../../verification.js";
 import { createGitCommandGuard } from "../../worktrees.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema } from "../contracts.js";
@@ -51,7 +51,7 @@ import {
 } from "../issue-contracts.js";
 import { PlanGovernanceConflict, PlanGovernanceRepository } from "../../plan-governance-repository.js";
 import { StructuredLogger, activityLogContext } from "../../logging.js";
-import { CapacityFailure, CapacityManager } from "../../capacity.js";
+import { CapacityFailure, CapacityManager, type CapacityProfileIdentity } from "../../capacity.js";
 import { CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema } from "../../capacity-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "../../worktrees.js";
 import { readEnvironmentSettings } from "../../environment-settings.js";
@@ -215,12 +215,34 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     throw ApplicationFailure.nonRetryable(safeSummary, code, { code, category, summary: safeSummary, ...(evidenceArtifactId ? { evidenceArtifactId } : {}) });
   };
   const agentCategory = (error: AgentFailure): AttentionCategory => error.code === "login-expired" ? "provider_authentication" : error.code === "model-unavailable" ? "provider_ambiguity" : error.code === "rate-limited" ? "provider_connectivity_exhausted" : error.code === "malformed-output" || error.code === "invalid-output" ? "agent_contradiction" : "agent_exhausted";
-  const providerForRole = (input: { roleProfiles?: Partial<Record<"planner" | "builder", string | undefined>> | undefined }, role: "planner" | "builder"): string => {
-    const profileId = input.roleProfiles?.[role];
-    if (!profileId) return "codex";
-    return (database.authQuery((db) => db.prepare("SELECT provider FROM forge_profiles WHERE id = ?").get(profileId) as { provider?: string } | undefined)?.provider) ?? "codex";
+  type CapacityInput = {
+    companyId: string;
+    taskId?: string;
+    projectId?: string;
+    roleProfiles?: Partial<Record<ProjectRole, string | undefined>>;
   };
-  const invokeAgent = async <T>(input: { companyId: string; roleProfiles?: { planner?: string | undefined } | undefined }, operation: () => Promise<T>, provider?: string): Promise<T> => {
+  const profileForRole = (input: CapacityInput, role: ProjectRole): CapacityProfileIdentity => database.authQuery((db) => {
+    const task = input.taskId
+      ? db.prepare("SELECT project_id AS projectId, role_agents_json AS roleAgentsJson FROM forge_tasks WHERE id = ? AND company_id = ?").get(input.taskId, input.companyId) as { projectId: string; roleAgentsJson: string } | undefined
+      : undefined;
+    const projectId = task?.projectId ?? input.projectId;
+    const project = projectId
+      ? db.prepare("SELECT role_defaults_json AS roleDefaultsJson FROM forge_projects WHERE id = ? AND company_id = ?").get(projectId, input.companyId) as { roleDefaultsJson: string } | undefined
+      : undefined;
+    const taskAgents = task ? jsonRequired(task.roleAgentsJson) as Partial<Record<ProjectRole, string>> : {};
+    const projectAgents = project ? jsonRequired(project.roleDefaultsJson) as Partial<Record<ProjectRole, string>> : {};
+    const agentId = taskAgents[role] ?? projectAgents[role];
+    const agent = agentId
+      ? db.prepare("SELECT name, profile_id AS profileId FROM forge_agents WHERE id = ? AND role = ?").get(agentId, role) as { name: string; profileId: string } | undefined
+      : undefined;
+    const profileId = input.roleProfiles?.[role] ?? agent?.profileId;
+    const profile = profileId
+      ? db.prepare("SELECT id, name, provider FROM forge_profiles WHERE id = ?").get(profileId) as Omit<CapacityProfileIdentity, "agentName"> | undefined
+      : undefined;
+    if (!profile) throw new CapacityFailure("profile-unavailable");
+    return { ...profile, ...(agent?.profileId === profile.id ? { agentName: agent.name } : {}) };
+  });
+  const invokeAgent = async <T>(input: CapacityInput, operation: () => Promise<T>, role: ProjectRole = "planner"): Promise<T> => {
     let heartbeat: ((details?: unknown) => void) | undefined;
     let interval: NodeJS.Timeout | undefined;
     let queueHint: NodeJS.Timeout | undefined;
@@ -229,12 +251,12 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       const activityContext = Context.current();
       heartbeat = (details?: unknown) => {
         activityContext.heartbeat(details);
-        if (!queueHint && details && typeof details === "object" && "queued" in details && details.queued === true && "taskId" in input) {
+        if (!queueHint && details && typeof details === "object" && "queued" in details && details.queued === true && input.taskId) {
           queueHint = setTimeout(() => {
             // This is projection-only feedback. A stale/missing projection must
             // never turn a queued activity into a failed one.
             try {
-              if ("taskId" in input && typeof input.taskId === "string" && details && typeof details === "object"
+              if (typeof input.taskId === "string" && details && typeof details === "object"
                 && "provider" in details && typeof details.provider === "string"
                 && "position" in details && typeof details.position === "number"
                 && "activeCount" in details && typeof details.activeCount === "number") {
@@ -249,13 +271,14 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       interval.unref();
     } catch { /* direct unit calls do not have an Activity context */ }
     try {
+      const profile = profileForRole(input, role);
       return await capacity.run(async () => {
         // The slot is acquired: stop the wait and put the previous pending
         // action back so the queue hint cannot outlive the wait.
         if (queueHint) { clearTimeout(queueHint); queueHint = undefined; }
         restoreQueueHint?.();
         return await operation();
-      }, provider ?? providerForRole(input, "planner"), heartbeat, cancellationSignal());
+      }, profile, heartbeat, cancellationSignal());
     } catch (error) {
       try {
         if (Context.current().cancellationSignal.aborted) throw new CancelledFailure("CANCELLED");
@@ -280,6 +303,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     } finally {
       clearInterval(interval);
       clearTimeout(queueHint);
+      restoreQueueHint?.();
     }
   };
   const bindCapacityExecution = async <T>(_capacityRequestId: string | undefined, _owner: { executionKind: "agent" | "developer"; executionId: string; sessionRef?: string | null; worktreePath?: string | null }, result: T): Promise<T> => result;
@@ -415,7 +439,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     attentionFailure,
     agentCategory,
     invokeAgent,
-    providerForRole,
+    profileForRole,
     bindCapacityExecution,
     runSupervised,
     latestWorktree,

@@ -184,7 +184,7 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, { ...result, leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) });
     },
     async runSupplementalReview(input) {
-      const result = await invokeAgent(input, () => agent?.runSupplementalReview ? agent.runSupplementalReview(input) : defaultAgent.runSupplementalReview(input, agentRuntime()));
+      const result = await invokeAgent(input, () => agent?.runSupplementalReview ? agent.runSupplementalReview(input) : defaultAgent.runSupplementalReview(input, agentRuntime()), "reviewer");
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.executionId, sessionRef: result.sessionRef }, result);
     },
     async consolidateLeadPlan(input) {

@@ -169,7 +169,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
   const stableInstallationId = installationId(dataRoot, parsedEnvironment.data, environment === process.env);
   const deliveryRepairCycleLimit = Number(parsedEnvironment.data.FORGE_DELIVERY_REPAIR_LIMIT ?? "2");
   const externalTurnCapacity = Number(parsedEnvironment.data.FORGE_CODEX_CAPACITY ?? "2");
-  const externalTurnCapacityByProvider = { codex: externalTurnCapacity, claude: Number(parsedEnvironment.data.FORGE_CLAUDE_CAPACITY ?? "2") };
+  const externalTurnCapacityByProvider = {
+    codex: externalTurnCapacity,
+    claude: Number(parsedEnvironment.data.FORGE_CLAUDE_CAPACITY ?? "2"),
+    openrouter: Number(parsedEnvironment.data.FORGE_OPENROUTER_CAPACITY ?? "2"),
+  };
   const externalTurnWaitLimitMs = Number(parsedEnvironment.data.FORGE_CODEX_WAIT_LIMIT_MS ?? "7200000");
   const externalTurnRateLimitAttempts = Number(parsedEnvironment.data.FORGE_CODEX_RATE_LIMIT_ATTEMPTS ?? "5");
   return ForgeConfigSchema.parse({
@@ -212,7 +216,7 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     worktreeRoot: overrides.worktreeRoot ?? resolve(dataRoot, "worktrees"),
     deliveryRepairCycleLimit: overrides.deliveryRepairCycleLimit ?? 2,
     externalTurnCapacity: overrides.externalTurnCapacity ?? 2,
-    externalTurnCapacityByProvider: overrides.externalTurnCapacityByProvider ?? { codex: overrides.externalTurnCapacity ?? 2, claude: 2 },
+    externalTurnCapacityByProvider: overrides.externalTurnCapacityByProvider ?? { codex: overrides.externalTurnCapacity ?? 2, claude: 2, openrouter: 2 },
     externalTurnWaitLimitMs: overrides.externalTurnWaitLimitMs ?? 7_200_000,
     externalTurnRateLimitAttempts: overrides.externalTurnRateLimitAttempts ?? 5,
     installationId: overrides.installationId ?? "test-installation",

@@ -118,8 +118,8 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
   const append = (stream: "stdout" | "stderr", chunk: Buffer): void => {
     const text = chunk.toString("utf8");
     appendEntry(entryTail, { stream, text });
-    if (stream === "stdout") stdout = tail(stdout + text);
-    else stderr = tail(stderr + text);
+    if (stream === "stdout") stdout += text;
+    else stderr += text;
   };
   child.stdout.on("data", (chunk: Buffer) => append("stdout", chunk));
   child.stderr.on("data", (chunk: Buffer) => append("stderr", chunk));
@@ -203,8 +203,8 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
     ...(input.cwd ? { cwd: String(redact(input.cwd)) } : {}),
     exitCode: timedOut ? null : exitCode,
     durationMs: Date.now() - started,
-    stdout: tail(String(redact(stdout))),
-    stderr: tail(String(redact(stderr))),
+    stdout: String(redact(stdout)),
+    stderr: String(redact(stderr)),
     entries: redactedEntries.entries,
     startedAt,
     finishedAt: new Date().toISOString(),

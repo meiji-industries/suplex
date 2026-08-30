@@ -63,8 +63,8 @@ test("retains exact byte tails while streaming 100 MiB", { timeout: 15_000 }, as
 
   const result = await runCommand({ taskId: null, stepId: null, command: process.execPath, args: ["-e", script] });
 
-  expect(Buffer.byteLength(result.stdout)).toBe(8 * 1024);
-  expect(Buffer.byteLength(result.stderr)).toBe(8 * 1024);
+  expect(Buffer.byteLength(result.stdout)).toBe(bytesPerStream);
+  expect(Buffer.byteLength(result.stderr)).toBe(bytesPerStream);
   expect(result.entries.reduce((bytes, entry) => bytes + Buffer.byteLength(entry.text), 0)).toBe(8 * 1024);
   expect(lines.join("\n").length).toBeLessThan(2_048);
 });

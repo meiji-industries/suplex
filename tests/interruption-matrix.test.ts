@@ -57,6 +57,18 @@ async function integrateRemote(value: Awaited<ReturnType<typeof remoteFixture>>,
   } } : undefined);
 }
 
+const authorityObservationCommands = [
+  ["remote", "get-url", "origin"],
+  ["ls-remote", "origin", "refs/heads/forge/task"],
+  ["status", "--porcelain=v1", "--untracked-files=all"],
+  ["rev-parse", "HEAD"],
+];
+
+function expectOnlyAuthorityObservations(calls: string[][]): void {
+  expect(calls).toEqual(authorityObservationCommands);
+  expect(calls.filter(([command]) => command === "fetch" || command === "merge")).toEqual([]);
+}
+
 test("developer commits, then its completion message is lost", () => {
   const outcome = twice(facts(), live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "b".repeat(40) } }));
   expect(outcome).toMatchObject({ action: "advance", evidence: ["handoff:git " + "b".repeat(40)] });
@@ -133,7 +145,7 @@ test("remote branch integration is clean", async () => {
   expect(await integrateRemote(fastForward, remoteHead)).toMatchObject({ kind: "fast_forwarded", to: remoteHead });
   const fastForwardCalls: string[][] = [];
   await expect(integrateRemote(fastForward, remoteHead, fastForwardCalls)).resolves.toMatchObject({ kind: "fast_forwarded", to: remoteHead });
-  expect(fastForwardCalls).toEqual([["remote", "get-url", "origin"], ["ls-remote", "origin", "refs/heads/forge/task"], ["status", "--porcelain=v1", "--untracked-files=all"], ["rev-parse", "HEAD"]]);
+  expectOnlyAuthorityObservations(fastForwardCalls);
 
   const merged = await remoteFixture();
   await writeFile(join(merged.worktreePath, "LOCAL.md"), "local\n"); await git(merged.worktreePath, "add", "LOCAL.md"); await git(merged.worktreePath, "commit", "-m", "local");
@@ -143,7 +155,7 @@ test("remote branch integration is clean", async () => {
   expect(first).toMatchObject({ kind: "merged", remoteHead: divergedHead });
   const mergeCalls: string[][] = [];
   await expect(integrateRemote(merged, divergedHead, mergeCalls)).resolves.toEqual(first);
-  expect(mergeCalls).toEqual([["remote", "get-url", "origin"], ["ls-remote", "origin", "refs/heads/forge/task"], ["status", "--porcelain=v1", "--untracked-files=all"], ["rev-parse", "HEAD"]]);
+  expectOnlyAuthorityObservations(mergeCalls);
 });
 
 test("remote branch integration conflicts and auto-enters resolution", () => {

@@ -25,14 +25,11 @@ export function createProjectionActivities(ctx: ActivityContext): ProbeActivitie
       });
     },
     async projectIssueState(input: IssueProjectionEvent): Promise<IssueWorkflowState> {
-    // Projection is a cache: invalid or stale records are logged and skipped by
-    // ForgeDatabase, never surfaced as a Workflow task failure.
-    database.projectIssueEvent(input);
-    database.observeIssueProjection(input);
-    if (input.state.phase === "done" || input.state.phase === "cancelled") {
-      try { await reconcileHerdrSessions(database, undefined, input.state.issueId); } catch { logger.child(activityLogContext()).warn("Herdr session reconciliation failed", { taskId: input.state.issueId }); }
-    }
-    return input.state;
+      database.projectIssueEvent(input);
+      if (input.state.phase === "done" || input.state.phase === "cancelled") {
+        try { await reconcileHerdrSessions(database, undefined, input.state.issueId); } catch { logger.child(activityLogContext()).warn("Herdr session reconciliation failed", { taskId: input.state.issueId }); }
+      }
+      return input.state;
     },
     async recordDeliveryBlocker(input: DeliveryBlockerActivityInput): Promise<DeliveryBlockerActivityResult> {
       const summary = input.operation === "review" ? "The delivery review infrastructure did not complete; retry the review." : "The delivery repair infrastructure did not complete; retry the repair.";

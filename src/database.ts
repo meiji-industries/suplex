@@ -125,6 +125,17 @@ export class DatabaseMigrationFailure extends Error {
   }
 }
 
+export class ProjectionPersistenceFailure extends Error {
+  constructor(
+    readonly code: "invalid-input" | "identity-mismatch" | "not-durable" | "write-failed",
+    message: string,
+    cause?: unknown,
+  ) {
+    super(message, { cause });
+    this.name = "ProjectionPersistenceFailure";
+  }
+}
+
 function migrationFolder(): string {
   const candidates = [
     resolve(process.cwd(), "drizzle"),
@@ -452,14 +463,22 @@ export class ForgeDatabase {
     return operation(this.db);
   }
 
+  private projectionTransaction(label: string, operation: () => void): void {
+    try {
+      this.db.transaction(operation)();
+    } catch (error) {
+      if (error instanceof ProjectionPersistenceFailure) throw error;
+      throw new ProjectionPersistenceFailure("write-failed", `${label} failed`, error);
+    }
+  }
+
   private applyIssueProjection(database: Database.Database, parsed: IssueWorkflowState, updatedAt: string, runId: string): void {
     const stateHash = projectionStateHash(parsed);
     this.normalizeLegacyInitialProjection(database, parsed, stateHash);
     const eventType = parsed.phase === "backlog" ? "task_created" : parsed.phase === "planning" ? "planning_started" : `phase_${parsed.phase}`;
     const task = database.prepare("SELECT company_id, project_id, workflow_id FROM forge_tasks WHERE id = ?").get(parsed.issueId) as { company_id: string; project_id: string; workflow_id: string } | undefined;
     if (!task || task.company_id !== parsed.companyId || task.project_id !== parsed.projectId || task.workflow_id !== parsed.workflowId) {
-      projectionLogger.warn("Skipping projection with task identity that no longer matches");
-      return;
+      throw new ProjectionPersistenceFailure("identity-mismatch", "Workflow projection task identity does not match");
     }
     let eventById = database.prepare("SELECT workflow_id, revision, event_hash FROM forge_issue_timeline WHERE id = ? AND source = 'workflow'").get(parsed.lastEventId) as { workflow_id: string; revision: number; event_hash: string } | undefined;
     let eventByRevision = database.prepare("SELECT id, event_hash FROM forge_issue_timeline WHERE workflow_id = ? AND revision = ? AND source = 'workflow'").get(parsed.workflowId, parsed.revision) as { id: string; event_hash: string } | undefined;
@@ -509,19 +528,33 @@ export class ForgeDatabase {
     if (!snapshot) database.prepare(`INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, run_id, revision, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(parsed.issueId, parsed.companyId, parsed.workflowId, runId, parsed.revision, JSON.stringify(parsed), updatedAt);
     // Snapshots are a bounded history: keep revision 0 (the creation record) and the newest 50. A hot loop once grew one task to 2.7M rows.
     database.prepare("DELETE FROM forge_workflow_snapshots WHERE task_id = ? AND revision > 0 AND revision <= ?").run(parsed.issueId, parsed.revision - 50);
-    const authoritativeRevision = parsed.revision;
-    const authoritativeEventHash = stateHash;
-    const projectionStatus = "current";
-    database.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, authoritative_event_hash, projected_at, blocker_json, state_changed_at, projection_status, reconciled_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, project_id = excluded.project_id, workflow_id = excluded.workflow_id, revision = excluded.revision, phase = excluded.phase, owner = excluded.owner, allowed_commands_json = excluded.allowed_commands_json, pending_action = excluded.pending_action, updated_at = excluded.updated_at, last_event_id = excluded.last_event_id, event_hash = excluded.event_hash, authoritative_revision = excluded.authoritative_revision, authoritative_event_hash = excluded.authoritative_event_hash, projected_at = excluded.projected_at, blocker_json = excluded.blocker_json, state_changed_at = excluded.state_changed_at, projection_status = excluded.projection_status, projection_status_message = NULL, reconciled_at = excluded.reconciled_at
+    database.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, projected_at, blocker_json, state_changed_at, projection_status, reconciled_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, project_id = excluded.project_id, workflow_id = excluded.workflow_id, revision = excluded.revision, phase = excluded.phase, owner = excluded.owner, allowed_commands_json = excluded.allowed_commands_json, pending_action = excluded.pending_action, updated_at = excluded.updated_at, last_event_id = excluded.last_event_id, event_hash = excluded.event_hash, projected_at = excluded.projected_at, blocker_json = excluded.blocker_json, state_changed_at = excluded.state_changed_at, projection_status = excluded.projection_status, projection_status_message = NULL, reconciled_at = excluded.reconciled_at
       `).run(
-      parsed.issueId, parsed.companyId, parsed.projectId, parsed.workflowId, parsed.revision, parsed.phase, parsed.owner, JSON.stringify(parsed.allowedCommands), parsed.pendingAction, updatedAt, parsed.lastEventId, stateHash, authoritativeRevision, authoritativeEventHash, updatedAt, parsed.blocker === undefined ? null : JSON.stringify(parsed.blocker), parsed.stateChangedAt ?? null, projectionStatus, updatedAt,
+      parsed.issueId, parsed.companyId, parsed.projectId, parsed.workflowId, parsed.revision, parsed.phase, parsed.owner, JSON.stringify(parsed.allowedCommands), parsed.pendingAction, updatedAt, parsed.lastEventId, stateHash, updatedAt, parsed.blocker === undefined ? null : JSON.stringify(parsed.blocker), parsed.stateChangedAt ?? null, "current", updatedAt,
     );
     database.prepare("UPDATE forge_issue_projections SET last_run_id = ? WHERE task_id = ?").run(runId, parsed.issueId);
     if (parsed.phase === "done" && parsed.resultCommit && (parsed.pendingAction === "Done — kept in worktree" || parsed.pendingAction === "Done — branch pushed")) {
       database.prepare("UPDATE forge_tasks SET delivery_worktree_path = ?, delivery_branch_name = ?, delivery_commit = ?, updated_at = ? WHERE id = ? AND company_id = ?").run(parsed.worktreePath ?? null, parsed.branchName ?? null, parsed.resultCommit, updatedAt, parsed.issueId, parsed.companyId);
     }
+  }
+
+  private applyIssueProjectionObservation(database: Database.Database, parsed: IssueWorkflowState, runId: string): void {
+    const task = database.prepare("SELECT company_id, project_id, workflow_id FROM forge_tasks WHERE id = ?").get(parsed.issueId) as { company_id: string; project_id: string; workflow_id: string } | undefined;
+    if (!task || task.company_id !== parsed.companyId || task.project_id !== parsed.projectId || task.workflow_id !== parsed.workflowId) {
+      throw new ProjectionPersistenceFailure("identity-mismatch", "Workflow projection observation task identity does not match");
+    }
+    const stateHash = projectionStateHash(parsed);
+    const current = database.prepare("SELECT revision, event_hash, last_event_id, last_run_id FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string; last_event_id: string; last_run_id: string | null } | undefined;
+    if (!current
+      || current.revision !== parsed.revision
+      || current.event_hash !== stateHash
+      || current.last_event_id !== parsed.lastEventId
+      || current.last_run_id !== runId) {
+      throw new ProjectionPersistenceFailure("not-durable", "Workflow projection observation has no matching durable projection");
+    }
+    database.prepare("UPDATE forge_issue_projections SET authoritative_revision = ?, authoritative_event_hash = ? WHERE task_id = ?").run(parsed.revision, stateHash, parsed.issueId);
   }
 
   private normalizeLegacyInitialProjection(database: Database.Database, parsed: IssueWorkflowState, stateHash: string): void {
@@ -564,38 +597,37 @@ export class ForgeDatabase {
   }
 
   observeIssueProjection(event: IssueProjectionEvent): void {
-    const parsed = IssueProjectionEventSchema.safeParse(event);
-    if (!parsed.success) {
-      projectionLogger.warn("Skipping invalid workflow projection observation");
-      return;
+    const validated = IssueProjectionEventSchema.safeParse(event);
+    if (!validated.success) {
+      throw new ProjectionPersistenceFailure("invalid-input", "Workflow projection observation failed schema validation", validated.error);
     }
-    const validated = parsed.data;
-    const stateHash = projectionStateHash(validated.state);
-    this.db.transaction(() => {
-      const task = this.db.prepare("SELECT company_id, project_id, workflow_id FROM forge_tasks WHERE id = ?").get(validated.state.issueId) as { company_id: string; project_id: string; workflow_id: string } | undefined;
-      if (!task || task.company_id !== validated.state.companyId || task.project_id !== validated.state.projectId || task.workflow_id !== validated.state.workflowId) {
-        projectionLogger.warn("Skipping workflow projection observation with mismatched task identity");
-        return;
-      }
-      const current = this.db.prepare("SELECT authoritative_revision, authoritative_event_hash FROM forge_issue_projections WHERE task_id = ?").get(validated.state.issueId) as { authoritative_revision: number; authoritative_event_hash: string } | undefined;
-      if (current && current.authoritative_revision <= validated.state.revision) this.db.prepare("UPDATE forge_issue_projections SET authoritative_revision = ?, authoritative_event_hash = ? WHERE task_id = ?").run(validated.state.revision, stateHash, validated.state.issueId);
-    })();
+    this.projectionTransaction("Workflow projection observation", () => {
+      this.applyIssueProjectionObservation(this.db, validated.data.state, validated.data.runId);
+    });
   }
 
   projectIssueEvent(event: IssueProjectionEvent): void {
     const validated = IssueProjectionEventSchema.safeParse(event);
     if (!validated.success) {
-      projectionLogger.warn("Skipping invalid workflow projection event");
-      return;
+      throw new ProjectionPersistenceFailure("invalid-input", "Workflow projection event failed schema validation", validated.error);
     }
-    try {
-      this.db.transaction(() => this.applyIssueProjection(this.db, validated.data.state, new Date().toISOString(), validated.data.runId))();
-    } catch (error) {
-      projectionLogger.warn("Workflow projection write failed", {}, { error: error instanceof Error ? error.message : String(error) });
-    }
+    this.projectionTransaction("Workflow projection event write", () => {
+      this.applyIssueProjection(this.db, validated.data.state, new Date().toISOString(), validated.data.runId);
+      this.applyIssueProjectionObservation(this.db, validated.data.state, validated.data.runId);
+    });
   }
 
   projectIssueState(state: IssueProjectionRecord): void {
+    if (state.state && (
+      (state.state.issueId !== undefined && state.state.issueId !== state.taskId)
+      || (state.state.companyId !== undefined && state.state.companyId !== state.companyId)
+      || (state.state.projectId !== undefined && state.state.projectId !== state.projectId)
+      || (state.state.workflowId !== undefined && state.state.workflowId !== state.workflowId)
+      || (state.state.revision !== undefined && state.state.revision !== state.revision)
+      || (state.state.lastEventId !== undefined && state.state.lastEventId !== state.lastEventId)
+    )) {
+      throw new ProjectionPersistenceFailure("identity-mismatch", "Workflow state projection identity does not match its state");
+    }
     const parsed = IssueWorkflowStateSchema.safeParse({
       ...(state.state ?? {}),
       issueId: state.taskId,
@@ -611,32 +643,40 @@ export class ForgeDatabase {
       ...(state.projectRevisionId ? { projectRevisionId: state.projectRevisionId } : {}),
     });
     if (!parsed.success) {
-      projectionLogger.warn("Skipping invalid workflow state projection");
-      return;
+      throw new ProjectionPersistenceFailure("invalid-input", "Workflow state projection failed schema validation", parsed.error);
     }
-    try {
-      this.db.transaction(() => this.applyIssueProjection(this.db, parsed.data, new Date().toISOString(), state.runId ?? parsed.data.workflowId))();
-    } catch (error) {
-      projectionLogger.warn("Workflow state projection write failed", {}, { error: error instanceof Error ? error.message : String(error) });
-    }
+    const runId = state.runId ?? parsed.data.workflowId;
+    this.projectionTransaction("Workflow state projection write", () => {
+      this.applyIssueProjection(this.db, parsed.data, new Date().toISOString(), runId);
+      this.applyIssueProjectionObservation(this.db, parsed.data, runId);
+    });
   }
 
   replaceIssueProjectionFromEvents(taskId: string, events: IssueProjectionEvent[]): void {
-    const validated = events.map((event) => IssueProjectionEventSchema.safeParse(event)).filter((event): event is { success: true; data: IssueProjectionEvent } => event.success).map((event) => event.data).sort((left, right) => left.state.revision - right.state.revision);
-    if (validated.length === 0 || validated.some((event) => event.state.issueId !== taskId)) {
-      projectionLogger.warn("Skipping projection rebuild with invalid or mismatched events");
-      return;
+    const validated: IssueProjectionEvent[] = [];
+    for (const event of events) {
+      const parsed = IssueProjectionEventSchema.safeParse(event);
+      if (!parsed.success) {
+        throw new ProjectionPersistenceFailure("invalid-input", "Projection rebuild event failed schema validation", parsed.error);
+      }
+      validated.push(parsed.data);
     }
-    try {
-      this.db.transaction(() => {
-        this.db.prepare("DELETE FROM forge_issue_projections WHERE task_id = ?").run(taskId);
-        this.db.prepare("DELETE FROM forge_issue_timeline WHERE task_id = ?").run(taskId);
-        this.db.prepare("DELETE FROM forge_workflow_snapshots WHERE task_id = ?").run(taskId);
-        for (const event of validated) this.applyIssueProjection(this.db, event.state, new Date().toISOString(), event.runId);
-      })();
-    } catch (error) {
-      projectionLogger.warn("Projection rebuild write failed", {}, { error: error instanceof Error ? error.message : String(error) });
+    if (validated.length === 0) {
+      throw new ProjectionPersistenceFailure("invalid-input", "Projection rebuild requires at least one event");
     }
+    if (validated.some((event) => event.state.issueId !== taskId)) {
+      throw new ProjectionPersistenceFailure("identity-mismatch", "Projection rebuild task identity does not match");
+    }
+    validated.sort((left, right) => left.state.revision - right.state.revision);
+    this.projectionTransaction("Projection rebuild write", () => {
+      this.db.prepare("DELETE FROM forge_issue_projections WHERE task_id = ?").run(taskId);
+      this.db.prepare("DELETE FROM forge_issue_timeline WHERE task_id = ?").run(taskId);
+      this.db.prepare("DELETE FROM forge_workflow_snapshots WHERE task_id = ?").run(taskId);
+      for (const event of validated) {
+        this.applyIssueProjection(this.db, event.state, new Date().toISOString(), event.runId);
+        this.applyIssueProjectionObservation(this.db, event.state, event.runId);
+      }
+    });
   }
 
   schemaStatus(): SchemaStatus {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase, projectionStateHash } from "../src/database.js";
+import { ForgeDatabase, ProjectionPersistenceFailure, projectionStateHash } from "../src/database.js";
 import { createActivityContext } from "../src/engine/activities/context.js";
 import { createProjectionActivities } from "../src/engine/activities/projection.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueProjectionEvent } from "../src/engine/issue-contracts.js";
@@ -46,6 +46,14 @@ function fixture(database: ForgeDatabase): void {
   });
 }
 
+function durableProjection(database: ForgeDatabase): unknown {
+  return database.authQuery((db) => ({
+    projection: db.prepare("SELECT revision, pending_action, last_event_id, event_hash, authoritative_revision, authoritative_event_hash FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"),
+    timeline: db.prepare("SELECT revision, event_hash FROM forge_issue_timeline WHERE task_id = ? ORDER BY stream_id").all("task-integrity"),
+    snapshots: db.prepare("SELECT revision, state_json FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision").all("task-integrity"),
+  }));
+}
+
 test("stale projections do not write and re-issued events replace their state", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-projection-integrity-test-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
@@ -53,7 +61,6 @@ test("stale projections do not write and re-issued events replace their state", 
     fixture(database);
     const initial = createEvent(0, "backlog", "workflow-integrity:0");
     const planning = createEvent(1, "planning", "workflow-integrity:1");
-    database.observeIssueProjection(planning);
     database.projectIssueEvent(planning);
     database.projectIssueEvent(initial);
     expect(database.authQuery((db) => db.prepare("SELECT authoritative_revision, length(authoritative_event_hash) AS hash_length FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ authoritative_revision: 0, hash_length: 64 });
@@ -116,15 +123,119 @@ test("records one timeline row for repeated observations of a phase", async () =
   }
 });
 
-test("invalid projection cache input is warned and never fails the workflow activity", async () => {
+test("projection activity rejects invalid schema and preserves prior authority", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-projection-invalid-test-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   try {
     fixture(database);
     const projection = createProjectionActivities(createActivityContext(database, createTestConfig(root)));
+    await projection.projectIssueState(createEvent(0, "backlog", "workflow-integrity:0"));
+    const before = durableProjection(database);
     const invalid = { schemaVersion: 1, runId: "run-integrity", eventId: "workflow-integrity:bad", state: { issueId: "task-integrity" } } as unknown as IssueProjectionEvent;
-    await expect(projection.projectIssueState(invalid)).resolves.toEqual(invalid.state);
-    expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ count: 0 });
+
+    const rejection = projection.projectIssueState(invalid);
+    await expect(rejection).rejects.toBeInstanceOf(ProjectionPersistenceFailure);
+    await expect(rejection).rejects.toMatchObject({ code: "invalid-input" });
+    expect(durableProjection(database)).toEqual(before);
+    expect(() => database.observeIssueProjection(invalid)).toThrow(ProjectionPersistenceFailure);
+    expect(durableProjection(database)).toEqual(before);
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("projection activity rejects task identity mismatch and preserves prior authority", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-projection-identity-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    const projection = createProjectionActivities(createActivityContext(database, createTestConfig(root)));
+    await projection.projectIssueState(createEvent(0, "backlog", "workflow-integrity:0"));
+    const before = durableProjection(database);
+    const mismatched = createEvent(1, "planning", "workflow-integrity:1");
+    mismatched.state.companyId = "company-other";
+
+    const rejection = projection.projectIssueState(mismatched);
+    await expect(rejection).rejects.toBeInstanceOf(ProjectionPersistenceFailure);
+    await expect(rejection).rejects.toMatchObject({ code: "identity-mismatch" });
+    expect(durableProjection(database)).toEqual(before);
+    expect(() => database.observeIssueProjection(mismatched)).toThrow(ProjectionPersistenceFailure);
+    expect(durableProjection(database)).toEqual(before);
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("projection activity rejects a SQLite transaction failure and rolls back every projection row", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-projection-transaction-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    const projection = createProjectionActivities(createActivityContext(database, createTestConfig(root)));
+    await projection.projectIssueState(createEvent(0, "backlog", "workflow-integrity:0"));
+    const before = durableProjection(database);
+    const planning = createEvent(1, "planning", "workflow-integrity:1");
+    database.authQuery((db) => db.exec(`CREATE TRIGGER fail_projection_snapshot
+      BEFORE INSERT ON forge_workflow_snapshots
+      WHEN NEW.task_id = 'task-integrity' AND NEW.revision = 1
+      BEGIN SELECT RAISE(ABORT, 'injected projection failure'); END`));
+
+    const rejection = projection.projectIssueState(planning);
+    await expect(rejection).rejects.toBeInstanceOf(ProjectionPersistenceFailure);
+    await expect(rejection).rejects.toMatchObject({ code: "write-failed" });
+    expect(durableProjection(database)).toEqual(before);
+    database.authQuery((db) => db.exec("DROP TRIGGER fail_projection_snapshot"));
+    expect(() => database.observeIssueProjection(planning)).toThrow(ProjectionPersistenceFailure);
+    expect(durableProjection(database)).toEqual(before);
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("projection activity rolls back durable rows when observation metadata fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-projection-observation-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    const projection = createProjectionActivities(createActivityContext(database, createTestConfig(root)));
+    await projection.projectIssueState(createEvent(0, "backlog", "workflow-integrity:0"));
+    const before = durableProjection(database);
+    const planning = createEvent(1, "planning", "workflow-integrity:1");
+    database.authQuery((db) => db.exec(`CREATE TRIGGER fail_projection_observation
+      BEFORE UPDATE OF authoritative_revision, authoritative_event_hash ON forge_issue_projections
+      WHEN NEW.task_id = 'task-integrity' AND NEW.authoritative_revision = 1
+      BEGIN SELECT RAISE(ABORT, 'injected observation failure'); END`));
+
+    const rejection = projection.projectIssueState(planning);
+    await expect(rejection).rejects.toBeInstanceOf(ProjectionPersistenceFailure);
+    await expect(rejection).rejects.toMatchObject({ code: "write-failed" });
+    expect(durableProjection(database)).toEqual(before);
+    database.authQuery((db) => db.exec("DROP TRIGGER fail_projection_observation"));
+    expect(() => database.observeIssueProjection(planning)).toThrow(ProjectionPersistenceFailure);
+    expect(durableProjection(database)).toEqual(before);
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("valid projection activity replay and observation are idempotent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-projection-replay-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    const projection = createProjectionActivities(createActivityContext(database, createTestConfig(root)));
+    await projection.projectIssueState(createEvent(0, "backlog", "workflow-integrity:0"));
+    const planning = createEvent(1, "planning", "workflow-integrity:1");
+    await expect(projection.projectIssueState(planning)).resolves.toEqual(planning.state);
+    const projected = durableProjection(database);
+
+    await expect(projection.projectIssueState(planning)).resolves.toEqual(planning.state);
+    expect(() => database.observeIssueProjection(planning)).not.toThrow();
+    expect(durableProjection(database)).toEqual(projected);
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });

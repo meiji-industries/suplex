@@ -204,10 +204,11 @@ export class IssueRun {
       if (stored) return Promise.resolve(IssueWorkflowStateSchema.parse(jsonRequired(stored.result_json)));
     }
     this.start();
-    const interruptible = this.interrupts.has(name);
-    const interruptKey = interruptible && commandId !== "legacy-command" ? commandId : undefined;
+    const registeredInterrupt = this.interrupts.get(name);
+    const coalesceKey = registeredInterrupt?.coalesceKey?.(input);
+    const interruptKey = coalesceKey ?? (registeredInterrupt && commandId !== "legacy-command" ? `command\u0000${commandId}` : undefined);
     let interrupt = interruptKey ? this.interrupting.get(interruptKey) : undefined;
-    if (interruptible && !interrupt) {
+    if (registeredInterrupt && !interrupt) {
       interrupt = this.runInterrupt(name, input);
       if (interruptKey) this.interrupting.set(interruptKey, interrupt);
     }

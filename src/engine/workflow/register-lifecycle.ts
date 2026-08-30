@@ -50,6 +50,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     if (!executionId || !["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling"].includes(ctx.state.developerRecoveryStatus ?? "")) return undefined;
     return cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId }).then((result) => ({ executionId, result }));
   };
+  const developerCancellationKey = (): string | undefined => ctx.state.developerExecutionId ? `developer-cancellation:${ctx.state.revision}:${ctx.state.developerExecutionId}` : undefined;
   const acceptedDeveloperCancellation = (name: string, executionId: string): DeveloperCancellationResult | undefined => {
     const execution = runExecution.current();
     if (execution.acceptedInterrupt !== name || execution.interruptResult === undefined) return undefined;
@@ -59,6 +60,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
   };
   setInterruptHandler(issueUpdates.cancel_issue, {
     cancelActive: true,
+    coalesceKey: developerCancellationKey,
     validate: (rawInput: unknown) => {
       PlanCommandInputSchema.parse(rawInput);
       if (TERMINAL_PHASES.has(ctx.state.phase)) throw new Error("Issue cancellation is not available in the current phase");
@@ -119,6 +121,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
   }));
   setInterruptHandler(issueUpdates.cancel_development, {
     cancelActive: true,
+    coalesceKey: developerCancellationKey,
     validate: (rawInput: unknown) => {
       const command = StartPlanningInputSchema.parse(rawInput);
       if (ctx.commandAlreadyProcessed(command.commandId)) return false;

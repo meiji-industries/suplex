@@ -10,6 +10,7 @@ interface HandlerValidationInput {
 }
 export interface InterruptHandler {
   cancelActive?: boolean;
+  coalesceKey?: (input: unknown) => string | undefined;
   validate?: Handler;
   run?: Handler;
 }

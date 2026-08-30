@@ -251,6 +251,76 @@ test("development cancellation invokes the cancel hook before held completion", 
   }
 });
 
+test("cancellation interrupts coalesce by target across command IDs and types", async () => {
+  const releaseInterrupts = deferred<void>();
+  const bothTargetsInterrupted = deferred<void>();
+  const cancellationCalls: string[] = [];
+  const harness = await createEngineHarness({
+    projectIssueState: async (event) => event.state,
+    cancelDeveloperExecution: async (input) => {
+      cancellationCalls.push(input.executionId);
+      if (cancellationCalls.length >= 2) bothTargetsInterrupted.resolve(undefined);
+      await releaseInterrupts.promise;
+      return { status: "cancelled_confirmed", executionId: input.executionId, exitCode: null, exitSignal: null, evidenceArtifactId: null };
+    },
+  });
+  const activeInput = (issueId: string, executionId: string) => {
+    const workflowId = harness.workflowId(issueId);
+    return workflowInput(issueId, {
+      ...buildInitialIssueWorkflowState({ workflowId, ...workflowInput(issueId) }),
+      phase: "development" as const,
+      revision: 3,
+      owner: "lead" as const,
+      allowedCommands: ["cancel_development" as const, "cancel_issue" as const],
+      pendingAction: "Developer execution",
+      lastEventId: `${workflowId}:3`,
+      planRevision: 1,
+      planMaterial: true,
+      planApproved: true,
+      developerExecutionId: executionId,
+      developerAttempt: 1,
+      developerRecoveryStatus: "active" as const,
+    });
+  };
+  const firstIssueId = "interrupt-target-a";
+  const secondIssueId = "interrupt-target-b";
+  harness.seedTask(firstIssueId);
+  harness.seedTask(secondIssueId);
+  try {
+    const firstRun = await startIssueWorkflow(harness.config, activeInput(firstIssueId, "developer-target-a"));
+    const secondRun = await startIssueWorkflow(harness.config, activeInput(secondIssueId, "developer-target-b"));
+    const firstActive = await queryIssueWorkflow(harness.config, firstRun.workflowId);
+    const secondActive = await queryIssueWorkflow(harness.config, secondRun.workflowId);
+    const firstCommand = { expectedRevision: firstActive.revision, actorUserId: engineFixture.actorUserId, commandId: "cancel-target-a-first" };
+    const duplicateCommand = { ...firstCommand, commandId: "cancel-target-a-duplicate" };
+    const issueCommand = { ...firstCommand, commandId: "cancel-target-a-issue" };
+    const distinctCommand = { expectedRevision: secondActive.revision, actorUserId: engineFixture.actorUserId, commandId: "cancel-target-b" };
+
+    const firstCancellation = executeIssueCommand(harness.config, firstRun.workflowId, "cancel_development", firstCommand);
+    const duplicateCancellation = executeIssueCommand(harness.config, firstRun.workflowId, "cancel_development", duplicateCommand);
+    const issueCancellation = executeIssueCommand(harness.config, firstRun.workflowId, "cancel_issue", issueCommand);
+    const distinctCancellation = executeIssueCommand(harness.config, secondRun.workflowId, "cancel_development", distinctCommand);
+    await bothTargetsInterrupted.promise;
+    releaseInterrupts.resolve(undefined);
+    const [firstResult, duplicateResult, issueResult, distinctResult] = await Promise.all([firstCancellation, duplicateCancellation, issueCancellation, distinctCancellation]);
+
+    expect([...cancellationCalls].sort()).toEqual(["developer-target-a", "developer-target-b"]);
+    expect(firstResult).toMatchObject({ phase: "delivery_blocked", developerRecoveryStatus: "cancelled" });
+    expect(duplicateResult).toMatchObject({ phase: "delivery_blocked", developerRecoveryStatus: "cancelled", lastHandlerError: { reason: "Developer cancellation was superseded by another command" } });
+    expect(issueResult).toMatchObject({ phase: "cancelled" });
+    expect(distinctResult).toMatchObject({ phase: "delivery_blocked", developerRecoveryStatus: "cancelled" });
+    expect(await executeIssueCommand(harness.config, firstRun.workflowId, "cancel_development", firstCommand)).toEqual(firstResult);
+    expect(await executeIssueCommand(harness.config, firstRun.workflowId, "cancel_development", duplicateCommand)).toEqual(duplicateResult);
+    expect(await executeIssueCommand(harness.config, firstRun.workflowId, "cancel_issue", issueCommand)).toEqual(issueResult);
+    expect(await executeIssueCommand(harness.config, secondRun.workflowId, "cancel_development", distinctCommand)).toEqual(distinctResult);
+    expect(cancellationCalls).toHaveLength(2);
+    for (const command of [firstCommand, duplicateCommand, issueCommand, distinctCommand]) expect(commandReceiptCount(harness, command.commandId)).toBe(1);
+  } finally {
+    releaseInterrupts.resolve(undefined);
+    await harness.stop();
+  }
+});
+
 test("concurrent duplicate planner notes interrupt once and mutate state only after the active turn", async () => {
   const planning = deferred<LeadPlanningResult>();
   const planningStarted = deferred<void>();

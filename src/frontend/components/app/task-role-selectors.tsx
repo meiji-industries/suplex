@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import type { DeliveryTarget } from "../../../tasks.js";
 import type { ApiAgent } from "../../lib/view-shared.js";
 import { Button } from "../ui/button.js";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
 import { ProfileAvatar } from "./profile-avatar.js";
 
 export type TaskAgentRole = ApiAgent["role"];
@@ -48,10 +48,11 @@ function TaskRoleSelector({ role, agents, assignment, disabled, disabledReason: 
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button type="button" variant="outline" size="sm" aria-label={accessibleLabel} disabled={disabled} title={reason} />}>
         {selectedAgent ? <ProfileAvatar name={selectedAgent.name} seed={selectedAgent.avatarSeed} size="xs" /> : null}
-        {label}
+        {selectedAgent ? selectedAgent.name : label}
         <ChevronDown />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
+        <DropdownMenuLabel>{label}</DropdownMenuLabel>
         <DropdownMenuRadioGroup value={assignment ?? ""} onValueChange={onChange}>
           {role === "builder" ? null : <DropdownMenuRadioItem value="">None</DropdownMenuRadioItem>}
           {availableAgents.map((agent) => (

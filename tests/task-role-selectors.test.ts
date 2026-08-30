@@ -42,4 +42,21 @@ describe("task role selectors", () => {
     expect(taskRoleDisabled("planner", "local_worktree", false)).toBe(false);
     expect(taskRoleDisabled("builder", "local_worktree", false)).toBe(false);
   });
+
+  it("shows the agent name in the trigger when assigned, and the role label when not", () => {
+    const agents = (["planner", "reviewer", "builder", "integrator"] as const).map((role) => ({
+      ...agent(role),
+      name: role === "planner" ? "Fable Planner" : role[0]!.toUpperCase() + role.slice(1),
+    }));
+    const props = { deliveryTarget: "pull_request_draft", supplementalReview: true, busy: false, onChange: () => undefined } as const;
+    const assignedHtml = renderToStaticMarkup(createElement(TaskRoleSelectors, { agents, assignments: Object.fromEntries(agents.map((candidate) => [candidate.role, candidate.id])), ...props }));
+    expect(assignedHtml).toContain(">Fable Planner<");
+
+    const unassignedHtml = renderToStaticMarkup(createElement(TaskRoleSelectors, { agents, assignments: {}, ...props }));
+    expect(unassignedHtml).toContain("Planner");
+    expect(unassignedHtml).toContain("Reviewer");
+    expect(unassignedHtml).toContain("Builder");
+    expect(unassignedHtml).toContain("Integrator");
+    expect(unassignedHtml).not.toContain("Fable Planner");
+  });
 });

@@ -39,7 +39,7 @@ export type AgentResponse = z.infer<typeof AgentResponseSchema>;
 
 export const ProjectRepositoryBodySchema = z.object({
   repositoryUrl: z.string().default(""),
-});
+}).strict();
 
 export const ProjectCreateBodySchema = z.union([ProjectRepositoryBodySchema, ProjectBodySchema]);
 

@@ -10,7 +10,6 @@ import { ForgeDatabase } from "../src/database.js";
 import { ProjectService, effectiveProfileCapacity, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { AgentProviderKind } from "../src/agent-providers/provider.js";
 import type { GithubAdapter } from "../src/github.js";
-import { jsonRequired } from "../src/task-utils.js";
 
 interface Fixture {
   root: string;
@@ -49,7 +48,7 @@ async function fixture(): Promise<Fixture> {
   database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin-1', 'Admin', 'admin@forge.local', 'admin', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run());
   const config = createTestConfig(root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot, worktreeRoot });
   const auth = new AuthService(database, config);
-  const projects = new ProjectService(database, auth, config, { localRepository, github });
+  const projects = new ProjectService(database, auth, config, { localRepository, github, validateProjectConfiguration: true });
   const company = auth.createCompany("admin-1", "Acme");
   const profile = projects.createProfile("admin-1", { name: "Default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const planner = projects.createAgent("admin-1", { name: "Planner", role: "planner", profileId: profile.id });
@@ -198,27 +197,23 @@ test("clones a GitHub repository under the configured Forge roots", async () => 
   }
 });
 
-test.skip("keeps an active project active while saving configuration history", async () => {
+test("keeps saved project changes live without mutating prior configuration values", async () => {
   const value = await fixture();
   try {
-    const draft = await value.projects.createProject(value.adminId, value.companyId, input(value));
-    expect(draft.status).toBe("draft");
-    const active = await value.projects.activateProject(value.adminId, draft.id);
-    expect(active.status).toBe("active");
-    expect(active.configurationRevision).toBe(1);
-    expect(active.configurationIdentity).toMatch(/^[a-f0-9]{64}$/);
-    expect(active.baseSha).toBe("a".repeat(40));
-    expect(active.targetSha).toBe("b".repeat(40));
-    const unchanged = await value.projects.updateProject(value.adminId, draft.id, input(value));
-    expect(unchanged.status).toBe("active");
-    expect(unchanged.configurationRevision).toBe(1);
-    const changed = await value.projects.updateProject(value.adminId, draft.id, input(value, { targetBranch: "release" }));
-    expect(changed.status).toBe("active");
-    expect(changed.configurationRevision).toBe(2);
-    const revisions = value.database.authQuery((db) => db.prepare("SELECT revision, identity, normalized_json FROM forge_project_revisions WHERE project_id = ? ORDER BY revision").all(draft.id) as Array<{ revision: number; identity: string; normalized_json: string }>);
-    expect(revisions).toHaveLength(2);
-    expect(revisions[0]?.normalized_json).not.toContain("token");
-    expect(jsonRequired(revisions[0]?.normalized_json ?? "{}")).toMatchObject({ baseSha: "a".repeat(40), targetSha: "b".repeat(40) });
+    const original = await value.projects.createProject(value.adminId, value.companyId, input(value));
+    expect(original).not.toHaveProperty("status");
+    expect(original.targetBranch).toBe("main");
+    const unchanged = await value.projects.updateProject(value.adminId, original.id, input(value));
+    expect(unchanged.targetBranch).toBe("main");
+    const changed = await value.projects.updateProject(value.adminId, original.id, input(value, { targetBranch: "release" }));
+    expect(changed.targetBranch).toBe("release");
+    expect(value.projects.getProject(value.adminId, original.id).targetBranch).toBe("release");
+    expect(original.targetBranch).toBe("main");
+    expect(unchanged.targetBranch).toBe("main");
+    const history = value.database.authQuery((db) => db.prepare("SELECT action, metadata_json FROM forge_audit_events WHERE company_id = ? AND action IN ('project_created', 'project_updated')").all(value.companyId) as Array<{ action: string; metadata_json: string }>);
+    expect(history.filter((event) => event.action === "project_created")).toHaveLength(1);
+    expect(history.filter((event) => event.action === "project_updated")).toHaveLength(2);
+    expect(history.every((event) => event.metadata_json.includes(original.id))).toBe(true);
   } finally {
     await close(value);
   }
@@ -234,7 +229,7 @@ test("accepts free-form project commands and rejects secret-shaped commands", as
   }
 });
 
-test.skip("rejects traversal, symlink ambiguity, and invalid branches with typed redacted findings", async () => {
+test("rejects traversal, symlink ambiguity, and invalid branches with typed redacted findings", async () => {
   const value = await fixture();
   const outside = join(value.root, "outside");
   const symlinkPath = join(value.root, "repositories", "link");
@@ -248,8 +243,7 @@ test.skip("rejects traversal, symlink ambiguity, and invalid branches with typed
     const invalidChecksWorktree = join(value.worktreeRoot, "invalid-checks");
     await mkdir(invalidChecksRepository, { recursive: true });
     await mkdir(invalidChecksWorktree, { recursive: true });
-    const invalidChecks = await value.projects.createProject(value.adminId, value.companyId, input(value, { name: "Invalid checks", repositoryPath: invalidChecksRepository, worktreeRoot: invalidChecksWorktree, repository: "acme/invalid-checks", requiredChecks: [] }));
-    await expect(value.projects.activateProject(value.adminId, invalidChecks.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "invalid-check" })]) });
+    await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { name: "Invalid checks", repositoryPath: invalidChecksRepository, worktreeRoot: invalidChecksWorktree, repository: "acme/invalid-checks", requiredChecks: [] }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "invalid-check" })]) });
     expect(() => value.projects.createProfile(value.adminId, { name: "Secret profile", model: "ghp_should-not-persist", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 })).toThrowError("Profile configuration is invalid");
     expect(() => value.projects.createProfile(value.adminId, { name: "Invalid capacity", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 0 })).toThrowError("Profile configuration is invalid");
   } finally {
@@ -257,15 +251,16 @@ test.skip("rejects traversal, symlink ambiguity, and invalid branches with typed
   }
 });
 
-test.skip("fails closed for provider mismatch, unavailable agents, and cross-company project access", async () => {
+test("fails closed for provider mismatch, unavailable agents, and cross-company project access", async () => {
   const value = await fixture();
   try {
     const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
     const mismatched = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
       localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "other/repo", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } },
       github,
+      validateProjectConfiguration: true,
     });
-    await expect(mismatched.activateProject(value.adminId, project.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "repository-mismatch" })]) });
+    await expect(mismatched.updateProject(value.adminId, project.id, input(value))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "repository-mismatch" })]) });
     const unavailableRepository = join(value.root, "repositories", "unavailable");
     const unavailableWorktree = join(value.worktreeRoot, "unavailable");
     await mkdir(unavailableRepository, { recursive: true });
@@ -283,25 +278,30 @@ test.skip("fails closed for provider mismatch, unavailable agents, and cross-com
     await expect(value.projects.updateProject("member-1", project.id, input(value))).rejects.toMatchObject({ publicMessage: "Not found" });
     await expect(value.projects.activateProject("member-1", project.id)).rejects.toMatchObject({ publicMessage: "Not found" });
     value.auth.setCompanyStatus(value.adminId, value.companyId, "paused");
-    await expect(value.projects.activateProject(value.adminId, project.id)).rejects.toMatchObject({ publicMessage: "Project activation failed", findings: expect.arrayContaining([expect.objectContaining({ code: "company-inactive" })]) });
+    await expect(value.projects.updateProject(value.adminId, project.id, input(value))).rejects.toMatchObject({ publicMessage: "Company is not active", findings: expect.arrayContaining([expect.objectContaining({ code: "company-inactive" })]) });
   } finally {
     await close(value);
   }
 });
 
 
-test.skip("rejects GitHub provider URL with wrong hostname or path", async () => {
+test("rejects GitHub provider URL with wrong hostname or path", async () => {
   const value = await fixture();
-  const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
-  const wrongHost = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
-    localRepository,
-    github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: "https://notgithub.com/acme/forge" }; } },
-  });
-  await expect(wrongHost.activateProject(value.adminId, project.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "provider-host" })]) });
-  const wrongPath = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
-    localRepository,
-    github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: "https://github.com/other/repo" }; } },
-  });
-  await expect(wrongPath.activateProject(value.adminId, project.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "provider-path" })]) });
-  await close(value);
+  try {
+    const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
+    const wrongHost = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
+      localRepository,
+      github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: "https://notgithub.com/acme/forge" }; } },
+      validateProjectConfiguration: true,
+    });
+    await expect(wrongHost.updateProject(value.adminId, project.id, input(value))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "provider-host" })]) });
+    const wrongPath = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
+      localRepository,
+      github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: "https://github.com/other/repo" }; } },
+      validateProjectConfiguration: true,
+    });
+    await expect(wrongPath.updateProject(value.adminId, project.id, input(value))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "provider-path" })]) });
+  } finally {
+    await close(value);
+  }
 });

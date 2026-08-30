@@ -215,6 +215,7 @@ const projectColumns = "p.*";
 const namePattern = /^[\p{L}\p{N}](?:[\p{L}\p{N} ._'-]{0,78}[\p{L}\p{N}])?$/u;
 const repositoryPattern = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})\/[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})$/;
 const branchPattern = /^(?![./])(?!.*(?:\.\.|\.$|\.lock$|\/\/|\s|[~^:?*\[\\]))[A-Za-z0-9._/-]+$/;
+const checkPattern = /^[\p{L}\p{N}][\p{L}\p{N} ._:/()\[\]-]{0,119}$/u;
 const secretPattern = /(?:gh[pousr]_|github_pat_|token\s*=|password\s*=|secret\s*=|BEGIN [A-Z ]+ PRIVATE KEY|sk-[A-Za-z0-9])/i;
 const modelIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,119})?$/;
 const avatarSeedPattern = /^[a-f0-9]{32}$/;
@@ -943,6 +944,7 @@ export class ProjectService {
     if (!isUsableCommand(input.setupCommand)) findings.push(finding("unapproved-command", "setupCommand", "Command must be a single non-empty line without secrets"));
     if (!isUsableCommand(input.verificationCommand)) findings.push(finding("unapproved-command", "verificationCommand", "Command must be a single non-empty line without secrets"));
     if (secretPattern.test(input.repository) || secretPattern.test(input.baseBranch) || secretPattern.test(input.targetBranch)) findings.push(finding("secret-shaped-value", "configuration", "Secret-shaped configuration values are not accepted"));
+    if (input.requiredChecks.length === 0 || input.requiredChecks.length > 32 || input.requiredChecks.some((check) => !checkPattern.test(check.trim()))) findings.push(finding("invalid-check", "requiredChecks", "Select at least one valid required check"));
     if (worktree.path) {
       try { await access(worktree.path, constants.W_OK); } catch { findings.push(finding("worktree-unwritable", "worktreeRoot", "Worktree root must be writable")); }
     }
@@ -971,6 +973,10 @@ export class ProjectService {
         await this.github.checkAuthentication();
         const remote = await this.github.getRepository({ cwd: normalized.repositoryPath, nameWithOwner: normalized.repository });
         if (remote.nameWithOwner.toLowerCase() !== normalized.repository.toLowerCase()) findings.push(finding("provider-mismatch", "repository", "GitHub repository identity does not match configuration"));
+        let providerUrl: URL | undefined;
+        try { providerUrl = new URL(remote.url); } catch {}
+        if (!providerUrl || providerUrl.protocol !== "https:" || providerUrl.hostname.toLowerCase() !== "github.com") findings.push(finding("provider-host", "repository", "GitHub provider returned a URL outside github.com"));
+        else if (providerUrl.username || providerUrl.password || providerUrl.search || providerUrl.hash || providerUrl.pathname.replace(/\/$/, "").replace(/\.git$/, "").slice(1).toLowerCase() !== normalized.repository) findings.push(finding("provider-path", "repository", "GitHub provider URL does not match configured repository identity"));
       } catch (reason) {
         findings.push(finding(reason instanceof GithubFailure && (reason as GithubFailure).code === "authentication" ? "github-auth-unavailable" : "github-repository-unavailable", "repository", "GitHub repository identity could not be verified"));
       }

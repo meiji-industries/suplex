@@ -41,7 +41,7 @@ function sessionCookie(response: { headers: OutgoingHttpHeaders }): string {
   return "";
 }
 
-test.skip("project API activates valid configuration, redacts typed failures, and preserves company scope", async () => {
+test("project API activates valid configuration, redacts typed failures, and preserves company scope", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-project-api-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
@@ -53,8 +53,9 @@ test.skip("project API activates valid configuration, redacts typed failures, an
   const auth = new AuthService(database, config, { webAuthn: webAuthn() });
   const projects = new ProjectService(database, auth, config, {
     github,
-    localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } },
+    localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: input.repositoryPath.endsWith(join("meiji-industries", "sampler")) ? "meiji-industries/sampler" : "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } },
     repositoryProvisioner: { async ensure(input) { await mkdir(input.repositoryPath, { recursive: true }); await mkdir(input.worktreeRoot, { recursive: true }); } },
+    validateProjectConfiguration: true,
   });
   const app = createApp({ config, auth, projects, capacity: new CapacityManager(database, config), health: {
     engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }),
@@ -96,15 +97,15 @@ test.skip("project API activates valid configuration, redacts typed failures, an
     expect(invalidUrl.json()).toMatchObject({ error: "GitHub repository URL is invalid", findings: [expect.objectContaining({ field: "repositoryUrl" })] });
     expect(JSON.stringify(invalidUrl.json())).not.toContain("token@");
     const configuration = { name: "Direct GitHub", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, builder: builder.id, reviewer: reviewer.id } };
-    const draft = await app.inject({ method: "POST", url: `/api/companies/${company.id}/projects`, headers: { cookie: adminCookie, origin }, payload: configuration });
-    expect(draft.statusCode).toBe(201);
-    const project = draft.json() as { id: string; status: string };
-    expect(project.status).toBe("draft");
+    const saved = await app.inject({ method: "POST", url: `/api/companies/${company.id}/projects`, headers: { cookie: adminCookie, origin }, payload: configuration });
+    expect(saved.statusCode, saved.body).toBe(201);
+    const project = saved.json() as { id: string };
+    expect(project).not.toHaveProperty("status");
     expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}/checks`, headers: { cookie: adminCookie } })).json()).toEqual({ checks: [{ name: "Tests / unit", status: "completed", conclusion: "success" }] });
     expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}/repository-defaults`, headers: { cookie: adminCookie } })).json()).toEqual({ setupCommand: "pnpm install", verificationCommand: "pnpm test" });
-    const activated = await app.inject({ method: "POST", url: `/api/projects/${project.id}/activate`, headers: { cookie: adminCookie, origin }, payload: {} });
-    expect(activated.statusCode).toBe(200);
-    expect(activated.json()).toMatchObject({ status: "active", configurationRevision: 1, repository: "acme/forge" });
+    const live = await app.inject({ method: "GET", url: `/api/projects/${project.id}`, headers: { cookie: adminCookie, origin } });
+    expect(live.statusCode).toBe(200);
+    expect(live.json()).toMatchObject({ repository: "acme/forge", targetBranch: "main" });
     const invalid = await app.inject({ method: "POST", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie, origin }, payload: { ...configuration, name: "Unsafe", repositoryPath: join(repositoryRoot, "unsafe"), worktreeRoot: join(worktreeRoot, "unsafe"), repository: "https://token@github.com/acme/forge.git" } });
     expect(invalid.statusCode).toBe(422);
     expect(invalid.json()).toMatchObject({ error: "Project configuration is invalid" });

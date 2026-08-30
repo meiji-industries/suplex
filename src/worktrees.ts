@@ -22,6 +22,14 @@ export class WorktreeFailure extends Error {
   }
 }
 
+async function rebuildNativeModulesIfNeeded(worktreePath: string, activity?: { taskId: string; stepId: string }): Promise<void> {
+  if (!existsSync(join(worktreePath, "node_modules"))) return;
+  const env = withWorktreeMiseTrust(process.env, worktreePath);
+  const probe = await runCommand({ taskId: activity?.taskId ?? null, stepId: activity?.stepId ?? null, command: "node", args: ["-e", "require('better-sqlite3')"], cwd: worktreePath, env, timeout: 30_000, expectNonZero: true });
+  if (!/NODE_MODULE_VERSION|was compiled against a different Node\.js version|ERR_DLOPEN_FAILED/.test(`${probe.stdout}\n${probe.stderr}`)) return;
+  await runCommand({ taskId: activity?.taskId ?? null, stepId: activity?.stepId ?? null, command: "sh", args: ["-lc", "pnpm rebuild"], cwd: worktreePath, env, timeout: 20 * 60_000, expectNonZero: true });
+}
+
 export interface WorktreeInput {
   repositoryPath: string;
   worktreeRoot: string;
@@ -304,6 +312,7 @@ export class WorktreeManager {
       const actualBranch = await this.git.run(["symbolic-ref", "--short", "HEAD"], worktreePath, activity);
       const actualHead = await this.git.run(["rev-parse", "HEAD"], worktreePath, activity);
       if (actualRoot !== worktreePath || actualBranch !== branchName || actualHead.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new WorktreeFailure("worktree-verification", "Created worktree did not match its recorded branch and base revision");
+      await rebuildNativeModulesIfNeeded(worktreePath, activity);
       return { branchName, worktreePath, targetBaseSha: input.targetBaseSha };
     } catch (error) {
       if (error instanceof WorktreeFailure) throw error;
@@ -659,6 +668,7 @@ export class WorktreeManager {
         catch { throw new WorktreeFailure("worktree-branch-switch-failed", "The preserved worktree could not switch to the task branch"); }
         return await this.reuse(input);
       }
+      await rebuildNativeModulesIfNeeded(canonicalWorktree, input.stepId ? { taskId: input.taskId, stepId: input.stepId } : undefined);
       return { branchName, worktreePath: canonicalWorktree, targetBaseSha: actualHead };
     } catch (error) {
       if (error instanceof WorktreeFailure) throw error;

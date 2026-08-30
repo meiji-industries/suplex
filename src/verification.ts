@@ -1,7 +1,8 @@
-import { redact } from "./logging.js";
+import { StructuredLogger, redact } from "./logging.js";
 import { runCommand } from "./command-runner.js";
 import { createGitCommandGuard, type GitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
 
+const logger = new StructuredLogger();
 const tail = (value: string): string => value.length > 64 * 1024 ? value.slice(-64 * 1024) : value;
 const truncateBytes = (value: string, maxBytes: number): string => {
   const bytes = Buffer.from(value, "utf8");
@@ -105,11 +106,7 @@ export async function runPinnedVerification(input: PinnedVerificationInput, depe
   const guard = dependencies.guard ?? ownedGuard!;
   const evidence: VerificationCommandEvidence[] = [];
   try {
-    const stages: Array<readonly [string, readonly string[], number]> = [
-      [input.setupCommand, setupArgv, 10 * 60_000],
-      [input.verificationCommand, verificationArgv, 20 * 60_000],
-    ];
-    for (const [display, argv, timeout] of stages) {
+    const runStage = async (display: string, argv: readonly string[], timeout: number): Promise<VerificationCommandEvidence> => {
       const startedAt = now();
       let stdout = "";
       let stderr = "";
@@ -128,22 +125,41 @@ export async function runPinnedVerification(input: PinnedVerificationInput, depe
         signal = typeof failure.signal === "string" ? failure.signal : null;
         timedOut = failure.killed === true || failure.code === "ETIMEDOUT";
       }
-      const commandEvidence: VerificationCommandEvidence = {
-        command: display,
-        argv: [...argv],
-        startedAt,
-        finishedAt: now(),
-        exitCode,
-        signal,
-        timedOut,
-        stdout: truncateBytes(String(redact(tail(stdout))), 8 * 1024),
-        stderr: truncateBytes(String(redact(tail(stderr))), 8 * 1024),
-      };
-      evidence.push(commandEvidence);
-      const serialized = JSON.stringify({ commands: evidence });
-      if (Buffer.byteLength(serialized, "utf8") > 256 * 1024) return { outcome: "failed", code: "verification_evidence_too_large", summary: "Verification evidence exceeded the safe artifact limit", commands: boundedEvidence(evidence) };
-      if (timedOut || exitCode !== 0) return { outcome: "failed", code: timedOut ? "verification_timed_out" : "verification_failed", summary: failureSummary(display, commandEvidence.stdout, commandEvidence.stderr), commands: evidence };
-    }
+      return { command: display, argv: [...argv], startedAt, finishedAt: now(), exitCode, signal, timedOut, stdout: truncateBytes(String(redact(tail(stdout))), 8 * 1024), stderr: truncateBytes(String(redact(tail(stderr))), 8 * 1024) };
+    };
+    const failed = (command: VerificationCommandEvidence): boolean => command.timedOut || command.exitCode !== 0;
+    const result = (command: VerificationCommandEvidence): VerificationResult => ({
+      outcome: "failed",
+      code: command.timedOut ? "verification_timed_out" : "verification_failed",
+      summary: failureSummary(command.command, command.stdout, command.stderr),
+      commands: evidence,
+    });
+    const record = (command: VerificationCommandEvidence): VerificationResult | undefined => {
+      evidence.push(command);
+      if (Buffer.byteLength(JSON.stringify({ commands: evidence }), "utf8") > 256 * 1024) return { outcome: "failed", code: "verification_evidence_too_large", summary: "Verification evidence exceeded the safe artifact limit", commands: boundedEvidence(evidence) };
+      return undefined;
+    };
+    const setup = await runStage(input.setupCommand, setupArgv, 10 * 60_000);
+    const setupLimit = record(setup);
+    if (setupLimit) return setupLimit;
+    if (failed(setup)) return result(setup);
+
+    const verification = await runStage(input.verificationCommand, verificationArgv, 20 * 60_000);
+    const verificationLimit = record(verification);
+    if (verificationLimit) return verificationLimit;
+    if (!failed(verification)) return { outcome: "passed", summary: "Project setup and verification passed", commands: evidence };
+    if (!/NODE_MODULE_VERSION|was compiled against a different Node\.js version|ERR_DLOPEN_FAILED/.test(`${verification.stdout}\n${verification.stderr}`)) return result(verification);
+
+    logger.info("Native module ABI mismatch detected; rebuilding dependencies before retrying verification", input.taskId ? { taskId: input.taskId } : {});
+    const rebuild = await runStage("pnpm rebuild", ["sh", "-lc", "pnpm rebuild"], 20 * 60_000);
+    const rebuildLimit = record(rebuild);
+    if (rebuildLimit) return rebuildLimit;
+    if (failed(rebuild)) return result(rebuild);
+
+    const retry = await runStage(input.verificationCommand, verificationArgv, 20 * 60_000);
+    const retryLimit = record(retry);
+    if (retryLimit) return retryLimit;
+    if (failed(retry)) return result(retry);
     return { outcome: "passed", summary: "Project setup and verification passed", commands: evidence };
   } finally {
     await ownedGuard?.cleanup();

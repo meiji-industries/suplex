@@ -79,6 +79,40 @@ test("includes a redacted bounded output tail when final verification fails", as
   expect(result.summary).not.toContain("gho_secret");
 });
 
+test("rebuilds native modules once and retries verification after an ABI mismatch", async () => {
+  const calls: string[] = [];
+  const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "pnpm install", verificationCommand: "pnpm test" }, {
+    guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
+    execute: async (command, args) => {
+      const invocation = `${command} ${args.join(" ")}`;
+      calls.push(invocation);
+      if (invocation === "sh -lc pnpm test" && calls.filter((call) => call === invocation).length === 1) {
+        throw Object.assign(new Error("native module ABI mismatch"), { code: 1, stderr: "better-sqlite3 was compiled against a different Node.js version; NODE_MODULE_VERSION 127 requires 147" });
+      }
+      return { stdout: "", stderr: "" };
+    },
+  });
+
+  expect(calls).toEqual(["sh -lc pnpm install", "sh -lc pnpm test", "sh -lc pnpm rebuild", "sh -lc pnpm test"]);
+  expect(result).toMatchObject({ outcome: "passed" });
+});
+
+test("does not rebuild native modules for unrelated verification failures", async () => {
+  const calls: string[] = [];
+  const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "pnpm install", verificationCommand: "pnpm test" }, {
+    guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
+    execute: async (command, args) => {
+      const invocation = `${command} ${args.join(" ")}`;
+      calls.push(invocation);
+      if (invocation === "sh -lc pnpm test") throw Object.assign(new Error("test failure"), { code: 1, stderr: "AssertionError: expected true to be false" });
+      return { stdout: "", stderr: "" };
+    },
+  });
+
+  expect(calls).toEqual(["sh -lc pnpm install", "sh -lc pnpm test"]);
+  expect(result).toMatchObject({ outcome: "failed", code: "verification_failed" });
+});
+
 test("preserves a successful verification with bounded command output", async () => {
   const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "pnpm install", verificationCommand: "pnpm test" }, {
     guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },

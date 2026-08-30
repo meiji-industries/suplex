@@ -148,11 +148,13 @@ test("target-base drift without a check scopes the first retry to the result com
   ]);
 });
 
-test("target-base drift auto-retries despite an extra publish affordance", async () => {
+test("target-base reconciliation precedes delivery review and retains capped backoff", async () => {
   const waits: number[] = [];
   const retries: string[] = [];
   const projections: IssueWorkflowState[] = [];
-  const context = targetBaseRetryContext(targetBaseDriftState(), retries, projections);
+  const context = targetBaseRetryContext(targetBaseDriftState({
+    allowedCommands: ["review_delivery", "cancel_issue", "retry_target_base_reconciliation"],
+  }), retries, projections);
 
   await runExecution.run(automaticRetryExecution(waits), async () => {
     expect(canAutoRetryDeliveryBlocker(context)).toBe(true);
@@ -173,6 +175,23 @@ test("target-base drift auto-retries despite an extra publish affordance", async
     pendingAction: "Target base moved; reconciling automatically before publishing.",
     blocker: null,
   });
+});
+
+test("other auto-retry candidate pairs remain human decisions", async () => {
+  const waits: number[] = [];
+  const retries: string[] = [];
+  const context = targetBaseRetryContext(targetBaseDriftState({
+    allowedCommands: ["repair_delivery", "cancel_issue", "retry_target_base_reconciliation"],
+    resultCommit: "e".repeat(40),
+  }), retries, []);
+
+  await runExecution.run(automaticRetryExecution(waits), async () => {
+    expect(canAutoRetryDeliveryBlocker(context)).toBe(false);
+    await expect(autoRetryDeliveryBlocker(context)).resolves.toBe(false);
+  });
+
+  expect(waits).toEqual([]);
+  expect(retries).toEqual([]);
 });
 
 test("exhausted target-base retries report reconciliation failure once", async () => {

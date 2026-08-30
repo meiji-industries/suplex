@@ -230,6 +230,13 @@ function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" |
   if (ctx.state.phase !== "delivery_blocked") return null;
   const commands = ctx.state.blocker?.actions.map((action) => action.command) ?? ctx.state.allowedCommands;
   const candidates = commands.filter((command) => AUTO_RETRY_BLOCKER_COMMANDS.has(command));
+  // A delivery cannot be reviewed or published against a moved target base, so reconciliation is
+  // the prerequisite. Reconciliation is idempotent, and no_drift returns to the prior review or
+  // publish checkpoint.
+  const reconciliationPrecedesReview = candidates.length === 2
+    && candidates.includes("review_delivery")
+    && candidates.includes("retry_target_base_reconciliation");
+  if (reconciliationPrecedesReview) return "retry_target_base_reconciliation";
   if (candidates.length !== 1) return null;
   return candidates[0] as "review_delivery" | "repair_delivery" | "repair_ci" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation";
 }

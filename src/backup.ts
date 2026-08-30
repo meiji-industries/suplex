@@ -10,12 +10,15 @@ import Database from "better-sqlite3";
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import type { GithubReleasePort } from "./github-release.js";
+import type { HealthCheck } from "./health.js";
 import { reconcileRestoredDeveloperExecutions, type RestoredDeveloperRecoveryReport } from "./developer-recovery.js";
 import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 const backupVersion = 1;
 const backupRoot = "forge-backup";
+
+export const BACKUP_HEALTH_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 
 export interface BackupManifestEntry {
   path: string;
@@ -328,12 +331,21 @@ function component(entries: BackupManifestEntry[], prefix: string): { path: stri
   return { path: prefix.replace(/\/$/, ""), count: selected.length, bytes: selected.reduce((total, entry) => total + entry.bytes, 0) };
 }
 
-export async function checkBackupHealth(config: ForgeConfig): Promise<import("./health.js").HealthCheck> {
+export async function checkBackupHealth(config: ForgeConfig, now: () => number = Date.now): Promise<HealthCheck> {
   try {
     const value = jsonRequired(await readFile(join(config.dataRoot, "backup-status.json"), "utf8")) as { valid?: boolean; verifiedAt?: string; errors?: string[] };
     const verifiedAt = typeof value.verifiedAt === "string" ? value.verifiedAt : "";
-    const valid = value.valid === true && Boolean(verifiedAt) && !Number.isNaN(Date.parse(verifiedAt));
-    return { id: "backup", label: "Backup verification", status: valid ? "healthy" : "unhealthy", summary: valid ? "The latest recorded backup verification passed" : "No verified backup is recorded", details: { verifiedAt: verifiedAt || "never", ageMs: valid ? Math.max(0, Date.now() - Date.parse(verifiedAt)) : -1, errors: value.errors?.join(", ") ?? "" } };
+    const verifiedAtMs = Date.parse(verifiedAt);
+    const valid = value.valid === true && Boolean(verifiedAt) && !Number.isNaN(verifiedAtMs);
+    const ageMs = valid ? Math.max(0, now() - verifiedAtMs) : -1;
+    const fresh = valid && ageMs <= BACKUP_HEALTH_MAX_AGE_MS;
+    return {
+      id: "backup",
+      label: "Backup verification",
+      status: fresh ? "healthy" : valid ? "warning" : "unhealthy",
+      summary: fresh ? "The latest recorded backup verification passed" : valid ? "The latest recorded backup verification is stale" : "No verified backup is recorded",
+      details: { verifiedAt: verifiedAt || "never", ageMs, errors: value.errors?.join(", ") ?? "" },
+    };
   } catch {
     return { id: "backup", label: "Backup verification", status: "unhealthy", summary: "No verified backup is recorded", details: { verifiedAt: "never", ageMs: -1, errors: "missing-status" } };
   }

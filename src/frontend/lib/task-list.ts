@@ -41,6 +41,10 @@ export function createTaskListInvalidationHub(options: { createEventSource?: (ur
       timer ??= setTimeout(flush, debounceMs);
     } catch { /* Ignore malformed events. */ }
   };
+  const refreshSubscribed = (): void => {
+    for (const companyId of listeners.keys()) pending.add(companyId);
+    timer ??= setTimeout(flush, debounceMs);
+  };
   return {
     subscribe(companyId: string, listener: () => void): () => void {
       let set = listeners.get(companyId);
@@ -49,6 +53,7 @@ export function createTaskListInvalidationHub(options: { createEventSource?: (ur
       if (!source) {
         source = createEventSource("/api/tasks/events");
         source.addEventListener("invalidate", handle as EventListener);
+        source.addEventListener("ready", refreshSubscribed);
       }
       return () => {
         const current = listeners.get(companyId);

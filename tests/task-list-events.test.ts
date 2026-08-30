@@ -10,6 +10,7 @@ class FakeEventSource {
   static get last(): FakeEventSource { return FakeEventSource.instances[FakeEventSource.instances.length - 1]!; }
 
   closed = false;
+  connected = true;
   private readonly listeners = new Map<string, FakeListener[]>();
 
   constructor(readonly url: string) { FakeEventSource.instances.push(this); }
@@ -22,12 +23,15 @@ class FakeEventSource {
 
   close(): void { this.closed = true; }
 
+  disconnect(): void { this.connected = false; }
+
   invalidate(companyId: string): void {
     const event = { data: JSON.stringify({ companyId }) };
     for (const listener of this.listeners.get("invalidate") ?? []) listener(event);
   }
 
   ready(): void {
+    this.connected = true;
     const event = { data: JSON.stringify({ companyId: "company-a" }) };
     for (const listener of this.listeners.get("ready") ?? []) listener(event);
   }
@@ -91,15 +95,37 @@ describe("task list invalidation hub", () => {
     unsubscribe();
   });
 
-  it("ignores ready events", () => {
+  it("refetches every subscribed company when ready fires after reconnect", async () => {
+    let version = "baseline";
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const companyId = decodeURIComponent(new URL(String(input), "http://forge.test").pathname.split("/")[3] ?? "");
+      return new Response(JSON.stringify({ tasks: [{ id: `${companyId}-${version}` }] }));
+    }));
     const hub = createHub();
-    const listener = vi.fn();
-    const unsubscribe = hub.subscribe("company-a", listener);
+    const refreshes: Array<Promise<unknown>> = [];
+    const firstUnsubscribe = hub.subscribe("company-reconnect-a", () => { refreshes.push(readTaskList("company-reconnect-a")); });
+    const secondUnsubscribe = hub.subscribe("company-reconnect-b", () => { refreshes.push(readTaskList("company-reconnect-b")); });
 
+    await expect(Promise.all([readTaskList("company-reconnect-a"), readTaskList("company-reconnect-b")])).resolves.toEqual([
+      [{ id: "company-reconnect-a-baseline" }],
+      [{ id: "company-reconnect-b-baseline" }],
+    ]);
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(2);
+
+    FakeEventSource.last.disconnect();
+    expect(FakeEventSource.last.connected).toBe(false);
+    version = "mutated";
     FakeEventSource.last.ready();
-    vi.advanceTimersByTime(300);
-    expect(listener).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(300);
 
-    unsubscribe();
+    await expect(Promise.all(refreshes)).resolves.toEqual([
+      [{ id: "company-reconnect-a-mutated" }],
+      [{ id: "company-reconnect-b-mutated" }],
+    ]);
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(4);
+    expect(FakeEventSource.last.connected).toBe(true);
+
+    firstUnsubscribe();
+    secondUnsubscribe();
   });
 });

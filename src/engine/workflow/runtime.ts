@@ -228,10 +228,10 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
 
 function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" | "repair_delivery" | "repair_ci" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation" | null {
   if (ctx.state.phase !== "delivery_blocked") return null;
-  const nonDestructive = ctx.state.allowedCommands.filter((command) => command !== "cancel_issue");
-  const command = nonDestructive[0];
-  if (nonDestructive.length !== 1 || !command || !AUTO_RETRY_BLOCKER_COMMANDS.has(command)) return null;
-  return command as "review_delivery" | "repair_delivery" | "repair_ci" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation";
+  const commands = ctx.state.blocker?.actions.map((action) => action.command) ?? ctx.state.allowedCommands;
+  const candidates = commands.filter((command) => AUTO_RETRY_BLOCKER_COMMANDS.has(command));
+  if (candidates.length !== 1) return null;
+  return candidates[0] as "review_delivery" | "repair_delivery" | "repair_ci" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation";
 }
 
 function retryScope(ctx: IssueWorkflowContext, command: string): string | null {
@@ -282,6 +282,19 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
   const commandId = `${prefix}${attempt + 1}`;
   if (ctx.commandAlreadyProcessed(commandId)) return false;
   ctx.markCommandProcessed(commandId);
+  if (command === "retry_target_base_reconciliation" && ctx.state.releaseFailureCode === "target-base-drift") {
+    const pendingAction = "Target base moved; reconciling automatically before publishing.";
+    if (ctx.state.pendingAction !== pendingAction) {
+      ctx.state = IssueWorkflowStateSchema.parse({
+        ...ctx.state,
+        revision: ctx.state.revision + 1,
+        pendingAction,
+        stateChangedAt: new Date().toISOString(),
+        lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
+      });
+      await ctx.project();
+    }
+  }
   await sleep(AUTO_RETRY_BLOCKER_DELAYS[attempt]!);
   if (ctx.state.phase !== "delivery_blocked" || retryOnlyBlockerCommand(ctx) !== command || retryScope(ctx, command) !== scope) return true;
   const input = { expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId ?? ctx.input.autoApprovePlanActorUserId ?? "forge-auto-retry", commandId };

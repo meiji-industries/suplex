@@ -102,8 +102,8 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
         : true && ctx.state.releaseRepository && ctx.state.branchName
           ? await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
           : null;
-      if (true && observed?.exists && observed.state === "open" && observed.headSha && observed.headSha !== ctx.state.expectedHeadSha) {
-        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: observed.headSha, expectedHeadTree: null, resultCommit: observed.headSha, resultTree: null, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      if (true && observed?.exists && observed.state === "open" && observed.headSha && observed.headSha.toLowerCase() !== expectedHeadSha.toLowerCase()) {
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
         await ctx.project();
         return ctx.state;
       }

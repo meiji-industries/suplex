@@ -32,6 +32,7 @@ import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
 
 const execFileAsync = promisify(execFile);
+const PROJECT_VERIFICATION_FAILURE_PREFIX = "Project verification failed:";
 type MergeConflictPlanInput = MergeConflictPlanActivityInput;
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
@@ -669,8 +670,9 @@ export class AgentService {
     let subjectTree = subject.subjectTree;
     const leadSessionRef = subject.leadSessionRef;
     const isFinalReview = input.reviewKind === "final";
+    const requiresFreshVerificationFailureReview = !isFinalReview && input.deliverySummary?.startsWith(PROJECT_VERIFICATION_FAILURE_PREFIX) === true;
     if (isFinalReview && (!input.releaseId || !input.ciRunId || !input.deliveryReviewId)) throw new AgentFailure("scoped-input-missing", "Final review requires the exact release, delivery review, and CI run");
-    const existingDelivery: { id: string; leadExecutionId: string; sessionRef: string; opinionArtifactId: string; evidenceArtifactId: string; outcome: "approved" | "blocking"; summary: string; supersedesReviewId: string | null } | undefined = !isFinalReview
+    const existingDelivery: { id: string; leadExecutionId: string; sessionRef: string; opinionArtifactId: string; evidenceArtifactId: string; outcome: "approved" | "blocking"; summary: string; supersedesReviewId: string | null } | undefined = !isFinalReview && !requiresFreshVerificationFailureReview
       ? this.database.authQuery((db) => db.prepare("SELECT id, lead_execution_id AS leadExecutionId, session_ref AS sessionRef, opinion_artifact_id AS opinionArtifactId, evidence_artifact_id AS evidenceArtifactId, outcome, summary, supersedes_review_id AS supersedesReviewId FROM forge_delivery_reviews WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND subject_commit = ? LIMIT 1").get(input.taskId, input.companyId, input.workflowId, subjectCommit) as { id: string; leadExecutionId: string; sessionRef: string; opinionArtifactId: string; evidenceArtifactId: string; outcome: "approved" | "blocking"; summary: string; supersedesReviewId: string | null } | undefined)
       : undefined;
     if (existingDelivery) {
@@ -1009,8 +1011,8 @@ export class AgentService {
   }
 
   private deliveryReviewPrompt(input: { taskId: string; companyId: string; deliverySummary?: string | undefined; visualEvidence?: "off" | "capture" | "required" | undefined }, title: string, brief: string, plan: string, delivery: string, developerEvidence: string, gitEvidence: { targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }, forwardMerge: { priorHead: string; targetBaseSha: string } | null, hasDeveloperSession: boolean): string {
-    const verificationFailure = input.deliverySummary?.startsWith("Project verification failed:")
-      ? `\n\nProject verification failed on this commit: ${input.deliverySummary.slice("Project verification failed:".length).trim()}`
+    const verificationFailure = input.deliverySummary?.startsWith(PROJECT_VERIFICATION_FAILURE_PREFIX)
+      ? `\n\nProject verification failed on this commit: ${input.deliverySummary.slice(PROJECT_VERIFICATION_FAILURE_PREFIX.length).trim()}`
       : "";
     return this.renderTaskPrompt(input, "lead/delivery-review.md", { title, brief: promptExcerpt(brief, 8_000), plan: promptExcerpt(plan, 24_000), delivery: promptExcerpt(delivery, 32_000), developer_evidence: promptExcerpt(developerEvidence, 16_000), developer_session_note: hasDeveloperSession ? "" : "\n\nThere is no Developer session for this head; review the current diff against the base and treat the available delivery evidence as supplemental context.", forward_merge_note: forwardMerge ? `\n\nThis head is a clean forward merge of an already-reviewed delivery. Review the merge diff against the new base; its lineage is ${JSON.stringify(forwardMerge)}. Its pinned post-merge verification and prior delivery proof remain authoritative for unchanged behavior. Do not block solely because broader checks or manual smoke steps were not repeated after the merge; report those as advisory unless the exact merge diff shows a concrete regression or new risk.` : "", git_subject: JSON.stringify({ targetBaseSha: gitEvidence.targetBaseSha, branch: gitEvidence.branch, subjectCommit: gitEvidence.subjectCommit, subjectTree: gitEvidence.subjectTree, observedHead: gitEvidence.head, observedTree: gitEvidence.tree, dirtyState: gitEvidence.status ? "dirty" : "clean" }), instructions: promptExcerpt(gitEvidence.instructions || "(none found)", 12_000), diff: promptExcerpt(gitEvidence.diff, 72_000), commit: promptExcerpt(gitEvidence.commit, 12_000), visual_evidence_control: this.visualEvidenceInstruction(input.visualEvidence ?? "off") }) + verificationFailure;
   }

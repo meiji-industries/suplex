@@ -142,7 +142,6 @@ export function proveForwardMergeLineage(db: Database.Database, input: ForwardMe
         AND verification.kind = 'forward-merge-verification'
       WHERE m.task_id = ? AND m.company_id = ? AND m.workflow_id = ?
         AND m.project_revision_id = ? AND m.checkpoint = ? AND m.status = 'merged'
-        AND m.developer_execution_id = ?
         AND m.prior_tree IS NOT NULL AND m.merge_commit IS NOT NULL AND m.tree IS NOT NULL
         AND m.result_head IS NOT NULL AND m.result_tree IS NOT NULL
         AND lower(m.merge_commit) = lower(m.result_head) AND lower(m.tree) = lower(m.result_tree)
@@ -152,7 +151,6 @@ export function proveForwardMergeLineage(db: Database.Database, input: ForwardMe
       input.workflowId,
       input.projectRevisionId,
       input.checkpoint,
-      input.developerExecutionId,
       cursorHead,
       cursorTree,
     ) as ForwardMergeRow[];

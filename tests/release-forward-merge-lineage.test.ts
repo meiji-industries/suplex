@@ -28,7 +28,7 @@ const workflowId = "workflow-release-lineage";
 const reviewId = "review-release-lineage";
 const cleanups: Array<() => Promise<void>> = [];
 
-type FixtureShape = "direct" | "completed-prior" | "blocked-chain" | "transitive";
+type FixtureShape = "direct" | "completed-prior" | "blocked-chain" | "transitive" | "cross-execution";
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
@@ -42,8 +42,10 @@ async function fixture(shape: FixtureShape) {
   const database = new ForgeDatabase(config.databasePath);
   cleanups.push(async () => { database.close(); await rm(root, { recursive: true, force: true }); });
   const artifacts = new ArtifactStore(config.artifactRoot, database);
-  const linkedExecutionId = shape === "blocked-chain" ? "developer-blocked" : "developer-current";
-  const linkedWorktree = join(root, shape === "blocked-chain" ? "linked-worktree" : "worktree");
+  const linkedExecutionId = shape === "blocked-chain" ? "developer-blocked" : shape === "cross-execution" ? "developer-origin" : "developer-current";
+  const linkedWorktree = join(root, shape === "blocked-chain" ? "linked-worktree" : shape === "cross-execution" ? "origin-worktree" : "worktree");
+  const ancestorExecutionId = "developer-forward-merge";
+  const ambiguousAncestorExecutionId = "developer-forward-merge-ambiguous";
 
   database.authTransaction((db) => {
     db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES (?, 'Release lineage', 'active', ?)").run(companyId, now);
@@ -73,26 +75,31 @@ async function fixture(shape: FixtureShape) {
   }), "utf8") });
   const verification = await artifacts.putArtifact(companyId, "forward-merge-verification", { taskId, filename: "verification.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ outcome: "failed", code: "verification_failed", summary: "Lead reviewed the exact failed verification evidence" }), "utf8") });
   const ancestorVerification = await artifacts.putArtifact(companyId, "forward-merge-verification", { taskId, filename: "ancestor-verification.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ outcome: "failed", code: "verification_failed", summary: "Lead reviewed the exact ancestor verification evidence" }), "utf8") });
+  const developerEvidence = await artifacts.putArtifact(companyId, "agent-evidence", { taskId, filename: "developer-evidence.md", mimeType: "text/markdown", bytes: Buffer.from("Original Developer evidence", "utf8") });
   const opinion = await artifacts.putArtifact(companyId, "agent-opinion", { taskId, filename: "opinion.md", mimeType: "text/markdown", bytes: Buffer.from("Approved", "utf8") });
   const evidence = await artifacts.putArtifact(companyId, "agent-evidence", { taskId, filename: "evidence.md", mimeType: "text/markdown", bytes: Buffer.from("Exact merged subject reviewed", "utf8") });
 
   database.authTransaction((db) => {
     db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, project_configuration_artifact_id, project_configuration_captured_at, idempotency_key, created_at, updated_at) VALUES (?, ?, 'project-release-lineage', 'Release exact forward merge', ?, '[]', '{}', 0, ?, 'revision-release-lineage', ?, ?, 'release-lineage-key', ?, ?)").run(taskId, companyId, brief.id, workflowId, configuration.id, now, now, now);
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('lead-release-lineage', ?, ?, ?, 'reviewer', 'completed', 1, 'lead-session', ?, ?, ?)").run(taskId, companyId, workflowId, now, now, evidence.id);
-    const insertExecution = (id: string, attempt: number, status: string, worktreePath: string, targetBaseSha: string, resultCommit: string, resultTreeSha: string, supersedesExecutionId: string | null, deliveryArtifactId: string | null) => {
-      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, supersedes_execution_id, session_ref, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 'developer-session', ?, ?, ?, ?, ?, 'clean', ?)").run(id, taskId, companyId, workflowId, attempt, status, branchName, worktreePath, targetBaseSha, supersedesExecutionId, now, now, now, resultCommit, resultTreeSha, deliveryArtifactId);
+    const insertExecution = (id: string, attempt: number, status: string, worktreePath: string, targetBaseSha: string, resultCommit: string, resultTreeSha: string, supersedesExecutionId: string | null, deliveryArtifactId: string | null, evidenceArtifactId: string | null = null, executionKind = "agent") => {
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, supersedes_execution_id, session_ref, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id, execution_kind) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 'developer-session', ?, ?, ?, ?, ?, 'clean', ?, ?, ?)").run(id, taskId, companyId, workflowId, attempt, status, branchName, worktreePath, targetBaseSha, supersedesExecutionId, now, now, now, resultCommit, resultTreeSha, deliveryArtifactId, evidenceArtifactId, executionKind);
     };
     if (shape === "blocked-chain") {
       insertExecution("developer-origin", 1, "completed", join(root, "origin-worktree"), expectedBase, priorHead, priorTree, null, delivery.id);
       insertExecution("developer-middle", 2, "blocked", join(root, "middle-worktree"), currentBase, resultHead, resultTree, "developer-origin", null);
       insertExecution(linkedExecutionId, 3, "blocked", linkedWorktree, currentBase, resultHead, resultTree, "developer-middle", null);
+    } else if (shape === "cross-execution") {
+      insertExecution(linkedExecutionId, 1, "completed", linkedWorktree, expectedBase, priorHead, priorTree, null, delivery.id, developerEvidence.id);
+      insertExecution(ancestorExecutionId, 2, "completed", join(root, "forward-merge-worktree"), intermediateBase, intermediateHead, intermediateTree, linkedExecutionId, delivery.id, developerEvidence.id, "forward_merge");
+      insertExecution(ambiguousAncestorExecutionId, 3, "blocked", join(root, "ambiguous-forward-merge-worktree"), intermediateBase, intermediateHead, intermediateTree, linkedExecutionId, delivery.id, developerEvidence.id, "forward_merge");
     } else if (shape === "direct") {
       insertExecution(linkedExecutionId, 1, "completed", linkedWorktree, currentBase, resultHead, resultTree, null, delivery.id);
     } else {
       insertExecution(linkedExecutionId, 1, "completed", linkedWorktree, expectedBase, priorHead, priorTree, null, delivery.id);
     }
-    if (shape === "transitive") {
-      db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, delivery_artifact_id, failure_code, failure_summary, updated_at) VALUES ('merge-release-ancestor', ?, ?, ?, ?, ?, ?, ?, 'merged', '[]', ?, ?, ?, 'pre_release', ?, ?, ?, ?, ?, ?, 'verification_failed', 'Pinned ancestor verification failed', ?)").run(taskId, companyId, expectedBase, intermediateBase, priorHead, intermediateHead, intermediateTree, now, workflowId, configuration.id, priorTree, intermediateHead, intermediateTree, linkedExecutionId, ancestorVerification.id, delivery.id, now);
+    if (shape === "transitive" || shape === "cross-execution") {
+      db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, delivery_artifact_id, failure_code, failure_summary, updated_at) VALUES ('merge-release-ancestor', ?, ?, ?, ?, ?, ?, ?, 'merged', '[]', ?, ?, ?, 'pre_release', ?, ?, ?, ?, ?, ?, 'verification_failed', 'Pinned ancestor verification failed', ?)").run(taskId, companyId, expectedBase, intermediateBase, priorHead, intermediateHead, intermediateTree, now, workflowId, configuration.id, priorTree, intermediateHead, intermediateTree, shape === "cross-execution" ? ancestorExecutionId : linkedExecutionId, ancestorVerification.id, delivery.id, now);
       db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, delivery_artifact_id, failure_code, failure_summary, updated_at) VALUES ('merge-release-lineage', ?, ?, ?, ?, ?, ?, ?, 'merged', '[]', ?, ?, ?, 'pre_release', ?, ?, ?, ?, ?, ?, 'verification_failed', 'Pinned verification failed; Lead approved the exact result', ?)").run(taskId, companyId, intermediateBase, currentBase, intermediateHead, resultHead, resultTree, now, workflowId, configuration.id, intermediateTree, resultHead, resultTree, linkedExecutionId, verification.id, delivery.id, now);
     } else if (shape !== "direct") {
       db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, delivery_artifact_id, failure_code, failure_summary, updated_at) VALUES ('merge-release-lineage', ?, ?, ?, ?, ?, ?, ?, 'merged', '[]', ?, ?, ?, 'pre_release', ?, ?, ?, ?, ?, ?, 'verification_failed', 'Pinned verification failed; Lead approved the exact result', ?)").run(taskId, companyId, expectedBase, currentBase, priorHead, resultHead, resultTree, now, workflowId, configuration.id, priorTree, resultHead, resultTree, linkedExecutionId, verification.id, delivery.id, now);
@@ -128,6 +135,10 @@ async function fixture(shape: FixtureShape) {
     linkedWorktree,
     verificationArtifactId: verification.id,
     ancestorVerificationArtifactId: ancestorVerification.id,
+    deliveryArtifactId: delivery.id,
+    developerEvidenceArtifactId: developerEvidence.id,
+    ancestorExecutionId,
+    ambiguousAncestorExecutionId,
     calls,
     pushInput: { taskId, companyId, workflowId, branchName, commitSha: resultHead },
     publishInput: { taskId, companyId, workflowId, reviewId, developerExecutionId: linkedExecutionId, branchName, targetBaseSha: currentBase, subjectCommit: resultHead, subjectTree: resultTree },
@@ -185,6 +196,42 @@ test("pushes and publishes an approved two-hop forward merge from the immutable 
   expect(text).toContain("all focused tests passed");
 });
 
+test("pushes and publishes an exact forward-merge lineage across execution IDs from the original Developer root", async () => {
+  const value = await fixture("cross-execution");
+  const before = historicalRows(value);
+
+  expect(value.database.authQuery((db) => db.prepare(`SELECT id, status, result_commit AS resultCommit,
+      result_tree AS resultTree, delivery_artifact_id AS deliveryArtifactId,
+      evidence_artifact_id AS evidenceArtifactId
+    FROM forge_developer_executions WHERE id = ?`).get(value.linkedExecutionId))).toEqual({
+    id: value.linkedExecutionId,
+    status: "completed",
+    resultCommit: priorHead,
+    resultTree: priorTree,
+    deliveryArtifactId: value.deliveryArtifactId,
+    evidenceArtifactId: value.developerEvidenceArtifactId,
+  });
+  expect(value.database.authQuery((db) => db.prepare(`SELECT m.id, m.developer_execution_id AS developerExecutionId,
+      d.status AS developerStatus, d.execution_kind AS executionKind
+    FROM forge_forward_merges m JOIN forge_developer_executions d ON d.id = m.developer_execution_id
+    WHERE m.task_id = ? ORDER BY m.id`).all(taskId))).toEqual([
+    { id: "merge-release-ancestor", developerExecutionId: value.ancestorExecutionId, developerStatus: "completed", executionKind: "forward_merge" },
+    { id: "merge-release-lineage", developerExecutionId: value.linkedExecutionId, developerStatus: "completed", executionKind: "agent" },
+  ]);
+
+  await expectPushAndPublication(value);
+
+  expect(historicalRows(value)).toEqual(before);
+  expect(value.calls.pushedCwds).toEqual([value.linkedWorktree]);
+  const body = value.database.authQuery((db) => db.prepare(`SELECT a.storage_path AS storagePath, a.sha256
+    FROM forge_releases r JOIN forge_artifacts a ON a.id = r.body_artifact_id AND a.company_id = r.company_id
+    WHERE r.task_id = ?`).get(taskId) as { storagePath: string; sha256: string });
+  const text = (await value.artifacts.getArtifact({ companyId, storagePath: body.storagePath, sha256: body.sha256 })).toString("utf8");
+  expect(text).toContain("Inherited original Developer delivery");
+  expect(text).toContain("Preserved the reviewed implementation");
+  expect(text).toContain("all focused tests passed");
+});
+
 test("inherits the exact Developer delivery through a blocked execution supersedes chain for push and publication", async () => {
   const value = await fixture("blocked-chain");
   const before = historicalRows(value);
@@ -212,17 +259,17 @@ test.each([
   ["mismatched merge tree identity", "completed-prior", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET tree = ? WHERE id = 'merge-release-lineage'").run(wrongSha))],
   ["broken transitive head/tree link", "transitive", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET prior_tree = ? WHERE id = 'merge-release-lineage'").run(wrongSha))],
   ["broken transitive base continuity", "transitive", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET current_base_sha = ? WHERE id = 'merge-release-ancestor'").run(wrongSha))],
-  ["missing transitive verification artifact", "transitive", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET kind = 'agent-evidence' WHERE id = ?").run(value.ancestorVerificationArtifactId))],
-  ["ambiguous transitive predecessor", "transitive", (value: Fixture) => value.database.authQuery((db) => db.prepare(`INSERT INTO forge_forward_merges (
+  ["untyped cross-execution verification artifact", "cross-execution", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET kind = 'agent-evidence' WHERE id = ?").run(value.ancestorVerificationArtifactId))],
+  ["ambiguous cross-execution predecessor", "cross-execution", (value: Fixture) => value.database.authQuery((db) => db.prepare(`INSERT INTO forge_forward_merges (
       id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status,
       conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, result_head,
       result_tree, developer_execution_id, verification_artifact_id, delivery_artifact_id, failure_code,
       failure_summary, updated_at)
     SELECT 'merge-release-ancestor-copy', task_id, company_id, expected_base_sha, current_base_sha, prior_head,
       merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint,
-      prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id,
+      prior_tree, result_head, result_tree, ?, verification_artifact_id,
       delivery_artifact_id, failure_code, failure_summary, updated_at
-    FROM forge_forward_merges WHERE id = 'merge-release-ancestor'`).run())],
+    FROM forge_forward_merges WHERE id = 'merge-release-ancestor'`).run(value.ambiguousAncestorExecutionId))],
   ["cyclic transitive predecessor", "transitive", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET expected_base_sha = ?, prior_head = ?, prior_tree = ? WHERE id = 'merge-release-ancestor'").run(currentBase, resultHead, resultTree))],
 ] as const)("fails closed for %s", async (_label, shape, mutate) => {
   const value = await fixture(shape);

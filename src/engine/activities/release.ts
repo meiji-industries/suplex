@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { ActivityContext } from "./context.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
 import { jsonRequired } from "../../task-utils.js";
+import { proveForwardMergeLineage } from "./forward-merge-lineage.js";
 
 const LegacyReleaseDeliverySchema = z.object({
   summary: z.string().optional(),
@@ -64,6 +65,8 @@ type ReleaseContext = {
 type ForwardMergeReleaseCandidate = {
   title: string;
   forwardMergeId: string;
+  projectRevisionId: string;
+  checkpoint: string;
   expectedBaseSha: string;
   currentBaseSha: string;
   priorHead: string;
@@ -141,7 +144,8 @@ function directReleaseContext(db: Database.Database, input: ReleaseContextInput)
 }
 
 function forwardMergeReleaseContext(db: Database.Database, input: ReleaseContextInput): ReleaseContext | undefined {
-  const candidates = db.prepare(`SELECT t.title, m.id AS forwardMergeId, m.expected_base_sha AS expectedBaseSha,
+  const candidates = db.prepare(`SELECT t.title, m.id AS forwardMergeId, m.project_revision_id AS projectRevisionId,
+      m.checkpoint, m.expected_base_sha AS expectedBaseSha,
       m.current_base_sha AS currentBaseSha, m.prior_head AS priorHead, m.prior_tree AS priorTree,
       m.merge_commit AS mergeCommit, m.tree AS mergeTree, m.result_head AS resultHead, m.result_tree AS resultTree,
       d.id AS developerExecutionId, d.status AS developerStatus, d.branch_name AS branchName,
@@ -153,6 +157,7 @@ function forwardMergeReleaseContext(db: Database.Database, input: ReleaseContext
     JOIN forge_forward_merges m
       ON m.task_id = t.id AND m.company_id = t.company_id AND m.workflow_id = t.workflow_id
       AND m.status = 'merged' AND lower(m.result_head) = lower(?)
+      AND m.project_revision_id = t.project_configuration_artifact_id AND m.checkpoint = 'pre_release'
     JOIN forge_developer_executions d
       ON d.id = m.developer_execution_id AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
       AND d.branch_name = ?
@@ -165,12 +170,9 @@ function forwardMergeReleaseContext(db: Database.Database, input: ReleaseContext
     WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?
     ORDER BY COALESCE(m.updated_at, m.created_at) DESC, m.id DESC`).all(input.subjectCommit, input.branchName, input.subjectCommit, input.taskId, input.companyId, input.workflowId) as ForwardMergeReleaseCandidate[];
   const contexts: ReleaseContext[] = [];
+  const provenMergeIds = new Set<string>();
   for (const candidate of candidates) {
-    const executionAtPrior = sameRevision(candidate.developerResultCommit, candidate.priorHead) && sameRevision(candidate.developerResultTree, candidate.priorTree);
-    const executionAtResult = sameRevision(candidate.developerResultCommit, candidate.resultHead) && sameRevision(candidate.developerResultTree, candidate.resultTree);
-    const executionBaseCompatible = executionAtPrior
-      ? sameRevision(candidate.developerTargetBaseSha, candidate.expectedBaseSha)
-      : executionAtResult && (sameRevision(candidate.developerTargetBaseSha, candidate.expectedBaseSha) || sameRevision(candidate.developerTargetBaseSha, candidate.currentBaseSha));
+    const lineage = proveForwardMergeLineage(db, { currentMergeId: candidate.forwardMergeId, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: candidate.projectRevisionId, checkpoint: candidate.checkpoint, developerExecutionId: candidate.developerExecutionId });
     if (!sameRevision(candidate.resultHead, input.subjectCommit)
       || !sameRevision(candidate.mergeCommit, candidate.resultHead)
       || !sameRevision(candidate.mergeTree, candidate.resultTree)
@@ -178,18 +180,25 @@ function forwardMergeReleaseContext(db: Database.Database, input: ReleaseContext
       || !sameRevision(candidate.reviewSubjectTree, candidate.resultTree)
       || !sameRevision(candidate.reviewBaseSha, candidate.currentBaseSha)
       || !["completed", "blocked"].includes(candidate.developerStatus)
-      || !(executionAtPrior || executionAtResult)
-      || !executionBaseCompatible
+      || !lineage
+      || lineage.developer.id !== candidate.developerExecutionId || lineage.developer.status !== candidate.developerStatus
+      || !sameRevision(lineage.developer.targetBaseSha, candidate.developerTargetBaseSha)
+      || !sameRevision(lineage.developer.resultHead, candidate.developerResultCommit) || !sameRevision(lineage.developer.resultTree, candidate.developerResultTree)
+      || lineage.current.id !== candidate.forwardMergeId
+      || !sameRevision(lineage.current.expectedBaseSha, candidate.expectedBaseSha) || !sameRevision(lineage.current.currentBaseSha, candidate.currentBaseSha)
+      || !sameRevision(lineage.current.priorHead, candidate.priorHead) || !sameRevision(lineage.current.priorTree, candidate.priorTree)
+      || !sameRevision(lineage.current.resultHead, candidate.resultHead) || !sameRevision(lineage.current.resultTree, candidate.resultTree)
       || input.kind === "publish" && (candidate.developerExecutionId !== input.developerExecutionId
         || candidate.reviewId !== input.reviewId
         || !sameRevision(candidate.resultTree, input.subjectTree)
         || !sameRevision(candidate.currentBaseSha, input.targetBaseSha))) continue;
     const delivery = deliveryArtifactFromLineage(db, input, candidate.developerExecutionId);
     if (!delivery) continue;
+    provenMergeIds.add(candidate.forwardMergeId);
     contexts.push({ developerExecutionId: candidate.developerExecutionId, worktreePath: candidate.worktreePath, branchName: candidate.branchName, targetBaseSha: candidate.currentBaseSha, subjectCommit: candidate.resultHead!, subjectTree: candidate.resultTree, reviewId: candidate.reviewId, title: candidate.title, delivery });
   }
   const [context] = contexts;
-  if (!context) return undefined;
+  if (!context || provenMergeIds.size !== 1) return undefined;
   const identity = [context.developerExecutionId, context.worktreePath, context.branchName, context.targetBaseSha, context.subjectCommit, context.subjectTree, context.reviewId, context.delivery!.id].join("|");
   return contexts.every((candidate) => [candidate.developerExecutionId, candidate.worktreePath, candidate.branchName, candidate.targetBaseSha, candidate.subjectCommit, candidate.subjectTree, candidate.reviewId, candidate.delivery!.id].join("|") === identity) ? context : undefined;
 }

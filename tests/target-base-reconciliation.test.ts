@@ -478,6 +478,65 @@ describe("target-base reconciliation contracts", () => {
     }
   });
 
+  test("resurfaces the newest typed blocker through a two-hop immutable Developer lineage without rewriting rows", async () => {
+    const fixture = await targetBaseActivityFixture("forge-target-base-transitive-no-drift-");
+    try {
+      const firstMerge = await mergeTargetBase(fixture);
+      await fixture.run("git", ["checkout", "main"], { cwd: fixture.repositoryPath });
+      await writeFile(join(fixture.repositoryPath, "advanced-two.txt"), "advanced two\n");
+      await fixture.run("git", ["add", "advanced-two.txt"], { cwd: fixture.repositoryPath });
+      await fixture.run("git", ["commit", "-m", "advance base again"], { cwd: fixture.repositoryPath });
+      const secondBase = (await fixture.run("git", ["rev-parse", "HEAD"], { cwd: fixture.repositoryPath })).stdout.trim();
+      await fixture.run("git", ["checkout", "issue/task-1"], { cwd: fixture.repositoryPath });
+      await fixture.run("git", ["merge", "--no-ff", "--no-edit", secondBase], { cwd: fixture.repositoryPath });
+      const secondMergeHead = (await fixture.run("git", ["rev-parse", "HEAD"], { cwd: fixture.repositoryPath })).stdout.trim();
+      const secondMergeTree = (await fixture.run("git", ["rev-parse", "HEAD^{tree}"], { cwd: fixture.repositoryPath })).stdout.trim();
+      const firstVerification = await fixture.artifacts.putArtifact("company-1", "forward-merge-verification", { taskId: "task-1", filename: "first-verification.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ outcome: "failed", code: "verification_failed", summary: "First merge verification failed" })) });
+      const secondVerification = await fixture.artifacts.putArtifact("company-1", "forward-merge-verification", { taskId: "task-1", filename: "second-verification.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ outcome: "failed", code: "verification_timed_out", summary: "Newest merge verification timed out" })) });
+      const later = new Date(Date.parse(fixture.now) + 1_000).toISOString();
+      const latest = new Date(Date.parse(fixture.now) + 2_000).toISOString();
+      const noDriftOperationKey = `workflow-1:pre_release:${fixture.configuration.id}:${secondBase}:${secondBase}:${secondMergeHead}`;
+      fixture.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-root', 'task-1', 'company-1', 'workflow-1', 1, 1, 'completed', 'issue/task-1', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?, ?)").run(fixture.repositoryPath, fixture.repository.base, fixture.now, fixture.now, fixture.repository.head, fixture.priorTree, fixture.delivery.id, fixture.evidence.id);
+        db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, failure_code, failure_summary, updated_at) VALUES ('merge-transitive-a', 'task-1', 'company-1', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow-1', ?, 'pre_release', ?, ?, ?, 'developer-root', ?, 'verification_failed', 'First merge verification failed', ?)").run(fixture.repository.base, fixture.targetBase, fixture.repository.head, firstMerge.mergedHead, firstMerge.mergedTree, fixture.now, fixture.configuration.id, fixture.priorTree, firstMerge.mergedHead, firstMerge.mergedTree, firstVerification.id, fixture.now);
+        db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, result_head, result_tree, developer_execution_id, verification_artifact_id, failure_code, failure_summary, updated_at) VALUES ('merge-transitive-b', 'task-1', 'company-1', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow-1', ?, 'pre_release', ?, ?, ?, 'developer-root', ?, 'verification_timed_out', 'Newest merge verification timed out', ?)").run(fixture.targetBase, secondBase, firstMerge.mergedHead, secondMergeHead, secondMergeTree, later, fixture.configuration.id, firstMerge.mergedTree, secondMergeHead, secondMergeTree, secondVerification.id, later);
+        db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, developer_execution_id, updated_at) VALUES ('merge-transitive-no-drift', 'task-1', 'company-1', ?, ?, ?, NULL, NULL, 'no_drift', '[]', ?, 'workflow-1', ?, 'pre_release', ?, ?, 'developer-root', ?)").run(secondBase, secondBase, secondMergeHead, latest, fixture.configuration.id, noDriftOperationKey, secondMergeTree, latest);
+      });
+      const activities = createActivities(fixture.database, fixture.config, { githubRelease: {
+        async getRemoteRepository() { return "acme/project"; },
+        async getBranchHead() { return secondBase; },
+      } as never });
+      const before = {
+        executions: fixture.database.authQuery((db) => db.prepare("SELECT * FROM forge_developer_executions WHERE task_id = 'task-1' ORDER BY id").all()),
+        merges: fixture.database.authQuery((db) => db.prepare("SELECT * FROM forge_forward_merges WHERE task_id = 'task-1' ORDER BY id").all()),
+      };
+      const changesBefore = fixture.database.authQuery((db) => Number(db.prepare("SELECT total_changes()").pluck().get()));
+
+      await expect(activities.reconcileTargetBase({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: fixture.configuration.id, checkpoint: "pre_release", developerExecutionId: "developer-root", expectedBaseSha: secondBase, expectedHeadSha: secondMergeHead, expectedHeadTree: secondMergeTree, forwardMergeId: "merge-transitive-no-drift" })).resolves.toEqual({
+        outcome: "blocked",
+        checkId: "merge-transitive-b",
+        checkpoint: "pre_release",
+        code: "verification_timed_out",
+        owner: "lead",
+        retryable: true,
+        summary: "Newest merge verification timed out",
+        evidenceArtifact: { id: secondVerification.id, kind: "forward-merge-verification" },
+        observedBaseSha: secondBase,
+        priorHead: firstMerge.mergedHead,
+        priorTree: firstMerge.mergedTree,
+        resultHead: secondMergeHead,
+        resultTree: secondMergeTree,
+      });
+      expect({
+        executions: fixture.database.authQuery((db) => db.prepare("SELECT * FROM forge_developer_executions WHERE task_id = 'task-1' ORDER BY id").all()),
+        merges: fixture.database.authQuery((db) => db.prepare("SELECT * FROM forge_forward_merges WHERE task_id = 'task-1' ORDER BY id").all()),
+      }).toEqual(before);
+      expect(fixture.database.authQuery((db) => Number(db.prepare("SELECT total_changes()").pluck().get()))).toBe(changesBefore);
+    } finally {
+      await closeTargetBaseActivityFixture(fixture);
+    }
+  });
+
   test("allows a recorded forward merge to repair a stale workflow execution id", () => {
     const input = ReconcileTargetBaseActivityInputSchema.parse({
       taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: "revision-1", checkpoint: "pre_release",

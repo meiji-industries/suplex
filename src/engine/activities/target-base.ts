@@ -2,6 +2,7 @@ import type { TargetBaseActivities } from "../contracts/activities/target-base.j
 import type { ReconcileTargetBaseActivityInput, ReconcileTargetBaseActivityResult, TargetBaseBlockerCode } from "../contracts/primitives.js";
 import type { ActivityContext } from "./context.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
+import { proveForwardMergeLineage, type ForwardMergeLineageProof } from "./forward-merge-lineage.js";
 
 type VerificationBlockerCode = Extract<TargetBaseBlockerCode, "verification_failed" | "verification_timed_out" | "verification_evidence_too_large">;
 const verificationBlockerCodes: readonly VerificationBlockerCode[] = ["verification_failed", "verification_timed_out", "verification_evidence_too_large"];
@@ -25,12 +26,6 @@ type NoDriftMergedDelivery = {
   deliveryArtifactId: string | null;
   failureCode: string | null;
   failureSummary: string | null;
-  executionId: string | null;
-  executionStatus: string | null;
-  executionTargetBaseSha: string | null;
-  executionResultCommit: string | null;
-  executionResultTree: string | null;
-  executionDeliveryArtifactId: string | null;
 };
 
 function sameRevision(left: string | null | undefined, right: string | null | undefined): boolean {
@@ -101,71 +96,71 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
         : [];
       const verificationArtifact = storedDelivery ? storedArtifacts.find((artifact) => artifact.id === storedDelivery.verificationArtifactId && artifact.kind === "forward-merge-verification") : undefined;
       const deliveryArtifact = storedDelivery ? storedArtifacts.find((artifact) => artifact.id === storedDelivery.deliveryArtifactId && artifact.kind === "developer-delivery") : undefined;
+      const storedLineage = merge.status === "merged" && storedMergeId && storedDelivery?.developerExecutionId
+        ? database.authQuery((db) => proveForwardMergeLineage(db, { currentMergeId: storedMergeId, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, checkpoint: input.checkpoint, developerExecutionId: storedDelivery.developerExecutionId! }))
+        : undefined;
+      const storedLineageMatchesContext = !!storedLineage
+        && context.developerExecutionId === storedLineage.developer.id && context.developerStatus === storedLineage.developer.status
+        && sameRevision(context.targetBaseSha, storedLineage.developer.targetBaseSha)
+        && sameRevision(context.resultCommit, storedLineage.developer.resultHead) && sameRevision(context.resultTree, storedLineage.developer.resultTree);
+      const storedLineageMatchesMerge = storedLineageMatchesContext && !!merge.mergeCommit && !!merge.tree
+        && sameRevision(storedLineage.current.currentBaseSha, merge.targetBaseSha)
+        && sameRevision(storedLineage.current.priorHead, merge.priorHead) && sameRevision(storedLineage.current.priorTree, merge.priorTree)
+        && sameRevision(storedLineage.current.resultHead, merge.mergeCommit) && sameRevision(storedLineage.current.resultTree, merge.tree);
       if (merge.status === "merged" && storedDelivery?.developerExecutionId && (storedDelivery.failureCode !== null || storedDelivery.failureSummary !== null)) {
         const coordinates = { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, ...(storedDelivery.resultHead ? { resultHead: storedDelivery.resultHead } : {}), ...(storedDelivery.resultTree ? { resultTree: storedDelivery.resultTree } : {}) };
         const failureCode = storedDelivery.failureCode;
         const failureSummary = storedDelivery.failureSummary;
-        const ownsStoredVerificationFailure = !!merge.mergeCommit && !!merge.tree && !!storedDelivery.resultHead && !!storedDelivery.resultTree
-          && context.developerExecutionId === storedDelivery.developerExecutionId
-          && input.expectedBaseSha.toLowerCase() === storedDelivery.expectedBaseSha.toLowerCase() && context.targetBaseSha.toLowerCase() === merge.targetBaseSha.toLowerCase()
-          && input.expectedHeadSha.toLowerCase() === storedDelivery.resultHead.toLowerCase() && input.expectedHeadTree.toLowerCase() === storedDelivery.resultTree.toLowerCase()
-          && context.resultCommit.toLowerCase() === storedDelivery.resultHead.toLowerCase() && context.resultTree.toLowerCase() === storedDelivery.resultTree.toLowerCase()
-          && storedDelivery.resultHead.toLowerCase() === merge.mergeCommit.toLowerCase() && storedDelivery.resultTree.toLowerCase() === merge.tree.toLowerCase()
-          && isVerificationBlockerCode(failureCode) && !!failureSummary;
+        const ownsStoredVerificationFailure = storedLineageMatchesMerge && isVerificationBlockerCode(failureCode) && !!failureSummary;
         if (!ownsStoredVerificationFailure) return blocked("merge_state_ownership_mismatch", "human", false, "The blocked Developer revision does not match the recorded forward-merge verification failure", undefined, coordinates, merge.forwardMergeId ?? checkId);
         if (!verificationArtifact) return blocked("artifact_unavailable", "human", false, "The stored forward-merge verification artifact is unavailable", undefined, coordinates, merge.forwardMergeId ?? checkId);
         return blocked(failureCode, "lead", true, failureSummary, artifactReference({ id: verificationArtifact.id, kind: "forward-merge-verification" }), coordinates, merge.forwardMergeId ?? checkId);
       }
       if (merge.status === "merged" && storedDelivery && storedArtifacts.length === 2 && storedDelivery.developerExecutionId && storedDelivery.resultHead && storedDelivery.resultTree) {
         if (verificationArtifact && deliveryArtifact) {
-          const storedRevisionMatchesMerge = !!merge.mergeCommit && !!merge.tree && storedDelivery.resultHead.toLowerCase() === merge.mergeCommit.toLowerCase() && storedDelivery.resultTree.toLowerCase() === merge.tree.toLowerCase();
-          const adopted = storedRevisionMatchesMerge && adoptStoredDelivery({ developerExecutionId: storedDelivery.developerExecutionId, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: storedDelivery.resultHead, resultTree: storedDelivery.resultTree });
+          const adopted = storedLineageMatchesMerge && (storedLineage!.kind === "transitive" || adoptStoredDelivery({ developerExecutionId: storedDelivery.developerExecutionId, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: storedDelivery.resultHead, resultTree: storedDelivery.resultTree }));
           if (!adopted) return blocked("merge_state_ownership_mismatch", "human", false, "The completed Developer revision does not match the recorded forward merge", undefined, { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: storedDelivery.resultHead, resultTree: storedDelivery.resultTree }, merge.forwardMergeId ?? checkId);
           return { outcome: "revalidated", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, headSha: storedDelivery.resultHead, headTree: storedDelivery.resultTree, developerExecutionId: storedDelivery.developerExecutionId, deliveryArtifact: artifactReference({ id: deliveryArtifact.id, kind: "developer-delivery" }), verificationArtifact: artifactReference({ id: verificationArtifact.id, kind: "forward-merge-verification" }), ...(storedDelivery.developerEvidenceArtifactId ? { developerEvidenceArtifactId: storedDelivery.developerEvidenceArtifactId } : {}) };
         }
       }
+      if (merge.status === "merged" && !storedLineageMatchesMerge) {
+        return blocked("merge_state_ownership_mismatch", "human", false, "The Developer revision does not match the recorded forward merge", undefined, { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, ...(merge.mergeCommit ? { resultHead: merge.mergeCommit } : {}), ...(merge.tree ? { resultTree: merge.tree } : {}) }, merge.forwardMergeId ?? checkId);
+      }
       if (merge.status === "no_drift") {
-        const mergedDelivery = database.authQuery((db) => db.prepare(`SELECT
+        const mergedDeliveries = database.authQuery((db) => db.prepare(`SELECT
             m.id, m.project_revision_id AS projectRevisionId, m.expected_base_sha AS expectedBaseSha, m.current_base_sha AS targetBaseSha,
             m.prior_head AS priorHead, m.prior_tree AS priorTree, m.merge_commit AS mergeCommit, m.tree,
             m.result_head AS resultHead, m.result_tree AS resultTree, m.developer_execution_id AS developerExecutionId,
             m.verification_artifact_id AS verificationArtifactId, m.delivery_artifact_id AS deliveryArtifactId,
-            m.failure_code AS failureCode, m.failure_summary AS failureSummary,
-            d.id AS executionId, d.status AS executionStatus, d.target_base_sha AS executionTargetBaseSha,
-            d.result_commit AS executionResultCommit, d.result_tree AS executionResultTree,
-            d.delivery_artifact_id AS executionDeliveryArtifactId
+            m.failure_code AS failureCode, m.failure_summary AS failureSummary
           FROM forge_forward_merges m
-          LEFT JOIN forge_developer_executions d
-            ON d.id = m.developer_execution_id AND d.task_id = m.task_id AND d.company_id = m.company_id AND d.workflow_id = m.workflow_id
           WHERE m.task_id = ? AND m.company_id = ? AND m.workflow_id = ? AND m.status = 'merged'
             AND (lower(m.result_head) = lower(?) OR lower(m.merge_commit) = lower(?))
-          ORDER BY CASE
-            WHEN m.developer_execution_id = ? AND m.project_revision_id = ? THEN 0
-            WHEN m.developer_execution_id = ? THEN 1
-            ELSE 2
-          END, COALESCE(m.updated_at, m.created_at) DESC, m.id DESC
-          LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.expectedHeadSha, input.expectedHeadSha, developerExecutionId, input.projectRevisionId, developerExecutionId) as NoDriftMergedDelivery | undefined);
-        if (mergedDelivery) {
+          ORDER BY m.id`).all(input.taskId, input.companyId, input.workflowId, input.expectedHeadSha, input.expectedHeadSha) as NoDriftMergedDelivery[]);
+        const provenDeliveries: Array<{ mergedDelivery: NoDriftMergedDelivery; lineage: ForwardMergeLineageProof }> = [];
+        for (const mergedDelivery of mergedDeliveries) {
+          if (!mergedDelivery.developerExecutionId || mergedDelivery.developerExecutionId !== developerExecutionId) continue;
+          const lineage = database.authQuery((db) => proveForwardMergeLineage(db, { currentMergeId: mergedDelivery.id, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, checkpoint: input.checkpoint, developerExecutionId }));
+          const ownsMergedDelivery = !!lineage
+            && lineage.developer.id === context.developerExecutionId && lineage.developer.status === context.developerStatus
+            && sameRevision(lineage.developer.resultHead, context.resultCommit) && sameRevision(lineage.developer.resultTree, context.resultTree)
+            && sameRevision(lineage.developer.targetBaseSha, context.targetBaseSha)
+            && sameRevision(lineage.current.currentBaseSha, merge.targetBaseSha)
+            && sameRevision(lineage.current.resultHead, input.expectedHeadSha) && sameRevision(lineage.current.resultTree, input.expectedHeadTree)
+            && sameRevision(merge.priorHead, lineage.current.resultHead) && sameRevision(merge.priorTree, lineage.current.resultTree);
+          if (lineage && ownsMergedDelivery) provenDeliveries.push({ mergedDelivery, lineage });
+        }
+        if (mergedDeliveries.length > 0 && provenDeliveries.length !== 1) {
+          const [candidate] = mergedDeliveries.length === 1 ? mergedDeliveries : [];
+          const coordinates = candidate
+            ? { observedBaseSha: merge.targetBaseSha, priorHead: candidate.priorHead, ...(candidate.priorTree ? { priorTree: candidate.priorTree } : {}), ...(candidate.resultHead ? { resultHead: candidate.resultHead } : {}), ...(candidate.resultTree ? { resultTree: candidate.resultTree } : {}) }
+            : { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree };
+          return blocked("merge_state_ownership_mismatch", "human", false, "The Developer revision does not match the recorded forward merge", undefined, coordinates, candidate?.id ?? merge.forwardMergeId ?? checkId);
+        }
+        const provedDelivery = provenDeliveries[0];
+        if (provedDelivery) {
+          const { mergedDelivery, lineage } = provedDelivery;
           const coordinates = { observedBaseSha: merge.targetBaseSha, priorHead: mergedDelivery.priorHead, ...(mergedDelivery.priorTree ? { priorTree: mergedDelivery.priorTree } : {}), ...(mergedDelivery.resultHead ? { resultHead: mergedDelivery.resultHead } : {}), ...(mergedDelivery.resultTree ? { resultTree: mergedDelivery.resultTree } : {}) };
-          const executionAtPrior = sameRevision(mergedDelivery.executionResultCommit, mergedDelivery.priorHead) && sameRevision(mergedDelivery.executionResultTree, mergedDelivery.priorTree);
-          const executionAtResult = sameRevision(mergedDelivery.executionResultCommit, mergedDelivery.resultHead) && sameRevision(mergedDelivery.executionResultTree, mergedDelivery.resultTree);
-          const executionBaseMatches = executionAtPrior
-            ? sameRevision(mergedDelivery.executionTargetBaseSha, mergedDelivery.expectedBaseSha)
-            : executionAtResult && (sameRevision(mergedDelivery.executionTargetBaseSha, mergedDelivery.expectedBaseSha) || sameRevision(mergedDelivery.executionTargetBaseSha, mergedDelivery.targetBaseSha));
-          const ownsMergedDelivery = mergedDelivery.projectRevisionId === input.projectRevisionId
-            && !!mergedDelivery.developerExecutionId && mergedDelivery.developerExecutionId === developerExecutionId
-            && mergedDelivery.executionId === mergedDelivery.developerExecutionId && context.developerExecutionId === mergedDelivery.developerExecutionId
-            && mergedDelivery.executionStatus === context.developerStatus && !!mergedDelivery.executionStatus && ["completed", "blocked"].includes(mergedDelivery.executionStatus)
-            && (executionAtPrior || executionAtResult)
-            && sameRevision(mergedDelivery.executionResultCommit, context.resultCommit) && sameRevision(mergedDelivery.executionResultTree, context.resultTree)
-            && sameRevision(mergedDelivery.executionTargetBaseSha, context.targetBaseSha) && executionBaseMatches
-            && !!mergedDelivery.priorTree && sameRevision(mergedDelivery.targetBaseSha, merge.targetBaseSha)
-            && sameRevision(mergedDelivery.resultHead, input.expectedHeadSha) && sameRevision(mergedDelivery.resultTree, input.expectedHeadTree)
-            && sameRevision(mergedDelivery.mergeCommit, mergedDelivery.resultHead) && sameRevision(mergedDelivery.tree, mergedDelivery.resultTree)
-            && sameRevision(merge.priorHead, mergedDelivery.resultHead) && sameRevision(merge.priorTree, mergedDelivery.resultTree);
-          if (!ownsMergedDelivery) {
-            return blocked("merge_state_ownership_mismatch", "human", false, "The Developer revision does not match the recorded forward merge", undefined, coordinates, mergedDelivery.id);
-          }
           const mergedArtifacts = (mergedDelivery.verificationArtifactId || mergedDelivery.deliveryArtifactId)
             ? database.authQuery((db) => db.prepare("SELECT id, kind FROM forge_artifacts WHERE company_id = ? AND (id = ? OR id = ?) ORDER BY id").all(input.companyId, mergedDelivery.verificationArtifactId, mergedDelivery.deliveryArtifactId) as Array<{ id: string; kind: string }>)
             : [];
@@ -182,13 +177,13 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
             }
             return blocked(failureCode, "lead", true, failureSummary, artifactReference({ id: mergedVerificationArtifact.id, kind: "forward-merge-verification" }), coordinates, mergedDelivery.id);
           }
-          if (mergedDelivery.executionStatus !== "completed") {
+          if (lineage.developer.status !== "completed") {
             return blocked("merge_state_ownership_mismatch", "human", false, "The completed Developer revision does not match the recorded forward merge", undefined, coordinates, mergedDelivery.id);
           }
-          if (!mergedVerificationArtifact || !mergedDeliveryArtifact || mergedDelivery.executionDeliveryArtifactId !== mergedDelivery.deliveryArtifactId) {
+          if (!mergedVerificationArtifact || !mergedDeliveryArtifact || context.deliveryArtifactId !== mergedDelivery.deliveryArtifactId) {
             return blocked("artifact_unavailable", "human", false, "The stored forward-merge delivery artifacts are unavailable", undefined, coordinates, mergedDelivery.id);
           }
-          if (!adoptStoredDelivery({ developerExecutionId: mergedDelivery.developerExecutionId!, priorHead: mergedDelivery.priorHead, priorTree: mergedDelivery.priorTree!, resultHead: mergedDelivery.resultHead!, resultTree: mergedDelivery.resultTree! })) {
+          if (lineage.kind !== "transitive" && !adoptStoredDelivery({ developerExecutionId: lineage.developer.id, priorHead: lineage.current.priorHead, priorTree: lineage.current.priorTree, resultHead: lineage.current.resultHead, resultTree: lineage.current.resultTree })) {
             return blocked("merge_state_ownership_mismatch", "human", false, "The completed Developer revision does not match the recorded forward merge", undefined, coordinates, mergedDelivery.id);
           }
         }

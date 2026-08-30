@@ -385,6 +385,31 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
   }
 });
 
+test("normalizes legacy unknown delivery review attempt codes at the task read boundary", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Readable review attempts", description: "Keep legacy attempts readable.", idempotencyKey: "readable-review-attempts", images: [] });
+    const executionId = "legacy-review-execution";
+    const finishedAt = "2026-08-30T12:05:00.000Z";
+    value.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at, failure_code, failure_summary) VALUES (?, ?, ?, ?, 'reviewer', 'failed', 1, ?, ?, 'worker-restart-orphan', 'worker stopped')").run(executionId, created.task.id, value.companyId, created.task.workflowId, finishedAt, finishedAt);
+      const insertAttempt = db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, lead_session_ref, status, correction_attempts, failure_code, failure_summary, created_at, finished_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)");
+      insertAttempt.run("legacy-orphan-attempt", created.task.id, value.companyId, created.task.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), executionId, "legacy-review-session", "failed", "worker-restart-orphan", "worker stopped", finishedAt, finishedAt);
+      insertAttempt.run("valid-attempt", created.task.id, value.companyId, created.task.workflowId, "a".repeat(40), "d".repeat(40), "e".repeat(40), executionId, "legacy-review-session", "blocked", "rate-limited", "Retry later", finishedAt, finishedAt);
+      insertAttempt.run("null-attempt", created.task.id, value.companyId, created.task.workflowId, "a".repeat(40), "f".repeat(40), "1".repeat(40), executionId, "legacy-review-session", "completed", null, null, finishedAt, finishedAt);
+    });
+
+    const parsed = TaskResponseSchema.parse(value.tasks.getTask(value.adminId, created.task.id));
+    expect(Object.fromEntries(parsed.reviewLineage.reviewAttempts.map((attempt) => [attempt.id, attempt.code]))).toEqual({
+      "legacy-orphan-attempt": "process-failed",
+      "valid-attempt": "rate-limited",
+      "null-attempt": null,
+    });
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("forwards an explicit plan auto-approval to the workflow with its creating member", async () => {
   const value = await fixture();
   try {

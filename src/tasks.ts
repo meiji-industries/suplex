@@ -18,7 +18,7 @@ import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-fai
 import { acceptIssueDevelopment, acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, resyncIssueProjection, reviseIssuePlan, startIssueWorkflow } from "./engine/service.js";
 import { executeWorktreeCommand, type WorktreeCommandInput } from "./engine/worktree-commands.js";
 import { issueCommands } from "./commands/registry.js";
-import { createInitialIssueWorkflowState, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type SendPlannerNoteInput, type StartPlanningInput } from "./engine/issue-contracts.js";
+import { createInitialIssueWorkflowState, DeliveryOperationBlockCodeSchema, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type SendPlannerNoteInput, type StartPlanningInput } from "./engine/issue-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { taskCommandDescriptors, type TaskCommandDescriptor } from "./task-commands.js";
 import { TERMINAL_PHASES } from "./issue-phases.js";
@@ -228,7 +228,7 @@ export interface ReviewDto {
 export interface ReviewAttemptDto {
   id: string;
   status: string;
-  code: DeliveryOperationBlockCode | null;
+  code: DeliveryOperationBlockCode | "cancelled" | null;
   summary: string | null;
   correctionAttempts: number | null;
   planRevision: number;
@@ -274,6 +274,12 @@ export interface ReviewLineage {
   priorReviews: ReviewDto[];
   reviewAttempts: ReviewAttemptDto[];
   repairAttempts: RepairAttemptDto[];
+}
+
+function reviewAttemptFailureCode(code: string | null): DeliveryOperationBlockCode | "cancelled" | null {
+  if (code === null || code === "cancelled") return code;
+  const parsed = DeliveryOperationBlockCodeSchema.safeParse(code);
+  return parsed.success ? parsed.data : "process-failed";
 }
 
 export interface TaskLinkSummary {
@@ -1984,7 +1990,7 @@ export class TaskService {
       reviewAttempts: attemptRows.map((attempt) => ({
         id: attempt.id,
         status: attempt.status,
-        code: attempt.failure_code as DeliveryOperationBlockCode | null,
+        code: reviewAttemptFailureCode(attempt.failure_code),
         summary: attempt.failure_summary,
         correctionAttempts: attempt.correction_attempts,
         planRevision: attempt.plan_revision,

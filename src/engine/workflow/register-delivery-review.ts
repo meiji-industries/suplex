@@ -1,5 +1,5 @@
 import { log, setHandler } from "../registry.js";
-import { ApplicationFailure } from "../failures.js";
+import { ApplicationFailure, isCancellation } from "../failures.js";
 import { assertPayloadWithinLimit } from "../policy.js";
 import * as contracts from "../issue-contracts.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
@@ -38,6 +38,7 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
         (value) => "attemptId" in value ? (value.outcome === "completed" ? value.review.leadExecutionId : value.executionId) : undefined,
       );
     } catch (error) {
+      if (isCancellation(error)) throw error;
       const message = error instanceof Error ? error.message : String(error);
       log.error("Delivery review turn failed after dispatch", { workflowId: ctx.input.workflowId, taskId: ctx.input.issueId, error: message, stack: error instanceof Error ? error.stack : undefined });
       const completed = await legacyActivityProxies.findCompletedDeliveryReview({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, subjectCommit: subject.subjectCommit, subjectTree: subject.subjectTree }).catch((lookupError) => {

@@ -64,13 +64,16 @@ export class HerdrTurnRunner {
         const marker = `[forge-turn:${turnId}]`;
         let resultPath = initialResultPath;
         let prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
-        const existing = this.existingTurn(input, correction);
-        if (!existing) {
+        const existingBeforeLaunch = this.existingTurn(input, correction);
+        if (!existingBeforeLaunch) {
           await mkdir(dirname(initialResultPath), { recursive: true, mode: 0o700 });
           await this.quarantine(initialResultPath);
         }
         const argvDispatchAt = this.now().toISOString();
         session = await this.ensure(input, { path: this.promptPath(resultPath), content: prompt });
+        // A concurrent retry can create or complete this deterministic turn while
+        // ensure waits for agent startup; dispatch must use that durable state.
+        const existing = this.existingTurn(input, correction);
         const resumed = existing?.promptSentAt || existing?.status === "completed" ? existing : undefined;
         resultPath = existing
           ? this.existingResultPath(input, existing.resultRelativePath)

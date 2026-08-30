@@ -150,6 +150,54 @@ test("uses the integrator execution role for the persistent session", async () =
     expect(ensuredRole).toBe("integrator");
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
+test("rechecks a turn completed while agent startup waits", async () => {
+  const setup = await fixture();
+  const turnId = `turn_${createHash("sha256").update(["execution", "plan", "0"].join("\0")).digest("hex").slice(0, 32)}`;
+  const result = JSON.stringify({ status: "ok" });
+  const path = join(setup.root, "herdr-results", "task", "planner", `result-${turnId}.json`);
+  let prompts = 0;
+  const herdr = {
+    prompt: async () => {
+      prompts += 1;
+      return setup.session.live;
+    },
+  };
+  const sessions = {
+    ensureRoleSession: async () => {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, result);
+      const now = new Date().toISOString();
+      setup.database.authQuery((db) => db.prepare(
+        "INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, correction_index, status, result_sha256, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?)",
+      ).run(
+        turnId,
+        "task",
+        "session",
+        "planner",
+        "agent",
+        "execution",
+        "plan",
+        createHash("sha256").update("concurrent prompt").digest("hex"),
+        `herdr-results/task/planner/result-${turnId}.json`,
+        null,
+        0,
+        createHash("sha256").update(result).digest("hex"),
+        now,
+        now,
+      ));
+      return setup.session;
+    },
+  };
+  const runner = makeRunner(setup.database, herdr as never, sessions as never, new IssueTimelineEvents(setup.database));
+  try {
+    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
+    expect(prompts).toBe(0);
+  } finally {
+    setup.database.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
 test("accepts an OMP argv result written while Herdr waits for readiness", async () => {
   const setup = await fixture();
   const ompHome = join(setup.root, "omp");

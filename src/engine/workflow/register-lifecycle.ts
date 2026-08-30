@@ -1,14 +1,19 @@
-import { condition, setHandler } from "../registry.js";
+import { condition, runExecution, setHandler, setInterruptHandler } from "../registry.js";
 import { ApplicationFailure } from "../failures.js";
 import { z } from "zod";
 
 import { TERMINAL_PHASES } from "../../issue-phases.js";
 import { assertPayloadWithinLimit } from "../policy.js";
-import { ContinueWorkCommandSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, StartPlanningInputSchema } from "../issue-contracts.js";
+import { ContinueWorkCommandSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, StartPlanningInputSchema, type DeveloperCancellationResult } from "../issue-contracts.js";
 import { issueUpdates } from "../issue-updates.js";
 import { acceptDelivery, cancelCapacity, cancelCapacityExecution, cancelDeveloperExecution, cleanupTaskWorktree, createSuccessor, finalizeCapacity, inspectCapacity, inspectTaskWorktree, recreateTaskWorktree, recordDeliveryDecision } from "./activity-proxies.js";
 import type { IssueWorkflowContext } from "./context.js";
 import * as stateTransitions from "./state-transitions.js";
+
+type DeveloperCancellationInterruptResult = {
+  executionId: string;
+  result: DeveloperCancellationResult;
+};
 
 export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
   const cancelQueuedCapacity = async (): Promise<void> => {
@@ -40,6 +45,26 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     return "none";
   };
   const developerCancellationAvailable = (): boolean => ctx.state.phase === "development" || (ctx.state.phase === "delivery_blocked" && (ctx.state.developerRecoveryStatus === "cancellation_requested" || (ctx.state.developerRecoveryStatus === "interrupted" && ctx.state.capacity !== null)));
+  const interruptDeveloperCancellation = (): Promise<DeveloperCancellationInterruptResult> | undefined => {
+    const executionId = ctx.state.developerExecutionId;
+    if (!executionId || !["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling"].includes(ctx.state.developerRecoveryStatus ?? "")) return undefined;
+    return cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId }).then((result) => ({ executionId, result }));
+  };
+  const acceptedDeveloperCancellation = (name: string, executionId: string): DeveloperCancellationResult | undefined => {
+    const execution = runExecution.current();
+    if (execution.acceptedInterrupt !== name || execution.interruptResult === undefined) return undefined;
+    // The matching interrupt hook above is the only producer for this in-process result.
+    const interrupted = execution.interruptResult as DeveloperCancellationInterruptResult;
+    return interrupted.executionId === executionId ? interrupted.result : undefined;
+  };
+  setInterruptHandler(issueUpdates.cancel_issue, {
+    cancelActive: true,
+    validate: (rawInput: unknown) => {
+      PlanCommandInputSchema.parse(rawInput);
+      if (TERMINAL_PHASES.has(ctx.state.phase)) throw new Error("Issue cancellation is not available in the current phase");
+    },
+    run: interruptDeveloperCancellation,
+  });
   setHandler(issueUpdates.cancel_issue, ctx.guarded(async (rawInput: any) => {
     if (!ctx.exactPlanAuthorityEnabled && ctx.captureInitialProjectionState) await condition(() => ctx.initialProjectionComplete);
     if (ctx.initialProjectionBarrierEnabled) await ctx.initialProjection;
@@ -52,15 +77,17 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       ctx.planningPromise = undefined;
       ctx.planningScope = undefined;
     }
-    if (ctx.state.developerExecutionId && ["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling"].includes(ctx.state.developerRecoveryStatus ?? "")) {
-      const cancellation = await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId: ctx.state.developerExecutionId });
+    const executionId = ctx.state.developerExecutionId;
+    const interruptedCancellation = executionId ? acceptedDeveloperCancellation(issueUpdates.cancel_issue, executionId) : undefined;
+    if (executionId && ["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling"].includes(ctx.state.developerRecoveryStatus ?? "")) {
+      const cancellation = interruptedCancellation ?? await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId });
       if (cancellation.status === "completed_before_cancellation") {
         if (!unconditionalCancellation && ctx.applyCompletedDeveloperResult(cancellation.result, "Developer result claimed before issue cancellation.")) {
           await ctx.project();
           return ctx.state;
         }
         const result = cancellation.result as { developerExecutionId?: unknown; outcome?: unknown } | undefined;
-        if (!unconditionalCancellation && (result?.outcome !== "blocked" || result.developerExecutionId !== ctx.state.developerExecutionId || !true)) throw new Error("Completed Developer result is invalid");
+        if (!unconditionalCancellation && (result?.outcome !== "blocked" || result.developerExecutionId !== executionId || !true)) throw new Error("Completed Developer result is invalid");
       }
       if (cancellation.status !== "completed_before_cancellation" && !["cancelled", "cancelled_confirmed", "interrupted"].includes(cancellation.status)) {
         const summary = "summary" in cancellation ? cancellation.summary : "Forge could not confirm Developer termination.";
@@ -70,7 +97,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
           return ctx.state;
         }
       }
-      if (ctx.state.capacity) await settleCancelledCapacity(ctx.state.developerExecutionId);
+      if (ctx.state.capacity) await settleCancelledCapacity(executionId);
     } else {
       const cancellation = await cancelCurrentCapacity();
       if (cancellation.executionId) await settleCancelledCapacity(cancellation.executionId);
@@ -90,6 +117,17 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     await ctx.project();
     return ctx.state;
   }));
+  setInterruptHandler(issueUpdates.cancel_development, {
+    cancelActive: true,
+    validate: (rawInput: unknown) => {
+      const command = StartPlanningInputSchema.parse(rawInput);
+      if (ctx.commandAlreadyProcessed(command.commandId)) return false;
+      if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
+      if (!developerCancellationAvailable()) throw new Error("Developer cancellation is not available in the current phase");
+      return true;
+    },
+    run: interruptDeveloperCancellation,
+  });
   setHandler(issueUpdates.cancel_development, ctx.guarded(async (rawInput: any) => {
     assertPayloadWithinLimit("cancel development command", rawInput);
     const command = StartPlanningInputSchema.parse(rawInput);
@@ -106,13 +144,14 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
         return ctx.state;
       }
       const executionId = ctx.state.developerExecutionId;
+      const interruptedCancellation = acceptedDeveloperCancellation(issueUpdates.cancel_development, executionId);
       await ctx.withStateMutation(() => {
         if (ctx.state.revision !== command.expectedRevision || !developerCancellationAvailable()) throw new Error("Developer cancellation was superseded by another command");
         ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: "Cancelling Developer turn", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("cancellation_requested", null, "Cancellation was sent to the recorded Developer supervisor.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
         ctx.markCommandProcessed(command.commandId);
       });
       await ctx.project();
-      const result = await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId });
+      const result = interruptedCancellation ?? await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId });
       await ctx.withStateMutation(() => {
         if (result.status === "completed_before_cancellation") {
           if (!ctx.applyCompletedDeveloperResult(result.result, "Developer result won the cancellation race and was claimed.")) throw new Error("Completed Developer result is invalid");
@@ -129,6 +168,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     }
     if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
     const executionId = ctx.state.developerExecutionId;
+    const interruptedCancellation = executionId ? acceptedDeveloperCancellation(issueUpdates.cancel_development, executionId) : undefined;
     const hasCapacityOwnership = ctx.state.capacity !== null;
     await ctx.withStateMutation(() => {
       if (ctx.state.revision !== command.expectedRevision || !developerCancellationAvailable()) throw new Error("Developer cancellation was superseded by another command");
@@ -156,7 +196,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       await ctx.project();
       return ctx.state;
     }
-    const result = await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId });
+    const result = interruptedCancellation ?? await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId });
     await ctx.withStateMutation(() => {
       if (result.status === "completed_before_cancellation") {
         if (!ctx.applyCompletedDeveloperResult(result.result, "Developer result won the cancellation race and was claimed.")) throw new Error("Completed Developer result is invalid");

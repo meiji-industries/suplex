@@ -2,10 +2,88 @@ import { expect, test } from "vitest";
 import { activityContext } from "../src/engine/activity-context.js";
 import { createActivityCaller } from "../src/engine/activities.js";
 import { ApplicationFailure, CancelledFailure } from "../src/engine/failures.js";
-import { durableCommand } from "../src/engine/service.js";
-import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
+import { durableCommand, executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/engine/service.js";
+import { buildInitialIssueWorkflowState, type DeveloperTurnActivityOutcome, type IssueWorkflowInput, type LeadPlanningResult, type WorkflowDeveloperExecutionResult } from "../src/engine/issue-contracts.js";
 import { Wakeable } from "../src/engine/runs.js";
-import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
+import { createEngineHarness, engineFixture, type EngineHarness } from "./helpers/engine-harness.js";
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise; });
+  return { promise, resolve, reject };
+}
+
+function commandReceiptCount(harness: EngineHarness, commandId: string): number {
+  const row = harness.database.authQuery((db) => db.prepare("SELECT count(*) AS count FROM forge_engine_commands WHERE command_id = ?").get(commandId) as { count: number });
+  return row.count;
+}
+
+function workflowInput(issueId: string, continuationState?: IssueWorkflowInput["continuationState"]): Omit<IssueWorkflowInput, "workflowId"> {
+  return {
+    companyId: engineFixture.companyId,
+    projectId: engineFixture.projectId,
+    issueId,
+    projectRevisionId: engineFixture.projectRevisionId,
+    briefArtifactId: engineFixture.briefArtifactId,
+    briefSha256: engineFixture.sha256,
+    imageArtifactIds: [],
+    roleProfiles: engineFixture.roleProfiles,
+    supplementalReview: false,
+    ...(continuationState ? { continuationState } : {}),
+  };
+}
+
+function leadPlan(workflowId: string, issueId: string): LeadPlanningResult {
+  return {
+    leadExecutionId: "lead-plan",
+    leadSessionRef: "lead-session",
+    leadOutputArtifactId: "plan-artifact",
+    leadEvidenceArtifactId: "plan-evidence",
+    leadOutputArtifactSha256: engineFixture.sha256,
+    leadOutputKind: "plan",
+    leadSummary: "A material plan",
+    materialCategories: ["security_permissions"],
+    material: true,
+    planSubject: {
+      companyId: engineFixture.companyId,
+      issueId,
+      workflowId,
+      originalPlanRevision: 1,
+      outputId: "plan-output",
+      outputRevision: 1,
+      finalVersion: 1,
+      artifactId: "plan-artifact",
+      artifactSha256: engineFixture.sha256,
+      leadSessionRef: "lead-session",
+      leadExecutionId: "lead-plan",
+      evidenceManifestArtifactId: "plan-evidence",
+      evidenceManifestSha256: engineFixture.sha256,
+    },
+  };
+}
+
+type DeveloperActivityResult = DeveloperTurnActivityOutcome<WorkflowDeveloperExecutionResult>;
+function developerResult(executionId: string): DeveloperActivityResult {
+  return {
+    status: "completed",
+    resultHash: engineFixture.sha256,
+    result: {
+      developerExecutionId: executionId,
+      developerSessionRef: "developer-session",
+      branchName: "forge/issue/interrupt-development",
+      targetBaseSha: engineFixture.base,
+      currentStep: null,
+      resultCommit: engineFixture.commit,
+      resultTree: engineFixture.tree,
+      dirtyState: "clean",
+      deliveryArtifactId: "delivery-artifact",
+      evidenceArtifactId: "developer-evidence",
+      deliverySummary: "Late completion",
+      outcome: "completed",
+    },
+  };
+}
 
 test("durable command IDs are stable", () => {
   const input = { expectedRevision: 0, actorUserId: "member" };
@@ -56,4 +134,195 @@ test("IssueEngine loads an unstarted run from its snapshot", async () => {
     expect(run.input.roleProfiles.planner).toBe("profile");
     expect(harness.engine.run(workflowId)).toBe(run);
   } finally { await harness.stop(); }
+});
+
+test("issue cancellation interrupts held planning and late completion cannot resurrect it", async () => {
+  const planning = deferred<LeadPlanningResult>();
+  const planningStarted = deferred<void>();
+  const planningAborted = deferred<void>();
+  const harness = await createEngineHarness({
+    projectIssueState: async (event) => event.state,
+    runLeadPlanning: async () => {
+      const signal = activityContext.current().signal;
+      signal.addEventListener("abort", () => {
+        planningAborted.resolve(undefined);
+        planning.reject(new CancelledFailure());
+      }, { once: true });
+      planningStarted.resolve(undefined);
+      return planning.promise;
+    },
+  });
+  const issueId = "interrupt-planning";
+  harness.seedTask(issueId);
+  try {
+    const started = await startIssueWorkflow(harness.config, workflowInput(issueId));
+    const planningCommand = executeIssueCommand(harness.config, started.workflowId, "start_planning", {
+      expectedRevision: 0,
+      actorUserId: engineFixture.actorUserId,
+      commandId: "start-held-planning",
+    });
+    const planningRejected = expect(planningCommand).rejects.toBeInstanceOf(CancelledFailure);
+    await planningStarted.promise;
+    const active = await queryIssueWorkflow(harness.config, started.workflowId);
+    expect(active.phase).toBe("planning");
+
+    const command = { expectedRevision: active.revision, actorUserId: engineFixture.actorUserId, commandId: "cancel-held-planning" };
+    const cancelled = await executeIssueCommand(harness.config, started.workflowId, "cancel_issue", command);
+    await planningAborted.promise;
+    await planningRejected;
+    expect(cancelled).toMatchObject({ phase: "cancelled", activeOperation: null, pendingAction: "Issue cancelled" });
+
+    planning.resolve(leadPlan(started.workflowId, issueId));
+    await Promise.resolve();
+    expect(await queryIssueWorkflow(harness.config, started.workflowId)).toMatchObject({ phase: "cancelled", revision: cancelled.revision });
+    expect(await executeIssueCommand(harness.config, started.workflowId, "cancel_issue", command)).toEqual(cancelled);
+    expect(commandReceiptCount(harness, command.commandId)).toBe(1);
+  } finally {
+    await harness.stop();
+  }
+});
+
+test("development cancellation invokes the cancel hook before held completion", async () => {
+  const development = deferred<DeveloperActivityResult>();
+  const developmentStarted = deferred<void>();
+  const cancellationSent = deferred<void>();
+  let cancellationCalls = 0;
+  const harness = await createEngineHarness({
+    projectIssueState: async (event) => event.state,
+    runDeveloperExecutionSupervised: async () => {
+      developmentStarted.resolve(undefined);
+      return development.promise;
+    },
+    cancelDeveloperExecution: async (input) => {
+      cancellationCalls += 1;
+      cancellationSent.resolve(undefined);
+      return { status: "cancelled_confirmed", executionId: input.executionId, exitCode: null, exitSignal: null, evidenceArtifactId: null };
+    },
+  });
+  const issueId = "interrupt-development";
+  const workflowId = harness.workflowId(issueId);
+  harness.seedTask(issueId);
+  const ready = {
+    phase: "ready_for_development" as const,
+    revision: 1,
+    owner: "lead" as const,
+    allowedCommands: ["start_development" as const, "cancel_issue" as const],
+    pendingAction: "Start development",
+    lastEventId: `${workflowId}:1`,
+    continuationCount: 0,
+    lastSummaryHash: null,
+    blocker: null,
+    stateChangedAt: "2026-08-29T00:00:00.000Z",
+    planRevision: 1,
+    planMaterial: true,
+    planApproved: true,
+    leadSessionRef: "lead-session",
+    leadOutputArtifactId: "plan-artifact",
+  };
+  try {
+    const started = await startIssueWorkflow(harness.config, workflowInput(issueId, ready));
+    const developmentCommand = executeIssueCommand(harness.config, started.workflowId, "start_development", {
+      expectedRevision: 1,
+      actorUserId: engineFixture.actorUserId,
+      commandId: "start-held-development",
+    });
+    await developmentStarted.promise;
+    await developmentCommand;
+    const active = await queryIssueWorkflow(harness.config, started.workflowId);
+    expect(active).toMatchObject({ phase: "development", developerRecoveryStatus: "starting" });
+
+    const command = { expectedRevision: active.revision, actorUserId: engineFixture.actorUserId, commandId: "cancel-held-development" };
+    const cancellation = executeIssueCommand(harness.config, started.workflowId, "cancel_development", command);
+    await cancellationSent.promise;
+    const cancelled = await cancellation;
+    expect(cancelled).toMatchObject({ phase: "delivery_blocked", developerRecoveryStatus: "cancelled", activeOperation: null });
+    expect(cancellationCalls).toBe(1);
+
+    const executionId = active.developerExecutionId;
+    if (!executionId) throw new Error("The held development turn did not record its execution ID");
+    development.resolve(developerResult(executionId));
+    for (let attempt = 0; attempt < 10; attempt += 1) await Promise.resolve();
+    expect(await queryIssueWorkflow(harness.config, started.workflowId)).toMatchObject({ phase: "delivery_blocked", developerRecoveryStatus: "cancelled", revision: cancelled.revision });
+    expect(await executeIssueCommand(harness.config, started.workflowId, "cancel_development", command)).toEqual(cancelled);
+    expect(cancellationCalls).toBe(1);
+    expect(commandReceiptCount(harness, command.commandId)).toBe(1);
+  } finally {
+    await harness.stop();
+  }
+});
+
+test("concurrent duplicate planner notes interrupt once and mutate state only after the active turn", async () => {
+  const planning = deferred<LeadPlanningResult>();
+  const planningStarted = deferred<void>();
+  const noteForwarded = deferred<void>();
+  const projections: unknown[] = [];
+  const harness = await createEngineHarness({
+    projectIssueState: async (event) => { projections.push(structuredClone(event.state)); return event.state; },
+    runLeadPlanning: async () => { planningStarted.resolve(undefined); return planning.promise; },
+    recordPlannerNote: async (input) => {
+      noteForwarded.resolve(undefined);
+      return { noteId: `planner_note_${input.commandId}`, createdAt: "2026-08-29T00:00:00.000Z" };
+    },
+  });
+  const issueId = "interrupt-note";
+  harness.seedTask(issueId);
+  try {
+    const started = await startIssueWorkflow(harness.config, workflowInput(issueId));
+    const planningCommand = executeIssueCommand(harness.config, started.workflowId, "start_planning", {
+      expectedRevision: 0,
+      actorUserId: engineFixture.actorUserId,
+      commandId: "start-held-note",
+    });
+    await planningStarted.promise;
+    const active = structuredClone(await queryIssueWorkflow(harness.config, started.workflowId));
+    const projectionCount = projections.length;
+    const command = { expectedRevision: active.revision, actorUserId: engineFixture.actorUserId, commandId: "duplicate-live-note", note: "Cover the cancellation race." };
+
+    const first = executeIssueCommand(harness.config, started.workflowId, "send_planner_note", command);
+    const second = executeIssueCommand(harness.config, started.workflowId, "send_planner_note", command);
+    let notesSettled = false;
+    const notes = Promise.all([first, second]).then((results) => { notesSettled = true; return results; });
+    await noteForwarded.promise;
+    expect(notesSettled).toBe(false);
+    expect(harness.calls.get("recordPlannerNote")).toBe(1);
+    expect(await queryIssueWorkflow(harness.config, started.workflowId)).toEqual(active);
+    expect(projections).toHaveLength(projectionCount);
+
+    planning.resolve(leadPlan(started.workflowId, issueId));
+    const planned = await planningCommand;
+    const [firstResult, secondResult] = await notes;
+    expect(firstResult).toEqual(secondResult);
+    expect(firstResult).toMatchObject({ phase: "approval", revision: planned.revision, processedCommandIds: expect.arrayContaining([command.commandId]) });
+    expect(harness.calls.get("recordPlannerNote")).toBe(1);
+    expect(commandReceiptCount(harness, command.commandId)).toBe(1);
+  } finally {
+    await harness.stop();
+  }
+});
+
+test("concurrent duplicate commands recheck the durable receipt inside the serialized lane", async () => {
+  let planningCalls = 0;
+  const harness = await createEngineHarness({
+    projectIssueState: async (event) => event.state,
+    runLeadPlanning: async (input) => {
+      planningCalls += 1;
+      return leadPlan(input.workflowId, input.taskId);
+    },
+  });
+  const issueId = "duplicate-serialized-command";
+  harness.seedTask(issueId);
+  try {
+    const started = await startIssueWorkflow(harness.config, workflowInput(issueId));
+    const command = { expectedRevision: 0, actorUserId: engineFixture.actorUserId, commandId: "duplicate-start-planning" };
+    const [first, second] = await Promise.all([
+      executeIssueCommand(harness.config, started.workflowId, "start_planning", command),
+      executeIssueCommand(harness.config, started.workflowId, "start_planning", command),
+    ]);
+    expect(first).toEqual(second);
+    expect(first.phase).toBe("approval");
+    expect(planningCalls).toBe(1);
+    expect(commandReceiptCount(harness, command.commandId)).toBe(1);
+  } finally {
+    await harness.stop();
+  }
 });

@@ -7,7 +7,7 @@ import { createActivities, createActivityCaller, type ActivityCaller } from "./a
 import { CancelledFailure } from "./failures.js";
 import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, buildInitialIssueWorkflowState, type IssueWorkflowInput, type IssueWorkflowState } from "./issue-contracts.js";
 import { issueWorkflow } from "./workflows.js";
-import { runExecution, type Handler, type RunExecutionContext } from "./registry.js";
+import { runExecution, type Handler, type InterruptHandler, type RunExecutionContext } from "./registry.js";
 import { StructuredLogger } from "../logging.js";
 import { clearAutomaticChainHalt } from "./workflow/runtime.js";
 
@@ -44,6 +44,7 @@ export class Wakeable {
 function isAutomaticCommand(workflowId: string, commandId: string): boolean {
   return commandId.startsWith(`${workflowId}:auto-`);
 }
+type InterruptOutcome = { accepted: boolean; result: unknown };
 
 const AGENT_OWNED_PHASES: Record<string, true> = {
   planning: true, supplemental_review: true, plan_consolidation: true, development: true, reviewing_delivery: true, repair_required: true,
@@ -98,11 +99,14 @@ export class IssueRun {
   readonly wakeable = new Wakeable();
   readonly commands = new Map<string, Handler>();
   readonly queries = new Map<string, Handler>();
+  readonly interrupts = new Map<string, InterruptHandler>();
   private chain: Promise<unknown> = Promise.resolve();
   private workflowPromise?: Promise<IssueWorkflowState>;
   private loopError?: unknown;
   private initialState: IssueWorkflowState;
   private executionContext?: RunExecutionContext;
+  private activeCommand: { name: string; controller: AbortController } | undefined;
+  private interrupting = new Map<string, Promise<InterruptOutcome>>();
   private projectionTimes: number[] = [];
   private projectionSignatures: string[] = [];
   private runawayHalted = false;
@@ -134,6 +138,9 @@ export class IssueRun {
       signal: this.controller.signal,
       commands: this.commands,
       queries: this.queries,
+      interrupts: this.interrupts,
+      acceptedInterrupt: undefined,
+      interruptResult: undefined,
       activity: (name: string, args: unknown[], options: Parameters<ActivityCaller["call"]>[2]) => {
         if (name === "projectIssueState") {
           const now = this.clock.now();
@@ -147,13 +154,13 @@ export class IssueRun {
             const state = IssueWorkflowStateSchema.parse({ ...event.state, owner: "human", allowedCommands: [...new Set([...event.state.allowedCommands, "cancel_issue"])], pendingAction: "Runaway transition loop halted", lastHandlerError: { command: "workflow", reason: "Runaway transition loop halted", at: new Date(now).toISOString() } });
             this.initialState = state;
             this.logger.error("Runaway transition loop halted", { workflowId: this.workflowId, runId: this.runId });
-            return this.caller.call(name, [{ ...event, eventId: state.lastEventId, state }], options, this.controller.signal, this.workflowId);
+            return this.caller.call(name, [{ ...event, eventId: state.lastEventId, state }], options, runExecution.current().signal, this.workflowId);
           }
         }
         if (this.runawayHalted && name !== "projectIssueState") throw new Error("Runaway transition loop halted");
-        return this.caller.call(name, args, options, this.controller.signal, this.workflowId);
+        return this.caller.call(name, args, options, runExecution.current().signal, this.workflowId);
       },
-      wait: (milliseconds: number) => this.wakeable.wait(milliseconds, this.controller.signal, this.clock),
+      wait: (milliseconds: number) => this.wakeable.wait(milliseconds, runExecution.current().signal, this.clock),
       now: () => this.clock.now(),
       wake: () => this.wakeable.wake(),
       autoActionsHalted: () => this.runawayHalted,
@@ -179,8 +186,33 @@ export class IssueRun {
     if (!this.queries.has("issueState")) throw this.loopError ?? new Error(`Issue run ${this.workflowId} did not register its state query`);
   }
 
+  private async runInterrupt(name: string, input: unknown): Promise<InterruptOutcome> {
+    await this.ready();
+    const interrupt = this.interrupts.get(name);
+    if (!interrupt) return { accepted: false, result: undefined };
+    const accepted = interrupt.validate ? runExecution.run(this.executionContext!, () => interrupt.validate!(input as never)) : undefined;
+    if (accepted === false) return { accepted: false, result: undefined };
+    if (interrupt.cancelActive) this.activeCommand?.controller.abort();
+    const result = interrupt.run ? await runExecution.run(this.executionContext!, () => interrupt.run!(input as never)) : undefined;
+    return { accepted: true, result };
+  }
+
   execute(name: string, input: unknown, commandId = "legacy-command"): Promise<IssueWorkflowState> {
+    if (commandId !== "legacy-command") {
+      const stored = this.database.authQuery((db) => db.prepare("SELECT result_json FROM forge_engine_commands WHERE command_id = ? AND workflow_id = ?").get(commandId, this.workflowId) as { result_json: string } | undefined);
+      if (stored) return Promise.resolve(IssueWorkflowStateSchema.parse(JSON.parse(stored.result_json)));
+    }
+    this.start();
+    const interruptible = this.interrupts.has(name);
+    const interruptKey = interruptible && commandId !== "legacy-command" ? commandId : undefined;
+    let interrupt = interruptKey ? this.interrupting.get(interruptKey) : undefined;
+    if (interruptible && !interrupt) {
+      interrupt = this.runInterrupt(name, input);
+      if (interruptKey) this.interrupting.set(interruptKey, interrupt);
+    }
+    const acceptedInterrupt = interrupt;
     const operation = this.chain.then(async () => {
+      const interruptOutcome = acceptedInterrupt ? await acceptedInterrupt : undefined;
       await this.ready();
       const automatic = isAutomaticCommand(this.workflowId, commandId);
       if (!automatic && commandId !== "legacy-command") clearAutomaticChainHalt(this.workflowId);
@@ -195,12 +227,23 @@ export class IssueRun {
       }
       const handler = this.commands.get(name);
       if (!handler) throw new Error(`Unknown issue command: ${name}`);
-      const result = IssueWorkflowStateSchema.parse(await runExecution.run(this.executionContext!, () => handler(input as never)));
-      if (commandId !== "legacy-command") this.database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_engine_commands (command_id, workflow_id, command, result_json, created_at) VALUES (?, ?, ?, ?, ?)").run(commandId, this.workflowId, name, JSON.stringify(result), new Date(this.clock.now()).toISOString()));
-      this.initialState = result;
-      this.wakeable.wake();
-      return result;
+      const controller = new AbortController();
+      const context = { ...this.executionContext!, signal: AbortSignal.any([this.controller.signal, controller.signal]), acceptedInterrupt: interruptOutcome?.accepted ? name : undefined, interruptResult: interruptOutcome?.result };
+      this.activeCommand = { name, controller };
+      try {
+        const result = IssueWorkflowStateSchema.parse(await runExecution.run(context, () => handler(input as never)));
+        if (commandId !== "legacy-command") this.database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_engine_commands (command_id, workflow_id, command, result_json, created_at) VALUES (?, ?, ?, ?, ?)").run(commandId, this.workflowId, name, JSON.stringify(result), new Date(this.clock.now()).toISOString()));
+        this.initialState = result;
+        this.wakeable.wake();
+        return result;
+      } finally {
+        if (this.activeCommand?.controller === controller) this.activeCommand = undefined;
+      }
     });
+    if (interruptKey) {
+      const clear = () => { if (this.interrupting.get(interruptKey) === acceptedInterrupt) this.interrupting.delete(interruptKey); };
+      void operation.then(clear, clear);
+    }
     this.chain = operation.catch(() => undefined);
     return operation;
   }

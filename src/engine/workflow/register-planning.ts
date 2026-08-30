@@ -1,4 +1,4 @@
-import { CancellationScope, condition, log, setHandler } from "../registry.js";
+import { CancellationScope, condition, log, runExecution, setHandler, setInterruptHandler } from "../registry.js";
 
 import { routeLeadResult } from "../../plan-governance.js";
 import { plannerNoteAvailable } from "../../commands/definitions/planning.js";
@@ -13,6 +13,7 @@ import {
   type IssueWorkflowState,
   type LeadPlanningResult,
   type PlanCommandInput,
+  type SendPlannerNoteInput,
 } from "../issue-contracts.js";
 import { issueUpdates } from "../issue-updates.js";
 import {
@@ -338,11 +339,32 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
     if (ctx.state.phase !== "blocked" || !ctx.state.planBlockerSubject) throw new Error("Plan blocker response is not available in the current phase");
   } });
 
+  const validatePlannerNote = (rawInput: unknown): boolean => {
+    const command = SendPlannerNoteInputSchema.parse(rawInput);
+    if (ctx.commandAlreadyProcessed(command.commandId)) return false;
+    if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
+    if (!plannerNoteAvailable(ctx.state.phase, ctx.state.successorTaskId)) throw new Error("Planner feedback is not available after the task has ended");
+    return true;
+  };
+  const recordNote = (command: SendPlannerNoteInput) => recordPlannerNote({
+    taskId: ctx.input.issueId,
+    companyId: ctx.input.companyId,
+    workflowId: ctx.input.workflowId,
+    revision: command.expectedRevision,
+    actorUserId: command.actorUserId,
+    commandId: command.commandId,
+    ...("noteId" in command ? { noteId: command.noteId, noteSha256: command.noteSha256 } : { note: command.note }),
+  });
+  setInterruptHandler(issueUpdates.send_planner_note, {
+    validate: validatePlannerNote,
+    run: (rawInput: unknown) => recordNote(SendPlannerNoteInputSchema.parse(rawInput)),
+  });
+
   setHandler(issueUpdates.send_planner_note, ctx.guarded(async (rawInput: any) => {
     assertPayloadWithinLimit("tell Planner command", rawInput);
     const command = SendPlannerNoteInputSchema.parse(rawInput);
     if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
-    await recordPlannerNote({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, revision: command.expectedRevision, actorUserId: command.actorUserId, commandId: command.commandId, ...("noteId" in command ? { noteId: command.noteId, noteSha256: command.noteSha256 } : { note: command.note }) });
+    if (runExecution.current().acceptedInterrupt !== issueUpdates.send_planner_note) await recordNote(command);
     ctx.markCommandProcessed(command.commandId);
     if (true && ctx.state.phase === "merge_conflict_required" && ctx.state.mergeDecision) {
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Applying your decision", mergeResolutionPlanArtifactId: null, mergeDecision: null, pendingPlannerNotes: "note" in command ? [command.note] : [], blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
@@ -370,10 +392,7 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
     if (resumeDevelopment && ctx.state.phase === "ready_for_development") return retryDevelopment(ctx, { expectedRevision: ctx.state.revision, actorUserId: command.actorUserId, commandId: `${command.commandId}:resume` }, command.note);
     return ctx.state;
   }, "send_planner_note"), { validator(rawInput) {
-    const command = SendPlannerNoteInputSchema.parse(rawInput);
-    if (ctx.commandAlreadyProcessed(command.commandId)) return;
-    if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    if (!plannerNoteAvailable(ctx.state.phase, ctx.state.successorTaskId)) throw new Error("Planner feedback is not available after the task has ended");
+    validatePlannerNote(rawInput);
   } });
 }
 

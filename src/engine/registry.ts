@@ -3,12 +3,25 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isCancellation } from "./failures.js";
 
 export type Handler = (...args: never[]) => unknown;
+interface HandlerValidationInput {
+  expectedRevision: number;
+  actorUserId: string;
+  commandId?: string;
+}
+export interface InterruptHandler {
+  cancelActive?: boolean;
+  validate?: Handler;
+  run?: Handler;
+}
 export interface RunExecutionContext {
   workflowId: string;
   runId: string;
   signal: AbortSignal;
   commands: Map<string, Handler>;
   queries: Map<string, Handler>;
+  interrupts: Map<string, InterruptHandler>;
+  acceptedInterrupt: string | undefined;
+  interruptResult: unknown;
   activity(name: string, args: unknown[], options: ActivityCallOptions): Promise<unknown>;
   wait(milliseconds: number): Promise<void>;
   now(): number;
@@ -33,11 +46,15 @@ export const runExecution = {
 export function defineUpdate<T = unknown, A extends unknown[] = unknown[]>(name: string): string { void (0 as unknown as T); void (0 as unknown as A); return name; }
 export function defineQuery<T = unknown>(name: string): string { void (0 as unknown as T); return name; }
 export function defineSignal<A extends unknown[] = unknown[]>(name: string): string { void (0 as unknown as A); return name; }
-export function setHandler(name: string, handler: (...args: any[]) => any, options?: { validator?(input: any): void }): void {
+export function setHandler(name: string, handler: Handler, options?: { validator?(input: HandlerValidationInput): void }): void {
   const ctx = runExecution.current();
-  const registered = options?.validator ? ((...args: any[]) => { options.validator!(args[0]); return handler(...args); }) : handler;
-  (name === "issueState" || name === "probeState" ? ctx.queries : ctx.commands).set(name, registered as Handler);
+  // Interrupts validate before their out-of-band effect; the serialized handler may run after the state advances.
+  const registered: Handler = options?.validator ? ((...args: never[]) => { if (runExecution.current().acceptedInterrupt !== name) options.validator!(args[0]!); return handler(...args); }) : handler;
+  (name === "issueState" || name === "probeState" ? ctx.queries : ctx.commands).set(name, registered);
   ctx.wake();
+}
+export function setInterruptHandler(name: string, interrupt: InterruptHandler): void {
+  runExecution.current().interrupts.set(name, interrupt);
 }
 export function workflowInfo(): { runId: string; workflowId: string; historyLength: number; continueAsNewSuggested: boolean; unsafe: { now(): number } } {
   const ctx = runExecution.current();

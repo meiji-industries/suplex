@@ -29,6 +29,10 @@ export function recoverOrphanedHerdrExecutions(database: ForgeDatabase): { agent
 export function logReconciliation(logger: Pick<StructuredLogger, "debug" | "info">, name: string, durationMs: number, changes: number, counts: Record<string, number>): void {
   logger[changes === 0 ? "debug" : "info"](`Worker periodic reconciliation ${changes === 0 ? "idle" : "changed state"}: ${name}`, { durationMs, ...counts } as never);
 }
+export function createNonOverlappingRunner(operation: () => Promise<unknown> | unknown): () => Promise<void> {
+  let active: Promise<void> | undefined;
+  return () => active ??= Promise.resolve().then(operation).then(() => undefined, () => undefined).finally(() => { active = undefined; });
+}
 
 export async function loadIssueRuns(engine: IssueEngine): Promise<number> {
   const rows = engine.database.authQuery((db) => db.prepare(`SELECT s.task_id, s.state_json, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.request_hash, t.predecessor_task_id, t.auto_approve_plan, t.pull_request_mode, t.delivery_target, t.run_project_tests, t.visual_evidence FROM forge_workflow_snapshots s JOIN forge_tasks t ON t.id = s.task_id JOIN (SELECT task_id, max(revision) revision FROM forge_workflow_snapshots GROUP BY task_id) latest ON latest.task_id=s.task_id AND latest.revision=s.revision WHERE json_extract(s.state_json, '$.phase') NOT IN ('done','cancelled','failed')`).all() as Array<Record<string, unknown>>);
@@ -60,7 +64,7 @@ export async function startEngineHost(config: ForgeConfig, database = new ForgeD
   const registration = { workerId, taskQueue: runtimeIdentifiers(config.installationId).taskQueue, buildId: runtimeIdentifiers(config.installationId).buildId };
   database.registerWorker(registration);
   new StructuredLogger().info("Forge worker RUNNING and polling");
-  const schedule = (milliseconds: number, operation: () => Promise<unknown> | unknown): void => { void Promise.resolve().then(operation).catch(() => undefined); const timer = setInterval(() => void Promise.resolve().then(operation).catch(() => undefined), milliseconds); timer.unref(); };
+  const schedule = (milliseconds: number, operation: () => Promise<unknown> | unknown): void => { const run = createNonOverlappingRunner(operation); void run(); const timer = setInterval(() => void run(), milliseconds); timer.unref(); };
   // The health page treats a worker whose heartbeat is older than its max age as unavailable.
   schedule(15_000, () => database.registerWorker(registration));
   schedule(60_000, () => reconcileTaskCreationIntents(database, config));

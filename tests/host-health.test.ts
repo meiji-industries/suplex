@@ -7,7 +7,27 @@ import { ForgeDatabase } from "../src/database.js";
 import { checkWorker } from "../src/host-health.js";
 import { CodexReadinessProbe, checkGithubAuthentication } from "../src/provider-readiness.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
-import { logReconciliation } from "../src/worker.js";
+import { createNonOverlappingRunner, logReconciliation } from "../src/worker.js";
+
+test("periodic work does not overlap itself", async () => {
+  let release!: () => void;
+  let hold = true;
+  let calls = 0;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const run = createNonOverlappingRunner(async () => { calls += 1; if (hold) await gate; });
+
+  const first = run();
+  const overlapping = run();
+  await Promise.resolve();
+  expect(overlapping).toBe(first);
+  expect(calls).toBe(1);
+
+  hold = false;
+  release();
+  await first;
+  await run();
+  expect(calls).toBe(2);
+});
 
 test("idle periodic reconciliations do not emit info logs", () => {
   const debug: Array<{ message: string; context: object }> = [];

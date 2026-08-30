@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { CliHerdrClient, HerdrFailure } from "../src/herdr-client.js";
+import { CliHerdrClient, HerdrFailure, snapshotAgents } from "../src/herdr-client.js";
 import type { CommandRunResult } from "../src/command-runner.js";
 
 test("client validates JSON envelopes and passes unambiguous argv", async () => {
@@ -216,9 +216,20 @@ test("client accepts the legacy bare agent session form", async () => {
 
 test("snapshot normalizes Herdr agent state", async () => {
   const client = new CliHerdrClient("herdr", async () => ({
-    stdout: JSON.stringify({ id: "cli:snapshot", result: { agents: [{ name: "forge-developer", pane_id: "pane", agent_status: "working", agent_session: { value: "session" }, screen_detection_skipped: true, state_change_seq: 7 }] } }),
+    stdout: JSON.stringify({ id: "cli:snapshot", result: { type: "api_snapshot", snapshot: { agents: [{ name: "forge-developer", pane_id: "pane", agent_status: "working", agent_session: { value: "session" }, screen_detection_skipped: true, state_change_seq: 7 }] } } }),
   }));
   await expect(client.snapshot()).resolves.toEqual([expect.objectContaining({ name: "forge-developer", paneId: "pane", status: "working", agentSession: "session", screenDetectionSkipped: true, state_change_seq: 7 })]);
+});
+
+test("each explicit agent snapshot observes fresh state", async () => {
+  let calls = 0;
+  const client = {
+    snapshot: async () => [{ name: "forge-developer", paneId: "pane", status: ++calls === 1 ? "working" : "idle" }],
+  };
+
+  await expect(snapshotAgents(client as never)).resolves.toEqual([expect.objectContaining({ status: "working" })]);
+  await expect(snapshotAgents(client as never)).resolves.toEqual([expect.objectContaining({ status: "idle" })]);
+  expect(calls).toBe(2);
 });
 
 test("agent startup allows Codex interactive readiness under load", async () => {

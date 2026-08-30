@@ -44,6 +44,28 @@ test("adopts a valid turn outcome idempotently", async () => {
   expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_herdr_turns").get())).toEqual(rows);
 });
 
+test("uses one agent snapshot for session and turn reconciliation", async () => {
+  const { database, config } = await fixture();
+  database.authQuery((db) => {
+    db.prepare("UPDATE forge_herdr_role_sessions SET agent_name = 'task-planner', pane_id = 'pane' WHERE id = 'session'").run();
+    db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES ('turn-2', 'task', 'session', 'planner', 'agent', 'execution', 'plan-2', ?, 'herdr-results/task/planner/result-turn-2.json', 0, 'completed', ?, ?)").run("d".repeat(64), "2026-08-27T00:00:00.000Z", "2026-08-27T00:00:00.000Z");
+  });
+  let snapshots = 0;
+  let gets = 0;
+  const live = { name: "task-planner", paneId: "pane", status: "idle" };
+  const herdr = {
+    snapshot: async () => { snapshots += 1; return [live]; },
+    listAgents: async () => [live],
+    getAgent: async () => { gets += 1; return live; },
+  };
+
+  const outcomes = await reconcileActiveTurns(database, config, { herdr: herdr as never });
+
+  expect(outcomes).toHaveLength(2);
+  expect(snapshots).toBe(1);
+  expect(gets).toBe(0);
+});
+
 test("a late result for a failed Developer execution triggers one reconcile-only retry", async () => {
   const { database, config } = await fixture();
   const now = "2026-08-27T00:00:00.000Z";

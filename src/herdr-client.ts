@@ -208,16 +208,15 @@ export interface HerdrClient {
     args: string[];
   }): Promise<HerdrAgent>;
 }
-const snapshots = new WeakMap<HerdrClient, { at: number; agents: HerdrAgent[]; pending?: Promise<HerdrAgent[]> }>();
 export async function snapshotAgents(client: HerdrClient): Promise<HerdrAgent[]> {
-  const cached = snapshots.get(client);
-  if (cached && Date.now() - cached.at < 1_000) return cached.pending ?? cached.agents;
-  const load = typeof client.snapshot === "function" ? () => client.snapshot() : typeof client.listAgents === "function" ? () => client.listAgents() : async () => [];
-  const pending = load().catch(async () => typeof client.listAgents === "function" ? client.listAgents() : []);
-  snapshots.set(client, { at: Date.now(), agents: cached?.agents ?? [], pending });
-  const agents = await pending;
-  snapshots.set(client, { at: Date.now(), agents });
-  return agents;
+  if (typeof client.snapshot === "function") {
+    try {
+      return await client.snapshot();
+    } catch {
+      // Older Herdr versions do not expose the batched snapshot command.
+    }
+  }
+  return typeof client.listAgents === "function" ? client.listAgents() : [];
 }
 export class CliHerdrClient implements HerdrClient {
   constructor(
@@ -471,7 +470,9 @@ export class CliHerdrClient implements HerdrClient {
       .map(agent);
   }
   async snapshot(): Promise<HerdrAgent[]> {
-    return (((await this.call(["api", "snapshot"])).agents as Json[]) ?? [])
+    const result = await this.call(["api", "snapshot"]);
+    const snapshot = result.snapshot && typeof result.snapshot === "object" ? result.snapshot as Json : result;
+    return ((snapshot.agents as Json[]) ?? [])
       .filter((raw) => typeof raw.name === "string")
       .map(agent);
   }

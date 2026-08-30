@@ -5,7 +5,7 @@ import { join, relative } from "node:path";
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { detectGitHandoff } from "./git-handoff.js";
-import { type HerdrClient, CliHerdrClient } from "./herdr-client.js";
+import { type HerdrClient, CliHerdrClient, snapshotAgents } from "./herdr-client.js";
 import { reconcileHerdrSessions } from "./herdr-recovery.js";
 import { classifyRecovery, type DurableTaskFacts, type LiveObservations } from "./recovery/convergence.js";
 import { json } from "./task-utils.js";
@@ -54,7 +54,7 @@ function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
     LEFT JOIN forge_issue_worktrees worktree ON worktree.task_id = turn.task_id AND worktree.status <> 'released'
     LEFT JOIN forge_developer_executions developer ON developer.id = turn.execution_id AND turn.ledger = 'developer'
     LEFT JOIN forge_delivery_reviews review ON review.id = (SELECT id FROM forge_delivery_reviews WHERE workflow_id = projection.workflow_id ORDER BY created_at DESC, id DESC LIMIT 1)
-    WHERE turn.status IN (${activeStatuses}) AND (projection.phase NOT IN ('done', 'cancelled', 'failed') OR session.updated_at >= datetime('now', '-1 day'))${taskId ? " AND turn.task_id = ?" : ""}
+    WHERE turn.status IN (${activeStatuses}) AND (projection.phase NOT IN ('done', 'cancelled', 'failed') OR datetime(COALESCE(projection.state_changed_at, projection.updated_at)) >= datetime('now', '-1 day'))${taskId ? " AND turn.task_id = ?" : ""}
     ORDER BY turn.task_id, turn.turn_id`).all(...(taskId ? [taskId] : [])) as Turn[]);
 }
 
@@ -62,11 +62,13 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
   const herdr = deps.herdr ?? new CliHerdrClient();
   const detectHandoff = deps.detectHandoff ?? detectGitHandoff;
   const now = deps.now ?? (() => new Date().toISOString());
-  await reconcileHerdrSessions(database, herdr, taskId);
+  const agents = await snapshotAgents(herdr);
+  const agentsByName = new Map(agents.map((live) => [live.name, live]));
+  await reconcileHerdrSessions(database, herdr, taskId, agents);
   const outcomes: ActiveTurnOutcome[] = [];
   for (const turn of candidates(database, taskId)) {
     const bytes = await resultAt(config.runtimeRoot, turn.resultRelativePath);
-    const liveAgent = turn.agentName ? await herdr.getAgent(turn.agentName) : null;
+    const liveAgent = turn.agentName ? agentsByName.get(turn.agentName) ?? null : null;
     const handoff = (turn.role === "builder" || turn.role === "integrator") && turn.worktreePath && turn.branchName
       ? await detectHandoff({ worktreePath: turn.worktreePath, branchName: turn.branchName, previousCommit: turn.lastReviewedCommit, taskId: turn.taskId, database })
       : null;

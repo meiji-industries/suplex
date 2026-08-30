@@ -18,11 +18,12 @@ class FakeHerdrClient {
   readonly getAgentCalls: string[] = [];
   readonly starts: Array<{ name: string; args: string[] }> = [];
   readonly panes = new Set(["shell"]);
+  listAgentCalls = 0;
   closedTabs: string[] = [];
   nextPane = 1;
 
   async getAgent(name: string) { this.getAgentCalls.push(name); return this.agents.get(name) ?? null; }
-  async listAgents() { return [...this.agents.values()]; }
+  async listAgents() { this.listAgentCalls += 1; return [...this.agents.values()]; }
   async getWorkspace(id: string) { return id === "workspace" ? { workspaceId: id, label: "project" } : null; }
   async getTab(id: string) { return id === "tab" ? { tabId: id, workspaceId: "workspace", label: "TASK" } : null; }
   async getPane(id: string) { return this.panes.has(id) ? { paneId: id, tabId: "tab", workspaceId: "workspace" } : null; }
@@ -116,13 +117,17 @@ test("terminal projections close tabs, while failed tabs remain available", asyn
   }
 });
 
-test("closes old sessions for finished tasks without polling Herdr", async () => {
+test("closes old finished-task sessions even when the session was just observed", async () => {
   const value = await fixture("failed");
   const herdr = new FakeHerdrClient();
   try {
-    value.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET updated_at = '2000-01-01T00:00:00.000Z' WHERE id = 'session'").run());
+    value.database.authQuery((db) => {
+      db.prepare("UPDATE forge_issue_projections SET state_changed_at = '2000-01-01T00:00:00.000Z', updated_at = '2000-01-01T00:00:00.000Z' WHERE task_id = 'task'").run();
+      db.prepare("UPDATE forge_herdr_role_sessions SET updated_at = datetime('now') WHERE id = 'session'").run();
+    });
     await expect(reconcileHerdrSessions(value.database, herdr as unknown as HerdrClient)).resolves.toEqual([]);
     expect(herdr.getAgentCalls).toEqual([]);
+    expect(herdr.listAgentCalls).toBe(0);
     expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_role_sessions WHERE id = 'session'").get())).toEqual({ status: "closed" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

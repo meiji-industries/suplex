@@ -1,5 +1,5 @@
 import type { ForgeDatabase } from "./database.js";
-import { CliHerdrClient, type HerdrClient } from "./herdr-client.js";
+import { CliHerdrClient, snapshotAgents, type HerdrAgent, type HerdrClient } from "./herdr-client.js";
 
 export interface HerdrRecoveryOutcome {
   sessionId: string;
@@ -15,16 +15,19 @@ export async function reconcileHerdrSessions(
   database: ForgeDatabase,
   herdr: HerdrClient = new CliHerdrClient(),
   taskId?: string,
+  agentSnapshot?: readonly HerdrAgent[],
 ): Promise<HerdrRecoveryOutcome[]> {
-  const staleSessions = database.authQuery((db) => db.prepare(`SELECT session.id FROM forge_herdr_role_sessions session JOIN forge_issue_projections projection ON projection.task_id = session.task_id WHERE session.status NOT IN ('closed') AND projection.phase IN ('done', 'cancelled', 'failed') AND session.updated_at < datetime('now', '-1 day')${taskId ? " AND session.task_id = ?" : ""}`).all(...(taskId ? [taskId] : [])) as Array<{ id: string }>);
+  const staleSessions = database.authQuery((db) => db.prepare(`SELECT session.id FROM forge_herdr_role_sessions session JOIN forge_issue_projections projection ON projection.task_id = session.task_id WHERE session.status NOT IN ('closed') AND projection.phase IN ('done', 'cancelled', 'failed') AND datetime(COALESCE(projection.state_changed_at, projection.updated_at)) < datetime('now', '-1 day')${taskId ? " AND session.task_id = ?" : ""}`).all(...(taskId ? [taskId] : [])) as Array<{ id: string }>);
   if (staleSessions.length) database.authTransaction((db) => {
     const close = db.prepare("UPDATE forge_herdr_role_sessions SET status = 'closed', updated_at = ? WHERE id = ? AND status <> 'closed'");
     for (const session of staleSessions) close.run(now(), session.id);
   });
-  const sessions = database.authQuery((db) => db.prepare(`SELECT session.id, session.task_id AS taskId, session.agent_name AS agentName, session.codex_session_id AS codexSessionId, session.pane_id AS paneId, session.status FROM forge_herdr_role_sessions session JOIN forge_issue_projections projection ON projection.task_id = session.task_id WHERE session.status NOT IN ('closed') AND (projection.phase NOT IN ('done', 'cancelled', 'failed') OR session.updated_at >= datetime('now', '-1 day'))${taskId ? " AND session.task_id = ?" : ""} ORDER BY session.task_id, session.id`).all(...(taskId ? [taskId] : [])) as Array<{ id: string; taskId: string; agentName: string | null; codexSessionId: string | null; paneId: string | null; status: string }>);
+  const sessions = database.authQuery((db) => db.prepare(`SELECT session.id, session.task_id AS taskId, session.agent_name AS agentName, session.codex_session_id AS codexSessionId, session.pane_id AS paneId, session.status FROM forge_herdr_role_sessions session JOIN forge_issue_projections projection ON projection.task_id = session.task_id WHERE session.status NOT IN ('closed') AND (projection.phase NOT IN ('done', 'cancelled', 'failed') OR datetime(COALESCE(projection.state_changed_at, projection.updated_at)) >= datetime('now', '-1 day'))${taskId ? " AND session.task_id = ?" : ""} ORDER BY session.task_id, session.id`).all(...(taskId ? [taskId] : [])) as Array<{ id: string; taskId: string; agentName: string | null; codexSessionId: string | null; paneId: string | null; status: string }>);
+  const agents = agentSnapshot ?? (sessions.some((session) => session.agentName) ? await snapshotAgents(herdr) : []);
+  const agentsByName = new Map(agents.map((live) => [live.name, live]));
   const outcomes: HerdrRecoveryOutcome[] = [];
   for (const session of sessions) {
-    const live = session.agentName ? await herdr.getAgent(session.agentName) : null;
+    const live = session.agentName ? agentsByName.get(session.agentName) ?? null : null;
     if (live) {
       const conflict = (session.paneId && session.paneId !== live.paneId)
         || (session.paneId && live.tabId && !(await tabOwnsPane(database, session.taskId, live.tabId)));

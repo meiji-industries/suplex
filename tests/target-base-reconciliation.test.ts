@@ -124,7 +124,7 @@ describe("target-base reconciliation contracts", () => {
     }
   });
 
-  test("adopts and pushes a stored forward merge without weakening exact revision checks", async () => {
+  test("adopts and pushes persisted merges across no-drift and revalidation paths", async () => {
     const root = await mkdtemp(join(tmpdir(), "forge-target-base-push-"));
     const config = createTestConfig(root, { artifactRoot: join(root, "artifacts") });
     const database = new ForgeDatabase(config.databasePath);
@@ -132,6 +132,7 @@ describe("target-base reconciliation contracts", () => {
     await mkdir(repositoryPath, { recursive: true });
     const repository = await gitRepository(repositoryPath);
     const run = promisify(execFile);
+    await run("git", ["remote", "add", "origin", repositoryPath], { cwd: repositoryPath });
     const priorTree = (await run("git", ["rev-parse", "HEAD^{tree}"], { cwd: repositoryPath })).stdout.trim();
     const now = new Date().toISOString();
     try {
@@ -171,15 +172,25 @@ describe("target-base reconciliation contracts", () => {
         async getBranchHead({ branch }: { branch: string }) { return branch === "issue/task-1" ? pushedHead : targetBase; },
         async pushNormal() { pushCount += 1; pushedHead = mergedHead; },
       } as never });
-      const input = { taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: configuration.id, checkpoint: "pre_release" as const, developerExecutionId: "developer-1", expectedBaseSha: repository.base, expectedHeadSha: mergedHead, expectedHeadTree: mergedTree, forwardMergeId: "merge-1", verificationOnly: true };
+      const revalidatedInput = { taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: configuration.id, checkpoint: "pre_release" as const, developerExecutionId: "developer-1", expectedBaseSha: repository.base, expectedHeadSha: mergedHead, expectedHeadTree: mergedTree, forwardMergeId: "merge-1", verificationOnly: true };
+      const noDriftInput = { ...revalidatedInput, expectedBaseSha: targetBase, forwardMergeId: undefined, verificationOnly: undefined };
 
-      await expect(activities.reconcileTargetBase(input)).resolves.toMatchObject({ outcome: "revalidated", developerExecutionId: "developer-1", headSha: mergedHead, headTree: mergedTree });
+      await expect(activities.reconcileTargetBase(noDriftInput)).resolves.toMatchObject({ outcome: "no_drift", headSha: mergedHead, headTree: mergedTree });
+      expect(database.authQuery((db) => db.prepare("SELECT result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = 'developer-1'").get())).toEqual({ resultCommit: mergedHead, resultTree: mergedTree });
       await expect(activities.pushDeliveryBranch({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", branchName: "issue/task-1", commitSha: mergedHead })).resolves.toMatchObject({ commitSha: mergedHead });
       expect(pushCount).toBe(1);
-      expect(database.authQuery((db) => db.prepare("SELECT result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = 'developer-1'").get())).toEqual({ resultCommit: mergedHead, resultTree: mergedTree });
 
+      const changesBeforeRetry = database.authQuery((db) => Number(db.prepare("SELECT total_changes()").pluck().get()));
+      await expect(activities.reconcileTargetBase(noDriftInput)).resolves.toMatchObject({ outcome: "no_drift", headSha: mergedHead, headTree: mergedTree });
+      expect(database.authQuery((db) => Number(db.prepare("SELECT total_changes()").pluck().get()))).toBe(changesBeforeRetry);
+
+      database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET result_commit = ?, result_tree = ? WHERE id = 'developer-1'").run(sha("f"), sha("e")));
+      await expect(activities.reconcileTargetBase(noDriftInput)).resolves.toMatchObject({ outcome: "blocked", code: "merge_state_ownership_mismatch" });
+
+      database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET result_commit = ?, result_tree = ? WHERE id = 'developer-1'").run(repository.head, priorTree));
+      await expect(activities.reconcileTargetBase(revalidatedInput)).resolves.toMatchObject({ outcome: "revalidated", developerExecutionId: "developer-1", headSha: mergedHead, headTree: mergedTree });
+      expect(database.authQuery((db) => db.prepare("SELECT result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = 'developer-1'").get())).toEqual({ resultCommit: mergedHead, resultTree: mergedTree });
       await expect(activities.pushDeliveryBranch({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", branchName: "issue/task-1", commitSha: repository.head })).rejects.toMatchObject({ type: "stale-reviewed-revision", message: "The reviewed revision does not match a completed Developer execution" });
-      await expect(activities.reconcileTargetBase({ ...input, expectedBaseSha: targetBase })).resolves.toMatchObject({ outcome: "revalidated", developerExecutionId: "developer-1", headSha: mergedHead, headTree: mergedTree });
       expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_developer_executions WHERE task_id = 'task-1'").get())).toEqual({ count: 1 });
     } finally {
       database.close();

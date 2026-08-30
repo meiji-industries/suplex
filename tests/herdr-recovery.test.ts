@@ -28,6 +28,11 @@ class FakeHerdrClient {
   async getTab(id: string) { return id === "tab" ? { tabId: id, workspaceId: "workspace", label: "TASK" } : null; }
   async getPane(id: string) { return this.panes.has(id) ? { paneId: id, tabId: "tab", workspaceId: "workspace" } : null; }
   async splitPane(): Promise<Pane> { const paneId = `pane-${this.nextPane++}`; this.panes.add(paneId); return { paneId, tabId: "tab", workspaceId: "workspace" }; }
+  async createTab() {
+    const paneId = `pane-${this.nextPane++}`;
+    this.panes.add(paneId);
+    return { tab: { tabId: "tab", workspaceId: "workspace", label: "TASK" }, rootPane: { paneId, tabId: "tab", workspaceId: "workspace" } };
+  }
   async renamePane() {}
   async runPaneCommand(_paneId: string, command: string) {
     const readinessPath = command.match(/FORGE_HERDR_READINESS_SENTINEL='([^']+)'/)?.[1];

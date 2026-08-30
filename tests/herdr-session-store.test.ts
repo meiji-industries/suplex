@@ -117,7 +117,7 @@ test("stale workspace and tab mappings are replaced with live layout coordinates
     },
     async getTab(id: string) {
       calls.push(`tab:${id}`);
-      return { tabId: id, label: "TASK-1" };
+      return null;
     },
     async getPane(id: string) {
       calls.push(`pane:${id}`);
@@ -153,20 +153,18 @@ test("stale workspace and tab mappings are replaced with live layout coordinates
     });
     const store = new HerdrSessionStore(database, herdr as never);
     const workspace = await (store as unknown as { workspace(task: RoleSessionTask): Promise<{ workspaceId: string }> }).workspace(task);
-    const tab = await (store as unknown as { tab(task: RoleSessionTask, workspaceId: string): Promise<{ shellPaneId: string }> }).tab(task, workspace.workspaceId);
+    const tab = await (store as unknown as { tab(task: RoleSessionTask, workspaceId: string): Promise<{ tabId: string; workspaceId: string; freshRootPaneId: string | null }> }).tab(task, workspace.workspaceId);
 
     expect(workspace).toEqual({ workspaceId: "wA" });
-    expect(tab).toEqual({ shellPaneId: "wA:p2" });
+    expect(tab).toEqual({ tabId: "wA:t2", workspaceId: "wA", freshRootPaneId: "wA:p2" });
     expect(calls).toEqual([
       "workspace:w2E",
       "create-workspace",
       "tab:w2E:t2",
-      "pane:w2E:p2",
       "create-tab",
-      "rename:wA:p2:shell",
     ]);
     expect(database.authQuery((db) => db.prepare("SELECT workspace_id FROM forge_herdr_project_workspaces WHERE project_id = 'project_1'").get())).toEqual({ workspace_id: "wA" });
-    expect(database.authQuery((db) => db.prepare("SELECT workspace_id, tab_id, shell_pane_id FROM forge_herdr_task_tabs WHERE task_id = 'task_1'").get())).toEqual({ workspace_id: "wA", tab_id: "wA:t2", shell_pane_id: "wA:p2" });
+    expect(database.authQuery((db) => db.prepare("SELECT workspace_id, tab_id, shell_pane_id FROM forge_herdr_task_tabs WHERE task_id = 'task_1'").get())).toEqual({ workspace_id: "wA", tab_id: "wA:t2", shell_pane_id: null });
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });
@@ -177,7 +175,9 @@ class StartupHerdrFake {
   readonly agents = new Map<string, HerdrAgent>();
   readonly closed: string[] = [];
   readonly starts: string[] = [];
+  readonly renames: string[] = [];
   readonly startInputs: Array<{ name: string; paneId: string; kind?: string; args?: string[] }> = [];
+  readonly splitFrom: string[] = [];
   readonly panes: string[] = [];
   readonly commands: string[] = [];
   readonly launchPaths: string[] = [];
@@ -201,14 +201,24 @@ class StartupHerdrFake {
   async listAgents() { return [...this.agents.values()]; }
   async getWorkspace() { return null; }
   async createWorkspace() {
-    return { workspace: { workspaceId: "workspace", label: "project" }, tab: { tabId: "tab", label: "task" }, rootPane: { paneId: "shell" } };
+    return { workspace: { workspaceId: "workspace", label: "project" }, tab: { tabId: "tab", label: "task" }, rootPane: { paneId: "workspace-root" } };
   }
-  async getTab() { return null; }
-  async getPane() { return null; }
+  tabResult: { tabId: string; label: string } | null = null;
+  async getTab() { return this.tabResult; }
+  async getPane(id: string) {
+    return this.panes.includes(id) ? { paneId: id, tabId: "tab" } : null;
+  }
+  nextPane(): string {
+    const paneId = `pane-${this.panes.length + 1}`;
+    this.panes.push(paneId);
+    return paneId;
+  }
   async createTab() {
-    return { tab: { tabId: "tab", label: "task" }, rootPane: { paneId: "shell" } };
+    return { tab: { tabId: "tab", label: "task" }, rootPane: { paneId: this.nextPane() } };
   }
-  async renamePane() {}
+  async renamePane(id: string, label: string) {
+    this.renames.push(`${id}:${label}`);
+  }
   async runPaneCommand(paneId: string, command: string) {
     this.commands.push(`${paneId}:${command}`);
     const script = /^source '([^']+)'$/.exec(command)?.[1];
@@ -223,9 +233,9 @@ class StartupHerdrFake {
       : /FORGE_HERDR_READINESS_SENTINEL='([^']+)'/.exec(body)?.[1];
     if (path && this.writeReadiness) await writeFile(path, "ok");
   }
-  async splitPane(): Promise<Pane> {
-    const paneId = `pane-${this.panes.length + 1}`;
-    this.panes.push(paneId);
+  async splitPane(input: { paneId: string }): Promise<Pane> {
+    this.splitFrom.push(input.paneId);
+    const paneId = this.nextPane();
     return { paneId };
   }
   async closePane(paneId: string) {
@@ -325,6 +335,54 @@ test("starts a fresh session without waiting for its lazy Codex identity", async
     expect(herdr.panes).toEqual(["pane-1"]);
     expect(herdr.starts).toHaveLength(1);
     expect(herdr.commands[0]).toContain("/herdr-ready/");
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("the first role pane is the tab root pane and no pane is named shell", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
+    await expect(
+      store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
+    ).resolves.toMatchObject({ paneId: "pane-1" });
+    expect(herdr.panes).toEqual(["pane-1"]);
+    expect(herdr.renames).toEqual(["pane-1:planner"]);
+    expect(herdr.renames.some((entry) => entry.endsWith(":shell"))).toBe(false);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("a second role splits from the live sibling role pane", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  herdr.tabResult = { tabId: "tab", label: "task" };
+  try {
+    const home = join(value.root, "home");
+    await mkdir(home);
+    await writeFile(join(home, ".zshrc"), 'export PATH="/usr/bin"\n');
+    const store = new HerdrSessionStore(
+      value.database,
+      herdr as never,
+      {
+        ...process.env,
+        PATH: "/mise/shims:/usr/bin",
+        HOME: home,
+        SHELL: "/bin/zsh",
+      },
+      async () => {},
+    );
+    await store.ensureRoleSession(taskFor(value.root), "planner", startupSettings);
+    await store.ensureRoleSession(taskFor(value.root), "builder", startupSettings);
+
+    expect(herdr.panes).toEqual(["pane-1", "pane-2"]);
+    expect(herdr.splitFrom).toEqual(["pane-1"]);
+    expect(herdr.renames).toContain("pane-2:builder");
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -634,7 +692,7 @@ test("propagates a non-missing error while closing a recorded pane", async () =>
     await expect(
       store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
     ).rejects.toMatchObject({ code: "unavailable" });
-    expect(herdr.panes).toEqual([]);
+    expect(herdr.panes).toEqual(["pane-1"]);
     expect(
       value.database.authQuery((db) =>
         db
@@ -761,6 +819,7 @@ test("retries an unavailable shell once with a fresh pane", async () => {
     ).resolves.toMatchObject({ paneId: "pane-2" });
     expect(herdr.closed).toEqual(["pane-1"]);
     expect(herdr.panes).toEqual(["pane-1", "pane-2"]);
+    expect(herdr.commands.some((entry) => entry.startsWith("pane-2:"))).toBe(true);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

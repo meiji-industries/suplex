@@ -243,14 +243,8 @@ export class HerdrSessionStore {
     let paneId: string | undefined;
     let secretsFile: string | undefined;
     try {
-      const pane = await this.herdr.splitPane({
-        paneId: tab.shellPaneId,
-        direction: "down",
-        cwd: task.worktreePath,
-        focus: false,
-      });
+      const pane = await this.allocateRolePane(task, tab, role);
       paneId = pane.paneId;
-      await this.herdr.renamePane(pane.paneId, role);
       this.database.authQuery((db) =>
         db
           .prepare(
@@ -474,12 +468,16 @@ export class HerdrSessionStore {
     kind: HerdrAgentKind;
     args: string[];
     task: RoleSessionTask;
-    tab: { shellPaneId: string };
     role: RoleSessionRole;
     generation: number;
     preparation: string;
     scriptFile: boolean;
     readinessPath: string;
+    tab: {
+      tabId: string;
+      workspaceId: string;
+      freshRootPaneId: string | null;
+    };
   }): Promise<HerdrAgent> {
     try {
       return await this.herdr.startAgent({
@@ -513,13 +511,11 @@ export class HerdrSessionStore {
       const live = await this.getRecordedAgent(input.name);
       if (live && live.paneId === input.paneId) return live;
       await this.closeRecordedPane(input.sessionId, input.paneId);
-      const pane = await this.herdr.splitPane({
-        paneId: input.tab.shellPaneId,
-        direction: "down",
-        cwd: input.task.worktreePath,
-        focus: false,
-      });
-      await this.herdr.renamePane(pane.paneId, input.role);
+      const pane = await this.allocateRolePane(
+        input.task,
+        input.tab,
+        input.role,
+      );
       await this.preparePane(
         pane.paneId,
         input.task.runtimeRoot,
@@ -752,37 +748,31 @@ if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READ
     task: RoleSessionTask,
     workspaceId: string,
   ): Promise<{
-    shellPaneId: string;
+    tabId: string;
+    workspaceId: string;
+    freshRootPaneId: string | null;
   }> {
     const row = this.database.authQuery(
       (db) =>
         db
           .prepare(
-            "SELECT tab_id, shell_pane_id FROM forge_herdr_task_tabs WHERE task_id = ?",
+            "SELECT tab_id FROM forge_herdr_task_tabs WHERE task_id = ?",
           )
           .get(task.taskId) as
           | {
               tab_id: string | null;
-              shell_pane_id: string | null;
             }
           | undefined,
     );
     const tabId = row?.tab_id;
-    const shellPaneId = row?.shell_pane_id;
-    if (
-      tabId &&
-      shellPaneId &&
-      (await this.getRecorded(() => this.herdr.getTab(tabId))) &&
-      (await this.getRecorded(() => this.herdr.getPane(shellPaneId)))
-    )
-      return { shellPaneId };
+    if (tabId && (await this.getRecorded(() => this.herdr.getTab(tabId))))
+      return { tabId, workspaceId, freshRootPaneId: null };
     const created = await this.herdr.createTab({
       workspaceId,
       label: task.issueKey || task.taskId,
       cwd: task.worktreePath,
       focus: false,
     });
-    await this.herdr.renamePane(created.rootPane.paneId, "shell");
     this.database.authQuery((db) =>
       db
         .prepare(
@@ -794,12 +784,83 @@ if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READ
           workspaceId,
           task.issueKey || task.taskId,
           created.tab.tabId,
-          created.rootPane.paneId,
+          null,
           now(),
           now(),
         ),
     );
-    return { shellPaneId: created.rootPane.paneId };
+    return {
+      tabId: created.tab.tabId,
+      workspaceId,
+      freshRootPaneId: created.rootPane.paneId,
+    };
+  }
+  private async allocateRolePane(
+    task: RoleSessionTask,
+    tab: {
+      tabId: string;
+      workspaceId: string;
+      freshRootPaneId: string | null;
+    },
+    role: RoleSessionRole,
+  ): Promise<{ paneId: string }> {
+    if (tab.freshRootPaneId) {
+      const paneId = tab.freshRootPaneId;
+      tab.freshRootPaneId = null;
+      await this.herdr.renamePane(paneId, role);
+      return { paneId };
+    }
+    const rows = this.database.authQuery((db) =>
+      db
+        .prepare(
+          "SELECT pane_id FROM forge_herdr_role_sessions WHERE task_id = ? AND pane_id IS NOT NULL AND status NOT IN ('closed', 'failed')",
+        )
+        .all(task.taskId) as Array<{ pane_id: string | null }>,
+    );
+    for (const { pane_id: anchor } of rows) {
+      if (!anchor) continue;
+      const live = await this.getRecorded(() => this.herdr.getPane(anchor));
+      if (
+        !live ||
+        (live.tabId !== undefined && live.tabId !== tab.tabId)
+      )
+        continue;
+      const pane = await this.herdr.splitPane({
+        paneId: anchor,
+        direction: "down",
+        cwd: task.worktreePath,
+        focus: false,
+      });
+      await this.herdr.renamePane(pane.paneId, role);
+      return { paneId: pane.paneId };
+    }
+    if (await this.getRecorded(() => this.herdr.getTab(tab.tabId)))
+      await this.herdr.closeTab(tab.tabId);
+    const created = await this.herdr.createTab({
+      workspaceId: tab.workspaceId,
+      label: task.issueKey || task.taskId,
+      cwd: task.worktreePath,
+      focus: false,
+    });
+    this.database.authQuery((db) =>
+      db
+        .prepare(
+          "INSERT INTO forge_herdr_task_tabs (task_id, project_id, workspace_id, tab_label, tab_id, shell_pane_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?) ON CONFLICT(task_id) DO UPDATE SET tab_id = excluded.tab_id, shell_pane_id = excluded.shell_pane_id, workspace_id = excluded.workspace_id, state = 'open', updated_at = excluded.updated_at",
+        )
+        .run(
+          task.taskId,
+          task.projectId,
+          tab.workspaceId,
+          task.issueKey || task.taskId,
+          created.tab.tabId,
+          null,
+          now(),
+          now(),
+        ),
+    );
+    tab.tabId = created.tab.tabId;
+    await this.herdr.renamePane(created.rootPane.paneId, role);
+    return { paneId: created.rootPane.paneId };
   }
   private ready(
     row: Record<string, any>,

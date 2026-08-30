@@ -97,6 +97,25 @@ test("client preserves retryable Herdr timeout details", async () => {
     message: "Herdr command failed: timed out waiting for output match",
   });
 });
+test("client preserves the live agent startup timeout shape", async () => {
+  const client = new CliHerdrClient("herdr", async () => {
+    throw {
+      code: 1,
+      stderr: JSON.stringify({
+        error: { code: "timeout", message: "timed out waiting for agent startup" },
+      }),
+    };
+  });
+
+  await expect(
+    client.startAgent({ name: "task-builder", paneId: "pane-1", kind: "omp", args: [] }),
+  ).rejects.toMatchObject({
+    code: "timeout",
+    retryable: true,
+    message: "Herdr command failed: timed out waiting for agent startup",
+  });
+});
+
 
 test("client reports a missing omp binary as an unavailable provider", async () => {
   const client = new CliHerdrClient("herdr", async () => {

@@ -53,6 +53,15 @@ const isMissingHerdrFailure = (error: unknown): boolean =>
     "agent_not_found",
     "agent_name_not_found",
   ].includes(error.code);
+const isAgentStartupTimeout = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") return false;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  return (
+    code === "timeout" &&
+    (message === "timed out waiting for agent startup" ||
+      message === "Herdr command failed: timed out waiting for agent startup")
+  );
+};
 export function herdrLabel(value: string): string {
   return (
     value
@@ -533,11 +542,7 @@ export class HerdrSessionStore {
     try {
       return await this.herdr.startAgent(input);
     } catch (error) {
-      if (
-        input.adoptTimedOutArgvPrompt &&
-        error instanceof HerdrFailure &&
-        error.code === "timeout"
-      ) {
+      if (input.adoptTimedOutArgvPrompt && isAgentStartupTimeout(error)) {
         const live = await this.getRecordedAgent(input.name);
         if (
           live &&

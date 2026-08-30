@@ -64,6 +64,7 @@ export interface ActivityOptions {
   developer?: Omit<Partial<Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">>, "runRepair"> & { runRepair?: (input: Parameters<DeveloperService["runRepair"]>[0]) => Promise<unknown> };
   githubRelease?: GithubReleaseAdapter;
   ciProvider?: CiProvider;
+  capacity?: CapacityManager;
   logSink?: (line: string) => void;
 }
 export function asNonRetryableApplicationFailure(error: unknown): ApplicationFailure | undefined {
@@ -178,7 +179,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   const ci = new CiService(database, options.ciProvider ?? createGithubCiProvider(), artifacts);
   const acceptance = new AcceptanceService(database, githubRelease, { artifacts });
   const legacyForwardMerge = new ForwardMergeService(database, undefined, artifacts);
-  const capacity = new CapacityManager(database, config);
+  const capacity = options.capacity ?? new CapacityManager(database, config);
   const activityWorktrees = new Map<string, string>();
   const activityWorktreesByBranch = new Map<string, string>();
   const worktrees = new WorktreeManager(undefined, () => readEnvironmentSettings(database).minFreeDiskGb);
@@ -190,8 +191,8 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     throw ApplicationFailure.nonRetryable(safeSummary, code, { code, category, summary: safeSummary, ...(evidenceArtifactId ? { evidenceArtifactId } : {}) });
   };
   const agentCategory = (error: AgentFailure): AttentionCategory => error.code === "login-expired" ? "provider_authentication" : error.code === "model-unavailable" ? "provider_ambiguity" : error.code === "rate-limited" ? "provider_connectivity_exhausted" : error.code === "malformed-output" || error.code === "invalid-output" ? "agent_contradiction" : "agent_exhausted";
-  const providerForLead = (input: { roleProfiles?: { planner?: string | undefined } | undefined }): string => {
-    const profileId = input.roleProfiles?.planner;
+  const providerForRole = (input: { roleProfiles?: Partial<Record<"planner" | "builder", string | undefined>> | undefined }, role: "planner" | "builder"): string => {
+    const profileId = input.roleProfiles?.[role];
     if (!profileId) return "codex";
     return (database.authQuery((db) => db.prepare("SELECT provider FROM forge_profiles WHERE id = ?").get(profileId) as { provider?: string } | undefined)?.provider) ?? "codex";
   };
@@ -219,7 +220,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       interval.unref();
     } catch { /* direct unit calls do not have an Activity context */ }
     try {
-      return await capacity.run(operation, provider ?? providerForLead(input), heartbeat, cancellationSignal());
+      return await capacity.run(operation, provider ?? providerForRole(input, "planner"), heartbeat, cancellationSignal());
     } catch (error) {
       try {
         if (Context.current().cancellationSignal.aborted) throw new CancelledFailure("CANCELLED");
@@ -379,6 +380,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     attentionFailure,
     agentCategory,
     invokeAgent,
+    providerForRole,
     bindCapacityExecution,
     runSupervised,
     latestWorktree,

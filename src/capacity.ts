@@ -19,6 +19,13 @@ export class CapacityManager {
   constructor(private readonly database: ForgeDatabase, private readonly config: Pick<ForgeConfig, "externalTurnCapacity" | "externalTurnCapacityByProvider">) {}
 
   private limit(provider: string): number {
+    // Profile capacity overrides from the admin UI take precedence. The
+    // database is optional: older/test callers pass no database and still
+    // share the configured default bucket.
+    if (this.database) {
+      const override = this.database.authQuery((db) => db.prepare("SELECT MAX(capacity) AS capacity FROM forge_profiles WHERE provider = ? AND capacity IS NOT NULL").get(provider) as { capacity?: number | null } | undefined)?.capacity;
+      if (typeof override === "number" && Number.isInteger(override) && override > 0) return override;
+    }
     // Older/test callers can provide the pre-provider config shape. Every
     // provider must still share the configured default bucket in that case.
     return this.config.externalTurnCapacityByProvider?.[provider] ?? this.config.externalTurnCapacity;

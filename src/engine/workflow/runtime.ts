@@ -237,7 +237,7 @@ function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" |
 function retryScope(ctx: IssueWorkflowContext, command: string): string | null {
   if (command === "review_delivery") return ctx.state.resultCommit ?? null;
   if (command === "repair_delivery" || command === "repair_ci") return ctx.state.resultCommit ?? null;
-  if (command === "retry_target_base_reconciliation") return ctx.state.targetBaseCheckId ?? null;
+  if (command === "retry_target_base_reconciliation") return ctx.state.targetBaseCheckId ?? ctx.state.resultCommit ?? ctx.state.releaseId ?? null;
   return ctx.state.acceptanceId ?? ctx.state.releaseId ?? null;
 }
 
@@ -256,7 +256,9 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
   if (!canAutoRetryDeliveryBlocker(ctx)) {
     const command = retryOnlyBlockerCommand(ctx);
     if (command && true) {
-      const summary = ctx.state.deliveryRepairBlockerSummary ?? "Temporary provider failure persisted after automatic retries.";
+      const summary = command === "retry_target_base_reconciliation"
+        ? "The target base moved. Automatic reconciliation did not succeed. You can retry the reconciliation."
+        : ctx.state.deliveryRepairBlockerSummary ?? "Temporary provider failure persisted after automatic retries.";
       // Record the exhausted blocker once; re-projecting it on every loop pass is a hot loop.
       // humanBlocker() returns null without evidence, so the projected blocker cannot be the guard.
       if (ctx.state.owner === "human" && ctx.state.pendingAction === summary && ctx.state.allowedCommands.includes(command)) return false;

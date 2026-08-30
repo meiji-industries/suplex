@@ -128,6 +128,26 @@ function targetBaseRetryContext(
   return context as unknown as IssueWorkflowContext;
 }
 
+test("target-base drift without a check scopes the first retry to the result commit", async () => {
+  const waits: number[] = [];
+  const retries: string[] = [];
+  const resultCommit = "c".repeat(40);
+  const context = targetBaseRetryContext(targetBaseDriftState({
+    targetBaseCheckId: null,
+    resultCommit,
+  }), retries, []);
+
+  await runExecution.run(automaticRetryExecution(waits), async () => {
+    expect(canAutoRetryDeliveryBlocker(context)).toBe(true);
+    await expect(autoRetryDeliveryBlocker(context)).resolves.toBe(true);
+  });
+
+  expect(waits).toEqual([30_000]);
+  expect(retries).toEqual([
+    `workflow-target-base-retry:auto-retry:retry_target_base_reconciliation:${resultCommit}:1`,
+  ]);
+});
+
 test("target-base drift auto-retries despite an extra publish affordance", async () => {
   const waits: number[] = [];
   const retries: string[] = [];
@@ -152,6 +172,34 @@ test("target-base drift auto-retries despite an extra publish affordance", async
   expect(projections[0]).toMatchObject({
     pendingAction: "Target base moved; reconciling automatically before publishing.",
     blocker: null,
+  });
+});
+
+test("exhausted target-base retries report reconciliation failure once", async () => {
+  const waits: number[] = [];
+  const retries: string[] = [];
+  const projections: IssueWorkflowState[] = [];
+  const resultCommit = "d".repeat(40);
+  const retryPrefix = `workflow-target-base-retry:auto-retry:retry_target_base_reconciliation:${resultCommit}:`;
+  const context = targetBaseRetryContext(targetBaseDriftState({
+    targetBaseCheckId: null,
+    resultCommit,
+    processedCommandIds: [`${retryPrefix}1`, `${retryPrefix}2`, `${retryPrefix}3`],
+  }), retries, projections);
+
+  await runExecution.run(automaticRetryExecution(waits), async () => {
+    expect(canAutoRetryDeliveryBlocker(context)).toBe(false);
+    await expect(autoRetryDeliveryBlocker(context)).resolves.toBe(true);
+    await expect(autoRetryDeliveryBlocker(context)).resolves.toBe(false);
+  });
+
+  expect(waits).toEqual([]);
+  expect(retries).toEqual([]);
+  expect(projections).toHaveLength(1);
+  expect(context.state).toMatchObject({
+    owner: "human",
+    allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"],
+    pendingAction: "The target base moved. Automatic reconciliation did not succeed. You can retry the reconciliation.",
   });
 });
 

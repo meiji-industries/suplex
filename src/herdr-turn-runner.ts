@@ -64,9 +64,13 @@ export class HerdrTurnRunner {
         const marker = `[forge-turn:${turnId}]`;
         let resultPath = initialResultPath;
         let prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
-        session = await this.ensure(input, { path: this.promptPath(resultPath), content: prompt });
         const existing = this.existingTurn(input, correction);
-        // The reconciler completes a turn from its result file without a prompt timestamp; that turn is still resumable.
+        if (!existing) {
+          await mkdir(dirname(initialResultPath), { recursive: true, mode: 0o700 });
+          await this.quarantine(initialResultPath);
+        }
+        const argvDispatchAt = this.now().toISOString();
+        session = await this.ensure(input, { path: this.promptPath(resultPath), content: prompt });
         const resumed = existing?.promptSentAt || existing?.status === "completed" ? existing : undefined;
         resultPath = existing
           ? this.existingResultPath(input, existing.resultRelativePath)
@@ -82,18 +86,15 @@ export class HerdrTurnRunner {
           return { turnId, sessionId: session.codexSessionId ?? session.agentName, roleSessionId: session.id, result: parsed.data, resultHash: resumed.resultHash ?? hash(bytes) };
         }
         if (!resumed) {
-          if (!existing) {
-            await mkdir(dirname(resultPath), { recursive: true, mode: 0o700 });
-            await this.quarantine(resultPath);
+          if (!existing)
             this.create(turnId, input, session, resultPath, correction, prompt);
-          }
           const candidates = session.codexSessionId ? undefined : [...(await (session.provider === "codex" ? this.candidates() : this.runtimes(session.provider).candidatePaths(process.env)))];
           const start = await this.offset(session.rolloutPath);
           this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', updated_at = ? WHERE turn_id = ?", start, start, iso(), turnId);
           if (!promptInArgv) await this.herdr.prompt(session.agentName, prompt);
           this.update("UPDATE forge_herdr_turns SET status = 'waiting', updated_at = ? WHERE turn_id = ?", iso(), turnId);
           if (input.signal?.aborted) throw new AgentFailure("cancelled", "The interactive agent turn was cancelled.", { nonRetryable: true });
-          const promptSentAt = this.now().toISOString();
+          const promptSentAt = promptInArgv ? argvDispatchAt : this.now().toISOString();
           this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", promptSentAt, promptSentAt, turnId);
           session = await this.resolveIdentity(session, input, turnId, candidates);
         }

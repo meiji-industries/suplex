@@ -150,6 +150,75 @@ test("uses the integrator execution role for the persistent session", async () =
     expect(ensuredRole).toBe("integrator");
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
+test("accepts an OMP argv result written while Herdr waits for readiness", async () => {
+  const setup = await fixture();
+  const ompHome = join(setup.root, "omp");
+  const previousOmpHome = process.env.OMP_HOME;
+  const turnId = `turn_${createHash("sha256").update(["execution", "plan", "0"].join("\0")).digest("hex").slice(0, 32)}`;
+  const path = join(setup.root, "herdr-results", "task", "planner", `result-${turnId}.json`);
+  const dispatchAt = new Date("2026-08-30T00:00:00.000Z");
+  setup.session = {
+    ...setup.session,
+    provider: "openrouter",
+    codexSessionId: null,
+    rolloutPath: undefined,
+    launched: true,
+    live: { name: "lead", paneId: "pane", status: "idle" },
+  };
+  setup.input = {
+    ...setup.input,
+    profile: { ...setup.input.profile, provider: "openrouter", model: "anthropic/claude-sonnet-4.5" },
+  };
+  setup.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET provider_kind = 'openrouter', codex_session_id = NULL, rollout_path = NULL WHERE id = 'session'").run());
+  process.env.OMP_HOME = ompHome;
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify({ status: "blocked" }));
+  let initialPrompt: { path: string; content: string } | undefined;
+  let getCalls = 0;
+  const herdr = {
+    prompt: async () => { throw new Error("fresh argv prompts must not be resent"); },
+    getAgent: async () => {
+      getCalls += 1;
+      const transcriptPath = join(ompHome, "agent", "sessions", "project", "session.jsonl");
+      if (getCalls === 1) {
+        await mkdir(dirname(transcriptPath), { recursive: true });
+        await writeFile(transcriptPath, `${JSON.stringify({ type: "session", id: "omp-session", cwd: setup.input.task.worktreePath })}\n${JSON.stringify({ type: "message", id: "omp-turn", timestamp: "2026-08-30T00:00:00.000Z", role: "user", message: { content: [{ type: "text", text: marker(initialPrompt!.content) }] } })}\n${JSON.stringify({ type: "message", timestamp: "2026-08-30T00:00:00.000Z", role: "assistant", stopReason: "stop", message: { content: [{ type: "text", text: "done" }] } })}\n`);
+      }
+      return { ...setup.session.live, agentSession: transcriptPath, screenDetectionSkipped: true };
+    },
+  };
+  const sessions = {
+    ensureRoleSession: async (_task: unknown, _role: unknown, _settings: unknown, options?: { initialPrompt?: { path: string; content: string } }) => {
+      initialPrompt = options?.initialPrompt;
+      await writeFile(path, JSON.stringify({ status: "ok" }));
+      await utimes(path, dispatchAt, dispatchAt);
+      return setup.session;
+    },
+  };
+  let nowCalls = 0;
+  const runner = makeRunner(
+    setup.database,
+    herdr as never,
+    sessions as never,
+    new IssueTimelineEvents(setup.database),
+    undefined,
+    undefined,
+    async (ms) => {
+      if (ms !== 250) throw new Error("stale argv result waited instead of being accepted");
+    },
+    () => new Date(dispatchAt.getTime() + Math.min(nowCalls++, 1) * 2_000),
+  );
+  try {
+    await expect(runner.run(setup.input)).resolves.toMatchObject({ sessionId: "omp-session", result: { status: "ok" } });
+    expect((await readdir(dirname(path))).some((name) => name.includes(".quarantine-"))).toBe(true);
+    expect(setup.database.authQuery((db) => db.prepare("SELECT prompt_sent_at FROM forge_herdr_turns").get())).toEqual({ prompt_sent_at: dispatchAt.toISOString() });
+  } finally {
+    if (previousOmpHome === undefined) delete process.env.OMP_HOME;
+    else process.env.OMP_HOME = previousOmpHome;
+    setup.database.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
 test("accepts a fresh argv prompt from a title-prefixed OMP transcript reported by path", async () => {
   const setup = await fixture();
   const ompHome = join(setup.root, "omp");

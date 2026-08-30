@@ -968,6 +968,50 @@ test("reviewer sessions are persistent and have bounded agent names", async () =
   }
 });
 
+test("adopts a working OMP argv-prompt agent after Herdr startup timeout", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  const credentials = new ProviderCredentialStore(value.database);
+  credentials.set("openrouter", "sk-openrouter-session-secret");
+  herdr.startFailure = new HerdrFailure("timeout", true, "timed out waiting for agent startup");
+  herdr.responses.push({ name: "task-builder", paneId: "pane-1", status: "working" });
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {}, undefined, credentials);
+    await expect(store.ensureRoleSession(
+      taskFor(value.root),
+      "builder",
+      { provider: "openrouter", model: "anthropic/claude-sonnet-4.5", reasoningLevel: "high", serviceTier: "default" },
+      { initialPrompt: { path: join(value.root, "prompt.forge"), content: "prompt" } },
+    )).resolves.toMatchObject({ agentName: "task-builder", paneId: "pane-1", launched: true });
+    expect(herdr.closed).toEqual([]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_role_sessions WHERE task_id = 'task'").get())).toEqual({ status: "working" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("does not adopt an absent OMP argv-prompt agent after Herdr startup timeout", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  const credentials = new ProviderCredentialStore(value.database);
+  credentials.set("openrouter", "sk-openrouter-session-secret");
+  herdr.startFailure = new HerdrFailure("timeout", true, "timed out waiting for agent startup");
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {}, undefined, credentials);
+    await expect(store.ensureRoleSession(
+      taskFor(value.root),
+      "builder",
+      { provider: "openrouter", model: "anthropic/claude-sonnet-4.5", reasoningLevel: "high", serviceTier: "default" },
+      { initialPrompt: { path: join(value.root, "prompt.forge"), content: "prompt" } },
+    )).rejects.toMatchObject({ code: "timeout" });
+    expect(herdr.closed).toEqual(["pane-1"]);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("startup timeout closes its created pane and releases the name", async () => {
   const value = await startupFixture();
   const herdr = new StartupHerdrFake();

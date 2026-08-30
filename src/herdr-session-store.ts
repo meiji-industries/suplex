@@ -332,6 +332,7 @@ export class HerdrSessionStore {
           preparation,
           scriptFile: role === "builder" || role === "integrator",
           readinessPath,
+          adoptTimedOutArgvPrompt: runtime.kind === "omp" && initialPromptPath !== undefined,
         });
       } catch (error) {
         if (!runtime.presetSessionId && row.codex_session_id && !transcriptExists)
@@ -478,14 +479,10 @@ export class HerdrSessionStore {
       workspaceId: string;
       freshRootPaneId: string | null;
     };
+    adoptTimedOutArgvPrompt: boolean;
   }): Promise<HerdrAgent> {
     try {
-      return await this.herdr.startAgent({
-        name: input.name,
-        paneId: input.paneId,
-        kind: input.kind,
-        args: input.args,
-      });
+      return await this.startOrAdopt(input);
     } catch (error) {
       if (this.isInactiveRecordedName(error)) {
         const replacement = this.deriveAgentName(
@@ -495,12 +492,7 @@ export class HerdrSessionStore {
           true,
         );
         this.recordStartingName(input.sessionId, replacement, input.paneId);
-        return this.herdr.startAgent({
-          name: replacement,
-          paneId: input.paneId,
-          kind: input.kind,
-          args: input.args,
-        });
+        return this.startOrAdopt({ ...input, name: replacement });
       }
       if (
         !(error instanceof HerdrFailure) ||
@@ -524,16 +516,38 @@ export class HerdrSessionStore {
         input.scriptFile,
       );
       try {
-        return await this.herdr.startAgent({
-          name: input.name,
-          paneId: pane.paneId,
-          kind: input.kind,
-          args: input.args,
-        });
+        return await this.startOrAdopt({ ...input, paneId: pane.paneId });
       } catch (retryError) {
         await this.closePaneDuringFailureCleanup(pane.paneId);
         throw retryError;
       }
+    }
+  }
+  private async startOrAdopt(input: {
+    name: string;
+    paneId: string;
+    kind: HerdrAgentKind;
+    args: string[];
+    adoptTimedOutArgvPrompt: boolean;
+  }): Promise<HerdrAgent> {
+    try {
+      return await this.herdr.startAgent(input);
+    } catch (error) {
+      if (
+        input.adoptTimedOutArgvPrompt &&
+        error instanceof HerdrFailure &&
+        error.code === "timeout"
+      ) {
+        const live = await this.getRecordedAgent(input.name);
+        if (
+          live &&
+          live.paneId === input.paneId &&
+          (live.status === "working" ||
+            live.status === "idle" ||
+            live.status === "done"))
+          return live;
+      }
+      throw error;
     }
   }
   private isInactiveRecordedName(error: unknown): boolean {

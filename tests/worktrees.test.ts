@@ -488,6 +488,49 @@ test("reuses the task worktree when the configured base has moved", async () => 
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("reuses preserved task commits without relabeling the branch head as the target base", async () => {
+  const value = await fixture();
+  try {
+    const manager = new WorktreeManager();
+    const record = await manager.create({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_committed_retry", targetBaseSha: value.baseSha });
+    for (const [path, contents] of [["FIRST.md", "first\n"], ["SECOND.md", "second\n"]] as const) {
+      await writeFile(join(record.worktreePath, path), contents);
+      await git(["add", path], record.worktreePath);
+      await git(["commit", "-m", `add ${path}`], record.worktreePath);
+    }
+    const taskHeadSha = await git(["rev-parse", "HEAD"], record.worktreePath);
+    await writeFile(join(value.repositoryPath, "BASE_MOVED.md"), "new base\n");
+    await git(["add", "BASE_MOVED.md"], value.repositoryPath);
+    await git(["commit", "-m", "advance base"], value.repositoryPath);
+    const movedBaseSha = await git(["rev-parse", "HEAD"], value.repositoryPath);
+
+    await expect(manager.reuse({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_committed_retry", targetBaseSha: movedBaseSha, branchName: record.branchName })).resolves.toMatchObject({
+      branchName: record.branchName,
+      worktreePath: record.worktreePath,
+      targetBaseSha: value.baseSha,
+    });
+    await expect(git(["rev-parse", "HEAD"], record.worktreePath)).resolves.toBe(taskHeadSha);
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("fails closed when a preserved task branch has no exact merge base", async () => {
+  const value = await fixture();
+  try {
+    const manager = new WorktreeManager();
+    const record = await manager.create({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_unrelated_base", targetBaseSha: value.baseSha });
+    await git(["switch", "--orphan", "unrelated"], value.repositoryPath);
+    await writeFile(join(value.repositoryPath, "UNRELATED.md"), "unrelated\n");
+    await git(["add", "UNRELATED.md"], value.repositoryPath);
+    await git(["commit", "-m", "unrelated base"], value.repositoryPath);
+    const unrelatedBaseSha = await git(["rev-parse", "HEAD"], value.repositoryPath);
+
+    await expect(manager.reuse({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_unrelated_base", targetBaseSha: unrelatedBaseSha, branchName: record.branchName })).rejects.toMatchObject({
+      code: "worktree-base-mismatch",
+      message: "The preserved task branch and supplied target base do not have one exact merge base",
+    });
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("reads the current delivery diff from the recorded base through committed and tracked worktree changes", async () => {
   const value = await fixture();
   try {

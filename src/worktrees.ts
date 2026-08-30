@@ -681,8 +681,16 @@ export class WorktreeManager {
         catch { throw new WorktreeFailure("worktree-branch-switch-failed", "The preserved worktree could not switch to the task branch"); }
         return await this.reuse(input);
       }
+      let targetBaseSha: string;
+      try {
+        const mergeBases = (await this.git.run(["merge-base", "--all", input.targetBaseSha, actualHead], canonicalWorktree)).split(/\s+/).filter(Boolean);
+        if (mergeBases.length !== 1 || !shaPattern.test(mergeBases[0]!)) throw new Error("no exact merge base");
+        targetBaseSha = mergeBases[0]!;
+      } catch {
+        throw new WorktreeFailure("worktree-base-mismatch", "The preserved task branch and supplied target base do not have one exact merge base");
+      }
       await rebuildNativeModulesIfNeeded(canonicalWorktree, input.stepId ? { taskId: input.taskId, stepId: input.stepId } : undefined);
-      return { branchName, worktreePath: canonicalWorktree, targetBaseSha: actualHead };
+      return { branchName, worktreePath: canonicalWorktree, targetBaseSha };
     } catch (error) {
       if (error instanceof WorktreeFailure) throw error;
       throw new WorktreeFailure("worktree-not-owned", "The preserved directory is not a usable Git worktree of the configured repository");

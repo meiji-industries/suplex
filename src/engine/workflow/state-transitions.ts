@@ -100,7 +100,7 @@ export function repairRequiredState(state: IssueWorkflowState, result: Completed
   const openBlocking = result.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
   const firstFinding = openBlocking[0];
   const progress = withRepairProgress(state, { signature: repairSignature({ source: "review", code: firstFinding ? `${firstFinding.findingId}:${firstFinding.rationale}` : null }), commit: state.resultCommit ?? null, diagnosticHash: result.review.reviewArtifact?.artifactId ?? null });
-  const exhausted = noProgressEnabled && noProgress(state.repairProgress, progress.repairProgress!);
+  const exhausted = result.review.opinion !== "approved" && noProgressEnabled && noProgress(state.repairProgress, progress.repairProgress!);
   const canRepair = !exhausted && result.review.opinion === "blocking" && openBlocking.length > 0 && (state.repairCycle ?? 0) < repairCycleLimit;
   const phase = result.review.opinion === "approved" ? "delivery_reviewed" : canRepair ? "repair_required" : "delivery_blocked";
   const owner = phase === "repair_required" ? "lead" : "human";

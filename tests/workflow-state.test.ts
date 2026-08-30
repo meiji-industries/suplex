@@ -131,6 +131,50 @@ test("delivery workflow constructors keep blockers retryable and approvals exact
   expect(reviewApprovedState(awaitingReview, approved)).toMatchObject({ phase: "delivery_reviewed", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], deliveryReviewId: "review_2", deliveryReviewSupersedesId: "review_1" });
 });
 
+test("an approved recovered review outranks stale no-progress exhaustion", () => {
+  const approved = DeliveryReviewActivityResultSchema.parse({
+    outcome: "completed",
+    attemptId: "review_attempt_recovered",
+    correctionAttempts: 0,
+    subject,
+    review: {
+      reviewId: "review_recovered",
+      leadExecutionId: "agent_review_recovered",
+      leadSessionRef: subject.leadSessionRef,
+      opinionArtifactId: "artifact_opinion_recovered",
+      evidenceArtifactId: "artifact_review_evidence_recovered",
+      opinion: "approved",
+      summary: "The exact recovered delivery is approved.",
+      findings: [],
+      supersedesReviewId: null,
+    },
+  });
+  if (approved.outcome !== "completed") throw new Error("Expected a completed approval fixture");
+  const repeated = IssueWorkflowStateSchema.parse({
+    ...state(),
+    phase: "delivery_blocked",
+    owner: "human",
+    allowedCommands: ["retry_development", "cancel_issue"],
+    pendingAction: "Needs your call",
+    repairProgress: {
+      signature: "review|||",
+      commit: subject.subjectCommit,
+      diagnosticHash: null,
+      repeats: 3,
+    },
+  });
+
+  expect(repairRequiredState(repeated, approved, 2, true)).toMatchObject({
+    phase: "delivery_reviewed",
+    owner: "human",
+    allowedCommands: ["publish_draft", "cancel_issue"],
+    pendingAction: "Opening the pull request",
+    blocker: null,
+    deliveryReviewId: "review_recovered",
+    deliveryReviewOutcome: "approved",
+  });
+});
+
 test("a new implementation starts a fresh delivery-review lineage without changing repair lineage", () => {
   const repaired = IssueWorkflowStateSchema.parse({
     ...state(),

@@ -120,13 +120,12 @@ test("command receipt inherits the exact decorated final projection", async () =
     const started = await startIssueWorkflow(harness.config, workflowInput("decorated-result"));
     const run = harness.engine.run(started.workflowId);
     await run.ready();
-    let live = run.state;
-    run.queries.set("issueState", (() => live) as never);
+    const live = run.state;
     const nextRevision = live.revision + 1;
-    const raw = IssueWorkflowStateSchema.parse({ ...live, revision: nextRevision, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Raw handler result", lastEventId: `${started.workflowId}:${nextRevision}` });
+    const raw = IssueWorkflowStateSchema.parse({ ...live, revision: nextRevision, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Raw handler result", lastEventId: `${started.workflowId}:${nextRevision}`, branchName: "forge/decorated-result", worktreePath: "/worktrees/decorated-result", worktreeState: "present", developerExecutionId: "developer-decorated-result", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40) });
     const decorated = withWorktreeCommands(IssueWorkflowStateSchema.parse({ ...raw, allowedCommands: ["cancel_issue"], pendingAction: "Decorated projection result" }), true);
+    expect(decorated.allowedCommands).toEqual(["cancel_issue", "delete_worktree", "retry_target_base_reconciliation"]);
     run.commands.set("decoratedResultCommand", (async () => {
-      live = raw;
       await runExecution.current().activity("projectIssueState", [{ schemaVersion: 1, runId: run.runId, eventId: decorated.lastEventId, state: decorated }], { startToCloseTimeout: "1 minute" });
       return raw;
     }) as never);
@@ -138,13 +137,11 @@ test("command receipt inherits the exact decorated final projection", async () =
     const mismatchStarted = await startIssueWorkflow(harness.config, workflowInput("decorated-mismatch"));
     const mismatchRun = harness.engine.run(mismatchStarted.workflowId);
     await mismatchRun.ready();
-    let mismatchLive = mismatchRun.state;
-    mismatchRun.queries.set("issueState", (() => mismatchLive) as never);
+    const mismatchLive = mismatchRun.state;
     const mismatchRevision = mismatchLive.revision + 1;
-    const mismatchRaw = IssueWorkflowStateSchema.parse({ ...mismatchLive, revision: mismatchRevision, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Raw mismatch", lastEventId: `${mismatchStarted.workflowId}:${mismatchRevision}` });
+    const mismatchRaw = IssueWorkflowStateSchema.parse({ ...mismatchLive, revision: mismatchRevision, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Raw mismatch", lastEventId: `${mismatchStarted.workflowId}:${mismatchRevision}`, branchName: "forge/decorated-mismatch", worktreePath: "/worktrees/decorated-mismatch", worktreeState: "present", developerExecutionId: "developer-decorated-mismatch", targetBaseSha: "d".repeat(40), resultCommit: "e".repeat(40), resultTree: "f".repeat(40) });
     const wrongIdentity = IssueWorkflowStateSchema.parse({ ...mismatchRaw, issueId: "different-task" });
     mismatchRun.commands.set("decoratedMismatchCommand", (async () => {
-      mismatchLive = mismatchRaw;
       await runExecution.current().activity("projectIssueState", [{ schemaVersion: 1, runId: mismatchRun.runId, eventId: wrongIdentity.lastEventId, state: wrongIdentity }], { startToCloseTimeout: "1 minute" });
       return mismatchRaw;
     }) as never);

@@ -54,11 +54,13 @@ const AGENT_OWNED_PHASES: Record<string, true> = {
 };
 
 export function issueRunInputFromSnapshotRow(db: Parameters<typeof resolveAgentProfiles>[0], row: Record<string, unknown>, state: IssueWorkflowState): IssueWorkflowInput {
+  const actor = (db.prepare("SELECT actor_user_id FROM forge_audit_events WHERE action = 'task_created' AND json_extract(metadata_json, '$.taskId') = ? ORDER BY created_at LIMIT 1").get(state.issueId) as { actor_user_id: string | null } | undefined)?.actor_user_id;
   return IssueWorkflowInputSchema.parse({
     workflowId: state.workflowId, companyId: state.companyId, projectId: state.projectId, issueId: state.issueId, projectRevisionId: state.projectRevisionId,
     briefArtifactId: row.brief_artifact_id, imageArtifactIds: jsonRequired(String(row.image_artifact_ids_json)), roleProfiles: resolveAgentProfiles(db, jsonRequired(String(row.role_agents_json))),
     supplementalReview: Boolean(row.supplemental_review), requestHash: row.request_hash ?? undefined, predecessorTaskId: row.predecessor_task_id ?? undefined,
-    autoApprovePlan: Boolean(row.auto_approve_plan), pullRequestMode: row.pull_request_mode ?? undefined, deliveryTarget: row.delivery_target ?? undefined,
+    autoApprovePlan: Boolean(row.auto_approve_plan), autoApprovePlanActorUserId: row.auto_approve_plan && actor ? actor : undefined, pullRequestMode: row.pull_request_mode ?? undefined, deliveryTarget: row.delivery_target ?? undefined,
+    autoMergeActorUserId: row.delivery_target === "merged" && actor ? actor : undefined,
     runProjectTests: Boolean(row.run_project_tests), visualEvidence: row.visual_evidence ?? undefined, continuationState: state,
   });
 }

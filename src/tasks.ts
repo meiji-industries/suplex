@@ -1473,6 +1473,18 @@ export class TaskService {
     throw new Error("Workflow projection did not become available");
   }
 
+  private async awaitAccepted(taskId: string, expectedRevision: number, pending: Promise<IssueWorkflowState>): Promise<number> {
+    pending.catch(() => undefined);
+    const accepted = await Promise.race([
+      pending.then((state) => ({ kind: "state" as const, state }), (error) => ({ kind: "workflow-error" as const, error })),
+      this.waitForProjection(taskId, expectedRevision + 1).then(() => ({ kind: "projection" as const }), (error) => ({ kind: "projection-error" as const, error })),
+    ]);
+    if (accepted.kind === "state") return accepted.state.revision;
+    if (accepted.kind === "workflow-error") throw accepted.error;
+    if (accepted.kind === "projection") return expectedRevision + 1;
+    return (await pending).revision;
+  }
+
   async resolveDecisionBlocker(actorUserId: string, taskId: string, expectedRevision: number, answer: string): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
     const normalizedAnswer = normalizeText(answer);
@@ -1560,18 +1572,22 @@ export class TaskService {
       ? { expectedRevision, actorUserId, ...(payload.confirmDiscardDirty !== undefined ? { confirmDiscardDirty: payload.confirmDiscardDirty } : {}) }
       : planInput;
     try {
-      const state = command === "start_planning" && this.workflow.acceptPlanning
-        ? await this.workflow.acceptPlanning(task.workflowId, input as StartPlanningInput)
+      const acceptedStart = command === "start_planning" && this.workflow.acceptPlanning
+        || (command === "start_development" || command === "retry_development") && this.workflow.acceptDevelopment;
+      const pending = command === "start_planning" && this.workflow.acceptPlanning
+        ? this.workflow.acceptPlanning(task.workflowId, input as StartPlanningInput)
         : (command === "start_development" || command === "retry_development") && this.workflow.acceptDevelopment
-          ? await this.workflow.acceptDevelopment(task.workflowId, input as StartPlanningInput, command)
+          ? this.workflow.acceptDevelopment(task.workflowId, input as StartPlanningInput, command)
           : (command === "delete_worktree" || command === "recreate_worktree") && this.workflow.worktreeCommand
-            ? await this.workflow.worktreeCommand(command, task.workflowId, input as WorktreeCommandInput)
-          : await this.workflow.execute(command, task.workflowId, input as StartPlanningInput | PlanCommandInput | SendPlannerNoteInput);
-      if (command !== "cancel_issue" && command !== "send_planner_note" && state.revision <= expectedRevision) {
+            ? this.workflow.worktreeCommand(command, task.workflowId, input as WorktreeCommandInput)
+            : this.workflow.execute(command, task.workflowId, input as StartPlanningInput | PlanCommandInput | SendPlannerNoteInput);
+      const revision = acceptedStart
+        ? await this.awaitAccepted(taskId, expectedRevision, pending)
+        : (await pending).revision;
+      if (command !== "cancel_issue" && command !== "send_planner_note" && revision <= expectedRevision) {
         throw new Error("Stale workflow revision");
       }
-      this.recordTaskCommand(task, actorUserId, command, state.revision, payload.automatic === true);
-      if (command === "start_planning") await this.waitForProjection(taskId, expectedRevision + 1);
+      this.recordTaskCommand(task, actorUserId, command, revision, payload.automatic === true);
       return this.getTask(actorUserId, taskId);
     } catch (error) {
       if (command === "cancel_issue" && !workflowCancellationFailureIsTransient(error)) {

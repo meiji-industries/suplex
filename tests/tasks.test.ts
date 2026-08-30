@@ -250,6 +250,37 @@ test("a Developer retry returns after the retry update is accepted", async () =>
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("planning returns after its accepted projection while a rejected update remains rejected", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Accepted planning", description: "body", idempotencyKey: "accepted-planning-task", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    let resolvePending!: (state: IssueWorkflowState) => void;
+    let began!: () => void;
+    const beganPending = new Promise<void>((resolve) => { began = resolve; });
+    const pending = new Promise<IssueWorkflowState>((resolve) => { resolvePending = resolve; });
+    let pendingResolved = false;
+    void pending.then(() => { pendingResolved = true; });
+    value.workflow.acceptPlanning = () => {
+      began();
+      return pending;
+    };
+
+    const command = value.tasks.executeCommand(value.adminId, created.task.id, "start_planning", { expectedRevision: 0 });
+    await beganPending;
+    const planning = IssueWorkflowStateSchema.parse({ ...initial, phase: "planning", revision: 1, owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${initial.workflowId}:1` });
+    value.stateByTask.set(created.task.id, planning);
+    projectState(value.database, planning);
+    await expect(command).resolves.toMatchObject({ phase: "planning", revision: 1 });
+    expect(pendingResolved).toBe(false);
+    resolvePending(planning);
+
+    const rejected = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Rejected planning", description: "body", idempotencyKey: "rejected-planning-task", images: [] });
+    value.workflow.acceptPlanning = async () => { throw new Error("workflow rejected the update"); };
+    await expect(value.tasks.executeCommand(value.adminId, rejected.task.id, "start_planning", { expectedRevision: 0 })).rejects.toMatchObject({ statusCode: 409, findings: [expect.objectContaining({ code: "workflow-update-rejected" })] });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 for (const faultPoint of ["after_artifact_finalized", "after_task_committed", "before_response"] as const) {
   test(`an exact retry converges after ${faultPoint}`, async () => {
     const value = await fixture();

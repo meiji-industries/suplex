@@ -36,6 +36,9 @@ import { CopyButton } from "../components/app/copy-button.js";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip.js";
 import { adminDate, relativeTime, type ApiAgent, type ApiCi, type ApiProject, type ApiTask, type ApiTaskBranchSync } from "../lib/view-shared.js";
 import { isApiError, readJson, withCompany } from "../lib/api.js";
+import { requestTaskArchive } from "../lib/archive-task.js";
+import { invalidateTaskList } from "../lib/task-list.js";
+import { navigate } from "../lib/navigation.js";
 import { materialityCriteria, materialityMode } from "../lib/plan-materiality.js";
 import type { IssueCommandSlug } from "../../commands/registry.js";
 import { BLOCKED_PHASES, TERMINAL_PHASES, phaseLabel } from "../../issue-phases.js";
@@ -549,7 +552,7 @@ function TaskPromptProvenanceRow({ taskId, overrides }: { taskId: string; overri
   </Collapsible.Root>;
 }
 
-export function TaskDetailsPage({ task, project, companyId: _companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onMerge: _onMerge, onDuplicate, onSaveTemplate = async () => {}, onUpdateDetails, onRefresh, onRescue }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onMerge: () => Promise<void>; onDuplicate: () => Promise<void>; onSaveTemplate?: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport> }): ReactElement {
+export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onMerge: _onMerge, onDuplicate, onSaveTemplate = async () => {}, onUpdateDetails, onRefresh, onRescue, returnTo = "tasks" }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onMerge: () => Promise<void>; onDuplicate: () => Promise<void>; onSaveTemplate?: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport>; returnTo?: "tasks" | "board" }): ReactElement {
   const [syncing, setSyncing] = useState(false);
   const observedAtRef = useRef(task.githubPullRequest?.observedAt ?? null);
   observedAtRef.current = task.githubPullRequest?.observedAt ?? null;
@@ -578,9 +581,11 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   const archiveTask = async (confirmDiscardDirty = false): Promise<void> => {
     setArchiveBusy(true);
     try {
-      const result = await readJson<{ status: "archived"; task: ApiTask } | { status: "confirmation_required"; dirtyFileCount: number; task: ApiTask }>(`/api/tasks/${encodeURIComponent(task.id)}/archive`, { method: "POST", body: JSON.stringify({ expectedRevision: task.revision, confirmDiscardDirty }) });
-      if (result.status === "confirmation_required") { setArchiveDialog(result.dirtyFileCount); return; }
-      setArchiveDialog(null); await onRefresh();
+      const outcome = await requestTaskArchive({ taskId: task.id, companyId, expectedRevision: task.revision, confirmDiscardDirty, returnTo });
+      if (outcome.status === "confirmation_required") { setArchiveDialog(outcome.dirtyFileCount); return; }
+      setArchiveDialog(null);
+      invalidateTaskList(companyId);
+      navigate(outcome.redirectPath);
     } catch (reason) {
       setArchiveDialog(null);
       throw reason;

@@ -15,16 +15,26 @@ import { reconcileSuccessorIntents } from "../successor-recovery.js";
 import { reconcileDonePullRequests } from "../done-pull-request-reconciliation.js";
 import { CapacityManager } from "../capacity.js";
 
-export function reclaimOrphanedHerdrExecutions(database: ForgeDatabase, now = new Date().toISOString()): { agentExecutions: number; developerExecutions: number } {
+function recoverableSessionPredicate(roleSessionIds: readonly string[]): string {
+  return roleSessionIds.length
+    ? `session.id IN (${roleSessionIds.map(() => "?").join(", ")})`
+    : "0";
+}
+
+export function reclaimOrphanedHerdrExecutions(database: ForgeDatabase, recoverableRoleSessionIds: ReadonlySet<string>, now = new Date().toISOString()): { agentExecutions: number; developerExecutions: number } {
+  const sessionIds = [...recoverableRoleSessionIds];
+  const recoverable = recoverableSessionPredicate(sessionIds);
   return database.authTransaction((db) => ({
-    agentExecutions: db.prepare(`UPDATE forge_agent_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = COALESCE(finished_at, ?) WHERE status IN ('starting', 'running', 'cancelling') AND NOT EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'agent' AND turn.execution_id = forge_agent_executions.id AND turn.task_id = forge_agent_executions.task_id AND session.is_current = 1 AND session.status IN ('ready', 'working', 'blocked'))`).run(now).changes,
-    developerExecutions: db.prepare(`UPDATE forge_developer_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = COALESCE(finished_at, ?) WHERE status IN ('starting', 'running', 'cancelling') AND NOT EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'developer' AND turn.execution_id = forge_developer_executions.id AND turn.task_id = forge_developer_executions.task_id AND session.is_current = 1 AND session.status IN ('ready', 'working', 'blocked'))`).run(now).changes,
+    agentExecutions: db.prepare(`UPDATE forge_agent_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = COALESCE(finished_at, ?) WHERE status IN ('starting', 'running', 'cancelling') AND NOT EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'agent' AND turn.execution_id = forge_agent_executions.id AND turn.task_id = forge_agent_executions.task_id AND session.is_current = 1 AND ${recoverable})`).run(now, ...sessionIds).changes,
+    developerExecutions: db.prepare(`UPDATE forge_developer_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = COALESCE(finished_at, ?) WHERE status IN ('starting', 'running', 'cancelling') AND NOT EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'developer' AND turn.execution_id = forge_developer_executions.id AND turn.task_id = forge_developer_executions.task_id AND session.is_current = 1 AND ${recoverable})`).run(now, ...sessionIds).changes,
   }));
 }
-export function recoverOrphanedHerdrExecutions(database: ForgeDatabase): { agentExecutions: number; developerExecutions: number } {
+export function recoverOrphanedHerdrExecutions(database: ForgeDatabase, recoverableRoleSessionIds: ReadonlySet<string>): { agentExecutions: number; developerExecutions: number } {
+  const sessionIds = [...recoverableRoleSessionIds];
+  const recoverable = recoverableSessionPredicate(sessionIds);
   return database.authTransaction((db) => ({
-    agentExecutions: db.prepare(`UPDATE forge_agent_executions SET status = 'running', failure_code = NULL, finished_at = NULL WHERE status = 'failed' AND failure_code = 'worker-restart-orphan' AND EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'agent' AND turn.execution_id = forge_agent_executions.id AND turn.task_id = forge_agent_executions.task_id AND session.is_current = 1 AND session.status IN ('ready', 'working', 'blocked') AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed'))`).run().changes,
-    developerExecutions: db.prepare(`UPDATE forge_developer_executions SET status = 'running', failure_code = NULL, finished_at = NULL WHERE status = 'failed' AND failure_code = 'worker-restart-orphan' AND EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'developer' AND turn.execution_id = forge_developer_executions.id AND turn.task_id = forge_developer_executions.task_id AND session.is_current = 1 AND session.status IN ('ready', 'working', 'blocked') AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed'))`).run().changes,
+    agentExecutions: db.prepare(`UPDATE forge_agent_executions SET status = 'running', failure_code = NULL, finished_at = NULL WHERE status = 'failed' AND failure_code = 'worker-restart-orphan' AND EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'agent' AND turn.execution_id = forge_agent_executions.id AND turn.task_id = forge_agent_executions.task_id AND session.is_current = 1 AND ${recoverable} AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed'))`).run(...sessionIds).changes,
+    developerExecutions: db.prepare(`UPDATE forge_developer_executions SET status = 'running', failure_code = NULL, finished_at = NULL WHERE status = 'failed' AND failure_code = 'worker-restart-orphan' AND EXISTS (SELECT 1 FROM forge_herdr_turns turn JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id WHERE turn.ledger = 'developer' AND turn.execution_id = forge_developer_executions.id AND turn.task_id = forge_developer_executions.task_id AND session.is_current = 1 AND ${recoverable} AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed'))`).run(...sessionIds).changes,
   }));
 }
 export function logReconciliation(logger: Pick<StructuredLogger, "debug" | "info">, name: string, durationMs: number, changes: number, counts: Record<string, number>): void {

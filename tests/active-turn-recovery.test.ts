@@ -34,7 +34,7 @@ async function fixture() {
 
 test("adopts a valid turn outcome idempotently", async () => {
   const { database, config } = await fixture();
-  const herdr = { getAgent: async () => null };
+  const herdr = { runtimeSnapshot: async () => ({ agents: [], panes: [] }) };
   const first = await reconcileActiveTurns(database, config, { herdr: herdr as never });
   const rows = database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_herdr_turns").get());
   const second = await reconcileActiveTurns(database, config, { herdr: herdr as never });
@@ -44,26 +44,35 @@ test("adopts a valid turn outcome idempotently", async () => {
   expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_herdr_turns").get())).toEqual(rows);
 });
 
-test("uses one agent snapshot for session and turn reconciliation", async () => {
+test("uses one runtime snapshot and finds a renamed done agent by pane without forging completion", async () => {
   const { database, config } = await fixture();
   database.authQuery((db) => {
-    db.prepare("UPDATE forge_herdr_role_sessions SET agent_name = 'task-planner', pane_id = 'pane' WHERE id = 'session'").run();
-    db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES ('turn-2', 'task', 'session', 'planner', 'agent', 'execution', 'plan-2', ?, 'herdr-results/task/planner/result-turn-2.json', 0, 'completed', ?, ?)").run("d".repeat(64), "2026-08-27T00:00:00.000Z", "2026-08-27T00:00:00.000Z");
+    db.prepare("UPDATE forge_herdr_role_sessions SET agent_name = 'stale-planner-name', pane_id = 'pane' WHERE id = 'session'").run();
   });
+  await rm(join(config.runtimeRoot, "herdr-results/task/planner/result-turn.json"));
   let snapshots = 0;
-  let gets = 0;
-  const live = { name: "task-planner", paneId: "pane", status: "idle" };
   const herdr = {
-    snapshot: async () => { snapshots += 1; return [live]; },
-    listAgents: async () => [live],
-    getAgent: async () => { gets += 1; return live; },
+    runtimeSnapshot: async () => {
+      snapshots += 1;
+      return {
+        agents: [
+          { name: "stale-planner-name", paneId: "wrong-pane", status: "working" },
+          { name: "renamed-planner", paneId: "pane", tabId: "tab", agentSession: "native-session", status: "done" },
+        ],
+        panes: [
+          { paneId: "wrong-pane", agent: "stale-planner-name", agentStatus: "working" },
+          { paneId: "pane", tabId: "tab", agent: "renamed-planner", agentStatus: "done", tokens: { forge_binding_id: "session" } },
+        ],
+      };
+    },
   };
 
   const outcomes = await reconcileActiveTurns(database, config, { herdr: herdr as never });
 
-  expect(outcomes).toHaveLength(2);
+  expect(outcomes).toMatchObject([{ turnId: "turn", action: "resume" }]);
   expect(snapshots).toBe(1);
-  expect(gets).toBe(0);
+  expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = 'turn'").get())).toEqual({ status: "waiting" });
+  expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_agent_executions WHERE id = 'execution'").get())).toEqual({ status: "running" });
 });
 
 test("a late result for a failed Developer execution triggers one reconcile-only retry", async () => {
@@ -78,7 +87,7 @@ test("a late result for a failed Developer execution triggers one reconcile-only
   await writeFile(join(config.runtimeRoot, "herdr-results/task/builder/result-dev-turn.json"), JSON.stringify({ kind: "delivery" }));
   const calls: unknown[] = [];
   const reconcileDeveloper = async (_config: unknown, workflowId: string, input: unknown) => { calls.push({ workflowId, input }); database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', failure_code = NULL WHERE id = 'dev-execution'").run()); return {} as never; };
-  const herdr = { getAgent: async () => null };
+  const herdr = { runtimeSnapshot: async () => ({ agents: [], panes: [] }) };
   await reconcileActiveTurns(database, config, { herdr: herdr as never, reconcileDeveloper: reconcileDeveloper as never });
   await reconcileActiveTurns(database, config, { herdr: herdr as never, reconcileDeveloper: reconcileDeveloper as never });
   expect(calls).toEqual([{ workflowId: "workflow", input: { expectedRevision: 1, actorUserId: "system", commandId: "late-result-dev-turn-2026-08-27T00:00:00.000Z", reconcileOnly: true } }]);

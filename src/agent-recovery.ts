@@ -1,13 +1,16 @@
 import { HerdrCodexProvider } from "./agent-providers/herdr-codex.js";
 import type { ForgeDatabase } from "./database.js";
-import { CliHerdrClient } from "./herdr-client.js";
-import { reconcileHerdrSessions } from "./herdr-recovery.js";
+import { CliHerdrClient, type HerdrClient } from "./herdr-client.js";
+import { observeHerdrSessions } from "./herdr-recovery.js";
 
-export interface AgentRecoveryOutcome { roleSessionId: string; status: "active" | "failed"; }
+export interface AgentRecoveryOutcome { roleSessionId: string; status: "active" | "recoverable" | "failed"; }
 
 // Phase 5 owns pane/session liveness reconciliation. Legacy process checks are gone.
-export async function reconcileAgentExecutions(database: ForgeDatabase): Promise<AgentRecoveryOutcome[]> {
-  return (await reconcileHerdrSessions(database)).filter((outcome) => !outcome.sessionId.startsWith("tab:")).map((outcome) => ({ roleSessionId: outcome.sessionId, status: outcome.status === "failed" ? "failed" : "active" }));
+export async function reconcileAgentExecutions(database: ForgeDatabase, herdr: HerdrClient = new CliHerdrClient()): Promise<AgentRecoveryOutcome[]> {
+  return (await observeHerdrSessions(database, herdr)).map((observation) => ({
+    roleSessionId: observation.sessionId,
+    status: observation.classification === "failed" ? "failed" : observation.classification === "active" ? "active" : "recoverable",
+  }));
 }
 
 export async function cancelAgentExecution(database: ForgeDatabase, executionId: string): Promise<{ status: "cancelled"; reason?: string }> {

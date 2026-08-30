@@ -1,42 +1,47 @@
 import { HerdrCodexProvider } from "./agent-providers/herdr-codex.js";
 import type { ForgeDatabase } from "./database.js";
-import { CliHerdrClient } from "./herdr-client.js";
-import { reconcileHerdrSessions } from "./herdr-recovery.js";
+import { CliHerdrClient, type HerdrClient } from "./herdr-client.js";
+import { observeHerdrSessions } from "./herdr-recovery.js";
 import type { DeveloperCancellationResult } from "./engine/issue-contracts.js";
 import { cancelOperation, operationKey } from "./operation-claims.js";
 
 export interface DeveloperRecoveryOutcome {
   executionId: string;
-  status: "active" | "failed";
-  reason?: string;
+  status: "active" | "recoverable" | "failed";
+  reason?: "herdr-runtime-missing" | "herdr-binding-conflict";
 }
 
 export interface RestoredDeveloperRecoveryReport {
   executionId: string;
-  status: "active" | "failed";
-  reason: "session-active" | "session-missing";
+  status: "active" | "recoverable" | "failed";
+  reason: "session-active" | "runtime-missing" | "identity-conflict";
 }
 
-export async function reconcileDeveloperExecutions(database: ForgeDatabase): Promise<DeveloperRecoveryOutcome[]> {
-  const sessionOutcomes = await reconcileHerdrSessions(database);
-  const developerSessionIds = new Set(database.authQuery((db) => db.prepare("SELECT id FROM forge_herdr_role_sessions WHERE session_role IN ('builder', 'integrator') AND is_current = 1 AND status NOT IN ('closed')").all() as Array<{ id: string }>).map((session) => session.id));
-  const sessionsByTask = new Map(
-    sessionOutcomes
-      .filter((outcome) => developerSessionIds.has(outcome.sessionId))
-      .map((outcome) => [outcome.taskId, outcome]),
-  );
+export async function reconcileDeveloperExecutions(database: ForgeDatabase, herdr: HerdrClient = new CliHerdrClient()): Promise<DeveloperRecoveryOutcome[]> {
+  const observationsBySession = new Map((await observeHerdrSessions(database, herdr)).map((observation) => [observation.sessionId, observation]));
   const executions = database.authQuery((db) => db
-    .prepare("SELECT id, task_id AS taskId FROM forge_developer_executions WHERE status IN ('starting', 'running') ORDER BY started_at, id")
-    .all() as Array<{ id: string; taskId: string }>);
+    .prepare(`SELECT execution.id, execution.task_id AS taskId,
+      COALESCE((SELECT turn.role_session_id
+        FROM forge_herdr_turns turn
+        JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.is_current = 1 AND session.session_role IN ('builder', 'integrator')
+        WHERE turn.ledger = 'developer' AND turn.execution_id = execution.id AND turn.task_id = execution.task_id
+        ORDER BY turn.created_at DESC, turn.turn_id DESC LIMIT 1), execution.session_ref) AS sessionId
+      FROM forge_developer_executions execution
+      WHERE execution.status IN ('starting', 'running')
+      ORDER BY execution.started_at, execution.id`)
+    .all() as Array<{ id: string; taskId: string; sessionId: string | null }>);
   return executions.map((execution) => {
-    const session = sessionsByTask.get(execution.taskId);
-    if (session && session.status !== "failed" && session.status !== "unbound") {
+    const observation = execution.sessionId ? observationsBySession.get(execution.sessionId) : undefined;
+    if (observation?.classification === "active") {
       return { executionId: execution.id, status: "active" as const };
     }
+    if (observation?.classification !== "failed") {
+      return { executionId: execution.id, status: "recoverable" as const, reason: "herdr-runtime-missing" as const };
+    }
     database.authTransaction((db) => db
-      .prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = COALESCE(finished_at, ?), failure_code = 'developer-session-missing', failure_summary = 'Builder session cannot be recovered.' WHERE id = ? AND status IN ('starting', 'running')")
+      .prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = COALESCE(finished_at, ?), failure_code = 'developer-session-identity-conflict', failure_summary = 'Builder pane identity conflicts with its Forge binding.' WHERE id = ? AND status IN ('starting', 'running')")
       .run(new Date().toISOString(), execution.id));
-    return { executionId: execution.id, status: "failed" as const, reason: "herdr-session-missing" };
+    return { executionId: execution.id, status: "failed" as const, reason: "herdr-binding-conflict" as const };
   });
 }
 
@@ -44,7 +49,7 @@ export async function reconcileRestoredDeveloperExecutions(database: ForgeDataba
   return (await reconcileDeveloperExecutions(database)).map((outcome) => ({
     executionId: outcome.executionId,
     status: outcome.status,
-    reason: outcome.status === "active" ? "session-active" : "session-missing",
+    reason: outcome.status === "active" ? "session-active" : outcome.status === "recoverable" ? "runtime-missing" : "identity-conflict",
   }));
 }
 

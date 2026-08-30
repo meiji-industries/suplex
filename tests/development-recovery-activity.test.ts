@@ -32,7 +32,7 @@ async function setup() {
   return { database, activities: createDevelopmentActivities(createActivityContext(database, config)) };
 }
 
-function addCandidate(database: ForgeDatabase, input: { id: string; status?: "failed" | "completed" | "blocked" | "running"; failureCode?: string | null; sessionStatus?: "ready" | "working" | "blocked" | "missing"; codexSessionId?: string | null; turnStatus?: "waiting" | "completed" | "blocked"; roleSessionId?: string }) {
+function addCandidate(database: ForgeDatabase, input: { id: string; status?: "failed" | "completed" | "blocked" | "running"; failureCode?: string | null; sessionStatus?: "ready" | "working" | "blocked" | "missing" | "failed" | "closed"; codexSessionId?: string | null; turnStatus?: "waiting" | "completed" | "blocked"; roleSessionId?: string }) {
   const status = input.status ?? "failed";
   const sessionStatus = input.sessionStatus ?? "working";
   const turnStatus = input.turnStatus ?? "waiting";
@@ -106,12 +106,10 @@ test("findRecoverableDeveloperExecution rejects an unclaimed terminal execution"
   await expect(activities.findRecoverableDeveloperExecution({ taskId: "task", companyId: "company", workflowId: "workflow" })).resolves.toBeNull();
 });
 
-test("findRecoverableDeveloperExecution accepts a missing session only when it has a durable Codex session", async () => {
-  const { database, activities } = await setup();
-  addCandidate(database, { id: "candidate", sessionStatus: "missing", codexSessionId: "codex-durable" });
-  await expect(activities.findRecoverableDeveloperExecution({ taskId: "task", companyId: "company", workflowId: "workflow" })).resolves.toMatchObject({ executionId: "candidate", sessionRef: "session-candidate" });
-
-  const second = await setup();
-  addCandidate(second.database, { id: "candidate", sessionStatus: "missing", codexSessionId: null });
-  await expect(second.activities.findRecoverableDeveloperExecution({ taskId: "task", companyId: "company", workflowId: "workflow" })).resolves.toBeNull();
+test("findRecoverableDeveloperExecution ignores mirrored role-session liveness", async () => {
+  for (const sessionStatus of ["missing", "failed", "closed"] as const) {
+    const { database, activities } = await setup();
+    addCandidate(database, { id: "candidate", sessionStatus, codexSessionId: null });
+    await expect(activities.findRecoverableDeveloperExecution({ taskId: "task", companyId: "company", workflowId: "workflow" })).resolves.toMatchObject({ executionId: "candidate", sessionRef: "session-candidate" });
+  }
 });

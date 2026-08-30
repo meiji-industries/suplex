@@ -222,7 +222,7 @@ test("backup archive verifies hashes and restores only into a separate clean loc
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("restore drill preserves users, completed work, artifacts, and draft releases while interrupting in-flight work", async () => {
+test("restore drill preserves users, completed work, artifacts, draft releases, and recoverable execution intent", async () => {
   const value = await fixture();
   const archive = join(value.root, "restore-drill.tar.gz");
   const restored = join(value.root, "restore-drill");
@@ -300,11 +300,11 @@ test("restore drill preserves users, completed work, artifacts, and draft releas
         async updateDraftPullRequest() { providerMutations += 1; return pullRequest({ number: 42, headSha, baseSha }); },
         async getPullRequest() { providerReads += 1; return pullRequest({ number: 42, headSha, baseSha }); },
       });
-      expect(reconciliation.developerExecutions).toEqual([{ executionId: "developer-in-flight", status: "failed", reason: "session-missing" }]);
+      expect(reconciliation.developerExecutions).toEqual([{ executionId: "developer-in-flight", status: "recoverable", reason: "runtime-missing" }]);
       expect(reconciliation.providers).toEqual([expect.objectContaining({ releaseId: "release-drill", status: "matched", pullRequestNumber: 42 })]);
       expect(providerReads).toBe(2);
       expect(providerMutations).toBe(0);
-      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = 'developer-in-flight'").get())).toEqual({ status: "failed", failure_code: "developer-session-missing" });
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = 'developer-in-flight'").get())).toEqual({ status: "running", failure_code: null });
       expect(restoredDatabase.authQuery((db) => db.prepare("SELECT task_id, phase FROM forge_issue_projections ORDER BY task_id").all())).toEqual([{ task_id: "task-a", phase: "development" }, { task_id: "task-completed", phase: "done" }]);
     } finally {
       restoredDatabase.close();

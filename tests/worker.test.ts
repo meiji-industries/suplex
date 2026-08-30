@@ -26,7 +26,7 @@ test("reclaims non-terminal agent and developer execution ledgers after a worker
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, finished_at) VALUES ('developer-terminal', 'task', 'company', 'workflow', 1, 2, 'completed', 'forge/task', '/worktrees/task', ?, ?, ?)").run("c".repeat(40), startedAt, finishedAt);
     });
 
-    expect(reclaimOrphanedHerdrExecutions(database, reclaimedAt)).toEqual({ agentExecutions: 1, developerExecutions: 1 });
+    expect(reclaimOrphanedHerdrExecutions(database, new Set(), reclaimedAt)).toEqual({ agentExecutions: 1, developerExecutions: 1 });
     expect(database.authQuery((db) => db.prepare("SELECT id, status, failure_code, finished_at FROM forge_agent_executions ORDER BY id").all())).toEqual([
       { id: "agent-orphan", status: "failed", failure_code: "worker-restart-orphan", finished_at: reclaimedAt },
       { id: "agent-terminal", status: "completed", failure_code: null, finished_at: finishedAt },
@@ -41,7 +41,7 @@ test("reclaims non-terminal agent and developer execution ledgers after a worker
   }
 });
 
-test("keeps live turns active and reopens only matching restart-orphan rows", async () => {
+test("uses explicit recoverable bindings instead of mirrored role-session status", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-worker-recovery-test-"));
   const database = new ForgeDatabase(createTestConfig(root).databasePath);
   const now = new Date().toISOString();
@@ -58,12 +58,17 @@ test("keeps live turns active and reopens only matching restart-orphan rows", as
       db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, codex_session_id, agent_name, pane_id, status, created_at, updated_at) VALUES ('developer-session', 'task', 'builder', 1, 1, 'codex', 'developer-codex', 'builder', 'developer-pane', 'working', ?, ?)").run(now, now);
       db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES ('developer-turn', 'task', 'developer-session', 'builder', 'developer', 'developer-execution', 'implementation', ?, 'developer-result.json', 0, 'waiting', ?, ?)").run("e".repeat(64), now, now);
     });
-    expect(reclaimOrphanedHerdrExecutions(database, now)).toEqual({ agentExecutions: 0, developerExecutions: 0 });
+    const recoverableBindings = new Set(["session", "developer-session"]);
+    database.authQuery((db) => {
+      db.prepare("UPDATE forge_herdr_role_sessions SET status = 'missing' WHERE id = 'session'").run();
+      db.prepare("UPDATE forge_herdr_role_sessions SET status = 'closed' WHERE id = 'developer-session'").run();
+    });
+    expect(reclaimOrphanedHerdrExecutions(database, recoverableBindings, now)).toEqual({ agentExecutions: 0, developerExecutions: 0 });
     database.authQuery((db) => {
       db.prepare("UPDATE forge_agent_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = ? WHERE id = 'execution'").run(now);
       db.prepare("UPDATE forge_developer_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = ? WHERE id = 'developer-execution'").run(now);
     });
-    expect(recoverOrphanedHerdrExecutions(database)).toEqual({ agentExecutions: 1, developerExecutions: 1 });
+    expect(recoverOrphanedHerdrExecutions(database, recoverableBindings)).toEqual({ agentExecutions: 1, developerExecutions: 1 });
     expect(database.authQuery((db) => db.prepare("SELECT status, failure_code, finished_at FROM forge_agent_executions WHERE id = 'execution'").get())).toEqual({ status: "running", failure_code: null, finished_at: null });
     expect(database.authQuery((db) => db.prepare("SELECT status, failure_code, finished_at FROM forge_developer_executions WHERE id = 'developer-execution'").get())).toEqual({ status: "running", failure_code: null, finished_at: null });
   } finally { database.close(); await rm(root, { recursive: true, force: true }); }

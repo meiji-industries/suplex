@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { TaskRoleSelectors, taskRoleDisabled } from "../src/frontend/components/app/task-role-selectors.js";
+import { DropdownMenuLabel, DropdownMenuRadioGroup } from "../src/frontend/components/ui/dropdown-menu.js";
 import type { ApiAgent } from "../src/frontend/lib/view-shared.js";
 
 function agent(role: ApiAgent["role"]): ApiAgent {
@@ -21,6 +22,17 @@ function agent(role: ApiAgent["role"]): ApiAgent {
 }
 
 describe("task role selectors", () => {
+  it("renders the role heading only inside a menu group", () => {
+    const html = renderToStaticMarkup(createElement(
+      DropdownMenuRadioGroup,
+      { value: "" },
+      createElement(DropdownMenuLabel, null, "Planner"),
+    ));
+
+    expect(html).toContain("Planner");
+    expect(() => renderToStaticMarkup(createElement(DropdownMenuLabel, null, "Planner"))).toThrow("MenuGroupContext is missing");
+  });
+
   it("renders one selector for each task role", () => {
     const agents = (["planner", "reviewer", "builder", "integrator"] as const).map(agent);
     const assignments = Object.fromEntries(agents.map((candidate) => [candidate.role, candidate.id]));

@@ -52,8 +52,8 @@ function TaskRoleSelector({ role, agents, assignment, disabled, disabledReason: 
         <ChevronDown />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
-        <DropdownMenuLabel>{label}</DropdownMenuLabel>
         <DropdownMenuRadioGroup value={assignment ?? ""} onValueChange={onChange}>
+          <DropdownMenuLabel>{label}</DropdownMenuLabel>
           {role === "builder" ? null : <DropdownMenuRadioItem value="">None</DropdownMenuRadioItem>}
           {availableAgents.map((agent) => (
             <DropdownMenuRadioItem key={agent.id} value={agent.id}>

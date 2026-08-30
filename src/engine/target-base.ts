@@ -4,7 +4,9 @@ export function applyTargetBaseNoDrift(state: IssueWorkflowState, result: Extrac
   const resumed = state.phase !== "delivery_blocked"
     ? {}
     : result.checkpoint === "pre_release"
-      ? { phase: "delivery_reviewed" as const, owner: "lead" as const, allowedCommands: ["publish_draft", "cancel_issue"] as const, pendingAction: "Publish one exact draft pull request" }
+      ? state.deliveryReviewId
+        ? { phase: "delivery_reviewed" as const, owner: "lead" as const, allowedCommands: ["publish_draft", "cancel_issue"] as const, pendingAction: "Publish one exact draft pull request" }
+        : { phase: "delivery_ready" as const, owner: "lead" as const, allowedCommands: ["review_delivery", "cancel_issue"] as const, pendingAction: "Lead delivery review" }
       : result.checkpoint === "pre_final_review"
         ? { phase: "final_review" as const, owner: "lead" as const, allowedCommands: ["final_review", "cancel_issue"] as const, pendingAction: "Final Lead review" }
         : { phase: "accepted" as const, owner: "human" as const, allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"] as const, pendingAction: "Member acceptance required" };

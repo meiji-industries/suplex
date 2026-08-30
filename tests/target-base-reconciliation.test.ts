@@ -609,6 +609,39 @@ describe("target-base reconciliation contracts", () => {
     expect(input.forwardMergeId).toBe("merge-1");
   });
 
+  test("resumes an exactly reviewed no-drift delivery to publication", () => {
+    const resumed = applyTargetBaseNoDrift(IssueWorkflowStateSchema.parse({
+      workflowId: "workflow-1", companyId: "company-1", projectId: "project-1", issueId: "task-1", projectRevisionId: "revision-1",
+      phase: "delivery_blocked", revision: 4, owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Provider unavailable", lastEventId: "workflow-1:4", continuationCount: 0, lastSummaryHash: null,
+      targetBaseSha: sha("b"), resultCommit: sha("c"), resultTree: sha("d"), deliveryReviewId: "review-exact",
+      targetBaseBlockerCode: "provider_unavailable", targetBaseBlockerOwner: "provider", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Provider unavailable",
+    }), {
+      outcome: "no_drift", checkId: "check-reviewed", checkpoint: "pre_release", expectedBaseSha: sha("b"), observedBaseSha: sha("b"), headSha: sha("c"), headTree: sha("d"),
+    });
+
+    expect(resumed).toMatchObject({
+      phase: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish one exact draft pull request", deliveryReviewId: "review-exact", targetBaseBlockerCode: null,
+    });
+    expect(resumed.allowedCommands).not.toContain("review_delivery");
+  });
+
+  test("requires Lead review when a no-drift delivery has no review identity", () => {
+    const resumed = applyTargetBaseNoDrift(IssueWorkflowStateSchema.parse({
+      workflowId: "workflow-1", companyId: "company-1", projectId: "project-1", issueId: "task-1", projectRevisionId: "revision-1",
+      phase: "delivery_blocked", revision: 4, owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Provider unavailable", lastEventId: "workflow-1:4", continuationCount: 0, lastSummaryHash: null,
+      targetBaseSha: sha("b"), resultCommit: sha("c"), resultTree: sha("d"), deliveryReviewId: null,
+      targetBaseBlockerCode: "provider_unavailable", targetBaseBlockerOwner: "provider", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Provider unavailable",
+    }), {
+      outcome: "no_drift", checkId: "check-unreviewed", checkpoint: "pre_release", expectedBaseSha: sha("b"), observedBaseSha: sha("b"), headSha: sha("c"), headTree: sha("d"),
+    });
+
+    expect(resumed).toMatchObject({
+      phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Lead delivery review", deliveryReviewId: null, targetBaseBlockerCode: null,
+    });
+    expect(resumed.allowedCommands).not.toContain("publish_draft");
+    expect(resumed.phase).not.toBe("delivery_reviewed");
+  });
+
   test("invalidates current authority while preserving only published identity", () => {
     const state = IssueWorkflowStateSchema.parse({
       workflowId: "workflow-1",

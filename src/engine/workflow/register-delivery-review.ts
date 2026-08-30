@@ -1,4 +1,4 @@
-import { setHandler } from "../registry.js";
+import { log, setHandler } from "../registry.js";
 import { ApplicationFailure } from "../failures.js";
 import { assertPayloadWithinLimit } from "../policy.js";
 import * as contracts from "../issue-contracts.js";
@@ -23,10 +23,10 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
     const reviewing = stateTransitions.reviewingDeliveryState(ctx.state);
     ctx.state = reviewing;
     await ctx.project();
+    const subject = { planRevision: ctx.state.planRevision ?? ctx.state.revision, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, developerExecutionId: ctx.state.developerExecutionId!, deliveryArtifactId: ctx.state.deliveryArtifactId!, developerEvidenceArtifactId: ctx.state.developerEvidenceArtifactId!, leadSessionRef: ctx.state.leadSessionRef!, developerSessionRef: ctx.state.developerSessionRef! };
+    const common = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, branchName: ctx.state.branchName!, ...(ctx.state.deliverySummary ? { deliverySummary: ctx.state.deliverySummary } : {}) };
     let result: contracts.DeliveryReviewActivityResult | LegacyReviewResult;
     try {
-      const subject = { planRevision: ctx.state.planRevision ?? ctx.state.revision, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, developerExecutionId: ctx.state.developerExecutionId!, deliveryArtifactId: ctx.state.deliveryArtifactId!, developerEvidenceArtifactId: ctx.state.developerEvidenceArtifactId!, leadSessionRef: ctx.state.leadSessionRef!, developerSessionRef: ctx.state.developerSessionRef! };
-      const common = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, branchName: ctx.state.branchName!, ...(ctx.state.deliverySummary ? { deliverySummary: ctx.state.deliverySummary } : {}) };
       // A CI repair produces a fresh delivery; it does not supersede the last blocking review's subject.
       const ciRepairDelivery = Boolean(ctx.state.ciRepairDeveloperExecutionId) && ctx.state.ciRepairDeveloperExecutionId === ctx.state.developerExecutionId;
       const supersedesReviewId = ctx.state.targetBaseOutcome === "revalidated" || ctx.state.developerTurnKind === "implementation" || !ctx.state.deliveryRepairAttemptId || ciRepairDelivery
@@ -37,13 +37,22 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
         (capacityRequestId) => activityProxies.reviewDelivery({ ...common, subject, worktreePath: ctx.state.worktreePath!, supersedesReviewId, ...(ctx.input.visualEvidence !== undefined ? { visualEvidence: ctx.input.visualEvidence } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) }) as unknown as Promise<contracts.DeliveryReviewActivityResult | LegacyReviewResult>,
         (value) => "attemptId" in value ? (value.outcome === "completed" ? value.review.leadExecutionId : value.executionId) : undefined,
       );
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error("Delivery review turn failed after dispatch", { workflowId: ctx.input.workflowId, taskId: ctx.input.issueId, error: message, stack: error instanceof Error ? error.stack : undefined });
+      const completed = await legacyActivityProxies.findCompletedDeliveryReview({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, subjectCommit: subject.subjectCommit, subjectTree: subject.subjectTree }).catch((lookupError) => {
+        log.error("Completed delivery-review lookup failed", { workflowId: ctx.input.workflowId, taskId: ctx.input.issueId, error: lookupError instanceof Error ? lookupError.message : String(lookupError), stack: lookupError instanceof Error ? lookupError.stack : undefined });
+        return null;
+      });
+      if (completed) result = completed;
+      else {
       let evidenceArtifactId: string | null = null;
       try { evidenceArtifactId = (await activityProxies.recordDeliveryBlocker({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, operation: "review" })).artifactId; } catch { /* Keep the fixed state transition if blocker recording itself is unavailable. */ }
-      ctx.state = stateTransitions.reviewBlockedState(ctx.state, { attemptId: null, code: "review-infrastructure-failure", summary: "The review infrastructure did not complete; retry the review.", evidenceArtifactId }, true);
+      ctx.state = stateTransitions.reviewBlockedState(ctx.state, { attemptId: null, code: "review-infrastructure-failure", summary: `The review infrastructure did not complete: ${message.slice(0, 180)}. Retry the review.`, evidenceArtifactId }, true);
       await ctx.project();
       void command;
       return ctx.state;
+      }
     }
     const artifactBackedReview = true;
     // Deprecated: histories created before the minimum repair loop recorded this
@@ -180,6 +189,7 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
         (value) => value.status === "completed" ? value.result.developerExecutionId : value.developerExecutionId,
       );
     } catch (error) {
+      log.error("Developer repair turn failed after dispatch", { workflowId: ctx.input.workflowId, taskId: ctx.input.issueId, error: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined });
       let evidenceArtifactId: string | null = null;
       try { evidenceArtifactId = (await activityProxies.recordDeliveryBlocker({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, operation: "repair" })).artifactId; } catch { /* Keep the fixed state transition if blocker recording itself is unavailable. */ }
       const summary = error instanceof Error ? error.message : "The repair infrastructure did not complete; retry the repair.";

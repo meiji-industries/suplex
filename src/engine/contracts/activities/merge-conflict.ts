@@ -66,6 +66,7 @@ export type WorkflowMergeConflictResolutionActivityInput = Omit<MergeConflictRes
 export interface MergeConflictResolutionActivitySuccess {
   developerExecutionId: string;
   developerSessionRef: string;
+  worktreePath?: string;
   resultCommit: string;
   resultTree: string;
   deliveryArtifactId: string;

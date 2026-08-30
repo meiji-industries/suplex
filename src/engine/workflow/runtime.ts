@@ -163,6 +163,11 @@ const AUTO_CHAINED_COMMANDS = { delivery_ready: "review_delivery", delivery_revi
 // A chained step that threw is never chained again in this run: the phase may re-enter itself
 // (plan conflict -> required -> resolve throws -> plan conflict ...) and each pass has a new revision.
 const haltedChains = new Set<string>();
+const chainKey = (workflowId: string, command: string) => `${workflowId}:${command}`;
+
+export function clearAutomaticChainHalt(workflowId: string): void {
+  for (const key of haltedChains) if (key.startsWith(`${workflowId}:`)) haltedChains.delete(key);
+}
 const AUTO_RETRY_BLOCKER_DELAYS = [30_000, 120_000, 300_000] as const;
 const AUTO_RETRY_BLOCKER_COMMANDS = new Set(["review_delivery", "repair_delivery", "repair_ci", "final_review", "accept_delivery", "reconcile_acceptance", "reconcile_merge", "retry_target_base_reconciliation"]);
 
@@ -179,7 +184,7 @@ export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): 
   // Routine (non-material) plans land in ready_for_development without going through autoApprovePlan's
   // auto-start, so this table entry needs its own gate to keep old histories that parked here replayable.
   if (ctx.state.phase === "ready_for_development" && !true) return null;
-  if (haltedChains.has(command) && true) return null;
+  if (haltedChains.has(chainKey(ctx.state.workflowId, command)) && true) return null;
   if (runExecution.current().autoActionsHalted()) return null;
   const commandId = `${ctx.state.workflowId}:auto-${command}:${ctx.state.revision}`;
   return ctx.commandAlreadyProcessed(commandId) ? null : { command, commandId };
@@ -206,7 +211,7 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   const unchanged = ctx.state.phase === before.phase && ctx.state.owner === before.owner && ctx.state.pendingAction === before.pendingAction;
   if (!failure && !unchanged) return;
   const reason = failure instanceof Error ? failure.message : failure ? String(failure) : `Automatic ${chained.command.replaceAll("_", " ")} made no progress`;
-  haltedChains.add(chained.command);
+  haltedChains.add(chainKey(ctx.state.workflowId, chained.command));
   ctx.state = IssueWorkflowStateSchema.parse({
     ...ctx.state,
     revision: ctx.state.revision + 1,
@@ -299,7 +304,16 @@ export function createGuarded(
   return <A extends unknown[], R>(fn: (...args: A) => Promise<R>, command?: string) => async (...args: A): Promise<R> => {
     const before = store.get();
     try {
-      return await fn(...args);
+      const result = await fn(...args);
+      const commandId = (args[0] as { commandId?: unknown } | undefined)?.commandId;
+      const automatic = typeof commandId === "string" && commandId.startsWith(`${before.workflowId}:auto-`);
+      if (!automatic && store.get().lastHandlerError) {
+        const cleared = IssueWorkflowStateSchema.parse({ ...store.get(), lastHandlerError: null });
+        store.set(cleared);
+        await options.project(cleared);
+        return cleared as R;
+      }
+      return result;
     } catch (error) {
       const state = store.get();
       if (isCancellation(error)) throw error;

@@ -8,6 +8,7 @@ import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, buildInitialIssueWo
 import { issueWorkflow } from "./workflows.js";
 import { runExecution, type Handler, type RunExecutionContext } from "./registry.js";
 import { StructuredLogger } from "../logging.js";
+import { clearAutomaticChainHalt } from "./workflow/runtime.js";
 
 export interface EngineClock {
   now(): number;
@@ -171,6 +172,7 @@ export class IssueRun {
     const operation = this.chain.then(async () => {
       await this.ready();
       const automatic = isAutomaticCommand(this.workflowId, commandId);
+      if (!automatic && commandId !== "legacy-command") clearAutomaticChainHalt(this.workflowId);
       if (this.runawayHalted && !automatic && commandId !== "legacy-command") {
         this.runawayHalted = false;
         this.projectionTimes = [];

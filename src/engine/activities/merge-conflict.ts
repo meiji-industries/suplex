@@ -20,12 +20,13 @@ export function createMergeConflictActivities(ctx: ActivityContext): MergeConfli
       const rawInput: MergeConflictResolutionActivityInput = { ...input, worktreePath };
       const operation = developer.runMergeConflictResolution ? developer.runMergeConflictResolution.bind(developer) : defaultDeveloper.runMergeConflictResolution.bind(defaultDeveloper);
       const result = await invokeAgent(input, () => operation(rawInput));
-      return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath }, result);
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath }, { ...result, worktreePath });
     },
     async resolveMergeConflictSupervised(input) {
       return invokeAgent(input, () => runSupervised<MergeConflictResolutionActivityResult>(input, async (service) => {
         const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
-        return service.runMergeConflictResolution({ ...input, worktreePath });
+        const result = await service.runMergeConflictResolution({ ...input, worktreePath });
+        return "outcome" in result ? result : { ...result, worktreePath };
       }));
     },
   };

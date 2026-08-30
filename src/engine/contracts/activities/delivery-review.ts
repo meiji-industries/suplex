@@ -82,6 +82,16 @@ export const DeliveryDecisionActivityInputSchema = z.object({
 
 export type DeliveryReviewResult = DeliveryReviewActivityResult;
 
+export const CompletedDeliveryReviewLookupInputSchema = z.object({
+  taskId: durableId,
+  companyId: durableId,
+  workflowId: durableId,
+  subjectCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  subjectTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
+}).strict();
+
+export type CompletedDeliveryReviewLookupInput = z.infer<typeof CompletedDeliveryReviewLookupInputSchema>;
+
 /** Workflow-safe review input. The activity resolves the worktree from durable execution state. */
 export type WorkflowDeliveryReviewActivityInput = Omit<DeliveryReviewActivityInput, "worktreePath"> & { worktreePath?: string };
 
@@ -138,5 +148,6 @@ export interface DeliveryDecisionActivityInput {
 export interface DeliveryReviewActivities {
   planDeliveryRepair(input: DeliveryRepairPlanActivityInput): Promise<DeliveryRepairPlanResult>;
   reviewDelivery(input: WorkflowDeliveryReviewActivityInput): Promise<WorkflowDeliveryReviewResult>;
+  findCompletedDeliveryReview(input: CompletedDeliveryReviewLookupInput): Promise<DeliveryReviewActivityResult | null>;
   recordDeliveryDecision(input: DeliveryDecisionActivityInput): Promise<{ artifactId: string }>;
 }

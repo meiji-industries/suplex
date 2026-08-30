@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { relative, resolve, sep } from "node:path";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, relative, resolve, sep } from "node:path";
 
 import type { ZodType } from "zod";
 
@@ -16,6 +16,7 @@ import { classifyRecovery, type DurableTaskFacts, type LiveObservations } from "
 import { CiRepairPlanSchema, DeliveryReviewSchema, MergeConflictPlanSchema } from "./engine/issue-contracts.js";
 import { reconcileIssueDeveloperDelivery } from "./engine/service.js";
 import { json } from "./task-utils.js";
+import { claimTurnRecoveryPrompt } from "./turn-recovery-receipt.js";
 
 export interface ActiveTurnOutcome {
   taskId: string;
@@ -35,10 +36,12 @@ type Turn = {
   status: TurnStatus;
   resultRelativePath: string;
   executionId: string;
+  executionRole: "planner" | "builder" | "reviewer" | "integrator";
   executionStatus: string | null;
   executionFinishedAt: string | null;
   promptSentAt: string | null;
-  isLatestActiveExecutionTurn: number;
+  recoveryPromptSentAt: string | null;
+  isLatestSessionTurn: number;
   ledger: "agent" | "developer";
   promptKind: string;
   revision: number;
@@ -74,7 +77,7 @@ const developerResultSchemas: Readonly<Record<string, ZodType>> = {
 // Keep completed turns with a durable result in the scan so an unchanged second
 // reconciliation reports the same idempotent outcome without writing again.
 const activeStatuses = "'dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed'";
-const activeExecutionStatuses = new Set(["starting", "running", "cancelling"]);
+const activeExecutionStatuses = new Set(["starting", "running"]);
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const safeText = (value: unknown) => String(redact(value)).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
 
@@ -112,12 +115,11 @@ function sessionObservation(observation: HerdrSessionObservation | undefined): L
 }
 
 function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
-  return database.authQuery((db) => db.prepare(`SELECT turn.turn_id AS turnId, turn.task_id AS taskId, session.id AS roleSessionId, session.session_role AS role, turn.status, turn.result_relative_path AS resultRelativePath, turn.execution_id AS executionId, COALESCE(agent.status, developer.status) AS executionStatus, COALESCE(agent.finished_at, developer.finished_at) AS executionFinishedAt, turn.prompt_sent_at AS promptSentAt, CASE WHEN turn.turn_id = (
+  return database.authQuery((db) => db.prepare(`SELECT turn.turn_id AS turnId, turn.task_id AS taskId, session.id AS roleSessionId, session.session_role AS role, turn.status, turn.result_relative_path AS resultRelativePath, turn.execution_id AS executionId, turn.execution_role AS executionRole, COALESCE(agent.status, developer.status) AS executionStatus, COALESCE(agent.finished_at, developer.finished_at) AS executionFinishedAt, turn.prompt_sent_at AS promptSentAt, turn.recovery_prompt_sent_at AS recoveryPromptSentAt, CASE WHEN turn.turn_id = (
       SELECT latest.turn_id FROM forge_herdr_turns latest
-      JOIN forge_agent_executions latest_agent ON latest_agent.id = latest.execution_id AND latest.ledger = 'agent'
-      WHERE latest.role_session_id = turn.role_session_id AND latest_agent.status IN ('starting', 'running', 'cancelling')
+      WHERE latest.role_session_id = turn.role_session_id
       ORDER BY latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1
-    ) THEN 1 ELSE 0 END AS isLatestActiveExecutionTurn, turn.ledger, turn.prompt_kind AS promptKind, projection.revision, projection.phase, projection.workflow_id AS workflowId, session.pane_id AS paneId, worktree.branch_name AS branchName, worktree.worktree_path AS worktreePath, review.subject_commit AS lastReviewedCommit
+    ) THEN 1 ELSE 0 END AS isLatestSessionTurn, turn.ledger, turn.prompt_kind AS promptKind, projection.revision, projection.phase, projection.workflow_id AS workflowId, session.pane_id AS paneId, worktree.branch_name AS branchName, worktree.worktree_path AS worktreePath, review.subject_commit AS lastReviewedCommit
     FROM forge_herdr_turns turn
     JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.is_current = 1
     JOIN forge_issue_projections projection ON projection.task_id = turn.task_id
@@ -130,51 +132,90 @@ function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
 }
 
 function eligibleResumeIdentity(turn: Turn, observation: HerdrSessionObservation | undefined): observation is HerdrSessionObservation {
-  const live = sessionObservation(observation).session;
+  const lifecycle = observation?.lifecycleStatus;
   return (turn.role === "planner" || turn.role === "reviewer")
     && Boolean(turn.paneId && observation?.agentName)
     && observation?.sessionId === turn.roleSessionId
     && observation.paneId === turn.paneId
     && observation.classification === "active"
     && observation.identityFailure === null
-    && (live === "live_idle" || live === "terminal");
+    && (lifecycle === "idle" || lifecycle === "done");
 }
 
 function eligibleResumeExecution(turn: Turn): boolean {
   return turn.ledger === "agent"
     && turn.promptSentAt !== null
-    && turn.isLatestActiveExecutionTurn === 1
+    && turn.recoveryPromptSentAt === null
+    && turn.isLatestSessionTurn === 1
     && turn.executionStatus !== null
     && activeExecutionStatuses.has(turn.executionStatus);
 }
 
-function claimResumeReceipt(database: ForgeDatabase, turn: Turn, observedStatus: TurnStatus, excerpt: string, timestamp: string): boolean {
-  return database.authTransaction((db) => {
-    const claimed = db.prepare(`UPDATE forge_herdr_turns SET status = 'awaiting_human', attention_excerpt = ?, updated_at = ?
-      WHERE turn_id = ? AND role_session_id = ? AND status = ?
-        AND EXISTS (SELECT 1 FROM forge_herdr_role_sessions session WHERE session.id = ? AND session.is_current = 1 AND session.pane_id IS ?)
-        AND EXISTS (SELECT 1 FROM forge_agent_executions execution WHERE execution.id = ? AND execution.task_id = ? AND execution.status = ? AND execution.status IN ('starting', 'running', 'cancelling'))
-      RETURNING turn_id`).get(excerpt, timestamp, turn.turnId, turn.roleSessionId, observedStatus, turn.roleSessionId, turn.paneId, turn.executionId, turn.taskId, turn.executionStatus);
-    if (!claimed) return false;
-    db.prepare("UPDATE forge_herdr_role_sessions SET status = 'ready', attention_activated_at = COALESCE(attention_activated_at, ?), updated_at = ? WHERE id = ? AND is_current = 1").run(timestamp, timestamp, turn.roleSessionId);
-    return true;
-  });
-}
-
 function completeTurn(database: ForgeDatabase, turn: Turn, bytes: Buffer, timestamp: string, handoff?: { headSha: string }): boolean {
   return database.authTransaction((db) => {
-    const completed = db.prepare(`UPDATE forge_herdr_turns SET result_sha256 = ?, task_complete_seen_at = ?, status = 'completed', attention_excerpt = NULL, finished_at = ?, updated_at = ?
-      WHERE turn_id = ? AND role_session_id = ? AND status = ?
-        AND EXISTS (SELECT 1 FROM forge_herdr_role_sessions session WHERE session.id = ? AND session.is_current = 1 AND session.pane_id IS ?)
-      RETURNING turn_id`).get(sha256(bytes), timestamp, timestamp, timestamp, turn.turnId, turn.roleSessionId, turn.status, turn.roleSessionId, turn.paneId);
+    const completed = db.prepare(`UPDATE forge_herdr_turns AS current
+      SET result_sha256 = ?, task_complete_seen_at = ?, status = 'completed', attention_excerpt = NULL, finished_at = ?, updated_at = ?
+      WHERE current.turn_id = ? AND current.task_id = ? AND current.role_session_id = ?
+        AND current.ledger = ? AND current.execution_id = ? AND current.execution_role = ?
+        AND current.prompt_kind = ? AND current.prompt_sent_at IS ? AND current.recovery_prompt_sent_at IS ?
+        AND current.result_relative_path = ? AND current.status = ?
+        AND current.turn_id = (
+          SELECT latest.turn_id FROM forge_herdr_turns latest
+          WHERE latest.role_session_id = current.role_session_id
+          ORDER BY latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1
+        )
+        AND EXISTS (
+          SELECT 1 FROM forge_herdr_role_sessions session
+          WHERE session.id = current.role_session_id AND session.task_id = current.task_id
+            AND session.session_role = ? AND session.is_current = 1 AND session.pane_id IS ?
+        )
+        AND EXISTS (
+          SELECT 1 FROM forge_issue_projections projection
+          WHERE projection.task_id = current.task_id AND projection.workflow_id = ?
+            AND projection.revision = ? AND projection.phase NOT IN ('done', 'cancelled', 'failed')
+        )
+        AND ((current.ledger = 'agent' AND EXISTS (
+          SELECT 1 FROM forge_agent_executions execution
+          WHERE execution.id = current.execution_id AND execution.task_id = current.task_id
+            AND execution.workflow_id = ? AND execution.role = current.execution_role
+            AND execution.status = ? AND execution.status IN ('starting', 'running')
+        )) OR (current.ledger = 'developer' AND EXISTS (
+          SELECT 1 FROM forge_developer_executions execution
+          WHERE execution.id = current.execution_id AND execution.task_id = current.task_id
+            AND execution.workflow_id = ? AND execution.status = ?
+            AND execution.status IN ('starting', 'running')
+        )))
+      RETURNING turn_id`).get(
+        sha256(bytes), timestamp, timestamp, timestamp,
+        turn.turnId, turn.taskId, turn.roleSessionId,
+        turn.ledger, turn.executionId, turn.executionRole,
+        turn.promptKind, turn.promptSentAt, turn.recoveryPromptSentAt,
+        turn.resultRelativePath, turn.status,
+        turn.role, turn.paneId,
+        turn.workflowId, turn.revision,
+        turn.workflowId, turn.executionStatus,
+        turn.workflowId, turn.executionStatus,
+      );
     if (!completed) return false;
     if (handoff) {
       const sequence = (db.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS value FROM forge_developer_execution_events WHERE execution_id = ?").get(turn.executionId) as { value: number }).value;
       db.prepare("INSERT OR IGNORE INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, occurred_at, summary, idempotency_key) VALUES (?, ?, 0, ?, 'git_handoff', ?, ?, ?)").run(randomUUID(), turn.executionId, sequence, timestamp, `Delivery taken from Git commit ${handoff.headSha.slice(0, 7)}; the Developer's completion message was not received.`, `git-handoff:${handoff.headSha}`);
     }
-    db.prepare("UPDATE forge_herdr_role_sessions SET status = 'ready', attention_activated_at = NULL, updated_at = ? WHERE id = ? AND is_current = 1 AND status <> 'closed'").run(timestamp, turn.roleSessionId);
+    db.prepare("UPDATE forge_herdr_role_sessions SET status = 'ready', attention_activated_at = NULL, updated_at = ? WHERE id = ? AND task_id = ? AND is_current = 1 AND status <> 'closed'").run(timestamp, turn.roleSessionId, turn.taskId);
     return true;
   });
+}
+
+async function writeResultAtomically(path: string, bytes: Buffer): Promise<void> {
+  const temporary = `${path}.recovery-${randomUUID()}`;
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  try {
+    await writeFile(temporary, bytes, { mode: 0o600 });
+    await rename(temporary, path);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
 
 export async function reconcileActiveTurns(database: ForgeDatabase, config: ForgeConfig, deps: {
@@ -195,7 +236,12 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
     try {
       const result = await resultAt(config.runtimeRoot, turn);
       const observation = observationsBySession.get(turn.roleSessionId);
-      const handoff = (turn.role === "builder" || turn.role === "integrator") && turn.worktreePath && turn.branchName
+      const handoffCompatible = turn.ledger === "developer"
+        && turn.promptKind === "implementation"
+        && turn.role === "builder"
+        && result.promptable
+        && result.bytes === null;
+      const handoff = handoffCompatible && turn.worktreePath && turn.branchName
         ? await detectHandoff({ worktreePath: turn.worktreePath, branchName: turn.branchName, previousCommit: turn.lastReviewedCommit, taskId: turn.taskId, database })
         : null;
       const git = handoff ? {
@@ -204,20 +250,38 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
         dirty: handoff.kind === "dirty",
         headCommit: "headSha" in handoff ? handoff.headSha : null,
       } : null;
+      const terminal = ["done", "cancelled", "failed"].includes(turn.phase);
       const facts: DurableTaskFacts = {
-        taskId: turn.taskId, phase: turn.phase, revision: turn.revision, terminal: false, cancelled: false,
+        taskId: turn.taskId, phase: turn.phase, revision: turn.revision, terminal, cancelled: turn.phase === "cancelled",
         branchName: turn.branchName, worktreePath: turn.worktreePath, lastReviewedCommit: turn.lastReviewedCommit,
-        turn: { turnId: turn.turnId, role: turn.role, status: turn.status, resultPresent: Boolean(result.bytes), resultValid: result.valid, resumeRequestsSent: turn.status === "awaiting_human" ? 1 : 0 },
+        turn: { turnId: turn.turnId, role: turn.role, status: turn.status, resultPresent: Boolean(result.bytes), resultValid: result.valid, resumeRequestsSent: turn.recoveryPromptSentAt === null ? 0 : 1 },
         failure: null,
       };
       const classified = classifyRecovery(facts, { herdr: sessionObservation(observation), git, github: null });
       let action: ActiveTurnOutcome["action"] = classified.action === "advance" || classified.action === "resume" || classified.action === "attention" ? classified.action : "no_change";
       const evidence = [...classified.evidence, result.evidence];
+      const exactActiveExecution = turn.isLatestSessionTurn === 1 && turn.executionStatus !== null && activeExecutionStatuses.has(turn.executionStatus);
+      const lateDeveloperResult = turn.status === "completed" && turn.ledger === "developer" && turn.executionStatus === "failed" && result.valid;
+      if (action === "advance" && !lateDeveloperResult && !exactActiveExecution) {
+        action = "no_change";
+        evidence.push("advance:not latest active execution");
+      }
       if (action === "advance" && turn.status !== "completed") {
-        const handoffBytes = handoff?.kind === "clean_commit"
-          ? Buffer.from(JSON.stringify({ kind: "delivery", summary: `Delivery taken from Git commit ${handoff.headSha.slice(0, 7)}; the Developer's completion message was not received.`, steps: [{ number: 1, status: "completed", filesChanged: [], notes: "Git handoff." }], authorizedStepsNotCompleted: [], resultCommit: handoff.headSha, resultTree: handoff.treeSha, dirtyState: "clean", blocker: null }))
-          : result.valid ? result.bytes : null;
-        if (handoffBytes && !completeTurn(database, turn, handoffBytes, now(), handoff?.kind === "clean_commit" && turn.ledger === "developer" ? handoff : undefined)) {
+        let completionBytes = result.valid ? result.bytes : null;
+        let completedHandoff: { headSha: string } | undefined;
+        if (!completionBytes && handoff?.kind === "clean_commit") {
+          const candidate = { kind: "delivery", summary: `Delivery taken from Git commit ${handoff.headSha.slice(0, 7)}; the Developer's completion message was not received.`, steps: [{ number: 1, status: "completed", filesChanged: [], notes: "Git handoff." }], authorizedStepsNotCompleted: [], resultCommit: handoff.headSha, resultTree: handoff.treeSha, dirtyState: "clean", blocker: null };
+          const parsed = DeveloperDeliveryReportSchema.safeParse(candidate);
+          if (parsed.success) {
+            completionBytes = Buffer.from(JSON.stringify(parsed.data));
+            await writeResultAtomically(result.path, completionBytes);
+            completedHandoff = handoff;
+          } else {
+            action = "no_change";
+            evidence.push("advance:Git handoff result invalid");
+          }
+        }
+        if (action === "advance" && completionBytes && !completeTurn(database, turn, completionBytes, now(), completedHandoff)) {
           action = "no_change";
           evidence.push("advance:completion CAS lost");
         }
@@ -229,6 +293,9 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
         } else if (turn.promptSentAt === null) {
           action = "no_change";
           evidence.push("resume:initial prompt receipt absent");
+        } else if (turn.recoveryPromptSentAt !== null) {
+          action = "no_change";
+          evidence.push("resume:receipt already persisted");
         } else if (!eligibleResumeExecution(turn)) {
           action = "no_change";
           evidence.push("resume:not latest active execution");
@@ -238,8 +305,15 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
         } else {
           const marker = `[forge-turn:${turn.turnId}]`;
           const prompt = `Resume the existing Forge turn with turn_id ${turn.turnId}. Write the required JSON result to ${result.path} using the exact schema already provided. The turn is complete only after that file exists and you reply with the completion marker ${marker}. Do not create a new turn or session.`;
-          const excerpt = safeText(`Recovery requested once for turn ${turn.turnId}; required result: ${result.path}`);
-          if (claimResumeReceipt(database, turn, turn.status, excerpt, now())) {
+          const timestamp = now();
+          const claimed = claimTurnRecoveryPrompt(database, {
+            turnId: turn.turnId, taskId: turn.taskId, roleSessionId: turn.roleSessionId, sessionRole: turn.role, paneId: turn.paneId,
+            ledger: turn.ledger, executionId: turn.executionId, executionRole: turn.executionRole, executionStatus: turn.executionStatus!,
+            promptKind: turn.promptKind, promptSentAt: turn.promptSentAt, resultRelativePath: turn.resultRelativePath, turnStatus: turn.status,
+            workflowId: turn.workflowId, revision: turn.revision, timestamp,
+            attentionExcerpt: safeText(`Recovery requested once for turn ${turn.turnId}; required result: ${result.path}`),
+          });
+          if (claimed) {
             evidence.push("resume:receipt persisted before prompt");
             await herdr.prompt(observation.agentName!, prompt);
           } else {

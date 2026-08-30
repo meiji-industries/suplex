@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 
 import { reconcileActiveTurns } from "../src/active-turn-recovery.js";
+import { DeveloperDeliveryReportSchema } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 
@@ -262,21 +263,120 @@ test("one failed candidate retains identity evidence while the next candidate re
   expect(errors).toEqual([{ message: "Active turn recovery candidate failed", context: { taskId: first.taskId, turnId: first.turnId }, details: { error: "candidate one failed" } }]);
 });
 
+test("cancellation and terminal projection state suppress prompts and completion", async () => {
+  const value = await fixture();
+  const cancelling = value.addTurn("cancelling", { executionStatus: "cancelling" });
+  const cancelledAgent = value.addTurn("cancelled-agent");
+  const terminalProjection = value.addTurn("terminal-projection");
+  await value.writeResult(cancelling, validLeadPlan);
+  await value.writeResult(terminalProjection, validLeadPlan);
+  value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'cancelled', updated_at = ? WHERE task_id = ?").run(new Date().toISOString(), terminalProjection.taskId));
+  const prompts: string[] = [];
+  const status = (turn: AddedTurn, lifecycle: string) => ({
+    agent: { name: `live-${turn.agentName}`, paneId: turn.paneId, status: lifecycle },
+    pane: { paneId: turn.paneId, agent: `live-${turn.agentName}`, agentStatus: lifecycle, tokens: { forge_binding_id: turn.sessionId } },
+  });
+  const live = [status(cancelling, "done"), status(cancelledAgent, "cancelled"), status(terminalProjection, "done")];
+  const herdr = { runtimeSnapshot: async () => ({ agents: live.map(({ agent }) => agent), panes: live.map(({ pane }) => pane) }), prompt: async (agent: string) => { prompts.push(agent); } };
+
+  const outcomes = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, now: () => stamp });
+
+  expect(outcomes.find(({ turnId }) => turnId === cancelling.turnId)).toMatchObject({ action: "no_change", evidence: expect.arrayContaining(["advance:not latest active execution"]) });
+  expect(outcomes.find(({ turnId }) => turnId === cancelledAgent.turnId)).toMatchObject({ action: "no_change", evidence: expect.arrayContaining(["resume:not exact current live binding"]) });
+  expect(outcomes.find(({ turnId }) => turnId === terminalProjection.turnId)).toMatchObject({ action: "no_change", evidence: expect.arrayContaining(["task:terminal"]) });
+  expect(prompts).toEqual([]);
+  expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_herdr_turns WHERE status = 'completed' AND task_id IN (?, ?, ?)").get(cancelling.taskId, cancelledAgent.taskId, terminalProjection.taskId))).toEqual({ count: 0 });
+});
+
+test("prompt CAS loses an execution cancellation race without dispatch", async () => {
+  const value = await fixture();
+  const turn = value.addTurn("prompt-race");
+  let prompts = 0;
+  const herdr = { runtimeSnapshot: async () => value.snapshot(), prompt: async () => { prompts += 1; } };
+  let raced = false;
+  const now = () => {
+    if (!raced) {
+      raced = true;
+      value.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'cancelled' WHERE id = 'execution-prompt-race'").run());
+    }
+    return stamp;
+  };
+
+  const outcomes = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, now });
+
+  expect(outcomes).toMatchObject([{ turnId: turn.turnId, action: "no_change", evidence: expect.arrayContaining(["resume:receipt not claimed"]) }]);
+  expect(prompts).toBe(0);
+  expect(value.database.authQuery((db) => db.prepare("SELECT status, recovery_prompt_sent_at FROM forge_herdr_turns WHERE turn_id = ?").get(turn.turnId))).toEqual({ status: "waiting", recovery_prompt_sent_at: null });
+});
+
+test("compatible clean Git handoff writes and validates exact delivery bytes before completion", async () => {
+  for (const valid of [true, false]) {
+    const value = await fixture();
+    const turn = value.addTurn(`handoff-${valid ? "valid" : "invalid"}`, { role: "builder", ledger: "developer" });
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES (?, ?, 'company', 'project', ?, '/repo', '/worktrees', '/missing', ?, ?, 'lease', 'active', ?)").run(`worktree-handoff-${valid}`, turn.taskId, `workflow-handoff-${valid ? "valid" : "invalid"}`, `work/handoff-${valid ? "valid" : "invalid"}`, "d".repeat(40), stamp));
+    const headSha = valid ? "e".repeat(40) : "invalid";
+    const detectHandoff = async () => ({ kind: "clean_commit" as const, headSha, treeSha: "f".repeat(40) });
+    const herdr = { runtimeSnapshot: async () => ({ agents: [], panes: [] }) };
+
+    const outcomes = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, detectHandoff: detectHandoff as never, now: () => stamp });
+    const path = join(value.config.runtimeRoot, turn.resultRelativePath);
+
+    if (valid) {
+      const bytes = await readFile(path);
+      expect(DeveloperDeliveryReportSchema.safeParse(JSON.parse(bytes.toString("utf8"))).success).toBe(true);
+      expect(outcomes).toMatchObject([{ turnId: turn.turnId, action: "advance" }]);
+      expect(value.database.authQuery((db) => db.prepare("SELECT status, result_sha256 FROM forge_herdr_turns WHERE turn_id = ?").get(turn.turnId))).toEqual({ status: "completed", result_sha256: createHash("sha256").update(bytes).digest("hex") });
+      expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_developer_execution_events WHERE execution_id = ? AND kind = 'git_handoff'").get(`execution-handoff-valid`))).toEqual({ count: 1 });
+    } else {
+      expect(outcomes).toMatchObject([{ turnId: turn.turnId, action: "no_change", evidence: expect.arrayContaining(["advance:Git handoff result invalid"]) }]);
+      await expect(readFile(path)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(value.database.authQuery((db) => db.prepare("SELECT status, result_sha256 FROM forge_herdr_turns WHERE turn_id = ?").get(turn.turnId))).toEqual({ status: "waiting", result_sha256: null });
+    }
+  }
+});
+
+test("Git handoff is disabled for incompatible ledgers and prompt kinds", async () => {
+  const cases: Array<{ name: string; ledger: Ledger; role: Role; promptKind: string }> = [
+    { name: "agent", ledger: "agent", role: "builder", promptKind: "implementation" },
+    { name: "repair", ledger: "developer", role: "builder", promptKind: "delivery-repair" },
+    { name: "ci", ledger: "developer", role: "integrator", promptKind: "ci-repair" },
+    { name: "merge", ledger: "developer", role: "integrator", promptKind: "merge-conflict-resolution" },
+  ];
+  for (const item of cases) {
+    const value = await fixture();
+    const turn = value.addTurn(`incompatible-${item.name}`, item);
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES (?, ?, 'company', 'project', ?, '/repo', '/worktrees', '/missing', ?, ?, 'lease', 'active', ?)").run(`worktree-incompatible-${item.name}`, turn.taskId, `workflow-incompatible-${item.name}`, `work/incompatible-${item.name}`, "d".repeat(40), stamp));
+    let detections = 0;
+    const detectHandoff = async () => { detections += 1; return { kind: "clean_commit" as const, headSha: "e".repeat(40), treeSha: "f".repeat(40) }; };
+    const herdr = { runtimeSnapshot: async () => ({ agents: [], panes: [] }) };
+
+    await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, detectHandoff: detectHandoff as never });
+
+    expect(detections, item.name).toBe(0);
+    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = ?").get(turn.turnId)), item.name).not.toEqual({ status: "completed" });
+  }
+});
+
 test("result and clean-handoff completion lose their exact CAS after session supersession", async () => {
   for (const kind of ["result", "handoff"] as const) {
     const value = await fixture();
     const turn = value.addTurn(`race-${kind}`, { role: "builder", ledger: "developer" });
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES (?, ?, 'company', 'project', ?, '/repo', '/worktrees', '/missing', ?, ?, 'lease', 'active', ?)").run(`worktree-${kind}`, turn.taskId, `workflow-race-${kind}`, `work/race-${kind}`, "d".repeat(40), stamp));
     if (kind === "result") await value.writeResult(turn, validDeveloperDelivery);
-    const detectHandoff = async () => {
-      value.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0 WHERE id = ?").run(turn.sessionId));
-      return kind === "result"
-        ? { kind: "no_new_commit" as const, headSha: null }
-        : { kind: "clean_commit" as const, headSha: "e".repeat(40), treeSha: "f".repeat(40) };
-    };
+    const detectHandoff = async () => kind === "result"
+      ? { kind: "no_new_commit" as const, headSha: null }
+      : { kind: "clean_commit" as const, headSha: "e".repeat(40), treeSha: "f".repeat(40) };
     const herdr = { runtimeSnapshot: async () => value.snapshot() };
+    let superseded = false;
+    const now = () => {
+      if (!superseded) {
+        superseded = true;
+        value.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0 WHERE id = ?").run(turn.sessionId));
+      }
+      return stamp;
+    };
 
-    const outcomes = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, detectHandoff: detectHandoff as never, now: () => stamp });
+    const outcomes = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, detectHandoff: detectHandoff as never, now });
 
     expect(outcomes).toMatchObject([{ turnId: turn.turnId, action: "no_change", evidence: expect.arrayContaining(["advance:completion CAS lost"]) }]);
     expect(value.database.authQuery((db) => db.prepare("SELECT status, result_sha256 FROM forge_herdr_turns WHERE turn_id = ?").get(turn.turnId))).toEqual({ status: "waiting", result_sha256: null });

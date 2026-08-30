@@ -7,8 +7,10 @@ import { gunzipSync } from "node:zlib";
 import { expect, test } from "vitest";
 import { z } from "zod";
 
+import { reconcileActiveTurns } from "../src/active-turn-recovery.js";
 import { ArtifactStore } from "../src/artifacts.js";
 import { AgentFailure } from "../src/agent-failure.js";
+import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { HerdrFailure } from "../src/herdr-client.js";
 import { HerdrTurnRunner, type HerdrTurnInput } from "../src/herdr-turn-runner.js";
@@ -37,6 +39,7 @@ async function fixture(): Promise<{ root: string; database: ForgeDatabase; input
     db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES ('task', 'company', 'project', 'Task', 'brief', '[]', '{}', 0, 'workflow', 'revision', 'key', ?, ?, ?)").run("b".repeat(64), now, now);
     db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, codex_session_id, agent_name, pane_id, rollout_path, status, created_at, updated_at) VALUES ('session', 'task', 'planner', 1, 1, 'codex', 'codex-session', 'planner', 'pane', ?, 'ready', ?, ?)").run(join(root, "rollout.jsonl"), now, now);
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, heartbeat_at) VALUES ('execution', 'task', 'company', 'workflow', 'planner', 'running', 1, ?, ?)").run(now, now);
+    db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task', 'company', 'project', 'workflow', 1, 'planning', 'lead', '[]', NULL, ?, 'event')").run(now);
   });
   const rolloutPath = join(root, "rollout.jsonl");
   await writeFile(rolloutPath, "");
@@ -122,7 +125,7 @@ async function developerTurnFixture(dirty = false) {
     db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('developer', 'task', 'company', 'workflow', 1, 1, 'running', 'forge/issue/task', ?, ?, ?)").run(worktreePath, base, now);
     db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES ('worktree', 'task', 'company', 'project', 'workflow', ?, ?, ?, 'forge/issue/task', ?, 'lease', 'active', ?)").run(worktreePath, setup.root, worktreePath, base, now);
   });
-  const input = { ...setup.input, executionId: "developer", executionRole: "builder" as const, ledger: "developer" as const, promptKind: "developer-delivery", resultSchema: DeveloperDeliverySchema };
+  const input = { ...setup.input, executionId: "developer", executionRole: "builder" as const, ledger: "developer" as const, promptKind: "implementation", resultSchema: DeveloperDeliverySchema };
   setup.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET session_role = 'builder' WHERE id = 'session'").run());
   return { ...setup, input };
 }
@@ -1042,6 +1045,43 @@ test("idle with no result sends one nudge, awaits human, and adopts the late res
     setTimeout(() => void writeFile(join(setup.root, row.result_relative_path), JSON.stringify({ status: "ok" })), 1_050);
     await expect(running).resolves.toMatchObject({ result: { status: "ok" } });
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
+test("runner nudge crash and attention cleanup cannot trigger a recovery duplicate", async () => {
+  const setup = await fixture();
+  setup.input.promptKind = "lead-plan";
+  let runnerPrompts = 0;
+  const runnerHerdr = {
+    prompt: async (_name: string, prompt: string) => {
+      runnerPrompts += 1;
+      if (runnerPrompts === 1) {
+        await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(prompt) })}${line({ type: "task_started", turn_id: "silent" })}${line({ type: "task_complete", turn_id: "silent", duration_ms: 1 })}`);
+        return setup.session.live;
+      }
+      throw new Error("simulated crash after missing-result nudge dispatch");
+    },
+    getAgent: async () => ({ ...setup.session.live, status: "done", screenDetectionSkipped: true }),
+  };
+  const runner = makeRunner(setup.database, runnerHerdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
+  try {
+    await expect(runner.run(setup.input)).rejects.toThrow("simulated crash after missing-result nudge dispatch");
+    expect(runnerPrompts).toBe(2);
+    expect(setup.database.authQuery((db) => db.prepare("SELECT status, recovery_prompt_sent_at AS recoveryPromptSentAt, attention_excerpt AS attentionExcerpt FROM forge_herdr_turns").get())).toEqual({ status: "awaiting_human", recoveryPromptSentAt: expect.any(String), attentionExcerpt: expect.stringContaining("Agent remained done") });
+
+    let recoveryPrompts = 0;
+    const recoveryHerdr = {
+      runtimeSnapshot: async () => ({
+        agents: [{ name: setup.session.agentName, paneId: setup.session.paneId, agentSession: setup.session.codexSessionId!, status: "done" }],
+        panes: [{ paneId: setup.session.paneId, agent: setup.session.agentName, agentSession: setup.session.codexSessionId!, agentStatus: "done", tokens: { forge_binding_id: setup.session.id } }],
+      }),
+      prompt: async () => { recoveryPrompts += 1; },
+    };
+    await reconcileActiveTurns(setup.database, createTestConfig(setup.root), { herdr: recoveryHerdr as never });
+    expect(recoveryPrompts).toBe(0);
+  } finally {
+    setup.database.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
 });
 
 test("synthesizes one Developer delivery from a clean Git handoff", async () => {

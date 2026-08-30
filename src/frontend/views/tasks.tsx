@@ -51,8 +51,7 @@ function taskListDate(timestamp: string): string {
   if (date.toDateString() === today.toDateString()) return relativeTime(timestamp);
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
-
-function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId, onProjectChange, sourceSummary, onSourceSelect, onSourceClear, agents, roleAgents, onRoleAgentChange, onApplyTemplate, title, onTitleChange, description, onDescriptionChange, autoApprovePlan, onAutoApprovePlanChange, deliveryTarget, onDeliveryTargetChange, runProjectTests, onRunProjectTestsChange, visualEvidence, onVisualEvidenceChange, supplementalReview, onSupplementalReviewChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
+export function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId, onProjectChange, sourceSummary, onSourceSelect, onSourceClear, agents, roleAgents, onRoleAgentChange, onApplyTemplate, title, onTitleChange, description, onDescriptionChange, autoApprovePlan, onAutoApprovePlanChange, deliveryTarget, onDeliveryTargetChange, runProjectTests, onRunProjectTestsChange, visualEvidence, onVisualEvidenceChange, supplementalReview, onSupplementalReviewChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   companyStatus: CompanyStatus | undefined;
@@ -90,7 +89,6 @@ function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId,
   const [templates, setTemplates] = useState<ApiTaskTemplate[]>([]);
   const loadTemplates = useCallback(async (): Promise<void> => { if (open && projectId) setTemplates((await readJson<{ templates: ApiTaskTemplate[] }>(`/api/projects/${encodeURIComponent(projectId)}/task-templates`)).templates); }, [open, projectId]);
   useEffect(() => { void loadTemplates(); }, [loadTemplates]);
-  const deleteTemplate = async (template: ApiTaskTemplate): Promise<void> => { await readJson(`/api/task-templates/${encodeURIComponent(template.id)}`, { method: "DELETE" }); await loadTemplates(); };
   const active = companyStatus === "active";
   const project = projects.find((candidate) => candidate.id === projectId);
   const hasProjectTests = Boolean(project?.verificationCommand.trim());
@@ -123,7 +121,7 @@ function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId,
               <BreadcrumbItem><DialogTitle className="font-normal">New task</DialogTitle></BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
-          <div className="flex items-center gap-1"><TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy} onSelect={onSourceSelect} onClear={onSourceClear} />{templates.length ? <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={busy} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.flatMap((template) => [<DropdownMenuItem key={template.id} onClick={() => void onApplyTemplate(template)}>{template.name}</DropdownMenuItem>, <DropdownMenuItem key={`${template.id}-delete`} variant="destructive" onClick={() => void deleteTemplate(template)}>Delete {template.name}</DropdownMenuItem>])}</DropdownMenuContent></DropdownMenu> : null}</div>
+          <div className="flex items-center gap-1"><TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy} onSelect={onSourceSelect} onClear={onSourceClear} />{templates.length ? <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={busy} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.map((template) => <DropdownMenuItem key={template.id} onClick={() => void onApplyTemplate(template)}>{template.name}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null}</div>
         </DialogHeader>
         {active ? (
           <form className="flex min-h-[310px] flex-col" onPaste={pasteImages} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.requestSubmit(); } }} onSubmit={(event) => { event.preventDefault(); void onSubmit(); }}>

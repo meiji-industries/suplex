@@ -7,6 +7,7 @@ import { durableCommand, executeIssueCommand, queryIssueWorkflow, startIssueWork
 import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema, type IssueProjectionEvent, type IssueWorkflowInput, type IssueWorkflowState, type LeadPlanningResult } from "../src/engine/issue-contracts.js";
 import { Wakeable, type IssueRun } from "../src/engine/runs.js";
 import { createEngineHarness, engineFixture, type EngineHarness } from "./helpers/engine-harness.js";
+import { withWorktreeCommands } from "../src/engine/workflow/state-transitions.js";
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -107,6 +108,48 @@ test("global command identity collision is rejected before another workflow effe
     expect(() => secondRun.execute("crossWorkflowCommand", {}, commandId)).toThrow("another workflow or command");
     expect(effects).toBe(0);
     expect(commandReceiptCount(harness, commandId)).toBe(1);
+  } finally {
+    await harness.stop();
+  }
+});
+
+test("command receipt inherits the exact decorated final projection", async () => {
+  const harness = await createEngineHarness({ projectIssueState: async (event) => event.state });
+  for (const issueId of ["decorated-result", "decorated-mismatch"]) harness.seedTask(issueId);
+  try {
+    const started = await startIssueWorkflow(harness.config, workflowInput("decorated-result"));
+    const run = harness.engine.run(started.workflowId);
+    await run.ready();
+    let live = run.state;
+    run.queries.set("issueState", (() => live) as never);
+    const nextRevision = live.revision + 1;
+    const raw = IssueWorkflowStateSchema.parse({ ...live, revision: nextRevision, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Raw handler result", lastEventId: `${started.workflowId}:${nextRevision}` });
+    const decorated = withWorktreeCommands(IssueWorkflowStateSchema.parse({ ...raw, allowedCommands: ["cancel_issue"], pendingAction: "Decorated projection result" }), true);
+    run.commands.set("decoratedResultCommand", (async () => {
+      live = raw;
+      await runExecution.current().activity("projectIssueState", [{ schemaVersion: 1, runId: run.runId, eventId: decorated.lastEventId, state: decorated }], { startToCloseTimeout: "1 minute" });
+      return raw;
+    }) as never);
+    const result = await run.execute("decoratedResultCommand", {}, "decorated-result-command");
+    expect(result).toEqual(decorated);
+    const receipt = harness.database.authQuery((db) => db.prepare("SELECT result_json FROM forge_engine_commands WHERE command_id = ?").get("decorated-result-command") as { result_json: string });
+    expect(IssueWorkflowStateSchema.parse(JSON.parse(receipt.result_json))).toEqual(decorated);
+
+    const mismatchStarted = await startIssueWorkflow(harness.config, workflowInput("decorated-mismatch"));
+    const mismatchRun = harness.engine.run(mismatchStarted.workflowId);
+    await mismatchRun.ready();
+    let mismatchLive = mismatchRun.state;
+    mismatchRun.queries.set("issueState", (() => mismatchLive) as never);
+    const mismatchRevision = mismatchLive.revision + 1;
+    const mismatchRaw = IssueWorkflowStateSchema.parse({ ...mismatchLive, revision: mismatchRevision, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Raw mismatch", lastEventId: `${mismatchStarted.workflowId}:${mismatchRevision}` });
+    const wrongIdentity = IssueWorkflowStateSchema.parse({ ...mismatchRaw, issueId: "different-task" });
+    mismatchRun.commands.set("decoratedMismatchCommand", (async () => {
+      mismatchLive = mismatchRaw;
+      await runExecution.current().activity("projectIssueState", [{ schemaVersion: 1, runId: mismatchRun.runId, eventId: wrongIdentity.lastEventId, state: wrongIdentity }], { startToCloseTimeout: "1 minute" });
+      return mismatchRaw;
+    }) as never);
+    await expect(mismatchRun.execute("decoratedMismatchCommand", {}, "decorated-mismatch-command")).rejects.toMatchObject({ code: "identity-mismatch" });
+    expect(commandReceiptCount(harness, "decorated-mismatch-command")).toBe(0);
   } finally {
     await harness.stop();
   }

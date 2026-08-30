@@ -86,7 +86,7 @@ async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixtu
   await writeFile(join(repositoryPath, "package.json"), JSON.stringify({ scripts: { test: "node -e 'process.exit(0)'" } }));
   await writeFile(join(repositoryPath, ".gitignore"), "node_modules/\n");
   await execFileAsync("pnpm", ["install", "--lockfile-only"], { cwd: repositoryPath });
-  await execFileAsync("git", ["init"], { cwd: repositoryPath });
+  await execFileAsync("git", ["init", "-b", "main"], { cwd: repositoryPath });
   await execFileAsync("git", ["config", "user.email", "forge-test@example.invalid"], { cwd: repositoryPath });
   await execFileAsync("git", ["config", "user.name", "Forge Test"], { cwd: repositoryPath });
   await execFileAsync("git", ["add", "README.md", "package.json", ".gitignore", "pnpm-lock.yaml"], { cwd: repositoryPath });

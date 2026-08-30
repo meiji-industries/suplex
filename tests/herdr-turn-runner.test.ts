@@ -176,12 +176,12 @@ test("accepts a fresh argv prompt from a title-prefixed OMP transcript reported 
       if (getCalls === 1) {
         await mkdir(dirname(transcriptPath), { recursive: true });
         await writeFile(transcriptPath, `${JSON.stringify({ type: "title", v: 1, title: "" })}\n${JSON.stringify({ type: "session", id: "omp-session", cwd: setup.input.task.worktreePath })}\n${JSON.stringify({ type: "message", id: "omp-turn", timestamp: "2026-08-28T12:00:00.000Z", role: "user", message: { content: [{ type: "text", text: marker(prompt.content) }] } })}\n${JSON.stringify({ type: "message", timestamp: "2026-08-28T12:00:01.000Z", role: "assistant", stopReason: "stop", message: { content: [{ type: "text", text: "done" }] } })}\n`);
-      } else if (getCalls === 2) {
+      } else if (getCalls === 3) {
         await writeFile(resultPath(prompt.content), JSON.stringify({ status: "ok" }));
         // Linux stamps files from a coarse clock that can trail promptSentAt by a tick; make that deterministic here.
         await utimes(resultPath(prompt.content), new Date(Date.now() - 5), new Date(Date.now() - 5));
       }
-      return { ...setup.session.live, agentSession: transcriptPath };
+      return { ...setup.session.live, agentSession: transcriptPath, screenDetectionSkipped: true };
     },
   };
   const sessions = {

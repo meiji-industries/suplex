@@ -72,6 +72,7 @@ export class HerdrTurnRunner {
           ? this.existingResultPath(input, existing.resultRelativePath)
           : initialResultPath;
         prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
+        const promptInArgv = session.launched && session.provider === "openrouter";
         if (resumed?.status === "completed") {
           const recorded = resumed.resultHash ? await readFile(resultPath).catch(() => undefined) : undefined;
           const bytes = recorded && hash(recorded) === resumed.resultHash ? recorded : await this.stableResult(resultPath, undefined, resumed.promptSentAt, false);
@@ -89,7 +90,6 @@ export class HerdrTurnRunner {
           const candidates = session.codexSessionId ? undefined : [...(await (session.provider === "codex" ? this.candidates() : this.runtimes(session.provider).candidatePaths(process.env)))];
           const start = await this.offset(session.rolloutPath);
           this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', updated_at = ? WHERE turn_id = ?", start, start, iso(), turnId);
-          const promptInArgv = session.launched && session.provider === "openrouter";
           if (!promptInArgv) await this.herdr.prompt(session.agentName, prompt);
           this.update("UPDATE forge_herdr_turns SET status = 'waiting', updated_at = ? WHERE turn_id = ?", iso(), turnId);
           if (input.signal?.aborted) throw new AgentFailure("cancelled", "The interactive agent turn was cancelled.", { nonRetryable: true });
@@ -97,7 +97,7 @@ export class HerdrTurnRunner {
           this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", promptSentAt, promptSentAt, turnId);
           session = await this.resolveIdentity(session, input, turnId, candidates);
         }
-        const completion = await this.wait(input, session, turnId, marker, resultPath, prompt, input.signal, resumed && await this.recoverCompletion(input, session, turnId, marker, resultPath));
+        const completion = await this.wait(input, session, turnId, marker, resultPath, prompt, promptInArgv, input.signal, resumed && await this.recoverCompletion(input, session, turnId, marker, resultPath));
         session = completion.session ?? session;
         const bytes = await this.stableResult(resultPath, completion.resultVersion, this.promptSentAt(turnId), completion.steeredAfterCompletion);
         if (!bytes) continue;
@@ -122,7 +122,7 @@ export class HerdrTurnRunner {
     }
   }
 
-  private async wait(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, marker: string, resultPath: string, prompt: string, signal?: AbortSignal, recovered?: Completion): Promise<Completion> {
+  private async wait(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, marker: string, resultPath: string, prompt: string, promptInArgv: boolean, signal?: AbortSignal, recovered?: Completion): Promise<Completion> {
     const completion: Completion = recovered ?? { marker: false, completed: false, steeredAfterCompletion: false };
     let activeTurnId: string | undefined;
     let polls = 0;
@@ -187,7 +187,7 @@ export class HerdrTurnRunner {
           // A direct question is already a durable human-attention boundary. Do
           // not overwrite it with the one-time completion resume request.
           const row = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { status: string } | undefined);
-          if (row?.status !== "awaiting_human") {
+          if (!promptInArgv && row?.status !== "awaiting_human") {
             await this.herdr.prompt(session.agentName, `Your previous turn ended without writing the required result file at ${resultPath}. Write it now using the exact schema you were given, then reply with the completion marker ${marker}.`);
             this.update("UPDATE forge_herdr_turns SET status = 'awaiting_human', updated_at = ? WHERE turn_id = ?", iso(), turnId);
           }

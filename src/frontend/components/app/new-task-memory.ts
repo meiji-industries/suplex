@@ -49,3 +49,7 @@ export function writeNewTaskMemory(value: NewTaskMemory, storage: Pick<Storage, 
   try { storage.setItem(storageKey, JSON.stringify(value)); }
   catch { /* Local storage may be unavailable. */ }
 }
+
+export function resolveNewTaskProjectId(rememberedProjectId: string | undefined, projects: ReadonlyArray<{ id: string }>): string {
+  return rememberedProjectId && projects.some((project) => project.id === rememberedProjectId) ? rememberedProjectId : projects[0]?.id ?? "";
+}

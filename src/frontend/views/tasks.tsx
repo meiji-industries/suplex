@@ -31,7 +31,7 @@ import { TaskDetailsPage, TaskDetailsNotFound, TaskDetailsSkeleton, type PlanRev
 import { prefillForTaskSource, preserveEditedPrefill, TaskSourcePicker, type TaskSourceSelector, type TaskSourceSummary } from "../components/app/task-source-picker.js";
 import { TaskRoleSelectors } from "../components/app/task-role-selectors.js";
 import { taskDeliveryTargetOptions } from "../components/app/task-delivery-target.js";
-import { readNewTaskMemory, writeNewTaskMemory, type NewTaskMemory } from "../components/app/new-task-memory.js";
+import { readNewTaskMemory, resolveNewTaskProjectId, writeNewTaskMemory, type NewTaskMemory } from "../components/app/new-task-memory.js";
 import { duplicateTaskDraft } from "../lib/duplicate-task-prefill.js";
 
 async function fileAsImage(file: File): Promise<{ filename: string; mimeType: string; base64: string }> {
@@ -234,7 +234,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
       ]);
       if (token !== requestToken.current) return;
       setProjects(projectResult.projects); setTasks(taskResult); setAgents(agentResult.agents);
-      setProjectId((current) => projectResult.projects.some((project) => project.id === current) ? current : projectResult.projects[0]?.id ?? "");
+      setProjectId((current) => resolveNewTaskProjectId(current || remembered.current.projectId, projectResult.projects));
       setRoleAgentOverrides((current) => Object.fromEntries(Object.entries(current).filter(([, id]) => !id || agentResult.agents.some((agent) => agent.id === id))));
       setDetailNotFound(Boolean(routeTaskId) && !taskResult.some((task) => task.id === routeTaskId));
       setLoadedCompanyId(companyId);
@@ -273,7 +273,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   }, [mode]);
   useEffect(() => {
     selectedRef.current = undefined;
-    setSelected(undefined); setProjectId(""); setRoleAgentOverrides({}); setTitle(""); setDescription(""); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; resetNewTaskSettings(); setImages([]); setCreateError(""); setDetailNotFound(false);
+    setSelected(undefined); setProjectId(remembered.current.projectId ?? ""); setRoleAgentOverrides({}); setTitle(""); setDescription(""); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; resetNewTaskSettings(); setImages([]); setCreateError(""); setDetailNotFound(false);
   }, [companyId]);
   const reloadTasks = useCallback(async (): Promise<void> => {
     const token = ++taskListToken.current;

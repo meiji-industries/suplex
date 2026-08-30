@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { newTaskMemoryDefaults, readNewTaskMemory, writeNewTaskMemory, type NewTaskMemory } from "../src/frontend/components/app/new-task-memory.js";
+import { newTaskMemoryDefaults, readNewTaskMemory, resolveNewTaskProjectId, writeNewTaskMemory, type NewTaskMemory } from "../src/frontend/components/app/new-task-memory.js";
 
 function memoryStorage(): Pick<Storage, "getItem" | "setItem"> {
   const values = new Map<string, string>();
@@ -39,4 +39,22 @@ test("drops non-string role agent values", () => {
   const storage = { getItem: () => JSON.stringify({ ...newTaskMemoryDefaults, roleAgents: { planner: "planner-1", builder: 12, reviewer: null, integrator: false } }) };
 
   expect(readNewTaskMemory(storage).roleAgents).toEqual({ planner: "planner-1" });
+});
+
+test("resolves the remembered project id when it exists in the project list", () => {
+  const projects = [{ id: "rtd" }, { id: "forge" }];
+
+  expect(resolveNewTaskProjectId("forge", projects)).toBe("forge");
+});
+
+test("falls back to the first project when the remembered id is missing or unknown", () => {
+  const projects = [{ id: "rtd" }, { id: "forge" }];
+
+  expect(resolveNewTaskProjectId(undefined, projects)).toBe("rtd");
+  expect(resolveNewTaskProjectId("", projects)).toBe("rtd");
+  expect(resolveNewTaskProjectId("other-company-project", projects)).toBe("rtd");
+});
+
+test("returns an empty string when the project list is empty", () => {
+  expect(resolveNewTaskProjectId("forge", [])).toBe("");
 });

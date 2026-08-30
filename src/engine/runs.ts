@@ -58,13 +58,14 @@ const AGENT_OWNED_PHASES: Record<string, true> = {
 
 export function issueRunInputFromSnapshotRow(db: Parameters<typeof resolveAgentProfiles>[0], row: Record<string, unknown>, state: IssueWorkflowState): IssueWorkflowInput {
   const actor = (db.prepare("SELECT actor_user_id FROM forge_audit_events WHERE action = 'task_created' AND json_extract(metadata_json, '$.taskId') = ? ORDER BY created_at LIMIT 1").get(state.issueId) as { actor_user_id: string | null } | undefined)?.actor_user_id;
+  const repository = (db.prepare("SELECT repository_identity AS repository FROM forge_projects WHERE id = ? AND company_id = ?").get(state.projectId, state.companyId) as { repository: string | null } | undefined)?.repository ?? undefined;
   return IssueWorkflowInputSchema.parse({
     workflowId: state.workflowId, companyId: state.companyId, projectId: state.projectId, issueId: state.issueId, projectRevisionId: state.projectRevisionId,
     briefArtifactId: row.brief_artifact_id, imageArtifactIds: jsonRequired(String(row.image_artifact_ids_json)), roleProfiles: resolveAgentProfiles(db, jsonRequired(String(row.role_agents_json))),
     supplementalReview: Boolean(row.supplemental_review), requestHash: row.request_hash ?? undefined, predecessorTaskId: row.predecessor_task_id ?? undefined,
     autoApprovePlan: Boolean(row.auto_approve_plan), autoApprovePlanActorUserId: row.auto_approve_plan && actor ? actor : undefined, pullRequestMode: row.pull_request_mode ?? undefined, deliveryTarget: row.delivery_target ?? undefined,
     autoMergeActorUserId: row.delivery_target === "merged" && actor ? actor : undefined,
-    runProjectTests: Boolean(row.run_project_tests), visualEvidence: row.visual_evidence ?? undefined, continuationState: state,
+    runProjectTests: Boolean(row.run_project_tests), visualEvidence: row.visual_evidence ?? undefined, repository, continuationState: state,
   });
 }
 
@@ -114,6 +115,8 @@ export class IssueRun {
   private activeCommand: { name: string; controller: AbortController; deferredProjections: DeferredProjection[]; context: CommandExecutionContext } | undefined;
   private activeEffect: AbortController | undefined;
   private interruptPending = false;
+  private interruptBarrier: Promise<void> | undefined;
+  private releaseInterrupt: (() => void) | undefined;
   private interrupting = new Map<string, Promise<InterruptOutcome>>();
   private projectionTimes: number[] = [];
   private projectionSignatures: string[] = [];
@@ -204,7 +207,7 @@ export class IssueRun {
       },
       wait: async (milliseconds: number) => {
         const execution = runExecution.current() as CommandExecutionContext;
-        if (this.interruptPending && !execution.interruptDispatch && !execution.acceptedInterrupt) { await Promise.resolve(); return; }
+        if (this.interruptPending && !execution.interruptDispatch && !execution.acceptedInterrupt) { await this.interruptBarrier; return; }
         if (execution.deferredProjections) await this.flushCommandProjections(execution);
         this.assertCommandAuthority(execution);
         const effect = new AbortController();
@@ -320,9 +323,17 @@ export class IssueRun {
       try { this.initialState = IssueWorkflowStateSchema.parse(jsonRequired(row.state_json)); } catch { /* Preserve the last known in-memory fallback if durable state is unreadable. */ }
     }
     this.loopError = error;
+    this.finishInterrupt();
     this.controller.abort(error);
     this.invalidate?.(this);
   }
+  private finishInterrupt(): void {
+    this.interruptPending = false;
+    this.releaseInterrupt?.();
+    this.interruptBarrier = undefined;
+    this.releaseInterrupt = undefined;
+  }
+
 
   private async runInterrupt(name: string, input: unknown): Promise<InterruptOutcome> {
     await this.ready();
@@ -335,6 +346,7 @@ export class IssueRun {
     this.assertCommandAuthority(this.executionContext as CommandExecutionContext);
     const deferredProjections = interrupt.cancelActive ? active?.deferredProjections : undefined;
     if (interrupt.cancelActive) {
+      if (!this.interruptPending) this.interruptBarrier = new Promise<void>((resolve) => { this.releaseInterrupt = resolve; });
       this.interruptPending = true;
       this.activeCommand?.controller.abort();
       this.activeEffect?.abort();
@@ -344,7 +356,7 @@ export class IssueRun {
       const result = interrupt.run ? await runExecution.run(interruptContext, () => interrupt.run!(input as never)) : undefined;
       return { accepted: true, result, ...(deferredProjections ? { deferredProjections } : {}) };
     } catch (error) {
-      if (interrupt.cancelActive) this.interruptPending = false;
+      if (interrupt.cancelActive) this.finishInterrupt();
       throw error;
     }
   }
@@ -401,6 +413,13 @@ export class IssueRun {
           const liveState = this.state;
           if (liveState.revision >= result.revision) result = liveState;
           const committedProjections = this.coalesceCommandProjections(deferredProjections);
+          const projectedResult = committedProjections.at(-1)?.event.state;
+          if (projectedResult && projectedResult.revision >= result.revision) {
+            if (projectedResult.workflowId !== result.workflowId || projectedResult.issueId !== result.issueId) {
+              throw new ProjectionPersistenceFailure("identity-mismatch", "Command projection result identity does not match its handler result");
+            }
+            result = projectedResult;
+          }
           try {
             result = this.database.commitIssueCommand({ commandId, workflowId: this.workflowId, runId: this.runId, command: name, result, events: committedProjections.map((projection) => projection.event), createdAt: new Date(this.clock.now()).toISOString() });
           } catch (error) {
@@ -412,7 +431,7 @@ export class IssueRun {
             if (authority) this.updateCommandAuthority(context, authority);
           }
           await this.replayDurableProjections(committedProjections, context);
-          if (context.acceptedInterrupt) this.interruptPending = false;
+          if (context.acceptedInterrupt) this.finishInterrupt();
         }
         this.initialState = result;
         this.wakeable.wake();

@@ -70,6 +70,32 @@ test("cleans a worktree recorded only by a developer execution", async () => {
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("cleans a worktree when a stale dispatching turn belongs to a failed execution", async () => {
+  const value = await fixture();
+  try {
+    const now = new Date().toISOString();
+    value.database.authTransaction((db) => {
+      db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = ? WHERE id = 'developer_1'").run(now);
+      db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES ('turn_stale', 'task_1', 'session_1', 'builder', 'developer', 'developer_1', 'implementation', ?, 'herdr-results/task_1/developer/result-turn_stale.json', 0, 'dispatching', ?, ?)").run("c".repeat(64), now, now);
+    });
+    await expect(activities(value).cleanupTaskWorktree({ taskId: "task_1", companyId: "company_1", workflowId: "workflow_1" })).resolves.toMatchObject({ outcome: "cleaned" });
+    expect(existsSync(value.worktreePath)).toBe(false);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("keeps a worktree when a dispatching turn belongs to a starting execution", async () => {
+  const value = await fixture();
+  try {
+    const now = new Date().toISOString();
+    value.database.authTransaction((db) => {
+      db.prepare("UPDATE forge_developer_executions SET status = 'starting' WHERE id = 'developer_1'").run();
+      db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES ('turn_stale', 'task_1', 'session_1', 'builder', 'developer', 'developer_1', 'implementation', ?, 'herdr-results/task_1/developer/result-turn_stale.json', 0, 'dispatching', ?, ?)").run("c".repeat(64), now, now);
+    });
+    await expect(activities(value).cleanupTaskWorktree({ taskId: "task_1", companyId: "company_1", workflowId: "workflow_1" })).resolves.toMatchObject({ outcome: "not_owned" });
+    expect(existsSync(value.worktreePath)).toBe(true);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("rejects a developer worktree outside the configured root", async () => {
   const value = await fixture();
   try {

@@ -115,6 +115,7 @@ export class HerdrTurnRunner {
         correction += 1;
       }
     } catch (error) {
+      if (turnId) this.update("UPDATE forge_herdr_turns SET status = 'failed', finished_at = ?, updated_at = ? WHERE turn_id = ? AND prompt_sent_at IS NULL AND status IN ('created', 'dispatching')", iso(), iso(), turnId);
       if (error instanceof HerdrFailure) throw new AgentFailure(error.code, error.message, { nonRetryable: !error.retryable });
       throw error;
     } finally {

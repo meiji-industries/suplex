@@ -307,6 +307,17 @@ test("keeps retryable Herdr client failures retryable at the turn boundary", asy
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
+test("settles a turn when the Herdr prompt fails before dispatch", async () => {
+  const setup = await fixture();
+  const runner = makeRunner(setup.database, {
+    prompt: async () => { throw new HerdrFailure("timeout", true, "Herdr timed out"); },
+  } as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
+  try {
+    await expect(runner.run(setup.input)).rejects.toEqual(expect.objectContaining<Partial<AgentFailure>>({ code: "timeout", nonRetryable: false }));
+    expect(setup.database.authQuery((db) => db.prepare("SELECT status, prompt_sent_at AS promptSentAt FROM forge_herdr_turns").get())).toEqual({ status: "failed", promptSentAt: null });
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
 test("binds and persists a fresh session after the first prompt reports agentSession", async () => {
   const setup = await freshIdentityFixture();
   const herdr = {

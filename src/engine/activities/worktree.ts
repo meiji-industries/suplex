@@ -27,7 +27,7 @@ export function createWorktreeActivities(ctx: ActivityContext) {
     const path = resolve(row.worktreePath);
     return path.startsWith(`${resolve(config.worktreeRoot)}/`) && path.startsWith(`${resolve(row.worktreeRoot)}/`);
   };
-  const active = (input: { taskId: string }) => database.authQuery((db) => db.prepare("SELECT 1 FROM forge_herdr_turns WHERE task_id = ? AND ledger = 'developer' AND status IN ('dispatching', 'waiting', 'validating') LIMIT 1").get(input.taskId)) !== undefined;
+  const active = (input: { taskId: string }) => database.authQuery((db) => db.prepare("SELECT 1 FROM forge_herdr_turns turn JOIN forge_developer_executions execution ON execution.id = turn.execution_id WHERE turn.task_id = ? AND turn.ledger = 'developer' AND turn.status IN ('dispatching', 'waiting', 'validating') AND execution.status IN ('starting', 'running', 'cancelling') LIMIT 1").get(input.taskId)) !== undefined;
   const revision = (input: { taskId: string; companyId: string }) => database.authQuery((db) => (db.prepare("SELECT revision FROM forge_issue_projections WHERE task_id = ? AND company_id = ?").get(input.taskId, input.companyId) as { revision: number } | undefined)?.revision ?? 0);
   const recordTimeline = (input: { taskId: string; companyId: string; workflowId: string }, eventType: "worktree_cleaned" | "worktree_recreated", metadata: Record<string, unknown>) => {
     const currentRevision = revision(input);

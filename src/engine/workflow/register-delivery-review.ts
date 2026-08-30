@@ -87,6 +87,10 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
         : stateTransitions.repairRequiredState(ctx.state, exactResult, ctx.repairCycleLimit, true);
     }
     const pushReviewedHead = true;
+    const shouldPushReviewedHead = ctx.state.phase === "delivery_reviewed"
+      && (ctx.input.deliveryTarget === "remote_branch"
+        || Boolean(pushReviewedHead && ctx.input.deliveryTarget && ["pull_request_draft", "pull_request_ready", "merged"].includes(ctx.input.deliveryTarget) && ctx.state.pullRequestNumber && ctx.state.resultCommit && ctx.state.resultCommit.toLowerCase() !== ctx.state.expectedHeadSha?.toLowerCase()));
+    if (shouldPushReviewedHead) await ctx.project();
     if (ctx.state.phase === "delivery_reviewed" && ctx.input.deliveryTarget === "remote_branch") {
       await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName!, commitSha: ctx.state.resultCommit! });
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Done — branch pushed", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });

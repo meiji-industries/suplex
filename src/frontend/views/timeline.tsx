@@ -1,9 +1,10 @@
-import { ChartNoAxesGantt, Minus, Plus, RotateCcw } from "lucide-react";
+import { ChartNoAxesGantt, ChevronRight, Minus, Plus, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Button } from "../components/ui/button.js";
 import { Checkbox } from "../components/ui/checkbox.js";
+import { Collapsible } from "../components/ui/collapsible.js";
 import { Input } from "../components/ui/input.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs.js";
@@ -294,7 +295,7 @@ function SummaryTable({ label, totals, companyId, tickets = false }: { label: st
 export function TimelineTotals({ summary, groupByProject, companyId }: { summary: WorkTimelineSummary; groupByProject: boolean; companyId: string }): ReactElement {
   const groups = summary.projectGroups.length > 0 ? summary.projectGroups : [{ projectId: "empty", projectName: "", ticketTotals: [], dayTotals: [], durationMs: 0 }];
   if (!groupByProject) return <div className="grid lg:grid-cols-2"><SummaryTable label="Daily agent-hours" totals={summary.dayTotals} companyId={companyId} /><SummaryTable label="Ticket totals" totals={summary.ticketTotals} companyId={companyId} tickets /></div>;
-  return <div>{groups.map((group) => <div key={group.projectId}>{group.projectName ? <div data-project-header={group.projectName} className="flex h-9 items-center justify-between border-t border-border/70 bg-muted/30 px-3 text-xs font-medium sm:px-4"><span>{group.projectName}</span><span>{group.ticketTotals.length} tickets · {formatDuration(group.durationMs)}</span></div> : null}<div className="grid lg:grid-cols-2"><SummaryTable label="Daily agent-hours" totals={group.dayTotals} companyId={companyId} /><SummaryTable label="Ticket totals" totals={group.ticketTotals} companyId={companyId} tickets /></div></div>)}</div>;
+  return <div>{groups.map((group) => group.projectName ? <Collapsible.Root key={group.projectId} className="group/timeline-project"><Collapsible.Trigger data-project-header={group.projectName} className="flex h-9 w-full items-center gap-2 border-t border-border/70 bg-muted/30 px-3 text-left text-xs font-medium outline-none transition-colors hover:bg-muted/50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring/50 sm:px-4"><ChevronRight className="size-3 text-muted-foreground transition-transform group-data-[open]/timeline-project:rotate-90" /><span>{group.projectName}</span><span className="ml-auto">{group.ticketTotals.length} tickets · {formatDuration(group.durationMs)}</span></Collapsible.Trigger><Collapsible.Panel><div className="grid lg:grid-cols-2"><SummaryTable label="Daily agent-hours" totals={group.dayTotals} companyId={companyId} /><SummaryTable label="Ticket totals" totals={group.ticketTotals} companyId={companyId} tickets /></div></Collapsible.Panel></Collapsible.Root> : <div key={group.projectId} className="grid lg:grid-cols-2"><SummaryTable label="Daily agent-hours" totals={group.dayTotals} companyId={companyId} /><SummaryTable label="Ticket totals" totals={group.ticketTotals} companyId={companyId} tickets /></div>)}</div>;
 }
 
 function TimelineMiniMap({ summary, fullRange, visibleRange, onRangeChange }: { summary: WorkTimelineSummary; fullRange: TimelineRange; visibleRange: TimelineRange; onRangeChange: (range: TimelineRange) => void }): ReactElement {

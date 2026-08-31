@@ -16,6 +16,13 @@ test("renders flat and grouped timeline totals", () => {
   expect(flat).not.toContain("data-project-header");
 
   const grouped = renderToStaticMarkup(createElement(TimelineTotals, { summary, groupByProject: true, companyId: "company" }));
-  expect(grouped.match(/aria-label="Daily agent-hours"/g)).toHaveLength(2);
+  expect(grouped).toContain('aria-expanded="false"');
+  expect(grouped).not.toContain('aria-label="Daily agent-hours"');
   expect(grouped.indexOf('data-project-header="Forge"')).toBeLessThan(grouped.indexOf('data-project-header="Herdr"'));
+});
+
+test("shows project names while grouped timeline totals are closed", () => {
+  const grouped = renderToStaticMarkup(createElement(TimelineTotals, { summary, groupByProject: true, companyId: "company" }));
+  expect(grouped).toContain("Forge");
+  expect(grouped).toContain("Herdr");
 });

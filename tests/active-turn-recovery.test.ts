@@ -97,10 +97,16 @@ test("terminal planner and reviewer runtime produces STE100 attention without pr
   const prompts: Array<{ agent: string; prompt: string }> = [];
   const herdr = { runtimeSnapshot: async () => value.snapshot(), prompt: async (agent: string, prompt: string) => { prompts.push({ agent, prompt }); } };
 
-  const outcomes = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, now: () => stamp });
+  const calls = ["2026-08-27T00:00:01.000Z", "2026-08-27T00:00:02.000Z"];
+  const first = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, now: () => calls.shift()! });
+  const persisted = value.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt, updated_at FROM forge_herdr_turns WHERE turn_id = ?").get(planner.turnId));
+  const second = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, now: () => calls.shift()! });
 
-  expect(outcomes).toMatchObject([{ turnId: planner.turnId, action: "attention" }, { turnId: reviewer.turnId, action: "attention" }]);
-  expect(outcomes.every((outcome) => outcome.evidence.includes("turn:outcome missing"))).toBe(true);
+  expect(first).toMatchObject([{ turnId: planner.turnId, action: "attention" }, { turnId: reviewer.turnId, action: "attention" }]);
+  expect(second.every((outcome) => outcome.action === "attention")).toBe(true);
+  expect(first.every((outcome) => outcome.evidence.includes("turn:outcome missing"))).toBe(true);
+  expect(value.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt, updated_at FROM forge_herdr_turns WHERE turn_id = ?").get(planner.turnId))).toEqual(persisted);
+  expect(persisted).toEqual({ status: "awaiting_human", attention_excerpt: expect.stringContaining("STE100"), updated_at: "2026-08-27T00:00:01.000Z" });
   expect(prompts).toEqual([]);
 });
 
@@ -119,6 +125,24 @@ test.each([
 
   expect(await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, now: () => stamp })).toEqual([]);
   expect(prompts).toEqual([]);
+  expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = ?").get(turn.turnId))).toEqual({ status: "waiting" });
+});
+test("attention CAS rejects a changed projection revision", async () => {
+  const value = await fixture();
+  const turn = value.addTurn("attention-revision");
+  const herdr = { runtimeSnapshot: async () => value.snapshot() };
+  let changed = false;
+  const now = () => {
+    if (!changed) {
+      changed = true;
+      value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET revision = 2 WHERE task_id = ?").run(turn.taskId));
+    }
+    return stamp;
+  };
+
+  const outcomes = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, now });
+
+  expect(outcomes).toMatchObject([{ turnId: turn.turnId, action: "no_change", evidence: expect.arrayContaining(["attention:CAS lost"]) }]);
   expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = ?").get(turn.turnId))).toEqual({ status: "waiting" });
 });
 
@@ -143,7 +167,7 @@ test("no initial prompt receipt and unknown live lifecycle never trigger recover
 
   const outcomes = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, now: () => stamp });
 
-  expect(outcomes.find(({ turnId }) => turnId === noReceipt.turnId)).toMatchObject({ action: "attention", evidence: expect.arrayContaining(["turn:outcome missing"]) });
+  expect(outcomes.find(({ turnId }) => turnId === noReceipt.turnId)).toMatchObject({ action: "no_change", evidence: expect.arrayContaining(["attention:not a current dispatched execution"]) });
   expect(outcomes.find(({ turnId }) => turnId === unknownLifecycle.turnId)).toMatchObject({ action: "no_change" });
   expect(prompts).toEqual([]);
   expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = ?").get(noReceipt.turnId))).toEqual({ status: "dispatching" });
@@ -162,8 +186,8 @@ test("only the latest turn for the exact active execution in a current session i
 
   const outcomes = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, now: () => stamp });
 
-  expect(outcomes.find(({ turnId }) => turnId === historical.turnId)).toMatchObject({ action: "attention", evidence: expect.arrayContaining(["turn:outcome missing"]) });
-  expect(outcomes.find(({ turnId }) => turnId === activeTurnId)).toMatchObject({ action: "attention", evidence: expect.arrayContaining(["turn:outcome missing"]) });
+  expect(outcomes.find(({ turnId }) => turnId === historical.turnId)).toMatchObject({ action: "no_change", evidence: expect.arrayContaining(["attention:not a current dispatched execution"]) });
+  expect(outcomes.find(({ turnId }) => turnId === activeTurnId)).toMatchObject({ action: "no_change", evidence: expect.arrayContaining(["attention:CAS lost"]) });
   expect(prompts).toEqual([]);
   expect(value.database.authQuery((db) => db.prepare("SELECT turn_id, status FROM forge_herdr_turns WHERE role_session_id = ? ORDER BY turn_id").all(historical.sessionId))).toEqual([
     { turn_id: activeTurnId, status: "completed" },
@@ -180,7 +204,6 @@ test("unsafe targets stay unprompted while malformed known-schema output remains
   value.database.authQuery((db) => db.prepare("UPDATE forge_herdr_turns SET result_relative_path = '../outside.json' WHERE turn_id = ?").run(traversal.turnId));
   const prompts: string[] = [];
   const herdr = { runtimeSnapshot: async () => value.snapshot(), prompt: async (agent: string) => { prompts.push(agent); } };
-
   const outcomes = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, now: () => stamp });
 
   expect(outcomes.find(({ turnId }) => turnId === traversal.turnId)).toMatchObject({ action: "attention", evidence: expect.arrayContaining(["result:path outside runtime root"]) });
@@ -304,7 +327,7 @@ test("prompt CAS loses an execution cancellation race without dispatch", async (
 
   const outcomes = await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, now });
 
-  expect(outcomes).toMatchObject([{ turnId: turn.turnId, action: "attention", evidence: expect.arrayContaining(["turn:outcome missing"]) }]);
+  expect(outcomes).toMatchObject([{ turnId: turn.turnId, action: "no_change", evidence: expect.arrayContaining(["attention:CAS lost"]) }]);
   expect(prompts).toBe(0);
   expect(value.database.authQuery((db) => db.prepare("SELECT status, recovery_prompt_sent_at FROM forge_herdr_turns WHERE turn_id = ?").get(turn.turnId))).toEqual({ status: "waiting", recovery_prompt_sent_at: null });
 });

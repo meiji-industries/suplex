@@ -103,7 +103,7 @@ test("lead idle or done without a valid result becomes STE100 attention without 
     expect(first).toMatchObject([{ turnId: "turn", action: "attention", evidence: expect.arrayContaining(["turn:outcome missing"]) }]);
     expect(second).toMatchObject([{ turnId: "turn", action: "attention" }]);
     expect(prompts).toEqual([]);
-    expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = 'turn'").get())).toEqual({ status: "waiting" });
+    expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = 'turn'").get())).toEqual({ status: "awaiting_human" });
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });

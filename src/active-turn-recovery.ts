@@ -154,6 +154,19 @@ async function recreateMissingRuntime(database: ForgeDatabase, config: ForgeConf
   await new HerdrSessionStore(database, herdr).ensureRoleSession(task, turn.role, settings);
   return true;
 }
+function persistAttention(database: ForgeDatabase, turn: Turn, reason: string, timestamp: string): boolean {
+  return database.authTransaction((db) => db.prepare(`UPDATE forge_herdr_turns AS current
+    SET status = 'awaiting_human', attention_excerpt = ?, updated_at = ?
+    WHERE current.turn_id = ? AND current.task_id = ? AND current.role_session_id = ?
+      AND current.execution_id = ? AND current.execution_role = ? AND current.status IN ('created', 'dispatching', 'waiting', 'blocked', 'validating', 'correction_required')
+      AND current.turn_id = (SELECT latest.turn_id FROM forge_herdr_turns latest WHERE latest.role_session_id = current.role_session_id ORDER BY latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1)
+      AND EXISTS (SELECT 1 FROM forge_herdr_role_sessions session WHERE session.id = current.role_session_id AND session.task_id = current.task_id AND session.is_current = 1)
+      AND EXISTS (SELECT 1 FROM forge_issue_projections projection WHERE projection.task_id = current.task_id AND projection.workflow_id = ? AND projection.revision = ? AND projection.phase NOT IN ('done', 'cancelled', 'failed'))
+      AND ((current.ledger = 'agent' AND EXISTS (SELECT 1 FROM forge_agent_executions execution WHERE execution.id = current.execution_id AND execution.task_id = current.task_id AND execution.workflow_id = ? AND execution.role = current.execution_role AND execution.status IN ('starting', 'running')))
+        OR (current.ledger = 'developer' AND EXISTS (SELECT 1 FROM forge_developer_executions execution WHERE execution.id = current.execution_id AND execution.task_id = current.task_id AND execution.workflow_id = ? AND execution.status IN ('starting', 'running'))))`)
+    .run(safeText(reason), timestamp, turn.turnId, turn.taskId, turn.roleSessionId, turn.executionId, turn.executionRole, turn.workflowId, turn.revision, turn.workflowId, turn.workflowId).changes === 1);
+}
+
 
 
 function eligibleResumeExecution(turn: Turn): boolean {
@@ -282,6 +295,11 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
       const evidence = [...classified.evidence, result.evidence];
       const exactActiveExecution = turn.isLatestSessionTurn === 1 && turn.executionStatus !== null && activeExecutionStatuses.has(turn.executionStatus);
       const lateDeveloperResult = turn.status === "completed" && turn.ledger === "developer" && turn.executionStatus === "failed" && result.valid;
+      const expectsResult = turn.promptSentAt !== null && exactActiveExecution;
+      if (action === "attention" && !expectsResult) {
+        action = "no_change";
+        evidence.push("attention:not a current dispatched execution");
+      }
       if (action === "advance" && !lateDeveloperResult && !exactActiveExecution) {
         action = "no_change";
         evidence.push("advance:not latest active execution");
@@ -305,6 +323,14 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
           action = "no_change";
           evidence.push("advance:completion CAS lost");
         }
+      }
+      // Repeated snapshots retain the same derived action without rewriting an
+      // already-attended row. A lost CAS is a stale/non-active turn.
+      if (action === "attention" && turn.status !== "awaiting_human" && !persistAttention(database, turn, classified.reason, now())) {
+        action = "no_change";
+        evidence.push("attention:CAS lost");
+      } else if (action === "attention" && turn.status !== "awaiting_human") {
+        evidence.push("attention:receipt persisted");
       }
       if (action === "resume") {
         if (!result.promptable || turn.promptSentAt === null || !eligibleResumeExecution(turn)) {

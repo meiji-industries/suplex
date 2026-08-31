@@ -13,7 +13,7 @@ export interface AgentRuntimeProjection {
 
 type RuntimeRow = {
   agentId: string; taskId: string; sessionId: string; role: AgentRuntimeProjection["role"]; paneId: string | null;
-  phase: string; revision: number; turnId: string | null; turnStatus: "created" | "dispatching" | "waiting" | "blocked" | "awaiting_human" | "validating" | "completed" | "correction_required" | "failed" | null; resultHash: string | null;
+  phase: string; revision: number; turnId: string | null; turnStatus: "created" | "dispatching" | "waiting" | "blocked" | "awaiting_human" | "validating" | "completed" | "correction_required" | "failed" | null; promptSentAt: string | null; resultHash: string | null;
 };
 
 function live(observation: HerdrSessionObservation | undefined, unavailable: boolean) {
@@ -26,17 +26,18 @@ function live(observation: HerdrSessionObservation | undefined, unavailable: boo
   return { session: "live_progress" as const, stalledBeyondPolicy: false };
 }
 
-export async function projectAgentRuntime(database: ForgeDatabase, herdr: HerdrClient, agentIds: readonly string[]): Promise<AgentRuntimeProjection[]> {
-  if (!agentIds.length) return [];
+export async function projectAgentRuntime(database: ForgeDatabase, herdr: HerdrClient, agentIds: readonly string[], companyIds?: readonly string[]): Promise<AgentRuntimeProjection[]> {
+  if (!agentIds.length || companyIds?.length === 0) return [];
+  const companyScope = companyIds ? ` AND task.company_id IN (${companyIds.map(() => "?").join(",")})` : "";
   const rows = database.authQuery((db) => db.prepare(`SELECT json_extract(task.role_agents_json, '$.' || session.session_role) AS agentId, task.id AS taskId, session.id AS sessionId, session.session_role AS role, session.pane_id AS paneId, projection.phase, projection.revision,
-    turn.turn_id AS turnId, turn.status AS turnStatus, turn.result_sha256 AS resultHash
+    turn.turn_id AS turnId, turn.status AS turnStatus, turn.prompt_sent_at AS promptSentAt, turn.result_sha256 AS resultHash
     FROM forge_herdr_role_sessions session
     JOIN forge_tasks task ON task.id = session.task_id
     JOIN forge_issue_projections projection ON projection.task_id = task.id
     LEFT JOIN forge_herdr_turns turn ON turn.role_session_id = session.id AND turn.turn_id = (SELECT latest.turn_id FROM forge_herdr_turns latest WHERE latest.role_session_id = session.id ORDER BY latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1)
     WHERE session.is_current = 1 AND projection.phase NOT IN ('done', 'cancelled', 'failed')
-      AND json_extract(task.role_agents_json, '$.' || session.session_role) IN (${agentIds.map(() => "?").join(",")})
-    ORDER BY task.id, session.session_role`).all(...agentIds) as RuntimeRow[]);
+      AND json_extract(task.role_agents_json, '$.' || session.session_role) IN (${agentIds.map(() => "?").join(",")})${companyScope}
+    ORDER BY task.id, session.session_role`).all(...agentIds, ...(companyIds ?? [])) as RuntimeRow[]);
   let observations: HerdrSessionObservation[] = [];
   let unavailable = false;
   try {
@@ -46,7 +47,7 @@ export async function projectAgentRuntime(database: ForgeDatabase, herdr: HerdrC
   }
   const bySession = new Map(observations.map((observation) => [observation.sessionId, observation]));
   return rows.map((row) => {
-    const diagnosis = classifyRecovery({ taskId: row.taskId, phase: row.phase, revision: row.revision, terminal: false, cancelled: false, branchName: null, worktreePath: null, lastReviewedCommit: null, turn: row.turnId && row.turnStatus ? { turnId: row.turnId, role: row.role, status: row.turnStatus, resultPresent: row.resultHash !== null, resultValid: row.resultHash !== null, resumeRequestsSent: 0 } : null, failure: null }, { herdr: live(bySession.get(row.sessionId), unavailable), git: null, github: null });
+    const diagnosis = classifyRecovery({ taskId: row.taskId, phase: row.phase, revision: row.revision, terminal: false, cancelled: false, branchName: null, worktreePath: null, lastReviewedCommit: null, turn: row.turnId && row.turnStatus && row.promptSentAt ? { turnId: row.turnId, role: row.role, status: row.turnStatus, resultPresent: row.resultHash !== null, resultValid: row.resultHash !== null, resumeRequestsSent: 0 } : null, failure: null }, { herdr: live(bySession.get(row.sessionId), unavailable), git: null, github: null });
     return { agentId: row.agentId, taskId: row.taskId, role: row.role, diagnosis: diagnosis.diagnosis, detail: diagnosis.reason };
   });
 }

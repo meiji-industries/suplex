@@ -1,12 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import { ForgeDatabase } from "../src/database.js";
 import { ArtifactStore } from "../src/artifacts.js";
+import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
 import { createActivities } from "../src/engine/activities.js";
 import { ForwardMergeService } from "../src/forward-merge.js";
@@ -20,9 +19,13 @@ import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "../src/engi
 
 const sha = (letter: string) => letter.repeat(40);
 const artifact = { id: "artifact_forward", kind: "forward-merge-delivery" as const };
+const run = async (command: string, args: string[], options: { cwd: string }) => {
+  const result = await runCommand({ taskId: null, stepId: null, command, args, cwd: options.cwd });
+  if (result.exitCode !== 0) throw new Error(result.stderr || `${command} exited ${result.exitCode}`);
+  return result;
+};
 
 async function gitRepository(root: string): Promise<{ base: string; head: string }> {
-  const run = promisify(execFile);
   await run("git", ["init", "-b", "main"], { cwd: root });
   await run("git", ["config", "user.name", "Forge Test"], { cwd: root });
   await run("git", ["config", "user.email", "forge@example.test"], { cwd: root });
@@ -45,7 +48,6 @@ async function targetBaseActivityFixture(prefix: string) {
   const repositoryPath = join(root, "repository");
   await mkdir(repositoryPath, { recursive: true });
   const repository = await gitRepository(repositoryPath);
-  const run = promisify(execFile);
   await run("git", ["remote", "add", "origin", repositoryPath], { cwd: repositoryPath });
   const priorTree = (await run("git", ["rev-parse", "HEAD^{tree}"], { cwd: repositoryPath })).stdout.trim();
   await run("git", ["checkout", "main"], { cwd: repositoryPath });
@@ -285,7 +287,6 @@ describe("target-base reconciliation contracts", () => {
     const repositoryPath = join(root, "repository");
     await mkdir(repositoryPath, { recursive: true });
     const repository = await gitRepository(repositoryPath);
-    const run = promisify(execFile);
     await run("git", ["remote", "add", "origin", repositoryPath], { cwd: repositoryPath });
     const priorTree = (await run("git", ["rev-parse", "HEAD^{tree}"], { cwd: repositoryPath })).stdout.trim();
     const now = new Date().toISOString();
@@ -359,7 +360,6 @@ describe("target-base reconciliation contracts", () => {
     const repositoryPath = join(root, "repository");
     await mkdir(repositoryPath, { recursive: true });
     const repository = await gitRepository(repositoryPath);
-    const run = promisify(execFile);
     const priorTree = (await run("git", ["rev-parse", "HEAD^{tree}"], { cwd: repositoryPath })).stdout.trim();
     const now = new Date().toISOString();
     const failureCode = "verification_timed_out";
@@ -430,7 +430,6 @@ describe("target-base reconciliation contracts", () => {
     const repositoryPath = join(root, "repository");
     await mkdir(repositoryPath, { recursive: true });
     const repository = await gitRepository(repositoryPath);
-    const run = promisify(execFile);
     await run("git", ["remote", "add", "origin", repositoryPath], { cwd: repositoryPath });
     const priorTree = (await run("git", ["rev-parse", "HEAD^{tree}"], { cwd: repositoryPath })).stdout.trim();
     const now = new Date().toISOString();

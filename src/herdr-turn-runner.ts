@@ -32,7 +32,7 @@ export interface HerdrTurnInput<T> {
   task: { taskId: string; projectId: string; projectSlug: string; issueKey?: string; worktreePath: string; runtimeRoot: string };
   executionRole: ExecutionRole; ledger: "agent" | "developer"; executionId: string; promptKind: string; prompt: string;
   profile: { provider?: AgentProviderKind; model: string; reasoningLevel: string; servicePriority: string }; resultSchema: z.ZodType<T>; schemaPath: string;
-  companyId: string; workflowId: string; revision: number; signal?: AbortSignal | undefined;
+  companyId: string; workflowId: string; revision: number; signal?: AbortSignal | undefined; dispatchFence?: (() => void) | undefined;
 }
 export interface HerdrTurnOutput<T> { turnId: string; sessionId: string; roleSessionId: string; result: T; resultHash: string; }
 interface Completion { marker: boolean; codexTurnId?: string; completed: boolean; steeredAfterCompletion: boolean; resultVersion?: string | undefined; rolloutEndOffset?: number; session?: EnsuredRoleSession; }
@@ -65,12 +65,12 @@ export class HerdrTurnRunner {
         const marker = `[forge-turn:${turnId}]`;
         let resultPath = initialResultPath;
         let prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
-        const existingBeforeLaunch = this.existingTurn(input, correction);
-        if (existingBeforeLaunch?.status === "correction_required" && !this.existingTurn(input, correction + 1)) {
-          throw new AgentFailure("recovery-dispatch-ambiguous", "The durable turn does not prove whether its correction prompt was dispatched", { nonRetryable: true });
+        const existingBeforeLaunch = this.existingTurn(input, correction, prompt);
+        if (!existingBeforeLaunch && this.turnExists(turnId)) {
+          throw new AgentFailure("recovery-identity-conflict", "The durable turn identity does not match this dispatch", { nonRetryable: true });
         }
-        if (existingBeforeLaunch && !existingBeforeLaunch.promptSentAt && existingBeforeLaunch.status !== "completed") {
-          throw new AgentFailure("recovery-dispatch-ambiguous", "The durable turn does not prove whether its prompt was dispatched", { nonRetryable: true });
+        if (existingBeforeLaunch?.status === "correction_required" && !this.existingTurn(input, correction + 1, this.dispatchPrompt(marker, this.resultPath(input, this.turnId(input, correction + 1)), input.schemaPath, input.prompt, validationIssues))) {
+          throw new AgentFailure("recovery-dispatch-ambiguous", "The durable turn does not prove whether its correction prompt was dispatched", { nonRetryable: true });
         }
         if (!existingBeforeLaunch) {
           await mkdir(dirname(initialResultPath), { recursive: true, mode: 0o700 });
@@ -78,36 +78,43 @@ export class HerdrTurnRunner {
         }
         const argvDispatchAt = this.now().toISOString();
         const initialPrompt = existingBeforeLaunch ? undefined : { path: this.promptPath(resultPath), content: prompt };
-        session = await this.ensure(input, initialPrompt);
-        // A concurrent retry can create or complete this deterministic turn while
-        // ensure waits for agent startup; dispatch must use that durable state.
-        const existing = this.existingTurn(input, correction);
-        const resumed = existing?.promptSentAt || existing?.status === "completed" ? existing : undefined;
-        if (existing && !resumed) throw new AgentFailure("recovery-dispatch-ambiguous", "The durable turn does not prove whether its prompt was dispatched", { nonRetryable: true });
+        let dispatchIntentCreated = false;
+        session = await this.ensure(input, initialPrompt, existingBeforeLaunch ? undefined : (reserved) => {
+          this.create(turnId!, input, reserved, resultPath, correction, prompt);
+          dispatchIntentCreated = true;
+          if (reserved.promptInArgv) this.update("UPDATE forge_herdr_turns SET status = 'dispatching', prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", argvDispatchAt, argvDispatchAt, turnId!);
+          input.dispatchFence?.();
+        });
+        let existing = this.existingTurn(input, correction, prompt);
+        if (!existing && !dispatchIntentCreated) {
+          this.create(turnId, input, session, resultPath, correction, prompt);
+          dispatchIntentCreated = true;
+          existing = this.existingTurn(input, correction, prompt);
+        }
+        if (!existing) throw new AgentFailure("recovery-identity-conflict", "The durable turn identity changed during dispatch setup", { nonRetryable: true });
+        const resumed = existing && !dispatchIntentCreated ? existing : undefined;
         resultPath = existing
           ? this.existingResultPath(input, existing.resultRelativePath)
           : initialResultPath;
         prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
         const promptInArgv = initialPrompt !== undefined && session.launched && session.provider === "openrouter";
         if (resumed?.status === "completed") {
-          const recorded = resumed.resultHash ? await readFile(resultPath).catch(() => undefined) : undefined;
-          const bytes = recorded && hash(recorded) === resumed.resultHash ? recorded : await this.stableResult(resultPath, undefined, resumed.promptSentAt, false);
-          if (!bytes) throw new AgentFailure("recovery-result-invalid", "The completed Forge turn has no stable schema-valid result", { nonRetryable: true });
+          if (!resumed.resultHash) throw new AgentFailure("recovery-result-invalid", "The completed Forge turn has no immutable result hash", { nonRetryable: true });
+          const bytes = await readFile(resultPath).catch(() => undefined);
+          if (!bytes || hash(bytes) !== resumed.resultHash) throw new AgentFailure("recovery-result-invalid", "The completed Forge turn result failed integrity validation", { nonRetryable: true });
           const parsed = input.resultSchema.safeParse(jsonRequired(bytes.toString("utf8")));
-          if (!parsed.success) throw new AgentFailure("recovery-result-invalid", "The completed Forge turn has no stable schema-valid result", { nonRetryable: true });
-          return { turnId, sessionId: session.codexSessionId ?? session.agentName, roleSessionId: session.id, result: parsed.data, resultHash: resumed.resultHash ?? hash(bytes) };
+          if (!parsed.success) throw new AgentFailure("recovery-result-invalid", "The completed Forge turn has no schema-valid result", { nonRetryable: true });
+          return { turnId, sessionId: session.codexSessionId ?? session.agentName, roleSessionId: session.id, result: parsed.data, resultHash: resumed.resultHash };
         }
         if (!resumed) {
-          if (!existing)
-            this.create(turnId, input, session, resultPath, correction, prompt);
           const candidates = session.codexSessionId ? undefined : [...(await (session.provider === "codex" ? this.candidates() : this.runtimes(session.provider).candidatePaths(process.env)))];
           const start = await this.offset(session.rolloutPath);
-          this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', updated_at = ? WHERE turn_id = ?", start, start, iso(), turnId);
+          const promptSentAt = this.now().toISOString();
+          this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', prompt_sent_at = COALESCE(prompt_sent_at, ?), updated_at = ? WHERE turn_id = ?", start, start, promptSentAt, promptSentAt, turnId);
+          input.dispatchFence?.();
           if (!promptInArgv) await this.herdr.prompt(session.agentName, prompt);
           this.update("UPDATE forge_herdr_turns SET status = 'waiting', updated_at = ? WHERE turn_id = ?", iso(), turnId);
           if (input.signal?.aborted) throw new AgentFailure("cancelled", "The interactive agent turn was cancelled.", { nonRetryable: true });
-          const promptSentAt = promptInArgv ? argvDispatchAt : this.now().toISOString();
-          this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", promptSentAt, promptSentAt, turnId);
           session = await this.resolveIdentity(session, input, turnId, candidates);
         }
         const recoveredDispatch = resumed !== undefined;
@@ -153,7 +160,7 @@ export class HerdrTurnRunner {
       const live = (await snapshotAgents(this.herdr)).find((agent) => agent.name === session.agentName) ?? await this.herdr.getAgent(session.agentName);
       if (!live) {
         if (recoveredDispatch) throw new AgentFailure("recovery-agent-absent", "The previously dispatched interactive turn has no live agent", { nonRetryable: true });
-        if (session.provider === "openrouter") await this.recycleRejectedSession(input, prompt, resultPath, turnId);
+        if (session.provider === "openrouter") { input.dispatchFence?.(); await this.recycleRejectedSession(input, prompt, resultPath, turnId); }
         throw new AgentFailure("agent-absent", "Interactive agent is absent from Herdr");
       }
       if (live.status === "blocked") {
@@ -218,7 +225,7 @@ export class HerdrTurnRunner {
                 workflowId: input.workflowId, revision: input.revision, timestamp, attentionExcerpt,
               })
             : false;
-          if (claimed && !promptInArgv) await this.herdr.prompt(session.agentName, `Your previous turn ended without writing the required result file at ${resultPath}. Write it now using the exact schema you were given, then reply with the completion marker ${marker}.`);
+          if (claimed && !promptInArgv) { input.dispatchFence?.(); await this.herdr.prompt(session.agentName, `Your previous turn ended without writing the required result file at ${resultPath}. Write it now using the exact schema you were given, then reply with the completion marker ${marker}.`); }
         }
       } else if (live.status !== "working") {
         idlePolls = 0;
@@ -312,12 +319,15 @@ export class HerdrTurnRunner {
     return `${this.completionBlock(marker, path, schema)}${validationIssues ? `\n\nYour previous result file failed schema validation. Correct these issues:\n${validationIssues}` : ""}\n\n${responseStyleBlock}\n\n${taskPrompt}`;
   }
   private completionBlock(marker: string, path: string, schema: string): string { return `${marker}\n\nForge completion contract\n- Atomically write exactly one JSON object to ${path} (write a sibling temp file, then rename).\n- The object must satisfy ${schema}; no Markdown fence or commentary belongs in the file.\n- Do not say the task is complete until the result file exists.\n- Do not repeat the file contents in your reply; one short sentence is enough.`; }
-  private existingTurn(input: HerdrTurnInput<unknown>, correction: number): { resultRelativePath: string; status: string; promptSentAt: string | undefined; resultHash: string | undefined } | undefined {
+  private existingTurn(input: HerdrTurnInput<unknown>, correction: number, prompt: string): { resultRelativePath: string; status: string; promptSentAt: string | undefined; resultHash: string | undefined } | undefined {
     return this.database.authQuery((db) => db.prepare(
-      "SELECT result_relative_path AS resultRelativePath, status, prompt_sent_at AS promptSentAt, result_sha256 AS resultHash FROM forge_herdr_turns WHERE ledger = ? AND execution_id = ? AND prompt_kind = ? AND correction_index = ? AND task_id = ?",
-    ).get(input.ledger, input.executionId, input.promptKind, correction, input.task.taskId) as { resultRelativePath: string; status: string; promptSentAt: string | undefined; resultHash: string | undefined } | undefined);
+      "SELECT t.result_relative_path AS resultRelativePath, t.status, t.prompt_sent_at AS promptSentAt, t.result_sha256 AS resultHash FROM forge_herdr_turns t JOIN forge_herdr_role_sessions s ON s.id = t.role_session_id AND s.task_id = t.task_id AND s.session_role = t.execution_role AND s.is_current = 1 WHERE t.ledger = ? AND t.execution_id = ? AND t.prompt_kind = ? AND t.correction_index = ? AND t.task_id = ? AND t.execution_role = ? AND t.prompt_sha256 = ?",
+    ).get(input.ledger, input.executionId, input.promptKind, correction, input.task.taskId, input.executionRole, hash(prompt)) as { resultRelativePath: string; status: string; promptSentAt: string | undefined; resultHash: string | undefined } | undefined);
   }
-  private async ensure(input: HerdrTurnInput<unknown>, initialPrompt?: { path: string; content: string }): Promise<EnsuredRoleSession> { return this.sessions.ensureRoleSession(input.task, input.executionRole, { provider: input.profile.provider ?? "codex", model: input.profile.model, reasoningLevel: input.profile.reasoningLevel, serviceTier: input.profile.servicePriority === "fast" ? "fast" : input.profile.servicePriority === "priority" ? "priority" : "default" }, initialPrompt ? { initialPrompt } : undefined); }
+  private turnExists(turnId: string): boolean {
+    return this.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_herdr_turns WHERE turn_id = ?").get(turnId)) !== undefined;
+  }
+  private async ensure(input: HerdrTurnInput<unknown>, initialPrompt?: { path: string; content: string }, beforeLaunch?: (session: { id: string; rolloutPath?: string; promptInArgv: boolean }) => void): Promise<EnsuredRoleSession> { return this.sessions.ensureRoleSession(input.task, input.executionRole, { provider: input.profile.provider ?? "codex", model: input.profile.model, reasoningLevel: input.profile.reasoningLevel, serviceTier: input.profile.servicePriority === "fast" ? "fast" : input.profile.servicePriority === "priority" ? "priority" : "default" }, { ...(initialPrompt ? { initialPrompt } : {}), ...(beforeLaunch ? { beforeLaunch } : {}) }); }
   private promptPath(resultPath: string): string { return join(dirname(resultPath), `prompt-${randomUUID()}.forge`); }
   private async recycleRejectedSession(input: HerdrTurnInput<unknown>, prompt: string, resultPath: string, turnId: string): Promise<EnsuredRoleSession> {
     await this.sessions.retireRoleSession(input.task.taskId, input.executionRole);
@@ -371,7 +381,7 @@ export class HerdrTurnRunner {
     }
     return activeTurnId;
   }
-  private create(turnId: string, input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, path: string, correction: number, prompt: string): void { this.update("INSERT OR IGNORE INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, correction_index, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?)", turnId, input.task.taskId, session.id, input.executionRole, input.ledger, input.executionId, input.promptKind, hash(prompt), relative(input.task.runtimeRoot, path), session.rolloutPath ?? null, correction, iso(), iso()); }
+  private create(turnId: string, input: HerdrTurnInput<unknown>, session: { id: string; rolloutPath?: string }, path: string, correction: number, prompt: string): void { this.update("INSERT OR IGNORE INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, correction_index, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?)", turnId, input.task.taskId, session.id, input.executionRole, input.ledger, input.executionId, input.promptKind, hash(prompt), relative(input.task.runtimeRoot, path), session.rolloutPath ?? null, correction, iso(), iso()); }
   private update(sql: string, ...values: unknown[]): void { this.database.authQuery((db) => db.prepare(sql).run(...values)); }
   private heartbeat(input: HerdrTurnInput<unknown>): boolean {
     const table = input.ledger === "agent" ? "forge_agent_executions" : "forge_developer_executions";

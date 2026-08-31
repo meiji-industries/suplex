@@ -55,13 +55,18 @@ function resultPath(prompt: string): string {
   return /Atomically write exactly one JSON object to (.+?) \(write a sibling/.exec(prompt)?.[1] ?? "";
 }
 function marker(prompt: string): string { return /^\[forge-turn:[^\]]+\]/.exec(prompt)?.[0] ?? ""; }
+function promptHash(input: HerdrTurnInput<unknown>, turnId: string): string {
+  const path = join(input.task.runtimeRoot, "herdr-results", input.task.taskId, input.executionRole, `result-${turnId}.json`);
+  const prompt = `[forge-turn:${turnId}]\n\nForge completion contract\n- Atomically write exactly one JSON object to ${path} (write a sibling temp file, then rename).\n- The object must satisfy ${input.schemaPath}; no Markdown fence or commentary belongs in the file.\n- Do not say the task is complete until the result file exists.\n- Do not repeat the file contents in your reply; one short sentence is enough.\n\nForge response style\n- Use ASD-STE100 Simplified Technical English for all human-readable prose.\n- In normal prose fields and public progress messages, write short, direct, unambiguous sentences and use consistent terms.\n- Do not alter required JSON keys, enum values, identifiers, paths, commands, code, quoted text, or schema-required formats.\n- Do not claim ASD-STE100 certification or force vocabulary that makes accurate technical output impossible.\n\n${input.prompt}`;
+  return createHash("sha256").update(prompt).digest("hex");
+}
 async function complete(session: FakeSession, prompt: string, result?: unknown, extra = ""): Promise<void> {
   const turn = `codex-${marker(prompt).slice(-6, -1)}`;
   await appendFile(session.rolloutPath!, `${line({ type: "user_message", message: marker(prompt) })}${line({ type: "task_started", turn_id: turn })}${extra}${line({ type: "task_complete", turn_id: turn, duration_ms: 1 })}`);
-  if (result !== undefined) setTimeout(() => void writeFile(resultPath(prompt), JSON.stringify(result)), 10);
+  if (result !== undefined) await writeFile(resultPath(prompt), JSON.stringify(result));
 }
 
-async function runScenario(callback: (prompt: string, session: FakeSession) => Promise<void>, snapshots = false): Promise<{ value: z.infer<typeof ResultSchema>; database: ForgeDatabase; root: string }> {
+async function runScenario(callback: (prompt: string, session: FakeSession) => Promise<void>, snapshots = false): Promise<{ value: z.infer<typeof ResultSchema>; database: ForgeDatabase; root: string; input: HerdrTurnInput<z.infer<typeof ResultSchema>>; session: FakeSession }> {
   const setup = await fixture();
   const herdr = {
     prompt: async (_name: string, prompt: string) => { await callback(prompt, setup.session); return setup.session.live; },
@@ -71,7 +76,7 @@ async function runScenario(callback: (prompt: string, session: FakeSession) => P
   const artifacts = snapshots ? new ArtifactStore(join(setup.root, "artifacts"), setup.database) : undefined;
   const runner = makeRunner(setup.database, herdr as never, sessions as never, new IssueTimelineEvents(setup.database), artifacts);
   const output = await runner.run(setup.input);
-  return { value: output.result, database: setup.database, root: setup.root };
+  return { value: output.result, database: setup.database, root: setup.root, input: setup.input, session: setup.session };
 }
 
 async function freshIdentityFixture(): Promise<Awaited<ReturnType<typeof fixture>> & { candidates: string[] }> {
@@ -139,8 +144,98 @@ test("converts non-retryable Herdr session failures at the turn boundary", async
     await expect(runner.run(setup.input)).rejects.toEqual(expect.objectContaining<Partial<AgentFailure>>({ code: "guard_invalid", nonRetryable: true }));
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
+test("fences after session setup and before an argv launch", async () => {
+  const setup = await fixture();
+  const controller = new AbortController();
+  let launches = 0;
+  let prompts = 0;
+  let setupStarted!: () => void;
+  let releaseSetup!: () => void;
+  const started = new Promise<void>((resolve) => { setupStarted = resolve; });
+  const release = new Promise<void>((resolve) => { releaseSetup = resolve; });
+  const sessions = {
+    ensureRoleSession: async (_task: unknown, _role: unknown, _settings: unknown, options: { beforeLaunch?: (session: { id: string; promptInArgv: boolean }) => void }) => {
+      setupStarted();
+      await release;
+      options.beforeLaunch?.({ id: setup.session.id, promptInArgv: true });
+      launches += 1;
+      return setup.session;
+    },
+  };
+  const runner = makeRunner(setup.database, { prompt: async () => { prompts += 1; return setup.session.live; } } as never, sessions as never, new IssueTimelineEvents(setup.database));
+  const turn = runner.run({
+    ...setup.input,
+    signal: controller.signal,
+    dispatchFence: () => {
+      if (controller.signal.aborted) throw new AgentFailure("cancelled", "Cancelled before dispatch", { nonRetryable: true });
+    },
+  });
+  try {
+    await started;
+    controller.abort();
+    releaseSetup();
+    await expect(turn).rejects.toMatchObject({ code: "cancelled" });
+    expect(launches).toBe(0);
+    expect(prompts).toBe(0);
+  } finally {
+    releaseSetup();
+    await turn.catch(() => undefined);
+    setup.database.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+test("recovers a prompt delivered before the worker records completion", async () => {
+  const setup = await fixture();
+  let prompts = 0;
+  let crash = true;
+  const sessions = {
+    ensureRoleSession: async (_task: unknown, _role: unknown, _settings: unknown, options?: { beforeLaunch?: (session: { id: string; promptInArgv: boolean }) => void }) => {
+      options?.beforeLaunch?.({ id: setup.session.id, promptInArgv: false });
+      return setup.session;
+    },
+  };
+  const herdr = {
+    prompt: async (_name: string, prompt: string) => {
+      prompts += 1;
+      await complete(setup.session, prompt, { status: "ok" });
+      if (crash) {
+        crash = false;
+        throw new Error("simulated crash after prompt delivery");
+      }
+      return setup.session.live;
+    },
+    getAgent: async () => setup.session.live,
+  };
+  const runner = makeRunner(setup.database, herdr as never, sessions as never, new IssueTimelineEvents(setup.database));
+  try {
+    await expect(runner.run(setup.input)).rejects.toThrow("simulated crash after prompt delivery");
+    expect(setup.database.authQuery((db) => db.prepare("SELECT status, prompt_sent_at AS promptSentAt FROM forge_herdr_turns").get())).toMatchObject({ status: "dispatching", promptSentAt: expect.any(String) });
+    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
+    expect(prompts).toBe(1);
+  } finally {
+    setup.database.close();
+    await rm(setup.root, { recursive: true, force: true });
+  }
+});
+
+test("rejects schema-valid bytes rewritten after turn completion", async () => {
+  let sentPrompt = "";
+  const scenario = await runScenario(async (prompt, session) => {
+    sentPrompt = prompt;
+    await complete(session, prompt, { status: "ok" });
+  });
+  try {
+    await writeFile(resultPath(sentPrompt), JSON.stringify({ status: "blocked" }));
+    const runner = makeRunner(scenario.database, { prompt: async () => { throw new Error("completed turns must not prompt"); }, getAgent: async () => undefined } as never, { ensureRoleSession: async () => scenario.session } as never, new IssueTimelineEvents(scenario.database));
+    await expect(runner.run(scenario.input)).rejects.toMatchObject({ code: "recovery-result-invalid", nonRetryable: true });
+  } finally {
+    scenario.database.close();
+    await rm(scenario.root, { recursive: true, force: true });
+  }
+});
 test("uses the integrator execution role for the persistent session", async () => {
   const setup = await fixture();
+  setup.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET session_role = 'integrator' WHERE id = 'session'").run());
   let ensuredRole: string | undefined;
   const herdr = {
     prompt: async (_name: string, prompt: string) => { await complete(setup.session, prompt, { status: "ok" }); return setup.session.live; },
@@ -180,7 +275,7 @@ test("rechecks a turn completed while agent startup waits", async () => {
         "agent",
         "execution",
         "plan",
-        createHash("sha256").update("concurrent prompt").digest("hex"),
+        promptHash(setup.input, turnId),
         `herdr-results/task/planner/result-${turnId}.json`,
         null,
         0,
@@ -225,6 +320,7 @@ test("accepts an OMP argv result written while Herdr waits for readiness", async
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, JSON.stringify({ status: "blocked" }));
   let initialPrompt: { path: string; content: string } | undefined;
+  let intentBeforeLaunch = false;
   let getCalls = 0;
   const herdr = {
     prompt: async () => { throw new Error("fresh argv prompts must not be resent"); },
@@ -239,8 +335,10 @@ test("accepts an OMP argv result written while Herdr waits for readiness", async
     },
   };
   const sessions = {
-    ensureRoleSession: async (_task: unknown, _role: unknown, _settings: unknown, options?: { initialPrompt?: { path: string; content: string } }) => {
+    ensureRoleSession: async (_task: unknown, _role: unknown, _settings: unknown, options?: { initialPrompt?: { path: string; content: string }; beforeLaunch?: (session: { id: string; promptInArgv: boolean }) => void }) => {
       initialPrompt = options?.initialPrompt;
+      options?.beforeLaunch?.({ id: setup.session.id, promptInArgv: true });
+      intentBeforeLaunch = setup.database.authQuery((db) => db.prepare("SELECT prompt_sent_at FROM forge_herdr_turns").get()) !== undefined;
       await writeFile(path, JSON.stringify({ status: "ok" }));
       await utimes(path, dispatchAt, dispatchAt);
       return setup.session;
@@ -263,6 +361,7 @@ test("accepts an OMP argv result written while Herdr waits for readiness", async
     await expect(runner.run(setup.input)).resolves.toMatchObject({ sessionId: "omp-session", result: { status: "ok" } });
     expect((await readdir(dirname(path))).some((name) => name.includes(".quarantine-"))).toBe(true);
     expect(setup.database.authQuery((db) => db.prepare("SELECT prompt_sent_at FROM forge_herdr_turns").get())).toEqual({ prompt_sent_at: dispatchAt.toISOString() });
+    expect(intentBeforeLaunch).toBe(true);
   } finally {
     if (previousOmpHome === undefined) delete process.env.OMP_HOME;
     else process.env.OMP_HOME = previousOmpHome;
@@ -286,7 +385,7 @@ test.each(["codex", "openrouter"] as const)("existing ambiguous %s turn fails be
     new IssueTimelineEvents(setup.database),
   );
   try {
-    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "recovery-dispatch-ambiguous", nonRetryable: true });
+    await expect(runner.run(setup.input)).rejects.toMatchObject({ code: "recovery-identity-conflict", nonRetryable: true });
     expect(ensures).toBe(0);
     expect(prompts).toBe(0);
   } finally {
@@ -299,7 +398,7 @@ test("missing correction row fails before a correction prompt can be redispatche
   const setup = await fixture();
   const turnId = `turn_${createHash("sha256").update(["execution", "plan", "0"].join("\0")).digest("hex").slice(0, 32)}`;
   const now = new Date().toISOString();
-  setup.database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, 0, ?, 'correction_required', ?, ?)").run(turnId, "a".repeat(64), join("herdr-results", "task", "planner", `result-${turnId}.json`), now, now, now));
+  setup.database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, 0, ?, 'correction_required', ?, ?)").run(turnId, promptHash(setup.input, turnId), join("herdr-results", "task", "planner", `result-${turnId}.json`), now, now, now));
   let ensures = 0;
   let prompts = 0;
   const runner = makeRunner(
@@ -325,7 +424,7 @@ test.each(["waiting", "completed"])("recovered OpenRouter %s turn relaunches wit
   setup.input = { ...setup.input, profile: { ...setup.input.profile, provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } };
   setup.database.authQuery((db) => {
     db.prepare("UPDATE forge_herdr_role_sessions SET provider_kind = 'openrouter', codex_session_id = NULL, rollout_path = NULL WHERE id = 'session'").run();
-    db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, 0, ?, ?, ?, ?)").run(turnId, "a".repeat(64), join("herdr-results", "task", "planner", `result-${turnId}.json`), now, status, now, now);
+    db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, 0, ?, ?, ?, ?)").run(turnId, promptHash(setup.input, turnId), join("herdr-results", "task", "planner", `result-${turnId}.json`), now, status, now, now);
   });
   let initialPrompt: { path: string; content: string } | undefined;
   let prompts = 0;
@@ -356,7 +455,7 @@ test("recovered OpenRouter agent absence never recycles with the original prompt
   const now = new Date().toISOString();
   setup.session = { ...setup.session, provider: "openrouter", launched: true };
   setup.input = { ...setup.input, profile: { ...setup.input.profile, provider: "openrouter", model: "anthropic/claude-sonnet-4.5" } };
-  setup.database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, correction_index, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, ?, 0, ?, 'waiting', ?, ?)").run(turnId, "a".repeat(64), join("herdr-results", "task", "planner", `result-${turnId}.json`), setup.session.rolloutPath, now, now, now));
+  setup.database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, correction_index, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, ?, 0, ?, 'waiting', ?, ?)").run(turnId, promptHash(setup.input, turnId), join("herdr-results", "task", "planner", `result-${turnId}.json`), setup.session.rolloutPath, now, now, now));
   let initialPrompt: { path: string; content: string } | undefined;
   let prompts = 0;
   let retires = 0;
@@ -1121,7 +1220,7 @@ test("adopts a persisted waiting turn after marker-start-completion without prom
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, JSON.stringify({ status: "ok" }));
     await appendFile(setup.session.rolloutPath!, rollout);
-    setup.database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, rollout_start_offset, rollout_cursor_offset, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, ?, 0, ?, ?, 'waiting', ?, ?)").run(turnId, "c".repeat(64), join("herdr-results", "task", "planner", `result-${turnId}.json`), setup.session.rolloutPath, Buffer.byteLength(rollout), promptSentAt, promptSentAt, promptSentAt));
+    setup.database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, rollout_path, rollout_start_offset, rollout_cursor_offset, prompt_sent_at, status, created_at, updated_at) VALUES (?, 'task', 'session', 'planner', 'agent', 'execution', 'plan', ?, ?, ?, 0, ?, ?, 'waiting', ?, ?)").run(turnId, promptHash(setup.input, turnId), join("herdr-results", "task", "planner", `result-${turnId}.json`), setup.session.rolloutPath, Buffer.byteLength(rollout), promptSentAt, promptSentAt, promptSentAt));
     const runner = makeRunner(setup.database, { prompt: async () => { prompts += 1; return setup.session.live; }, getAgent: async () => setup.session.live } as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
     await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
     expect(prompts).toBe(0);

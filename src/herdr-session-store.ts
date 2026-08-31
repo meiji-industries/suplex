@@ -43,6 +43,7 @@ export interface EnsuredRoleSession {
 const now = (): string => new Date().toISOString();
 export interface EnsureRoleSessionOptions {
   initialPrompt?: { path: string; content: string };
+  beforeLaunch?: (session: { id: string; rolloutPath?: string; promptInArgv: boolean }) => void;
 }
 const quote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 const isMissingHerdrFailure = (error: unknown): boolean =>
@@ -338,6 +339,7 @@ export class HerdrSessionStore {
       let live: HerdrAgent;
       try {
         await runtime.prepareLaunch({ cwd: task.worktreePath, env: this.environment });
+        options.beforeLaunch?.({ id: row.id, ...(typeof row.rollout_path === "string" ? { rolloutPath: row.rollout_path } : {}), promptInArgv: initialPromptPath !== undefined });
         live = await this.startOrReplace({
           sessionId: row.id,
           name,

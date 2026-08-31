@@ -308,8 +308,8 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   };
   const activeCount = visibleTasks.filter((task) => activeTaskPhases.has(task.phase) || BLOCKED_PHASES.has(task.phase)).length;
   const backlogCount = visibleTasks.filter((task) => task.phase === "backlog").length;
-  const archivedCount = taskFilter === "archived" ? visibleTasks.length : undefined;
   const taskGroups = taskListGroups(visibleTasks, taskFilter);
+  const archivedCount = taskFilter === "archived" ? taskGroups.reduce((count, group) => count + group.tasks.length, 0) : undefined;
   const selectTask = (task: ApiTaskSummary): void => { setSelected(undefined); selectedRef.current = undefined; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`${routeBase}/${encodeURIComponent(task.id)}`, companyId)); window.dispatchEvent(new Event("forge:navigate")); };
   const addImages = async (files: File[]): Promise<void> => {
     setCreateError("");

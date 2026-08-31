@@ -1,4 +1,4 @@
-import { setHandler } from "../registry.js";
+import { isCancellation, setHandler } from "../registry.js";
 import { ApplicationFailure } from "../failures.js";
 import * as contracts from "../issue-contracts.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
@@ -39,6 +39,7 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
       try {
         await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName, commitSha: ctx.state.resultCommit });
       } catch (error) {
+        if (isCancellation(error)) throw error;
         const failure = ctx.permanentActivityFailure(error);
         const code = ReleaseFailureCodeSchema.safeParse(failure?.code);
         const releaseFailure = code.success ? new GithubReleaseFailure(code.data, failure?.summary ?? "The reviewed branch is unavailable for pushing") : null;
@@ -79,7 +80,8 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
           (result) => result.leadExecutionId,
         );
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
-      } catch {
+      } catch (error) {
+        if (isCancellation(error)) throw error;
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Planner couldn't plan the fix — retry or take a look", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       }
       if (legacyConflict) ctx.continuationRequested = true;

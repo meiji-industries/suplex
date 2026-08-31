@@ -1,4 +1,4 @@
-import { setHandler } from "../registry.js";
+import { isCancellation, setHandler } from "../registry.js";
 import * as contracts from "../issue-contracts.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
@@ -31,6 +31,7 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
         (review) => review.leadExecutionId,
       );
     } catch (error) {
+      if (isCancellation(error)) throw error;
       const failure = ctx.permanentActivityFailure(error);
       const summary = failure?.summary ?? "Final review did not finish. Try again, or request changes to send the work back.";
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["final_review", "request_delivery_changes", "cancel_issue"], pendingAction: summary, finalReviewFailureCode: "final_review_unavailable", blocker: failure?.category ? stateTransitions.humanBlocker(failure.category, summary, [{ command: "final_review", label: "Retry final review", requiresNote: false, destructive: false }, { command: "request_delivery_changes", label: "Request delivery changes", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
@@ -70,7 +71,8 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
           (plan) => plan.leadExecutionId,
         );
         repairPlan = { planArtifactId: planned.planArtifactId, findings: planned.findings };
-      } catch {
+      } catch (error) {
+        if (isCancellation(error)) throw error;
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["record_delivery_decision", "cancel_issue"], pendingAction: "Planner couldn't plan the fix — retry or take a look", finalReviewId: result.finalReviewId, finalReviewOutcome: result.outcome, finalReviewSummary: result.summary, finalReviewOpinionArtifactId: result.opinionArtifactId, finalReviewEvidenceArtifactId: result.evidenceArtifactId, finalReviewFindings: result.findings, blocker: stateTransitions.humanBlocker("agent_exhausted", result.summary, [{ command: "record_delivery_decision", label: "Record delivery decision", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.reviewArtifact.artifactId, "delivery-review")), stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
         await ctx.project();
         return ctx.state;
@@ -139,7 +141,8 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
           (plan) => plan.leadExecutionId,
         );
         memberRepairPlan = planned;
-      } catch {
+      } catch (error) {
+        if (isCancellation(error)) throw error;
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["request_delivery_changes", "cancel_issue"], pendingAction: "Planner couldn't plan the fix — retry or take a look", acceptanceId: result.acceptanceId, acceptanceStatus: result.status, acceptanceReasonArtifactId: result.reasonArtifactId ?? null, acceptanceBlockerEvidenceArtifactId: result.evidenceArtifactId ?? null, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
         await ctx.project();
         return ctx.state;

@@ -176,7 +176,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       try {
         const plan = await planMergeConflict({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, worktreePath: state.worktreePath!, branchName: state.branchName!, priorHead: result.priorHead, targetBaseSha: result.observedBaseSha, conflictArtifact: result.conflictArtifact, conflictFileCount: result.conflictFileCount, forwardMergeId: result.checkId });
         state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_required", owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, lastEventId: `${state.workflowId}:${state.revision + 1}` });
-      } catch {
+      } catch (error) {
+        if (isCancellation(error)) throw error;
         state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Forge could not prepare a conflict plan. Try resolving again.", lastEventId: `${state.workflowId}:${state.revision + 1}` });
       }
     }
@@ -222,7 +223,15 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(syncGithubPullRequestSignal, () => { githubSyncRequested = true; });
   const syncGithubPullRequest = async (): Promise<void> => {
     if (runExecution.current().autoActionsHalted()) return;
-    if (!state.releaseRepository && !sourcePullRequest && true) sourcePullRequest = await loadTaskSourcePullRequest({ taskId: state.issueId, companyId: state.companyId }).then((source) => sourcePullRequestState(source, true), () => undefined);
+    if (!state.releaseRepository && !sourcePullRequest && true) {
+      sourcePullRequest = await loadTaskSourcePullRequest({ taskId: state.issueId, companyId: state.companyId }).then(
+        (source) => sourcePullRequestState(source, true),
+        (error) => {
+          if (isCancellation(error)) throw error;
+          return undefined;
+        },
+      );
+    }
     if (!state.releaseRepository && sourcePullRequest) { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, sourcePullRequest)); await projectIssueState(state); }
     if (!state.releaseRepository || !state.branchName) return;
     // GitHub reconciliation only runs while Forge is waiting on GitHub. While an agent turn or a
@@ -230,7 +239,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     // unreleased local head (after a repair the PR still points at the failed commit), so it is skipped too.
     const syncSkipsAgentPhases = true;
     if (syncSkipsAgentPhases && !isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review", ...(true ? ["delivery_ready"] : [])].includes(state.phase))) return;
-    const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch(() => null);
+    const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch((error) => {
+      if (isCancellation(error)) throw error;
+      return null;
+    });
     if (!observed) return;
     const common = githubPullRequestObservationFields(observed, new Date().toISOString());
     if (isSourcePullRequestPreDelivery(state, sourcePullRequest) && observed.state !== "merged") { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, common)); await projectIssueState(state); return; }
@@ -253,7 +265,13 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       await projectIssueState(state);
       for (const action of reconciliation.actions) {
         if ((action.kind === "enable_auto_merge" || action.kind === "merge" || action.kind === "mark_ready") && state.releaseRepository) {
-          const failure = await applyGithubPullRequestAction({ repository: state.releaseRepository, number: action.number, headSha: "headSha" in action ? action.headSha : observed.headSha ?? "", action: action.kind }).then(() => null, (error: Error & { cause?: { message?: string } }) => error.cause?.message ?? error.message);
+          const failure = await applyGithubPullRequestAction({ repository: state.releaseRepository, number: action.number, headSha: "headSha" in action ? action.headSha : observed.headSha ?? "", action: action.kind }).then(
+            () => null,
+            (error: Error & { cause?: { message?: string } }) => {
+              if (isCancellation(error)) throw error;
+              return error.cause?.message ?? error.message;
+            },
+          );
           if (failure !== null) {
             if (action.kind === "enable_auto_merge" && /auto.?merge is not allowed|not enabled for this repository/i.test(failure)) {
               state = IssueWorkflowStateSchema.parse({ ...state, autoMergeAvailable: false, revision: state.revision + 1, pendingAction: "Auto-merge is not available. Forge will merge directly.", lastEventId: `${state.workflowId}:${state.revision + 1}` });

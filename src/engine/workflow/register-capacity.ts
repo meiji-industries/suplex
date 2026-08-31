@@ -1,4 +1,4 @@
-import { setHandler } from "../registry.js";
+import { isCancellation, setHandler } from "../registry.js";
 import * as contracts from "../issue-contracts.js";
 import * as capacityContracts from "../../capacity-contracts.js";
 import { assertPayloadWithinLimit } from "../policy.js";
@@ -85,8 +85,13 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
           (repair) => repair.developerExecutionId,
         );
       } catch (error) {
+        if (isCancellation(error)) throw error;
         let evidenceArtifactId: string | null = null;
-        try { evidenceArtifactId = (await activityProxies.recordDeliveryBlocker({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, operation: "repair" })).artifactId; } catch { /* Keep the fixed state transition if blocker recording itself is unavailable. */ }
+        try {
+          evidenceArtifactId = (await activityProxies.recordDeliveryBlocker({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, operation: "repair" })).artifactId;
+        } catch (fallbackError) {
+          if (isCancellation(fallbackError)) throw fallbackError;
+        }
         const summary = error instanceof Error ? error.message : "The repair infrastructure did not complete; retry the repair.";
         const failure = ctx.permanentActivityFailure(error, true);
         const failureClass = noProgressEnabled ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary, source: "local_check" }) : "code_failure";
@@ -108,7 +113,8 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
           (result) => result.leadExecutionId,
         );
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
-      } catch {
+      } catch (error) {
+        if (isCancellation(error)) throw error;
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Forge could not prepare a conflict plan. Try resolving again.", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       }
       await ctx.project();
@@ -131,7 +137,8 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
           ctx.state = applyTargetBaseRevalidation(ctx.state, { outcome: "revalidated", checkId: ctx.state.forwardMergeId!, checkpoint: ctx.state.targetBaseCheckpoint ?? "pre_release", expectedBaseSha: ctx.state.targetBaseSha!, observedBaseSha: ctx.state.forwardMergeTargetBaseSha!, priorHead: ctx.state.forwardMergePriorHead!, priorTree: ctx.state.forwardMergePriorTree!, headSha: successfulResult.resultCommit, headTree: successfulResult.resultTree, developerExecutionId: successfulResult.developerExecutionId, deliveryArtifact: { id: successfulResult.deliveryArtifactId, kind: "forward-merge-delivery" }, verificationArtifact: { id: successfulResult.verificationArtifactId, kind: "forward-merge-verification" }, developerEvidenceArtifactId: successfulResult.evidenceArtifactId });
           ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, worktreePath: successfulResult.worktreePath ?? ctx.state.worktreePath, developerSessionRef: successfulResult.developerSessionRef, deliverySummary: successfulResult.summary, developerEvidenceArtifactId: successfulResult.evidenceArtifactId, mergeResolutionDeveloperExecutionId: successfulResult.developerExecutionId, mergeResolutionDeveloperSessionRef: successfulResult.developerSessionRef });
         }
-      } catch {
+      } catch (error) {
+        if (isCancellation(error)) throw error;
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Builder didn't finish resolving conflicts — retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       }
       await ctx.project();

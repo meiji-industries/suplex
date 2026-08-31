@@ -6,9 +6,10 @@ import { expect, test } from "vitest";
 
 import { AuthService } from "../src/auth.js";
 import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema, type IssueWorkflowInput, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
+import { CancelledFailure } from "../src/engine/failures.js";
 import { continueIssueWork, executeIssueCommand, reviseIssuePlan, startIssueWorkflow } from "../src/engine/service.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
-import { createEngineHarness, engineFixture, type EngineHarness } from "./helpers/engine-harness.js";
+import { createEngineHarness, engineFixture, ImmediateClock, type EngineHarness } from "./helpers/engine-harness.js";
 
 function seedContinuation(harness: EngineHarness, issueId: string, fields: Partial<IssueWorkflowState>): IssueWorkflowState {
   harness.seedTask(issueId);
@@ -39,7 +40,14 @@ test("TaskService consumes atomic engine projections for decision, revise-plan, 
       harness.database.projectIssueEvent({ schemaVersion: 1, runId: `${input.successorWorkflowId}:creation`, eventId: successor.lastEventId, state: successor });
       return { successorTaskId: input.successorTaskId, successorWorkflowId: input.successorWorkflowId, predecessorTaskId: input.predecessorTaskId, projectRevisionId: engineFixture.projectRevisionId, creationRevision: input.acceptedRevision };
     },
-  });
+  }, new class extends ImmediateClock {
+    override wait(_milliseconds: number, signal: AbortSignal): Promise<void> {
+      return new Promise<void>((_resolve, reject) => {
+        if (signal.aborted) reject(new CancelledFailure());
+        else signal.addEventListener("abort", () => reject(new CancelledFailure()), { once: true });
+      });
+    }
+  }());
   const brief = Buffer.from("TaskService engine integration brief"), storagePath = `${engineFixture.companyId}/objects/task-service/brief.md`, briefSha256 = createHash("sha256").update(brief).digest("hex");
   await mkdir(dirname(join(harness.config.artifactRoot, storagePath)), { recursive: true });
   await writeFile(join(harness.config.artifactRoot, storagePath), brief);
@@ -51,6 +59,7 @@ test("TaskService consumes atomic engine projections for decision, revise-plan, 
     const revision = seedContinuation(harness, "task-service-revision", { phase: "approval", owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "revise_plan", "cancel_issue"], pendingAction: "Approve final plan", planRevision: 1, planMaterial: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" });
     const done = seedContinuation(harness, "task-service-continue", { phase: "done", owner: "human", allowedCommands: ["continue_work"], pendingAction: "Done" });
     await Promise.all([startIssueWorkflow(harness.config, workflowInput(approval)), startIssueWorkflow(harness.config, workflowInput(revision)), startIssueWorkflow(harness.config, workflowInput(done))]);
+    for (const workflowId of [approval.workflowId, revision.workflowId, done.workflowId]) harness.engine.run(workflowId);
     const auth = new AuthService(harness.database, harness.config);
     const workflow: Pick<IssueWorkflowPort, "execute" | "revisePlan" | "continueWork" | "acceptDevelopment"> = {
       execute: (command, workflowId, input) => executeIssueCommand(harness.config, workflowId, command, input),
@@ -59,15 +68,21 @@ test("TaskService consumes atomic engine projections for decision, revise-plan, 
       acceptDevelopment: async () => { throw new Error("Developer admission unavailable in integration fixture"); },
     };
     const tasks = new TaskService(harness.database, auth, {} as never, harness.config, { workflow: workflow as IssueWorkflowPort });
-    const decided = await tasks.executeCommand(engineFixture.actorUserId, approval.issueId, "request_plan_revision", { expectedRevision: 1, note: "Revise the plan", idempotencyKey: "task-service-decision-key" });
-    expect(decided).toMatchObject({ phase: "approval", revision: 3 });
+    const decisionCurrent = tasks.getTask(engineFixture.actorUserId, approval.issueId);
+    const decided = await tasks.executeCommand(engineFixture.actorUserId, approval.issueId, "request_plan_revision", { expectedRevision: decisionCurrent.revision, note: "Revise the plan", idempotencyKey: "task-service-decision-key" });
+    expect(decided.phase).toBe("approval");
+    expect(decided.revision).toBeGreaterThan(decisionCurrent.revision);
 
-    const revised = await tasks.revisePlan(engineFixture.actorUserId, revision.issueId, { expectedRevision: 1, actorUserId: engineFixture.actorUserId, reason: "Rework the plan", worktreeDisposition: "reuse" });
-    expect(revised).toMatchObject({ phase: "delivery_blocked", revision: 2, pendingAction: "Plan revision is blocked" });
+    const revisionCurrent = tasks.getTask(engineFixture.actorUserId, revision.issueId);
+    const revised = await tasks.revisePlan(engineFixture.actorUserId, revision.issueId, { expectedRevision: revisionCurrent.revision, actorUserId: engineFixture.actorUserId, reason: "Rework the plan", worktreeDisposition: "reuse" });
+    expect(revised).toMatchObject({ phase: "delivery_blocked", pendingAction: "Plan revision is blocked" });
+    expect(revised.revision).toBeGreaterThan(revisionCurrent.revision);
 
-    const continued = await tasks.continueWork(engineFixture.actorUserId, done.issueId, 1, "Continue with follow-up work");
-    expect(continued.original).toMatchObject({ phase: "done", revision: 2 });
-    expect(continued.successor).toMatchObject({ id: `${done.issueId}-successor-1`, phase: "backlog", revision: 0 });
+    const doneCurrent = tasks.getTask(engineFixture.actorUserId, done.issueId);
+    const continued = await tasks.continueWork(engineFixture.actorUserId, done.issueId, doneCurrent.revision, "Continue with follow-up work");
+    expect(continued.original.phase).toBe("done");
+    expect(continued.original.revision).toBeGreaterThan(doneCurrent.revision);
+    expect(continued.successor).toMatchObject({ id: `${done.issueId}-successor-${doneCurrent.revision}`, phase: "backlog", revision: 0 });
   } finally {
     await harness.stop();
   }

@@ -371,7 +371,11 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
       await ctx.project();
       return resolveMergeConflict(ctx, { expectedRevision: ctx.state.revision, actorUserId: command.actorUserId, commandId: `${ctx.state.workflowId}:decision-resolve:${ctx.state.revision}` });
     }
-    if (ctx.herdrExecutionSubstrateEnabled) return ctx.state;
+    if (ctx.herdrExecutionSubstrateEnabled) {
+      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      await ctx.project();
+      return ctx.state;
+    }
     if (["backlog", "planning", "supplemental_review", "plan_consolidation"].includes(ctx.state.phase) || !ctx.state.leadSessionRef) {
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, pendingPlannerNotes: [...(ctx.state.pendingPlannerNotes ?? []), ...("note" in command ? [command.note] : [])].slice(-32) });
       return ctx.state;

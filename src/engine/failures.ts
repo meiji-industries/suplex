@@ -33,5 +33,12 @@ export class ActivityFailure extends Error {
 }
 
 export function isCancellation(error: unknown): boolean {
-  return error instanceof CancelledFailure || (error instanceof Error && (error.name === "AbortError" || error.name === "CancelledFailure"));
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    if (current instanceof CancelledFailure || current instanceof Error && (current.name === "AbortError" || current.name === "CancelledFailure")) return true;
+    seen.add(current);
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
 }

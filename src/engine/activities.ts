@@ -11,7 +11,7 @@ import { ActivityFailure, ApplicationFailure, CancelledFailure } from "./failure
 import { durationMs, type ActivityCallOptions } from "./registry.js";
 
 export interface ActivityCaller {
-  call(name: string, args: unknown[], options: ActivityCallOptions, runSignal: AbortSignal, workflowId: string, beforeAttempt?: () => void): Promise<unknown>;
+  call(name: string, args: unknown[], options: ActivityCallOptions, runSignal: AbortSignal, workflowId: string, beforeAttempt?: () => void | Promise<void>): Promise<unknown>;
 }
 
 function failureType(error: unknown): string | undefined {
@@ -37,7 +37,7 @@ export function createActivityCaller(database: ForgeDatabase, activities: object
       let lastError: unknown;
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
         if (runSignal.aborted) throw new CancelledFailure("Activity cancelled");
-        beforeAttempt?.();
+        if (beforeAttempt) await beforeAttempt();
         if (runSignal.aborted) throw new CancelledFailure("Activity cancelled");
         const id = randomUUID();
         const startedAt = new Date().toISOString();

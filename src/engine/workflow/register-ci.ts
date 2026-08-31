@@ -1,4 +1,4 @@
-import { setHandler } from "../registry.js";
+import { isCancellation, setHandler } from "../registry.js";
 import * as contracts from "../issue-contracts.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
@@ -60,6 +60,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       );
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ctx.addRevisionCommand(["review_delivery", "cancel_issue"]) : ctx.addRevisionCommand(["request_delivery_changes", "cancel_issue"]), pendingAction: result.outcome === "completed" ? "Reviewing the latest changes" : "CI repair is blocked", developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.outcome === "completed" ? "clean" : "dirty", deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.summary, developerOutcome: result.outcome === "completed" ? "completed" : "blocked", deliveryReviewId: result.outcome === "completed" ? null : ctx.state.deliveryReviewId, ...(result.outcome === "completed" ? { deliveryRepairAttemptId: null, deliveryReviewSupersedesId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null } : {}), releaseId: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, ciRepairDeveloperExecutionId: result.developerExecutionId, ciRepairDeveloperSessionRef: result.developerSessionRef, blocker: result.outcome === "blocked" ? stateTransitions.humanBlocker("verification_unrecoverable", result.summary, [{ command: "request_delivery_changes", label: "Request delivery changes", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], undefined) : null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     } catch (error) {
+      if (isCancellation(error)) throw error;
       const failure = ctx.permanentActivityFailure(error);
       const failureClass = true ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary: failure?.summary ?? "CI repair failed — retry", source: "ci" }) : "ci_failure";
       const evidence = stateTransitions.evidencePointer(failure?.evidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? undefined, "attention-evidence");
@@ -115,6 +116,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       }
       result = await activityProxies.reconcileCi({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, releaseId: expectedReleaseId, expectedHeadSha, attemptNumber: attempt });
     } catch (error) {
+      if (isCancellation(error)) throw error;
       if (ctx.state.phase !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId || ctx.state.expectedHeadSha !== expectedHeadSha) return ctx.state;
       const failure = ctx.permanentActivityFailure(error);
       const failureClass = true ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary: failure?.summary ?? "Couldn't check CI — retry", source: "ci" }) : null;
@@ -186,7 +188,10 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
         // failed provider jobs instead of forcing a code repair, then wait on CI again.
         const rerunCount = ctx.state.ciRerunCount ?? 0;
         if (plan.disposition === "rerun" && true && rerunCount < CI_RERUN_LIMIT) {
-          const rerun = await activityProxies.rerunCi({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, ciRunId: result.runId, ciAttemptId }).catch(() => null);
+          const rerun = await activityProxies.rerunCi({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, ciRunId: result.runId, ciAttemptId }).catch((error) => {
+            if (isCancellation(error)) throw error;
+            return null;
+          });
           if (rerun) {
             ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: rerun.summary, ciRerunCount: rerunCount + 1, ciNextPollAt: new Date(Date.now() + CI_RERUN_POLL_DELAY_MS).toISOString(), ciRepairPlanSummary: plan.summary, ciRepairLeadExecutionId: plan.leadExecutionId, ciRepairLeadSessionRef: plan.leadSessionRef, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
             await ctx.project();
@@ -196,7 +201,8 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ci_repair_required", owner: "lead", allowedCommands: [], pendingAction: "Builder is fixing the failing CI job", ciRepairPlanId: plan.planId, ciRepairPlanArtifactId: plan.planArtifactId, ciRepairPlanEvidenceArtifactId: plan.evidenceArtifactId, ciRepairPlanSummary: plan.summary, ciRepairLeadExecutionId: plan.leadExecutionId, ciRepairLeadSessionRef: plan.leadSessionRef, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
         await ctx.project();
         return runExactCiRepairTurn();
-      } catch {
+      } catch (error) {
+        if (isCancellation(error)) throw error;
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["reconcile_ci", "request_delivery_changes", "cancel_issue"]), pendingAction: "Integrator couldn't plan the fix — retry or take a look", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       }
       await ctx.project();

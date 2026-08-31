@@ -5,7 +5,7 @@ import { ProjectionPersistenceFailure, projectionStateHash, type ForgeDatabase }
 import { resolveAgentProfiles } from "../projects.js";
 import { jsonRequired } from "../task-utils.js";
 import { createActivities, createActivityCaller, type ActivityCaller } from "./activities.js";
-import { CancelledFailure } from "./failures.js";
+import { CancelledFailure, isCancellation } from "./failures.js";
 import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, buildInitialIssueWorkflowState, type IssueProjectionEvent, type IssueWorkflowInput, type IssueWorkflowState } from "./issue-contracts.js";
 import { issueWorkflow } from "./workflows.js";
 import { withWorktreeCommands } from "./workflow/state-transitions.js";
@@ -33,14 +33,22 @@ export class Wakeable {
     if (signal.aborted) throw new CancelledFailure();
     const controller = new AbortController();
     const combined = AbortSignal.any([signal, controller.signal]);
-    await Promise.race([
-      clock.wait(milliseconds, combined),
-      new Promise<void>((resolve) => {
-        const waiter = () => { controller.abort(); resolve(); };
-        this.waiters.add(waiter);
-        combined.addEventListener("abort", () => this.waiters.delete(waiter), { once: true });
-      }),
-    ]);
+    let woken = false;
+    try {
+      await Promise.race([
+        clock.wait(milliseconds, combined),
+        new Promise<void>((resolve) => {
+          const waiter = () => { woken = true; controller.abort(); resolve(); };
+          this.waiters.add(waiter);
+          combined.addEventListener("abort", () => this.waiters.delete(waiter), { once: true });
+        }),
+      ]);
+    } catch (error) {
+      if (!woken || signal.aborted) throw error;
+    } finally {
+      controller.abort();
+    }
+    if (signal.aborted) throw new CancelledFailure();
   }
 }
 function isAutomaticCommand(workflowId: string, commandId: string): boolean {
@@ -112,7 +120,7 @@ export class IssueRun {
   private loopError?: unknown;
   private initialState: IssueWorkflowState;
   private executionContext?: RunExecutionContext;
-  private activeCommand: { name: string; controller: AbortController; deferredProjections: DeferredProjection[]; context: CommandExecutionContext } | undefined;
+  private activeCommand: { name: string; controller: AbortController; deferredProjections: DeferredProjection[]; context: CommandExecutionContext; settled: Promise<void> } | undefined;
   private activeEffect: AbortController | undefined;
   private interruptPending = false;
   private interruptBarrier: Promise<void> | undefined;
@@ -148,8 +156,10 @@ export class IssueRun {
   }
   get workflowId(): string { return this.input.workflowId; }
   get state(): IssueWorkflowState {
+    if (this.loopError) return this.initialState;
     const query = this.queries.get("issueState");
-    return IssueWorkflowStateSchema.parse(this.loopError ? this.initialState : query ? query() : this.initialState);
+    const live = IssueWorkflowStateSchema.parse(query ? query() : this.initialState);
+    return this.initialState.revision >= live.revision ? this.initialState : live;
   }
   get error(): unknown { return this.loopError; }
 
@@ -168,6 +178,7 @@ export class IssueRun {
       interruptResult: undefined,
       activity: async (name: string, args: unknown[], options: Parameters<ActivityCaller["call"]>[2]) => {
         const execution = runExecution.current() as CommandExecutionContext;
+        await this.waitForActiveCommand(execution);
         if (this.interruptPending && !execution.interruptDispatch && !execution.acceptedInterrupt) throw new CancelledFailure();
         if (name === "projectIssueState") {
           const now = this.clock.now();
@@ -198,7 +209,11 @@ export class IssueRun {
         const effect = new AbortController();
         this.activeEffect = effect;
         try {
-          const result = await this.caller.call(name, args, options, AbortSignal.any([execution.signal, effect.signal]), this.workflowId, () => this.assertCommandAuthority(execution));
+          const result = await this.caller.call(name, args, options, AbortSignal.any([execution.signal, effect.signal]), this.workflowId, async () => {
+            await this.waitForActiveCommand(execution);
+            this.assertCommandAuthority(execution);
+          });
+          await this.waitForActiveCommand(execution);
           this.assertCommandAuthority(execution);
           return result;
         } finally {
@@ -207,13 +222,21 @@ export class IssueRun {
       },
       wait: async (milliseconds: number) => {
         const execution = runExecution.current() as CommandExecutionContext;
+        await this.waitForActiveCommand(execution);
         if (this.interruptPending && !execution.interruptDispatch && !execution.acceptedInterrupt) { await this.interruptBarrier; return; }
         if (execution.deferredProjections) await this.flushCommandProjections(execution);
         this.assertCommandAuthority(execution);
         const effect = new AbortController();
         this.activeEffect = effect;
         try {
-          await this.wakeable.wait(milliseconds, AbortSignal.any([execution.signal, effect.signal]), this.clock);
+          try {
+            await this.wakeable.wait(milliseconds, AbortSignal.any([execution.signal, effect.signal]), this.clock);
+          } catch (error) {
+            if (!this.interruptPending || execution.interruptDispatch || execution.acceptedInterrupt) throw error;
+            await this.interruptBarrier;
+            return;
+          }
+          await this.waitForActiveCommand(execution);
           this.assertCommandAuthority(execution);
         } finally {
           if (this.activeEffect === effect) this.activeEffect = undefined;
@@ -227,7 +250,7 @@ export class IssueRun {
     this.executionContext = context;
     this.workflowPromise = runExecution.run(context, () => issueWorkflow(this.input));
     void this.workflowPromise.catch(async (error) => {
-      if (this.controller.signal.aborted) return;
+      if (this.controller.signal.aborted || isCancellation(error)) return;
       this.loopError = error;
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error("Issue workflow run failed", { workflowId: this.workflowId }, { error: message, stack: error instanceof Error ? error.stack : undefined });
@@ -245,12 +268,23 @@ export class IssueRun {
     if (!this.queries.has("issueState")) throw this.loopError ?? new Error(`Issue run ${this.workflowId} did not register its state query`);
   }
 
+  private async waitForActiveCommand(context: CommandExecutionContext): Promise<void> {
+    while (this.activeCommand && this.activeCommand.context !== context && !context.interruptDispatch) {
+      await this.activeCommand.settled;
+    }
+    if (context.signal.aborted) throw new CancelledFailure();
+    if (this.loopError) throw this.loopError;
+  }
+
   private coalesceCommandProjections(projections: DeferredProjection[]): DeferredProjection[] {
     const pending: DeferredProjection[] = [];
     for (const projection of projections) {
-      const prior = pending.findIndex((candidate) => candidate.event.eventId === projection.event.eventId && candidate.event.state.revision === projection.event.state.revision);
-      if (prior >= 0) pending[prior] = projection;
-      else pending.push(projection);
+      const prior = pending.find((candidate) => candidate.event.eventId === projection.event.eventId && candidate.event.state.revision === projection.event.state.revision);
+      if (!prior) {
+        pending.push(projection);
+      } else if (prior.event.runId !== projection.event.runId || projectionStateHash(prior.event.state) !== projectionStateHash(projection.event.state)) {
+        throw new ProjectionPersistenceFailure("conflict", "Command emitted conflicting projections for one immutable event revision");
+      }
     }
     pending.sort((left, right) => left.event.state.revision - right.event.state.revision);
     return pending;
@@ -272,7 +306,13 @@ export class IssueRun {
 
   private assertCommandAuthority(context: CommandExecutionContext, expected?: IssueProjectionEvent): void {
     try {
-      let authority = expected ?? context.durableProjection ?? this.loadCommandAuthority();
+      if (expected) {
+        this.database.observeIssueProjection(expected);
+        if (expected.state.revision >= this.initialState.revision) this.initialState = expected.state;
+        this.updateCommandAuthority(context, expected);
+        return;
+      }
+      let authority = context.durableProjection ?? this.loadCommandAuthority();
       const live = this.state;
       if (projectionStateHash(live) !== projectionStateHash(authority.state)) {
         if (live.workflowId !== authority.state.workflowId || live.revision !== authority.state.revision + 1 || live.lastEventId !== `${live.workflowId}:${live.revision}`) {
@@ -398,6 +438,8 @@ export class IssueRun {
       const handler = this.commands.get(name);
       if (!handler) throw new Error(`Unknown issue command: ${name}`);
       const controller = new AbortController();
+      let finishCommand!: () => void;
+      const settled = new Promise<void>((resolve) => { finishCommand = resolve; });
       const deferredProjections: DeferredProjection[] = commandId === "legacy-command" ? [] : [...(interruptOutcome?.deferredProjections ?? [])];
       let durableProjection: IssueProjectionEvent | undefined;
       if (commandId !== "legacy-command") {
@@ -405,7 +447,7 @@ export class IssueRun {
         catch (error) { this.failClosedToDurable(error); throw error; }
       }
       const context: CommandExecutionContext = { ...this.executionContext!, signal: AbortSignal.any([this.controller.signal, controller.signal]), acceptedInterrupt: interruptOutcome?.accepted ? name : undefined, interruptResult: interruptOutcome?.result, ...(commandId === "legacy-command" ? {} : { deferredProjections, ...(durableProjection ? { durableProjection } : {}), projectionExpected: deferredProjections.length > 0 }) };
-      this.activeCommand = { name, controller, deferredProjections, context };
+      this.activeCommand = { name, controller, deferredProjections, context, settled };
       try {
         let result = IssueWorkflowStateSchema.parse(await runExecution.run(context, () => handler(input as never)));
         if (this.loopError) throw this.loopError;
@@ -431,13 +473,14 @@ export class IssueRun {
             if (authority) this.updateCommandAuthority(context, authority);
           }
           await this.replayDurableProjections(committedProjections, context);
-          if (context.acceptedInterrupt) this.finishInterrupt();
         }
+        if (context.acceptedInterrupt) this.finishInterrupt();
         this.initialState = result;
         this.wakeable.wake();
         return result;
       } finally {
         if (this.activeCommand?.controller === controller) this.activeCommand = undefined;
+        finishCommand();
       }
     });
     if (interruptKey) {
@@ -498,6 +541,7 @@ export class IssueEngine {
     const projectionExists = this.database.authQuery((db) => Boolean(db.prepare("SELECT 1 FROM forge_issue_projections WHERE workflow_id = ?").get(workflowId)));
     if (!projectionExists && input.continuationState) {
       const state = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState(input), ...(input.continuationState ?? {}) });
+      if (state.revision !== 0) throw new ProjectionPersistenceFailure("not-durable", "Issue continuation has no exact persisted projection authority");
       this.database.bootstrapIssueProjection({ schemaVersion: 1, runId: `${workflowId}:snapshot-bootstrap`, eventId: state.lastEventId, state });
     }
     const run = new IssueRun(input, this.database, this.caller, this.clock, undefined, (failed) => this.invalidateRun(failed));

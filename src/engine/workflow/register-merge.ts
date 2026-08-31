@@ -1,4 +1,4 @@
-import { setHandler, sleep } from "../registry.js";
+import { isCancellation, setHandler, sleep } from "../registry.js";
 import * as contracts from "../issue-contracts.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
@@ -23,6 +23,7 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
       if (true && ctx.state.releaseRepository && ctx.state.branchName) await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
       result = await activityProxies.reconcileMerge({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, acceptanceId: ctx.state.acceptanceId });
     } catch (error) {
+      if (isCancellation(error)) throw error;
       const failure = ctx.permanentActivityFailure(error, true);
       if (true && failure && ["login-expired", "unauthenticated"].includes(failure.code)) {
         ctx.state = stateTransitions.credentialBlockedState(ctx.state, "reconcile_merge", stateTransitions.evidencePointer(failure.evidenceArtifactId, "attention-evidence"));
@@ -125,7 +126,8 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
         const productDecision = true && plan.disposition === "product_decision";
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: productDecision ? "human" : "lead", allowedCommands: productDecision ? ["send_planner_note", "resolve_merge_conflict", "cancel_issue"] : ["resolve_merge_conflict", "cancel_issue"], pendingAction: productDecision ? plan.question! : "Resolving the conflict", blocker: productDecision ? stateTransitions.humanBlocker("member_decision", plan.question!, [{ command: "send_planner_note", label: "Choose a behavior", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(plan.planArtifactId, "merge-conflict-plan")) : null, mergeDecision: productDecision ? { question: plan.question!, choices: plan.choices!, recommendedChoiceId: plan.recommendedChoiceId! } : null, mergeResolutionPlanId: productDecision ? null : plan.planId, mergeResolutionPlanArtifactId: productDecision ? null : plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       });
-    } catch {
+    } catch (error) {
+      if (isCancellation(error)) throw error;
       return block("Forge could not prepare a conflict plan");
     }
   }
@@ -177,7 +179,8 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
         ctx.state = applyTargetBaseRevalidation(ctx.state, { outcome: "revalidated", checkId: prior.forwardMergeId, checkpoint: ctx.state.targetBaseCheckpoint ?? "pre_release", expectedBaseSha: prior.expectedBaseSha, observedBaseSha: prior.targetBaseSha, priorHead: prior.priorHead, priorTree: prior.priorTree, headSha: successfulResult.resultCommit, headTree: successfulResult.resultTree, developerExecutionId: successfulResult.developerExecutionId, deliveryArtifact: { id: successfulResult.deliveryArtifactId, kind: "forward-merge-delivery" }, verificationArtifact: { id: successfulResult.verificationArtifactId, kind: "forward-merge-verification" }, developerEvidenceArtifactId: successfulResult.evidenceArtifactId });
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, worktreePath: successfulResult.worktreePath ?? ctx.state.worktreePath, developerSessionRef: successfulResult.developerSessionRef, deliverySummary: successfulResult.summary, developerEvidenceArtifactId: successfulResult.evidenceArtifactId, mergeResolutionDeveloperExecutionId: successfulResult.developerExecutionId, mergeResolutionDeveloperSessionRef: successfulResult.developerSessionRef, ...ctx.recoveryFields("active", null, "Developer merge-conflict result claimed.", null), activeOperation: null });
       });
-    } catch {
+    } catch (error) {
+      if (isCancellation(error)) throw error;
       await ctx.withStateMutation(() => {
         if (ctx.state.activeOperation?.commandId !== command.commandId) return;
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Builder didn't finish resolving conflicts — retry", activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });

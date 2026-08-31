@@ -10,8 +10,12 @@ export function applyTargetBaseNoDrift(state: IssueWorkflowState, result: Extrac
       : result.checkpoint === "pre_final_review"
         ? { phase: "final_review" as const, owner: "lead" as const, allowedCommands: ["final_review", "cancel_issue"] as const, pendingAction: "Final Lead review" }
         : { phase: "accepted" as const, owner: "human" as const, allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"] as const, pendingAction: "Member acceptance required" };
-  const resumedRevision = state.phase === "delivery_blocked" ? { revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` } : {};
-  return IssueWorkflowStateSchema.parse({ ...state, ...resumed, ...resumedRevision, targetBaseCheckId: result.checkId, targetBaseCheckpoint: result.checkpoint, targetBaseOutcome: result.outcome, targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null });
+  const changed = state.phase === "delivery_blocked"
+    || state.targetBaseCheckId !== result.checkId
+    || state.targetBaseCheckpoint !== result.checkpoint
+    || state.targetBaseOutcome !== result.outcome;
+  const revision = changed ? { revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` } : {};
+  return IssueWorkflowStateSchema.parse({ ...state, ...resumed, ...revision, targetBaseCheckId: result.checkId, targetBaseCheckpoint: result.checkpoint, targetBaseOutcome: result.outcome, targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null });
 }
 
 export function applyTargetBaseRevalidation(

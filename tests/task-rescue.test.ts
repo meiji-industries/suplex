@@ -87,7 +87,7 @@ test("rescue resyncs the live workflow projection before retrying its allowed co
   }
 });
 
-test("rescue stops after typed Developer reconciliation reaches delivery ready", async () => {
+test("rescue continues to the next retry after Developer reconciliation reaches delivery ready", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-task-rescue-reconcile-"));
   const config = createTestConfig(root);
   const database = new ForgeDatabase(config.databasePath);
@@ -100,16 +100,24 @@ test("rescue stops after typed Developer reconciliation reaches delivery ready",
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-rescue', 'company-rescue', 'task-brief', 'task.md', 'text/markdown', 1, ?, 'brief-rescue', ?)").run("a".repeat(64), now);
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES ('task-rescue', 'company-rescue', 'project-rescue', 'Rescue', 'brief-rescue', '[]', '{}', 0, 'workflow-rescue', 'revision-rescue', 'rescue-key', ?, ?, ?)").run("b".repeat(64), now, now);
     });
+    for (let revision = 0; revision < 25; revision += 1) {
+      const projected = state(revision);
+      database.projectIssueState({ taskId: projected.issueId, companyId: projected.companyId, projectId: projected.projectId, workflowId: projected.workflowId, revision: projected.revision, phase: projected.phase, owner: projected.owner, allowedCommands: projected.allowedCommands, pendingAction: projected.pendingAction, lastEventId: projected.lastEventId, state: projected });
+    }
     const live = state(25);
-    connectEngine.mockResolvedValue({ connection: { close: vi.fn() }, client: { workflow: { getHandle: vi.fn().mockReturnValue({ query: vi.fn().mockResolvedValue(live), describe: vi.fn().mockResolvedValue({ runId: "run" }) }) } } });
+    const settled = { ...live, revision: 26, phase: "delivery_blocked" as const, allowedCommands: ["retry_target_base_reconciliation" as const], pendingAction: "Retry target-base reconciliation", lastEventId: "workflow-rescue:26" };
+    const query = vi.fn().mockResolvedValueOnce(live).mockResolvedValue(settled);
+    connectEngine.mockResolvedValue({ connection: { close: vi.fn() }, client: { workflow: { getHandle: vi.fn().mockReturnValue({ query, describe: vi.fn().mockResolvedValue({ runId: "run" }) }) } } });
     reconcileIssueDeveloperDelivery.mockResolvedValue({ ...live, phase: "delivery_ready" });
-    const tasks = { getTask: vi.fn().mockImplementation(() => ({ id: "task-rescue", companyId: "company-rescue", workflowId: "workflow-rescue", revision: 25, phase: "delivery_blocked", allowedCommands: ["retry_development"] })), executeCommand: vi.fn() };
+    const tasks = { getTask: vi.fn().mockImplementation(() => {
+      const projected = database.authQuery((db) => db.prepare("SELECT revision, phase, allowed_commands_json FROM forge_issue_projections WHERE task_id = 'task-rescue'").get() as { revision: number; phase: string; allowed_commands_json: string } | undefined);
+      return { id: "task-rescue", companyId: "company-rescue", workflowId: "workflow-rescue", revision: projected?.revision ?? 25, phase: projected?.phase ?? "delivery_blocked", allowedCommands: projected ? jsonRequired(projected.allowed_commands_json) : ["retry_development"] };
+    }), executeCommand: vi.fn().mockResolvedValue(undefined) };
     const result = await new TaskRescueService(tasks as never, database, config).rescue("admin", "task-rescue");
     expect(result.steps).toContainEqual(expect.objectContaining({ name: "Reconcile Developer delivery", outcome: "completed" }));
-    expect(result.steps).not.toContainEqual(expect.objectContaining({ name: "Re-dispatch workflow" }));
-    expect(result.steps).not.toContainEqual(expect.objectContaining({ name: "Release stale bookkeeping" }));
-    expect(result.steps).not.toContainEqual(expect.objectContaining({ name: "Retry current step" }));
-    expect(tasks.executeCommand).not.toHaveBeenCalled();
+    expect(result.steps).toContainEqual({ name: "Continue rescue", outcome: "completed", detail: "Continued from delivery_blocked at revision 26." });
+    expect(result.steps).toContainEqual({ name: "Retry current step", outcome: "completed", detail: "Issued retry_target_base_reconciliation." });
+    expect(tasks.executeCommand).toHaveBeenCalledWith("admin", "task-rescue", "retry_target_base_reconciliation", expect.objectContaining({ expectedRevision: 26 }));
   } finally { database.close(); await rm(root, { recursive: true, force: true }); }
 });
 

@@ -81,9 +81,9 @@ export function reviewingDeliveryState(state: IssueWorkflowState): IssueWorkflow
   return revisioned(state, "reviewing_delivery", "lead", [], "Lead delivery review");
 }
 
-export function reviewBlockedState(state: IssueWorkflowState, result: { attemptId: string | null; code: DeliveryWorkflowBlockCode; summary: string; evidenceArtifactId: string | null }, infrastructure = false): IssueWorkflowState {
+export function reviewBlockedState(state: IssueWorkflowState, result: { attemptId: string | null; code: DeliveryWorkflowBlockCode; summary: string; evidenceArtifactId: string | null }, _infrastructure = false): IssueWorkflowState {
   return IssueWorkflowStateSchema.parse({
-    ...revisioned(state, "delivery_blocked", "human", ["review_delivery", "cancel_issue"], infrastructure ? "Delivery review infrastructure failed; retry the review" : "Delivery review blocked; retry the review or cancel"),
+    ...revisioned(state, "delivery_blocked", "human", ["review_delivery", "cancel_issue"], result.summary),
     deliveryReviewAttemptId: result.attemptId,
     deliveryReviewId: null,
     deliveryReviewOutcome: null,

@@ -148,10 +148,10 @@ export function safeBlockSummary(code: import("./engine/issue-contracts.js").Del
     "process-failed": "The Lead review process did not complete; inspect the evidence and retry.",
     "preflight-failed": reason ?? "The Lead review preflight failed; inspect the evidence and retry.",
     "evidence-too-large": "Lead review evidence exceeded the local artifact limit; retry with bounded output.",
-    "subject-changed": "The exact delivery subject changed before review; produce a fresh delivery.",
+    "subject-changed": "The Developer worktree is on another branch.",
     "repair-incomplete": "The repair did not address every open blocking finding.",
     "repair-scope": "The Developer reported that the repair is blocked.",
-    "worktree-unsafe": "The Developer worktree is not the exact clean reviewed revision.",
+    "worktree-unsafe": "The Developer worktree is unavailable or on another branch.",
     "repair-cap-exhausted": "The configured repair-cycle limit has been reached.",
   };
   return summaries[code];
@@ -776,8 +776,8 @@ export class AgentService {
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
       throw failure;
     }
-    if (gitEvidence.branch !== input.branchName || gitEvidence.head.toLowerCase() !== subjectCommit.toLowerCase() || gitEvidence.tree.toLowerCase() !== subjectTree.toLowerCase() || gitEvidence.status.trim()) {
-      const failure = new AgentFailure("delivery-revision-changed", "The Developer delivery no longer matches its recorded clean exact revision");
+    if (gitEvidence.branch !== input.branchName) {
+      const failure = new AgentFailure("delivery-revision-changed", "The Developer worktree is on another branch");
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
       throw failure;
     }

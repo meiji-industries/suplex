@@ -101,6 +101,7 @@ test("delivery workflow constructors keep blockers retryable and approvals exact
   expect(reviewing).toMatchObject({ phase: "reviewing_delivery", owner: "lead", allowedCommands: ["cancel_issue"] });
 
   const blocked = reviewBlockedState(reviewing, { attemptId: "review_attempt_1", code: "process-failed", summary: "The review process did not complete.", evidenceArtifactId: "artifact_review_evidence" });
+  expect(blocked.pendingAction).toBe("The review process did not complete.");
   expect(blocked).toMatchObject({ phase: "delivery_blocked", owner: "human", allowedCommands: ["review_delivery", "cancel_issue"], deliveryReviewBlockerCode: "process-failed", deliveryReviewAttemptId: "review_attempt_1" });
 
   const blocking = DeliveryReviewActivityResultSchema.parse({ outcome: "completed", attemptId: "review_attempt_2", correctionAttempts: 1, subject, review: { reviewId: "review_1", leadExecutionId: "agent_review_1", leadSessionRef: subject.leadSessionRef, opinionArtifactId: "artifact_opinion", evidenceArtifactId: "artifact_review_evidence", opinion: "blocking", summary: "A repair is required.", repairPlan: "Fix the controlled defect.", findings: [blockingFinding], supersedesReviewId: null } });

@@ -23,10 +23,11 @@ import { ACTIVE_INVOCATION_STATUSES, TaskStatus, TaskStatusIcon, taskPresentatio
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { invalidateTaskList, readTaskList, subscribeTaskListInvalidations } from ".././lib/task-list.js";
 import { navigate } from ".././lib/navigation.js";
-import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES as blockedTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
-import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, FileText, Filter, FolderKanban, Layers3, ListFilter, Plus } from "lucide-react";
+import { taskListGroups, type TaskListFilter } from "../lib/task-list-groups.js";
+import { ACTIVE_PHASES as activeTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
+import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, CircleDotDashed, CircleSlash, CircleX, Ellipsis, FileText, Filter, FolderKanban, Layers3, ListFilter, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type ReactElement } from "react";
-import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiCompanyBranchSync, type ApiProject, type ApiTask, type ApiTaskSummary, type ApiTaskTemplate, type TaskPhase } from "../lib/view-shared.js";
+import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiCompanyBranchSync, type ApiProject, type ApiTask, type ApiTaskSummary, type ApiTaskTemplate } from "../lib/view-shared.js";
 import { TaskDetailsPage, TaskDetailsNotFound, TaskDetailsSkeleton, type PlanRevisionInput, type TaskPlanAction } from "./task-details.js";
 import { prefillForTaskSource, preserveEditedPrefill, TaskSourcePicker, type TaskSourceSelector, type TaskSourceSummary } from "../components/app/task-source-picker.js";
 import { TaskRoleSelectors } from "../components/app/task-role-selectors.js";
@@ -44,8 +45,6 @@ async function fileAsImage(file: File): Promise<{ filename: string; mimeType: st
     reader.readAsDataURL(file);
   });
 }
-
-type TaskListFilter = "active" | "backlog" | "all" | "archived";
 
 function taskListDate(timestamp: string): string {
   const date = new Date(timestamp);
@@ -309,12 +308,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   };
   const activeCount = visibleTasks.filter((task) => activeTaskPhases.has(task.phase)).length;
   const backlogCount = visibleTasks.filter((task) => task.phase === "backlog").length;
-  const taskGroups = [
-    { id: "active", title: "In progress", phases: activeTaskPhases, tasks: visibleTasks.filter((task) => activeTaskPhases.has(task.phase)) },
-    { id: "backlog", title: "Backlog", phases: new Set<TaskPhase>(["backlog"]), tasks: visibleTasks.filter((task) => task.phase === "backlog") },
-    { id: "blocked", title: "Blocked", phases: blockedTaskPhases, tasks: visibleTasks.filter((task) => blockedTaskPhases.has(task.phase)) },
-    { id: "completed", title: "Completed", phases: new Set<TaskPhase>(["done", "cancelled"]), tasks: visibleTasks.filter((task) => task.phase === "done" || task.phase === "cancelled") },
-  ].filter((group) => taskFilter === "all" || taskFilter === "archived" ? group.tasks.length > 0 : group.id === taskFilter).map((group) => ({ ...group, tasks: [...group.tasks].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)) }));
+  const taskGroups = taskListGroups(visibleTasks, taskFilter);
   const selectTask = (task: ApiTaskSummary): void => { setSelected(undefined); selectedRef.current = undefined; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`${routeBase}/${encodeURIComponent(task.id)}`, companyId)); window.dispatchEvent(new Event("forge:navigate")); };
   const addImages = async (files: File[]): Promise<void> => {
     setCreateError("");
@@ -591,8 +585,8 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
         {scopeLoaded && taskGroups.length === 0 ? <div className="px-4 py-8 text-xs text-muted-foreground">{taskFilter === "active" ? "No active tasks." : taskFilter === "backlog" ? "No backlog tasks." : taskFilter === "archived" ? "No archived tasks." : "No tasks yet. Press ⌘N to create one."}</div> : null}
         {scopeLoaded ? <div aria-label="Task groups" className="py-1">
           {taskGroups.map((group) => {
-            const GroupIcon = group.id === "completed" ? CheckCircle2 : group.id === "blocked" ? CircleX : group.id === "active" ? CircleDotDashed : CircleDashed;
-            const groupIconClass = group.id === "completed" ? "text-emerald-500" : group.id === "blocked" ? "text-rose-500" : group.id === "active" ? "text-amber-500" : "text-muted-foreground";
+            const GroupIcon = group.id === "completed" ? CheckCircle2 : group.id === "cancelled" ? CircleSlash : group.id === "blocked" ? CircleX : group.id === "active" ? CircleDotDashed : CircleDashed;
+            const groupIconClass = group.id === "completed" ? "text-emerald-500" : group.id === "cancelled" ? "text-muted-foreground" : group.id === "blocked" ? "text-rose-500" : group.id === "active" ? "text-amber-500" : "text-muted-foreground";
             return (
               <Collapsible.Root key={group.id} defaultOpen className="group/task-group pt-1">
                 <Collapsible.Trigger className="mx-2 flex h-9 w-[calc(100%-1rem)] items-center gap-2 rounded-md bg-muted/60 px-2 text-left text-xs outline-none transition-colors hover:bg-muted/80 focus-visible:ring-1 focus-visible:ring-ring/50">

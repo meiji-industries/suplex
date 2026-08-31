@@ -79,6 +79,13 @@ interface ForwardMergeInput {
 export class ForwardMergeService {
   constructor(private readonly database?: ForgeDatabase, private readonly provider?: ForwardMergeProvider, private readonly artifacts?: ArtifactStore) {}
 
+  async observeCleanTaskBranch(input: Pick<ForwardMergeInput, "worktreePath" | "repositoryPath" | "branchName">): Promise<{ headSha: string; treeSha: string }> {
+    const ownership = await this.inspectOwnership(input);
+    const status = await this.git(["status", "--porcelain=v1", "--untracked-files=all"], input.worktreePath);
+    if (status) throw new ForwardMergeFailure("merge-state-ownership-mismatch");
+    return ownership;
+  }
+
   async reconcile(input: ForwardMergeInput): Promise<ForwardMergeResult> {
     this.validateInput(input);
     const observedBaseSha = input.currentBaseSha ?? await this.observeBase(input);
@@ -165,7 +172,7 @@ export class ForwardMergeService {
       FROM forge_forward_merges
       WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND project_revision_id = ? AND checkpoint = ?`).get(input.forwardMergeId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId, input.checkpoint) as { id: string; status: string; expectedBaseSha: string; targetBaseSha: string; priorHead: string; priorTree: string | null; mergeCommit: string | null; tree: string | null; resultHead: string | null; resultTree: string | null; developerExecutionId: string | null } | undefined);
     if (!stored || stored.status !== "merged" || !stored.priorTree || !stored.mergeCommit || !stored.tree || !stored.resultHead || !stored.resultTree) throw new ForwardMergeFailure("merge-state-ownership-mismatch");
-    await this.inspectOwnership({ worktreePath: input.worktreePath, repositoryPath: input.repositoryPath, branchName: input.branchName, expectedBaseSha: input.expectedBaseSha, expectedHeadSha: input.expectedHeadSha, expectedHeadTree: input.expectedHeadTree });
+    await this.inspectOwnership({ worktreePath: input.worktreePath, repositoryPath: input.repositoryPath, branchName: input.branchName });
     await this.assertMergedOwnership({ worktreePath: input.worktreePath, branchName: input.branchName, priorHead: stored.priorHead, targetBaseSha: stored.targetBaseSha, mergeCommit: stored.mergeCommit, tree: stored.tree });
     return { status: "merged", priorHead: stored.priorHead, priorTree: stored.priorTree, targetBaseSha: stored.targetBaseSha, mergeCommit: stored.mergeCommit, tree: stored.tree, conflictFiles: [], forwardMergeId: stored.id };
   }
@@ -176,7 +183,7 @@ export class ForwardMergeService {
     if (input.repository !== undefined && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(input.repository)) throw new ForwardMergeFailure("remote-identity-mismatch");
   }
 
-  private async inspectOwnership(input: ForwardMergeInput): Promise<{ headSha: string; treeSha: string }> {
+  private async inspectOwnership(input: Pick<ForwardMergeInput, "worktreePath" | "repositoryPath" | "branchName">): Promise<{ headSha: string; treeSha: string }> {
     try {
       const worktree = await realpath(input.worktreePath);
       const repository = await realpath(input.repositoryPath);

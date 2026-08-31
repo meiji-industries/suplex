@@ -76,6 +76,27 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
       let pinned: ReturnType<typeof loadTaskConfiguration>;
       try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { return blocked("artifact_unavailable", "human", false, "The task project configuration is unavailable or incomplete"); }
       const service = new ForwardMergeService(database, githubRelease, artifacts);
+      const adoptObservedTaskBranch = async (): Promise<ReconcileTargetBaseActivityResult | undefined> => {
+        const priorHead = context.resultCommit!;
+        const priorTree = context.resultTree!;
+        const observed = await service.observeCleanTaskBranch({ worktreePath: context.worktreePath, repositoryPath: pinned.repositoryPath, branchName: context.branchName });
+        if (sameRevision(observed.headSha, priorHead) && sameRevision(observed.treeSha, priorTree)) return undefined;
+        const guard = await createGitCommandGuard(config.runtimeRoot);
+        try {
+          const verification = await runPinnedVerification({ taskId: input.taskId, stepId: checkId, worktreePath: context.worktreePath, setupCommand: pinned.setupCommand, verificationCommand: pinned.verificationCommand, runtimeRoot: config.runtimeRoot }, { guard });
+          const verificationArtifact = await artifacts.putArtifact(input.companyId, "forward-merge-verification", { filename: `${checkId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(verification), "utf8") });
+          if (verification.outcome !== "passed") {
+            return blocked(verification.code === "verification_timed_out" ? "verification_timed_out" : verification.code === "verification_evidence_too_large" ? "verification_evidence_too_large" : "verification_failed", "lead", true, verification.summary, artifactReference(verificationArtifact), { observedBaseSha: input.expectedBaseSha, priorHead, priorTree, resultHead: observed.headSha, resultTree: observed.treeSha });
+          }
+          const deliveryArtifact = await artifacts.putArtifact(input.companyId, "forward-merge-delivery", { filename: `${checkId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, kind: "observed-task-branch", summary: "Observed clean task branch adopted; prior delivery evidence is diagnostic only", priorHead, priorTree, resultCommit: observed.headSha, resultTree: observed.treeSha, developerExecutionId: context.developerExecutionId, verificationArtifactId: verificationArtifact.id }, null, 2), "utf8") });
+          const adopted = database.authTransaction((db) => db.prepare(`UPDATE forge_developer_executions
+              SET status = 'completed', result_commit = ?, result_tree = ?, dirty_state = 'clean', delivery_artifact_id = ?, evidence_artifact_id = ?
+              WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?
+                AND status IN ('completed', 'blocked') AND lower(result_commit) = lower(?) AND lower(result_tree) = lower(?)`).run(observed.headSha, observed.treeSha, deliveryArtifact.id, verificationArtifact.id, context.developerExecutionId, input.taskId, input.companyId, input.workflowId, priorHead, priorTree).changes);
+          if (adopted !== 1) return undefined;
+          return { outcome: "revalidated", checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: input.expectedBaseSha, priorHead, priorTree, headSha: observed.headSha, headTree: observed.treeSha, developerExecutionId: context.developerExecutionId, deliveryArtifact: artifactReference({ id: deliveryArtifact.id, kind: "forward-merge-delivery" }), verificationArtifact: artifactReference({ id: verificationArtifact.id, kind: "forward-merge-verification" }) };
+        } finally { await guard.cleanup(); }
+      };
       let merge;
       try {
         if (input.verificationOnly) {
@@ -85,6 +106,15 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           merge = await service.reconcile({ worktreePath: context.worktreePath, repositoryPath: pinned.repositoryPath, branchName: context.branchName, expectedBaseSha: input.expectedBaseSha, expectedHeadSha: input.expectedHeadSha, expectedHeadTree: input.expectedHeadTree, repository: pinned.repository, baseBranch: pinned.baseBranch, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: pinned.artifactId, checkpoint: input.checkpoint, developerExecutionId, ...(input.releaseId ? { releaseId: input.releaseId } : {}), ...(input.deliveryReviewId ? { deliveryReviewId: input.deliveryReviewId } : {}), ...(input.ciRunId ? { ciRunId: input.ciRunId } : {}), ...(input.finalReviewId ? { finalReviewId: input.finalReviewId } : {}), ...(input.acceptanceId ? { acceptanceId: input.acceptanceId } : {}) });
         }
       } catch (error) {
+        if (error instanceof ForwardMergeFailure && error.code === "merge-state-ownership-mismatch") {
+          try {
+            const adopted = await adoptObservedTaskBranch();
+            if (adopted) return adopted;
+          } catch (adoptionError) {
+            const failure = reconcileBlocker(adoptionError);
+            return blocked(failure.code, failure.owner, failure.retryable, failure.summary);
+          }
+        }
         const failure = reconcileBlocker(error);
         return blocked(failure.code, failure.owner, failure.retryable, failure.summary);
       }
@@ -192,6 +222,15 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           reusedVerificationArtifact = { id: mergedVerificationArtifact.id, kind: "forward-merge-verification", ...(verificationSha ? { sha256: verificationSha } : {}) };
           if (lineage.kind !== "transitive" && !adoptStoredDelivery({ developerExecutionId: lineage.developer.id, priorHead: lineage.current.priorHead, priorTree: lineage.current.priorTree, resultHead: lineage.current.resultHead, resultTree: lineage.current.resultTree })) {
             return blocked("merge_state_ownership_mismatch", "human", false, "The completed Developer revision does not match the recorded forward merge", undefined, coordinates, mergedDelivery.id);
+          }
+        }
+        if (!provedDelivery) {
+          try {
+            const adopted = await adoptObservedTaskBranch();
+            if (adopted) return adopted;
+          } catch (error) {
+            const failure = reconcileBlocker(error);
+            return blocked(failure.code, failure.owner, failure.retryable, failure.summary);
           }
         }
         return { outcome: "no_drift", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree, ...(provedDelivery && reusedDeliveryArtifact && reusedVerificationArtifact ? { developerExecutionId: provedDelivery.mergedDelivery.developerExecutionId!, deliveryArtifact: artifactReference(reusedDeliveryArtifact), verificationArtifact: artifactReference(reusedVerificationArtifact) } : {}) };

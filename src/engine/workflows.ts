@@ -131,7 +131,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         releaseId: published ? state.releaseId : null, pullRequestNumber: published ? state.pullRequestNumber : null, pullRequestUrl: published ? state.pullRequestUrl : null, deliveryDecisionArtifactId: null, ciRunId: null, ciAttempt: 0, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, acceptedHeadSha: null, mergeOutcome: null, expectedHeadSha: result.resultHead, expectedHeadTree: result.resultTree, ...recoveryFields(null, null, null, null) });
       return;
     }
-    const allowedCommands = [verification ? "retry_forward_merge_verification" : "retry_target_base_reconciliation", "cancel_issue"] as const;
+    const allowedCommands = (result.retryable ? [verification ? "retry_forward_merge_verification" : "retry_target_base_reconciliation", "cancel_issue"] : ["cancel_issue"]) as IssueCommand[];
     state = IssueWorkflowStateSchema.parse({
       ...state,
       blocker: null,

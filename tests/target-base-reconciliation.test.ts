@@ -209,6 +209,29 @@ describe("target-base reconciliation contracts", () => {
     }
   });
 
+  test("adopts a clean externally advanced task branch instead of requiring recorded merge ownership", async () => {
+    const fixture = await targetBaseActivityFixture("forge-target-base-external-head-");
+    try {
+      const { mergedHead, mergedTree } = await mergeTargetBase(fixture);
+      await fixture.run("git", ["commit", "--allow-empty", "-m", "external task branch advance"], { cwd: fixture.repositoryPath });
+      const observedHead = (await fixture.run("git", ["rev-parse", "HEAD"], { cwd: fixture.repositoryPath })).stdout.trim();
+      const observedTree = (await fixture.run("git", ["rev-parse", "HEAD^{tree}"], { cwd: fixture.repositoryPath })).stdout.trim();
+      fixture.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-current', 'task-1', 'company-1', 'workflow-1', 1, 1, 'blocked', 'issue/task-1', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?, ?)").run(fixture.repositoryPath, fixture.repository.base, fixture.now, fixture.now, fixture.repository.head, fixture.priorTree, fixture.delivery.id, fixture.evidence.id);
+        db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, result_head, result_tree, developer_execution_id, updated_at) VALUES ('merge-old', 'task-1', 'company-1', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow-1', ?, 'pre_release', ?, ?, ?, ?, 'developer-current', ?)").run(fixture.repository.base, fixture.targetBase, fixture.repository.head, mergedHead, mergedTree, fixture.now, fixture.configuration.id, `workflow-1:pre_release:${fixture.configuration.id}:${fixture.repository.base}:${fixture.targetBase}:${fixture.repository.head}`, fixture.priorTree, mergedHead, mergedTree, fixture.now);
+      });
+      const activities = createActivities(fixture.database, fixture.config, { githubRelease: {
+        async getRemoteRepository() { return "acme/project"; },
+        async getBranchHead() { return fixture.targetBase; },
+      } as never });
+
+      await expect(activities.reconcileTargetBase({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: fixture.configuration.id, checkpoint: "pre_release", developerExecutionId: "developer-current", expectedBaseSha: fixture.repository.base, expectedHeadSha: fixture.repository.head, expectedHeadTree: fixture.priorTree })).resolves.toMatchObject({ outcome: "revalidated", headSha: observedHead, headTree: observedTree, developerExecutionId: "developer-current" });
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = 'developer-current'").get())).toEqual({ resultCommit: observedHead, resultTree: observedTree });
+    } finally {
+      await closeTargetBaseActivityFixture(fixture);
+    }
+  });
+
   test("ignores a stale input forward-merge id during ordinary reconciliation", async () => {
     const fixture = await targetBaseActivityFixture("forge-target-base-stale-input-");
     try {

@@ -19,7 +19,7 @@ const staleBase = "1".repeat(40);
 const staleHead = "2".repeat(40);
 const priorTree = "3".repeat(40);
 
-function workflowInput(issueId: string, continuationState: IssueWorkflowState, deliveryTarget: "local_worktree" | "pull_request_draft" = "pull_request_draft"): Omit<IssueWorkflowInput, "workflowId"> {
+function workflowInput(issueId: string, continuationState: IssueWorkflowState, deliveryTarget: "local_worktree" | "remote_branch" | "pull_request_draft" = "pull_request_draft"): Omit<IssueWorkflowInput, "workflowId"> {
   return {
     companyId: engineFixture.companyId,
     projectId: engineFixture.projectId,

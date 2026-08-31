@@ -40,11 +40,12 @@ import { requestTaskArchive } from "../lib/archive-task.js";
 import { invalidateTaskList } from "../lib/task-list.js";
 import { navigate } from "../lib/navigation.js";
 import { materialityCriteria, materialityMode } from "../lib/plan-materiality.js";
+import { FORGE_REPOSITORY, type TaskDiagnostics } from "../lib/fix-task-prefill.js";
 import type { IssueCommandSlug } from "../../commands/registry.js";
 import { BLOCKED_PHASES, TERMINAL_PHASES, phaseLabel } from "../../issue-phases.js";
 import { releaseFailureCopy } from "../../release-failures.js";
 import type { ActivityFeedRow } from "../lib/task-activity-feed.js";
-import { Archive, ArchiveRestore, Check, Circle, Ellipsis, GitPullRequest, RefreshCw } from "lucide-react";
+import { Archive, ArchiveRestore, Check, Circle, Ellipsis, GitPullRequest, RefreshCw, Wrench } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 const DeveloperDiff = lazy(async () => await import("../components/app/developer-diff.js"));
@@ -422,13 +423,12 @@ function TaskOptions({ canArchive, canCancel, archived, busy, resyncBusy, onArch
 }
 
 type RescueReport = { steps: Array<{ name: string; outcome: "completed" | "skipped" | "failed"; detail: string }> };
-type Diagnostics = { workflow: { status: string; lastWorkflowTaskFailure: string | null; pendingWorkflowTaskAgeSeconds: number | null; buildId: string | null; currentBuildId: string | null }; executions: Array<{ id: string; kind: string; status: string; pid: number | null; terminal: boolean }>; capacityRequests: Array<{ id: string; status: string; executionId: string | null }>; leases: Array<{ executionId: string; status: string }> };
 
 function RescueControls({ task, busy, onRescue }: { task: ApiTask; busy: boolean; onRescue: () => Promise<RescueReport> }): ReactElement | null {
-  const [confirmOpen, setConfirmOpen] = useState(false); const [report, setReport] = useState<RescueReport | null>(null); const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null); const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false); const [report, setReport] = useState<RescueReport | null>(null); const [diagnostics, setDiagnostics] = useState<TaskDiagnostics | null>(null); const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   if (["done", "cancelled"].includes(task.phase)) return null;
   const run = async (): Promise<void> => { setConfirmOpen(false); setReport(await onRescue()); };
-  const loadDiagnostics = (): void => { setDiagnosticsOpen((open) => !open); if (!diagnostics) void readJson<Diagnostics>(`/api/tasks/${encodeURIComponent(task.id)}/diagnostics`).then(setDiagnostics).catch(() => setDiagnostics(null)); };
+  const loadDiagnostics = (): void => { setDiagnosticsOpen((open) => !open); if (!diagnostics) void readJson<TaskDiagnostics>(`/api/tasks/${encodeURIComponent(task.id)}/diagnostics`).then(setDiagnostics).catch(() => setDiagnostics(null)); };
   return <Card data-task-rescue size="sm" aria-label="Task recovery">
     <CardHeader>
       <CardTitle><h3>Task recovery</h3></CardTitle>
@@ -440,6 +440,21 @@ function RescueControls({ task, busy, onRescue }: { task: ApiTask; busy: boolean
     </CardContent> : null}
     <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Rescue this task?</AlertDialogTitle><AlertDialogDescription>Forge will re-dispatch the workflow to the current worker, release stale locks, and retry the current step.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => void run()}>Rescue task</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
   </Card>;
+}
+
+function FixInNewTaskAction({ busy, onCreate }: { busy: boolean; onCreate?: (() => Promise<void>) | undefined }): ReactElement {
+  const [preparing, setPreparing] = useState(false);
+  const prepare = async (): Promise<void> => {
+    if (!onCreate) return;
+    setPreparing(true);
+    try { await onCreate(); }
+    catch { /* The parent surfaces preparation failures in the task view. */ }
+    finally { setPreparing(false); }
+  };
+  return <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-4" data-fix-in-new-task>
+    <p className="text-xs text-muted-foreground">Use this task's current diagnostics to prepare a Forge fix.</p>
+    <Button type="button" size="sm" variant="outline" disabled={busy || preparing || !onCreate} title={onCreate ? "Prepare a Forge fix task" : `Requires an active forge project for ${FORGE_REPOSITORY}.`} onClick={() => void prepare()}><Wrench />{preparing ? "Preparing…" : "Fix in a new task"}</Button>
+  </div>;
 }
 
 function PlanningRunCard({ task }: { task: ApiTask }): ReactElement | null {
@@ -552,7 +567,7 @@ function TaskPromptProvenanceRow({ taskId, overrides }: { taskId: string; overri
   </Collapsible.Root>;
 }
 
-export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onMerge: _onMerge, onDuplicate, onSaveTemplate = async () => {}, onUpdateDetails, onRefresh, onRescue, returnTo = "tasks" }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onMerge: () => Promise<void>; onDuplicate: () => Promise<void>; onSaveTemplate?: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport>; returnTo?: "tasks" | "board" }): ReactElement {
+export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onMerge: _onMerge, onDuplicate, onFixInNewTask, onSaveTemplate = async () => {}, onUpdateDetails, onRefresh, onRescue, returnTo = "tasks" }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onMerge: () => Promise<void>; onDuplicate: () => Promise<void>; onFixInNewTask?: () => Promise<void>; onSaveTemplate?: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport>; returnTo?: "tasks" | "board" }): ReactElement {
   const [syncing, setSyncing] = useState(false);
   const observedAtRef = useRef(task.githubPullRequest?.observedAt ?? null);
   observedAtRef.current = task.githubPullRequest?.observedAt ?? null;
@@ -704,6 +719,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                   </TabsContent>
                 </Tabs>
                 <RescueControls task={task} busy={busy} onRescue={onRescue} />
+                <FixInNewTaskAction busy={busy} onCreate={onFixInNewTask} />
               </div>
             </div>
           </div>

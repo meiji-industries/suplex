@@ -34,6 +34,7 @@ import { taskDeliveryTargetOptions } from "../components/app/task-delivery-targe
 import { newTaskFormSettings, readNewTaskMemory, resolveNewTaskProjectId, writeNewTaskMemory, type NewTaskMemory } from "../components/app/new-task-memory.js";
 import { newTaskImageError } from "../components/app/new-task-images.js";
 import { duplicateTaskDraft } from "../lib/duplicate-task-prefill.js";
+import { findForgeProject, fixTaskDraft, type TaskDiagnostics } from "../lib/fix-task-prefill.js";
 
 async function fileAsImage(file: File): Promise<{ filename: string; mimeType: string; base64: string }> {
   return await new Promise((resolve, reject) => {
@@ -296,6 +297,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const taskBoard = Object.fromEntries(taskPhases.map((phase) => [phase, boardTasks.filter((task) => task.phase === phase && (phase !== "done" || showArchived || task.worktreeState !== "cleaned"))])) as Record<(typeof taskPhases)[number], ApiTask[]>;
   const selected = scopeLoaded ? selectedState : undefined;
   const availableProjects = visibleProjects.filter((project) => project.companyId === companyId);
+  const forgeProject = currentCompany?.status === "active" ? findForgeProject(availableProjects) : undefined;
   const newTaskProject = availableProjects.find((project) => project.id === projectId);
   const newTaskRoleAgents = {
     planner: roleAgentOverrides.planner ?? newTaskProject?.roleDefaults.planner,
@@ -402,6 +404,16 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
       setError(`Unable to duplicate task${reason instanceof Error ? `: ${reason.message}` : ""}`);
     } finally { setBusy(false); }
   };
+  const prepareFixTask = async (): Promise<void> => {
+    if (!selected || !forgeProject) return;
+    setCreateError(""); setError("");
+    let diagnostics: TaskDiagnostics | undefined;
+    try { diagnostics = await readJson<TaskDiagnostics>(`/api/tasks/${encodeURIComponent(selected.id)}/diagnostics`); }
+    catch { /* The draft remains useful from the task snapshot alone. */ }
+    const draft = fixTaskDraft(selected, diagnostics, window.location.href);
+    setProjectId(forgeProject.id); setRoleAgentOverrides({}); setTitle(draft.title); setDescription(draft.description);
+    setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setImages([]); resetNewTaskSettings(); setCreateOpen(true);
+  };
   const saveTaskAsTemplate = async (): Promise<void> => {
     if (!selected) return;
     const name = window.prompt("Template name")?.trim();
@@ -496,7 +508,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
   if (routeTaskId && detailNotFound) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
   if (routeTaskId && !selected) return <TaskDetailsSkeleton />;
-  if (routeTaskId && selected) return <><TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} returnTo={mode} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} onMarkReady={markReady} onMerge={mergePullRequest} onDuplicate={duplicateTask} onUpdateDetails={updateTaskDetails} onRefresh={refreshTask} onRescue={rescueTask} onSaveTemplate={saveTaskAsTemplate} />{newTaskDialog}</>;
+  if (routeTaskId && selected) return <><TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} returnTo={mode} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} onMarkReady={markReady} onMerge={mergePullRequest} onDuplicate={duplicateTask} {...(forgeProject ? { onFixInNewTask: prepareFixTask } : {})} onUpdateDetails={updateTaskDetails} onRefresh={refreshTask} onRescue={rescueTask} onSaveTemplate={saveTaskAsTemplate} />{newTaskDialog}</>;
 
   if (mode === "board") {
     return (

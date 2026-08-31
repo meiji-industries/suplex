@@ -232,6 +232,32 @@ describe("target-base reconciliation contracts", () => {
     }
   });
 
+  test("adopts a clean merged task branch when an ordinary reconciliation reuses an unowned merge", async () => {
+    const fixture = await targetBaseActivityFixture("forge-target-base-unowned-merge-");
+    try {
+      const { mergedHead, mergedTree } = await mergeTargetBase(fixture);
+      fixture.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-current', 'task-1', 'company-1', 'workflow-1', 1, 1, 'blocked', 'issue/task-1', ?, ?, 'developer-current-session', ?, ?, ?, ?, 'clean', ?, ?)").run(fixture.repositoryPath, fixture.repository.base, fixture.now, fixture.now, fixture.repository.head, fixture.priorTree, fixture.delivery.id, fixture.evidence.id);
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-wrong', 'task-1', 'company-1', 'workflow-1', 1, 2, 'completed', 'issue/task-1', ?, ?, 'developer-wrong-session', ?, ?, ?, ?, 'clean')").run(fixture.repositoryPath, fixture.repository.base, fixture.now, fixture.now, sha("f"), sha("e"));
+        db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, operation_key, prior_tree, result_head, result_tree, developer_execution_id, updated_at) VALUES ('merge-unowned', 'task-1', 'company-1', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow-1', ?, 'pre_release', ?, ?, ?, ?, 'developer-wrong', ?)").run(fixture.repository.base, fixture.targetBase, fixture.repository.head, mergedHead, mergedTree, fixture.now, fixture.configuration.id, `workflow-1:pre_release:${fixture.configuration.id}:${fixture.repository.base}:${fixture.targetBase}:${fixture.repository.head}`, fixture.priorTree, mergedHead, mergedTree, fixture.now);
+      });
+      const activities = createActivities(fixture.database, fixture.config, { githubRelease: {
+        async getRemoteRepository() { return "acme/project"; },
+        async getBranchHead() { return fixture.targetBase; },
+      } as never });
+
+      const result = await activities.reconcileTargetBase({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: fixture.configuration.id, checkpoint: "pre_release", developerExecutionId: "developer-current", expectedBaseSha: fixture.repository.base, expectedHeadSha: fixture.repository.head, expectedHeadTree: fixture.priorTree });
+
+      expect(result).toMatchObject({ outcome: "revalidated", headSha: mergedHead, headTree: mergedTree, developerExecutionId: "developer-current" });
+      if (result.outcome !== "revalidated") throw new Error("Expected clean merged branch adoption");
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT status, result_commit AS resultCommit, result_tree AS resultTree, delivery_artifact_id AS deliveryArtifactId, evidence_artifact_id AS evidenceArtifactId FROM forge_developer_executions WHERE id = 'developer-current'").get())).toEqual({ status: "completed", resultCommit: mergedHead, resultTree: mergedTree, deliveryArtifactId: result.deliveryArtifact.id, evidenceArtifactId: result.verificationArtifact.id });
+      expect(result.deliveryArtifact.id).not.toBe(fixture.delivery.id);
+      expect(result.verificationArtifact.id).not.toBe(fixture.evidence.id);
+    } finally {
+      await closeTargetBaseActivityFixture(fixture);
+    }
+  });
+
   test("ignores a stale input forward-merge id during ordinary reconciliation", async () => {
     const fixture = await targetBaseActivityFixture("forge-target-base-stale-input-");
     try {
@@ -743,7 +769,7 @@ describe("target-base reconciliation contracts", () => {
       deliveryArtifact: artifact,
       verificationArtifact: { ...artifact, id: "artifact-verification-b", kind: "forward-merge-verification" },
     });
-    expect(unpublished).toMatchObject({ releaseId: null, pullRequestNumber: null, pullRequestUrl: null });
+    expect(unpublished).toMatchObject({ releaseId: null, pullRequestNumber: null, pullRequestUrl: null, developerEvidenceArtifactId: "artifact-verification-b" });
     const resumed = applyTargetBaseNoDrift(IssueWorkflowStateSchema.parse({ ...state, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Provider unavailable", targetBaseBlockerCode: "provider_unavailable", targetBaseBlockerOwner: "provider", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Provider unavailable" }), {
       outcome: "no_drift",
       checkId: "check-6",

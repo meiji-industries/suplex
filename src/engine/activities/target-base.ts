@@ -157,6 +157,13 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
         }
       }
       if (merge.status === "merged" && !storedLineageMatchesMerge) {
+        try {
+          const adopted = await adoptObservedTaskBranch();
+          if (adopted) return adopted;
+        } catch (error) {
+          const failure = reconcileBlocker(error);
+          return blocked(failure.code, failure.owner, failure.retryable, failure.summary);
+        }
         return blocked("merge_state_ownership_mismatch", "human", false, "The Developer revision does not match the recorded forward merge", undefined, { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, ...(merge.mergeCommit ? { resultHead: merge.mergeCommit } : {}), ...(merge.tree ? { resultTree: merge.tree } : {}) }, merge.forwardMergeId ?? checkId);
       }
       if (merge.status === "no_drift") {

@@ -1,12 +1,17 @@
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 
 import { ArtifactStore } from "../../artifacts.js";
 import { runCommand } from "../../command-runner.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
+import type { ForgeConfig } from "../../config.js";
+import type { ForgeDatabase } from "../../database.js";
+import { readEnvironmentSettings } from "../../environment-settings.js";
+import { WorktreeManager } from "../../worktrees.js";
 import type { ActivityContext } from "./context.js";
 
-export function createWorktreeActivities(ctx: ActivityContext) {
+export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" | "config" | "worktrees" | "createHash">) {
   const { database, config, worktrees, createHash } = ctx;
   const owned = (input: { taskId: string; companyId: string; workflowId: string }) => database.authQuery((db) => db.prepare("SELECT repository_path AS repositoryPath, worktree_path AS worktreePath, worktree_root AS worktreeRoot, branch_name AS branchName, starting_sha AS targetBaseSha FROM forge_issue_worktrees WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status <> 'released'").get(input.taskId, input.companyId, input.workflowId) as { repositoryPath: string; worktreePath: string; worktreeRoot: string; branchName: string; targetBaseSha: string } | undefined);
   const resolved = (input: { taskId: string; companyId: string; workflowId: string }) => {
@@ -77,4 +82,17 @@ export function createWorktreeActivities(ctx: ActivityContext) {
       return { worktreePath: result.worktreePath };
     },
   };
+}
+
+/**
+ * Builds the worktree cleanup activity outside the engine host so the archive
+ * path can clean a worktree locally when the durable workflow has already ended.
+ */
+export function createLocalWorktreeCleanup(database: ForgeDatabase, config: ForgeConfig, git?: ConstructorParameters<typeof WorktreeManager>[0]) {
+  return createWorktreeActivities({
+    database,
+    config,
+    worktrees: new WorktreeManager(git, () => readEnvironmentSettings(database).minFreeDiskGb),
+    createHash,
+  }).cleanupTaskWorktree;
 }

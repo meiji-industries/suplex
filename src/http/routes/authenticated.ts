@@ -56,7 +56,7 @@ const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app
   if (options.tasks) await app.register(taskBranch, { tasks: options.tasks });
   if (options.tasks && options.database) await app.register(taskPane, { tasks: options.tasks, database: options.database });
   if (options.tasks && options.database && options.config) await app.register(taskRefresh, { tasks: options.tasks, database: options.database, config: options.config });
-  if (options.tasks && options.database) await app.register(taskArchive, { tasks: options.tasks, database: options.database });
+  if (options.tasks && options.database) await app.register(taskArchive, { tasks: options.tasks, database: options.database, ...(options.config ? { config: options.config } : {}) });
   if (options.tasks) await app.register(agentEvents, { tasks: options.tasks });
   if (options.attention) await app.register(attention, { attention: options.attention });
 };

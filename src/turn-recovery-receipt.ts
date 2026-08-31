@@ -78,7 +78,6 @@ export function claimTurnRecoveryPrompt(database: ForgeDatabase, claim: TurnReco
         claim.executionStatus,
       );
     if (!claimed) return false;
-    db.prepare("UPDATE forge_herdr_role_sessions SET status = 'ready', attention_activated_at = COALESCE(attention_activated_at, ?), updated_at = ? WHERE id = ? AND task_id = ? AND is_current = 1").run(claim.timestamp, claim.timestamp, claim.roleSessionId, claim.taskId);
     return true;
   });
 }

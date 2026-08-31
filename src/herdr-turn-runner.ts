@@ -438,22 +438,20 @@ export class HerdrTurnRunner {
     const sanitized = String(redact(value)).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
     return sanitized || undefined;
   }
-  private async updateAttention(session: EnsuredRoleSession, turnId: string, status: "blocked" | "awaiting_human", excerpt: string | undefined): Promise<void> {
+  private async updateAttention(_session: EnsuredRoleSession, turnId: string, status: "blocked" | "awaiting_human", excerpt: string | undefined): Promise<void> {
     this.database.authQuery((db) => {
       const now = iso();
       const current = db.prepare("SELECT status, attention_excerpt FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { status: string; attention_excerpt: string | null } | undefined;
       if (current?.status === status && current.attention_excerpt === (excerpt ?? null)) return;
       db.prepare("UPDATE forge_herdr_turns SET status = ?, attention_excerpt = ?, updated_at = ? WHERE turn_id = ?").run(status, excerpt ?? null, now, turnId);
-      db.prepare("UPDATE forge_herdr_role_sessions SET status = ?, attention_activated_at = COALESCE(attention_activated_at, ?), updated_at = ? WHERE id = ?").run(status === "blocked" ? "blocked" : "ready", now, now, session.id);
     });
   }
-  private clearAttention(sessionId: string, turnId: string, status: "working" | "waiting" = "waiting", force = false): void {
+  private clearAttention(_sessionId: string, turnId: string, status: "working" | "waiting" = "waiting", force = false): void {
     this.database.authQuery((db) => {
       const current = db.prepare("SELECT status, recovery_prompt_sent_at AS recoveryPromptSentAt FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { status: string; recoveryPromptSentAt: string | null } | undefined;
       if (!force && status === "waiting" && current?.recoveryPromptSentAt) return;
       const now = iso();
       if (current && ["blocked", "awaiting_human"].includes(current.status)) db.prepare("UPDATE forge_herdr_turns SET status = ?, attention_excerpt = NULL, updated_at = ? WHERE turn_id = ? AND status IN ('blocked', 'awaiting_human')").run(status === "working" ? "waiting" : status, now, turnId);
-      db.prepare("UPDATE forge_herdr_role_sessions SET status = ?, attention_activated_at = NULL, updated_at = ? WHERE id = ? AND status <> 'closed'").run(status === "working" ? "working" : "ready", now, sessionId);
     });
   }
   private async offset(path?: string): Promise<number> { return path ? (await stat(path).catch(() => ({ size: 0 }))).size : 0; }

@@ -749,8 +749,38 @@ test("adopts a legacy name-only binding and durably records its live pane", asyn
     expect(herdr.getAgentTargets).toEqual(["legacy-planner"]);
     expect(herdr.panes).toEqual([]);
     expect(value.database.authQuery((db) =>
-      db.prepare("SELECT agent_name, pane_id FROM forge_herdr_role_sessions WHERE id = ?").get(row.id),
-    )).toEqual({ agent_name: "legacy-planner", pane_id: "legacy-pane" });
+      db.prepare("SELECT agent_name, pane_id, status, last_agent_status, last_seen_at FROM forge_herdr_role_sessions WHERE id = ?").get(row.id),
+    )).toEqual({ agent_name: "legacy-planner", pane_id: "legacy-pane", status: "ready", last_agent_status: null, last_seen_at: null });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("keeps a bound working agent as a ready lifecycle binding", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  herdr.agents.set("working-planner", {
+    name: "working-planner",
+    paneId: "working-pane",
+    status: "working",
+  });
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
+    const row = (store as unknown as {
+      reserve(task: RoleSessionTask, role: "planner"): { id: string };
+    }).reserve(taskFor(value.root), "planner");
+    value.database.authQuery((db) =>
+      db.prepare(
+        "UPDATE forge_herdr_role_sessions SET agent_name = 'working-planner', launch_fingerprint = ?, last_agent_status = 'idle', last_seen_at = '2000-01-01T00:00:00.000Z' WHERE id = ?",
+      ).run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
+    );
+
+    await store.ensureRoleSession(taskFor(value.root), "planner", startupSettings);
+
+    expect(value.database.authQuery((db) =>
+      db.prepare("SELECT status, last_agent_status, last_seen_at FROM forge_herdr_role_sessions WHERE id = ?").get(row.id),
+    )).toEqual({ status: "ready", last_agent_status: "idle", last_seen_at: "2000-01-01T00:00:00.000Z" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -1256,7 +1286,7 @@ test.each(["working", "idle", "done"])(
         { initialPrompt: { path: join(value.root, "prompt.forge"), content: "prompt" } },
       )).resolves.toMatchObject({ agentName: "task-builder", paneId: "pane-1", launched: true });
       expect(herdr.closed).toEqual([]);
-      expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_role_sessions WHERE task_id = 'task'").get())).toEqual({ status: status === "working" ? "working" : "ready" });
+      expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_role_sessions WHERE task_id = 'task'").get())).toEqual({ status: "ready" });
     } finally {
       value.database.close();
       await rm(value.root, { recursive: true, force: true });

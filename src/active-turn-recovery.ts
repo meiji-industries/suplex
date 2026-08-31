@@ -227,7 +227,6 @@ function completeTurn(database: ForgeDatabase, turn: Turn, bytes: Buffer, timest
       const sequence = (db.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS value FROM forge_developer_execution_events WHERE execution_id = ?").get(turn.executionId) as { value: number }).value;
       db.prepare("INSERT OR IGNORE INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, occurred_at, summary, idempotency_key) VALUES (?, ?, 0, ?, 'git_handoff', ?, ?, ?)").run(randomUUID(), turn.executionId, sequence, timestamp, `Delivery taken from Git commit ${handoff.headSha.slice(0, 7)}; the Developer's completion message was not received.`, `git-handoff:${handoff.headSha}`);
     }
-    db.prepare("UPDATE forge_herdr_role_sessions SET status = 'ready', attention_activated_at = NULL, updated_at = ? WHERE id = ? AND task_id = ? AND is_current = 1 AND status <> 'closed'").run(timestamp, turn.roleSessionId, turn.taskId);
     return true;
   });
 }

@@ -560,15 +560,13 @@ export class HerdrSessionStore {
         .prepare(
           `UPDATE forge_herdr_role_sessions
            SET agent_name = ?, pane_id = ?, launch_fingerprint = ?, generation = generation + 1,
-               status = 'ready', last_seen_at = ?,
-               updated_at = ?, ensure_token = NULL, ensure_expires_at = NULL
+               status = 'ready', updated_at = ?, ensure_token = NULL, ensure_expires_at = NULL
            WHERE id = ?`,
         )
         .run(
           live.name,
           live.paneId,
           fingerprint,
-          now(),
           now(),
           row.id,
         ),
@@ -1017,15 +1015,12 @@ if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READ
     this.database.authQuery((db) =>
       db
         .prepare(
-          "UPDATE forge_herdr_role_sessions SET agent_name = ?, pane_id = ?, codex_session_id = COALESCE(codex_session_id, ?), status = ?, last_agent_status = ?, last_seen_at = ?, launch_fingerprint = ?, updated_at = ? WHERE id = ?",
+          "UPDATE forge_herdr_role_sessions SET agent_name = ?, pane_id = ?, codex_session_id = COALESCE(codex_session_id, ?), status = 'ready', launch_fingerprint = ?, updated_at = ? WHERE id = ?",
         )
         .run(
           live.name,
           live.paneId,
           live.agentSession ?? null,
-          live.status === "working" ? "working" : "ready",
-          live.status ?? null,
-          now(),
           fingerprint,
           now(),
           row.id,

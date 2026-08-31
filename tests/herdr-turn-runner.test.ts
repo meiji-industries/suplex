@@ -1011,7 +1011,7 @@ test("keeps a reviewer pane persistent when its turn fails", async () => {
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("records blocked agent attention while the turn stays alive", async () => {
+test("records blocked agent attention only on the turn", async () => {
   let prompted = false;
   const setup = await fixture();
   const herdr = {
@@ -1034,7 +1034,7 @@ test("records blocked agent attention while the turn stays alive", async () => {
   try {
     const running = runner.run(setup.input);
     await new Promise((resolve) => setTimeout(resolve, 75));
-    expect(setup.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_role_sessions WHERE id = 'session'").get())).toEqual({ status: "blocked" });
+    expect(setup.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_role_sessions WHERE id = 'session'").get())).toEqual({ status: "ready" });
     expect(setup.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt FROM forge_herdr_turns").get())).toEqual({ status: "blocked", attention_excerpt: "Select the deployment target: Options: - staging - production" });
     const row = setup.database.authQuery((db) => db.prepare("SELECT result_relative_path FROM forge_herdr_turns").get() as { result_relative_path: string });
     setTimeout(() => void writeFile(join(setup.root, row.result_relative_path!), JSON.stringify({ status: "ok" })), 1_100);

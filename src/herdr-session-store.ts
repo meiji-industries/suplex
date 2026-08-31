@@ -229,6 +229,24 @@ export class HerdrSessionStore {
     let existing = await this.getRecordedAgent(row);
     if (existing && (!row.pane_id || existing.paneId === row.pane_id)) {
       this.assertIdentity(row, existing);
+      if (["done", "failed", "cancelled"].includes(existing.status ?? "")) {
+        // A role session is durable, but its interactive runtime is not. Never
+        // bind a later turn to a terminal agent or its terminal transcript.
+        await this.closeRecordedPane(row.id, existing.paneId);
+        closedPaneId = existing.paneId;
+        this.database.authQuery((db) =>
+          db
+            .prepare(
+              "UPDATE forge_herdr_role_sessions SET agent_name = NULL, codex_session_id = NULL, rollout_path = NULL, status = 'unbound', updated_at = ? WHERE id = ?",
+            )
+            .run(now(), row.id),
+        );
+        row = this.readRoleSession(row.id) ?? row;
+        existing = null;
+      }
+    }
+    if (existing && (!row.pane_id || existing.paneId === row.pane_id)) {
+      this.assertIdentity(row, existing);
       if (row.launch_fingerprint === fingerprint) {
         const ready = this.ready(row, existing, fingerprint, false);
         await this.reportBindingMetadata(task, role, ready);

@@ -112,7 +112,11 @@ export class HerdrTurnRunner {
           const promptSentAt = this.now().toISOString();
           this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', prompt_sent_at = COALESCE(prompt_sent_at, ?), updated_at = ? WHERE turn_id = ?", start, start, promptSentAt, promptSentAt, turnId);
           input.dispatchFence?.();
-          if (!promptInArgv) await this.herdr.prompt(session.agentName, prompt);
+          if (!promptInArgv) {
+            const dispatched = await this.herdr.prompt(session.agentName, prompt);
+            if (dispatched && ["done", "failed", "cancelled"].includes(dispatched.status ?? ""))
+              throw new AgentFailure("agent-terminal-after-dispatch", "Herdr accepted the prompt, but the interactive agent is terminal.");
+          }
           this.update("UPDATE forge_herdr_turns SET status = 'waiting', updated_at = ? WHERE turn_id = ?", iso(), turnId);
           if (input.signal?.aborted) throw new AgentFailure("cancelled", "The interactive agent turn was cancelled.", { nonRetryable: true });
           session = await this.resolveIdentity(session, input, turnId, candidates);

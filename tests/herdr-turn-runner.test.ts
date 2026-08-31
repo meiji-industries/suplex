@@ -650,6 +650,25 @@ test("preserves dispatch authority when the Herdr prompt outcome is ambiguous", 
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
+test.each(["done", "failed", "cancelled"])(
+  "does not mark a turn waiting when prompt returns a terminal %s agent",
+  async (status) => {
+    const setup = await fixture();
+    let prompts = 0;
+    const runner = makeRunner(setup.database, {
+      prompt: async () => {
+        prompts += 1;
+        return { ...setup.session.live, status };
+      },
+    } as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
+    try {
+      await expect(runner.run(setup.input)).rejects.toEqual(expect.objectContaining<Partial<AgentFailure>>({ code: "agent-terminal-after-dispatch", nonRetryable: false }));
+      expect(prompts).toBe(1);
+      expect(setup.database.authQuery((db) => db.prepare("SELECT status, prompt_sent_at AS promptSentAt FROM forge_herdr_turns").get())).toEqual({ status: "dispatching", promptSentAt: expect.any(String) });
+    } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+  },
+);
+
 test("binds and persists a fresh session after the first prompt reports agentSession", async () => {
   const setup = await freshIdentityFixture();
   const herdr = {

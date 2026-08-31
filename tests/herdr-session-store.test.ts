@@ -1208,6 +1208,33 @@ test("reviewer sessions are persistent and have bounded agent names", async () =
   }
 });
 
+test.each(["done", "failed", "cancelled"])(
+  "relaunches a terminal %s runtime instead of returning it as a ready role session",
+  async (status) => {
+    const value = await startupFixture();
+    const herdr = new StartupHerdrFake();
+    try {
+      const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
+      const first = await store.ensureRoleSession(taskFor(value.root), "planner", startupSettings);
+      herdr.agents.set(first.agentName, { name: first.agentName, paneId: first.paneId, status });
+
+      const second = await store.ensureRoleSession(taskFor(value.root), "planner", startupSettings);
+
+      expect(second.id).toBe(first.id);
+      expect(second.paneId).not.toBe(first.paneId);
+      expect(second.agentName).not.toBe(first.agentName);
+      expect(herdr.closed).toContain(first.paneId);
+      expect(herdr.starts).toHaveLength(2);
+      expect(value.database.authQuery((db) =>
+        db.prepare("SELECT status, codex_session_id, rollout_path FROM forge_herdr_role_sessions WHERE id = ?").get(first.id),
+      )).toMatchObject({ status: "ready", codex_session_id: null, rollout_path: null });
+    } finally {
+      value.database.close();
+      await rm(value.root, { recursive: true, force: true });
+    }
+  },
+);
+
 test.each(["working", "idle", "done"])(
   "adopts a %s OMP argv-prompt agent after the live Herdr startup timeout",
   async (status) => {

@@ -7,13 +7,17 @@ const tasks = [
   { id: "cancelled-old", phase: "cancelled", updatedAt: "2026-08-28T12:00:00.000Z" },
   { id: "cancelled-new", phase: "cancelled", updatedAt: "2026-08-30T12:00:00.000Z" },
   { id: "active", phase: "development", updatedAt: "2026-08-27T12:00:00.000Z" },
+  { id: "ci-repairing", phase: "ci_repairing", updatedAt: "2026-08-27T13:00:00.000Z" },
+  { id: "ci-repair-needed", phase: "ci_repair_required", updatedAt: "2026-08-27T14:00:00.000Z" },
   { id: "backlog", phase: "backlog", updatedAt: "2026-08-26T12:00:00.000Z" },
 ] as const;
 
 test("separates completed and cancelled task groups", () => {
   const groups = taskListGroups(tasks, "all");
 
-  expect(groups.map((group) => group.id)).toEqual(["active", "backlog", "completed", "cancelled"]);
+  expect(groups.map((group) => group.id)).toEqual(["active", "backlog", "blocked", "completed", "cancelled"]);
+  expect(groups.find((group) => group.id === "active")?.tasks.map((task) => task.id)).toEqual(["ci-repairing", "active"]);
+  expect(groups.find((group) => group.id === "blocked")?.tasks.map((task) => task.id)).toEqual(["ci-repair-needed"]);
   expect(groups.find((group) => group.id === "completed")?.tasks.map((task) => task.id)).toEqual(["done"]);
   expect(groups.find((group) => group.id === "cancelled")?.tasks.map((task) => task.id)).toEqual(["cancelled-new", "cancelled-old"]);
 });

@@ -3,10 +3,14 @@ import { observeHerdrSessions, type HerdrSessionObservation } from "./herdr-reco
 import { type HerdrClient, snapshotHerdrRuntime } from "./herdr-client.js";
 import { classifyRecovery, type RuntimeDiagnosis } from "./recovery/convergence.js";
 
+export type AgentRuntimeLiveStatus = "active" | "terminal" | "missing" | "unavailable";
+
 export interface AgentRuntimeProjection {
   agentId: string;
   taskId: string;
   role: "planner" | "builder" | "reviewer" | "integrator";
+  paneId: string | null;
+  liveStatus: AgentRuntimeLiveStatus;
   diagnosis: RuntimeDiagnosis;
   detail: string;
 }
@@ -24,6 +28,13 @@ function live(observation: HerdrSessionObservation | undefined, unavailable: boo
   if (observation.lifecycleStatus === "idle") return { session: "live_idle" as const, stalledBeyondPolicy: false };
   if (observation.lifecycleStatus === "done" || observation.lifecycleStatus === "cancelled") return { session: "terminal" as const, stalledBeyondPolicy: false };
   return { session: "live_progress" as const, stalledBeyondPolicy: false };
+}
+
+function paneLiveStatus(observation: HerdrSessionObservation | undefined, unavailable: boolean): AgentRuntimeLiveStatus {
+  if (unavailable) return "unavailable";
+  if (observation?.lifecycleStatus === "done" || observation?.lifecycleStatus === "cancelled") return "terminal";
+  if (!observation || observation.classification === "missing" || observation.classification === "unbound") return "missing";
+  return "active";
 }
 
 export async function projectAgentRuntime(database: ForgeDatabase, herdr: HerdrClient, agentIds: readonly string[], companyIds?: readonly string[]): Promise<AgentRuntimeProjection[]> {
@@ -47,7 +58,8 @@ export async function projectAgentRuntime(database: ForgeDatabase, herdr: HerdrC
   }
   const bySession = new Map(observations.map((observation) => [observation.sessionId, observation]));
   return rows.map((row) => {
-    const diagnosis = classifyRecovery({ taskId: row.taskId, phase: row.phase, revision: row.revision, terminal: false, cancelled: false, branchName: null, worktreePath: null, lastReviewedCommit: null, turn: row.turnId && row.turnStatus && row.promptSentAt ? { turnId: row.turnId, role: row.role, status: row.turnStatus, resultPresent: row.resultHash !== null, resultValid: row.resultHash !== null, resumeRequestsSent: 0 } : null, failure: null }, { herdr: live(bySession.get(row.sessionId), unavailable), git: null, github: null });
-    return { agentId: row.agentId, taskId: row.taskId, role: row.role, diagnosis: diagnosis.diagnosis, detail: diagnosis.reason };
+    const observation = bySession.get(row.sessionId);
+    const diagnosis = classifyRecovery({ taskId: row.taskId, phase: row.phase, revision: row.revision, terminal: false, cancelled: false, branchName: null, worktreePath: null, lastReviewedCommit: null, turn: row.turnId && row.turnStatus && row.promptSentAt ? { turnId: row.turnId, role: row.role, status: row.turnStatus, resultPresent: row.resultHash !== null, resultValid: row.resultHash !== null, resumeRequestsSent: 0 } : null, failure: null }, { herdr: live(observation, unavailable), git: null, github: null });
+    return { agentId: row.agentId, taskId: row.taskId, role: row.role, paneId: row.paneId, liveStatus: paneLiveStatus(observation, unavailable), diagnosis: diagnosis.diagnosis, detail: diagnosis.reason };
   });
 }

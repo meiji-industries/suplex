@@ -1,5 +1,5 @@
 import { ChartNoAxesGantt, CircleHelp, CirclePlus, Columns3, ClipboardList, EllipsisVertical, FolderGit2, Inbox, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 
 import { buttonVariants } from "../ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog.js";
@@ -14,6 +14,7 @@ import { AgentsLeaderboard } from "./agents-leaderboard.js";
 import { ProfileAvatar } from "./profile-avatar.js";
 import { RecentTasks } from "./recent-tasks.js";
 import { SystemHealthIndicator } from "./system-health.js";
+import { useAgentStatus } from "./use-agent-status.js";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 
@@ -94,6 +95,13 @@ export function AppSidebar(): ReactElement {
   const context = useOptionalCompanyContext();
   const { setOpenMobile } = useSidebar();
   const close = (): void => setOpenMobile(false);
+  const onAuthenticationRequired = useCallback(() => window.location.assign("/auth"), []);
+  const { agents, runtime } = useAgentStatus({
+    ...(context?.currentCompany?.id ? { companyId: context.currentCompany.id } : {}),
+    authenticated: Boolean(context?.user),
+    loading: context?.loading ?? true,
+    onAuthenticationRequired,
+  });
   useEffect(() => {
     let goPending = false;
     let goTimer: number | undefined;
@@ -122,7 +130,7 @@ export function AppSidebar(): ReactElement {
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
       <SidebarHeader><div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div></SidebarHeader>
-      <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} /><AgentsLeaderboard /><SecondaryNavigation close={close} /></SidebarContent>
+      <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} runtime={runtime} /><AgentsLeaderboard agents={agents} runtime={runtime} /><SecondaryNavigation close={close} /></SidebarContent>
       <SidebarFooter><UserMenu /></SidebarFooter>
     </Sidebar>
   );

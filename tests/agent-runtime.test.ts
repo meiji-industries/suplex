@@ -9,7 +9,7 @@ import { ForgeDatabase } from "../src/database.js";
 
 const now = "2026-08-31T00:00:00.000Z";
 
-test("runtime projection excludes inaccessible and unbound agents", async () => {
+test("runtime projection scopes and exposes observed pane presence", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-agent-runtime-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   try {
@@ -24,7 +24,10 @@ test("runtime projection excludes inaccessible and unbound agents", async () => 
       }
     });
     const runtime = await projectAgentRuntime(database, { runtimeSnapshot: async () => ({ agents: [{ name: "unbound", paneId: "other", status: "working" }], panes: [{ paneId: "other", agent: "unbound", agentStatus: "working" }] }) } as never, ["shared-agent"], ["company-a"]);
-    expect(runtime).toEqual([{ agentId: "shared-agent", taskId: "task-company-a", role: "planner", diagnosis: "unknown", detail: "No recovery action is currently needed." }]);
+    expect(runtime).toEqual([{ agentId: "shared-agent", taskId: "task-company-a", role: "planner", paneId: "pane-company-a", liveStatus: "missing", diagnosis: "unknown", detail: "No recovery action is currently needed." }]);
+
+    const liveRuntime = await projectAgentRuntime(database, { runtimeSnapshot: async () => ({ agents: [{ name: "planner", paneId: "pane-company-a", status: "idle" }], panes: [{ paneId: "pane-company-a", agent: "planner", agentStatus: "idle" }] }) } as never, ["shared-agent"], ["company-a"]);
+    expect(liveRuntime).toMatchObject([{ paneId: "pane-company-a", liveStatus: "active", diagnosis: "resting" }]);
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });

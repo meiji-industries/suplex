@@ -24,7 +24,7 @@ import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/
 import { invalidateTaskList, readTaskList, subscribeTaskListInvalidations } from ".././lib/task-list.js";
 import { navigate } from ".././lib/navigation.js";
 import { taskListGroups, type TaskListFilter } from "../lib/task-list-groups.js";
-import { ACTIVE_PHASES as activeTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
+import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
 import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, CircleDotDashed, CircleSlash, CircleX, Ellipsis, FileText, Filter, FolderKanban, Layers3, ListFilter, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type ReactElement } from "react";
 import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiCompanyBranchSync, type ApiProject, type ApiTask, type ApiTaskSummary, type ApiTaskTemplate } from "../lib/view-shared.js";
@@ -306,8 +306,9 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     reviewer: roleAgentOverrides.reviewer ?? newTaskProject?.roleDefaults.reviewer,
     integrator: roleAgentOverrides.integrator ?? newTaskProject?.roleDefaults.integrator,
   };
-  const activeCount = visibleTasks.filter((task) => activeTaskPhases.has(task.phase)).length;
+  const activeCount = visibleTasks.filter((task) => activeTaskPhases.has(task.phase) || BLOCKED_PHASES.has(task.phase)).length;
   const backlogCount = visibleTasks.filter((task) => task.phase === "backlog").length;
+  const archivedCount = taskFilter === "archived" ? visibleTasks.length : undefined;
   const taskGroups = taskListGroups(visibleTasks, taskFilter);
   const selectTask = (task: ApiTaskSummary): void => { setSelected(undefined); selectedRef.current = undefined; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`${routeBase}/${encodeURIComponent(task.id)}`, companyId)); window.dispatchEvent(new Event("forge:navigate")); };
   const addImages = async (files: File[]): Promise<void> => {
@@ -576,7 +577,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
               <TabsTrigger value="active">Active <span className="text-[11px] text-muted-foreground">{activeCount}</span></TabsTrigger>
               <TabsTrigger value="backlog">Backlog <span className="text-[11px] text-muted-foreground">{backlogCount}</span></TabsTrigger>
               <TabsTrigger value="all">All tasks <span className="text-[11px] text-muted-foreground">{visibleTasks.length}</span></TabsTrigger>
-              <TabsTrigger value="archived">Archived <span className="text-[11px] text-muted-foreground">{visibleTasks.length}</span></TabsTrigger>
+              <TabsTrigger value="archived">Archived {archivedCount === undefined ? null : <span className="text-[11px] text-muted-foreground">{archivedCount}</span>}</TabsTrigger>
             </TabsList>
           </Tabs>
         </div>

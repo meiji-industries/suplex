@@ -14,6 +14,10 @@ export function taskListGroups<Task extends { phase: TaskPhase; updatedAt: strin
   ];
 
   return groups
-    .filter((group) => filter === "all" || filter === "archived" ? group.tasks.length > 0 : group.id === filter)
+    .filter((group) => {
+      if (!group.tasks.length || filter === "all") return group.tasks.length > 0;
+      if (filter === "archived") return group.id === "completed" || group.id === "cancelled";
+      return filter === "active" ? group.id === "active" || group.id === "blocked" : group.id === filter;
+    })
     .map((group) => ({ ...group, tasks: [...group.tasks].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)) }));
 }

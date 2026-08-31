@@ -26,6 +26,10 @@ test("hides an empty cancelled task group", () => {
   expect(taskListGroups(tasks.filter((task) => task.phase !== "cancelled"), "all").some((group) => group.id === "cancelled")).toBe(false);
 });
 
-test("returns only the active group for the active filter", () => {
-  expect(taskListGroups(tasks, "active").map((group) => group.id)).toEqual(["active"]);
+test("returns in-progress and blocked groups for the active filter", () => {
+  expect(taskListGroups(tasks, "active").map((group) => group.id)).toEqual(["active", "blocked"]);
+});
+
+test("returns only completed and cancelled groups for the archived filter", () => {
+  expect(taskListGroups(tasks, "archived").map((group) => group.id)).toEqual(["completed", "cancelled"]);
 });

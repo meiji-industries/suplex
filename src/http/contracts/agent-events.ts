@@ -18,7 +18,7 @@ export const AgentTimelineEventSchema = z.object({
 
 export const AgentEventHistorySchema = z.object({
   events: z.array(AgentTimelineEventSchema),
-  status: z.object({ phase: z.string(), terminal: z.boolean() }),
+  status: z.object({ phase: z.string(), terminal: z.boolean(), revision: z.number().int().nonnegative() }),
 });
 
 export type AgentTimelineEvent = z.infer<typeof AgentTimelineEventSchema>;

@@ -1735,9 +1735,9 @@ export class TaskService {
     throw new TaskFailure("Not found", [], 404);
   }
 
-  getAgentEventHistory(actorUserId: string, taskId: string, after = 0, limit = 200): { events: ReturnType<IssueTimelineEvents["history"]>; status: { phase: string; terminal: boolean } } {
+  getAgentEventHistory(actorUserId: string, taskId: string, after = 0, limit = 200): { events: ReturnType<IssueTimelineEvents["history"]>; status: { phase: string; terminal: boolean; revision: number } } {
     const task = this.getTask(actorUserId, taskId);
-    return { events: new IssueTimelineEvents(this.database).history(task.id, after, Math.min(limit, 200)), status: { phase: task.phase, terminal: TERMINAL_PHASES.has(task.phase) } };
+    return { events: new IssueTimelineEvents(this.database).history(task.id, after, Math.min(limit, 200)), status: { phase: task.phase, terminal: TERMINAL_PHASES.has(task.phase), revision: task.revision } };
   }
 
   getTaskActivity(actorUserId: string, taskId: string, limit = 200): { execution: { id: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: string; currentStep: string | null } | null; events: TaskActivityEvent[]; commands: Array<{ id: string; stepId: string; command: string; cwd: string | null; exitCode: number | null; durationMs: number; stdout: string; stderr: string; entries: Array<{ stream: "stdout" | "stderr"; text: string }>; at: string }> } {

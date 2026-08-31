@@ -169,9 +169,8 @@ function persistAttention(database: ForgeDatabase, turn: Turn, reason: string, t
 
 
 
-function eligibleResumeExecution(turn: Turn): boolean {
-  return turn.ledger === "agent"
-    && turn.promptSentAt !== null
+function eligibleRuntimeRecreation(turn: Turn): boolean {
+  return turn.promptSentAt !== null
     && turn.recoveryPromptSentAt === null
     && turn.isLatestSessionTurn === 1
     && turn.executionStatus !== null
@@ -333,7 +332,7 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
         evidence.push("attention:receipt persisted");
       }
       if (action === "resume") {
-        if (!result.promptable || turn.promptSentAt === null || !eligibleResumeExecution(turn)) {
+        if (!result.promptable || !eligibleRuntimeRecreation(turn)) {
           action = "no_change";
           evidence.push("resume:not an active promptable execution");
         } else if (await recreateMissingRuntime(database, config, herdr, turn)) {

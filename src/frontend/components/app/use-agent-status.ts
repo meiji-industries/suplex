@@ -41,6 +41,7 @@ export function useAgentStatus({ companyId, authenticated, loading, onAuthentica
     if (!enabled) {
       setAgents([]);
       setRuntime([]);
+      return;
     }
     let closed = false;
     const refresh = (): void => { if (!closed) void reload(); };

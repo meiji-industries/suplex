@@ -57,7 +57,7 @@ test("project API activates valid configuration, redacts typed failures, and pre
     repositoryProvisioner: { async ensure(input) { await mkdir(input.repositoryPath, { recursive: true }); await mkdir(input.worktreeRoot, { recursive: true }); } },
     validateProjectConfiguration: true,
   });
-  const app = createApp({ config, auth, projects, capacity: new CapacityManager(database, config), health: {
+  const app = createApp({ config, auth, projects, database, capacity: new CapacityManager(database, config), health: {
     engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }),
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
     artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
@@ -79,6 +79,7 @@ test("project API activates valid configuration, redacts typed failures, and pre
     const planner = await createAgent("Planner", "planner");
     const builder = await createAgent("Builder", "builder");
     const reviewer = await createAgent("Reviewer", "reviewer");
+    expect((await app.inject({ method: "GET", url: "/api/agents", headers: { cookie: adminCookie } })).statusCode).toBe(200);
     const inheritedCapacity = await app.inject({ method: "PATCH", url: `/api/admin/profiles/${profile.id}/capacity`, headers: { cookie: adminCookie, origin }, payload: { capacity: null } });
     expect(inheritedCapacity.json()).toMatchObject({ capacity: null, effectiveCapacity: config.externalTurnCapacity });
     const restoredCapacity = await app.inject({ method: "PATCH", url: `/api/admin/profiles/${profile.id}/capacity`, headers: { cookie: adminCookie, origin }, payload: { capacity: 3 } });

@@ -3,6 +3,7 @@ import { type ZodTypeProvider } from "@fastify/type-provider-zod";
 
 import type { ProjectService, RoleAssignments } from "../../projects.js";
 import type { ForgeDatabase } from "../../database.js";
+import type { HerdrClient } from "../../herdr-client.js";
 import { CliHerdrClient } from "../../herdr-client.js";
 import { projectAgentRuntime } from "../../agent-runtime.js";
 import { CompanyIdParamsSchema, ProjectIdParamsSchema } from "../contracts/common.js";
@@ -11,6 +12,7 @@ import { AgentListQuerySchema, AgentListResponseSchema, AgentRuntimeListResponse
 export interface ProjectRoutesOptions {
   projects: ProjectService;
   database?: ForgeDatabase;
+  herdr?: HerdrClient;
 }
 
 function roleDefaults(value: { planner?: string | undefined; builder?: string | undefined; reviewer?: string | undefined; integrator?: string | undefined }): RoleAssignments {
@@ -24,7 +26,7 @@ function roleDefaults(value: { planner?: string | undefined; builder?: string | 
 
 const projects: FastifyPluginAsync<ProjectRoutesOptions> = async (app, options) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const { projects, database } = options;
+  const { projects, database, herdr = new CliHerdrClient() } = options;
   typed.get("/api/agents", { schema: { querystring: AgentListQuerySchema, response: { 200: AgentListResponseSchema } } }, async (request, reply) => reply.send({ agents: projects.listAgents(request.forgeUser.id, request.query.companyId, request.query.includeArchived === "true") }));
   typed.get("/api/agent-runtime", { schema: { querystring: AgentListQuerySchema, response: { 200: AgentRuntimeListResponseSchema } } }, async (request, reply) => {
     const agents = projects.listAgents(request.forgeUser.id, request.query.companyId);
@@ -33,7 +35,7 @@ const projects: FastifyPluginAsync<ProjectRoutesOptions> = async (app, options) 
       : request.query.companyId
         ? [request.query.companyId]
         : (database.authQuery((db) => db.prepare("SELECT company_id FROM forge_memberships WHERE user_id = ?").all(request.forgeUser.id) as Array<{ company_id: string }>)).map((row) => row.company_id);
-    return reply.send({ runtime: database ? await projectAgentRuntime(database, new CliHerdrClient(), agents.map((agent) => agent.id), companyIds) : [] });
+    return reply.send({ runtime: database ? await projectAgentRuntime(database, herdr, agents.map((agent) => agent.id), companyIds) : [] });
   });
   typed.get("/api/profiles", { schema: { response: { 200: ProfileListResponseSchema } } }, async (request, reply) => reply.send({ profiles: projects.listProfiles(request.forgeUser.id) }));
   typed.get("/api/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: projects.listModels(request.forgeUser.id) }));

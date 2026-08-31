@@ -62,6 +62,7 @@ const authorityObservationCommands = [
   ["ls-remote", "origin", "refs/heads/forge/task"],
   ["status", "--porcelain=v1", "--untracked-files=all"],
   ["rev-parse", "HEAD"],
+  ["rev-parse", "HEAD^{tree}"],
 ];
 
 function expectOnlyAuthorityObservations(calls: string[][]): void {

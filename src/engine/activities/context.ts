@@ -221,7 +221,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     projectId?: string;
     roleProfiles?: Partial<Record<ProjectRole, string | undefined>>;
   };
-  const profileForRole = (input: CapacityInput, role: ProjectRole): CapacityProfileIdentity => database.authQuery((db) => {
+  const profileForRole = (input: CapacityInput, role: ProjectRole): CapacityProfileIdentity | "codex" => database.authQuery((db) => {
     const task = input.taskId
       ? db.prepare("SELECT project_id AS projectId, role_agents_json AS roleAgentsJson FROM forge_tasks WHERE id = ? AND company_id = ?").get(input.taskId, input.companyId) as { projectId: string; roleAgentsJson: string } | undefined
       : undefined;
@@ -236,6 +236,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       ? db.prepare("SELECT name, profile_id AS profileId FROM forge_agents WHERE id = ? AND role = ?").get(agentId, role) as { name: string; profileId: string } | undefined
       : undefined;
     const profileId = input.roleProfiles?.[role] ?? agent?.profileId;
+    if (!profileId) return "codex";
     const profile = profileId
       ? db.prepare("SELECT id, name, provider FROM forge_profiles WHERE id = ?").get(profileId) as Omit<CapacityProfileIdentity, "agentName"> | undefined
       : undefined;

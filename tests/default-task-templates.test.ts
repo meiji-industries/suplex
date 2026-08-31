@@ -36,7 +36,7 @@ test("creating a project seeds the Ship Check template", async () => {
     const planner = projects.createAgent("admin-1", { name: "Planner", role: "planner", profileId: profile.id });
     const builder = projects.createAgent("admin-1", { name: "Builder", role: "builder", profileId: profile.id });
     const reviewer = projects.createAgent("admin-1", { name: "Reviewer", role: "reviewer", profileId: profile.id });
-    const project = await projects.createProject("admin-1", company.id, { name: "Forge", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: [], roleDefaults: { planner: planner.id, builder: builder.id, reviewer: reviewer.id } });
+    const project = await projects.createProject("admin-1", company.id, { name: "Forge", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, builder: builder.id, reviewer: reviewer.id } });
     const templates = new TaskTemplateService(database, { requireCompanyAccess: () => ({}) } as never, {} as never).list("admin-1", project.id);
     expect(templates).toHaveLength(1);
     expect(templates[0]).toMatchObject({ ...DEFAULT_TASK_TEMPLATES[0], roleAgents: { planner: planner.id, builder: builder.id, reviewer: reviewer.id } });

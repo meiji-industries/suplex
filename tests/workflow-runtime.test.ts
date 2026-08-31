@@ -170,11 +170,14 @@ test("target-base reconciliation precedes delivery review and retains capped bac
     "workflow-target-base-retry:auto-retry:retry_target_base_reconciliation:check-target-base-retry:2",
     "workflow-target-base-retry:auto-retry:retry_target_base_reconciliation:check-target-base-retry:3",
   ]);
-  expect(projections).toHaveLength(1);
-  expect(projections[0]).toMatchObject({
-    pendingAction: "Target base moved; reconciling automatically before publishing.",
-    blocker: null,
-  });
+  expect(projections).toHaveLength(4);
+  expect(projections.map(({ revision, pendingAction, processedCommandIds }) => ({ revision, pendingAction, attempts: processedCommandIds?.length }))).toEqual([
+    { revision: 1, pendingAction: "Target base moved after delivery review", attempts: 1 },
+    { revision: 2, pendingAction: "Target base moved; reconciling automatically before publishing.", attempts: 1 },
+    { revision: 3, pendingAction: "Target base moved; reconciling automatically before publishing.", attempts: 2 },
+    { revision: 4, pendingAction: "Target base moved; reconciling automatically before publishing.", attempts: 3 },
+  ]);
+  expect(projections.every(({ blocker }) => blocker === null)).toBe(true);
 });
 
 test("other auto-retry candidate pairs remain human decisions", async () => {

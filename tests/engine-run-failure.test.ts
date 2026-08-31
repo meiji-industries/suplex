@@ -13,14 +13,16 @@ test("a rejected workflow immediately projects a human-owned rescue state and lo
     observeGithubPullRequest: async () => { throw new Error("GitHub observation failed"); },
   });
   const records: Array<Record<string, unknown>> = [];
-  const workflowId = "workflow-run-failure";
+  const workflowId = h.workflowId("run-failure");
+  h.seedTask("run-failure");
   const input = {
     workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "run-failure", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2,
     continuationState: {
       ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "run-failure", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-      phase: "ci_waiting" as const, revision: 4, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Waiting for CI", releaseId: "release-existing", releaseRepository: "acme/forge", branchName: "forge/issue/failure", baseBranch: "main", expectedHeadSha: engineFixture.commit, expectedHeadTree: engineFixture.tree, lastEventId: `${workflowId}:4`,
+      phase: "ci_waiting" as const, revision: 0, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Waiting for CI", releaseId: "release-existing", releaseRepository: "acme/forge", branchName: "forge/issue/failure", baseBranch: "main", expectedHeadSha: engineFixture.commit, expectedHeadTree: engineFixture.tree, lastEventId: `${workflowId}:0`,
     },
   };
+  h.database.projectIssueEvent({ schemaVersion: 1, runId: "seed-run-failure", eventId: input.continuationState.lastEventId, state: input.continuationState });
   const caller = createActivityCaller(h.database, h.activities, h.clock.wait.bind(h.clock));
   const run = new IssueRun(input, h.database, caller, h.clock, new StructuredLogger((line) => records.push(JSON.parse(line) as Record<string, unknown>)));
   try {

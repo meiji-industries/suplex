@@ -42,10 +42,8 @@ export async function probeWorkflow(input: ProbeWorkflowInput): Promise<ProbeWor
   return state;
 }
 export const issueStateQuery = defineQuery<IssueWorkflowState>("issueState");
-const leadPlanningPatch = "forge-lead-planning-v1";
-const leadResultRoutingPatch = "forge-lead-result-routing-v2";
-const planGovernancePatch = "forge-plan-governance-v1";
-const planningProjectionIntegrityPatch = "forge-planning-projection-integrity-v1";
+const leadPlanningPatch = "forge-lead-planning-v1", leadResultRoutingPatch = "forge-lead-result-routing-v2";
+const planGovernancePatch = "forge-plan-governance-v1", planningProjectionIntegrityPatch = "forge-planning-projection-integrity-v1";
 const distinctPlanningStatesPatch = "forge-distinct-planning-states-v1";
 const developerFailureRecoveryPatch = "forge-developer-failure-recovery-v1";
 const developerReconciliationRecoveryPatch = "forge-developer-reconciliation-recovery-v1";

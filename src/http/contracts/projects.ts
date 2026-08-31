@@ -38,8 +38,8 @@ export const AgentListQuerySchema = z.object({ companyId: z.string().min(1).opti
 export type AgentResponse = z.infer<typeof AgentResponseSchema>;
 
 export const ProjectRepositoryBodySchema = z.object({
-  repositoryUrl: z.string().default(""),
-}).strict();
+  repositoryUrl: z.string().min(1),
+});
 
 export const ProjectCreateBodySchema = z.union([ProjectRepositoryBodySchema, ProjectBodySchema]);
 

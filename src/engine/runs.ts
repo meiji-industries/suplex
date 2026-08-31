@@ -78,7 +78,12 @@ export function issueRunInputFromSnapshotRow(db: Parameters<typeof resolveAgentP
 }
 
 function recoverInterruptedOperation(state: IssueWorkflowState, database: ForgeDatabase): IssueWorkflowState {
-  if (!state.activeOperation || !AGENT_OWNED_PHASES[state.phase]) return state;
+  // CI reconciliation can enter its agent-owned repair phases from the workflow
+  // loop rather than a user command. Those turns therefore have no
+  // `activeOperation` to recover, even though an interrupted planner or repair
+  // must still be made actionable after a worker restart.
+  const ciRepairPhase = state.phase === "ci_repair_planning" || state.phase === "ci_repairing";
+  if ((!state.activeOperation && !ciRepairPhase) || !AGENT_OWNED_PHASES[state.phase]) return state;
   const live = database.authQuery((db) => Boolean(db.prepare(`
     SELECT 1 FROM forge_developer_executions execution
     JOIN forge_herdr_turns turn ON turn.ledger = 'developer' AND turn.execution_id = execution.id AND turn.task_id = execution.task_id

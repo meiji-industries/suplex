@@ -448,6 +448,29 @@ test("Developer progress is durable before the held effect and terminal receipt 
   }
 });
 
+test("worker restart makes an orphaned autonomous CI repair actionable", async () => {
+  const harness = await createEngineHarness({ projectIssueState: async (event) => event.state });
+  const issueId = "orphaned-autonomous-ci-repair", workflowId = harness.workflowId(issueId);
+  harness.seedTask(issueId);
+  const continuation = IssueWorkflowStateSchema.parse({
+    ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
+    phase: "ci_repair_planning", revision: 1, owner: "lead", allowedCommands: [], pendingAction: "Looking into the CI failure", lastEventId: `${workflowId}:1`, activeOperation: null,
+  });
+  try {
+    persistContinuation(harness, issueId, continuation);
+    await startIssueWorkflow(harness.config, workflowInput(issueId, continuation));
+    expect(await queryIssueWorkflow(harness.config, workflowId)).toMatchObject({
+      phase: "ci_repair_required",
+      owner: "human",
+      allowedCommands: ["repair_ci", "reconcile_ci", "cancel_issue"],
+      activeOperation: null,
+      pendingAction: "CI repair was interrupted — retry is available",
+    });
+  } finally {
+    await harness.stop();
+  }
+});
+
 test("durable projection replay failures do not falsify command success", async () => {
   let replayFailures = 0;
   const harness = await createEngineHarness({

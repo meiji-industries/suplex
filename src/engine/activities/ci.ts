@@ -87,11 +87,14 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
     },
     async runCiRepair(input: WorkflowCiRepairActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);
-      const supervised = await invokeAgent(input, () => runSupervised<WorkflowCiRepairActivityResult>(input, "ci-repair", async (service) => {
-        const { worktreePath: _worktreePath, ...result } = await service.runCiRepair({ ...input, worktreePath });
+      const workflowResult = (raw: unknown): WorkflowCiRepairActivityResult => {
+        const { worktreePath: _worktreePath, ...result } = raw as Awaited<ReturnType<InstanceType<typeof DeveloperService>["runCiRepair"]>>;
         void _worktreePath;
         return result;
-      }), "integrator");
+      };
+      const supervised = await invokeAgent(input, () => runSupervised<WorkflowCiRepairActivityResult>(input, "ci-repair", async (service, operationClaim) => {
+        return workflowResult(await service.runCiRepair({ ...input, worktreePath, operationClaim }));
+      }, workflowResult), "integrator");
       if (supervised.status !== "completed") throw ApplicationFailure.nonRetryable(supervised.summary, supervised.reasonCode, { executionId: supervised.developerExecutionId });
       const result = supervised.result;
       activityWorktrees.set(result.developerExecutionId, worktreePath);

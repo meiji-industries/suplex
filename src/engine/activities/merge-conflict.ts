@@ -23,11 +23,11 @@ export function createMergeConflictActivities(ctx: ActivityContext): MergeConfli
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath }, { ...result, worktreePath });
     },
     async resolveMergeConflictSupervised(input) {
-      return invokeAgent(input, () => runSupervised<MergeConflictResolutionActivityResult>(input, "merge-conflict-resolution", async (service) => {
+      const workflowResult = (raw: unknown): MergeConflictResolutionActivityResult => raw as MergeConflictResolutionActivityResult;
+      return invokeAgent(input, () => runSupervised<MergeConflictResolutionActivityResult>(input, "merge-conflict-resolution", async (service, operationClaim) => {
         const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
-        const result = await service.runMergeConflictResolution({ ...input, worktreePath });
-        return "outcome" in result ? result : { ...result, worktreePath };
-      }), "integrator");
+        return workflowResult(await service.runMergeConflictResolution({ ...input, worktreePath, operationClaim }));
+      }, workflowResult), "integrator");
     },
   };
 }

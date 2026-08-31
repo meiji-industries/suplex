@@ -8,10 +8,14 @@ import { afterEach, expect, test } from "vitest";
 import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { claimOperation, operationKey } from "../src/operation-claims.js";
+import { beginOperation, claimOperation, operationKey, recordOperationEffect } from "../src/operation-claims.js";
 import { integrateRemoteBranch, type RemoteIntegration } from "../src/remote-branch-integration.js";
 
 const deadOwnerToken = `${createHash("sha256").update(hostname()).digest("hex")}:2147483647:crashed-worker`;
+
+function expireClaim(database: ForgeDatabase, key: string): void {
+  database.authQuery((db) => db.prepare("UPDATE forge_operation_claims SET lease_expires_at = '1970-01-01T00:00:00.000Z' WHERE operation_key = ?").run(key));
+}
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -102,12 +106,14 @@ test("abandoned merge claim executes once after exact authority proves no effect
   const remoteHead = await git(value.peer, "rev-parse", "HEAD");
   await git(value.peer, "push", "origin", "forge/task");
   const priorHead = await git(value.worktreePath, "rev-parse", "HEAD");
+  const priorTree = await git(value.worktreePath, "rev-parse", "HEAD^{tree}");
   const remoteUrl = await git(value.worktreePath, "remote", "get-url", "origin");
   const remoteUrlSha256 = createHash("sha256").update(remoteUrl).digest("hex");
   const remoteRef = "refs/heads/forge/task";
   const key = operationKey(["remote-integration", "task", remoteHead]);
-  const coordinates = { identity: { companyId: "company", workflowId: "workflow", repository: "acme/forge", provider: "git-origin", remoteUrlSha256, remoteRef, intendedRemoteHead: remoteHead, targetBaseSha: "a".repeat(40) }, authority: { priorHead, priorStatusSha256: createHash("sha256").update("").digest("hex"), priorDirtyFileCount: 0 } };
+  const coordinates = { identity: { companyId: "company", workflowId: "workflow", repository: "acme/forge", provider: "git-origin", remoteUrlSha256, remoteRef, intendedRemoteHead: remoteHead, targetBaseSha: "a".repeat(40) }, authority: { priorHead, priorTree, priorStatusSha256: createHash("sha256").update("").digest("hex"), priorDirtyFileCount: 0 } };
   claimOperation(value.database, { key, taskId: "task", kind: "merge", coordinates, ownerToken: deadOwnerToken });
+  expireClaim(value.database, key);
   let mergeEffects = 0;
   const result = await integrate(value, remoteHead, {
     git: async (args, cwd, taskId) => {
@@ -127,20 +133,27 @@ test("completed merge settles an abandoned claim with zero new merge effects", a
   await git(value.worktreePath, "add", "LOCAL.md");
   await git(value.worktreePath, "commit", "-m", "local");
   const priorHead = await git(value.worktreePath, "rev-parse", "HEAD");
+  const priorTree = await git(value.worktreePath, "rev-parse", "HEAD^{tree}");
   await writeFile(join(value.peer, "REMOTE.md"), "remote\n");
   await git(value.peer, "add", "REMOTE.md");
   await git(value.peer, "commit", "-m", "remote");
   const remoteHead = await git(value.peer, "rev-parse", "HEAD");
   await git(value.peer, "push", "origin", "forge/task");
-  await git(value.worktreePath, "fetch", "origin", "forge/task");
-  await git(value.worktreePath, "merge", "--no-edit", remoteHead);
-  const mergeCommit = await git(value.worktreePath, "rev-parse", "HEAD");
   const remoteUrl = await git(value.worktreePath, "remote", "get-url", "origin");
   const remoteUrlSha256 = createHash("sha256").update(remoteUrl).digest("hex");
   const remoteRef = "refs/heads/forge/task";
   const key = operationKey(["remote-integration", "task", remoteHead]);
-  const coordinates = { identity: { companyId: "company", workflowId: "workflow", repository: "acme/forge", provider: "git-origin", remoteUrlSha256, remoteRef, intendedRemoteHead: remoteHead, targetBaseSha: "a".repeat(40) }, authority: { priorHead, priorStatusSha256: createHash("sha256").update("").digest("hex"), priorDirtyFileCount: 0 } };
-  claimOperation(value.database, { key, taskId: "task", kind: "merge", coordinates, ownerToken: deadOwnerToken });
+  const coordinates = { identity: { companyId: "company", workflowId: "workflow", repository: "acme/forge", provider: "git-origin", remoteUrlSha256, remoteRef, intendedRemoteHead: remoteHead, targetBaseSha: "a".repeat(40) }, authority: { priorHead, priorTree, priorStatusSha256: createHash("sha256").update("").digest("hex"), priorDirtyFileCount: 0 } };
+  const claimed = claimOperation(value.database, { key, taskId: "task", kind: "merge", coordinates, ownerToken: deadOwnerToken });
+  if (claimed.status !== "acquired") throw new Error("Expected merge claim");
+  expect(beginOperation(value.database, key, claimed.ownership)).toBe(true);
+  await git(value.worktreePath, "fetch", "origin", "forge/task");
+  await git(value.worktreePath, "merge", "--no-edit", remoteHead);
+  const mergeCommit = await git(value.worktreePath, "rev-parse", "HEAD");
+  const mergeTree = await git(value.worktreePath, "rev-parse", "HEAD^{tree}");
+  const outcome = { kind: "merged" as const, mergeCommit, remoteHead };
+  expect(recordOperationEffect(value.database, key, claimed.ownership, { kind: "remote-integration", outcome, head: mergeCommit, tree: mergeTree, statusSha256: createHash("sha256").update("").digest("hex") })).toBe(true);
+  expireClaim(value.database, key);
   let mergeEffects = 0;
   const result = await integrate(value, remoteHead, {
     git: async (args, cwd, taskId) => {
@@ -149,7 +162,7 @@ test("completed merge settles an abandoned claim with zero new merge effects", a
       return { ok: command.exitCode === 0, stdout: command.stdout.trim(), stderr: command.stderr };
     },
   });
-  expect(result).toEqual({ kind: "merged", mergeCommit, remoteHead });
+  expect(result).toEqual(outcome);
   expect(mergeEffects).toBe(0);
   expect(value.database.authQuery((db) => db.prepare("SELECT status, generation FROM forge_operation_claims WHERE operation_key = ?").get(key))).toEqual({ status: "settled", generation: 2 });
 });

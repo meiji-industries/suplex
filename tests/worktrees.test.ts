@@ -15,6 +15,10 @@ import { createGitCommandGuard, reserveOwnedWorktree, withWorktreeBuildCaches, W
 
 const deadOwnerToken = `${createHash("sha256").update(hostname()).digest("hex")}:2147483647:crashed-worker`;
 
+function expireClaim(database: ForgeDatabase, key: string): void {
+  database.authQuery((db) => db.prepare("UPDATE forge_operation_claims SET lease_expires_at = '1970-01-01T00:00:00.000Z' WHERE operation_key = ?").run(key));
+}
+
 async function command(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
   const result = await runCommand({ taskId: null, stepId: null, command, args, cwd, ...(env ? { env } : {}) });
   if (result.exitCode !== 0 || result.timedOut) throw Object.assign(new Error(result.stderr || `${command} failed`), result);
@@ -188,6 +192,7 @@ test("abandoned push claims retry only after exact remote absence", async () => 
   let pushes = 0;
   try {
     claimOperation(database, { key, taskId: "task_1", kind: "push", coordinates, ownerToken: deadOwnerToken });
+    expireClaim(database, key);
     const manager = new WorktreeManager({
       async run(args: string[]) {
         if (args[0] === "rev-parse") return value.baseSha;
@@ -218,6 +223,7 @@ test("an observed intended remote commit settles an abandoned push without anoth
   let pushes = 0;
   try {
     claimOperation(database, { key, taskId: "task_1", kind: "push", coordinates, ownerToken: deadOwnerToken });
+    expireClaim(database, key);
     const manager = new WorktreeManager({
       async run(args: string[]) {
         if (args[0] === "rev-parse") return value.baseSha;
@@ -301,7 +307,7 @@ test("push command failure with exact remote absence releases the claim for retr
   }
 });
 
-test("a failed terminal claim wins after git push succeeds", async () => {
+test("cancellation after git push dispatch cannot overwrite its proven outcome", async () => {
   const value = await fixture();
   const database = new ForgeDatabase(createTestConfig(value.root).databasePath);
   const branchName = "feat/cancelled-push";
@@ -314,7 +320,7 @@ test("a failed terminal claim wins after git push succeeds", async () => {
       async run(args: string[]) {
         if (args[0] === "rev-parse") return value.baseSha;
         if (args[0] === "remote") return remoteUrl;
-        if (args[0] === "ls-remote") return "";
+        if (args[0] === "ls-remote") return pushes > 0 ? `${value.baseSha}\trefs/heads/${branchName}` : "";
         if (args[0] === "push") {
           pushes += 1;
           cancelOperation(database, { key, taskId, kind: "push" });
@@ -325,9 +331,9 @@ test("a failed terminal claim wins after git push succeeds", async () => {
     });
     const claims = { database, taskId };
 
-    await expect(manager.push(value.repositoryPath, branchName, claims)).rejects.toMatchObject({ code: "operation-failed" });
-    expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_operation_claims WHERE operation_key = ?").get(key))).toEqual({ status: "failed" });
-    await expect(manager.push(value.repositoryPath, branchName, claims)).rejects.toMatchObject({ code: "operation-failed" });
+    await expect(manager.push(value.repositoryPath, branchName, claims)).resolves.toBeUndefined();
+    expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_operation_claims WHERE operation_key = ?").get(key))).toEqual({ status: "settled" });
+    await expect(manager.push(value.repositoryPath, branchName, claims)).resolves.toBeUndefined();
     expect(pushes).toBe(1);
   } finally {
     database.close();

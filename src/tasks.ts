@@ -1079,7 +1079,7 @@ export class TaskService {
     const context = this.taskBranchContext(actorUserId, taskId);
     if (!context) return { available: false };
     try {
-      await new WorktreeManager().push(context.worktreePath, context.branchName);
+      await new WorktreeManager().push(context.worktreePath, context.branchName, { database: this.database, taskId });
     } catch (error) {
       const stderr = error && typeof error === "object" && "stderr" in error ? error.stderr : undefined;
       throw new TaskFailure(String(stderr ?? (error instanceof Error ? error.message : error)).trim().slice(0, 300), [], 409);

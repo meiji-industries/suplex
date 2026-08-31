@@ -228,11 +228,13 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       const observerDetail = observer.locator("[data-task-detail]");
       await observerDetail.getByRole("button", { name: "Edit task title", exact: true }).waitFor();
       await observer.close(); await page.close();
+      database.authQuery((db) => db.prepare("UPDATE forge_tasks SET archived_at = ? WHERE title = 'Browser task'").run(new Date().toISOString()));
       const narrow = await context.newPage();
       await narrow.setViewportSize({ width: 390, height: 844 });
       await narrow.goto(`${baseUrl}${detailPath}?company=${encodeURIComponent(company.id)}`);
       const narrowDetail = narrow.locator("[data-task-detail]");
       await narrowDetail.getByRole("button", { name: "Edit task title", exact: true }).waitFor();
+      expect(await narrowDetail.getByText("Archived", { exact: true }).isVisible()).toBe(true);
       expect(await narrowDetail.getByRole("button", { name: "Edit task description", exact: true }).innerText()).toContain("Image attached.");
       expect(await narrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       await narrow.close(); await context.close();

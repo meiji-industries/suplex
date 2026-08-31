@@ -236,7 +236,9 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
       setProjects(projectResult.projects); setTasks(taskResult); setAgents(agentResult.agents);
       setProjectId((current) => resolveNewTaskProjectId(current || remembered.current.projectId, projectResult.projects));
       setRoleAgentOverrides((current) => Object.fromEntries(Object.entries(current).filter(([, id]) => !id || agentResult.agents.some((agent) => agent.id === id))));
-      setDetailNotFound(Boolean(routeTaskId) && !taskResult.some((task) => task.id === routeTaskId));
+      // The list is only one visibility slice (for example, active or archived).
+      // Let the authoritative detail request decide whether a routed task exists.
+      setDetailNotFound(false);
       setLoadedCompanyId(companyId);
     } catch (reason) {
       if (token !== requestToken.current) return;

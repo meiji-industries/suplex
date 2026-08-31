@@ -55,7 +55,7 @@ test("findRecoverableDeveloperExecution joins the current role session and atomi
   const { database, activities } = await setup();
   addCandidate(database, { id: "candidate" });
 
-  await expect(activities.findRecoverableDeveloperExecution({ taskId: "task", companyId: "company", workflowId: "workflow" })).resolves.toEqual({ executionId: "candidate", planRevision: 7, attempt: 1, sessionRef: "session-candidate", worktreePath: "/worktrees/candidate", branchName: "forge/candidate", targetBaseSha: baseSha });
+  await expect(activities.findRecoverableDeveloperExecution({ taskId: "task", companyId: "company", workflowId: "workflow" })).resolves.toEqual({ executionId: "candidate", planRevision: 7, attempt: 1, sessionRef: "session-candidate", worktreePath: "/worktrees/candidate", branchName: "forge/candidate", targetBaseSha: baseSha, supersedesExecutionId: null });
   expect(database.authQuery((db) => db.prepare("SELECT status, failure_code, finished_at FROM forge_developer_executions WHERE id = 'candidate'").get())).toEqual({ status: "running", failure_code: null, finished_at: null });
 });
 

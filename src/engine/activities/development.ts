@@ -22,7 +22,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
     },
     async findRecoverableDeveloperExecution(input) {
       const rows = database.authQuery((db) => db.transaction(() => {
-        const executions = db.prepare(`SELECT execution.id AS executionId, execution.plan_revision AS planRevision, execution.attempt, session.id AS sessionRef, execution.worktree_path AS worktreePath, execution.branch_name AS branchName, execution.target_base_sha AS targetBaseSha
+        const executions = db.prepare(`SELECT execution.id AS executionId, execution.plan_revision AS planRevision, execution.attempt, session.id AS sessionRef, execution.worktree_path AS worktreePath, execution.branch_name AS branchName, execution.target_base_sha AS targetBaseSha, execution.supersedes_execution_id AS supersedesExecutionId
           FROM forge_developer_executions execution
           JOIN forge_herdr_turns turn ON turn.ledger = 'developer' AND turn.execution_id = execution.id AND turn.task_id = execution.task_id
           JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.task_id = execution.task_id
@@ -33,7 +33,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
             AND session.session_role IN ('builder', 'integrator') AND session.is_current = 1
             AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed')
             AND NOT EXISTS (SELECT 1 FROM forge_developer_result_conflicts conflict WHERE conflict.execution_id = execution.id)
-          ORDER BY execution.started_at DESC LIMIT 2`).all(input.taskId, input.companyId, input.workflowId) as Array<{ executionId: string; planRevision: number; attempt: number; sessionRef: string; worktreePath: string; branchName: string; targetBaseSha: string }>;
+          ORDER BY execution.started_at DESC LIMIT 2`).all(input.taskId, input.companyId, input.workflowId) as Array<{ executionId: string; planRevision: number; attempt: number; sessionRef: string; worktreePath: string; branchName: string; targetBaseSha: string; supersedesExecutionId: string | null }>;
         if (executions.length !== 1) return [];
         const candidate = executions[0]!;
         const reopened = db.prepare(`UPDATE forge_developer_executions SET status = 'running', failure_code = NULL, finished_at = NULL

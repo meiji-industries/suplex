@@ -37,7 +37,7 @@ test("the task detail remains backed by the engine snapshot after a host restart
       await context.addCookies(cookies.map((cookie) => { const [name, value] = cookie.split("=", 2); return { name: name!, value: value!, domain: "127.0.0.1", path: "/" }; }).filter((cookie) => cookie.name === SESSION_COOKIE_NAME || cookie.name === CSRF_COOKIE_NAME));
       const page = await context.newPage(); const url = `http://127.0.0.1:${address.port}/tasks?company=${engineFixture.companyId}`;
       await page.goto(url); const list = page.locator("[data-task-list]"); await list.waitFor({ timeout: 5_000 }); await list.getByText("browser-engine", { exact: true }).waitFor({ timeout: 5_000 });
-      await h.restart(); expect(await queryIssueWorkflow(h.config, started.workflowId)).toMatchObject({ phase: "backlog", revision: 0 });
+      await h.restart(); expect(await queryIssueWorkflow(h.config, started.workflowId)).toMatchObject({ phase: "backlog", revision: 1 });
       await page.setViewportSize({ width: 390, height: 844 }); expect(await list.getByText("browser-engine", { exact: true }).isVisible()).toBe(true); await context.close();
     } finally { await browser.close(); }
   } finally { await app.close(); await h.stop(); }

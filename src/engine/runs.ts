@@ -423,7 +423,6 @@ export class IssueRun {
       await this.ready();
       if (this.loopError) throw this.loopError;
       const automatic = isAutomaticCommand(this.workflowId, commandId);
-      if (!automatic && commandId !== "legacy-command") clearAutomaticChainHalt(this.workflowId);
       if (this.runawayHalted && !automatic && commandId !== "legacy-command") {
         this.runawayHalted = false;
         this.projectionTimes = [];
@@ -480,6 +479,7 @@ export class IssueRun {
         return result;
       } finally {
         if (this.activeCommand?.controller === controller) this.activeCommand = undefined;
+        if (!automatic && commandId !== "legacy-command") clearAutomaticChainHalt(this.workflowId);
         finishCommand();
       }
     });

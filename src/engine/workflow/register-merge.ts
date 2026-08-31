@@ -130,6 +130,7 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
       if (isCancellation(error)) throw error;
       return block("Forge could not prepare a conflict plan");
     }
+    await ctx.project();
   }
   if (!ctx.state.mergeResolutionPlanArtifactId && ctx.state.mergeDecision) return ctx.state;
   if (!ctx.state.mergeResolutionPlanArtifactId) return block("A Lead conflict plan is required");

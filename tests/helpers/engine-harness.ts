@@ -5,7 +5,7 @@ import { createTestConfig, type ForgeConfig } from "../../src/config.js";
 import { ForgeDatabase } from "../../src/database.js";
 import { loadIssueRuns } from "../../src/engine/host.js";
 import { installIssueEngine } from "../../src/engine/index.js";
-import type { IssueActivities, IssueWorkflowState } from "../../src/engine/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueContinuationStateSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, type IssueActivities, type IssueWorkflowInput, type IssueWorkflowState } from "../../src/engine/issue-contracts.js";
 import { IssueEngine, type EngineClock } from "../../src/engine/runs.js";
 import { runtimeIdentifiers } from "../../src/runtime-identifiers.js";
 
@@ -22,6 +22,8 @@ export interface EngineHarness {
   activities: Partial<IssueActivities>; calls: Map<string, number>;
   workflowId(issueId: string): string;
   seedTask(issueId: string, options?: { autoApprovePlan?: boolean; pullRequestMode?: "draft" | "ready" | "auto_merge"; deliveryTarget?: "local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged" }): void;
+  seedContinuation(issueId: string, continuationState: NonNullable<IssueWorkflowInput["continuationState"]>): IssueWorkflowState;
+  startContinuation(issueId: string, continuationState: NonNullable<IssueWorkflowInput["continuationState"]>, extra?: Partial<IssueWorkflowInput>): Promise<{ workflowId: string; runId: string }>;
   restart(): Promise<IssueEngine>;
   settle(workflowId: string, predicate: (state: IssueWorkflowState) => boolean): Promise<IssueWorkflowState>;
   stop(): Promise<void>;
@@ -59,6 +61,25 @@ export async function createEngineHarness(overrides: Partial<IssueActivities> = 
     get database() { return database; }, get engine() { return engine; },
     workflowId: (issueId) => `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-${issueId}`,
     seedTask(issueId, options = {}) { const now = new Date(clock.now()).toISOString(); database.authQuery((db) => db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, auto_approve_plan, pull_request_mode, delivery_target, created_at, updated_at) VALUES (?, ?, ?, ?, ?, '[]', ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)").run(issueId, engineFixture.companyId, engineFixture.projectId, issueId, engineFixture.briefArtifactId, JSON.stringify(engineFixture.roleProfiles), harness.workflowId(issueId), engineFixture.projectRevisionId, `${issueId}-key`, options.autoApprovePlan ? 1 : 0, options.pullRequestMode ?? "ready", options.deliveryTarget ?? "pull_request_ready", now, now)); },
+    seedContinuation(issueId, continuationState) {
+      const workflowId = harness.workflowId(issueId);
+      const continuation = IssueContinuationStateSchema.parse(continuationState);
+      const finalState = IssueWorkflowStateSchema.parse({
+        ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
+        ...continuation,
+      });
+      for (let revision = 0; revision <= finalState.revision; revision += 1) {
+        const state = revision === finalState.revision ? finalState : IssueWorkflowStateSchema.parse({ ...finalState, revision, lastEventId: `${workflowId}:${revision}` });
+        database.projectIssueEvent({ schemaVersion: 1, runId: `seed-${issueId}`, eventId: state.lastEventId, state });
+      }
+      return finalState;
+    },
+    async startContinuation(issueId, continuationState, extra = {}) {
+      const workflowId = harness.workflowId(issueId);
+      harness.seedContinuation(issueId, continuationState);
+      const run = await engine.create(IssueWorkflowInputSchema.parse({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2, continuationState, ...extra }));
+      return { workflowId, runId: run.runId };
+    },
     async restart() { engine.dispose(); database.close(); database = new ForgeDatabase(config.databasePath); engine = new IssueEngine(config, database, { activities: activityProxy, clock }); installIssueEngine(config, engine); await loadIssueRuns(engine); return engine; },
     async settle(workflowId, predicate) { let last!: IssueWorkflowState; for (let attempt = 0; attempt < 2_000; attempt += 1) { const run = engine.run(workflowId); last = run.state; if (predicate(last)) return last; if (run.error) throw run.error; await Promise.resolve(); } throw new Error(`Engine run ${workflowId} did not settle from ${last.phase}: ${JSON.stringify(last.lastHandlerError)}`); },
     async stop() { engine.dispose(); database.close(); await rm(root, { recursive: true, force: true }); },

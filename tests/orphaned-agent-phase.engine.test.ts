@@ -1,23 +1,8 @@
 import { expect, test } from "vitest";
 
-import { buildInitialIssueWorkflowState, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
-import { queryIssueWorkflow, startIssueWorkflow } from "../src/engine/service.js";
+import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
+import { queryIssueWorkflow } from "../src/engine/service.js";
 import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
-
-function input(issueId: string, continuationState: IssueWorkflowState) {
-  return {
-    companyId: engineFixture.companyId,
-    projectId: engineFixture.projectId,
-    issueId,
-    projectRevisionId: engineFixture.projectRevisionId,
-    briefArtifactId: engineFixture.briefArtifactId,
-    briefSha256: engineFixture.sha256,
-    imageArtifactIds: [],
-    roleProfiles: engineFixture.roleProfiles,
-    supplementalReview: false,
-    continuationState,
-  };
-}
 
 test("a resumed merge-conflict resolution with no live execution becomes a human recovery state", async () => {
   const h = await createEngineHarness();
@@ -35,7 +20,7 @@ test("a resumed merge-conflict resolution with no live execution becomes a human
     lastEventId: `${workflowId}:7`,
   };
   try {
-    const started = await startIssueWorkflow(h.config, input("orphaned-merge-resolution", continuationState));
+    const started = await h.startContinuation("orphaned-merge-resolution", continuationState);
     await h.settle(started.workflowId, (state) => state.phase === "merge_conflict_required" && state.owner === "human");
     expect(await queryIssueWorkflow(h.config, workflowId)).toMatchObject({ phase: "merge_conflict_required", owner: "human", activeOperation: null, allowedCommands: ["resolve_merge_conflict", "cancel_issue"], developerRecoveryStatus: "interrupted" });
   } finally { await h.stop(); }
@@ -57,7 +42,7 @@ test("a resumed development turn with no live execution becomes the existing dev
     lastEventId: `${workflowId}:7`,
   };
   try {
-    const started = await startIssueWorkflow(h.config, input("orphaned-development", continuationState));
+    const started = await h.startContinuation("orphaned-development", continuationState);
     await h.settle(started.workflowId, (state) => state.phase === "delivery_blocked" && state.owner === "human");
     expect(await queryIssueWorkflow(h.config, workflowId)).toMatchObject({ phase: "delivery_blocked", owner: "human", activeOperation: null, allowedCommands: ["retry_development", "cancel_issue"], developerRecoveryStatus: "interrupted" });
   } finally { await h.stop(); }

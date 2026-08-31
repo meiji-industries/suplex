@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 
 import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
 import { ApplicationFailure } from "../src/engine/failures.js";
-import { executeIssueCommand, queryIssueWorkflow, signalIssueGithubPullRequestSync, startIssueWorkflow } from "../src/engine/service.js";
+import { executeIssueCommand, queryIssueWorkflow, signalIssueGithubPullRequestSync } from "../src/engine/service.js";
 import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
 
 const head = "a".repeat(40);
@@ -33,14 +33,14 @@ test("repeated unchanged PR syncs retain a human CI decision", async () => {
       githubPullRequestObservationKey: `42:open:false:${head}:none:failed`,
       lastEventId: "workflow-human-ci:20",
     };
-    const started = await startIssueWorkflow(h.config, { companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "human-ci", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false, continuationState });
+    const started = await h.startContinuation("human-ci", continuationState);
 
     await signalIssueGithubPullRequestSync(h.config, started.workflowId);
     await h.settle(started.workflowId, () => observations === 1);
     await signalIssueGithubPullRequestSync(h.config, started.workflowId);
     await h.settle(started.workflowId, () => observations === 2);
 
-    expect(await queryIssueWorkflow(h.config, started.workflowId)).toMatchObject({ phase: "ci_repair_required", owner: "human", revision: 21, pendingAction: "Required check failed: Test suite", githubPullRequestMergeable: "MERGEABLE", githubPullRequestChecks: { total: 1, pending: 0, failing: 1, successful: 0 }, expectedHeadSha: head });
+    expect(await queryIssueWorkflow(h.config, started.workflowId)).toMatchObject({ phase: "ci_repair_required", owner: "human", revision: 22, pendingAction: "Required check failed: Test suite", githubPullRequestMergeable: "MERGEABLE", githubPullRequestChecks: { total: 1, pending: 0, failing: 1, successful: 0 }, expectedHeadSha: head });
   } finally { await h.stop(); }
 });
 
@@ -74,9 +74,9 @@ test("CI reconciliation rejects a changed PR head without replacing reviewed ide
       processedCommandIds: [`${h.workflowId("ci-head-drift")}:auto-review_delivery:23`],
       lastEventId: "workflow-ci-head-drift:20",
     };
-    const started = await startIssueWorkflow(h.config, { companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "ci-head-drift", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false, continuationState });
+    const started = await h.startContinuation("ci-head-drift", continuationState);
 
-    const changed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: 20, actorUserId: engineFixture.actorUserId });
+    const changed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: (await queryIssueWorkflow(h.config, started.workflowId)).revision, actorUserId: engineFixture.actorUserId });
 
     expect(changed).toMatchObject({ phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null });
     expect(h.calls.get("reconcileCi") ?? 0).toBe(0);
@@ -88,13 +88,9 @@ test.each([
   ["base", head, "d".repeat(40)],
 ] as const)("missing-release CI recovery rejects observed %s drift without replacing reviewed identity", async (coordinate, observedHeadSha, observedBaseSha) => {
   const issueId = `ci-missing-release-${coordinate}-drift`;
-  let observations = 0;
   const h = await createEngineHarness({
     projectIssueState: async (event) => event.state,
-    observeGithubPullRequest: async () => {
-      observations += 1;
-      return { exists: true, number: 42, url: "https://github.test/42", state: "open" as const, isDraft: false, headSha: observations === 1 ? head : observedHeadSha, baseSha: observations === 1 ? engineFixture.base : observedBaseSha, mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, autoMergeEnabled: false, reviewDecision: null };
-    },
+    observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.test/42", state: "open" as const, isDraft: false, headSha: observedHeadSha, baseSha: observedBaseSha, mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, autoMergeEnabled: false, reviewDecision: null }),
     adoptPullRequestRelease: async () => { throw new Error(`changed PR ${coordinate} must not be adopted`); },
     reconcileCi: async () => { throw new Error(`changed PR ${coordinate} must not reach CI reconciliation`); },
   });
@@ -120,9 +116,9 @@ test.each([
       processedCommandIds: [`${h.workflowId(issueId)}:auto-review_delivery:23`],
       lastEventId: `workflow-${issueId}:20`,
     };
-    const started = await startIssueWorkflow(h.config, { companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false, continuationState });
+    const started = await h.startContinuation(issueId, continuationState);
 
-    const changed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: 20, actorUserId: engineFixture.actorUserId });
+    const changed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: (await queryIssueWorkflow(h.config, started.workflowId)).revision, actorUserId: engineFixture.actorUserId });
 
     expect(changed).toMatchObject({ phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null });
     expect(h.calls.get("adoptPullRequestRelease") ?? 0).toBe(0);
@@ -165,9 +161,9 @@ test("missing-release CI recovery forwards pinned base and preserves reviewed id
       processedCommandIds: [`${h.workflowId(issueId)}:auto-review_delivery:23`],
       lastEventId: `workflow-${issueId}:20`,
     };
-    const started = await startIssueWorkflow(h.config, { companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false, continuationState });
+    const started = await h.startContinuation(issueId, continuationState);
 
-    const failed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: 20, actorUserId: engineFixture.actorUserId });
+    const failed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: (await queryIssueWorkflow(h.config, started.workflowId)).revision, actorUserId: engineFixture.actorUserId });
 
     expect(adoptionInput).toMatchObject({ expectedBaseSha: engineFixture.base });
     expect(failed).toMatchObject({ expectedHeadSha: head, expectedHeadTree: engineFixture.tree, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: "review-a", lastHandlerError: { command: "reconcile_ci", reason: "Activity adoptPullRequestRelease failed" } });
@@ -206,9 +202,9 @@ test("missing-release CI recovery adopts an unpinned legacy pull request identit
       processedCommandIds: [`${h.workflowId(issueId)}:auto-review_delivery:23`],
       lastEventId: `workflow-${issueId}:20`,
     };
-    const started = await startIssueWorkflow(h.config, { companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false, continuationState });
+    const started = await h.startContinuation(issueId, continuationState);
 
-    const adopted = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: 20, actorUserId: engineFixture.actorUserId });
+    const adopted = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: (await queryIssueWorkflow(h.config, started.workflowId)).revision, actorUserId: engineFixture.actorUserId });
 
     expect(adopted).toMatchObject({ releaseId: "release-adopted", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: engineFixture.tree });
     expect(h.calls.get("adoptPullRequestRelease")).toBe(1);

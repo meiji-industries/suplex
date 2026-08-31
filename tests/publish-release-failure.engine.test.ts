@@ -2,7 +2,6 @@ import { expect, test } from "vitest";
 
 import { ApplicationFailure } from "../src/engine/failures.js";
 import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
-import { startIssueWorkflow } from "../src/engine/service.js";
 import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
 
 test("a stale reviewed revision blocks publication for human review", async () => {
@@ -18,7 +17,7 @@ test("a stale reviewed revision blocks publication for human review", async () =
     phase: "delivery_reviewed" as const, revision: 5, owner: "lead" as const, allowedCommands: ["publish_draft" as const, "cancel_issue" as const], pendingAction: "Opening the pull request", deliveryReviewId: "review", developerExecutionId: "developer", branchName: "forge/issue/stale", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, releaseRepository: "acme/forge", lastEventId: `${workflowId}:5`,
   };
   try {
-    const started = await startIssueWorkflow(h.config, { companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "stale-publish", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false, continuationState });
+    const started = await h.startContinuation("stale-publish", continuationState);
     const state = await h.settle(started.workflowId, (value) => value.phase === "delivery_blocked");
     expect(state).toMatchObject({ phase: "delivery_blocked", owner: "human", allowedCommands: expect.arrayContaining(["review_delivery", "cancel_issue"]), releaseFailureCode: "stale-reviewed-revision", pendingAction: "The reviewed branch is unavailable for pushing" });
     expect(state.allowedCommands).toContain("retry_target_base_reconciliation");
@@ -37,7 +36,7 @@ test("a resumed interrupted publish returns to delivery review without pushing",
     phase: "releasing" as const, revision: 5, owner: "lead" as const, allowedCommands: [], pendingAction: "Opening the pull request", deliveryReviewId: "review", developerExecutionId: "developer", branchName: "forge/issue/interrupted", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, releaseRepository: "acme/forge", activeOperation: null, releaseRetryAt: null, lastEventId: `${workflowId}:5`,
   };
   try {
-    const started = await startIssueWorkflow(h.config, { companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "interrupted-publish", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false, continuationState });
+    const started = await h.startContinuation("interrupted-publish", continuationState);
     await h.settle(started.workflowId, (value) => value.phase === "delivery_ready");
     expect(projected).toContainEqual(expect.objectContaining({ phase: "delivery_ready", owner: "lead", allowedCommands: expect.arrayContaining(["review_delivery", "cancel_issue"]), pendingAction: "Publish was interrupted — re-review before publishing" }));
     expect(h.calls.get("pushDeliveryBranch") ?? 0).toBe(0);

@@ -63,6 +63,7 @@ async function fixture() {
     const resultRelativePath = `herdr-results/${taskId}/${role}/result-${turnId}.json`;
     const promptSentAt = options.promptSentAt === undefined ? stamp : options.promptSentAt;
     database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES (?, 'company', 'project', 'Task', 'brief', '[]', '{}', 0, ?, 'revision', ?, ?, ?)").run(taskId, `workflow-${suffix}`, `key-${suffix}`, stamp, stamp);
       db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES (?, 'company', 'project', ?, 1, 'planning', 'lead', '[]', NULL, ?, 'event')").run(taskId, `workflow-${suffix}`, stamp);
       db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, agent_name, pane_id, status, created_at, updated_at) VALUES (?, ?, ?, 1, 1, 'codex', ?, ?, 'ready', ?, ?)").run(sessionId, taskId, role, agentName, paneId, stamp, stamp);
       if (ledger === "agent") {
@@ -112,6 +113,24 @@ test("terminal current planner and reviewer turns prompt their renamed live agen
     { turn_id: planner.turnId, status: "awaiting_human", attention_excerpt: expect.stringContaining(planner.turnId) },
     { turn_id: reviewer.turnId, status: "awaiting_human", attention_excerpt: expect.stringContaining(reviewer.turnId) },
   ]);
+});
+
+test.each([
+  { name: "cancelled", phase: "cancelled", archived: false },
+  { name: "archived", phase: "planning", archived: true },
+])("$name tasks are excluded from active-turn recovery", async ({ phase, archived }) => {
+  const value = await fixture();
+  const turn = value.addTurn(`terminal-${phase}-${archived}`);
+  value.database.authTransaction((db) => {
+    db.prepare("UPDATE forge_issue_projections SET phase = ? WHERE task_id = ?").run(phase, turn.taskId);
+    if (archived) db.prepare("UPDATE forge_tasks SET archived_at = ? WHERE id = ?").run(stamp, turn.taskId);
+  });
+  const prompts: string[] = [];
+  const herdr = { runtimeSnapshot: async () => value.snapshot(), prompt: async (agent: string) => { prompts.push(agent); } };
+
+  expect(await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, now: () => stamp })).toEqual([]);
+  expect(prompts).toEqual([]);
+  expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = ?").get(turn.turnId))).toEqual({ status: "waiting" });
 });
 
 test("no initial prompt receipt and unknown live lifecycle never trigger recovery prompts", async () => {
@@ -283,7 +302,7 @@ test("cancellation and terminal projection state suppress prompts and completion
 
   expect(outcomes.find(({ turnId }) => turnId === cancelling.turnId)).toMatchObject({ action: "no_change", evidence: expect.arrayContaining(["advance:not latest active execution"]) });
   expect(outcomes.find(({ turnId }) => turnId === cancelledAgent.turnId)).toMatchObject({ action: "no_change", evidence: expect.arrayContaining(["resume:not exact current live binding"]) });
-  expect(outcomes.find(({ turnId }) => turnId === terminalProjection.turnId)).toMatchObject({ action: "no_change", evidence: expect.arrayContaining(["task:terminal"]) });
+  expect(outcomes.find(({ turnId }) => turnId === terminalProjection.turnId)).toBeUndefined();
   expect(prompts).toEqual([]);
   expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_herdr_turns WHERE status = 'completed' AND task_id IN (?, ?, ?)").get(cancelling.taskId, cancelledAgent.taskId, terminalProjection.taskId))).toEqual({ count: 0 });
 });

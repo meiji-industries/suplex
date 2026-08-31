@@ -127,7 +127,9 @@ function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
     LEFT JOIN forge_agent_executions agent ON agent.id = turn.execution_id AND turn.ledger = 'agent'
     LEFT JOIN forge_developer_executions developer ON developer.id = turn.execution_id AND turn.ledger = 'developer'
     LEFT JOIN forge_delivery_reviews review ON review.id = (SELECT id FROM forge_delivery_reviews WHERE workflow_id = projection.workflow_id ORDER BY created_at DESC, id DESC LIMIT 1)
-    WHERE turn.status IN (${activeStatuses}) AND (projection.phase NOT IN ('done', 'cancelled', 'failed') OR datetime(COALESCE(projection.state_changed_at, projection.updated_at)) >= datetime('now', '-1 day'))${taskId ? " AND turn.task_id = ?" : ""}
+    WHERE turn.status IN (${activeStatuses})
+      AND projection.phase NOT IN ('done', 'cancelled', 'failed')
+      AND NOT EXISTS (SELECT 1 FROM forge_tasks task WHERE task.id = turn.task_id AND task.archived_at IS NOT NULL)${taskId ? " AND turn.task_id = ?" : ""}
     ORDER BY turn.task_id, turn.turn_id`).all(...(taskId ? [taskId] : [])) as Turn[]);
 }
 

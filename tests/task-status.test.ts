@@ -10,6 +10,9 @@ test("task status uses the shared phase icons", () => {
   expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "backlog" }))).toContain("lucide-circle-dashed");
   expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "blocked" }))).toContain("lucide-circle-x");
   expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "failed" }))).toContain("lucide-circle-x");
+  const ciRepairRequired = renderToStaticMarkup(createElement(TaskStatus, { phase: "ci_repair_required" }));
+  expect(ciRepairRequired).toContain("lucide-triangle-alert");
+  expect(ciRepairRequired).not.toContain("lucide-circle-x");
   expect(phaseLabel("development")).toBe("In Development");
   expect(phaseLabel("ci_repairing")).toBe("Fixing CI");
   expect(phaseLabel("ci_repair_required")).toBe("CI repair needed");

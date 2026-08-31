@@ -97,6 +97,6 @@ test("merges consecutive visits and groups the thirty-segment history into first
 
   expect(thirtySegmentActivity).toHaveLength(30);
   expect(timings.find((timing) => timing.phase === "development")).toMatchObject({ durationMs: 12 * 60_000 });
-  expect(lanes.map((lane) => lane.label)).toEqual(["Ready", "In Development", "Delivered", "In Review", "Fixing review findings", "Reviewed", "Opening PR", "Needs attention", "Waiting for CI", "Final review"]);
+  expect(lanes.map((lane) => lane.label)).toEqual(["Ready", "In Development", "Ready for review", "In Review", "Fixing review findings", "Reviewed", "Opening PR", "Needs attention", "Waiting for CI", "Final review"]);
   expect(lanes.find((lane) => lane.phase === "repair_required")?.timings).toHaveLength(3);
 });

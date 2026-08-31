@@ -182,7 +182,7 @@ test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at
       await recovery.getByText("Reconnecting", { exact: true }).waitFor();
       current = taskState(company.id, "active", 5, { phase: "delivery_ready", pendingAction: "Lead delivery review" });
       await reloadTask();
-      expect(await page.getByText("Delivered", { exact: true }).count()).toBeGreaterThan(0);
+      expect(await page.getByText("Ready for review", { exact: true }).count()).toBeGreaterThan(0);
 
       current = taskState(company.id, "interrupted", 3);
       await reloadTask();

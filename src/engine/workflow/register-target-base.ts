@@ -23,10 +23,13 @@ export function registerTargetBaseHandlers(ctx: IssueWorkflowContext): void {
       throw error;
     }
     if (!checkpoint && canSyncBranch()) {
-      const previous = { owner: ctx.state.owner, allowedCommands: ctx.state.allowedCommands, pendingAction: ctx.state.pendingAction };
+      const previous = { phase: ctx.state.phase, owner: ctx.state.owner, allowedCommands: ctx.state.allowedCommands, pendingAction: ctx.state.pendingAction };
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Merging the latest base branch", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
-      if (await ctx.runTargetBaseCheckpoint("pre_release")) {
+      if (await ctx.runTargetBaseCheckpoint("pre_release") && ctx.state.phase === previous.phase) {
+        // A no-drift check outside a blocked transition only needs to undo the
+        // transient "Merging" status. A checkpoint that changes phase owns its
+        // review tuple, so restoring it would revive stale retry commands.
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...previous, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
         await ctx.project();
       }

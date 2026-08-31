@@ -63,6 +63,40 @@ test("cancelling a queued Developer turn prevents its start and retry starts exa
   } finally { await h.stop(); }
 });
 
+test("target-base retry preserves the authoritative Lead-review state for a clean unreviewed delivery", async () => {
+  const h = await createEngineHarness({
+    projectIssueState: async (event) => event.state,
+    reconcileTargetBase: async (value) => ({ outcome: "no_drift" as const, checkId: "target-base-clean", checkpoint: value.checkpoint, expectedBaseSha: value.expectedBaseSha, observedBaseSha: value.expectedBaseSha, headSha: value.expectedHeadSha, headTree: value.expectedHeadTree }),
+  });
+  const issueId = "clean-delivery-target-base-retry";
+  h.seedTask(issueId);
+  try {
+    const blocked = {
+      ...baseState(h, issueId, "delivery_blocked", 12),
+      owner: "human" as const,
+      allowedCommands: ["retry_development" as const, "cancel_issue" as const],
+      pendingAction: "Developer retry is available",
+      developerExecutionId: "developer-clean",
+      developerSessionRef: "developer-session",
+      branchName: `forge/issue/${issueId}`,
+      targetBaseSha: engineFixture.base,
+      resultCommit: engineFixture.commit,
+      resultTree: engineFixture.tree,
+      dirtyState: "clean" as const,
+      deliveryArtifactId: "delivery",
+      developerEvidenceArtifactId: "evidence",
+      deliveryReviewId: null,
+    };
+    const started = await h.startContinuation(issueId, blocked);
+    const initial = await queryIssueWorkflow(h.config, started.workflowId);
+    const resumed = await executeIssueCommand(h.config, started.workflowId, "retry_target_base_reconciliation", { expectedRevision: initial.revision, actorUserId: engineFixture.actorUserId });
+
+    expect(resumed).toMatchObject({ phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue", "retry_target_base_reconciliation"], pendingAction: "Lead delivery review" });
+    expect(resumed.allowedCommands).not.toContain("retry_development");
+    expect(h.calls.get("reconcileTargetBase")).toBe(1);
+  } finally { await h.stop(); }
+});
+
 test("projection rebuild replaces a lagged projection with the latest engine snapshot", async () => {
   const h = await createEngineHarness(); h.seedTask("rebuild"); h.activities.projectIssueState = async (event) => { h.database.projectIssueEvent(event); h.database.observeIssueProjection(event); return event.state; };
   try {

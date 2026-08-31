@@ -190,6 +190,30 @@ test("live identity-valid Herdr processes preserve and recover agent and develop
   }
 });
 
+test("startup convergence ignores an older failed execution when a newer turn in its role session is active", async () => {
+  const value = await startupFixture(["shared-session-task"]);
+  bindAgentExecution(value.database, { taskId: "shared-session-task", executionId: "older-execution", sessionId: "shared-session", paneId: "shared-pane", role: "integrator", status: "failed", turnStatus: "waiting", mirroredSessionStatus: "failed" });
+  value.database.authTransaction((db) => {
+    const later = "2026-08-30T12:01:00.000Z";
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES ('newer-execution', 'shared-session-task', 'company', 'workflow-shared-session-task', 'integrator', 'starting', 2, ?)").run(later);
+    db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES ('turn-newer-execution', 'shared-session-task', 'shared-session', 'integrator', 'agent', 'newer-execution', 'delivery-review', ?, 'results/newer-execution.json', 0, 'waiting', ?, ?)").run("2".repeat(64), later, later);
+  });
+  const herdr = { async runtimeSnapshot() { return runtimeSnapshot([{ sessionId: "shared-session", paneId: "shared-pane", status: "idle" }]); } } as unknown as HerdrClient;
+  try {
+    await expect(convergeOrphanedHerdrExecutions(value.database, herdr, silentLogger)).resolves.toEqual({
+      reclaimed: { agentExecutions: 0, developerExecutions: 0 },
+      recovered: { agentExecutions: 0, developerExecutions: 0 },
+    });
+    expect(value.database.authQuery((db) => db.prepare("SELECT id, status, failure_code FROM forge_agent_executions ORDER BY id").all())).toEqual([
+      { id: "newer-execution", status: "starting", failure_code: null },
+      { id: "older-execution", status: "failed", failure_code: "worker-restart-orphan" },
+    ]);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("the compatibility agent-list snapshot fallback preserves an observed live execution", async () => {
   const value = await startupFixture(["fallback-task"]);
   bindAgentExecution(value.database, { taskId: "fallback-task", executionId: "fallback-execution", sessionId: "fallback-session", paneId: "fallback-pane", role: "planner", turnStatus: "waiting" });
@@ -216,8 +240,9 @@ test("a live reused role pane does not preserve an execution whose own linked tu
   const value = await startupFixture(["reused-pane-task"]);
   bindAgentExecution(value.database, { taskId: "reused-pane-task", executionId: "stale-execution", sessionId: "shared-session", paneId: "shared-pane", status: "running", turnStatus: "completed" });
   value.database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at, failure_code, failure_summary) VALUES ('later-execution', 'reused-pane-task', 'company', 'workflow-reused-pane-task', 'reviewer', 'failed', 2, ?, ?, 'worker-restart-orphan', 'worker stopped')").run(stamp, stamp);
-    db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES ('turn-later-execution', 'reused-pane-task', 'shared-session', 'reviewer', 'agent', 'later-execution', 'delivery-review', ?, 'results/later-execution.json', 0, 'waiting', ?, ?)").run("2".repeat(64), stamp, stamp);
+    const later = "2026-08-30T12:01:00.000Z";
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at, failure_code, failure_summary) VALUES ('later-execution', 'reused-pane-task', 'company', 'workflow-reused-pane-task', 'reviewer', 'failed', 2, ?, ?, 'worker-restart-orphan', 'worker stopped')").run(later, later);
+    db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES ('turn-later-execution', 'reused-pane-task', 'shared-session', 'reviewer', 'agent', 'later-execution', 'delivery-review', ?, 'results/later-execution.json', 0, 'waiting', ?, ?)").run("2".repeat(64), later, later);
   });
   insertReviewAttempt(value.database, { id: "stale-running-attempt", taskId: "reused-pane-task", executionId: "stale-execution", sessionId: "shared-session", status: "running" });
   insertReviewAttempt(value.database, { id: "stale-completed-attempt", taskId: "reused-pane-task", executionId: "stale-execution", sessionId: "shared-session", status: "completed", finishedAt: stamp });

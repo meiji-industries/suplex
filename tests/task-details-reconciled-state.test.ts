@@ -4,6 +4,8 @@ import { expect, test } from "vitest";
 
 import { TaskDetailsPage } from "../src/frontend/views/task-details.js";
 import { PullRequestCard } from "../src/frontend/components/app/pull-request-card.js";
+import type { ApiTask } from "../src/frontend/lib/view-shared.js";
+
 
 test("pull request head branches hug their text while change stats remain right-aligned", () => {
   const task = {
@@ -14,6 +16,22 @@ test("pull request head branches hug their text while change stats remain right-
   expect(html).toContain('<code class="min-w-0 truncate rounded bg-muted px-1.5" title="work/readme-tweak-10-2c349f08">');
   expect(html).not.toContain('min-w-0 flex-1 truncate rounded bg-muted px-1.5');
   expect(html).toContain('class="ml-auto flex shrink-0 items-center gap-1.5 tabular-nums"');
+});
+
+test("pull request cards show the latest failing check separately from metadata", () => {
+  const partialTask = {
+    id: "task-1", title: "Pull request task", phase: "development", release: null,
+    ci: { attempts: [{ checks: [{ name: "build / test", status: "completed", conclusion: "failure", detailsUrl: "https://github.com/acme/forge/runs/1", summary: null, startedAt: "2026-08-31T00:00:00.000Z", completedAt: "2026-08-31T00:02:00.000Z", selectedForEvaluation: true }] }] },
+    githubPullRequest: { exists: true, number: 42, url: "https://github.com/acme/forge/pull/42", state: "open", isDraft: false, checks: { total: 1, pending: 0, failing: 1, successful: 0 }, mergeable: "MERGEABLE", observedAt: null, autoMergeEnabled: false },
+  };
+  // This focused rendering fixture omits unrelated task fields.
+  const task = partialTask as unknown as ApiTask;
+  const html = renderToStaticMarkup(createElement(PullRequestCard, { task, busy: false, onRefresh: async () => undefined, onMarkReady: async () => undefined }));
+  expect(html).toContain('href="https://github.com/acme/forge/runs/1"');
+  expect(html).toContain("build / test");
+  expect(html).toContain("Failing after 2m");
+  expect(html).toContain("Mergeability mergeable · Auto-merge off · synced never");
+  expect(html).not.toContain("Checks failing 1/1 ·");
 });
 
 test("draft pull requests render the primary ready action and icon-only refresh", () => {

@@ -27,15 +27,16 @@ describe("recentTasks", () => {
   });
 });
 
-it("renders only observed active panes, including idle panes, and excludes terminal panes", () => {
+it("renders only observed active panes in role order, including idle panes, and excludes terminal panes", () => {
   const runtime = [
-    { agentId: "planner", taskId: "task-a", role: "planner", paneId: "pane-idle", liveStatus: "active", diagnosis: "resting", detail: "" },
-    { agentId: "builder", taskId: "task-a", role: "builder", paneId: "pane-working", liveStatus: "active", diagnosis: "working", detail: "" },
+    { agentId: "integrator", taskId: "task-a", role: "integrator", paneId: "pane-integrator", liveStatus: "active", diagnosis: "resting", detail: "" },
+    { agentId: "builder", taskId: "task-a", role: "builder", paneId: "pane-builder", liveStatus: "active", diagnosis: "working", detail: "" },
+    { agentId: "reviewer", taskId: "task-a", role: "reviewer", paneId: "pane-reviewer", liveStatus: "active", diagnosis: "blocked", detail: "" },
+    { agentId: "planner", taskId: "task-a", role: "planner", paneId: "pane-planner", liveStatus: "active", diagnosis: "resting", detail: "" },
     { agentId: "reviewer", taskId: "task-a", role: "reviewer", paneId: "pane-done", liveStatus: "terminal", diagnosis: "resting", detail: "" },
-    { agentId: "reviewer", taskId: "task-a", role: "reviewer", paneId: "pane-cancelled", liveStatus: "terminal", diagnosis: "resting", detail: "" },
     { agentId: "integrator", taskId: "task-a", role: "integrator", paneId: "pane-missing", liveStatus: "missing", diagnosis: "unknown", detail: "" },
     { agentId: "planner", taskId: "task-b", role: "planner", paneId: "pane-other-task", liveStatus: "active", diagnosis: "blocked", detail: "" },
   ] satisfies ApiAgentRuntime[];
 
-  expect(liveTaskPanes("task-a", runtime).map((pane) => `${pane.role} · ${runtimeStatusLabel(pane)}`)).toEqual(["planner · Idle", "builder · Working"]);
+  expect(liveTaskPanes("task-a", runtime).map((pane) => `${pane.role} · ${runtimeStatusLabel(pane)}`)).toEqual(["planner · Idle", "builder · Working", "reviewer · Needs input", "integrator · Idle"]);
 });

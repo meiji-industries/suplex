@@ -471,6 +471,23 @@ test("worker restart makes an orphaned autonomous CI repair actionable", async (
   }
 });
 
+test("worker restart does not load an archived task", async () => {
+  const harness = await createEngineHarness({ projectIssueState: async (event) => event.state });
+  const issueId = "archived-run-is-not-loaded";
+  harness.seedTask(issueId);
+  try {
+    const started = await startIssueWorkflow(harness.config, workflowInput(issueId));
+    await harness.engine.run(started.workflowId).ready();
+    harness.database.authQuery((db) => db.prepare("UPDATE forge_tasks SET archived_at = ? WHERE id = ?").run("2026-08-31T00:00:00.000Z", issueId));
+
+    await harness.restart();
+
+    expect(harness.engine.runs.has(started.workflowId)).toBe(false);
+  } finally {
+    await harness.stop();
+  }
+});
+
 test("durable projection replay failures do not falsify command success", async () => {
   let replayFailures = 0;
   const harness = await createEngineHarness({

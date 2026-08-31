@@ -36,6 +36,9 @@ export const AgentResponseSchema = z.object({ id: z.string(), name: z.string(), 
 export const AgentListResponseSchema = z.object({ agents: z.array(AgentResponseSchema) });
 export const AgentListQuerySchema = z.object({ companyId: z.string().min(1).optional(), includeArchived: z.literal("true").optional() });
 export type AgentResponse = z.infer<typeof AgentResponseSchema>;
+export const AgentRuntimeProjectionSchema = z.object({ agentId: z.string(), taskId: z.string(), role: z.enum(["planner", "builder", "reviewer", "integrator"]), diagnosis: z.enum(["working", "resting", "blocked", "result_missing", "recovering_runtime", "runtime_unavailable", "identity_conflict", "unknown"]), detail: z.string() });
+export const AgentRuntimeListResponseSchema = z.object({ runtime: z.array(AgentRuntimeProjectionSchema) });
+export type AgentRuntimeProjection = z.infer<typeof AgentRuntimeProjectionSchema>;
 
 export const ProjectRepositoryBodySchema = z.object({
   repositoryUrl: z.string().min(1),

@@ -2,7 +2,7 @@ import { isApiError } from "./api.js";
 import { ISSUE_PHASES, type IssuePhase } from "../../issue-phases.js";
 import type { AttentionActionResponse, AttentionItemResponse, CompanyAttentionResponse } from "../../http/contracts/attention.js";
 import type { CredentialResponse, InvitationSummaryResponse } from "../../http/contracts/common.js";
-import type { AgentResponse, ModelResponse, ProfileResponse, ProjectCheckResponse, ProjectResponse } from "../../http/contracts/projects.js";
+import type { AgentResponse, AgentRuntimeProjection, ModelResponse, ProfileResponse, ProjectCheckResponse, ProjectResponse } from "../../http/contracts/projects.js";
 import type { HermesAdminAgent } from "../../http/contracts/hermes.js";
 import type { TaskBranchSyncResponse } from "../../http/contracts/task-branch.js";
 import type { TaskListTask, TaskResponse } from "../../http/contracts/tasks.js";
@@ -10,6 +10,7 @@ import type { TaskTemplateResponse } from "../../http/contracts/task-templates.j
 
 export type ApiProfile = ProfileResponse;
 export type ApiAgent = AgentResponse;
+export type ApiAgentRuntime = AgentRuntimeProjection;
 export type ApiHermesAgent = HermesAdminAgent;
 export type ApiModel = ModelResponse;
 export type ApiCheck = ProjectCheckResponse;

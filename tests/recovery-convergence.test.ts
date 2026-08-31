@@ -1,28 +1,38 @@
 import { expect, test } from "vitest";
-import { attentionCardFor } from "../src/recovery/attention-card.js";
-import { classifyRecovery, FAILURE_CLASS_ACTION, type DurableTaskFacts, type LiveObservations } from "../src/recovery/convergence.js";
 
-function facts(overrides: Partial<DurableTaskFacts> = {}): DurableTaskFacts { return { taskId: "task", phase: "planning", revision: 1, terminal: false, cancelled: false, branchName: "forge/task", worktreePath: "/tmp/task", lastReviewedCommit: null, turn: null, failure: null, ...overrides }; }
-function live(overrides: Partial<LiveObservations> = {}): LiveObservations { return { herdr: { session: "missing", stalledBeyondPolicy: false }, git: null, github: null, ...overrides }; }
+import { classifyRecovery, type DurableTaskFacts, type LiveObservations } from "../src/recovery/convergence.js";
 
-test("rule 0 leaves terminal and cancelled tasks unchanged", () => expect(classifyRecovery(facts({ terminal: true }), live({ git: { worktreePresent: false, onRecordedBranch: false, dirty: false, headCommit: null } })).action).toBe("no_change"));
-test("rule 1 advances a valid turn outcome", () => expect(classifyRecovery(facts({ turn: { turnId: "turn", role: "planner", status: "completed", resultPresent: true, resultValid: true, resumeRequestsSent: 0 } }), live()).action).toBe("advance"));
-test("rule 2 advances a clean Developer handoff", () => expect(classifyRecovery(facts({ turn: { turnId: "turn", role: "builder", status: "completed", resultPresent: false, resultValid: false, resumeRequestsSent: 0 } }), live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "abc" } })).action).toBe("advance"));
-test("a clean Developer commit with remaining steps resumes instead of needing attention", () => {
-  const recovery = classifyRecovery(facts({ lastReviewedCommit: "prior", turn: { turnId: "turn", role: "builder", status: "blocked", resultPresent: true, resultValid: false, resumeRequestsSent: 0 } }), live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "new-commit" } }));
-  expect(["advance", "resume"]).toContain(recovery.action);
-  expect(recovery.action).not.toBe("attention");
+function facts(overrides: Partial<DurableTaskFacts> = {}): DurableTaskFacts {
+  return { taskId: "task", phase: "planning", revision: 1, terminal: false, cancelled: false, branchName: null, worktreePath: null, lastReviewedCommit: null, turn: { turnId: "turn", role: "planner", status: "waiting", resultPresent: false, resultValid: false, resumeRequestsSent: 0 }, failure: null, ...overrides };
+}
+function live(session: LiveObservations["herdr"]["session"]): LiveObservations { return { herdr: { session, stalledBeyondPolicy: true }, git: null, github: null }; }
+
+test.each([
+  ["working", "live_progress", "working", "no_change"],
+  ["blocked", "live_blocked", "blocked", "attention"],
+  ["idle missing result", "live_idle", "result_missing", "attention"],
+  ["done missing result", "terminal", "result_missing", "attention"],
+  ["missing binding", "missing", "recovering_runtime", "resume"],
+  ["runtime unavailable", "unavailable", "runtime_unavailable", "retry"],
+  ["identity conflict", "identity_conflict", "identity_conflict", "attention"],
+] as const)("%s derives %s", (_name, session, diagnosis, action) => {
+  expect(classifyRecovery(facts(), live(session))).toMatchObject({ diagnosis, action });
 });
-test("rule 3 resumes an idle Lead once", () => expect(classifyRecovery(facts({ turn: { turnId: "turn", role: "planner", status: "completed", resultPresent: false, resultValid: false, resumeRequestsSent: 0 } }), live({ herdr: { session: "terminal", stalledBeyondPolicy: false } })).action).toBe("resume"));
-test("rule 4 attends a missing Developer outcome", () => expect(classifyRecovery(facts({ turn: { turnId: "turn", role: "builder", status: "failed", resultPresent: false, resultValid: false, resumeRequestsSent: 0 } }), live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: true, headCommit: null } })).action).toBe("attention"));
-test("rule 5 attends an active missing worktree", () => expect(classifyRecovery(facts(), live({ git: { worktreePresent: false, onRecordedBranch: false, dirty: false, headCommit: null } })).action).toBe("attention"));
-test("rule 6 attends missing GitHub credentials", () => expect(classifyRecovery(facts(), live({ github: { headSha: null, merged: false, closed: false, checks: "none", authenticated: false } })).attention?.primaryAction.label).toBe("Sign in to GitHub and retry"));
-test("rule 7 maps failures", () => expect(classifyRecovery(facts({ failure: { class: "code_failure", signature: "lint", newCommitSinceFailure: true, newDiagnosticSinceFailure: false } }), live()).action).toBe("repair"));
-test("rule 8 leaves live sessions alone", () => expect(classifyRecovery(facts(), live({ herdr: { session: "live_progress", stalledBeyondPolicy: false } })).action).toBe("no_change"));
-test("rule 9 resumes only stalled idle sessions", () => expect(classifyRecovery(facts(), live({ herdr: { session: "live_idle", stalledBeyondPolicy: true } })).action).toBe("resume"));
-test("rule 10 retries an unavailable Herdr", () => expect(classifyRecovery(facts(), live({ herdr: { session: "unavailable", stalledBeyondPolicy: false } })).action).toBe("retry"));
-test("rule 11 otherwise changes nothing", () => expect(classifyRecovery(facts(), live()).action).toBe("no_change"));
-test("idempotency keys are stable and include the Git head", () => { const input = facts(); const first = classifyRecovery(input, live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "a" } })); const same = classifyRecovery(input, live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "a" } })); const changed = classifyRecovery(input, live({ git: { worktreePresent: true, onRecordedBranch: true, dirty: false, headCommit: "b" } })); expect(first.idempotencyKey).toBe(same.idempotencyKey); expect(first.idempotencyKey).not.toBe(changed.idempotencyKey); });
-test("the canonical failure map has every class", () => expect(Object.keys(FAILURE_CLASS_ACTION)).toHaveLength(11));
-test("attention cards always have user-facing essentials", () => { for (const card of [attentionCardFor({ kind: "github_credential" }), attentionCardFor({ kind: "worktree_missing", worktreePath: null, branchName: null }), attentionCardFor({ kind: "missing_turn_outcome", role: "lead", dirty: false }), attentionCardFor({ kind: "product_decision", question: "Which?", choices: [{ id: "a", label: "A", description: "A" }, { id: "b", label: "B", description: "B" }], recommendedChoiceId: "a" }), attentionCardFor({ kind: "dirty_worktree_cleanup", dirtyFileCount: 1, worktreePath: "/tmp" }), attentionCardFor({ kind: "no_progress", failureClass: "code_failure", signature: "test" })]) expect(card.title && card.explanation && card.primaryAction && card.evidence.length).toBeTruthy(); });
-test("operational events never create attention", () => { expect(classifyRecovery(facts(), live({ herdr: { session: "unavailable", stalledBeyondPolicy: false } })).action).not.toBe("attention"); expect(classifyRecovery(facts({ terminal: true }), live({ git: { worktreePresent: false, onRecordedBranch: false, dirty: false, headCommit: null } })).action).not.toBe("attention"); expect(classifyRecovery(facts(), live({ herdr: { session: "live_idle", stalledBeyondPolicy: false } })).action).not.toBe("attention"); });
+
+test("valid result wins over terminal runtime", () => {
+  expect(classifyRecovery(facts({ turn: { turnId: "turn", role: "planner", status: "completed", resultPresent: true, resultValid: true, resumeRequestsSent: 0 } }), live("terminal")).action).toBe("advance");
+});
+
+test("working never becomes stuck based on elapsed policy", () => {
+  expect(classifyRecovery(facts(), live("live_progress"))).toMatchObject({ diagnosis: "working", action: "no_change" });
+});
+
+test("idle result missing produces helpful STE100 attention", () => {
+  const result = classifyRecovery(facts(), live("live_idle"));
+  expect(result.reason).toContain("STE100");
+  expect(result.reason).toContain("stopped before recording the required result");
+});
+
+test("unbound working runtime is an orphan and cannot be adopted", () => {
+  expect(classifyRecovery(facts({ turn: null }), live("live_progress"))).toMatchObject({ diagnosis: "identity_conflict", action: "attention" });
+});

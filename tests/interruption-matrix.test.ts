@@ -78,9 +78,9 @@ test("developer commits, then its completion message is lost", () => {
   expect(outcome.evidence).toContain("handoff:git " + "b".repeat(40));
 });
 
-test("lead missing-result resume is durably consumed", async () => {
+test("lead idle or done without a valid result becomes STE100 attention without prompting", async () => {
   const waiting = facts({ turn: { ...facts().turn!, role: "planner", status: "waiting", resultPresent: false, resultValid: false, resumeRequestsSent: 0 } });
-  expect(twice(waiting, live())).toMatchObject({ action: "resume" });
+  expect(twice(waiting, live())).toMatchObject({ action: "attention", diagnosis: "result_missing" });
 
   const root = await mkdtemp(join(tmpdir(), "forge-matrix-active-turn-"));
   const config = createTestConfig(root);
@@ -95,21 +95,15 @@ test("lead missing-result resume is durably consumed", async () => {
       db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, prompt_sent_at, created_at, updated_at) VALUES ('turn', 'task', 'session', 'planner', 'agent', 'execution', 'lead-plan', ?, 'herdr-results/task/planner/result-turn.json', 0, 'waiting', ?, ?, ?)").run("c".repeat(64), stamp, stamp, stamp);
     });
     const prompts: string[] = [];
-    const herdr = {
-      runtimeSnapshot: async () => ({
-        agents: [{ name: "renamed-live-lead", paneId: "pane", status: "done" }],
-        panes: [{ paneId: "pane", agent: "renamed-live-lead", agentStatus: "done", tokens: { forge_binding_id: "session" } }],
-      }),
-      prompt: async (agent: string) => { prompts.push(agent); },
-    };
+    const herdr = { runtimeSnapshot: async () => ({ agents: [{ name: "renamed-live-lead", paneId: "pane", status: "done" }], panes: [{ paneId: "pane", agent: "renamed-live-lead", agentStatus: "done", tokens: { forge_binding_id: "session" } }] }), prompt: async (agent: string) => { prompts.push(agent); } };
 
     const first = await reconcileActiveTurns(database, config, { herdr: herdr as never, now: () => stamp });
     const second = await reconcileActiveTurns(database, config, { herdr: herdr as never, now: () => stamp });
 
-    expect(first).toMatchObject([{ turnId: "turn", action: "resume", evidence: expect.arrayContaining(["resume:receipt persisted before prompt"]) }]);
-    expect(second[0]?.action).not.toBe("resume");
-    expect(prompts).toEqual(["renamed-live-lead"]);
-    expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = 'turn'").get())).toEqual({ status: "awaiting_human" });
+    expect(first).toMatchObject([{ turnId: "turn", action: "attention", evidence: expect.arrayContaining(["turn:outcome missing"]) }]);
+    expect(second).toMatchObject([{ turnId: "turn", action: "attention" }]);
+    expect(prompts).toEqual([]);
+    expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = 'turn'").get())).toEqual({ status: "waiting" });
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });

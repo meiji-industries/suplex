@@ -1,13 +1,16 @@
 import type { FastifyPluginAsync } from "fastify";
 import { type ZodTypeProvider } from "@fastify/type-provider-zod";
 
-import type { ProjectService } from "../../projects.js";
-import type { RoleAssignments } from "../../projects.js";
+import type { ProjectService, RoleAssignments } from "../../projects.js";
+import type { ForgeDatabase } from "../../database.js";
+import { CliHerdrClient } from "../../herdr-client.js";
+import { projectAgentRuntime } from "../../agent-runtime.js";
 import { CompanyIdParamsSchema, ProjectIdParamsSchema } from "../contracts/common.js";
-import { AgentListQuerySchema, AgentListResponseSchema, ModelListResponseSchema, ProfileListResponseSchema, ProjectBodySchema, ProjectCheckListResponseSchema, ProjectCreateBodySchema, ProjectListResponseSchema, ProjectRepositoryDefaultsResponseSchema, ProjectResponseSchema, TaskSourceListResponseSchema, TaskSourceQuerySchema } from "../contracts/projects.js";
+import { AgentListQuerySchema, AgentRuntimeListResponseSchema, ModelListResponseSchema, ProfileListResponseSchema, ProjectBodySchema, ProjectCheckListResponseSchema, ProjectCreateBodySchema, ProjectListResponseSchema, ProjectRepositoryDefaultsResponseSchema, ProjectResponseSchema, TaskSourceListResponseSchema, TaskSourceQuerySchema } from "../contracts/projects.js";
 
 export interface ProjectRoutesOptions {
   projects: ProjectService;
+  database?: ForgeDatabase;
 }
 
 function roleDefaults(value: { planner?: string | undefined; builder?: string | undefined; reviewer?: string | undefined; integrator?: string | undefined }): RoleAssignments {
@@ -21,9 +24,12 @@ function roleDefaults(value: { planner?: string | undefined; builder?: string | 
 
 const projects: FastifyPluginAsync<ProjectRoutesOptions> = async (app, options) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const { projects } = options;
+  const { projects, database } = options;
+  typed.get("/api/agent-runtime", { schema: { querystring: AgentListQuerySchema, response: { 200: AgentRuntimeListResponseSchema } } }, async (request, reply) => {
+    const agents = projects.listAgents(request.forgeUser.id, request.query.companyId);
+    return reply.send({ runtime: database ? await projectAgentRuntime(database, new CliHerdrClient(), agents.map((agent) => agent.id)) : [] });
+  });
   typed.get("/api/profiles", { schema: { response: { 200: ProfileListResponseSchema } } }, async (request, reply) => reply.send({ profiles: projects.listProfiles(request.forgeUser.id) }));
-  typed.get("/api/agents", { schema: { querystring: AgentListQuerySchema, response: { 200: AgentListResponseSchema } } }, async (request, reply) => reply.send({ agents: projects.listAgents(request.forgeUser.id, request.query.companyId, request.query.includeArchived === "true") }));
   typed.get("/api/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: projects.listModels(request.forgeUser.id) }));
   typed.get("/api/projects", { schema: { response: { 200: ProjectListResponseSchema } } }, async (request, reply) => reply.send({ projects: projects.listProjects(request.forgeUser.id) }));
   typed.get("/api/companies/:companyId/projects", { schema: { params: CompanyIdParamsSchema, response: { 200: ProjectListResponseSchema } } }, async (request, reply) => reply.send({ projects: projects.listProjects(request.forgeUser.id, request.params.companyId) }));

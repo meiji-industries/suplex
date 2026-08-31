@@ -16,7 +16,7 @@ import { classifyRecovery, type DurableTaskFacts, type LiveObservations } from "
 import { CiRepairPlanSchema, DeliveryReviewSchema, MergeConflictPlanSchema } from "./engine/issue-contracts.js";
 import { reconcileIssueDeveloperDelivery } from "./engine/service.js";
 import { json } from "./task-utils.js";
-import { claimTurnRecoveryPrompt } from "./turn-recovery-receipt.js";
+import { HerdrSessionStore, type LaunchSettings, type RoleSessionTask } from "./herdr-session-store.js";
 
 export interface ActiveTurnOutcome {
   taskId: string;
@@ -105,8 +105,10 @@ async function resultAt(runtimeRoot: string, turn: Pick<Turn, "ledger" | "prompt
   return { path, bytes, valid, promptable: true, evidence: valid ? `result:valid ${turn.ledger}/${turn.promptKind}` : `result:invalid ${turn.ledger}/${turn.promptKind}` };
 }
 
-function sessionObservation(observation: HerdrSessionObservation | undefined): LiveObservations["herdr"] {
-  if (!observation || observation.classification !== "active") return { session: "missing", stalledBeyondPolicy: false };
+function sessionObservation(observation: HerdrSessionObservation | undefined, unavailable = false): LiveObservations["herdr"] {
+  if (unavailable) return { session: "unavailable", stalledBeyondPolicy: false };
+  if (!observation || observation.classification === "missing" || observation.classification === "unbound") return { session: "missing", stalledBeyondPolicy: false };
+  if (observation.identityFailure) return { session: "identity_conflict", stalledBeyondPolicy: false };
   const status = observation.lifecycleStatus ?? undefined;
   if (status === "blocked") return { session: "live_blocked", stalledBeyondPolicy: false };
   if (status === "idle") return { session: "live_idle", stalledBeyondPolicy: false };
@@ -130,19 +132,29 @@ function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
     WHERE turn.status IN (${activeStatuses})
       AND projection.phase NOT IN ('done', 'cancelled', 'failed')
       AND NOT EXISTS (SELECT 1 FROM forge_tasks task WHERE task.id = turn.task_id AND task.archived_at IS NOT NULL)${taskId ? " AND turn.task_id = ?" : ""}
+
     ORDER BY turn.task_id, turn.turn_id`).all(...(taskId ? [taskId] : [])) as Turn[]);
 }
-
-function eligibleResumeIdentity(turn: Turn, observation: HerdrSessionObservation | undefined): observation is HerdrSessionObservation {
-  const lifecycle = observation?.lifecycleStatus;
-  return (turn.role === "planner" || turn.role === "reviewer")
-    && Boolean(turn.paneId && observation?.agentName)
-    && observation?.sessionId === turn.roleSessionId
-    && observation.paneId === turn.paneId
-    && observation.classification === "active"
-    && observation.identityFailure === null
-    && (lifecycle === "idle" || lifecycle === "done");
+async function recreateMissingRuntime(database: ForgeDatabase, config: ForgeConfig, herdr: HerdrClient, turn: Turn): Promise<boolean> {
+  const launch = database.authQuery((db) => db.prepare(`SELECT task.project_id AS projectId, project.name AS projectSlug, task.issue_number AS issueNumber,
+    worktree.worktree_path AS worktreePath, profile.provider, profile.model, profile.reasoning_level AS reasoningLevel, profile.service_priority AS servicePriority
+    FROM forge_tasks task
+    JOIN forge_projects project ON project.id = task.project_id
+    JOIN forge_herdr_role_sessions session ON session.id = ? AND session.task_id = task.id AND session.session_role = ? AND session.is_current = 1
+    JOIN forge_agents agent ON agent.id = json_extract(task.role_agents_json, '$.' || session.session_role)
+    JOIN forge_profiles profile ON profile.id = agent.profile_id
+    LEFT JOIN forge_issue_worktrees worktree ON worktree.task_id = task.id AND worktree.status <> 'released'
+    WHERE task.id = ?`).get(turn.roleSessionId, turn.role, turn.taskId) as {
+      projectId: string; projectSlug: string; issueNumber: number | null; worktreePath: string | null;
+      provider: LaunchSettings["provider"]; model: string; reasoningLevel: string; servicePriority: LaunchSettings["serviceTier"];
+    } | undefined);
+  if (!launch?.worktreePath) return false;
+  const task: RoleSessionTask = { taskId: turn.taskId, projectId: launch.projectId, projectSlug: launch.projectSlug, ...(launch.issueNumber ? { issueKey: String(launch.issueNumber) } : {}), worktreePath: launch.worktreePath, runtimeRoot: config.runtimeRoot };
+  const settings: LaunchSettings = { model: launch.model, reasoningLevel: launch.reasoningLevel, serviceTier: launch.servicePriority, ...(launch.provider ? { provider: launch.provider } : {}) };
+  await new HerdrSessionStore(database, herdr).ensureRoleSession(task, turn.role, settings);
+  return true;
 }
+
 
 function eligibleResumeExecution(turn: Turn): boolean {
   return turn.ledger === "agent"
@@ -230,8 +242,14 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
   const herdr = deps.herdr ?? new CliHerdrClient();
   const detectHandoff = deps.detectHandoff ?? detectGitHandoff;
   const now = deps.now ?? (() => new Date().toISOString());
-  const runtimeSnapshot = await snapshotHerdrRuntime(herdr);
-  const observations = await observeHerdrSessions(database, herdr, taskId, runtimeSnapshot);
+  let observations: HerdrSessionObservation[] = [];
+  let herdrUnavailable = false;
+  try {
+    const runtimeSnapshot = await snapshotHerdrRuntime(herdr);
+    observations = await observeHerdrSessions(database, herdr, taskId, runtimeSnapshot);
+  } catch {
+    herdrUnavailable = true;
+  }
   const observationsBySession = new Map(observations.map((observation) => [observation.sessionId, observation]));
   const outcomes: ActiveTurnOutcome[] = [];
   for (const turn of candidates(database, taskId)) {
@@ -259,7 +277,7 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
         turn: { turnId: turn.turnId, role: turn.role, status: turn.status, resultPresent: Boolean(result.bytes), resultValid: result.valid, resumeRequestsSent: turn.recoveryPromptSentAt === null ? 0 : 1 },
         failure: null,
       };
-      const classified = classifyRecovery(facts, { herdr: sessionObservation(observation), git, github: null });
+      const classified = classifyRecovery(facts, { herdr: sessionObservation(observation, herdrUnavailable), git, github: null });
       let action: ActiveTurnOutcome["action"] = classified.action === "advance" || classified.action === "resume" || classified.action === "attention" ? classified.action : "no_change";
       const evidence = [...classified.evidence, result.evidence];
       const exactActiveExecution = turn.isLatestSessionTurn === 1 && turn.executionStatus !== null && activeExecutionStatuses.has(turn.executionStatus);
@@ -289,39 +307,14 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
         }
       }
       if (action === "resume") {
-        if (!result.promptable) {
+        if (!result.promptable || turn.promptSentAt === null || !eligibleResumeExecution(turn)) {
           action = "no_change";
-          evidence.push("resume:result target not promptable");
-        } else if (turn.promptSentAt === null) {
-          action = "no_change";
-          evidence.push("resume:initial prompt receipt absent");
-        } else if (turn.recoveryPromptSentAt !== null) {
-          action = "no_change";
-          evidence.push("resume:receipt already persisted");
-        } else if (!eligibleResumeExecution(turn)) {
-          action = "no_change";
-          evidence.push("resume:not latest active execution");
-        } else if (!eligibleResumeIdentity(turn, observation)) {
-          action = "no_change";
-          evidence.push("resume:not exact current live binding");
+          evidence.push("resume:not an active promptable execution");
+        } else if (await recreateMissingRuntime(database, config, herdr, turn)) {
+          evidence.push("resume:missing binding recreated");
         } else {
-          const marker = `[forge-turn:${turn.turnId}]`;
-          const prompt = `Resume the existing Forge turn with turn_id ${turn.turnId}. Write the required JSON result to ${result.path} using the exact schema already provided. The turn is complete only after that file exists and you reply with the completion marker ${marker}. Do not create a new turn or session.`;
-          const timestamp = now();
-          const claimed = claimTurnRecoveryPrompt(database, {
-            turnId: turn.turnId, taskId: turn.taskId, roleSessionId: turn.roleSessionId, sessionRole: turn.role, paneId: turn.paneId,
-            ledger: turn.ledger, executionId: turn.executionId, executionRole: turn.executionRole, executionStatus: turn.executionStatus!,
-            promptKind: turn.promptKind, promptSentAt: turn.promptSentAt, resultRelativePath: turn.resultRelativePath, turnStatus: turn.status,
-            workflowId: turn.workflowId, revision: turn.revision, timestamp,
-            attentionExcerpt: safeText(`Recovery requested once for turn ${turn.turnId}; required result: ${result.path}`),
-          });
-          if (claimed) {
-            evidence.push("resume:receipt persisted before prompt");
-            await herdr.prompt(observation.agentName!, prompt);
-          } else {
-            action = "no_change";
-            evidence.push("resume:receipt not claimed");
-          }
+          action = "no_change";
+          evidence.push("resume:runtime recreation not eligible");
         }
       }
       if (action === "advance" && (turn.role === "builder" || turn.role === "integrator") && turn.executionStatus === "failed" && result.valid) {

@@ -8,7 +8,7 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { reconcileWorktrees } from "../src/worktree-reconciliation.js";
 
-test("missing terminal worktrees are recorded once with an event hash", async () => {
+test("cancelled tasks do not reconcile missing worktrees", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-worktree-reconcile-"));
   const config = createTestConfig(root);
   const database = new ForgeDatabase(config.databasePath);
@@ -22,9 +22,8 @@ test("missing terminal worktrees are recorded once with an event hash", async ()
       db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, projected_at) VALUES ('task_1', 'company_1', 'project_1', 'workflow_1', 3, 'cancelled', 'human', '[]', '', ?, 'workflow_1:3', ?, 3, ?)").run(now, "a".repeat(64), now);
       db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES ('worktree_1', 'task_1', 'company_1', 'project_1', 'workflow_1', '/repo', ?, ?, 'forge/task_1', ?, 'hash', 'active', ?)").run(config.worktreeRoot, join(config.worktreeRoot, "gone"), "a".repeat(40), now);
     });
-    expect((await reconcileWorktrees(database, config, { exists: async () => false })).outcomes[0]?.status).toBe("removed_externally_terminal");
-    expect(database.authQuery((db) => db.prepare("SELECT event_hash AS eventHash FROM forge_issue_timeline WHERE event_type = 'worktree_removed_externally'").get())).toEqual({ eventHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
-    expect((await reconcileWorktrees(database, config, { exists: async () => false })).outcomes[0]?.status).toBe("already_recorded");
+    await expect(reconcileWorktrees(database, config, { exists: async () => false })).resolves.toEqual({ inspected: 0, removedExternally: 0, reported: 0, outcomes: [] });
+    expect(database.authQuery((db) => db.prepare("SELECT event_hash AS eventHash FROM forge_issue_timeline WHERE event_type = 'worktree_removed_externally'").get())).toBeUndefined();
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });

@@ -17,8 +17,8 @@ function state(phase: "ci_waiting" | "manual_merge" | "development", allowedComm
   });
 }
 
-function database(rows: Array<{ taskId: string; phase: string; stateJson: string }>) {
-  return { authQuery: (query: (db: { prepare: () => { all: () => unknown } }) => unknown) => query({ prepare: () => ({ all: () => rows.map((row) => ({ ...row, companyId: "company", workflowId: `workflow-${row.phase}`, revision: 3, repository: "acme/forge", branch: `forge/${row.taskId}`, pullRequestNumber: 42 })) }) }) };
+function database(rows: Array<{ taskId: string; phase: string; stateJson: string; archived?: boolean }>) {
+  return { authQuery: (query: (db: { prepare: (sql: string) => { all: () => unknown } }) => unknown) => query({ prepare: (sql) => ({ all: () => rows.filter((row) => !sql.includes("t.archived_at IS NULL") || !row.archived).map((row) => ({ ...row, companyId: "company", workflowId: `workflow-${row.phase}`, revision: 3, repository: "acme/forge", branch: `forge/${row.taskId}`, pullRequestNumber: 42 })) }) }) };
 }
 
 function observed(overrides: Partial<Pick<GithubPullRequestObservation, "state" | "headSha"> & { failing: number; pending: number; successful: number; total: number }> = {}): GithubPullRequestObservation {
@@ -31,6 +31,8 @@ test("selects active GitHub phases and maps observations to the accepted reconci
     { taskId: "ci", phase: "ci_waiting", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])) },
     { taskId: "merge", phase: "manual_merge", stateJson: JSON.stringify(state("manual_merge", ["reconcile_merge"])) },
     { taskId: "development", phase: "development", stateJson: JSON.stringify(state("development", [])) },
+    { taskId: "failed", phase: "failed", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])) },
+    { taskId: "archived", phase: "ci_waiting", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])), archived: true },
   ];
   const execute = vi.fn<(...args: any[]) => Promise<any>>(async () => ({}));
   const result = await reconcileGithubObservations(database(rows) as never, {} as never, { observe: async (input) => input.branch === "forge/merge" ? observed({ state: "closed" }) : observed({ pending: 1, successful: 0 }), execute: execute as never });

@@ -28,7 +28,8 @@ async function reportWorktreeMissing(config: ForgeConfig, workflowId: string, in
 export async function reconcileWorktrees(database: ForgeDatabase, config: ForgeConfig, options: { taskId?: string; exists?: (path: string) => Promise<boolean>; execute?: typeof executeIssueCommand } = {}): Promise<WorktreeReconciliationResult> {
   const rows = database.authQuery((db) => db.prepare(`SELECT w.task_id AS taskId, w.company_id AS companyId, w.workflow_id AS workflowId, w.worktree_path AS worktreePath, p.phase, p.revision
     FROM forge_issue_worktrees w JOIN forge_issue_projections p ON p.task_id = w.task_id AND p.company_id = w.company_id
-    WHERE w.status <> 'released' AND w.cleaned_at IS NULL AND (? IS NULL OR w.task_id = ?) ORDER BY w.task_id`).all(options.taskId ?? null, options.taskId ?? null) as Candidate[]);
+    JOIN forge_tasks t ON t.id = w.task_id AND t.company_id = w.company_id AND t.archived_at IS NULL
+    WHERE w.status <> 'released' AND w.cleaned_at IS NULL AND p.phase NOT IN ('done', 'cancelled', 'failed') AND (? IS NULL OR w.task_id = ?) ORDER BY w.task_id`).all(options.taskId ?? null, options.taskId ?? null) as Candidate[]);
   const exists = options.exists ?? (async (path: string) => access(path).then(() => true).catch(() => false));
   const execute = options.execute ?? executeIssueCommand;
   const outcomes: WorktreeReconciliationResult["outcomes"] = [];

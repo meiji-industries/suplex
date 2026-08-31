@@ -15,8 +15,9 @@ test("done pull-request sync selects only open observed pull requests", () => {
     { taskId: "never", repository: "acme/forge", branch: "forge/never", pullRequestNumber: 43, stateJson: JSON.stringify(doneState(null)) },
     { taskId: "merged", repository: "acme/forge", branch: "forge/merged", pullRequestNumber: 44, stateJson: JSON.stringify(doneState("merged")) },
     { taskId: "closed", repository: "acme/forge", branch: "forge/closed", pullRequestNumber: 45, stateJson: JSON.stringify(doneState("closed")) },
+    { taskId: "archived", repository: "acme/forge", branch: "forge/archived", pullRequestNumber: 46, stateJson: JSON.stringify(doneState("open")) },
   ];
-  const database = { authQuery: (query: (db: { prepare: () => { all: () => typeof rows } }) => unknown) => query({ prepare: () => ({ all: () => rows }) }) };
+  const database = { authQuery: (query: (db: { prepare: (sql: string) => { all: () => typeof rows } }) => unknown) => query({ prepare: (sql) => ({ all: () => sql.includes("t.archived_at IS NULL") ? rows.filter((row) => row.taskId !== "archived") : rows }) }) };
   expect(selectDonePullRequestSyncCandidates(database as never).map(({ taskId }) => taskId)).toEqual(["open", "never"]);
 });
 

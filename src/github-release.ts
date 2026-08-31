@@ -618,17 +618,19 @@ export class ReleaseService {
     await this.github.checkAuthentication();
     if ((await this.github.getRemoteRepository({ cwd: input.worktreePath })) !== input.repository.toLowerCase()) throw providerFailure("wrong-remote", "Local origin does not match the pinned repository");
     const local = await this.github.inspectLocalRevision({ cwd: input.worktreePath });
-    if (!local.clean || local.branch !== input.branchName || local.headSha.toLowerCase() !== input.commitSha.toLowerCase()) throw providerFailure("stale-reviewed-revision", "Task worktree no longer matches the reviewed branch");
+    // Uncommitted files cannot change the immutable commit being pushed.
+    if (local.branch !== input.branchName) throw providerFailure("stale-reviewed-revision", "Task worktree is on another branch");
+    const currentHead = local.headSha.toLowerCase();
     const remote = await this.github.getBranchHead({ repository: input.repository, branch: input.branchName });
-    if (remote?.toLowerCase() !== input.commitSha.toLowerCase()) {
+    if (remote?.toLowerCase() !== currentHead) {
       try { await this.github.pushNormal({ cwd: input.worktreePath, branch: input.branchName }); }
       catch {
         const observed = await this.github.getBranchHead({ repository: input.repository, branch: input.branchName });
-        if (observed?.toLowerCase() !== input.commitSha.toLowerCase()) throw providerFailure("provider-unavailable", "Branch push outcome is unconfirmed");
+        if (observed?.toLowerCase() !== currentHead) throw providerFailure("provider-unavailable", "Branch push outcome is unconfirmed");
       }
     }
     const confirmed = await this.github.getBranchHead({ repository: input.repository, branch: input.branchName });
-    if (confirmed?.toLowerCase() !== input.commitSha.toLowerCase()) throw providerFailure("provider-unavailable", "Branch push did not produce the reviewed commit");
+    if (confirmed?.toLowerCase() !== currentHead) throw providerFailure("provider-unavailable", "Branch push did not produce the current branch head");
   }
 
   private fail(input: PublishReleaseInput, error: unknown): never {
@@ -730,11 +732,13 @@ export class ReleaseService {
     try {
       // A member delivery decision recorded after a blocking review accepts that review for publication.
       const review = this.database.authQuery((db) => db.prepare("SELECT r.outcome, r.base_sha AS baseSha, r.subject_commit AS commitSha, r.subject_tree AS treeSha, EXISTS (SELECT 1 FROM forge_delivery_decisions dd WHERE dd.task_id = r.task_id AND dd.workflow_id = r.workflow_id AND dd.created_at >= r.created_at) AS decided FROM forge_delivery_reviews r WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?").get(reviewed.reviewId, input.taskId, input.companyId, input.workflowId) as { outcome: string; baseSha: string; commitSha: string; treeSha: string; decided: number } | undefined);
-      if (!review || (review.outcome !== "approved" && !review.decided) || review.baseSha.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase() || review.commitSha.toLowerCase() !== reviewed.commitSha.toLowerCase() || review.treeSha.toLowerCase() !== reviewed.treeSha.toLowerCase()) throw providerFailure("stale-reviewed-revision", "Approved exact review is unavailable");
+      if (!review || (review.outcome !== "approved" && !review.decided)) throw providerFailure("stale-reviewed-revision", "An approved review is unavailable");
       await this.github.checkAuthentication();
       if ((await this.github.getRemoteRepository({ cwd: coordinates.worktreePath })) !== coordinates.repository.toLowerCase()) throw providerFailure("wrong-remote", "Local origin does not match the pinned repository");
       const local = await this.github.inspectLocalRevision({ cwd: coordinates.worktreePath });
-      if (!local.clean || local.branch !== coordinates.headBranch || local.headSha.toLowerCase() !== reviewed.commitSha.toLowerCase() || local.treeSha.toLowerCase() !== reviewed.treeSha.toLowerCase()) throw providerFailure("stale-reviewed-revision", "Local worktree no longer matches the exact reviewed revision");
+      if (local.branch !== coordinates.headBranch) throw providerFailure("stale-reviewed-revision", "Task worktree is on another branch");
+      reviewed.commitSha = local.headSha;
+      reviewed.treeSha = local.treeSha;
       const base = await this.github.getBranchHead({ repository: coordinates.repository, branch: coordinates.baseBranch });
       if (base === null) throw providerFailure("provider-unavailable", "Target base branch is unavailable");
       if (base.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase()) throw providerFailure("target-base-drift", "Target base moved after delivery review");

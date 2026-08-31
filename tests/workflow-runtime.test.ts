@@ -225,6 +225,28 @@ test("exhausted target-base retries report reconciliation failure once", async (
   });
 });
 
+test("non-retryable target-base blockers never enter the automatic retry loop", async () => {
+  const waits: number[] = [];
+  const retries: string[] = [];
+  const projections: IssueWorkflowState[] = [];
+  const context = targetBaseRetryContext(targetBaseDriftState({
+    targetBaseBlockerCode: "worktree_dirty",
+    targetBaseBlockerOwner: "human",
+    targetBaseBlockerRetryable: false,
+    pendingAction: "The owned issue worktree is not clean",
+  }), retries, projections);
+
+  await runExecution.run(automaticRetryExecution(waits), async () => {
+    expect(canAutoRetryDeliveryBlocker(context)).toBe(false);
+    await expect(autoRetryDeliveryBlocker(context)).resolves.toBe(false);
+  });
+
+  expect(waits).toEqual([]);
+  expect(retries).toEqual([]);
+  expect(projections).toEqual([]);
+  expect(context.state.pendingAction).toBe("The owned issue worktree is not clean");
+});
+
 test("recorded human blocker actions prevent unrelated automatic retries", async () => {
   const waits: number[] = [];
   const retries: string[] = [];

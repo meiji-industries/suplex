@@ -64,7 +64,6 @@ test("task command routes stay in registry parity", async () => {
         "start-development",
         "start-planning",
         "tell-planner",
-        "verify-developer-ownership",
       ]
     `);
   } finally {

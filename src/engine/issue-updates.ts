@@ -59,7 +59,6 @@ export const recordProgressUpdate = issueUpdates.record_progress;
 export const startDevelopmentUpdate = issueUpdates.start_development;
 export const retryDevelopmentUpdate = issueUpdates.retry_development;
 export const cancelDevelopmentUpdate = issueUpdates.cancel_development;
-export const verifyDeveloperOwnershipUpdate = issueUpdates.verify_developer_ownership;
 export const reviewDeliveryUpdate = issueUpdates.review_delivery;
 export const repairDeliveryUpdate = issueUpdates.repair_delivery;
 export const recordDeliveryDecisionUpdate = issueUpdates.record_delivery_decision;

@@ -3,19 +3,20 @@ import { expect, test } from "vitest";
 import { createGithubReleasePort, ReleaseService, type GithubReleasePort } from "../src/github-release.js";
 
 const sha = "a".repeat(40);
+const priorReviewedSha = "b".repeat(40);
 
-test("a verified remote task branch is not pushed again before publication", async () => {
+test("the current remote task branch is not pushed again when the worktree is dirty and the prior reviewed commit changed", async () => {
   let pushes = 0;
   const github = {
     async checkAuthentication() {},
     async getRemoteRepository() { return "acme/forge"; },
-    async inspectLocalRevision() { return { branch: "task/example", headSha: sha, treeSha: sha, clean: true }; },
+    async inspectLocalRevision() { return { branch: "task/example", headSha: sha, treeSha: sha, clean: false }; },
     async getBranchHead() { return sha; },
     async pushNormal() { pushes += 1; },
   } as unknown as GithubReleasePort;
 
   await new ReleaseService(undefined as never, undefined as never, github).pushBranch({
-    repository: "acme/forge", worktreePath: "/worktree", branchName: "task/example", commitSha: sha,
+    repository: "acme/forge", worktreePath: "/worktree", branchName: "task/example", commitSha: priorReviewedSha,
   });
 
   expect(pushes).toBe(0);

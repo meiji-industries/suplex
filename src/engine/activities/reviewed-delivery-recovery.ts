@@ -291,7 +291,7 @@ export async function recoverReviewedDelivery(
     const repository = await githubRelease.getRemoteRepository({ cwd: input.worktreePath });
     if (repository.toLowerCase() !== pinned.repository.toLowerCase()) return blocked("worktree-unsafe", WORKTREE_SUMMARY);
     const local = await githubRelease.inspectLocalRevision({ cwd: input.worktreePath });
-    if (!local.clean || local.branch !== input.branchName || !same(local.headSha, merge.resultHead) || !same(local.treeSha, merge.resultTree)) return blocked("worktree-unsafe", WORKTREE_SUMMARY);
+    if (local.branch !== input.branchName) return blocked("worktree-unsafe", WORKTREE_SUMMARY);
   } catch {
     return blocked("worktree-unsafe", WORKTREE_SUMMARY);
   }

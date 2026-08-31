@@ -18,7 +18,6 @@ test("task command descriptors project every routed command", () => {
     { name: "start_development", label: "Start development", endpoint: "start-development", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "retry_development", label: "Retry development", endpoint: "retry-development", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "cancel_development", label: "Cancel development", endpoint: "cancel-development", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
-    { name: "verify_developer_ownership", label: "Verify developer ownership", endpoint: "verify-developer-ownership", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "review_delivery", label: "Review delivery", endpoint: "review-delivery", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "repair_delivery", label: "Send back to Developer", endpoint: "repair-delivery", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "record_delivery_decision", label: "Record delivery decision", endpoint: "record-delivery-decision", method: "POST", expectedRevision: 7, note: "required", idempotency: "required" },

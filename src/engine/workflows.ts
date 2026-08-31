@@ -146,7 +146,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       targetBaseOutcome: result.outcome,
       targetBaseBlockerCode: result.code,
       targetBaseBlockerOwner: result.owner,
-      targetBaseBlockerRetryable: true,
+      targetBaseBlockerRetryable: result.retryable,
       targetBaseBlockerSummary: summary,
       ...recoveryFields(null, null, null, null),
       ...(verification && result.observedBaseSha ? { forwardMergeTargetBaseSha: result.observedBaseSha } : {}),

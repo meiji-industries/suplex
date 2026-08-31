@@ -45,7 +45,7 @@ export interface ForwardMergeResult {
 }
 
 export class ForwardMergeFailure extends Error {
-  constructor(readonly code: "unsafe-command" | "not-ancestor" | "conflict" | "git" | "provider-unavailable" | "authentication-required" | "remote-identity-mismatch" | "base-advanced-again" | "worktree-ownership-mismatch" | "worktree-dirty" | "merge-state-ownership-mismatch") {
+  constructor(readonly code: "unsafe-command" | "not-ancestor" | "conflict" | "git" | "provider-unavailable" | "authentication-required" | "remote-identity-mismatch" | "base-advanced-again" | "worktree-ownership-mismatch" | "merge-state-ownership-mismatch") {
     super(`Forward merge ${code}`);
     this.name = "ForwardMergeFailure";
   }
@@ -180,21 +180,19 @@ export class ForwardMergeService {
     try {
       const worktree = await realpath(input.worktreePath);
       const repository = await realpath(input.repositoryPath);
-      const [actualRoot, commonDirRaw, repositoryCommonDirRaw, branchName, headSha, treeSha, status] = await Promise.all([
+      const [actualRoot, commonDirRaw, repositoryCommonDirRaw, branchName, headSha, treeSha] = await Promise.all([
         this.git(["rev-parse", "--show-toplevel"], worktree),
         this.git(["rev-parse", "--git-common-dir"], worktree),
         this.git(["rev-parse", "--git-common-dir"], repository),
         this.git(["branch", "--show-current"], worktree),
         this.git(["rev-parse", "HEAD"], worktree),
         this.git(["rev-parse", "HEAD^{tree}"], worktree),
-        this.git(["status", "--porcelain=v1", "--untracked-files=all"], worktree),
       ]);
       const [commonDir, repositoryCommonDir] = await Promise.all([
         realpath(resolve(worktree, commonDirRaw)).catch(() => commonDirRaw),
         realpath(resolve(repository, repositoryCommonDirRaw)).catch(() => repositoryCommonDirRaw),
       ]);
       if (actualRoot !== worktree || commonDir !== repositoryCommonDir || branchName !== input.branchName) throw new ForwardMergeFailure("worktree-ownership-mismatch");
-      if (status) throw new ForwardMergeFailure("worktree-dirty");
       return { headSha, treeSha };
     } catch (error) {
       if (error instanceof ForwardMergeFailure) throw error;

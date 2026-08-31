@@ -154,7 +154,6 @@ test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at
         const url = new URL(request.url());
         if (url.pathname.endsWith("/events")) { await route.fulfill({ status: 200, contentType: "text/event-stream", body: ": ready\n\n" }); return; }
         if (request.method() !== "POST") { await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current) }); return; }
-        if (url.pathname.endsWith("/verify-developer-ownership")) { current = taskState(company.id, "active", 6, { pendingAction: "Developer execution" }); await route.fulfill({ contentType: "application/json", body: JSON.stringify(current) }); return; }
         if (url.pathname.endsWith("/retry-development")) { current = taskState(company.id, "active", 7, { developerExecution: { id: "developer-attempt-2", status: "running", attempt: 2, branchName: "forge/issue/recovery-browser-task", targetBaseSha: "a".repeat(40), startedAt: "2026-08-12T00:00:00.000Z", finishedAt: null, summary: "Linked attempt 2 reconnected to the preserved worktree." } }); await route.fulfill({ contentType: "application/json", body: JSON.stringify(current) }); return; }
         if (url.pathname.endsWith("/cancel-development")) {
           if (staleCancellation) { staleCancellation = false; current = taskState(company.id, "active", 8); await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "stale_workflow_revision" }) }); return; }

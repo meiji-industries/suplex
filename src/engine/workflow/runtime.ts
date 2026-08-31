@@ -253,7 +253,7 @@ function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" |
 function retryScope(ctx: IssueWorkflowContext, command: string): string | null {
   if (command === "review_delivery") return ctx.state.resultCommit ?? null;
   if (command === "repair_delivery" || command === "repair_ci") return ctx.state.resultCommit ?? null;
-  if (command === "retry_target_base_reconciliation") return ctx.state.targetBaseCheckId ?? ctx.state.resultCommit ?? ctx.state.releaseId ?? null;
+  if (command === "retry_target_base_reconciliation") return ctx.state.resultCommit ?? ctx.state.releaseId ?? ctx.state.targetBaseCheckId ?? null;
   return ctx.state.acceptanceId ?? ctx.state.releaseId ?? null;
 }
 
@@ -261,6 +261,7 @@ export function canAutoRetryDeliveryBlocker(ctx: IssueWorkflowContext): boolean 
   if (runExecution.current().autoActionsHalted()) return false;
   if (!true) return false;
   const command = retryOnlyBlockerCommand(ctx);
+  if (command === "retry_target_base_reconciliation" && ctx.state.targetBaseBlockerRetryable === false) return false;
   const scope = command ? retryScope(ctx, command) : null;
   if (!command || !scope) return false;
   const prefix = `${ctx.state.workflowId}:auto-retry:${command}:${scope}:`;
@@ -271,6 +272,7 @@ export function canAutoRetryDeliveryBlocker(ctx: IssueWorkflowContext): boolean 
 export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promise<boolean> {
   if (!canAutoRetryDeliveryBlocker(ctx)) {
     const command = retryOnlyBlockerCommand(ctx);
+    if (command === "retry_target_base_reconciliation" && ctx.state.targetBaseBlockerRetryable === false) return false;
     if (command && true) {
       const summary = command === "retry_target_base_reconciliation"
         ? "The target base moved. Automatic reconciliation did not succeed. You can retry the reconciliation."

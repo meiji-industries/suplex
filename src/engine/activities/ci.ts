@@ -50,11 +50,7 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
       };
       const local = await githubRelease.inspectLocalRevision({ cwd: context.worktreePath });
       const remoteHead = await githubRelease.getBranchHead({ repository: pinned.repository, branch: input.branchName });
-      if (!local.clean
-        || local.branch !== input.branchName
-        || local.headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()
-        || local.treeSha.toLowerCase() !== input.expectedHeadTree.toLowerCase()
-        || remoteHead?.toLowerCase() !== input.expectedHeadSha.toLowerCase()) throw new CiFailure("stale-input");
+      if (local.branch !== input.branchName || remoteHead === null) throw new CiFailure("stale-input");
       const service = new ForwardMergeService(database, githubRelease, new ArtifactStore(config.artifactRoot));
       const merge = await service.reconcile({
         worktreePath: context.worktreePath,

@@ -46,8 +46,8 @@ export async function executeIssueCommand(config: ForgeConfig, workflowId: strin
 export async function acceptIssuePlanning(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return executeIssueCommand(config, workflowId, "start_planning", input); }
 export async function acceptIssueDevelopment(config: ForgeConfig, workflowId: string, input: StartPlanningInput, command: "start_development" | "retry_development" = "start_development"): Promise<IssueWorkflowState> { return executeIssueCommand(config, workflowId, command, input); }
 export async function reconcileIssueDeveloperDelivery(config: ForgeConfig, workflowId: string, input: StartPlanningInput & { reconcileOnly: true }): Promise<IssueWorkflowState> {
-  const validated = StartPlanningInputSchema.parse(durableCommand(workflowId, issueCommands.verify_developer_ownership.durableCommandKind!, input));
-  return getIssueEngine(config).run(workflowId).execute(issueUpdates.verify_developer_ownership, { ...validated, reconcileOnly: true }, validated.commandId);
+  const validated = StartPlanningInputSchema.parse(durableCommand(workflowId, issueCommands.retry_development.durableCommandKind!, input));
+  return getIssueEngine(config).run(workflowId).execute(issueUpdates.retry_development, { ...validated, reconcileOnly: true }, validated.commandId);
 }
 export async function resolveIssueDecisionBlocker(config: ForgeConfig, workflowId: string, input: ResolveDecisionBlockerInput): Promise<IssueWorkflowState> { return dedicated(config, workflowId, "resolve_decision_blocker", input, ResolveDecisionBlockerInputSchema); }
 export async function resyncIssueProjection(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return dedicated(config, workflowId, "resync_projection", input, StartPlanningInputSchema); }

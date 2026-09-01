@@ -266,7 +266,7 @@ function ProjectSettingsDialog({
   const availableChecks: ApiCheck[] = [...new Map([...checkOptions, ...selectedChecks.map((name) => ({ name, status: "configured" } satisfies ApiCheck))].map((check) => [check.name, check])).values()];
   return (
     <Dialog open={Boolean(project)} onOpenChange={(open) => { if (!open) onOpenChange(false); }}>
-      <DialogContent className="max-h-[85vh] w-[min(92vw,640px)] overflow-y-auto" showCloseButton>
+      <DialogContent className="max-h-[85vh] w-[min(92vw,936px)] max-w-none overflow-y-auto sm:max-w-[936px]" showCloseButton>
         <DialogHeader><DialogTitle>Project settings</DialogTitle><DialogDescription>{project?.repository}</DialogDescription></DialogHeader>
           {project && form ? <form onSubmit={(event) => void submit(event)}>
             <FieldGroup>

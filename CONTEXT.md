@@ -33,8 +33,8 @@ Explicit revision requests, approval notes, and immutable workflow evidence. For
 _Avoid_: Issue chat, discussion thread
 
 **Task brief**:
-The company-scoped Markdown description and immutable image attachments supplied when creating an issue. Images are automatically available to the Lead as planning evidence and reach the Developer only when the final plan explicitly requires them.
-_Avoid_: Plain-text-only intake, mutable task attachment
+The current company-scoped Markdown description and image attachments for an issue. Members may edit the description at any time; each newly admitted planning turn uses the current description. Images are automatically available to the Lead as planning evidence and reach the Developer only when the final plan explicitly requires them.
+_Avoid_: Plain-text-only intake
 
 **Kanban**:
 A read-only, derived view of issue workflow state inside an active company context. It exposes explicit legal action buttons but does not use drag-and-drop to change state in the MVP. The instance administrator also has an agency-wide, cross-company overview with one row per company showing active-issue count, action-required count, and recent activity; ordinary members remain limited to their assigned companies.

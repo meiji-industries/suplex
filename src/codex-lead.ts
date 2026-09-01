@@ -358,7 +358,9 @@ export class AgentService {
     }
     const brief = row.description ?? (() => {
       if (!row.brief_storage_path || !row.brief_sha256) throw new AgentFailure("scoped-input-missing", "Task description is unavailable");
-      return this.artifacts.readSync({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 }).toString("utf8");
+      const migrated = this.artifacts.readSync({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 }).toString("utf8");
+      this.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET description = ? WHERE id = ? AND company_id = ? AND description IS NULL").run(migrated, input.taskId, input.companyId));
+      return migrated;
     })();
     const revisionNote = input.revisionNoteArtifactId
       ? this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'plan-decision'").get(input.revisionNoteArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined)
@@ -893,21 +895,27 @@ export class AgentService {
   async runSupplementalReview(rawInput: SupplementalReviewActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<SupplementalReviewResult> {
     const input = rawInput;
     const profile = await this.resolveTurnProfile(input.roleProfiles.reviewer, undefined, "Supplemental reviewer");
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.name AS projectSlug,
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, t.description, p.name AS projectSlug,
       CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issueKey,
       b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256, oa.storage_path AS output_storage_path, oa.sha256 AS output_sha256, e.storage_path AS evidence_storage_path, e.sha256 AS evidence_sha256
       FROM forge_tasks t
       JOIN forge_projects p ON p.id = t.project_id
       JOIN forge_companies c ON c.id = t.company_id
-      JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_agent_executions io ON io.task_id = t.id AND io.output_artifact_id = ?
+      LEFT JOIN forge_artifacts b ON b.id = t.brief_artifact_id AND b.kind = 'task-brief'
+      JOIN forge_agent_executions io ON io.task_id = t.id AND io.output_artifact_id = ?
       JOIN forge_artifacts oa ON oa.id = io.output_artifact_id JOIN forge_artifacts e ON e.id = io.evidence_artifact_id
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId, input.briefArtifactId) as { title: string; projectSlug: string; issueKey: string | null; brief_storage_path: string; brief_sha256: string; output_storage_path: string; output_sha256: string; evidence_storage_path: string; evidence_sha256: string } | undefined);
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId) as { title: string; description: string | null; projectSlug: string; issueKey: string | null; brief_storage_path: string | null; brief_sha256: string | null; output_storage_path: string; output_sha256: string; evidence_storage_path: string; evidence_sha256: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Supplemental review evidence is unavailable");
     const reviewerProfile = profile;
     const configuration = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input);
     const normalizedJson = JSON.stringify(configuration);
     const worktreePath = await this.planningWorktree(input, configuration, context.title);
-    const brief = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
+    const brief = context.description ?? (() => {
+      if (!context.brief_storage_path || !context.brief_sha256) throw new AgentFailure("scoped-input-missing", "Task description is unavailable");
+      const migrated = this.artifacts.readSync({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 }).toString("utf8");
+      this.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET description = ? WHERE id = ? AND company_id = ? AND description IS NULL").run(migrated, input.taskId, input.companyId));
+      return migrated;
+    })();
     const draft = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
     const instructions = await this.repositoryEvidence(worktreePath);
     const images = this.database.authQuery((db) => {

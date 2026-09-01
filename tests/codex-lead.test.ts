@@ -230,14 +230,14 @@ test("Lead planning persists a fake turn result and reuses the Lead role session
     await rm(value.root, { recursive: true, force: true });
   }
 });
-test("Lead planning reads a legacy task description and ignores a stale brief input", async () => {
+test("Lead planning persists a legacy task description and ignores a stale brief input", async () => {
   const value = await fixture("gpt-5-codex", "Legacy task text");
   const fake = fakeTurnRunner({ "lead-plan": () => routinePlan() });
   try {
     const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
     await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: "stale-brief", imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
     expect(fake.calls[0]?.prompt).toContain("Legacy task text");
-    expect(value.database.authQuery((db) => db.prepare("SELECT description FROM forge_tasks WHERE id = 'task_1'").get())).toEqual({ description: null });
+    expect(value.database.authQuery((db) => db.prepare("SELECT description FROM forge_tasks WHERE id = 'task_1'").get())).toEqual({ description: "Legacy task text" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 test("a description edit after planning admission cannot change its sent prompt", async () => {
@@ -506,6 +506,7 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
     for (const artifact of [draft, priorEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_primary', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_primary', ?, ?, ?)").run(now, now, priorEvidence.id);
     db.prepare("UPDATE forge_agent_executions SET output_kind = 'plan', output_revision = 1, output_artifact_id = ?, output_summary = 'Draft plan' WHERE id = 'agent_primary'").run(draft.id);
+    db.prepare("UPDATE forge_tasks SET description = 'Runtime review description' WHERE id = 'task_1'").run();
   });
   let reviewArtifactId = "";
   const fake = fakeTurnRunner({
@@ -520,13 +521,14 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
   });
   try {
     const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
-    const review = await service.runSupplementalReview({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1", reviewer: "profile_2" }, revision: 1, leadOutputArtifactId: draft.id, leadEvidenceArtifactId: priorEvidence.id });
+    const review = await service.runSupplementalReview({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: "stale-brief", imageArtifactIds: [], roleProfiles: { planner: "profile_1", reviewer: "profile_2" }, revision: 1, leadOutputArtifactId: draft.id, leadEvidenceArtifactId: priorEvidence.id });
     reviewArtifactId = review.reviewArtifactId;
     const consolidated = await service.consolidateLeadPlan({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1", reviewer: "profile_2" }, revision: 2, leadSessionRef: "session_primary", leadOutputArtifactId: draft.id, supplementalReviewArtifactId: review.reviewArtifactId });
     expect(review.sessionRef).toBe("session_0123456789abcdef01234567");
     expect(consolidated.leadSessionRef).toBe("session_0123456789abcdef01234567");
     expect(fake.calls).toHaveLength(2);
     expect(fake.calls[0]).toMatchObject({ promptKind: "supplemental-review", executionRole: "reviewer" });
+    expect(fake.calls[0]?.prompt).toContain("Runtime review description");
     expect(fake.calls[1]).toMatchObject({ promptKind: "lead-consolidation", executionRole: "planner" });
     expect(value.database.authQuery((db) => db.prepare("SELECT profile_id, session_ref, summary FROM forge_plan_reviews WHERE id = ?").get(review.reviewId))).toEqual({ profile_id: "profile_2", session_ref: "session_0123456789abcdef01234567", summary: "Review is independent" });
     expect(value.database.authQuery((db) => db.prepare("SELECT planner_response_artifact_id FROM forge_plan_reviews WHERE id = ?").get(review.reviewId))).toEqual({ planner_response_artifact_id: consolidated.leadReviewResponseArtifactId });

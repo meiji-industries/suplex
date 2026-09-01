@@ -1275,7 +1275,7 @@ export class TaskService {
       taskConfiguration = TaskProjectConfigurationSchema.parse({ ...taskConfiguration, prompts: { artifactId: promptArtifact.id, sha256: promptArtifact.sha256, overrides: promptSet.overrides } });
       configurationArtifact = await this.artifacts.putArtifact(companyId, "task-project-configuration", { filename: `project-configuration-${taskId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(taskConfiguration), "utf8"), taskId });
       await this.maybeFault("after_manifest_persisted", { intentId: reserved.intent.id, taskId });
-      briefArtifact = configurationArtifact;
+      briefArtifact = await this.artifacts.putArtifact(companyId, "task-description-compatibility", { filename: `${taskId}.json`, mimeType: "application/json", bytes: Buffer.from("{}", "utf8"), taskId });
       await this.maybeFault("after_artifact_finalized", { intentId: reserved.intent.id, taskId, artifactIndex: 0 });
       this.updateCreationIntent(reserved.intent.id, { artifactIds: [promptArtifact.id, configurationArtifact.id, briefArtifact.id] }, reserved.intent.lease_token);
       for (const [imageIndex, { image, bytes }] of decodedImages.entries()) {
@@ -2147,7 +2147,9 @@ export class TaskService {
     const description = row.description ?? (() => {
       const brief = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-brief'").get(row.brief_artifact_id, row.company_id) as Pick<ArtifactRow, "storage_path" | "sha256"> | undefined);
       if (!brief) throw new TaskFailure("Task description is unavailable", [], 500);
-      return this.artifacts.readSync({ companyId: row.company_id, storagePath: brief.storage_path, sha256: brief.sha256 }).toString("utf8");
+      const migrated = this.artifacts.readSync({ companyId: row.company_id, storagePath: brief.storage_path, sha256: brief.sha256 }).toString("utf8");
+      this.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET description = ? WHERE id = ? AND company_id = ? AND description IS NULL").run(migrated, row.id, row.company_id));
+      return migrated;
     })();
     const workflowState = this.workflowStateForTask(row);
     const reviewLineage = this.reviewLineage(row, workflowState);

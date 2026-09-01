@@ -5,12 +5,23 @@ import { describe, expect, it } from "vitest";
 import { ChatAgentTurn } from "../src/frontend/components/app/task-chat/chat-agent-turn.js";
 import { ChatComposer } from "../src/frontend/components/app/task-chat/chat-composer.js";
 import { ChatMemberMessage } from "../src/frontend/components/app/task-chat/chat-member-message.js";
+import { selectedLivePane } from "../src/frontend/components/app/task-chat/task-chat.js";
+
 
 const completed = { kind: "agent_turn" as const, id: "turn", role: "builder" as const, agent: { name: "Builder", avatarSeed: "builder" }, startedAt: "2026-08-23T00:00:00.000Z", finishedAt: "2026-08-23T00:00:40.000Z", status: "completed" as const, intro: "I will inspect the exact delivered commit.", events: [{ id: "command", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "git status", exitCode: 0, status: "completed" as const }, { id: "message", at: "2026-08-23T00:00:11.000Z", kind: "message", text: "I found three in-scope blocking gaps." }, { id: "tool", at: "2026-08-23T00:00:12.000Z", kind: "tool_call", text: "read" }, { id: "update", at: "2026-08-23T00:00:13.000Z", kind: "agent_update", text: "The service now gathers all campaign routes." }, { id: "reasoning", at: "2026-08-23T00:00:14.000Z", kind: "thinking_summary", text: "Reasoning details" }, { id: "file", at: "2026-08-23T00:00:15.000Z", kind: "file_change", text: "Updated task-chat.ts", files: ["src/task-chat.ts"] }], summary: "The work is complete.", stats: { filesChanged: 1, additions: 12, deletions: 3 } };
 const withoutIntro = Object.fromEntries(Object.entries(completed).filter(([key]) => key !== "intro")) as Omit<typeof completed, "intro">;
 const withoutResult = Object.fromEntries(Object.entries(completed).filter(([key]) => key !== "intro" && key !== "summary")) as Omit<typeof completed, "intro" | "summary">;
 
 describe("task chat UI", () => {
+  it("keeps the selected live pane through refreshes and falls back to the first pane", () => {
+    const planner = { role: "planner", text: "plan" };
+    const builder = { role: "builder", text: "build" };
+    const panes = [planner, builder];
+    expect(selectedLivePane(panes, undefined)).toBe(planner);
+    expect(selectedLivePane([...panes], "builder")).toBe(builder);
+    expect(selectedLivePane([planner], "builder")).toBe(planner);
+  });
+
   it("keeps a completed final summary visible while progress stays collapsed", () => {
     const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item: completed, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
     expect(html).toContain("Worked for 40s");

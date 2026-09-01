@@ -1,3 +1,4 @@
+import { Terminal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { PullRequestCard } from "../pull-request-card.js";
@@ -32,7 +33,7 @@ export function LivePaneDock({ task }: { task: ApiTask }) {
   useEffect(() => {
     setSelectedRole((current) => current === selectedPane?.role ? current : selectedPane?.role);
   }, [selectedPane?.role]);
-  return selectedPane ? <section className="sticky bottom-0 z-10 border-t border-border bg-background" aria-label="Live agent output"><Tabs value={selectedPane.role} onValueChange={setSelectedRole}><div className="overflow-x-auto border-b border-border"><TabsList>{panes.map((pane) => <TabsTrigger key={pane.role} value={pane.role}>{pane.role}</TabsTrigger>)}</TabsList></div><TabsContent value={selectedPane.role}><LivePaneTerminal role={selectedPane.role} text={selectedPane.text} /></TabsContent></Tabs></section> : null;
+  return selectedPane ? <section className="sticky bottom-0 z-10 bg-[#1e1e2e]" aria-label="Live agent output"><Tabs className="gap-0" value={selectedPane.role} onValueChange={setSelectedRole}><div className="overflow-x-auto bg-[#1e1e2e] px-1 pt-1" aria-label="Live pane tabs"><TabsList className="h-8 gap-1 rounded-none bg-transparent p-0">{panes.map((pane) => <TabsTrigger className="group h-7 flex-none gap-1.5 rounded-md px-2 text-[13px] font-medium text-[#a6adc8] hover:bg-[#313244] hover:text-[#cdd6f4] data-active:bg-[#313244] data-active:text-[#cdd6f4] data-active:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.08)]" key={pane.role} value={pane.role}><Terminal className="hidden size-3 group-data-[active]:block" />{pane.role}</TabsTrigger>)}</TabsList></div><TabsContent className="mt-0" value={selectedPane.role}><LivePaneTerminal role={selectedPane.role} text={selectedPane.text} /></TabsContent></Tabs></section> : null;
 }
 
 

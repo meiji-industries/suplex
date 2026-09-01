@@ -5,13 +5,30 @@ import { describe, expect, it } from "vitest";
 import { ChatAgentTurn } from "../src/frontend/components/app/task-chat/chat-agent-turn.js";
 import { ChatComposer } from "../src/frontend/components/app/task-chat/chat-composer.js";
 import { ChatMemberMessage } from "../src/frontend/components/app/task-chat/chat-member-message.js";
-import { livePaneStatus, selectedLivePane } from "../src/frontend/components/app/task-chat/task-chat.js";
+import { adjustLivePaneHeight, clampLivePaneHeight, livePaneStatus, savedLivePaneHeight, selectedLivePane } from "../src/frontend/components/app/task-chat/task-chat.js";
 import type { ApiAgentRuntime } from "../src/frontend/lib/view-shared.js";
 
 
 const completed = { kind: "agent_turn" as const, id: "turn", role: "builder" as const, agent: { name: "Builder", avatarSeed: "builder" }, startedAt: "2026-08-23T00:00:00.000Z", finishedAt: "2026-08-23T00:00:40.000Z", status: "completed" as const, intro: "I will inspect the exact delivered commit.", events: [{ id: "command", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "git status", exitCode: 0, status: "completed" as const }, { id: "message", at: "2026-08-23T00:00:11.000Z", kind: "message", text: "I found three in-scope blocking gaps." }, { id: "tool", at: "2026-08-23T00:00:12.000Z", kind: "tool_call", text: "read" }, { id: "update", at: "2026-08-23T00:00:13.000Z", kind: "agent_update", text: "The service now gathers all campaign routes." }, { id: "reasoning", at: "2026-08-23T00:00:14.000Z", kind: "thinking_summary", text: "Reasoning details" }, { id: "file", at: "2026-08-23T00:00:15.000Z", kind: "file_change", text: "Updated task-chat.ts", files: ["src/task-chat.ts"] }], summary: "The work is complete.", stats: { filesChanged: 1, additions: 12, deletions: 3 } };
 const withoutIntro = Object.fromEntries(Object.entries(completed).filter(([key]) => key !== "intro")) as Omit<typeof completed, "intro">;
 const withoutResult = Object.fromEntries(Object.entries(completed).filter(([key]) => key !== "intro" && key !== "summary")) as Omit<typeof completed, "intro" | "summary">;
+
+describe("live pane dock sizing", () => {
+  it("restores valid heights and clamps malformed or out-of-range storage values", () => {
+    expect(savedLivePaneHeight("400")).toBe(400);
+    expect(savedLivePaneHeight("100")).toBe(160);
+    expect(savedLivePaneHeight("900")).toBe(720);
+    expect(savedLivePaneHeight("invalid")).toBe(320);
+    expect(savedLivePaneHeight(null)).toBe(320);
+  });
+
+  it("adjusts dock height in fixed clamped keyboard steps", () => {
+    expect(clampLivePaneHeight(350)).toBe(350);
+    expect(adjustLivePaneHeight(320, 1)).toBe(344);
+    expect(adjustLivePaneHeight(160, -1)).toBe(160);
+    expect(adjustLivePaneHeight(720, 1)).toBe(720);
+  });
+});
 
 describe("task chat UI", () => {
   it("keeps the selected live pane through refreshes and falls back to the first pane", () => {

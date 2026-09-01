@@ -267,9 +267,8 @@ test("POST /api/hermes/tasks creates task with 9-field projection, private no-st
   const count = (table: string, clause = ""): number => database.authQuery((db) => (db.prepare(`SELECT COUNT(*) AS count FROM ${table} ${clause}`).get() as { count: number }).count);
   expect(count("forge_tasks")).toBe(1);
   expect(count("forge_task_creation_intents")).toBe(1);
-  expect(count("forge_artifacts")).toBe(3);
+  expect(count("forge_artifacts")).toBe(2);
   expect(database.authQuery((db) => db.prepare("SELECT kind, filename FROM forge_artifacts WHERE task_id = ? ORDER BY kind").all(body.id))).toEqual([
-    { kind: "task-brief", filename: "task.md" },
     { kind: "task-project-configuration", filename: `project-configuration-${body.id}.json` },
     { kind: "task-prompt-set", filename: `prompts-${body.id}.json` },
   ]);

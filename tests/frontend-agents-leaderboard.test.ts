@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from "vitest";
 
-import { animateReorderedAgentRow } from "../src/frontend/components/app/agents-leaderboard.js";
+import { agentRuntimeDetail, agentRuntimeSummary, animateReorderedAgentRow } from "../src/frontend/components/app/agents-leaderboard.js";
+import type { ApiAgentRuntime } from "../src/frontend/lib/view-shared.js";
 
 const originalWindow = globalThis.window;
 const originalElement = globalThis.Element;
@@ -44,4 +45,20 @@ test("only animates rows whose rendered order changes", () => {
   expect(animate).toHaveBeenCalledTimes(2);
   expect(animate).toHaveBeenNthCalledWith(1, [{ transform: "translateY(-36px)" }, { transform: "translateY(0)" }], { duration: 240, easing: "ease-out" });
   expect(animate).toHaveBeenNthCalledWith(2, [{ transform: "translateY(36px)" }, { transform: "translateY(0)" }], { duration: 240, easing: "ease-out" });
+});
+
+test("runtime summary prioritizes working entries and detail preserves every assignment", () => {
+  const agent = { lastSeenAt: "2026-08-31T00:00:00.000Z" };
+  const runtime = [
+    { agentId: "agent", taskId: "task-review", role: "reviewer", paneId: "pane-review", liveStatus: "active", diagnosis: "resting", detail: "Resting" },
+    { agentId: "agent", taskId: "task-build", role: "builder", paneId: "pane-build", liveStatus: "active", diagnosis: "working", detail: "Working" },
+    { agentId: "agent", taskId: "task-plan", role: "planner", paneId: "pane-plan", liveStatus: "active", diagnosis: "blocked", detail: "Blocked" },
+  ] satisfies ApiAgentRuntime[];
+
+  expect(agentRuntimeSummary(agent, [])).toMatch(/^Last seen /);
+  expect(agentRuntimeSummary(agent, [{ ...runtime[1]! }])).toBe("builder · Working");
+  expect(agentRuntimeSummary(agent, runtime)).toBe("builder · Working +2 more");
+  expect(agentRuntimeDetail(agent, runtime)).toContain("task-review");
+  expect(agentRuntimeDetail(agent, runtime)).toContain("task-build");
+  expect(agentRuntimeDetail(agent, runtime)).toContain("task-plan");
 });

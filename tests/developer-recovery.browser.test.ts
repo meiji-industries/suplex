@@ -50,6 +50,7 @@ function taskState(companyId: string, status: RecoveryStatus, revision = 3, over
     browserProof: [],
     deliveryReceipt: null,
     worktreeState: "present",
+    worktreePath: "/forge/worktrees/recovery-browser-task",
     pullRequestMode: "ready",
     workflowId: "recovery-browser-workflow",
     projectRevisionId: "recovery-browser-revision",

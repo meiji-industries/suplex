@@ -144,6 +144,18 @@ test("a creator that loses its lease cannot advance the creation intent", async 
   }
 });
 
+test("task details use the current unreleased worktree lease", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Worktree details", description: "body", idempotencyKey: "worktree-details-task", images: [] });
+    const path = "/Users/x/forge/worktrees/acme/forge/task_11faa20d50cfa686e5bb197e";
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, status, reserved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?)").run("worktree-details-lease", created.task.id, value.companyId, value.projectId, created.task.workflowId, "/Users/x/forge/repositories/acme/forge", "/Users/x/forge/worktrees/acme/forge", path, "work/worktree-details", "a".repeat(40), "b".repeat(64), new Date().toISOString()));
+    expect(value.tasks.getTask(value.adminId, created.task.id).worktreePath).toBe(path);
+    value.database.authQuery((db) => db.prepare("UPDATE forge_issue_worktrees SET status = 'released' WHERE id = ?").run("worktree-details-lease"));
+    expect(value.tasks.getTask(value.adminId, created.task.id).worktreePath).toBeNull();
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 
 test("Planning progress is timeline-backed and does not read legacy spools", async () => {
   const value = await fixture();

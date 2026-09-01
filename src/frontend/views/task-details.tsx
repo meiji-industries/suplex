@@ -118,16 +118,19 @@ export function BranchSyncCard({ taskId, updatedAt, baseBranch, allowedCommands,
   </Card>;
 }
 
-function WorktreeControls({ task, busy, onAction }: { task: ApiTask; busy: boolean; onAction: (path: TaskPlanAction) => Promise<void> }): ReactElement | null {
+export function WorktreeControls({ task, busy, onAction }: { task: ApiTask; busy: boolean; onAction: (path: TaskPlanAction) => Promise<void> }): ReactElement {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const canDelete = task.allowedCommands.includes("delete_worktree");
   const canRecreate = task.allowedCommands.includes("recreate_worktree");
-  const path = task.developerExecution?.worktreePath;
-  if (!path && task.worktreeState !== "cleaned" && !canRecreate) return null;
-  return <div className="space-y-1"><dt className="text-muted-foreground">Worktree</dt><dd className="flex min-w-0 flex-wrap items-center gap-1">
-    {task.worktreeState === "cleaned" ? <span>Worktree removed</span> : path ? <><CopyButton value={path} label="Copy worktree path" /><span className="min-w-0 truncate font-mono" title={path}>{path.split("/").pop()}</span></> : null}
-    {canDelete ? <Button size="xs" variant="destructive" onClick={() => setDeleteOpen(true)} disabled={busy}>Delete worktree</Button> : null}
-    {canRecreate ? <Button size="xs" variant="outline" onClick={() => void onAction("recreate-worktree")} disabled={busy}>Recreate worktree</Button> : null}
+  const path = task.worktreePath;
+  return <div className="space-y-1"><dt className="text-muted-foreground">Worktree</dt><dd className="space-y-1">
+    <div className="flex min-w-0 items-center gap-1">
+      {task.worktreeState === "cleaned" ? <span>Worktree removed</span> : path ? <><CopyButton value={path} label="Copy worktree path" /><span className="min-w-0 flex-1 truncate font-mono" title={path}>{path.split("/").pop()}</span></> : <span>None</span>}
+    </div>
+    {canDelete || canRecreate ? <div className="flex flex-wrap gap-1">
+      {canDelete ? <Button size="xs" variant="destructive" onClick={() => setDeleteOpen(true)} disabled={busy}>Delete worktree</Button> : null}
+      {canRecreate ? <Button size="xs" variant="outline" onClick={() => void onAction("recreate-worktree")} disabled={busy}>Recreate worktree</Button> : null}
+    </div> : null}
   </dd>
   <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete worktree?</AlertDialogTitle><AlertDialogDescription>Delete the local worktree? The branch and task history are kept.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => void onAction("delete-worktree")}>Delete worktree</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
   </div>;

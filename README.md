@@ -286,13 +286,10 @@ After building the package, the same setup entry point is available as `npx forg
 ## Development checks
 
 ```sh
-pnpm run typecheck
-pnpm run test
-pnpm run test:browser
-pnpm run test:temporal
+pnpm verify
 ```
 
-The browser proof uses Playwright at narrow and desktop viewports against the same responsive application served by the API, including passkey enrollment, sign-in/out, membership, and recovery. The Temporal lifecycle proof starts an isolated pinned CLI development server on a dynamic loopback port and runs with `pnpm run test:temporal`; it does not touch Temporal Cloud.
+This is the repository verification gate: typecheck, lint, unit tests, engine tests, and browser tests. The browser proof uses Playwright at narrow and desktop viewports against the same responsive application served by the API, including passkey enrollment, sign-in/out, membership, and recovery.
 
 The real Lead integration proof is opt-in because it starts authenticated Codex turns and consumes provider capacity. Run it with a model accepted by the local authenticated Codex account; the proof intentionally forces a same-session format correction and verifies the immutable plan/evidence path:
 

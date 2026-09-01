@@ -114,6 +114,10 @@ _Avoid_: Perfection loop, nit-driven rework
 A named identity with an Analyst, Implementer, or Reviewer role and an avatar, assigned to an Agent profile. Projects and tasks select agents for each role; reassignment affects future turns while preserving the selected profile settings for each admitted turn.
 _Avoid_: Profile identity without role, silent agent reassignment
 
+**Hermes external agent**:
+A non-user machine identity, scoped to one company and its explicitly granted projects. It pairs once through a short-lived code and then uses a rotatable bearer credential to create tasks and read the safe status of only tasks it created.
+_Avoid_: Forge user, unscoped API key, general task API client
+
 **Agent profile**:
 A named preset in an uncapped global catalog, managed through Forge web settings and stored in the database, that fixes an agent provider, model, reasoning level, and service priority for a role turn. Profiles do not carry avatars or task assignment. The MVP begins with seeded Codex examples but permits the administrator to create and tune additional profiles. Custom role prompts are not part of profiles. Projects select role agents, and each agent is assigned one profile. Profiles are editable without version-history management; each turn records the resolved settings it actually used. An unavailable profile retries through the configured durable capacity policy, then pauses with a typed blocker if that policy is exhausted; it never falls back silently.
 _Avoid_: Ad hoc model override, profile-version management
@@ -139,8 +143,8 @@ An optional independent agent opinion requested for an original implementation p
 _Avoid_: Required critical review, automatic escalation
 
 **Role session**:
-A resumable agent conversation scoped to one issue and role. The Lead retains one session through planning, technical review, and repair planning; the Developer retains a separate session for prescribed implementation.
-_Avoid_: Shared role conversation, new Lead session per phase
+A durable binding for one task and one runtime role: Planner, Builder, Reviewer, or Integrator. A task has at most one current binding per role; terminal live agents are replaced rather than reused, and retiring a role ends its current binding.
+_Avoid_: Shared role conversation, terminal-agent reuse, Lead/Developer-only session model
 
 **Release automation**:
 Deterministic provider operations that publish and reconcile an exact reviewed revision. It is the default release path; a Release-agent session is created only for exceptional interpretation, while technical judgment remains with the Lead. The Developer remains local-only: it edits, tests, and commits inside an issue worktree but never publishes branches or calls providers. The Tailscale-only MVP polls configured providers only for issues awaiting pull-request, CI, or release status rather than accepting public webhooks or running broad background sync. A polling outage retries as provider connectivity and is never treated as CI failure; exhausted connectivity retry becomes an action-required blocker. CI success requires every configured check to pass on the exact reviewed pull-request head.

@@ -66,6 +66,12 @@ Reports land at the explicit `<report.md>` path in the brief (the helper's
 the pane with `herdr agent read`, tell the user what it needs, and wait for the
 user's answer. Never answer that dialog on the user's behalf.
 
+## Forge task status reconciliation
+
+Before reporting status for a Forge task, inspect every Herdr pane carrying that task ID and reconcile each pane’s lifecycle (`done`, `idle`, or `blocked`) with the task’s durable workflow state. Report both facts explicitly. A stopped role pane means that turn ended; it does not mean the task completed. An active durable phase does not mean its role pane is still running.
+
+Before replying about delegated work, collect the required report file, read the agent’s recent output, and independently run the promised checks. Only then report completion and close the pane.
+
 ## Shared-checkout discipline
 
 Every brief names the other live panes and their owned files. Never edit a

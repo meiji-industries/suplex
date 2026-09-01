@@ -230,6 +230,29 @@ test("Lead planning persists a fake turn result and reuses the Lead role session
     await rm(value.root, { recursive: true, force: true });
   }
 });
+test("Lead planning reads a legacy task description and ignores a stale brief input", async () => {
+  const value = await fixture("gpt-5-codex", "Legacy task text");
+  const fake = fakeTurnRunner({ "lead-plan": () => routinePlan() });
+  try {
+    const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
+    await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: "stale-brief", imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
+    expect(fake.calls[0]?.prompt).toContain("Legacy task text");
+    expect(value.database.authQuery((db) => db.prepare("SELECT description FROM forge_tasks WHERE id = 'task_1'").get())).toEqual({ description: null });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+test("a description edit after planning admission cannot change its sent prompt", async () => {
+  const value = await fixture("gpt-5-codex", "Admitted task text");
+  const fake = fakeTurnRunner({ "lead-plan": () => {
+    value.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET description = 'Edited after admission' WHERE id = 'task_1'").run());
+    return routinePlan();
+  } });
+  try {
+    const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
+    await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
+    expect(fake.calls[0]?.prompt).toContain("Admitted task text");
+    expect(fake.calls[0]?.prompt).not.toContain("Edited after admission");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
 
 test("Lead planning omits test-suite commands when project tests are disabled", async () => {
   const value = await fixture();

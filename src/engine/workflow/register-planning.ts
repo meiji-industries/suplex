@@ -91,7 +91,6 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
     assertPayloadWithinLimit("startPlanning command", rawInput);
     const input = StartPlanningInputSchema.parse(rawInput);
     if (ctx.state.revision !== input.expectedRevision || !ctx.state.allowedCommands.includes("start_planning")) throw new Error("Stale workflow revision");
-    if (input.briefArtifactId) ctx.input.briefArtifactId = input.briefArtifactId;
     const next = IssueWorkflowStateSchema.parse({
       ...ctx.state,
       phase: "planning",

@@ -170,8 +170,9 @@ interface PlanningRow {
   project_slug: string;
   issue_key: string | null;
   normalized_json: string;
-  brief_storage_path: string;
-  brief_sha256: string;
+  description: string | null;
+  brief_storage_path: string | null;
+  brief_sha256: string | null;
 }
 
 interface ProfileSettings {
@@ -330,12 +331,12 @@ export class AgentService {
     const input = LeadPlanningActivityInputSchema.parse(rawInput);
     const row = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.name AS project_slug,
       CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key,
-      b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256
+      t.description, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256
       FROM forge_tasks t
       JOIN forge_projects p ON p.id = t.project_id
       JOIN forge_companies c ON c.id = t.company_id
-      JOIN forge_artifacts b ON b.id = t.brief_artifact_id
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ? AND b.id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId, input.briefArtifactId) as PlanningRow | undefined);
+      LEFT JOIN forge_artifacts b ON b.id = t.brief_artifact_id AND b.kind = 'task-brief'
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId) as PlanningRow | undefined);
     if (!row) throw new AgentFailure("scoped-input-missing", "Lead planning evidence is unavailable");
     const configuration = this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input));
     row.normalized_json = JSON.stringify(configuration);
@@ -355,7 +356,10 @@ export class AgentService {
         sourceGuidance = `\n\nThis task continues the existing source branch \`${sourceBranch}\` at \`origin/${sourceBranch}\`. Before planning, inspect its commits and complete diff from merge-base \`${mergeBase}\` with \`git log ${mergeBase}..origin/${sourceBranch}\` and \`git diff ${mergeBase}..origin/${sourceBranch}\`. Plan against the source changes, not only the base checkout.`;
       } catch { throw new AgentFailure("source-branch-unavailable", "The selected source branch could not be inspected for planning"); }
     }
-    const brief = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
+    const brief = row.description ?? (() => {
+      if (!row.brief_storage_path || !row.brief_sha256) throw new AgentFailure("scoped-input-missing", "Task description is unavailable");
+      return this.artifacts.readSync({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 }).toString("utf8");
+    })();
     const revisionNote = input.revisionNoteArtifactId
       ? this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'plan-decision'").get(input.revisionNoteArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined)
       : undefined;
@@ -401,7 +405,7 @@ export class AgentService {
       issueId: input.taskId,
       workflowId: input.workflowId,
       projectId: input.projectId,
-      taskBrief: { artifactId: input.briefArtifactId, sha256: row.brief_sha256 },
+      taskDescription: brief,
       taskImages: images.map((image) => ({ artifactId: image.id, sha256: image.sha256, mimeType: "image/*", filename: image.filename })),
       projectRevision: { id: input.projectRevisionId, identity: row.normalized_json, baseSha: jsonRequired(row.normalized_json).baseSha ?? "", targetSha: jsonRequired(row.normalized_json).targetSha ?? "" },
       profiles: { lead: leadProfile, reviewer: input.roleProfiles.reviewer ? profileSettings.find((profile) => profile.id === input.roleProfiles.reviewer) ?? null : null },
@@ -472,9 +476,7 @@ export class AgentService {
     }
 
     const evidenceLines: string[] = [];
-    const executionRepositoryEvidenceArtifact = await this.artifacts.putArtifact(input.companyId, "agent-evidence", { filename: `${executionId}-repository.json`, mimeType: "application/json", bytes: Buffer.from(repositoryEvidence, "utf8") });
-    const revisionIdentity = jsonRequired(row.normalized_json) as Record<string, unknown>;
-    const inputManifestArtifact = await this.artifacts.putArtifact(input.companyId, "lead-input-manifest", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ companyId: input.companyId, taskId: input.taskId, projectId: input.projectId, workflowId: input.workflowId, briefArtifactId: input.briefArtifactId, briefSha256: row.brief_sha256, imageArtifacts: input.imageArtifactIds.map((id) => { const image = images.find((candidate) => candidate.id === id); return image ? { artifactId: id, sha256: image.sha256, mimeType: image.mime_type, filename: image.filename } : { artifactId: id }; }), projectRevisionId: input.projectRevisionId, normalizedRevisionSha256: createHash("sha256").update(row.normalized_json).digest("hex"), repositoryEvidenceArtifactId: executionRepositoryEvidenceArtifact.id, repositoryEvidenceSha256: executionRepositoryEvidenceArtifact.sha256, repository: { repository: revisionIdentity.repository, baseBranch: revisionIdentity.baseBranch, targetBranch: revisionIdentity.targetBranch, baseSha: revisionIdentity.baseSha, targetSha: revisionIdentity.targetSha }, leadProfile: { id: leadProfile.id, provider: leadProfile.provider, model: leadProfile.model, reasoningLevel: leadProfile.reasoningLevel, servicePriority: leadProfile.servicePriority }, ...(sessionRef ? { leadSessionRef: sessionRef } : {}), ...(input.resume ? { instructionArtifactId: input.resume.instructionArtifactId, instructionSha256: input.resume.instructionSha256, resumeReason: input.resume.reason } : {}) }, null, 2), "utf8") });
+    const inputManifestArtifact = await this.artifacts.putArtifact(input.companyId, "lead-input-manifest", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ companyId: input.companyId, taskId: input.taskId, projectId: input.projectId, workflowId: input.workflowId, taskDescription: brief, imageArtifacts: input.imageArtifactIds.map((id) => { const image = images.find((candidate) => candidate.id === id); return image ? { artifactId: id, sha256: image.sha256, mimeType: image.mime_type, filename: image.filename } : { artifactId: id }; }), projectRevisionId: input.projectRevisionId, normalizedRevisionSha256: createHash("sha256").update(row.normalized_json).digest("hex") }), "utf8") });
     this.database.authTransaction((db) => {
       db.prepare("UPDATE forge_agent_executions SET session_ref = ? WHERE id = ?").run(sessionRef ?? null, executionId);
     });

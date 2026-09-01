@@ -324,7 +324,7 @@ for (const faultPoint of ["after_artifact_finalized", "after_task_committed", "b
       expect(retried.created).toBe(faultPoint === "after_artifact_finalized");
       expect(retried.task).toMatchObject({ phase: "backlog", revision: 0 });
       expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE idempotency_key = ?").get(taskInput.idempotencyKey))).toEqual({ count: 1 });
-      expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts WHERE company_id = ?").get(value.companyId))).toEqual({ count: 3 });
+      expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts WHERE company_id = ?").get(value.companyId))).toEqual({ count: 2 });
       expect(value.database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all(retried.task.id))).toEqual([{ revision: 0 }]);
     } finally {
       value.database.close(); await rm(value.root, { recursive: true, force: true });
@@ -481,23 +481,24 @@ test("updates task title and description without changing its workflow state", a
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }
 });
-test("plans with the edited backlog brief", async () => {
+test("stores the edited backlog description as runtime data", async () => {
   const value = await fixture();
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Edit before planning", description: "Original brief", idempotencyKey: "edit-before-planning-0001", images: [] });
     const updated = await value.tasks.updateTaskDetails(value.adminId, created.task.id, { description: "Edited brief" });
     await value.tasks.executeCommand(value.adminId, created.task.id, "start_planning", { expectedRevision: updated.revision });
-    expect(value.planningInputsByTask.get(created.task.id)).toMatchObject({ briefArtifactId: updated.briefArtifactId });
+    expect(value.database.authQuery((db) => db.prepare("SELECT description FROM forge_tasks WHERE id = ?").get(created.task.id))).toEqual({ description: "Edited brief" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts WHERE company_id = ? AND kind = 'task-brief'").get(value.companyId))).toEqual({ count: 0 });
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }
 });
-test("locks the brief once planning starts", async () => {
+test("keeps task descriptions mutable while planning is active", async () => {
   const value = await fixture();
   try {
-    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Lock planning brief", description: "Original brief", idempotencyKey: "lock-planning-brief-0001", images: [] });
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Mutable planning brief", description: "Original brief", idempotencyKey: "mutable-planning-brief-0001", images: [] });
     await value.tasks.executeCommand(value.adminId, created.task.id, "start_planning", { expectedRevision: created.task.revision });
-    await expect(value.tasks.updateTaskDetails(value.adminId, created.task.id, { description: "Changed brief" })).rejects.toMatchObject({ statusCode: 409, findings: [expect.objectContaining({ code: "brief-locked" })] });
+    await expect(value.tasks.updateTaskDetails(value.adminId, created.task.id, { description: "Changed brief" })).resolves.toMatchObject({ description: "Changed brief", phase: "planning" });
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }

@@ -764,7 +764,7 @@ interface TaskRow {
   project_revision_id: string;
   created_at: string;
   updated_at: string;
-  description: string;
+  description: string | null;
   projection_revision: number;
   authoritative_revision: number;
   projected_at: string;
@@ -1134,11 +1134,9 @@ export class TaskService {
     if (!titlePattern.test(title)) findings.push(finding("invalid-title", "title", "Title must contain 1 to 160 characters"));
     if (!description || description.length > 200_000) findings.push(finding("invalid-description", "description", "Markdown description is required and must be at most 200,000 characters"));
     if (findings.length) throw new TaskFailure("Task details are invalid", findings, 422);
-    if (input.description !== undefined && current.phase !== "backlog") throw new TaskFailure("Task description cannot change after planning starts", [finding("brief-locked", "description", "Task description cannot change after planning starts")], 409, current);
-    const brief = input.description === undefined ? undefined : await this.artifacts.putArtifact(current.companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from(description, "utf8") });
     const now = this.now().toISOString();
     this.database.authTransaction((db) => {
-      db.prepare("UPDATE forge_tasks SET title = ?, brief_artifact_id = COALESCE(?, brief_artifact_id), updated_at = ? WHERE id = ? AND company_id = ?").run(title, brief?.id, now, taskId, current.companyId);
+      db.prepare("UPDATE forge_tasks SET title = ?, description = COALESCE(?, description), updated_at = ? WHERE id = ? AND company_id = ?").run(title, input.description === undefined ? null : description, now, taskId, current.companyId);
       this.auth.recordAuditEventInTransaction(db, actorUserId, "task_details_updated", undefined, current.companyId, { taskId, ...(input.title !== undefined ? { title } : {}), ...(input.description !== undefined ? { descriptionUpdated: "true" } : {}) });
     });
     return this.getTask(actorUserId, taskId);
@@ -1273,12 +1271,11 @@ export class TaskService {
       const taskId = reserved.intent.task_id;
       const workflowId = reserved.intent.workflow_id;
       this.updateCreationIntent(reserved.intent.id, { state: "staging", errorCode: null, attempt: reserved.intent.attempt + 1 }, reserved.intent.lease_token);
-      const briefBytes = Buffer.from(normalizeText(input.description), "utf8");
       promptArtifact = await this.artifacts.putArtifact(companyId, "task-prompt-set", { filename: `prompts-${taskId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 2, prompts: Object.fromEntries(promptSet.prompts), provenance: promptSet.provenance }), "utf8"), taskId });
       taskConfiguration = TaskProjectConfigurationSchema.parse({ ...taskConfiguration, prompts: { artifactId: promptArtifact.id, sha256: promptArtifact.sha256, overrides: promptSet.overrides } });
       configurationArtifact = await this.artifacts.putArtifact(companyId, "task-project-configuration", { filename: `project-configuration-${taskId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(taskConfiguration), "utf8"), taskId });
       await this.maybeFault("after_manifest_persisted", { intentId: reserved.intent.id, taskId });
-      briefArtifact = await this.artifacts.putArtifact(companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: briefBytes, taskId });
+      briefArtifact = configurationArtifact;
       await this.maybeFault("after_artifact_finalized", { intentId: reserved.intent.id, taskId, artifactIndex: 0 });
       this.updateCreationIntent(reserved.intent.id, { artifactIds: [promptArtifact.id, configurationArtifact.id, briefArtifact.id] }, reserved.intent.lease_token);
       for (const [imageIndex, { image, bytes }] of decodedImages.entries()) {
@@ -1287,7 +1284,9 @@ export class TaskService {
         imageArtifacts.push(artifact);
         this.updateCreationIntent(reserved.intent.id, { artifactIds: [promptArtifact, configurationArtifact, briefArtifact, ...imageArtifacts].filter((entry): entry is StoredArtifact => Boolean(entry)).map((entry) => entry.id) }, reserved.intent.lease_token);
       }
-      if (!briefArtifact) throw new ArtifactFailure("artifact-corrupt", "Task brief could not be stored");
+      if (!briefArtifact || !configurationArtifact) throw new ArtifactFailure("artifact-corrupt", "Task configuration could not be stored");
+      const storedBrief = briefArtifact;
+      const storedConfiguration = configurationArtifact;
       await this.maybeFault("after_artifact_staged", { intentId: reserved.intent.id, taskId });
       const now = this.now().toISOString();
       const autoApprovePlan = input.autoApprovePlan === true && authority.kind === "user";
@@ -1297,7 +1296,7 @@ export class TaskService {
       const initialState = createInitialIssueWorkflowState({ issueId: taskId, companyId, projectId: input.projectId, workflowId, projectRevisionId: configurationArtifact.id, requestHash, briefArtifactId: briefArtifact.id, briefSha256: briefArtifact.sha256, imageArtifactIds: imageArtifacts.map((artifact) => artifact.id), roleProfiles, supplementalReview, autoApprovePlan, ...(autoApprovePlanActorUserId ? { autoApprovePlanActorUserId } : {}), pullRequestMode, ...(autoMergeActorUserId ? { autoMergeActorUserId } : {}), deliveryTarget, runProjectTests, visualEvidence, repairCycleLimit: 2 });
       const eventHash = projectionStateHash(initialState);
       this.database.authTransaction((db) => {
-        db.prepare(`INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, auto_approve_plan, pull_request_mode, delivery_target, run_project_tests, visual_evidence, workflow_id, project_revision_id, project_configuration_artifact_id, project_configuration_captured_at, idempotency_key, request_hash, creator_agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(taskId, companyId, input.projectId, input.title.trim(), briefArtifact!.id, JSON.stringify(imageArtifacts.map((artifact) => artifact.id)), JSON.stringify(roleAgents), supplementalReview ? 1 : 0, autoApprovePlan ? 1 : 0, pullRequestMode, deliveryTarget, runProjectTests ? 1 : 0, visualEvidence, workflowId, configurationArtifact!.id, configurationArtifact!.id, capturedAt, idempotencyKey, requestHash, creatorAgentId, now, now);
+        db.prepare(`INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, description, image_artifact_ids_json, role_agents_json, supplemental_review, auto_approve_plan, pull_request_mode, delivery_target, run_project_tests, visual_evidence, workflow_id, project_revision_id, project_configuration_artifact_id, project_configuration_captured_at, idempotency_key, request_hash, creator_agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(taskId, companyId, input.projectId, input.title.trim(), storedBrief.id, normalizeText(input.description), JSON.stringify(imageArtifacts.map((artifact) => artifact.id)), JSON.stringify(roleAgents), supplementalReview ? 1 : 0, autoApprovePlan ? 1 : 0, pullRequestMode, deliveryTarget, runProjectTests ? 1 : 0, visualEvidence, workflowId, storedConfiguration.id, storedConfiguration.id, capturedAt, idempotencyKey, requestHash, creatorAgentId, now, now);
         db.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, authoritative_event_hash, projected_at) VALUES (?, ?, ?, ?, 0, 'backlog', 'human', ?, ?, ?, ?, ?, 0, ?, ?)`).run(taskId, companyId, input.projectId, workflowId, JSON.stringify(["start_planning"]), "Start planning", now, `${workflowId}:0`, eventHash, eventHash, now);
         db.prepare(`INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, source, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, 0, 'workflow', 'task_created', ?, ?, ?)`).run(`${workflowId}:0`, taskId, companyId, workflowId, JSON.stringify({ revision: 0, stateHash: eventHash }), now, eventHash);
         db.prepare(`INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, ?, ?, 0, ?, ?)`).run(taskId, companyId, workflowId, JSON.stringify(initialState), now);
@@ -1576,7 +1575,7 @@ export class TaskService {
       : deliveryChangesNote
       ? { expectedRevision, actorUserId, noteId: deliveryChangesNote.ref, noteSha256: deliveryChangesNote.sha256, ...(payload.idempotencyKey !== undefined ? { idempotencyKey: payload.idempotencyKey } : {}) }
       : descriptor.family === "start"
-      ? { expectedRevision, actorUserId, commandId: payload.commandId ?? randomUUID(), ...(command === "start_planning" ? { briefArtifactId: task.briefArtifactId } : {}), ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
+      ? { expectedRevision, actorUserId, commandId: payload.commandId ?? randomUUID(), ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
       : (command === "delete_worktree" || command === "recreate_worktree")
       ? { expectedRevision, actorUserId, ...(payload.confirmDiscardDirty !== undefined ? { confirmDiscardDirty: payload.confirmDiscardDirty } : {}) }
       : planInput;
@@ -2145,9 +2144,11 @@ export class TaskService {
       return db.prepare(`SELECT id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at FROM forge_artifacts WHERE company_id = ? AND id IN (${placeholders})`).all(row.company_id, ...imageIds) as ArtifactRow[];
     });
     const artifactById = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
-    const brief = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-brief'").get(row.brief_artifact_id, row.company_id) as Pick<ArtifactRow, "storage_path" | "sha256"> | undefined);
-    if (!brief) throw new TaskFailure("Task artifact is unavailable", [], 500);
-    const description = this.artifacts.readSync({ companyId: row.company_id, storagePath: brief.storage_path, sha256: brief.sha256 }).toString("utf8");
+    const description = row.description ?? (() => {
+      const brief = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-brief'").get(row.brief_artifact_id, row.company_id) as Pick<ArtifactRow, "storage_path" | "sha256"> | undefined);
+      if (!brief) throw new TaskFailure("Task description is unavailable", [], 500);
+      return this.artifacts.readSync({ companyId: row.company_id, storagePath: brief.storage_path, sha256: brief.sha256 }).toString("utf8");
+    })();
     const workflowState = this.workflowStateForTask(row);
     const reviewLineage = this.reviewLineage(row, workflowState);
     let priorTimelineEntryWasPlanning = false;
@@ -2445,7 +2446,7 @@ export class TaskService {
   }
 
   private taskQuery(scope: string): string {
-    return `SELECT t.id, t.company_id, t.project_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title, t.archived_at, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.auto_approve_plan, t.pull_request_mode, t.delivery_target, t.run_project_tests, t.visual_evidence, t.delivery_worktree_path, t.delivery_branch_name, t.delivery_commit, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.successor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.authoritative_revision, ip.projected_at, ip.projection_status, ip.projection_status_message, ip.phase, ip.owner, ip.allowed_commands_json, ip.pending_action, COALESCE((SELECT s.state_json FROM forge_workflow_snapshots s WHERE s.task_id = t.id AND s.revision = ip.revision), '{}') AS state_json FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope}`;
+    return `SELECT t.id, t.company_id, t.project_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title, t.archived_at, t.brief_artifact_id, t.description, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.auto_approve_plan, t.pull_request_mode, t.delivery_target, t.run_project_tests, t.visual_evidence, t.delivery_worktree_path, t.delivery_branch_name, t.delivery_commit, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.successor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.authoritative_revision, ip.projected_at, ip.projection_status, ip.projection_status_message, ip.phase, ip.owner, ip.allowed_commands_json, ip.pending_action, COALESCE((SELECT s.state_json FROM forge_workflow_snapshots s WHERE s.task_id = t.id AND s.revision = ip.revision), '{}') AS state_json FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope}`;
   }
 
   private async deleteTask(taskId: string, artifacts: Array<StoredArtifact | undefined>): Promise<void> {

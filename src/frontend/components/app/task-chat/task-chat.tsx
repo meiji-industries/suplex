@@ -1,39 +1,63 @@
-import { Terminal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { PullRequestCard } from "../pull-request-card.js";
 import { buildChatTranscript, sortChatItems, type ChatItem } from "../../../lib/task-chat.js";
 import { useTaskChatStream } from "../../../lib/use-task-chat-stream.js";
-import type { ApiTask } from "../../../lib/view-shared.js";
+import { readJson } from "../../../lib/api.js";
+import type { ApiAgentRuntime, ApiTask } from "../../../lib/view-shared.js";
 import { ChatAgentTurn } from "./chat-agent-turn.js";
 import { ChatComposer } from "./chat-composer.js";
 import { ChatMemberMessage } from "./chat-member-message.js";
 import { ChatSystemLine } from "./chat-system-line.js";
 import { LivePaneTerminal } from "./live-pane-terminal.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs.js";
+import { runtimeStatusLabel } from "../runtime-presentation.js";
 
 type LivePane = { role: string; text: string };
+type LivePaneStatus = { label: string; dotClass: string };
+type LivePaneResponse = { panes?: LivePane[] };
+type AgentRuntimeResponse = { runtime?: ApiAgentRuntime[] };
+
+
+export function livePaneStatus(taskId: string, role: string, runtime: readonly ApiAgentRuntime[]): LivePaneStatus {
+  const paneRuntime = runtime.find((entry) => entry.taskId === taskId && entry.role === role);
+  return paneRuntime
+    ? { label: runtimeStatusLabel(paneRuntime), dotClass: paneRuntime.diagnosis === "working" ? "bg-emerald-500" : paneRuntime.diagnosis === "blocked" ? "bg-amber-500" : "bg-muted-foreground" }
+    : { label: "Runtime unknown", dotClass: "bg-muted-foreground" };
+}
 
 export function selectedLivePane(panes: readonly LivePane[], selectedRole: string | undefined): LivePane | undefined {
   return panes.find((pane) => pane.role === selectedRole) ?? panes[0];
 }
 export function LivePaneDock({ task }: { task: ApiTask }) {
   const [panes, setPanes] = useState<LivePane[]>([]);
+  const [runtime, setRuntime] = useState<ApiAgentRuntime[]>([]);
   const [selectedRole, setSelectedRole] = useState<string>();
   // Panes keep moving in every non-terminal phase (CI repair, reviews, integrator work), so keep tailing.
   const running = !["done", "cancelled"].includes(task.phase);
   useEffect(() => {
     let active = true;
-    const load = async () => { const response = await fetch(`/api/tasks/${encodeURIComponent(task.id)}/pane`); if (active && response.ok) setPanes(((await response.json()) as { panes?: LivePane[] }).panes ?? []); };
+    const load = async () => {
+    const [paneResult, runtimeResult] = await Promise.allSettled([
+      readJson<LivePaneResponse>(`/api/tasks/${encodeURIComponent(task.id)}/pane`),
+      readJson<AgentRuntimeResponse>(`/api/agent-runtime?companyId=${encodeURIComponent(task.companyId)}`),
+    ]);
+    if (!active) return;
+    if (paneResult.status === "fulfilled") setPanes(paneResult.value.panes ?? []);
+    if (runtimeResult.status === "fulfilled") setRuntime(runtimeResult.value.runtime ?? []);
+    };
     void load();
     const timer = running ? window.setInterval(() => void load(), 2_000) : undefined;
     return () => { active = false; if (timer !== undefined) window.clearInterval(timer); };
-  }, [running, task.id]);
+  }, [running, task.companyId, task.id]);
   const selectedPane = selectedLivePane(panes, selectedRole);
   useEffect(() => {
     setSelectedRole((current) => current === selectedPane?.role ? current : selectedPane?.role);
   }, [selectedPane?.role]);
-  return selectedPane ? <section className="sticky bottom-0 z-10 bg-[#1e1e2e]" aria-label="Live agent output"><Tabs className="gap-0" value={selectedPane.role} onValueChange={setSelectedRole}><div className="overflow-x-auto bg-[#1e1e2e] px-1 pt-1" aria-label="Live pane tabs"><TabsList className="h-8 gap-1 rounded-none bg-transparent p-0">{panes.map((pane) => <TabsTrigger className="group h-7 flex-none gap-1.5 rounded-md px-2 text-[13px] font-medium text-[#a6adc8] hover:bg-[#313244] hover:text-[#cdd6f4] data-active:bg-[#313244] data-active:text-[#cdd6f4] data-active:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.08)]" key={pane.role} value={pane.role}><Terminal className="hidden size-3 group-data-[active]:block" />{pane.role}</TabsTrigger>)}</TabsList></div><TabsContent className="mt-0" value={selectedPane.role}><LivePaneTerminal role={selectedPane.role} text={selectedPane.text} /></TabsContent></Tabs></section> : null;
+  return selectedPane ? <section className="sticky bottom-0 z-10 bg-[#1e1e2e]" aria-label="Live agent output"><Tabs className="gap-0" value={selectedPane.role} onValueChange={setSelectedRole}><div className="overflow-x-auto bg-[#1e1e2e] px-1 pt-1" aria-label="Live pane tabs"><TabsList className="h-8 gap-1 rounded-none bg-transparent p-0">{panes.map((pane) => {
+    const status = livePaneStatus(task.id, pane.role, runtime);
+    return <TabsTrigger aria-label={`${pane.role}: ${status.label}`} className="group h-7 flex-none gap-1.5 rounded-md px-2 text-[13px] font-medium text-[#a6adc8] hover:bg-[#313244] hover:text-[#cdd6f4] data-active:bg-[#313244] data-active:text-[#cdd6f4] data-active:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.08)]" key={pane.role} title={status.label} value={pane.role}><span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${status.dotClass}`} />{pane.role}</TabsTrigger>;
+  })}</TabsList></div><TabsContent className="mt-0" value={selectedPane.role}><LivePaneTerminal role={selectedPane.role} text={selectedPane.text} /></TabsContent></Tabs></section> : null;
 }
 
 

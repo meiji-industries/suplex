@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import { ChatAgentTurn } from "../src/frontend/components/app/task-chat/chat-agent-turn.js";
 import { ChatComposer } from "../src/frontend/components/app/task-chat/chat-composer.js";
 import { ChatMemberMessage } from "../src/frontend/components/app/task-chat/chat-member-message.js";
-import { selectedLivePane } from "../src/frontend/components/app/task-chat/task-chat.js";
+import { livePaneStatus, selectedLivePane } from "../src/frontend/components/app/task-chat/task-chat.js";
+import type { ApiAgentRuntime } from "../src/frontend/lib/view-shared.js";
 
 
 const completed = { kind: "agent_turn" as const, id: "turn", role: "builder" as const, agent: { name: "Builder", avatarSeed: "builder" }, startedAt: "2026-08-23T00:00:00.000Z", finishedAt: "2026-08-23T00:00:40.000Z", status: "completed" as const, intro: "I will inspect the exact delivered commit.", events: [{ id: "command", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "git status", exitCode: 0, status: "completed" as const }, { id: "message", at: "2026-08-23T00:00:11.000Z", kind: "message", text: "I found three in-scope blocking gaps." }, { id: "tool", at: "2026-08-23T00:00:12.000Z", kind: "tool_call", text: "read" }, { id: "update", at: "2026-08-23T00:00:13.000Z", kind: "agent_update", text: "The service now gathers all campaign routes." }, { id: "reasoning", at: "2026-08-23T00:00:14.000Z", kind: "thinking_summary", text: "Reasoning details" }, { id: "file", at: "2026-08-23T00:00:15.000Z", kind: "file_change", text: "Updated task-chat.ts", files: ["src/task-chat.ts"] }], summary: "The work is complete.", stats: { filesChanged: 1, additions: 12, deletions: 3 } };
@@ -20,6 +21,18 @@ describe("task chat UI", () => {
     expect(selectedLivePane(panes, undefined)).toBe(planner);
     expect(selectedLivePane([...panes], "builder")).toBe(builder);
     expect(selectedLivePane([planner], "builder")).toBe(planner);
+  });
+
+  it("uses the matching runtime projection for live pane status", () => {
+    const runtime = [
+      { agentId: "agent-planner", taskId: "task-a", role: "planner", paneId: "pane-planner", liveStatus: "active", diagnosis: "working", detail: "" },
+      { agentId: "agent-builder", taskId: "task-a", role: "builder", paneId: "pane-builder", liveStatus: "active", diagnosis: "blocked", detail: "" },
+      { agentId: "agent-other", taskId: "task-b", role: "planner", paneId: "pane-other", liveStatus: "active", diagnosis: "blocked", detail: "" },
+    ] satisfies ApiAgentRuntime[];
+
+    expect(livePaneStatus("task-a", "planner", runtime)).toEqual({ label: "Working", dotClass: "bg-emerald-500" });
+    expect(livePaneStatus("task-a", "builder", runtime)).toEqual({ label: "Needs input", dotClass: "bg-amber-500" });
+    expect(livePaneStatus("task-a", "integrator", runtime)).toEqual({ label: "Runtime unknown", dotClass: "bg-muted-foreground" });
   });
 
   it("keeps a completed final summary visible while progress stays collapsed", () => {

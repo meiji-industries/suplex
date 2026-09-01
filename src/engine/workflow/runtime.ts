@@ -181,7 +181,7 @@ export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): 
   void patchId;
   const command = AUTO_CHAINED_COMMANDS[ctx.state.phase as keyof typeof AUTO_CHAINED_COMMANDS];
   if (!command || !ctx.state.allowedCommands.includes(command) || !true) return null;
-  if (command === "resolve_merge_conflict" && ctx.state.mergeDecision) return null;
+  if (command === "resolve_merge_conflict" && (ctx.state.mergeDecision || ctx.state.owner !== "lead")) return null;
   // Routine (non-material) plans land in ready_for_development without going through autoApprovePlan's
   // auto-start, so this table entry needs its own gate to keep old histories that parked here replayable.
   if (ctx.state.phase === "ready_for_development" && !true) return null;

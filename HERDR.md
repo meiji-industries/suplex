@@ -1,92 +1,160 @@
-# Working in Forge with Herdr
+# Working with Herdr
 
-Herdr keeps Forge's concurrent work visible and inspectable. The development
-stack runs in a pane, and every sub-agent job runs in its own sibling pane.
-The orchestrator does not run hidden agents: it writes the brief, launches a
-visible pane, waits in the background, verifies the result, and closes only
-the pane it created.
+Herdr keeps concurrent terminal work visible and inspectable. Work delegated
+through Herdr runs in its own pane: the orchestrator writes a brief, launches
+the agent in a visible sibling pane, monitors its state, verifies its output,
+and closes only the pane it created.
 
-The full operating rules are in
-[sub-agent panes](docs/agents/subagents-in-herdr-panes.md). See also
-[Forge operations](docs/agents/operations.md) for `forge task`, `doctor`, and
-logs, and the [smoke-test guide](docs/agents/smoke-test.md).
+This guide is intentionally repository-independent. Before acting, read the
+repository's agent instructions and use its documented task runner, tests,
+development processes, and publication workflow. Those project instructions
+take precedence over examples here.
 
-## Helper scripts
+## Preconditions and discovery
 
-These helpers currently live outside this repository in `~/.claude/scripts/`.
-Copy them into `scripts/` as a follow-up so the team can version and discover
-them with Forge.
-
-- `codex-pane.sh <label> <prompt.md> <out-file>` splits the rightmost pane in
-  the current row, names and rebalances it, then starts `codex exec`; its final
-  response is written to `<out-file>`.
-- `codex-pane-close.sh <pane-id>` closes that pane and rebalances its row.
-- `omp-agent.sh <name> <brief.md> <report-file>` creates and names a sibling
-  pane, starts an `omp` Herdr agent (Terra, medium thinking, yolo approvals),
-  sends the brief, and prints the pane id. The report must be written to
-  `<report-file>`.
-- `herdr-rebalance.py` takes no arguments. It equalizes widths in the current
-  pane's row after a split or close.
-- `scripts/dev-restart.sh [--force] <dev-pane-id>` (in this repo) restarts `mise run dev`
-  in the dev-stack pane, but only after `mise run dev:idle` confirms no engine
-  activity is in flight. Exit 1 means busy and nothing was touched.
-
-## Pane lifecycle
-
-1. Split the **rightmost** pane in the row to the right; never split the
-   orchestrator pane.
-2. Rename the new pane with a short unique task name.
-3. Start the agent and send a concise brief by file path.
-4. Run `herdr agent wait <name>` in the background; keep the orchestrator
-   responsive while it works.
-5. Read the required report, then inspect recent pane output and run the
-   promised checks yourself.
-6. Close only the pane you created, then rebalance. Do not close the dev-stack
-   or another agent's pane.
-
-## `herdr agent` essentials
-
-Start an agent in a known pane:
+Control Herdr only from a Herdr-managed pane:
 
 ```sh
-herdr agent start <name> --kind omp --pane <pane-id> -- <runner options>
-herdr agent prompt <name> "Read and carry out <brief.md>; report to <report.md>."
+test "${HERDR_ENV:-}" = 1
+```
+
+If that check fails, stop; do not inspect or control another Herdr session
+from outside it. The installed CLI is the source of truth for syntax:
+
+```sh
+herdr --help
+herdr --skill
+herdr agent
+herdr pane
+```
+
+Do not run bare `herdr` for discovery because it launches or attaches the
+TUI. Most control commands return JSON. Treat workspace, tab, and pane IDs as
+opaque values and read them from command results instead of deriving them
+from layout order or examples.
+
+Use native Herdr commands by default. Repository or user-level helper scripts
+are optional conveniences: verify that a helper exists and understand its
+behavior before relying on it. A portable workflow must not assume a
+particular helper path, agent runner, model, approval mode, task runner, or
+development stack.
+
+## Prepare the work
+
+Before launching an agent:
+
+1. Read the repository instructions and inspect the current worktree state.
+2. Choose a bounded task with a clear owner and minimal file overlap.
+3. Write a concise brief that names the objective, allowed scope, owned files,
+   relevant constraints, other active panes, expected deliverable, and checks
+   to run.
+4. State that other workers share the checkout and that unrelated changes
+   must be preserved.
+
+Default to a sibling pane in the current tab and the current working
+directory. Create a different workspace, tab, worktree, or working directory
+only when the user or repository workflow calls for that topology.
+
+## Pane and agent lifecycle
+
+Inspect the caller's layout before splitting:
+
+```sh
+herdr pane layout --pane "$HERDR_PANE_ID"
+```
+
+Split a wide pane to the right or a narrow/tall pane downward. Keep focus in
+the caller's pane and preserve its working directory:
+
+```sh
+herdr pane split --current --direction right --cwd "$PWD" --no-focus
+```
+
+Use `--direction down` when that better fits the layout. Read the new pane ID
+from `.result.pane.pane_id`, give the agent a short unique name, and start the
+requested supported agent kind:
+
+```sh
+herdr agent start <name> --kind <kind> --pane <pane-id> -- <agent-options>
+herdr agent prompt <name> "Read and carry out <brief.md>; report the result."
+```
+
+`agent start` requires an existing pane at an interactive shell prompt; it
+does not create or split a pane. Agent options belong after `--`. Omit that
+separator when there are no agent-specific options.
+
+Monitor without taking focus away from the user:
+
+```sh
 herdr agent wait <name>
+herdr agent get <name>
 herdr agent read <name> --source recent-unwrapped --lines 120
 ```
 
-`wait` settles at `idle`, `done`, or `blocked`. `done` is actionable. `idle`
-is not automatically completion: accept it only once the requested report
-exists; otherwise read the pane output and prompt the agent to continue.
-Reports land at the explicit `<report.md>` path in the brief (the helper's
-`<report-file>` argument); `codex-pane.sh` instead writes its final response to
-`<out-file>`.
+Choose a finite `--timeout` when an indefinite wait is inappropriate. A wait
+without `--until` settles at `idle`, `done`, or `blocked`:
 
-`blocked` means the agent is stopped at an approval or question dialog. Read
-the pane with `herdr agent read`, tell the user what it needs, and wait for the
-user's answer. Never answer that dialog on the user's behalf.
+- `done` means unseen background work reached an idle state. Inspect and
+  verify the result.
+- `idle` means the agent is ready for input, not necessarily that the assigned
+  task is complete. Accept it only when the expected result or report exists.
+- `blocked` means Herdr recognized an approval or question UI. Read the pane,
+  tell the user what input is needed, and never answer on the user's behalf.
+- `unknown` means Herdr cannot classify the agent confidently. It is not proof
+  of completion.
 
-## Forge task status reconciliation
+If a wait fails or the expected deliverable is missing, inspect `agent get`
+and recent unwrapped output, then prompt the same agent to continue. If an
+alternate-screen UI has discarded earlier output, ask the agent to write its
+complete report to a temporary Markdown file and return the path.
 
-Before reporting status for a Forge task, inspect every Herdr pane carrying that task ID and reconcile each pane’s lifecycle (`done`, `idle`, or `blocked`) with the task’s durable workflow state. Report both facts explicitly. A stopped role pane means that turn ended; it does not mean the task completed. An active durable phase does not mean its role pane is still running.
+### Status reconciliation
 
-Before replying about delegated work, collect the required report file, read the agent’s recent output, and independently run the promised checks. Only then report completion and close the pane.
+Before reporting a tracked task's status, inspect every pane associated with
+that task and reconcile their lifecycle with the task's authoritative status
+source (for example, a workflow engine, issue tracker, or deployment system).
+Report both facts: a stopped pane means its turn ended, not that the task is
+complete; an active task does not mean a role pane is still running. Before
+reporting delegated work complete, collect its deliverable, inspect recent pane
+output, and run the promised verification.
 
 ## Shared-checkout discipline
 
-Every brief names the other live panes and their owned files. Never edit a
-file with someone else's uncommitted change: poll `git status --short <file>`,
-wait until it is clean, re-read it, then edit. Prefer new files, commit only
-your own explicit paths, and never stash, reset, or rebase.
+Sibling panes normally share one checkout, so coordination matters:
 
-## Restarting the dev stack
+- Give one agent ownership of a file at a time and tell every agent about
+  overlapping live work.
+- Before editing, inspect the target paths with `git status --short -- <paths>`.
+  If another agent owns an uncommitted change, wait for it to finish and then
+  re-read the file.
+- Prefer disjoint files and small, reviewable changes. Re-read dependencies
+  changed by another agent before building on them.
+- Preserve unrelated changes. Never stash, reset, rebase, discard, or rewrite
+  another worker's work.
+- If commits are part of the task, commit only explicitly owned paths.
 
-`mise run dev` has no hot reload, so backend edits need a restart. Sub-agents
-never restart it: they report **restart needed**. The orchestrator restarts it
-with `scripts/dev-restart.sh <dev-pane-id>`, which refuses while
-`mise run dev:idle` reads the SQLite-backed in-flight activity ledger (agent turns, CI polls, and GitHub
-operations all run as engine activities, so "no pending activities" means
-nothing is interrupted). When it reports busy, wait and retry. An operator may
-use `scripts/dev-restart.sh --force <dev-pane-id>` only to restart through a
-turn awaiting human input: Herdr turns safely re-adopt their panes after the
-worker returns. Do not make force the default or use it for ordinary activity.
+Use separate worktrees only when the user or repository workflow requires
+isolation. Do not silently switch branches or create a worktree merely to
+avoid coordinating a shared checkout.
+
+## Verification and cleanup
+
+The orchestrator owns final integration. Read the deliverable, inspect the
+actual diff and recent pane output, and run the repository-prescribed checks
+for the combined change. An agent's success message is evidence, not
+verification.
+
+Do not let a sub-agent restart, replace, or stop a long-running development
+process unless its brief explicitly grants ownership. Otherwise it should
+report that a restart is needed. The orchestrator follows the repository's
+safe restart or idle-check procedure and never assumes hot reload is present.
+
+After the work is captured and verified, close only the pane created for that
+task:
+
+```sh
+herdr pane close <pane-id>
+```
+
+Never close the orchestrator pane, a development-process pane, another
+agent's pane, or any workspace, tab, or session that this task did not create.

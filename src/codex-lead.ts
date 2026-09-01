@@ -505,16 +505,16 @@ export class AgentService {
   async planMergeConflict(rawInput: MergeConflictPlanActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<MergeConflictPlanActivityResult> {
     const input = rawInput;
     const executionRole = input.executionRole ?? "planner";
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.name AS projectSlug,
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, t.description, p.name AS projectSlug,
       CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issueKey,
-      b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256
+      b.storage_path AS legacyBriefStoragePath, b.sha256 AS legacyBriefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256
       FROM forge_tasks t
       JOIN forge_projects p ON p.id = t.project_id
       JOIN forge_companies c ON c.id = t.company_id
-      JOIN forge_artifacts b ON b.id = t.brief_artifact_id AND b.id = ?
+      LEFT JOIN forge_artifacts b ON b.id = t.brief_artifact_id AND b.kind = 'task-brief'
       JOIN forge_agent_executions io ON io.task_id = t.id AND io.company_id = t.company_id AND io.workflow_id = t.workflow_id AND io.output_artifact_id = ? AND io.output_revision = ?
       JOIN forge_artifacts pa ON pa.id = io.output_artifact_id
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?`).get(input.briefArtifactId, input.leadOutputArtifactId, input.planRevision, input.taskId, input.companyId, input.projectId, input.projectRevisionId) as { title: string; projectSlug: string; issueKey: string | null; briefStoragePath: string; briefSha256: string; planStoragePath: string; planSha256: string } | undefined);
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?`).get(input.leadOutputArtifactId, input.planRevision, input.taskId, input.companyId, input.projectId, input.projectRevisionId) as { title: string; description: string | null; projectSlug: string; issueKey: string | null; legacyBriefStoragePath: string | null; legacyBriefSha256: string | null; planStoragePath: string; planSha256: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Merge-conflict planning evidence is unavailable");
     let conflict: ForwardMergeConflictArtifact;
     const conflictRow = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_forward_merges f ON f.conflict_artifact_id = a.id AND f.id = ? AND f.task_id = ? AND f.company_id = ? AND f.project_revision_id = ? WHERE a.id = ? AND a.company_id = ? AND a.kind = 'forward-merge-conflict'").get(input.forwardMergeId, input.taskId, input.companyId, input.projectRevisionId, input.conflictArtifact.id, input.companyId) as { storagePath: string; sha256: string } | undefined);
@@ -539,10 +539,13 @@ export class AgentService {
       return { planId, planArtifactId: existingPlan.planArtifactId, evidenceArtifactId: existingPlan.evidenceArtifactId, leadExecutionId: existingPlan.leadExecutionId, leadSessionRef: existingPlan.leadSessionRef, summary: output.summary, disposition: output.disposition, ...(output.question ? { question: output.question } : {}), ...(output.choices ? { choices: output.choices } : {}), ...(output.recommendedChoiceId ? { recommendedChoiceId: output.recommendedChoiceId } : {}) };
     }
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
-    const [brief, plan] = await Promise.all([
-      this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
-      this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
-    ]);
+    const brief = context.description ?? (() => {
+      if (!context.legacyBriefStoragePath || !context.legacyBriefSha256) throw new AgentFailure("scoped-input-missing", "Task description is unavailable");
+      const migrated = this.artifacts.readSync({ companyId: input.companyId, storagePath: context.legacyBriefStoragePath, sha256: context.legacyBriefSha256 }).toString("utf8");
+      this.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET description = ? WHERE id = ? AND company_id = ? AND description IS NULL").run(migrated, input.taskId, input.companyId));
+      return migrated;
+    })();
+    const plan = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 })).toString("utf8");
     const leadProfile = await this.resolveTurnProfile(input.roleProfiles?.[executionRole] ?? input.roleProfiles?.planner, input.leadSessionRef, "Integrator", executionRole);
     const schemaPath = await this.ensureResultSchema("merge-conflict-plan", MergeConflictPlanSchema);
     const executionId = `agent_${randomBytes(12).toString("hex")}`;

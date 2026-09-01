@@ -69,7 +69,7 @@ export class HerdrTurnRunner {
         if (!existingBeforeLaunch && this.turnExists(turnId)) {
           throw new AgentFailure("recovery-identity-conflict", "The durable turn identity does not match this dispatch", { nonRetryable: true });
         }
-        if (existingBeforeLaunch?.status === "correction_required" && !this.existingTurn(input, correction + 1, this.dispatchPrompt(marker, this.resultPath(input, this.turnId(input, correction + 1)), input.schemaPath, input.prompt, validationIssues))) {
+        if (existingBeforeLaunch?.status === "correction_required" && !this.correctionTurnExists(input, correction + 1)) {
           throw new AgentFailure("recovery-dispatch-ambiguous", "The durable turn does not prove whether its correction prompt was dispatched", { nonRetryable: true });
         }
         if (!existingBeforeLaunch) {
@@ -113,7 +113,7 @@ export class HerdrTurnRunner {
           this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', prompt_sent_at = COALESCE(prompt_sent_at, ?), updated_at = ? WHERE turn_id = ?", start, start, promptSentAt, promptSentAt, turnId);
           input.dispatchFence?.();
           if (!promptInArgv) {
-            const dispatched = await this.herdr.prompt(session.agentName, prompt);
+            const dispatched = await this.herdr.prompt(session.agentName, prompt, { waitForWorking: true });
             if (dispatched && ["done", "failed", "cancelled"].includes(dispatched.status ?? ""))
               throw new AgentFailure("agent-terminal-after-dispatch", "Herdr accepted the prompt, but the interactive agent is terminal.");
           }
@@ -327,6 +327,11 @@ export class HerdrTurnRunner {
     return this.database.authQuery((db) => db.prepare(
       "SELECT t.result_relative_path AS resultRelativePath, t.status, t.prompt_sent_at AS promptSentAt, t.result_sha256 AS resultHash FROM forge_herdr_turns t JOIN forge_herdr_role_sessions s ON s.id = t.role_session_id AND s.task_id = t.task_id AND s.session_role = t.execution_role AND s.is_current = 1 WHERE t.ledger = ? AND t.execution_id = ? AND t.prompt_kind = ? AND t.correction_index = ? AND t.task_id = ? AND t.execution_role = ? AND t.prompt_sha256 = ?",
     ).get(input.ledger, input.executionId, input.promptKind, correction, input.task.taskId, input.executionRole, hash(prompt)) as { resultRelativePath: string; status: string; promptSentAt: string | undefined; resultHash: string | undefined } | undefined);
+  }
+  private correctionTurnExists(input: HerdrTurnInput<unknown>, correction: number): boolean {
+    return this.database.authQuery((db) => db.prepare(
+      "SELECT 1 FROM forge_herdr_turns t JOIN forge_herdr_role_sessions s ON s.id = t.role_session_id AND s.task_id = t.task_id AND s.session_role = t.execution_role AND s.is_current = 1 WHERE t.turn_id = ? AND t.ledger = ? AND t.execution_id = ? AND t.prompt_kind = ? AND t.correction_index = ? AND t.task_id = ? AND t.execution_role = ?",
+    ).get(this.turnId(input, correction), input.ledger, input.executionId, input.promptKind, correction, input.task.taskId, input.executionRole) !== undefined);
   }
   private turnExists(turnId: string): boolean {
     return this.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_herdr_turns WHERE turn_id = ?").get(turnId)) !== undefined;

@@ -719,10 +719,10 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                   </CardContent>
                 </Card> : null}
                 <FinalGatePanel task={task} />
-                  </TabsContent>
-                </Tabs>
                 <RescueControls task={task} busy={busy} onRescue={onRescue} />
                 <FixInNewTaskAction busy={busy} onCreate={onFixInNewTask} />
+                  </TabsContent>
+                </Tabs>
               </div>
             </div>
             {activeWorkTab === "chat" ? <LivePaneDock task={task} /> : null}

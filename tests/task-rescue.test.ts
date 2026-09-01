@@ -121,6 +121,44 @@ test("rescue continues to the next retry after Developer reconciliation reaches 
   } finally { database.close(); await rm(root, { recursive: true, force: true }); }
 });
 
+test("rescue retries from the workflow revision produced by Developer reconciliation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-task-rescue-current-revision-"));
+  const config = createTestConfig(root);
+  const database = new ForgeDatabase(config.databasePath);
+  const now = new Date().toISOString();
+  try {
+    database.authQuery((db) => {
+      db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin', 'Admin', 'admin@forge.local', 'admin', 'active', ?, ?)").run(now, now);
+      db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-rescue', 'Rescue', 'active', ?)").run(now);
+      db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project-rescue', 'company-rescue', 'Rescue', '/tmp/repo', '/tmp/worktrees', 'main', 'main', 'true', 'true', '[]', '{}', 'active', ?, ?)").run(now, now);
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-rescue', 'company-rescue', 'task-brief', 'task.md', 'text/markdown', 1, ?, 'brief-rescue', ?)").run("a".repeat(64), now);
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES ('task-rescue', 'company-rescue', 'project-rescue', 'Rescue', 'brief-rescue', '[]', '{}', 0, 'workflow-rescue', 'revision-rescue', 'rescue-key', ?, ?, ?)").run("b".repeat(64), now, now);
+    });
+    const before = state(25);
+    const intermediate = state(26);
+    const after = { ...before, revision: 27, lastEventId: "workflow-rescue:27" };
+    for (let revision = 0; revision < before.revision; revision += 1) {
+      const projected = state(revision);
+      database.projectIssueState({ taskId: projected.issueId, companyId: projected.companyId, projectId: projected.projectId, workflowId: projected.workflowId, revision: projected.revision, phase: projected.phase, owner: projected.owner, allowedCommands: projected.allowedCommands, pendingAction: projected.pendingAction, lastEventId: projected.lastEventId, state: projected });
+    }
+    const query = vi.fn().mockResolvedValueOnce(before).mockResolvedValue(after);
+    connectEngine.mockResolvedValue({ connection: { close: vi.fn() }, client: { workflow: { getHandle: vi.fn().mockReturnValue({ query, describe: vi.fn().mockResolvedValue({ runId: "run" }) }) } } });
+    reconcileIssueDeveloperDelivery.mockImplementation(async () => {
+      database.projectIssueState({ taskId: intermediate.issueId, companyId: intermediate.companyId, projectId: intermediate.projectId, workflowId: intermediate.workflowId, revision: intermediate.revision, phase: intermediate.phase, owner: intermediate.owner, allowedCommands: intermediate.allowedCommands, pendingAction: intermediate.pendingAction, lastEventId: intermediate.lastEventId, state: intermediate });
+      return after;
+    });
+    const tasks = {
+      getTask: vi.fn().mockImplementation(() => ({ id: "task-rescue", companyId: "company-rescue", workflowId: "workflow-rescue", revision: 25, phase: "delivery_blocked", allowedCommands: ["retry_development"] })),
+      executeCommand: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const result = await new TaskRescueService(tasks as never, database, config).rescue("admin", "task-rescue");
+
+    expect(result.steps).toContainEqual({ name: "Refresh recovery state", outcome: "completed", detail: "Workflow is at revision 27." });
+    expect(tasks.executeCommand).toHaveBeenCalledWith("admin", "task-rescue", "retry_development", expect.objectContaining({ expectedRevision: 27 }));
+  } finally { database.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("active admin can read rescue diagnostics", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-task-diagnostics-admin-"));
   const config = createTestConfig(root);

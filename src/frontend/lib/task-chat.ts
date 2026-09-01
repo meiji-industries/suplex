@@ -75,12 +75,10 @@ export function chatEventFromTimelineEvent(event: AgentTimelineEvent): ChatEvent
 }
 
 function systemItem(entry: ApiTask["activity"][number]): ChatItem | undefined {
-  const summary = String(entry.metadata.summary ?? entry.metadata.blockerSummary ?? "");
   const text = entry.eventType === "phase_plan_approved" || entry.eventType === "plan_approved" ? "Plan approved automatically"
     : entry.eventType === "phase_ci_passed" || entry.eventType === "ci_passed" ? "CI passed"
       : entry.eventType === "github_pr_merged" || entry.eventType === "phase_merged" ? "Merged"
-        : entry.eventType === "delivery_blocked" || entry.eventType === "phase_delivery_blocked" ? (summary || "Delivery blocked")
-          : undefined;
+        : undefined;
   if (!text) return undefined;
   return { kind: "system", id: `system-${entry.id}`, at: entry.createdAt, text, tone: /failed|blocked|cancelled/i.test(text) ? "warning" : /passed|approved|merged/i.test(text) ? "success" : "muted" };
 }

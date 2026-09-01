@@ -85,6 +85,9 @@ export interface HerdrAgent {
   screenDetectionSkipped?: boolean;
   [key: string]: unknown;
 }
+export interface PromptOptions {
+  waitForWorking?: boolean;
+}
 /** A single live Herdr observation; pane display metadata is transient. */
 export interface HerdrRuntimeSnapshot {
   agents: HerdrAgent[];
@@ -277,7 +280,7 @@ export interface HerdrClient {
   renameAgent(target: string, name: string): Promise<void>;
   readAgent(name: string, source?: "recent-unwrapped", lines?: number, format?: "text" | "ansi"): Promise<string>;
   waitAgent(name: string): Promise<HerdrAgent>;
-  prompt(name: string, text: string): Promise<HerdrAgent>;
+  prompt(name: string, text: string, options?: PromptOptions): Promise<HerdrAgent>;
   sendKeys(name: string, keys: ["ctrl+c"]): Promise<void>;
   startAgent(input: {
     name: string;
@@ -657,9 +660,15 @@ export class CliHerdrClient implements HerdrClient {
       value<Json>(await this.call(["agent", "wait", name]), "agent"),
     );
   }
-  async prompt(name: string, text: string): Promise<HerdrAgent> {
+  async prompt(name: string, text: string, options?: PromptOptions): Promise<HerdrAgent> {
     return agent(
-      value<Json>(await this.call(["agent", "prompt", name, text]), "agent"),
+      value<Json>(await this.call([
+        "agent",
+        "prompt",
+        name,
+        text,
+        ...(options?.waitForWorking ? ["--wait", "--until", "working", "--timeout", "6000"] : []),
+      ]), "agent"),
     );
   }
   sendKeys(name: string, keys: ["ctrl+c"]): Promise<void> {

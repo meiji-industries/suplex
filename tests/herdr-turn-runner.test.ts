@@ -777,17 +777,28 @@ test("binds the Forge marker to its following Codex task_started turn", async ()
 
 test("styles the effective dispatched prompt and records its identity", async () => {
   let sent = "";
-  const outcome = await runScenario(async (prompt, session) => {
-    sent = prompt;
-    await complete(session, prompt, { status: "ok" });
-  });
+  let options: { waitForWorking?: boolean } | undefined;
+  const setup = await fixture();
+  const herdr = {
+    prompt: async (_name: string, prompt: string, value?: { waitForWorking?: boolean }) => {
+      sent = prompt;
+      options = value;
+      await complete(setup.session, prompt, { status: "ok" });
+      return setup.session.live;
+    },
+    getAgent: async () => setup.session.live,
+  };
+  const runner = makeRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
+  const output = await runner.run(setup.input);
   try {
     expect(sent).toContain("Plan this");
+    expect(options).toEqual({ waitForWorking: true });
     expect(sent.match(/Forge response style/g)).toHaveLength(1);
     expect(sent).toContain("ASD-STE100 Simplified Technical English");
     expect(sent).toContain("Do not alter required JSON keys, enum values, identifiers, paths, commands, code, quoted text, or schema-required formats.");
-    expect(outcome.database.authQuery((db) => db.prepare("SELECT prompt_sha256 FROM forge_herdr_turns").get())).toEqual({ prompt_sha256: createHash("sha256").update(sent).digest("hex") });
-  } finally { outcome.database.close(); await rm(outcome.root, { recursive: true, force: true }); }
+    expect(setup.database.authQuery((db) => db.prepare("SELECT prompt_sha256 FROM forge_herdr_turns").get())).toEqual({ prompt_sha256: createHash("sha256").update(sent).digest("hex") });
+    expect(output.result).toEqual({ status: "ok" });
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
 
@@ -968,6 +979,36 @@ test("sends one format correction to a fresh result path", async () => {
     for (const prompt of prompts) expect(prompt.match(/Forge response style/g)).toHaveLength(1);
     expect(outcome.value).toEqual({ status: "ok" });
   } finally { outcome.database.close(); await rm(outcome.root, { recursive: true, force: true }); }
+});
+
+test("recovers a dispatched format correction without sending it again", async () => {
+  const setup = await fixture();
+  let correctionPrompt = "";
+  let prompts = 0;
+  const interruptedHerdr = {
+    prompt: async (_name: string, prompt: string) => {
+      prompts += 1;
+      if (prompts === 1) {
+        await complete(setup.session, prompt, { wrong: true });
+        return setup.session.live;
+      }
+      correctionPrompt = prompt;
+      throw new Error("simulated crash after correction dispatch");
+    },
+    getAgent: async () => setup.session.live,
+  };
+  const sessions = { ensureRoleSession: async () => setup.session };
+  const interruptedRunner = makeRunner(setup.database, interruptedHerdr as never, sessions as never, new IssueTimelineEvents(setup.database));
+  try {
+    await expect(interruptedRunner.run(setup.input)).rejects.toThrow("simulated crash after correction dispatch");
+    await complete(setup.session, correctionPrompt, { status: "ok" });
+    const recoveredRunner = makeRunner(setup.database, {
+      prompt: async () => { prompts += 1; throw new Error("recovery must not resend the correction"); },
+      getAgent: async () => setup.session.live,
+    } as never, sessions as never, new IssueTimelineEvents(setup.database));
+    await expect(recoveredRunner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
+    expect(prompts).toBe(2);
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
 test("skips malformed rollout rows while accepting the bound completion", async () => {

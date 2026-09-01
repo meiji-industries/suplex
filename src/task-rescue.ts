@@ -80,18 +80,16 @@ export class TaskRescueService {
       try {
         const state = await reconcileIssueDeveloperDelivery(this.config, task.workflowId, { expectedRevision: task.revision, actorUserId, commandId: `rescue-reconcile-${randomUUID()}`, reconcileOnly: true });
         steps.push(this.record(actorUserId, task, "Reconcile Developer delivery", state.phase === "delivery_ready" ? "completed" : "skipped", state.phase === "delivery_ready" ? "Recovered the existing Developer delivery." : "No recoverable Developer execution exists."));
-        if (state.phase === "delivery_ready") {
-          const engine = await connectEngine(this.config);
-          try {
-            const handle = engine.client.workflow.getHandle(task.workflowId);
-            const [rawSettledState, description] = await Promise.all([handle.query(issueStateQuery), handle.describe()]);
-            const settledState = IssueWorkflowStateSchema.parse(rawSettledState);
-            authoritativeState = settledState;
-            const runId = description.rootExecution?.runId ?? description.runId;
-            this.database.projectIssueState({ taskId: settledState.issueId, companyId: settledState.companyId, projectId: settledState.projectId, workflowId: settledState.workflowId, ...(runId ? { runId } : {}), revision: settledState.revision, phase: settledState.phase, owner: settledState.owner, allowedCommands: settledState.allowedCommands, pendingAction: settledState.pendingAction, lastEventId: settledState.lastEventId, state: settledState });
-            steps.push(this.record(actorUserId, task, "Continue rescue", "completed", `Continued from ${settledState.phase} at revision ${settledState.revision}.`));
-          } finally { await engine.connection.close(); }
-        }
+        const engine = await connectEngine(this.config);
+        try {
+          const handle = engine.client.workflow.getHandle(task.workflowId);
+          const [rawSettledState, description] = await Promise.all([handle.query(issueStateQuery), handle.describe()]);
+          const settledState = IssueWorkflowStateSchema.parse(rawSettledState);
+          authoritativeState = settledState;
+          const runId = description.rootExecution?.runId ?? description.runId;
+          this.database.projectIssueState({ taskId: settledState.issueId, companyId: settledState.companyId, projectId: settledState.projectId, workflowId: settledState.workflowId, ...(runId ? { runId } : {}), revision: settledState.revision, phase: settledState.phase, owner: settledState.owner, allowedCommands: settledState.allowedCommands, pendingAction: settledState.pendingAction, lastEventId: settledState.lastEventId, state: settledState });
+          steps.push(this.record(actorUserId, task, state.phase === "delivery_ready" ? "Continue rescue" : "Refresh recovery state", "completed", state.phase === "delivery_ready" ? `Continued from ${settledState.phase} at revision ${settledState.revision}.` : `Workflow is at revision ${settledState.revision}.`));
+        } finally { await engine.connection.close(); }
       } catch (error) {
         steps.push(this.record(actorUserId, task, "Reconcile Developer delivery", "failed", error instanceof Error ? error.message.slice(0, 300) : "Could not reconcile the Developer execution."));
       }

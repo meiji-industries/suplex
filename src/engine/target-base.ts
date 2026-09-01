@@ -1,7 +1,8 @@
 import { IssueWorkflowStateSchema, type IssueWorkflowState, type ReconcileTargetBaseActivityResult } from "./issue-contracts.js";
 
 export function applyTargetBaseNoDrift(state: IssueWorkflowState, result: Extract<ReconcileTargetBaseActivityResult, { outcome: "no_drift" }>): IssueWorkflowState {
-  const resumed = state.phase !== "delivery_blocked"
+  const requiresResume = state.phase === "delivery_blocked" || (state.phase === "delivery_ready" && result.checkpoint === "pre_release");
+  const resumed = !requiresResume
     ? {}
     : result.checkpoint === "pre_release"
       ? state.deliveryReviewId
@@ -10,7 +11,7 @@ export function applyTargetBaseNoDrift(state: IssueWorkflowState, result: Extrac
       : result.checkpoint === "pre_final_review"
         ? { phase: "final_review" as const, owner: "lead" as const, allowedCommands: ["final_review", "cancel_issue"] as const, pendingAction: "Final Lead review" }
         : { phase: "accepted" as const, owner: "human" as const, allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"] as const, pendingAction: "Member acceptance required" };
-  const changed = state.phase === "delivery_blocked"
+  const changed = requiresResume
     || state.targetBaseCheckId !== result.checkId
     || state.targetBaseCheckpoint !== result.checkpoint
     || state.targetBaseOutcome !== result.outcome;

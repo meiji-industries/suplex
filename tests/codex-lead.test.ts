@@ -506,7 +506,7 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
     for (const artifact of [draft, priorEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_primary', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_primary', ?, ?, ?)").run(now, now, priorEvidence.id);
     db.prepare("UPDATE forge_agent_executions SET output_kind = 'plan', output_revision = 1, output_artifact_id = ?, output_summary = 'Draft plan' WHERE id = 'agent_primary'").run(draft.id);
-    db.prepare("UPDATE forge_tasks SET description = 'Runtime review description' WHERE id = 'task_1'").run();
+    db.prepare("UPDATE forge_tasks SET description = 'Runtime review description', brief_artifact_id = project_configuration_artifact_id WHERE id = 'task_1'").run();
   });
   let reviewArtifactId = "";
   const fake = fakeTurnRunner({

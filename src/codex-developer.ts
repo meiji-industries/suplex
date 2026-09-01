@@ -141,8 +141,9 @@ export type DeveloperDeliveryReport = z.infer<typeof DeveloperDeliveryReportSche
 interface DeveloperContext {
   title: string;
   normalizedJson: string;
-  briefStoragePath: string;
-  briefSha256: string;
+  description: string | null;
+  legacyBriefStoragePath: string | null;
+  legacyBriefSha256: string | null;
   planStoragePath: string;
   planSha256: string;
   evidenceStoragePath: string;
@@ -310,9 +311,9 @@ export class DeveloperService {
 
   async run(rawInput: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity> & OperationAware): Promise<DeveloperExecutionResult> {
     const input = rawInput;
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256, e.id AS outputId, e.original_plan_revision AS originalPlanRevision, e.output_revision AS outputRevision, e.final_version AS finalVersion, e.output_artifact_id AS artifactId, pa.sha256 AS artifactSha256, e.session_ref AS leadSessionRef, e.id AS leadExecutionId, e.evidence_manifest_artifact_id AS evidenceManifestArtifactId, em.sha256 AS evidenceManifestSha256
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, t.description, b.storage_path AS legacyBriefStoragePath, b.sha256 AS legacyBriefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256, e.id AS outputId, e.original_plan_revision AS originalPlanRevision, e.output_revision AS outputRevision, e.final_version AS finalVersion, e.output_artifact_id AS artifactId, pa.sha256 AS artifactSha256, e.session_ref AS leadSessionRef, e.id AS leadExecutionId, e.evidence_manifest_artifact_id AS evidenceManifestArtifactId, em.sha256 AS evidenceManifestSha256
       FROM forge_tasks t
-      JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_agent_executions e ON e.output_artifact_id = ? AND e.task_id = t.id AND e.workflow_id = t.workflow_id
+      LEFT JOIN forge_artifacts b ON b.id = t.brief_artifact_id AND b.kind = 'task-brief' JOIN forge_agent_executions e ON e.output_artifact_id = ? AND e.task_id = t.id AND e.workflow_id = t.workflow_id
       JOIN forge_artifacts pa ON pa.id = e.output_artifact_id JOIN forge_artifacts ea ON ea.id = e.evidence_artifact_id
       LEFT JOIN forge_artifacts em ON em.id = e.evidence_manifest_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId) as DeveloperContext & { outputId?: string; originalPlanRevision?: number; outputRevision?: number; finalVersion?: number; artifactId?: string; artifactSha256?: string; leadSessionRef?: string; leadExecutionId?: string; evidenceManifestArtifactId?: string; evidenceManifestSha256?: string } | undefined);
@@ -325,8 +326,13 @@ export class DeveloperService {
       ? this.currentPrompts(taskConfiguration.projectId)
       : this.pinnedPrompts(taskConfiguration, input.companyId);
     const repositoryPath = await scopedRepository(this.config.repositoryRoot, projectRevision.data.repositoryPath);
-    const [brief, planText, leadEvidence] = await Promise.all([
-      this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
+    const brief = context.description ?? (() => {
+      if (!context.legacyBriefStoragePath || !context.legacyBriefSha256) throw new AgentFailure("scoped-input-missing", "Task description is unavailable");
+      const migrated = this.artifacts.readSync({ companyId: input.companyId, storagePath: context.legacyBriefStoragePath, sha256: context.legacyBriefSha256 }).toString("utf8");
+      this.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET description = ? WHERE id = ? AND company_id = ? AND description IS NULL").run(migrated, input.taskId, input.companyId));
+      return migrated;
+    })();
+    const [planText, leadEvidence] = await Promise.all([
       this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
       this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.evidenceStoragePath, sha256: context.evidenceSha256 }).then((bytes) => bytes.toString("utf8")),
     ]);

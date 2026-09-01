@@ -371,6 +371,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     expect(first.task.issueKey).toBe("ACME-1");
     expect(first.task.pendingAction).toBe("Start planning");
     expect(first.task.description).toContain("Reproduce");
+    expect(value.database.authQuery((db) => db.prepare("SELECT t.brief_artifact_id AS briefArtifactId, t.project_configuration_artifact_id AS configurationArtifactId, COUNT(a.id) AS taskBriefArtifacts FROM forge_tasks t LEFT JOIN forge_artifacts a ON a.task_id = t.id AND a.kind = 'task-brief' WHERE t.id = ?").get(first.task.id))).toEqual({ briefArtifactId: first.task.projectRevisionId, configurationArtifactId: first.task.projectRevisionId, taskBriefArtifacts: 0 });
     expect(first.task.images).toHaveLength(1);
     expect(first.task.supplementalReview).toBe(true);
     expect(first.task.roleAgents.planner).toBeTruthy();

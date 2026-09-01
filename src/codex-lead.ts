@@ -196,8 +196,9 @@ interface ImageRow {
 interface DeliveryReviewContext {
   title: string;
   normalizedJson: string;
-  briefStoragePath: string;
-  briefSha256: string;
+  description: string | null;
+  legacyBriefStoragePath: string | null;
+  legacyBriefSha256: string | null;
   planStoragePath: string;
   planSha256: string;
   deliveryStoragePath: string;
@@ -686,9 +687,9 @@ export class AgentService {
       const findings = this.database.authQuery((db) => db.prepare("SELECT id AS findingId, severity, rationale, evidence_ref AS evidenceRef, disposition, repair_instruction AS repairInstruction FROM forge_delivery_findings WHERE review_id = ? ORDER BY id").all(existingDelivery.id) as DeliveryReview["findings"]);
       return DeliveryReviewActivityResultSchema.parse({ outcome: "completed", attemptId: `review_attempt_existing_${existingDelivery.id}`, correctionAttempts: 0, subject, review: { reviewId: existingDelivery.id, leadExecutionId: existingDelivery.leadExecutionId, leadSessionRef: existingDelivery.sessionRef, opinionArtifactId: existingDelivery.opinionArtifactId, evidenceArtifactId: existingDelivery.evidenceArtifactId, opinion: existingDelivery.outcome, summary: existingDelivery.summary, repairPlan: existingDelivery.outcome === "blocking" ? "Existing blocking review requires repair." : null, findings, supersedesReviewId: existingDelivery.supersedesReviewId } });
     }
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.name AS projectSlug,
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, t.description, p.name AS projectSlug,
       CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issueKey,
-      b.storage_path AS briefStoragePath, b.sha256 AS briefSha256,
+      b.storage_path AS legacyBriefStoragePath, b.sha256 AS legacyBriefSha256,
       pa.storage_path AS planStoragePath, pa.sha256 AS planSha256,
       da.storage_path AS deliveryStoragePath, da.sha256 AS deliverySha256,
       ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256,
@@ -699,7 +700,7 @@ export class AgentService {
       FROM forge_tasks t
       JOIN forge_projects p ON p.id = t.project_id
       JOIN forge_companies c ON c.id = t.company_id
-      JOIN forge_artifacts b ON b.id = t.brief_artifact_id
+      LEFT JOIN forge_artifacts b ON b.id = t.brief_artifact_id AND b.kind = 'task-brief'
       JOIN forge_developer_executions delivery_de ON delivery_de.id = (SELECT latest.id FROM forge_developer_executions latest
         WHERE latest.task_id = t.id AND latest.company_id = t.company_id
           AND latest.delivery_artifact_id IS NOT NULL AND latest.evidence_artifact_id IS NOT NULL
@@ -765,14 +766,18 @@ export class AgentService {
       const findings = this.database.authQuery((db) => db.prepare("SELECT id AS findingId, severity, rationale, evidence_ref AS evidenceRef, disposition, repair_instruction AS repairInstruction FROM forge_final_review_findings WHERE review_id = ? ORDER BY id").all(existingFinal.id) as DeliveryReview["findings"]);
       return DeliveryReviewActivityResultSchema.parse({ outcome: "completed", attemptId: `review_attempt_existing_${existingFinal.id}`, correctionAttempts: 0, subject, review: { reviewId: existingFinal.id, leadExecutionId: existingFinal.leadExecutionId, leadSessionRef: existingFinal.sessionRef, opinionArtifactId: existingFinal.opinionArtifactId, evidenceArtifactId: existingFinal.evidenceArtifactId, opinion: existingFinal.outcome, summary: existingFinal.summary, repairPlan: null, findings, supersedesReviewId: input.supersedesReviewId } });
     }
-    let brief: string;
+    const brief = context.description ?? (() => {
+      if (!context.legacyBriefStoragePath || !context.legacyBriefSha256) throw new AgentFailure("scoped-input-missing", "Task description is unavailable");
+      const migrated = this.artifacts.readSync({ companyId: input.companyId, storagePath: context.legacyBriefStoragePath, sha256: context.legacyBriefSha256 }).toString("utf8");
+      this.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET description = ? WHERE id = ? AND company_id = ? AND description IS NULL").run(migrated, input.taskId, input.companyId));
+      return migrated;
+    })();
     let plan: string;
     let delivery: string;
     let developerEvidence: string;
     let gitEvidence: Awaited<ReturnType<typeof readDeliveryGitEvidence>>;
     try {
-      [brief, plan, delivery, developerEvidence, gitEvidence] = await Promise.all([
-        this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
+      [plan, delivery, developerEvidence, gitEvidence] = await Promise.all([
         this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
         this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.deliveryStoragePath, sha256: context.deliverySha256 }).then((bytes) => bytes.toString("utf8")),
         this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.evidenceStoragePath, sha256: context.evidenceSha256 }).then((bytes) => bytes.toString("utf8")),

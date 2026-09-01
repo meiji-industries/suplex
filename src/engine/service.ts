@@ -5,7 +5,8 @@ import { runtimeIdentifiers } from "../runtime-identifiers.js";
 import { jsonRequired } from "../task-utils.js";
 import { getIssueEngine } from "./index.js";
 import { issueUpdates, syncGithubPullRequestSignal } from "./issue-updates.js";
-import { ContinueWorkCommandSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, SendPlannerNoteInputSchema, StartPlanningInputSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type SendPlannerNoteInput, type StartPlanningInput } from "./issue-contracts.js";
+import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, type IssueWorkflowInput, type IssueWorkflowState } from "./issue-contracts.js";
+import { ContinueWorkCommandSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, SendPlannerNoteInputSchema, StartPlanningInputSchema, type ContinueWorkCommand, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type SendPlannerNoteInput, type StartPlanningInput } from "../commands/inputs.js";
 
 export function durableCommand<T extends { expectedRevision: number; actorUserId: string; commandId?: string | undefined }>(workflowId: string, kind: string, input: T): T & { commandId: string } {
   if (input.commandId) return { ...input, commandId: input.commandId };

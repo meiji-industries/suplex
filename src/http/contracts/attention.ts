@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IssueCommandSchema } from "../../engine/issue-contracts.js";
+import { IssueCommandSchema } from "../../commands/registry.js";
 
 const AttentionActionSchema = z.object({ command: IssueCommandSchema, label: z.string(), expectedRevision: z.number().int().nonnegative(), requiresNote: z.boolean(), destructive: z.boolean(), idempotency: z.enum(["required", "none"]) });
 const AttentionCardActionSchema = z.object({ command: z.string(), label: z.string(), destructive: z.boolean().optional(), requiresNote: z.boolean().optional() });

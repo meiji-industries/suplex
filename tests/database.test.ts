@@ -7,30 +7,18 @@ import Database from "better-sqlite3";
 
 import { DatabaseMigrationFailure, ForgeDatabase } from "../src/database.js";
 
-test("initializes migrations in WAL mode and preserves probe state after reopening", async () => {
+test("initializes migrations in WAL mode after reopening", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-db-test-"));
   const filename = join(root, "forge.sqlite");
 
   try {
     const first = new ForgeDatabase(filename);
-    first.recordProbe({
-      workflowId: "probe-workflow-1",
-      probeId: "probe-1",
-      companyId: "company-1",
-      status: "running",
-    });
     const firstHealth = first.health();
     expect(firstHealth.walMode).toBe(true);
     expect(firstHealth.schemaState).toBe("current");
     first.close();
 
     const reopened = new ForgeDatabase(filename);
-    expect(reopened.getProbe("probe-1")).toEqual({
-      workflowId: "probe-workflow-1",
-      probeId: "probe-1",
-      companyId: "company-1",
-      status: "running",
-    });
     const reopenedHealth = reopened.health();
     expect(reopenedHealth.schemaState).toBe("current");
     expect(reopenedHealth.appliedMigrations).toBe(reopenedHealth.expectedMigrations);
@@ -69,12 +57,6 @@ test("adopts a pre-Drizzle database without rewriting existing probe state", asy
     legacy.close();
 
     const adopted = new ForgeDatabase(filename);
-    expect(adopted.getProbe("legacy-probe")).toEqual({
-      probeId: "legacy-probe",
-      workflowId: "legacy-workflow",
-      companyId: "legacy-company",
-      status: "running",
-    });
     const adoptedHealth = adopted.health();
     expect(adoptedHealth).toMatchObject({ walMode: true, schemaState: "current" });
     expect(adoptedHealth.appliedMigrations).toBe(adoptedHealth.expectedMigrations);

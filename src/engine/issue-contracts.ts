@@ -1,13 +1,14 @@
 import { z } from "zod";
 
 import { DecisionIdempotencyKeySchema, PlanBlockerSubjectSchema, PlanDecisionSubjectSchema } from "../plan-governance.js";
-export { LeadResumeDescriptorSchema } from "../lead-contracts.js";
-export type { LeadPlanningActivityInput, LeadPlanningResult } from "../lead-contracts.js";
 import { durableId } from "../commands/inputs.js";
 
-// moved to src/commands/inputs.ts — re-exported for compatibility
 export { ContinueWorkCommandSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, SendPlannerNoteInputSchema, StartPlanningInputSchema } from "../commands/inputs.js";
 export type { ContinueWorkCommand, PlanCommandInput, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, SendPlannerNoteInput, StartPlanningInput } from "../commands/inputs.js";
+export type { LeadPlanningResult } from "../lead-contracts.js";
+export { IssueCommandSchema } from "../commands/registry.js";
+export type { IssueCommand } from "../commands/registry.js";
+export { IssuePhaseSchema } from "../issue-phases.js";
 
 export * from "./contracts/primitives.js";
 export { IssueContinuationStateSchema, IssueWorkflowStateSchema } from "./contracts/state/index.js";

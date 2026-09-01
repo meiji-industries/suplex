@@ -7,20 +7,11 @@ import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { desc, eq } from "drizzle-orm";
 
-import { probeWorkflows, workerRegistrations } from "./database-schema.js";
+import { workerRegistrations } from "./database-schema.js";
 import { authSchema, type AuthSchema } from "./auth-schema.js";
 import { canonicalJson } from "./canonical-json.js";
 import { IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueProjectionEvent, type IssueWorkflowState } from "./engine/issue-contracts.js";
 import { jsonRequired } from "./task-utils.js";
-
-export type ProbeStatus = "running" | "completed";
-
-export interface ProbeRecord {
-  workflowId: string;
-  probeId: string;
-  companyId: string;
-  status: ProbeStatus;
-}
 
 export interface WorkerRegistration {
   workerId: string;
@@ -293,7 +284,7 @@ function determineSchemaState(expected: ExpectedMigration[], applied: AppliedMig
 
 export class ForgeDatabase {
   private readonly db: Database.Database;
-  private readonly orm: BetterSQLite3Database<AuthSchema & { probeWorkflows: typeof probeWorkflows; workerRegistrations: typeof workerRegistrations }>;
+  private readonly orm: BetterSQLite3Database<AuthSchema & { workerRegistrations: typeof workerRegistrations }>;
   private readonly mode: ForgeDatabaseOpenMode;
 
   constructor(filename: string, options: ForgeDatabaseOpenOptions = {}) {
@@ -310,7 +301,7 @@ export class ForgeDatabase {
       this.db.pragma("journal_mode = WAL");
       this.db.pragma("synchronous = FULL");
     }
-    this.orm = drizzle(this.db, { schema: { ...authSchema, probeWorkflows, workerRegistrations } });
+    this.orm = drizzle(this.db, { schema: { ...authSchema, workerRegistrations } });
     try {
       if (migrate) {
         this.ensureModelCatalog();
@@ -369,35 +360,6 @@ export class ForgeDatabase {
         this.db.prepare("UPDATE forge_projects SET repository_identity = ? WHERE id = ? AND repository_identity IS NOT NULL").run(row.repository_identity, row.id);
       }
     })();
-  }
-
-  recordProbe(record: ProbeRecord): void {
-    this.orm
-      .insert(probeWorkflows)
-      .values(record)
-      .onConflictDoUpdate({
-        target: probeWorkflows.probeId,
-        set: {
-          workflowId: record.workflowId,
-          companyId: record.companyId,
-          status: record.status,
-        },
-      })
-      .run();
-  }
-
-  getProbe(probeId: string): ProbeRecord | undefined {
-    const row = this.orm
-      .select({
-        workflowId: probeWorkflows.workflowId,
-        probeId: probeWorkflows.probeId,
-        companyId: probeWorkflows.companyId,
-        status: probeWorkflows.status,
-      })
-      .from(probeWorkflows)
-      .where(eq(probeWorkflows.probeId, probeId))
-      .get();
-    return row as ProbeRecord | undefined;
   }
 
   registerWorker(registration: WorkerRegistration): void {

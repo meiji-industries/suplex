@@ -26,13 +26,13 @@ test("state parsing always offers cancellation outside terminal phases", () => {
 
 test("withWorktreeCommands offers safe worktree lifecycle commands", () => {
   const initial = state();
-  expect(withWorktreeCommands({ ...initial, activeOperation: { commandId: "command_1", kind: "development", startedRevision: 10 } }, true).allowedCommands).not.toContain("delete_worktree");
-  expect(withWorktreeCommands({ ...initial, activeOperation: { commandId: "command_1", kind: "development", startedRevision: 10 } }, true).allowedCommands).not.toContain("retry_target_base_reconciliation");
-  expect(withWorktreeCommands(initial, true).allowedCommands).toContain("retry_target_base_reconciliation");
-  expect(withWorktreeCommands({ ...initial, worktreeState: "cleaned" }, true).allowedCommands).toEqual(expect.arrayContaining(["recreate_worktree"]));
-  expect(withWorktreeCommands({ ...initial, worktreeState: "cleaned" }, true).allowedCommands).not.toContain("delete_worktree");
-  expect(withWorktreeCommands({ ...initial, phase: "done", worktreeState: "cleaned" }, true).allowedCommands).not.toContain("recreate_worktree");
-  expect(withWorktreeCommands({ ...initial, phase: "cancelled", worktreeState: "present", activeOperation: null }, true).allowedCommands).toContain("delete_worktree");
+  expect(withWorktreeCommands({ ...initial, activeOperation: { commandId: "command_1", kind: "development", startedRevision: 10 } }).allowedCommands).not.toContain("delete_worktree");
+  expect(withWorktreeCommands({ ...initial, activeOperation: { commandId: "command_1", kind: "development", startedRevision: 10 } }).allowedCommands).not.toContain("retry_target_base_reconciliation");
+  expect(withWorktreeCommands(initial).allowedCommands).toContain("retry_target_base_reconciliation");
+  expect(withWorktreeCommands({ ...initial, worktreeState: "cleaned" }).allowedCommands).toEqual(expect.arrayContaining(["recreate_worktree"]));
+  expect(withWorktreeCommands({ ...initial, worktreeState: "cleaned" }).allowedCommands).not.toContain("delete_worktree");
+  expect(withWorktreeCommands({ ...initial, phase: "done", worktreeState: "cleaned" }).allowedCommands).not.toContain("recreate_worktree");
+  expect(withWorktreeCommands({ ...initial, phase: "cancelled", worktreeState: "present", activeOperation: null }).allowedCommands).toContain("delete_worktree");
 });
 
 test("accepts a sha-less plan blocker response receipt", () => {
@@ -165,7 +165,7 @@ test("an approved recovered review outranks stale no-progress exhaustion", () =>
     },
   });
 
-  expect(repairRequiredState(repeated, approved, 2, true)).toMatchObject({
+  expect(repairRequiredState(repeated, approved, 2)).toMatchObject({
     phase: "delivery_reviewed",
     owner: "human",
     allowedCommands: ["publish_draft", "cancel_issue"],

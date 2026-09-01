@@ -93,19 +93,9 @@ Shared core files (`tasks.ts`, `codex-lead.ts`, contracts, and comparable
 integration hubs) are serial work. Parallelise only disjoint file sets, and
 put the ownership map in every brief.
 
-## Temporal and migrations are history, not cleanup
+## Migrations are append-only
 
-- Never delete a `ctx.patched(...)` call, even when the behavior is gone; keep
-  the marker as an ignored compatibility call. Never delete an activity call
-  that recorded histories scheduled. Either deletion makes replay
-  nondeterministic.
-- Change workflow code with fixtures made from live histories, then run replay.
-  The workflow bundle (`src/temporal/workflow/**`, `workflows.ts`,
-  `contracts/**`, `commands/**`, and `lead-contracts.ts`) must not import Node
-  modules or `src/task-utils.ts`.
-- A migration's identity is its timestamp. Never delete a migration once it may
-  have reached the development database; if reverting its code, retain the
-  migration and make application code match the database it created.
+A migration's identity is its timestamp. Never edit or delete a migration once saved; add a new one. Application code must match the database the migrations create.
 
 ## Brief checklist
 

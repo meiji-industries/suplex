@@ -44,24 +44,16 @@ export const runExecution = {
   run<T>(context: RunExecutionContext, operation: () => T): T { return execution.run(context, operation); },
 };
 
-export function defineUpdate<T = unknown, A extends unknown[] = unknown[]>(name: string): string { void (0 as unknown as T); void (0 as unknown as A); return name; }
-export function defineQuery<T = unknown>(name: string): string { void (0 as unknown as T); return name; }
-export function defineSignal<A extends unknown[] = unknown[]>(name: string): string { void (0 as unknown as A); return name; }
 export function setHandler(name: string, handler: Handler, options?: { validator?(input: HandlerValidationInput): void }): void {
   const ctx = runExecution.current();
   // Interrupts validate before their out-of-band effect; the serialized handler may run after the state advances.
   const registered: Handler = options?.validator ? ((...args: never[]) => { if (runExecution.current().acceptedInterrupt !== name) options.validator!(args[0]!); return handler(...args); }) : handler;
-  (name === "issueState" || name === "probeState" ? ctx.queries : ctx.commands).set(name, registered);
+  (name === "issueState" ? ctx.queries : ctx.commands).set(name, registered);
   ctx.wake();
 }
 export function setInterruptHandler(name: string, interrupt: InterruptHandler): void {
   runExecution.current().interrupts.set(name, interrupt);
 }
-export function workflowInfo(): { runId: string; workflowId: string; historyLength: number; continueAsNewSuggested: boolean; unsafe: { now(): number } } {
-  const ctx = runExecution.current();
-  return { runId: ctx.runId, workflowId: ctx.workflowId, historyLength: 0, continueAsNewSuggested: false, unsafe: { now: () => ctx.now() } };
-}
-
 export function durationMs(value: string | number | undefined): number | undefined {
   if (value === undefined || typeof value === "number") return value;
   const match = /^([0-9]+(?:\.[0-9]+)?)\s*(millisecond|second|minute|hour)s?$/.exec(value.trim());
@@ -84,19 +76,6 @@ export async function condition(predicate: () => boolean, timeout?: string | num
   }
   return true;
 }
-export function allHandlersFinished(): boolean { return true; }
-
-export class CancellationScope {
-  readonly signal: AbortSignal;
-  private readonly controller = new AbortController();
-  constructor(_options: { cancellable?: boolean } = {}) { this.signal = this.controller.signal; }
-  cancel(): void { this.controller.abort(); }
-  run<T>(operation: () => Promise<T>): Promise<T> { return operation(); }
-  static cancellable<T>(operation: () => Promise<T>): Promise<T> { return new CancellationScope().run(operation); }
-  static nonCancellable<T>(operation: () => Promise<T>): Promise<T> { return operation(); }
-  static current(): CancellationScope { return new CancellationScope(); }
-}
-
 export const log = {
   info(message: string, attributes?: unknown) { console.info(message, attributes ?? ""); },
   warn(message: string, attributes?: unknown) { console.warn(message, attributes ?? ""); },

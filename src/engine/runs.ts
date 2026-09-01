@@ -148,7 +148,7 @@ export class IssueRun {
     const recovered = recoverInterruptedOperation(initial, database);
     let durable = recovered;
     if (input.continuationState) {
-      durable = withWorktreeCommands(durable, true);
+      durable = withWorktreeCommands(durable);
       const revision = initial.revision + 1;
       durable = IssueWorkflowStateSchema.parse({ ...durable, revision, lastEventId: `${durable.workflowId}:${revision}`, continuationCount: initial.continuationCount + 1 });
       database.projectIssueEvent({ schemaVersion: 1, runId: this.runId, eventId: durable.lastEventId, state: durable });

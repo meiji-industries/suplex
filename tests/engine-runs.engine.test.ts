@@ -4,7 +4,8 @@ import { runExecution } from "../src/engine/registry.js";
 import { createActivityCaller } from "../src/engine/activities.js";
 import { ActivityFailure, ApplicationFailure, CancelledFailure, isCancellation } from "../src/engine/failures.js";
 import { durableCommand, executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/engine/service.js";
-import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema, type IssueProjectionEvent, type IssueWorkflowInput, type IssueWorkflowState, type LeadPlanningResult } from "../src/engine/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema, type IssueProjectionEvent, type IssueWorkflowInput, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
+import type { LeadPlanningResult } from "../src/lead-contracts.js";
 import { Wakeable, type IssueRun } from "../src/engine/runs.js";
 import { createEngineHarness, engineFixture, ImmediateClock, type EngineHarness } from "./helpers/engine-harness.js";
 import { withWorktreeCommands } from "../src/engine/workflow/state-transitions.js";
@@ -123,7 +124,7 @@ test("command receipt inherits the exact decorated final projection", async () =
     const live = run.state;
     const nextRevision = live.revision + 1;
     const raw = IssueWorkflowStateSchema.parse({ ...live, revision: nextRevision, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Raw handler result", lastEventId: `${started.workflowId}:${nextRevision}`, branchName: "forge/decorated-result", worktreePath: "/worktrees/decorated-result", worktreeState: "present", developerExecutionId: "developer-decorated-result", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40) });
-    const decorated = withWorktreeCommands(IssueWorkflowStateSchema.parse({ ...raw, allowedCommands: ["cancel_issue"], pendingAction: "Decorated projection result" }), true);
+    const decorated = withWorktreeCommands(IssueWorkflowStateSchema.parse({ ...raw, allowedCommands: ["cancel_issue"], pendingAction: "Decorated projection result" }));
     expect(decorated.allowedCommands).toEqual(["cancel_issue", "delete_worktree", "retry_target_base_reconciliation"]);
     run.commands.set("decoratedResultCommand", (async () => {
       await runExecution.current().activity("projectIssueState", [{ schemaVersion: 1, runId: run.runId, eventId: decorated.lastEventId, state: decorated }], { startToCloseTimeout: "1 minute" });

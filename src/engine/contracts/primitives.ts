@@ -1,16 +1,11 @@
 import { z } from "zod";
-export { ISSUE_PHASES, IssuePhaseSchema } from "../../issue-phases.js";
 import { IssuePhaseSchema } from "../../issue-phases.js";
-export { LeadResumeDescriptorSchema } from "../../lead-contracts.js";
-export type { LeadPlanningActivityInput, LeadPlanningResult } from "../../lead-contracts.js";
 import { durableId, exactSha } from "../../commands/inputs.js";
 import { IssueCommandSchema } from "../../commands/registry.js";
-export { durableId, exactSha } from "../../commands/inputs.js";
-export { IssueCommandSchema, type IssueCommand } from "../../commands/registry.js";
 
-// moved to src/commands/inputs.ts — re-exported for compatibility
-export { ContinueWorkCommandSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, StartPlanningInputSchema } from "../../commands/inputs.js";
-export type { ContinueWorkCommand, PlanCommandInput, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, StartPlanningInput } from "../../commands/inputs.js";
+export { durableId, exactSha } from "../../commands/inputs.js";
+export { IssueCommandSchema } from "../../commands/registry.js";
+export { IssuePhaseSchema } from "../../issue-phases.js";
 
 export const sha = z.string().regex(/^[a-f0-9]{40,64}$/i);
 

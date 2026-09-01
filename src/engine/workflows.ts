@@ -1,12 +1,13 @@
-import { allHandlersFinished, CancellationScope, condition, defineQuery, isCancellation, log, runExecution, setHandler, sleep, workflowInfo } from "./registry.js";
-import { ProbeWorkflowInputSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, normalizeSafeSummary, type IssueBlocker, type IssueBlockerAction, type IssueCommand, type IssueWorkflowInput, type IssueWorkflowState, type LeadPlanningResult, type ReconcileTargetBaseActivityResult, type TargetBaseCheckpoint } from "./issue-contracts.js";
+import { condition, isCancellation, log, runExecution, setHandler, sleep } from "./registry.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, normalizeSafeSummary, type IssueBlocker, type IssueBlockerAction, type IssueWorkflowInput, type IssueWorkflowState, type ReconcileTargetBaseActivityResult, type TargetBaseCheckpoint } from "./issue-contracts.js";
+import type { IssueCommand } from "../commands/registry.js";
+import type { LeadPlanningResult } from "../lead-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
 import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "./target-base.js";
 import { advanceSourcePullRequestState, isSourcePullRequestPreDelivery, sourcePullRequestState } from "./github-source-pull-request.js";
 import { githubPullRequestObservationFields } from "../github-pull-request-observation.js";
 import { pullRequestObservationKey, reconcile, type PullRequestObservation, type PullRequestTarget } from "../pull-request-reconciler.js";
-import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, recordProbeStarted, loadTaskSourcePullRequest, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
+import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, loadTaskSourcePullRequest, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
 import { syncGithubPullRequestSignal } from "./issue-updates.js";
 import { evidencePointer, humanBlocker, withWorktreeCommands } from "./workflow/state-transitions.js";
 import { createIssueWorkflowContext } from "./workflow/context.js";
@@ -21,45 +22,13 @@ import { registerDevelopmentHandlers } from "./workflow/register-development.js"
 import { registerMergeHandlers, registerMergeReconciliationHandler } from "./workflow/register-merge.js";
 import { registerReleaseHandlers } from "./workflow/register-release.js";
 import { registerTargetBaseHandlers } from "./workflow/register-target-base.js";
-import { applyLeadResult, applyLegacyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
+import { applyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
 export * from "./issue-updates.js";
 export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
-async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { const projected = withWorktreeCommands(state, true); return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: workflowInfo().runId, eventId: projected.lastEventId, state: projected })); }
+async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { const projected = withWorktreeCommands(state); return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: runExecution.current().runId, eventId: projected.lastEventId, state: projected })); }
 const MAX_RECONCILIATION_ATTEMPTS = 20;
 function sleepUntil(retryAt: string | null | undefined): Promise<void> { return retryAt ? sleep(Math.max(1, Date.parse(retryAt) - Date.now())) : sleep("1 second"); }
-export const probeStateQuery = defineQuery<ProbeWorkflowState>("probeState");
-export async function probeWorkflow(input: ProbeWorkflowInput): Promise<ProbeWorkflowState> {
-  const validatedInput = ProbeWorkflowInputSchema.parse(input);
-  let state: ProbeWorkflowState = {
-    workflowId: validatedInput.workflowId,
-    probeId: validatedInput.probeId,
-    companyId: validatedInput.companyId,
-    status: "starting",
-  };
-  setHandler(probeStateQuery, () => state);
-  state = await recordProbeStarted(validatedInput);
-  await condition(() => false);
-  return state;
-}
-export const issueStateQuery = defineQuery<IssueWorkflowState>("issueState");
-const leadPlanningPatch = "forge-lead-planning-v1", leadResultRoutingPatch = "forge-lead-result-routing-v2";
-const planGovernancePatch = "forge-plan-governance-v1", planningProjectionIntegrityPatch = "forge-planning-projection-integrity-v1";
-const distinctPlanningStatesPatch = "forge-distinct-planning-states-v1";
-const developerFailureRecoveryPatch = "forge-developer-failure-recovery-v1";
-const developerReconciliationRecoveryPatch = "forge-developer-reconciliation-recovery-v1";
-const developerBlockedRecoveryStatePatch = "forge-developer-blocked-recovery-state-v1";
-const cancelBlockedDeveloperResultPatch = "forge-cancel-blocked-developer-result-v1";
-const artifactBackedConflictPatch = "forge-artifact-backed-conflict-evidence-v1";
-const artifactBackedReviewPatch = "forge-artifact-backed-review-evidence-v1";
-const exactDeliveryReviewPatch = "forge-exact-delivery-review-v1";
-const typedReleaseResultPatch = "forge-typed-release-result-v1";
-const targetBaseReconciliationPatch = "forge-target-base-reconciliation-v1";
-const exactAcceptanceReceiptPatch = "forge-exact-acceptance-receipt-v1";
-const durableCapacityPatch = "durable-capacity-v1";
-const decisionResolutionProjectionPatch = "forge-decision-resolution-projection-v1";
-const exhaustedActivityRecoveryPatch = "forge-exhausted-activity-recovery-v1";
-const autoChainLeadPhasesPatch = "forge-auto-chain-lead-phases-v1";
-const unconditionalCancelPatch = "forge-unconditional-cancel-v1";
+export const issueStateQuery = "issueState" as const;
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);
@@ -93,13 +62,12 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (supplementalReview) actions.push({ command: "request_supplemental_review", label: "Request supplemental review", requiresNote: false, destructive: false });
     return humanBlocker("member_authorization", "Member approval is required for this material plan.", actions, evidencePointer(result.leadOutputArtifactId, "lead-plan"));
   };
-  state = withWorktreeCommands(state, true);
+  state = withWorktreeCommands(state);
   const initialProjection = continuation || !exactPlanAuthorityEnabled ? Promise.resolve(state) : projectIssueState(state);
   let continuationRequested = false;
   let initialProjectionComplete = Boolean(continuation);
   let decisionInFlight = false;
   const currentState = (): IssueWorkflowState => state;
-  let planningScope: CancellationScope | undefined;
   let planningPromise: Promise<LeadPlanningResult> | undefined;
   const shouldContinueAsNew = (_revision: number): boolean => false;
   let stateMutationLocked = false;
@@ -311,11 +279,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       const now = Date.now();
       projectionStamps.push(now);
       while (projectionStamps.length && now - projectionStamps[0]! > 1_000) projectionStamps.shift();
-      state = withWorktreeCommands(state, true);
+      state = withWorktreeCommands(state);
       if (projectionStamps.length > 100) { log.error("Issue run is projecting in a hot loop; throttling", { workflowId: state.workflowId, phase: state.phase, revision: state.revision }); return new Promise<void>((resolve) => setTimeout(resolve, 1_000)).then(() => projectIssueState(state)); }
       return projectIssueState(state);
     },
-    projectState: (value) => { state = withWorktreeCommands(value, true); return projectIssueState(state); },
+    projectState: (value) => { state = withWorktreeCommands(value); return projectIssueState(state); },
     projectInitialPlanningState: async (next, distinctPlanningStates) => { if (distinctPlanningStates || !true) await projectIssueState(next); },
     planningProjectionFlags: () => { const distinctPlanningStates = true; return { distinctPlanningStates, shouldProject: distinctPlanningStates || !true }; },
     leadPlanningEnabled: () => true,
@@ -333,8 +301,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     set initialProjectionComplete(value: boolean) { initialProjectionComplete = value; },
     get decisionInFlight() { return decisionInFlight; },
     set decisionInFlight(value: boolean) { decisionInFlight = value; },
-    get planningScope() { return planningScope; },
-    set planningScope(value: CancellationScope | undefined) { planningScope = value; },
     get planningPromise() { return planningPromise; },
     set planningPromise(value: Promise<LeadPlanningResult> | undefined) { planningPromise = value; },
     supervisedDeveloperTurns, herdrExecutionSubstrateEnabled, shouldContinueAsNew, currentState, addRevisionCommand, approvalCommands, approvalBlocker,
@@ -342,10 +308,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     applyTargetBaseBlocked, runTargetBaseCheckpoint, recoveryFields, applyCompletedDeveloperResult, projectCapacityState, acquireExternalTurn,
     cancelCurrentCapacity: async () => { throw new Error("Capacity cancellation is not initialized"); },
     settleCancelledCapacity: async () => { throw new Error("Capacity cancellation is not initialized"); },
-    permanentActivityFailure, failureBlockCategory, leadResultKind, applyLeadResult, applyLegacyLeadResult,
-    leadPlanningPatch, leadResultRoutingPatch, planningProjectionIntegrityPatch, distinctPlanningStatesPatch, durableCapacityPatch, planGovernancePatch, decisionResolutionProjectionPatch,
-    exhaustedActivityRecoveryPatch, developerFailureRecoveryPatch, developerReconciliationRecoveryPatch, developerBlockedRecoveryStatePatch, cancelBlockedDeveloperResultPatch,
-    artifactBackedReviewPatch, exactDeliveryReviewPatch, typedReleaseResultPatch, targetBaseReconciliationPatch, exactAcceptanceReceiptPatch, artifactBackedConflictPatch, unconditionalCancelPatch, rateLimitFailure,
+    permanentActivityFailure, failureBlockCategory, leadResultKind, applyLeadResult,
+    rateLimitFailure,
     maxReconciliationAttempts: MAX_RECONCILIATION_ATTEMPTS,
     runPublishTurn: async () => { throw new Error("Publish runtime is not initialized"); },
     reconcileCiTurn: async () => { throw new Error("CI runtime is not initialized"); },
@@ -381,8 +345,19 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       if (!continuation) await workflowContext.projectState(workflowContext.captureInitialProjectionState ? workflowContext.initialProjectionState : workflowContext.state);
       workflowContext.initialProjectionComplete = true;
     }
+    function shouldWake(): boolean {
+      return githubSyncRequested // GitHub changed.
+        || (!workflowContext.state.allowedCommands.includes("delete_worktree") && (workflowContext.state.phase === "done" || (workflowContext.state.phase === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) // A terminal state needs completion.
+        || workflowContext.continuationRequested // A continuation was requested.
+        || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) // Publishing is due for retry.
+        || workflowContext.state.phase === "ci_waiting" // CI needs polling.
+        || workflowContext.state.phase === "ready_reconciliation" // Acceptance needs reconciliation.
+        || workflowContext.state.phase === "manual_merge" // Merge status needs polling.
+        || autoChainedCommand(workflowContext, "") !== null // A phase can advance automatically.
+        || canAutoRetryDeliveryBlocker(workflowContext); // A delivery blocker can retry.
+    }
     while (true) {
-      if ((workflowContext.state.phase === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.phase === "cancelled" && !(true && (workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree"))))) { if (true) await condition(allHandlersFinished); return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
+      if ((workflowContext.state.phase === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.phase === "cancelled" && !(true && (workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree"))))) { return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
       if (githubSyncRequested) {
         githubSyncRequested = false;
         if (true) await syncGithubPullRequest();
@@ -429,17 +404,17 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         continue;
       }
       if (await autoRetryDeliveryBlocker(workflowContext)) continue;
-      const chained = allHandlersFinished() ? autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) : null;
+      const chained = autoChainedCommand(workflowContext, "");
       if (chained) {
         await runAutoChainedCommand(workflowContext, chained);
         continue;
       }
-      await condition(() => githubSyncRequested || (true && allHandlersFinished() && !workflowContext.state.allowedCommands.includes("delete_worktree") && (workflowContext.state.phase === "done" || (workflowContext.state.phase === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) || (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge" || (allHandlersFinished() && (autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) !== null || canAutoRetryDeliveryBlocker(workflowContext))));
+      await condition(shouldWake);
     }
   } catch (error) {
     if (!isCancellation(error)) throw error;
     // External cancellation projects the same cancelled phase as cancel_issue in a non-cancellable scope.
-    await CancellationScope.nonCancellable(async () => {
+    await (async () => {
       if (state.phase === "cancelled" || state.phase === "done") return;
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Issue cancelled externally", blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);

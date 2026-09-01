@@ -96,10 +96,10 @@ async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixtu
   const config = createTestConfig(root, { repositoryRoot: root, artifactRoot: join(root, "artifacts"), runtimeRoot: join(root, "runtime") });
   const database = new ForgeDatabase(config.databasePath);
   const artifactStore = new ArtifactStore(config.artifactRoot);
-  const brief = await artifactStore.put("company_1", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from(briefText) });
+  const brief = await artifactStore.putArtifact("company_1", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from(briefText) });
   const targetSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
   const capturedAt = new Date().toISOString();
-  const taskConfiguration = await artifactStore.put("company_1", "task-project-configuration", {
+  const taskConfiguration = await artifactStore.putArtifact("company_1", "task-project-configuration", {
     filename: "project-configuration-task_1.json",
     mimeType: "application/json",
     bytes: Buffer.from(JSON.stringify({
@@ -212,7 +212,7 @@ test("Lead planning persists a fake turn result and reuses the Lead role session
     expect(fake.calls[1]).toMatchObject({ promptKind: "lead-plan", profile: { model: "gpt-5-codex" } });
     expect(value.database.authQuery((db) => db.prepare("SELECT status, provider, session_ref, process_pid, process_group_id FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ status: "completed", provider: "claude", session_ref: result.leadSessionRef, process_pid: null, process_group_id: null });
     const evidence = value.database.authQuery((db) => db.prepare("SELECT a.storage_path, a.sha256 FROM forge_artifacts a WHERE a.id = ?").get(result.leadEvidenceArtifactId) as { storage_path: string; sha256: string });
-    const evidenceText = await new ArtifactStore(value.config.artifactRoot).read({ companyId: "company_1", storagePath: evidence.storage_path, sha256: evidence.sha256 });
+    const evidenceText = await new ArtifactStore(value.config.artifactRoot).getArtifact({ companyId: "company_1", storagePath: evidence.storage_path, sha256: evidence.sha256 });
     expect(evidenceText).toEqual(Buffer.from("\n"));
     expect(value.database.authQuery((db) => db.prepare("SELECT output_kind AS kind, output_revision AS revision, session_ref FROM forge_agent_executions WHERE task_id = 'task_1' AND output_artifact_id IS NOT NULL").get())).toEqual({ kind: "plan", revision: 1, session_ref: result.leadSessionRef });
     value.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET provider = NULL WHERE session_ref = ?").run(result.leadSessionRef));
@@ -303,7 +303,7 @@ test("Lead decision blockers retain the immutable output artifact SHA-256", asyn
 test("Lead planning carries a member blocker answer in a revision prompt", async () => {
   const value = await fixture("gpt-5-codex", "Initial brief that must not be repeated.");
   const answerStore = new ArtifactStore(value.config.artifactRoot);
-  const answer = await answerStore.put("company_1", "plan-blocker-response", { filename: "answer.md", mimeType: "text/markdown", bytes: Buffer.from("Use the 30-day retention policy.") });
+  const answer = await answerStore.putArtifact("company_1", "plan-blocker-response", { filename: "answer.md", mimeType: "text/markdown", bytes: Buffer.from("Use the 30-day retention policy.") });
   value.database.authQuery((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company_1', 'task_1', ?, ?, ?, ?, ?, ?, ?)").run(answer.id, answer.kind, answer.filename, answer.mimeType, answer.byteSize, answer.sha256, answer.storagePath, answer.createdAt));
   const fake = fakeTurnRunner({ "lead-plan-revision": () => routinePlan("Plan revised after the blocker answer") });
   try {
@@ -434,8 +434,8 @@ test("delivery review preflight failures finalize a typed attempt without launch
     expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_delivery_review_attempts").get())).toEqual({ count: 0 });
 
     const artifactStore = new ArtifactStore(value.config.artifactRoot);
-    const delivery = await artifactStore.put("company_1", "developer-delivery", { filename: "preflight-delivery.json", mimeType: "application/json", bytes: Buffer.from("{\"kind\":\"delivery\"}") });
-    const evidence = await artifactStore.put("company_1", "agent-evidence", { filename: "preflight-evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"developer\"}\n") });
+    const delivery = await artifactStore.putArtifact("company_1", "developer-delivery", { filename: "preflight-delivery.json", mimeType: "application/json", bytes: Buffer.from("{\"kind\":\"delivery\"}") });
+    const evidence = await artifactStore.putArtifact("company_1", "agent-evidence", { filename: "preflight-evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"developer\"}\n") });
     const now = new Date().toISOString();
     value.database.authTransaction((db) => {
       for (const artifact of [delivery, evidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
@@ -457,9 +457,9 @@ test("Lead authors a complete conflict-resolution plan from both merge sides", a
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
   const worktreePath = join(value.root, "worktrees", "task-1");
   await mkdir(worktreePath, { recursive: true });
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "approved.json", mimeType: "application/json", bytes: Buffer.from("{\"kind\":\"plan\"}") });
-  const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
-  const conflictArtifact = await artifactStore.put("company_1", "forward-merge-conflict", { filename: "conflict.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkpoint: "pre_release", expectedBaseSha: "b".repeat(40), observedBaseSha: "b".repeat(40), priorHead: "a".repeat(40), priorTree: "a".repeat(40), conflictFiles: ["shared.txt"], combinedDiff: "<<<<<<< HEAD\nissue\n=======\nbase\n>>>>>>> base", priorCommitSummary: "", baseCommitSummary: "", commandEvidence: { command: "git diff --cc --no-ext-diff", complete: true } })) });
+  const plan = await artifactStore.putArtifact("company_1", "lead-plan", { filename: "approved.json", mimeType: "application/json", bytes: Buffer.from("{\"kind\":\"plan\"}") });
+  const leadEvidence = await artifactStore.putArtifact("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
+  const conflictArtifact = await artifactStore.putArtifact("company_1", "forward-merge-conflict", { filename: "conflict.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkpoint: "pre_release", expectedBaseSha: "b".repeat(40), observedBaseSha: "b".repeat(40), priorHead: "a".repeat(40), priorTree: "a".repeat(40), conflictFiles: ["shared.txt"], combinedDiff: "<<<<<<< HEAD\nissue\n=======\nbase\n>>>>>>> base", priorCommitSummary: "", baseCommitSummary: "", commandEvidence: { command: "git diff --cc --no-ext-diff", complete: true } })) });
   const now = new Date().toISOString();
   value.database.authTransaction((db) => {
     db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES ('profile_integrator', 'Integrator', 'codex', 'gpt-5.6-luna', 'low', 'fast', 1, ?, ?)").run(now, now);
@@ -498,8 +498,8 @@ test("permanent agent failures become non-retryable Engine application failures"
 test("supplemental review uses a fresh session and primary Lead consolidation resumes its session", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const draft = await artifactStore.put("company_1", "lead-plan", { filename: "draft.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Draft plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
-  const priorEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "prior.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"turn.completed\"}\n") });
+  const draft = await artifactStore.putArtifact("company_1", "lead-plan", { filename: "draft.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Draft plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
+  const priorEvidence = await artifactStore.putArtifact("company_1", "agent-evidence", { filename: "prior.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"turn.completed\"}\n") });
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();
     db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES ('profile_2', 'Reviewer', 'codex', 'gpt-5.6-luna', 'medium', 'standard', 1, ?, ?)").run(now, now);

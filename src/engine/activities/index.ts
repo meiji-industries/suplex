@@ -1,6 +1,5 @@
 import type { ForgeConfig } from "../../config.js";
 import type { ForgeDatabase } from "../../database.js";
-import type { ProbeActivities } from "../contracts.js";
 import type { DeliveryBlockerActivities } from "../contracts/activities/projection.js";
 import type { IssueActivities } from "../contracts/activities/index.js";
 import type { ActivityOptions } from "./context.js";
@@ -19,7 +18,7 @@ import { createAcceptanceActivities } from "./acceptance.js";
 import { createMergeConflictActivities } from "./merge-conflict.js";
 import { createWorktreeActivities } from "./worktree.js";
 
-export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): ProbeActivities & IssueActivities & DeliveryBlockerActivities {
+export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): IssueActivities & DeliveryBlockerActivities {
   const ctx = createActivityContext(database, config, options);
   return {
     ...createProjectionActivities(ctx),
@@ -35,7 +34,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     ...createAcceptanceActivities(ctx),
     ...createMergeConflictActivities(ctx),
     ...createWorktreeActivities(ctx),
-  } as unknown as ProbeActivities & IssueActivities & DeliveryBlockerActivities;
+  } as unknown as IssueActivities & DeliveryBlockerActivities;
 }
 
 export * from "./context.js";

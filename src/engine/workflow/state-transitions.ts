@@ -45,9 +45,7 @@ export function revisioned(state: IssueWorkflowState, phase: IssueWorkflowState[
   return IssueWorkflowStateSchema.parse({ ...state, revision, phase, owner, allowedCommands, pendingAction, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${revision}` });
 }
 
-export const worktreeCommandsPatch = "forge-worktree-commands-v1";
-export function withWorktreeCommands(state: IssueWorkflowState, patched: boolean): IssueWorkflowState {
-  if (!patched) return state;
+export function withWorktreeCommands(state: IssueWorkflowState): IssueWorkflowState {
   const terminal = state.phase === "done" || state.phase === "cancelled" || state.phase === "failed";
   const noActiveOperation = state.activeOperation === null || state.activeOperation === undefined;
   const canDelete = noActiveOperation && state.worktreeState !== "cleaned" && (Boolean(state.worktreePath) || (terminal && Boolean(state.branchName)));
@@ -219,9 +217,7 @@ export function reviewApprovedState(state: IssueWorkflowState, result: Completed
 
 // The Integrator owns getting the Builder's branch merged: publish, CI repair, and merge
 // conflicts. Gated so replayed histories keep their original role/profile.
-export const optionalRolesPatch = "forge-optional-roles-v1";
 export function integratorTurn(ctx: IssueWorkflowContext, legacyRole: "planner" | "builder"): { role: CapacityRole; profileId: string | undefined } {
-  if (!true) return { role: legacyRole, profileId: ctx.input.roleProfiles[legacyRole] };
   return { role: "integrator", profileId: ctx.input.roleProfiles.integrator ?? ctx.input.roleProfiles[legacyRole] };
 }
 

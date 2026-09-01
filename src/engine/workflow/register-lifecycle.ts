@@ -4,7 +4,8 @@ import { z } from "zod";
 
 import { TERMINAL_PHASES } from "../../issue-phases.js";
 import { assertPayloadWithinLimit } from "../policy.js";
-import { ContinueWorkCommandSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, StartPlanningInputSchema, type DeveloperCancellationResult } from "../issue-contracts.js";
+import { IssueWorkflowStateSchema, type DeveloperCancellationResult } from "../issue-contracts.js";
+import { ContinueWorkCommandSchema, PlanCommandInputSchema, StartPlanningInputSchema } from "../../commands/inputs.js";
 import { issueUpdates } from "../issue-updates.js";
 import { acceptDelivery, cancelCapacity, cancelCapacityExecution, cancelDeveloperExecution, cleanupTaskWorktree, createSuccessor, finalizeCapacity, inspectCapacity, inspectTaskWorktree, recreateTaskWorktree, recordDeliveryDecision } from "./activity-proxies.js";
 import type { IssueWorkflowContext } from "./context.js";
@@ -73,12 +74,6 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     const command = PlanCommandInputSchema.parse(rawInput);
     const unconditionalCancellation = true;
     if ((!unconditionalCancellation && command.expectedRevision !== ctx.state.revision) || TERMINAL_PHASES.has(ctx.state.phase)) throw new Error("Issue cancellation is not available in the current phase");
-    if (ctx.state.phase === "planning" && ctx.planningScope) {
-      ctx.planningScope.cancel();
-      await ctx.planningPromise?.catch(() => undefined);
-      ctx.planningPromise = undefined;
-      ctx.planningScope = undefined;
-    }
     const executionId = ctx.state.developerExecutionId;
     const interruptedCancellation = executionId ? acceptedDeveloperCancellation(issueUpdates.cancel_issue, executionId) : undefined;
     if (executionId && ["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling"].includes(ctx.state.developerRecoveryStatus ?? "")) {
@@ -134,7 +129,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
   setHandler(issueUpdates.cancel_development, ctx.guarded(async (rawInput: any) => {
     assertPayloadWithinLimit("cancel development command", rawInput);
     const command = StartPlanningInputSchema.parse(rawInput);
-    if (!ctx.durablePlanningCapacityEnabled()) {
+    if (!true) {
       if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
       if (!ctx.state.developerExecutionId) {
         await ctx.withStateMutation(() => {

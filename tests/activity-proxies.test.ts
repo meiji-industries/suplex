@@ -32,15 +32,18 @@ describe("activity proxies retry policies", () => {
     }
   });
 
-  test("Herdr agent proxies omit the schedule-to-close ceiling and use their matching bounded retries", () => {
-    const calls = source.match(/proxyActivities<[^>]+>\((herdr\w+ActivityOptions)\);/g) ?? [];
+  test("Herdr agent proxies use their matching start-to-close timeouts and retries", () => {
+    const calls = source.match(/proxyActivities<[^>]+>\((herdr\w+ActivityCallOptions)\);/g) ?? [];
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls) {
-      const optionsName = call.match(/\((herdr\w+ActivityOptions)\)/)?.[1];
+      const optionsName = call.match(/\((herdr\w+ActivityCallOptions)\)/)?.[1];
       expect(optionsName).toBeDefined();
       const options = source.match(new RegExp(`const ${optionsName}[^=]*= \\{[\\s\\S]*?\\};`))?.[0] ?? "";
-      expect(options).not.toContain("scheduleToCloseTimeout");
       expect(options).toMatch(/retry:\s*(EXTERNAL_AGENT_RETRY_POLICY|SUPERVISED_DEVELOPER_RETRY_POLICY)/);
     }
+
+    expect(source).toMatch(/herdrLeadActivityCallOptions[^=]*= \{ startToCloseTimeout: "20 minutes", retry: EXTERNAL_AGENT_RETRY_POLICY \}/);
+    expect(source).toMatch(/herdrDeveloperActivityCallOptions[^=]*= \{ startToCloseTimeout: "60 minutes", retry: EXTERNAL_AGENT_RETRY_POLICY \}/);
+    expect(source).toMatch(/herdrSupervisedDeveloperActivityCallOptions[^=]*= \{\s*\.\.\.herdrDeveloperActivityCallOptions,\s*retry: SUPERVISED_DEVELOPER_RETRY_POLICY,/);
   });
 });

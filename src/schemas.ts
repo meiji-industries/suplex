@@ -96,19 +96,7 @@ export const GhAuthStatusSchema = z.object({
 });
 
 const identifier = z.string().min(1).max(256);
-const durableIdentifier = identifier.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
-
 export const CompanyIdSchema = z.string().min(1).max(64).regex(/^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/);
-
-export const ProbeWorkflowInputSchema = z.object({
-  workflowId: durableIdentifier,
-  probeId: durableIdentifier,
-  companyId: durableIdentifier,
-});
-
-export const ProbeWorkflowStateSchema = ProbeWorkflowInputSchema.extend({
-  status: z.enum(["starting", "running"]),
-});
 
 export const HealthCheckSchema = z.object({
   id: z.enum(HEALTH_CHECK_IDS),

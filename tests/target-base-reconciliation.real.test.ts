@@ -65,7 +65,7 @@ test.skipIf(!enabled)("real Lead, Developer, GitHub, CI, and replay-safe adapter
     const requiredChecks = baseChecks.map((check) => check.name).sort();
     const setupCommand = "pnpm install --frozen-lockfile";
     const verificationCommand = "pnpm test";
-    const brief = await artifacts.put("company_real", "task-brief", { filename: "target-base-real.md", mimeType: "text/markdown", bytes: Buffer.from("Create FORGE_TARGET_BASE_ISSUE.md containing the exact line `forge target base real proof`. Run the complete pinned verification command and commit the result normally.") });
+    const brief = await artifacts.putArtifact("company_real", "task-brief", { filename: "target-base-real.md", mimeType: "text/markdown", bytes: Buffer.from("Create FORGE_TARGET_BASE_ISSUE.md containing the exact line `forge target base real proof`. Run the complete pinned verification command and commit the result normally.") });
     database.authTransaction((db) => {
       db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('user_real', 'Real proof', 'real-proof', 'admin', 'active', ?, ?)").run(now, now);
       db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company_real', 'Real proof', 'active', ?)").run(now);
@@ -100,7 +100,7 @@ test.skipIf(!enabled)("real Lead, Developer, GitHub, CI, and replay-safe adapter
     const parents = (await exec("git", ["rev-list", "--parents", "-n", "1", reconciled.headSha], { cwd: delivery.worktreePath })).stdout.trim().split(/\s+/);
     expect(parents).toEqual([reconciled.headSha, deliveredCommit, advancedBase]);
     const verificationRow = database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = 'company_real'").get(reconciled.verificationArtifact.id) as { storage_path: string; sha256: string });
-    await expect(artifacts.read({ companyId: "company_real", storagePath: verificationRow.storage_path, sha256: verificationRow.sha256 })).resolves.toBeInstanceOf(Buffer);
+    await expect(artifacts.getArtifact({ companyId: "company_real", storagePath: verificationRow.storage_path, sha256: verificationRow.sha256 })).resolves.toBeInstanceOf(Buffer);
     const freshReview = await lead.reviewDelivery({ taskId: "task_real", companyId: "company_real", workflowId: "workflow_real", projectId: "project_real", projectRevisionId: "revision_real", briefArtifactId: brief.id, planRevision: 1, roleProfiles: { planner: "profile_real", builder: "profile_real" }, leadOutputArtifactId: plan.leadOutputArtifactId, subject: { planRevision: 1, targetBaseSha: reconciled.observedBaseSha, subjectCommit: reconciled.headSha, subjectTree: reconciled.headTree, developerExecutionId: reconciled.developerExecutionId, deliveryArtifactId: reconciled.deliveryArtifact.id, developerEvidenceArtifactId: reconciled.verificationArtifact.id, leadSessionRef: plan.leadSessionRef, developerSessionRef: delivery.developerSessionRef }, worktreePath: delivery.worktreePath, branchName: delivery.branchName, supersedesReviewId: originalReview.review.reviewId });
     expect(freshReview).toMatchObject({ outcome: "completed", review: { opinion: "approved", leadSessionRef: plan.leadSessionRef, supersedesReviewId: originalReview.review.reviewId } });
     if (freshReview.outcome !== "completed") throw new Error("Fresh delivery review was blocked");

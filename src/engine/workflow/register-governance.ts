@@ -1,4 +1,4 @@
-import { CancellationScope, setHandler } from "../registry.js";
+import { setHandler } from "../registry.js";
 
 import { assertPayloadWithinLimit } from "../policy.js";
 import { IssueWorkflowStateSchema, type LeadPlanningResult } from "../issue-contracts.js";
@@ -15,19 +15,14 @@ export function registerGovernanceHandlers(ctx: IssueWorkflowContext): void {
     if (ctx.state.phase !== "blocked" || ctx.state.revision !== blockedRevision) return ctx.state;
     const next = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: blockedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead decision resolution", lastEventId: `${ctx.state.workflowId}:${blockedRevision + 1}`, blockerResolutionId: resolution.resolutionId, leadResumeInstructionArtifactId: command.answerArtifactId });
     ctx.state = next;
-    if (!ctx.decisionResolutionProjectionEnabled()) await ctx.project();
+    if (!true) await ctx.project();
     if (ctx.state.phase !== "planning" || ctx.state.revision !== next.revision) return ctx.state;
     let leadResult: LeadPlanningResult;
-    try {
-      const scope = new CancellationScope();
-      ctx.planningScope = scope;
-      ctx.planningPromise = scope.run(() => runLeadPlanning({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: next.revision, resume: { leadSessionRef: next.leadSessionRef!, reason: "decision_resolution", instructionArtifactId: command.answerArtifactId } }));
+    try {      ctx.planningPromise = runLeadPlanning({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: next.revision, resume: { leadSessionRef: next.leadSessionRef!, reason: "decision_resolution", instructionArtifactId: command.answerArtifactId } });
       leadResult = await ctx.planningPromise;
       ctx.planningPromise = undefined;
-      ctx.planningScope = undefined;
     } catch (error) {
       ctx.planningPromise = undefined;
-      ctx.planningScope = undefined;
       const failure = ctx.permanentActivityFailure(error, true);
       if (!failure) throw error;
       if (ctx.currentState().phase === "cancelled") return ctx.currentState();
@@ -37,7 +32,7 @@ export function registerGovernanceHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (ctx.state.revision !== next.revision || ctx.state.phase !== "planning") return ctx.state;
-    ctx.state = ctx.leadResultRoutingEnabled() ? ctx.applyLeadResult(next, leadResult) : ctx.applyLegacyLeadResult(next, leadResult);
+    ctx.state = ctx.applyLeadResult(next, leadResult);
     if (ctx.state.phase !== "blocked") {
       ctx.state = ctx.state.planMaterial
         ? IssueWorkflowStateSchema.parse({ ...ctx.state, phase: "approval", owner: "human", allowedCommands: ["approve_plan", "reject_plan", "cancel_issue", ...(ctx.input.supplementalReview ? ["request_supplemental_review" as const] : [])], pendingAction: "Approve final plan" })

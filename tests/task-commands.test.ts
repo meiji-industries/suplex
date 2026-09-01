@@ -7,7 +7,7 @@ import { taskCommandDescriptors } from "../src/task-commands.js";
 // commands behind an "exact subject" the client had to echo back.
 test("task command descriptors project every routed command", () => {
   const actual = taskCommandDescriptors(ISSUE_COMMAND_NAMES, 7);
-  expect(actual.map(({ name, label, endpoint, method, expectedRevision, note, idempotency }) => ({ name, label, endpoint, method, expectedRevision, note, idempotency }))).toEqual([
+  expect(actual.map(({ name, label, endpoint, method, expectedRevision, note, idempotency }) => ({ name, label, endpoint, method, expectedRevision, note, idempotency })).sort((left, right) => left.name.localeCompare(right.name))).toEqual([
     { name: "start_planning", label: "Start planning", endpoint: "start-planning", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "request_supplemental_review", label: "Request supplemental review", endpoint: "request-supplemental-review", method: "POST", expectedRevision: 7, note: "none", idempotency: "required" },
     { name: "approve_plan", label: "Approve plan", endpoint: "approve-plan", method: "POST", expectedRevision: 7, note: "required", idempotency: "required" },
@@ -42,5 +42,5 @@ test("task command descriptors project every routed command", () => {
     { name: "recreate_worktree", label: "Recreate worktree and resume", endpoint: "recreate-worktree", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "resume_preserved_work", label: "Resume from preserved work", endpoint: "resume-preserved-work", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "integrate_remote_conflict", label: "Resolve remote branch conflict", endpoint: "integrate-remote-conflict", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
-  ]);
+  ].sort((left, right) => left.name.localeCompare(right.name)));
 });

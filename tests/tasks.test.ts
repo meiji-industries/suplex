@@ -17,7 +17,8 @@ import type { GithubAdapter } from "../src/github.js";
 import type { GithubReleasePort } from "../src/github-release.js";
 import { loadTaskConfiguration } from "../src/task-project-configuration.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
-import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "../src/engine/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueWorkflowInput, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
+import type { ContinueWorkCommand, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, StartPlanningInput } from "../src/commands/inputs.js";
 import { TaskResponseSchema } from "../src/http/contracts/tasks.js";
 import { jsonRequired } from "../src/task-utils.js";
 import taskBranch from "../src/http/routes/task-branch.js";
@@ -100,7 +101,7 @@ async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listO
       if (input.expectedRevision !== projection.revision) throw new Error("Stale workflow revision");
       const successor = await tasks.createTask("admin-1", company.id, { projectId: current.projectId, title: `Continue: ${current.issueId}`, description: `Continued from Forge issue ${current.issueId}: ${input.reason}`, idempotencyKey: `continue-${current.issueId}`, images: [] });
       const successorState = stateByTask.get(successor.task.id)!;
-      const reasonArtifact = await new ArtifactStore(config.artifactRoot).put(company.id, "continuation-reason", { filename: "continuation-reason.md", mimeType: "text/markdown", bytes: Buffer.from(input.reason.trim(), "utf8") });
+      const reasonArtifact = await new ArtifactStore(config.artifactRoot).putArtifact(company.id, "continuation-reason", { filename: "continuation-reason.md", mimeType: "text/markdown", bytes: Buffer.from(input.reason.trim(), "utf8") });
       database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reasonArtifact.id, reasonArtifact.companyId, reasonArtifact.kind, reasonArtifact.filename, reasonArtifact.mimeType, reasonArtifact.byteSize, reasonArtifact.sha256, reasonArtifact.storagePath, reasonArtifact.createdAt);
         db.prepare("UPDATE forge_tasks SET predecessor_task_id = ? WHERE id = ?").run(current.issueId, successor.task.id);
@@ -755,7 +756,7 @@ test("re-resolves a pull request selector and pins source and PR base coordinate
     delete capturedConfiguration.artifactSha256;
     const branchConfiguration = { ...capturedConfiguration, source: { kind: "branch" as const, branch: "feature/branch", headSha: "e".repeat(40) } };
     const store = new ArtifactStore(value.config.artifactRoot, value.database);
-    const artifact = await store.put(value.companyId, "task-project-configuration", { filename: "task-project-configuration.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify(branchConfiguration)) });
+    const artifact = await store.putArtifact(value.companyId, "task-project-configuration", { filename: "task-project-configuration.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify(branchConfiguration)) });
     value.database.authTransaction((db) => {
       db.prepare("UPDATE forge_tasks SET project_configuration_artifact_id = ? WHERE id = ?").run(artifact.id, created.task.id);
     });

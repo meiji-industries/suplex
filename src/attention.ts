@@ -1,7 +1,7 @@
 import { AuthService } from "./auth.js";
 import { issueCommands } from "./commands/registry.js";
 import type { ForgeDatabase } from "./database.js";
-import { type IssueCommand } from "./engine/issue-contracts.js";
+import { type IssueCommand } from "./commands/registry.js";
 import { jsonRequired } from "./task-utils.js";
 import { attentionCardFromBlocker } from "./recovery/attention-card.js";
 import type { AttentionCard } from "./recovery/convergence.js";

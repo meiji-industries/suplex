@@ -359,7 +359,7 @@ export class AgentService {
     }
     const brief = row.description ?? (() => {
       if (!row.brief_storage_path || !row.brief_sha256) throw new AgentFailure("scoped-input-missing", "Task description is unavailable");
-      const migrated = this.artifacts.readSync({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 }).toString("utf8");
+      const migrated = this.artifacts.getArtifactSync({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 }).toString("utf8");
       this.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET description = ? WHERE id = ? AND company_id = ? AND description IS NULL").run(migrated, input.taskId, input.companyId));
       return migrated;
     })();
@@ -542,7 +542,7 @@ export class AgentService {
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
     const brief = context.description ?? (() => {
       if (!context.legacyBriefStoragePath || !context.legacyBriefSha256) throw new AgentFailure("scoped-input-missing", "Task description is unavailable");
-      const migrated = this.artifacts.readSync({ companyId: input.companyId, storagePath: context.legacyBriefStoragePath, sha256: context.legacyBriefSha256 }).toString("utf8");
+      const migrated = this.artifacts.getArtifactSync({ companyId: input.companyId, storagePath: context.legacyBriefStoragePath, sha256: context.legacyBriefSha256 }).toString("utf8");
       this.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET description = ? WHERE id = ? AND company_id = ? AND description IS NULL").run(migrated, input.taskId, input.companyId));
       return migrated;
     })();
@@ -768,7 +768,7 @@ export class AgentService {
     }
     const brief = context.description ?? (() => {
       if (!context.legacyBriefStoragePath || !context.legacyBriefSha256) throw new AgentFailure("scoped-input-missing", "Task description is unavailable");
-      const migrated = this.artifacts.readSync({ companyId: input.companyId, storagePath: context.legacyBriefStoragePath, sha256: context.legacyBriefSha256 }).toString("utf8");
+      const migrated = this.artifacts.getArtifactSync({ companyId: input.companyId, storagePath: context.legacyBriefStoragePath, sha256: context.legacyBriefSha256 }).toString("utf8");
       this.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET description = ? WHERE id = ? AND company_id = ? AND description IS NULL").run(migrated, input.taskId, input.companyId));
       return migrated;
     })();
@@ -920,7 +920,7 @@ export class AgentService {
     const worktreePath = await this.planningWorktree(input, configuration, context.title);
     const brief = context.description ?? (() => {
       if (!context.brief_storage_path || !context.brief_sha256) throw new AgentFailure("scoped-input-missing", "Task description is unavailable");
-      const migrated = this.artifacts.readSync({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 }).toString("utf8");
+      const migrated = this.artifacts.getArtifactSync({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 }).toString("utf8");
       this.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET description = ? WHERE id = ? AND company_id = ? AND description IS NULL").run(migrated, input.taskId, input.companyId));
       return migrated;
     })();

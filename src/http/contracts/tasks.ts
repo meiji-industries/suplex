@@ -2,7 +2,7 @@ import { z } from "zod";
 import { PlanMaterialCategorySchema, PublicPlanBlockerSubjectSchema, PublicPlanSubjectSchema } from "../../plan-governance.js";
 import { PersistedLeadOutputSchema } from "../../codex-lead.js";
 import { IssueCommandSlugSchema, IssueCommandSchema } from "../../commands/registry.js";
-import { IssuePhaseSchema } from "../../engine/issue-contracts.js";
+import { IssuePhaseSchema } from "../../issue-phases.js";
 
 import { DeliveryOperationBlockCodeSchema, DeliveryWorkflowBlockCodeSchema } from "../../engine/issue-contracts.js";
 import { ReleaseFailureCodeSchema } from "../../release-failures.js";

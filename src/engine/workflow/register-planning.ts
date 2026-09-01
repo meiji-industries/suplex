@@ -1,4 +1,4 @@
-import { CancellationScope, condition, log, runExecution, setHandler, setInterruptHandler } from "../registry.js";
+import { condition, log, runExecution, setHandler, setInterruptHandler } from "../registry.js";
 
 import { routeLeadResult } from "../../plan-governance.js";
 import { plannerNoteAvailable } from "../../commands/definitions/planning.js";
@@ -110,9 +110,9 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
     const distinctPlanningStates = planningProjection.distinctPlanningStates;
     if (planningProjection.shouldProject) await ctx.projectInitialPlanningState(next, distinctPlanningStates);
     if (ctx.state.phase !== "planning" || ctx.state.revision !== next.revision) return ctx.state;
-    if (ctx.leadPlanningEnabled()) {
+    if (true) {
       let leadResult;
-      const durablePlanningCapacity = ctx.durablePlanningCapacityEnabled();
+      const durablePlanningCapacity = true;
       try {
         const runPlanningTurn = () => ctx.acquireExternalTurn<LeadPlanningResult>(
           { operation: "lead_planning", role: "planner", profileId: ctx.input.roleProfiles.planner },
@@ -135,15 +135,11 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
         );
         if (ctx.exactPlanAuthorityEnabled || durablePlanningCapacity) {
           leadResult = await runPlanningTurn();
-        } else {
-          const scope = new CancellationScope();
-          ctx.planningScope = scope;
-          ctx.planningPromise = scope.run(runPlanningTurn);
+        } else {          ctx.planningPromise = runPlanningTurn();
           try {
             leadResult = await ctx.planningPromise;
           } finally {
             ctx.planningPromise = undefined;
-            ctx.planningScope = undefined;
           }
         }
       } catch (error) {
@@ -190,7 +186,7 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
       if (ctx.exactPlanAuthorityEnabled) {
         ctx.state = IssueWorkflowStateSchema.parse({ ...planningBase, ...leadResult, ...(distinctPlanningStates ? { revision: planningBase.revision + 1, lastEventId: `${planningBase.workflowId}:${planningBase.revision + 1}` } : {}), planRevision: next.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, preservedWorktreeCompatibility: leadResult.preservedWorktreeCompatibility ?? null, supplementalReviewUsed: false, blocker: null, stateChangedAt: new Date().toISOString(), originalPlanSubject: leadResult.planSubject ?? null, finalPlanSubject: leadResult.planSubject ?? null, materialityEvidence: leadResult.materialityEvidence ?? null, planBlockerSubject: leadResult.blockerSubject ?? null });
       } else {
-        const routedLeadResult = ctx.leadResultRoutingEnabled() ? ctx.applyLeadResult(next, leadResult) : ctx.applyLegacyLeadResult(next, leadResult);
+        const routedLeadResult = ctx.applyLeadResult(next, leadResult);
         ctx.state = IssueWorkflowStateSchema.parse({ ...routedLeadResult, ...(distinctPlanningStates ? { revision: next.revision + 1, lastEventId: `${next.workflowId}:${next.revision + 1}` } : {}), ...(ctx.leadResultKind(leadResult) === "plan" ? { planRevision: next.revision } : {}), supplementalReviewUsed: false });
       }
       if (ctx.state.revisionRequestId && ctx.state.revisedExecutionCoordinates?.disposition === "reuse" && ctx.state.preservedWorktreeCompatibility !== true) {
@@ -200,7 +196,7 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
       }
       if (ctx.state.revisionRequestId) await authorizePlanRevision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, revisionRequestId: ctx.state.revisionRequestId, planRevision: ctx.state.planRevision ?? ctx.state.revision });
       leadResult = await runPlanReview(ctx, leadResult);
-      if (ctx.planGovernanceEnabled()) {
+      if (true) {
         const route = routeLeadResult({ kind: leadResult.leadOutputKind, material: leadResult.material });
         const exactSubject = Boolean(ctx.state.finalPlanSubject);
         ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, phase: route.phase, owner: route.owner, allowedCommands: route.phase === "approval" ? ctx.approvalCommands(exactSubject, ctx.input.supplementalReview) : route.phase === "ready_for_development" && !exactSubject ? ctx.addRevisionCommand(route.allowedCommands as IssueCommand[]) : route.allowedCommands, pendingAction: route.pendingAction, blocker: route.phase === "approval" ? ctx.approvalBlocker(leadResult, exactSubject, ctx.input.supplementalReview) : null, stateChangedAt: new Date().toISOString() });

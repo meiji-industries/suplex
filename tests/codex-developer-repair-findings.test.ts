@@ -50,11 +50,11 @@ test("supervised Developer repair forwards every scheduled blocking finding to i
     repairInstruction: `Address ${findingId}`,
   }));
   const [brief, leadEvidence, delivery, developerEvidence, opinion] = await Promise.all([
-    artifacts.put("company_1", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from("Repair fixture") }),
-    artifacts.put("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") }),
-    artifacts.put("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
-    artifacts.put("company_1", "agent-evidence", { filename: "developer.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") }),
-    artifacts.put("company_1", "delivery-review", { filename: "review.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
+    artifacts.putArtifact("company_1", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from("Repair fixture") }),
+    artifacts.putArtifact("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") }),
+    artifacts.putArtifact("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
+    artifacts.putArtifact("company_1", "agent-evidence", { filename: "developer.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") }),
+    artifacts.putArtifact("company_1", "delivery-review", { filename: "review.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
   ]);
   const now = new Date().toISOString();
   database.authTransaction((db) => {
@@ -113,11 +113,11 @@ test("Developer repair forbids every test suite when project tests are disabled"
   const targetBaseSha = await git(["rev-parse", "HEAD"], worktreePath);
   const subjectTree = await git(["rev-parse", "HEAD^{tree}"], worktreePath);
   const [brief, leadEvidence, delivery, developerEvidence, opinion] = await Promise.all([
-    artifacts.put("company_1", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from("Repair fixture") }),
-    artifacts.put("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") }),
-    artifacts.put("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
-    artifacts.put("company_1", "agent-evidence", { filename: "developer.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") }),
-    artifacts.put("company_1", "delivery-review", { filename: "review.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
+    artifacts.putArtifact("company_1", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from("Repair fixture") }),
+    artifacts.putArtifact("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") }),
+    artifacts.putArtifact("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
+    artifacts.putArtifact("company_1", "agent-evidence", { filename: "developer.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") }),
+    artifacts.putArtifact("company_1", "delivery-review", { filename: "review.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
   ]);
   const now = new Date().toISOString();
   database.authTransaction((db) => {

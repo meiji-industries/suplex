@@ -65,14 +65,13 @@ the next start (immediately under `dev:watch`), and a later edit changes its
 hash and stops the server.
 Need a change? Create a new migration.
 
-## Where new code goes (anti-hub rules)
+## Where new code goes
 
-- A new issue command = one `defineIssueCommand` in `src/commands/definitions/<domain>.ts` + one `setHandler` in `src/temporal/workflow/register-<domain>.ts`. NEVER edit routes, service wrappers, the workflow port, contract enums, or frontend action types for a command — they derive from the registry.
-- A new workflow state field goes in its owning `src/temporal/contracts/state/<domain>.ts` fragment, APPENDED LAST in that fragment (serialized order is frozen; `tests/task-creation-recovery.test.ts` pins it).
-- A new activity = one signature in `src/temporal/contracts/activities/<domain>.ts` + one implementation in `src/temporal/activities/<domain>.ts`. Never add stubs to test fakes — pass overrides to `createIssueActivitiesFake`.
+- A new issue command = one `defineIssueCommand` in `src/commands/definitions/<domain>.ts` + one `setHandler` in `src/engine/workflow/register-<domain>.ts`. Routes, service wrappers, and frontend action types derive from the registry.
+- A new workflow state field goes in its owning `src/engine/contracts/state/<domain>.ts` fragment.
+- A new activity = one signature in `src/engine/contracts/activities/<domain>.ts` + one implementation in `src/engine/activities/<domain>.ts`.
 - A new phase goes in `src/issue-phases.ts` only.
-- A new replay scenario = one file in `tests/replay-scenarios/` + one line in its index.
-- Temporal update names, patch strings, `setHandler` order, and `durableCommand` kind strings are FROZEN. `tests/temporal-contract-pins.test.ts` and `tests/issue-command-executor.test.ts` enforce this — if they fail, your change is wrong, not the tests.
+- There is no Temporal and no replay. Nothing about command names, field order, or handler order is frozen. Delete dead code when you find it.
 - If `tests/architecture-guardrails.test.ts` line budgets fail, move code into the per-domain modules instead of raising the budget.
 
 ## Agent skills

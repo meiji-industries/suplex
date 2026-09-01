@@ -48,11 +48,11 @@ realTest("real Codex passes the authorized Developer service seam with scoped ar
     const movedTargetSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repository })).stdout.trim();
 
     const artifacts = new ArtifactStore(config.artifactRoot);
-    const brief = await artifacts.put("company_real", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from("Create the bounded real proof.") });
-    const supplemental = await artifacts.put("company_real", "supplemental-review", { filename: "review.txt", mimeType: "text/plain", bytes: Buffer.from("The Lead used this exact scoped review.") });
+    const brief = await artifacts.putArtifact("company_real", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from("Create the bounded real proof.") });
+    const supplemental = await artifacts.putArtifact("company_real", "supplemental-review", { filename: "review.txt", mimeType: "text/plain", bytes: Buffer.from("The Lead used this exact scoped review.") });
     const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
-    const referencedImage = await artifacts.put("company_real", "task-image", { filename: "referenced.png", mimeType: "image/png", bytes: imageBytes });
-    const unreferencedImage = await artifacts.put("company_real", "task-image", { filename: "unreferenced.png", mimeType: "image/png", bytes: imageBytes });
+    const referencedImage = await artifacts.putArtifact("company_real", "task-image", { filename: "referenced.png", mimeType: "image/png", bytes: imageBytes });
+    const unreferencedImage = await artifacts.putArtifact("company_real", "task-image", { filename: "unreferenced.png", mimeType: "image/png", bytes: imageBytes });
     const planValue = {
       kind: "plan", summary: "Real authorized Developer proof", reproduction: null, rootCauseAnalysis: null,
       steps: [
@@ -62,7 +62,7 @@ realTest("real Codex passes the authorized Developer service seam with scoped ar
       compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "Owner-controlled local execution with provider observation.", verificationStrategy: "Use the exact commands on each numbered step.", unresolvedTechnicalQuestions: [], materialCategories: [],
       developerContext: { includeTaskBrief: false, evidenceArtifactIds: [supplemental.id], imageArtifactIds: [referencedImage.id], repositoryInstructionPaths: [], artifactStepNumbers: { [supplemental.id]: [1], [referencedImage.id]: [1] } },
     };
-    const plan = await artifacts.put("company_real", "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify(planValue)) });
+    const plan = await artifacts.putArtifact("company_real", "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify(planValue)) });
     const now = new Date().toISOString();
     database.authQuery((db) => {
       db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('user_real', 'Real Proof', 'real-proof', 'admin', 'active', ?, ?)").run(now, now);
@@ -80,7 +80,7 @@ realTest("real Codex passes the authorized Developer service seam with scoped ar
     const result = await service.run({ taskId: "task_real", companyId: "company_real", workflowId: "workflow_real", projectId: "project_real", projectRevisionId: "revision_real", planRevision: 1, roleProfiles: { builder: "profile_real" }, leadSessionRef, leadOutputArtifactId: plan.id, authorization });
 
     const reconciliationRow = database.authQuery((db) => db.prepare("SELECT company_id AS companyId, storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(result.reconciliationArtifactId) as { companyId: string; storagePath: string; sha256: string });
-    const reconciliation = jsonRequired((await artifacts.read(reconciliationRow)).toString("utf8")) as { mismatches: string[]; report: unknown; policyVersion: number; independentVerification: { outcome: string; commands: Array<{ command: string; exitCode: number | null }> } };
+    const reconciliation = jsonRequired((await artifacts.getArtifact(reconciliationRow)).toString("utf8")) as { mismatches: string[]; report: unknown; policyVersion: number; independentVerification: { outcome: string; commands: Array<{ command: string; exitCode: number | null }> } };
     if (reconciliation.mismatches.length) throw new Error(JSON.stringify({ mismatches: reconciliation.mismatches, report: reconciliation.report }));
     expect(result.outcome).toBe("completed");
     expect(reconciliation.policyVersion).toBe(2);

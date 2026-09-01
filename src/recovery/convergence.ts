@@ -1,4 +1,6 @@
-import { sha256Hex } from "../engine/deterministic-id.js";
+import { createHash } from "node:crypto";
+
+const sha256Hex = (value: string): string => createHash("sha256").update(value).digest("hex");
 import { attentionCardFor } from "./attention-card.js";
 
 export type RecoveryAction = "advance" | "resume" | "retry" | "repair" | "attention" | "no_change";

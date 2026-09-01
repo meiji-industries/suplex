@@ -17,11 +17,12 @@ import { PromptOverrideService, type ResolvedPromptSet } from "./prompt-override
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
 import { acceptIssueDevelopment, acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, resyncIssueProjection, reviseIssuePlan, startIssueWorkflow } from "./engine/service.js";
 import { executeWorktreeCommand, type WorktreeCommandInput } from "./engine/worktree-commands.js";
-import { issueCommands } from "./commands/registry.js";
-import { createInitialIssueWorkflowState, DeliveryOperationBlockCodeSchema, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type SendPlannerNoteInput, type StartPlanningInput } from "./engine/issue-contracts.js";
+import { issueCommands, IssueCommandSchema, type IssueCommand } from "./commands/registry.js";
+import type { ContinueWorkCommand, PlanCommandInput, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, SendPlannerNoteInput, StartPlanningInput } from "./commands/inputs.js";
+import { createInitialIssueWorkflowState, DeliveryOperationBlockCodeSchema, IssueWorkflowStateSchema, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueWorkflowInput, type IssueWorkflowState } from "./engine/issue-contracts.js";
+import { TERMINAL_PHASES, type IssuePhase } from "./issue-phases.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { taskCommandDescriptors, type TaskCommandDescriptor } from "./task-commands.js";
-import { TERMINAL_PHASES } from "./issue-phases.js";
 import { MaterialityEvidenceArtifactSchema, PlanSubjectSchema, deterministicMaterialCategories, type MaterialityEvidenceSubject, type PlanBlockerSubject, type PlanMaterialCategory, type PlanSubject } from "./plan-governance.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { developerVerificationProjection } from "./developer-task-projection.js";
@@ -1108,7 +1109,7 @@ export class TaskService {
     const usedTitles = new Set(titles.map((row) => row.title));
     const sourceArtifacts = this.database.authQuery((db) => source.images.map((image) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(image.artifactId, source.companyId) as { storage_path: string; sha256: string } | undefined));
     if (sourceArtifacts.some((artifact) => !artifact)) throw new TaskFailure("Task attachment is unavailable", [finding("attachment-unavailable", "images", "The original attachment could not be copied")], 409);
-    const images = source.images.map((image, index) => ({ filename: image.filename, mimeType: image.mimeType, base64: this.artifacts.readSync({ companyId: source.companyId, storagePath: sourceArtifacts[index]!.storage_path, sha256: sourceArtifacts[index]!.sha256 }).toString("base64") }));
+    const images = source.images.map((image, index) => ({ filename: image.filename, mimeType: image.mimeType, base64: this.artifacts.getArtifactSync({ companyId: source.companyId, storagePath: sourceArtifacts[index]!.storage_path, sha256: sourceArtifacts[index]!.sha256 }).toString("base64") }));
     const created = await this.createTask(actorUserId, source.companyId, {
       projectId: source.projectId,
       title: duplicateTitle(source.title, usedTitles),
@@ -1401,7 +1402,7 @@ export class TaskService {
     this.database.authTransaction((db) => {
       for (const row of rows) db.prepare("DELETE FROM forge_artifacts WHERE id = ? AND company_id = ?").run(row.id, row.company_id);
     });
-    await Promise.all(rows.map((row) => this.artifacts.remove({ companyId: row.company_id, storagePath: row.storage_path })));
+    await Promise.all(rows.map((row) => this.artifacts.removeArtifact({ companyId: row.company_id, storagePath: row.storage_path })));
   }
 
   private async resumeCreationIntent(authority: TaskCreationAuthority, intent: CreationIntentRow, input: TaskInput): Promise<{ task: ForgeTask; created: boolean }> {
@@ -1506,7 +1507,7 @@ export class TaskService {
       this.recordTaskCommand(task, actorUserId, "resolve_decision_blocker", state.revision);
     } catch (error) {
       this.database.authTransaction((db) => db.prepare("DELETE FROM forge_artifacts WHERE id = ? AND company_id = ?").run(artifact.id, task.companyId));
-      await this.artifacts.remove({ companyId: artifact.companyId, storagePath: artifact.storagePath });
+      await this.artifacts.removeArtifact({ companyId: artifact.companyId, storagePath: artifact.storagePath });
       const message = error instanceof Error && /stale workflow revision/i.test(error.message) ? "Task changed before this action was accepted" : "Decision blocker could not be resolved";
       throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409);
     }
@@ -2042,7 +2043,7 @@ export class TaskService {
     const plans = planRows.flatMap((planRow): PlanArtifactView[] => {
       try {
         const subject = PlanSubjectSchema.parse({ companyId: row.company_id, issueId: row.id, workflowId: row.workflow_id, originalPlanRevision: planRow.originalPlanRevision, outputId: planRow.id, outputRevision: planRow.outputRevision, finalVersion: planRow.finalVersion, artifactId: planRow.artifactId, artifactSha256: planRow.artifactSha256, leadSessionRef: planRow.leadSessionRef, leadExecutionId: planRow.leadExecutionId, evidenceManifestArtifactId: planRow.evidenceManifestArtifactId, evidenceManifestSha256: undefined });
-        const content = PersistedLeadOutputSchema.parse(jsonRequired(this.artifacts.readSync({ companyId: row.company_id, storagePath: planRow.storagePath, sha256: planRow.storedSha256 }).toString("utf8")));
+        const content = PersistedLeadOutputSchema.parse(jsonRequired(this.artifacts.getArtifactSync({ companyId: row.company_id, storagePath: planRow.storagePath, sha256: planRow.storedSha256 }).toString("utf8")));
         return [{ subject, summary: planRow.summary, content, createdAt: planRow.createdAt, status: subject.outputId === finalSubject?.outputId ? "current" : "superseded" }];
       } catch {
         return [];
@@ -2063,7 +2064,7 @@ export class TaskService {
     const row = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'materiality-evidence'").get(subject.artifactId, companyId) as { storagePath: string; sha256: string } | undefined);
     if (!row) return { categories: subject.categories, evidenceArtifactId: subject.artifactId, evidenceArtifactSha256: subject.artifactSha256 ?? "", evidence: [] };
     try {
-      const artifact = MaterialityEvidenceArtifactSchema.parse(jsonRequired(this.artifacts.readSync({ companyId, storagePath: row.storagePath, sha256: row.sha256 }).toString("utf8")));
+      const artifact = MaterialityEvidenceArtifactSchema.parse(jsonRequired(this.artifacts.getArtifactSync({ companyId, storagePath: row.storagePath, sha256: row.sha256 }).toString("utf8")));
       const evidence: MaterialityView["evidence"] = artifact.evidence.map((entry) => ({ category: entry.category, source: "lead" as const, refs: entry.evidenceRefs, rationale: entry.rationale }));
       const leadCategories = new Set(artifact.evidence.map((entry) => entry.category));
       for (const category of deterministicMaterialCategories(artifact.affectedPaths)) {
@@ -2084,8 +2085,8 @@ export class TaskService {
     if (!row) return undefined;
     const profile = this.database.authQuery((db) => db.prepare("SELECT id, name FROM forge_profiles WHERE id = ?").get(row.profileId) as { id: string; name: string } | undefined);
     try {
-      const opinion = SupplementalReviewSchema.parse(jsonRequired(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.opinionStoragePath, sha256: row.opinionSha256 }).toString("utf8")));
-      const responseRaw = row.responseArtifactId && row.responseStoragePath && row.responseSha256 ? jsonRequired(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.responseStoragePath, sha256: row.responseSha256 }).toString("utf8")) as { reviewResponse?: unknown; summary?: unknown } : undefined;
+      const opinion = SupplementalReviewSchema.parse(jsonRequired(this.artifacts.getArtifactSync({ companyId: task.company_id, storagePath: row.opinionStoragePath, sha256: row.opinionSha256 }).toString("utf8")));
+      const responseRaw = row.responseArtifactId && row.responseStoragePath && row.responseSha256 ? jsonRequired(this.artifacts.getArtifactSync({ companyId: task.company_id, storagePath: row.responseStoragePath, sha256: row.responseSha256 }).toString("utf8")) as { reviewResponse?: unknown; summary?: unknown } : undefined;
       const plannerResponse = typeof responseRaw?.reviewResponse === "string" ? responseRaw.reviewResponse : typeof responseRaw?.summary === "string" ? responseRaw.summary : undefined;
       return { reviewId: row.reviewId, reviewerProfile: { id: profile?.id ?? row.profileId, name: profile?.name ?? "Reviewer" }, verdict: opinion.verdict, summary: opinion.summary, concerns: opinion.concerns, artifactId: row.artifactId, ...(plannerResponse ? { plannerResponse } : {}), createdAt: row.createdAt };
     } catch {
@@ -2100,7 +2101,7 @@ export class TaskService {
       ORDER BY d.created_at DESC, d.id DESC LIMIT 1`).get(task.id, task.company_id, task.workflow_id, finalSubject.outputId) as { decisionId: string; decision: "approve" | "request_revision" | "reject"; actorId: string; actorName: string; noteArtifactId: string; createdAt: string; noteStoragePath: string; noteSha256: string } | undefined);
     if (!row) return undefined;
     try {
-      const note = this.artifacts.readSync({ companyId: task.company_id, storagePath: row.noteStoragePath, sha256: row.noteSha256 }).toString("utf8");
+      const note = this.artifacts.getArtifactSync({ companyId: task.company_id, storagePath: row.noteStoragePath, sha256: row.noteSha256 }).toString("utf8");
       return { decisionId: row.decisionId, decision: row.decision, actor: { id: row.actorId, displayName: row.actorName }, note, noteArtifactId: row.noteArtifactId, noteArtifactSha256: row.noteSha256, createdAt: row.createdAt };
     } catch {
       return undefined;
@@ -2144,7 +2145,7 @@ export class TaskService {
     const description = row.description ?? (() => {
       const brief = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-brief'").get(row.brief_artifact_id, row.company_id) as Pick<ArtifactRow, "storage_path" | "sha256"> | undefined);
       if (!brief) throw new TaskFailure("Task description is unavailable", [], 500);
-      const migrated = this.artifacts.readSync({ companyId: row.company_id, storagePath: brief.storage_path, sha256: brief.sha256 }).toString("utf8");
+      const migrated = this.artifacts.getArtifactSync({ companyId: row.company_id, storagePath: brief.storage_path, sha256: brief.sha256 }).toString("utf8");
       this.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET description = ? WHERE id = ? AND company_id = ? AND description IS NULL").run(migrated, row.id, row.company_id));
       return migrated;
     })();
@@ -2359,7 +2360,7 @@ export class TaskService {
     const artifact = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'developer-delivery'").get(artifactId, companyId) as { storagePath: string; sha256: string } | undefined);
     if (!artifact) return null;
     try {
-      const report = jsonRequired(this.artifacts.readSync({ companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 }).toString("utf8")) as { summary?: unknown };
+      const report = jsonRequired(this.artifacts.getArtifactSync({ companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 }).toString("utf8")) as { summary?: unknown };
       return typeof report.summary === "string" && report.summary.trim() ? report.summary.trim() : null;
     } catch { return null; }
   }
@@ -2372,7 +2373,7 @@ export class TaskService {
     if (!row) return undefined;
     let bodyPreview: string | null = null;
     if (row.bodyArtifactId && row.bodyStoragePath && row.bodySha) {
-      try { bodyPreview = this.artifacts.readSync({ companyId, storagePath: row.bodyStoragePath, sha256: row.bodySha }).toString("utf8"); } catch { bodyPreview = null; }
+      try { bodyPreview = this.artifacts.getArtifactSync({ companyId, storagePath: row.bodyStoragePath, sha256: row.bodySha }).toString("utf8"); } catch { bodyPreview = null; }
     }
     const status: TaskRelease["status"] = row.status === "draft" ? "draft" : row.status === "ready" ? "ready" : row.status === "reconciling" ? "reconciling" : "blocked";
     const observedFailureCode = ReleaseFailureCodeSchema.safeParse(row.failureCode ?? row.status);
@@ -2412,7 +2413,7 @@ export class TaskService {
       FROM forge_agent_executions o JOIN forge_artifacts a ON a.id = o.output_artifact_id JOIN forge_artifacts e ON e.id = o.evidence_artifact_id
       WHERE o.task_id = ? AND o.company_id = ? AND o.output_artifact_id IS NOT NULL ORDER BY o.output_revision DESC LIMIT 1`).get(taskId, companyId) as LeadOutputRow | undefined);
     if (!row) return undefined;
-    const content = PersistedLeadOutputSchema.parse(jsonRequired(this.artifacts.readSync({ companyId: row.company_id, storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
+    const content = PersistedLeadOutputSchema.parse(jsonRequired(this.artifacts.getArtifactSync({ companyId: row.company_id, storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
     return { kind: row.kind, summary: row.summary, sessionRef: row.session_ref, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };
   }
 
@@ -2428,7 +2429,7 @@ export class TaskService {
     const attempts = attemptRows.map((attempt) => ({ ...attempt, owner: attempt.owner === "lead" ? "integrator" : attempt.owner, repairable: attempt.repairable === 1, checks: this.database.authQuery((db) => db.prepare("SELECT provider_check_id AS providerCheckId, name, head_sha AS headSha, status, conclusion, details_url AS detailsUrl, summary, started_at AS startedAt, completed_at AS completedAt, selected_for_evaluation AS selectedForEvaluation FROM forge_ci_attempt_checks WHERE attempt_id = ? ORDER BY name, provider_check_id").all(attempt.id) as Array<Omit<TaskCiProjection["attempts"][number]["checks"][number], "selectedForEvaluation"> & { selectedForEvaluation: number }>).map((check) => ({ ...check, selectedForEvaluation: check.selectedForEvaluation === 1 })) }));
     const latest = attempts[0];
     const repairPlanRow = this.database.authQuery((db) => db.prepare("SELECT p.id, p.status, p.ci_run_id AS ciRunId, p.ci_attempt_id AS ciAttemptId, p.failed_head_sha AS failedHeadSha, p.plan_artifact_id AS planArtifactId, p.evidence_artifact_id AS evidenceArtifactId, p.summary, p.created_at AS createdAt, p.updated_at AS updatedAt, p.consumed_at AS consumedAt, p.superseded_at AS supersededAt, a.storage_path AS planStoragePath, a.sha256 AS planSha256 FROM forge_ci_repair_plans p JOIN forge_artifacts a ON a.id = p.plan_artifact_id AND a.company_id = p.company_id WHERE p.task_id = ? AND p.company_id = ? ORDER BY p.created_at DESC LIMIT 1").get(taskId, companyId) as (Omit<NonNullable<TaskCiProjection["repairPlan"]>, "steps"> & { planStoragePath: string; planSha256: string }) | undefined);
-    const repairPlan = repairPlanRow ? (() => { const { planStoragePath, planSha256, ...publicPlan } = repairPlanRow; let steps: Array<{ number: number; instruction: string; verification: string }> = []; try { const value = json<{ steps?: unknown }>(this.artifacts.readSync({ companyId, storagePath: planStoragePath, sha256: planSha256 }).toString("utf8"), {}); steps = Array.isArray(value.steps) ? value.steps.filter((step): step is { number: number; instruction: string; verification: string } => Boolean(step) && typeof step === "object" && typeof (step as Record<string, unknown>).number === "number" && typeof (step as Record<string, unknown>).instruction === "string" && typeof (step as Record<string, unknown>).verification === "string").slice(0, 32) : []; } catch { /* projection remains bounded when the artifact is unavailable */ } return { ...publicPlan, steps }; })() : null;
+    const repairPlan = repairPlanRow ? (() => { const { planStoragePath, planSha256, ...publicPlan } = repairPlanRow; let steps: Array<{ number: number; instruction: string; verification: string }> = []; try { const value = json<{ steps?: unknown }>(this.artifacts.getArtifactSync({ companyId, storagePath: planStoragePath, sha256: planSha256 }).toString("utf8"), {}); steps = Array.isArray(value.steps) ? value.steps.filter((step): step is { number: number; instruction: string; verification: string } => Boolean(step) && typeof step === "object" && typeof (step as Record<string, unknown>).number === "number" && typeof (step as Record<string, unknown>).instruction === "string" && typeof (step as Record<string, unknown>).verification === "string").slice(0, 32) : []; } catch { /* projection remains bounded when the artifact is unavailable */ } return { ...publicPlan, steps }; })() : null;
     const repairs = this.database.authQuery((db) => db.prepare("SELECT x.id, x.repair_plan_id AS repairPlanId, x.prior_commit AS priorCommit, x.prior_tree AS priorTree, x.new_commit AS newCommit, x.new_tree AS newTree, x.delivery_artifact_id AS deliveryArtifactId, x.evidence_artifact_id AS evidenceArtifactId, x.status, x.summary, x.created_at AS createdAt, x.completed_at AS completedAt FROM forge_ci_repairs x JOIN forge_ci_repair_plans p ON p.id = x.repair_plan_id WHERE p.task_id = ? AND p.company_id = ? ORDER BY x.created_at DESC LIMIT 20").all(taskId, companyId) as TaskCiProjection["repairs"]);
     const supersededRuns = this.database.authQuery((db) => db.prepare("SELECT c.id AS runId, c.release_id AS releaseId, c.expected_head_sha AS expectedHeadSha, c.expected_head_tree AS expectedHeadTree, c.status, c.superseded_at AS supersededAt FROM forge_ci_runs c WHERE c.task_id = ? AND c.company_id = ? AND c.superseded_at IS NOT NULL ORDER BY c.superseded_at DESC, c.id DESC LIMIT 5").all(taskId, companyId) as TaskCiProjection["supersededRuns"]);
     const continuity = this.database.authQuery((db) => db.prepare(`SELECT
@@ -2460,7 +2461,7 @@ export class TaskService {
       return rows;
     });
     const physical = [...stored, ...artifacts.filter((artifact): artifact is StoredArtifact => Boolean(artifact)).map((artifact) => ({ company_id: artifact.companyId, storage_path: artifact.storagePath }))];
-    await Promise.all(physical.map((artifact) => this.artifacts.remove({ companyId: artifact.company_id, storagePath: artifact.storage_path })));
+    await Promise.all(physical.map((artifact) => this.artifacts.removeArtifact({ companyId: artifact.company_id, storagePath: artifact.storage_path })));
   }
 
   private user(userId: string): AuthUser {

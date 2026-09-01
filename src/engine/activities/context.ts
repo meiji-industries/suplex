@@ -19,7 +19,6 @@ import { ForwardMergeFailure, ForwardMergeService } from "../../forward-merge.js
 import { parseAcceptedProjectRevision, type AcceptedProjectRevision, type ProjectRole } from "../../projects.js";
 import { runPinnedVerification } from "../../verification.js";
 import { createGitCommandGuard } from "../../worktrees.js";
-import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema } from "../contracts.js";
 import {
   ArtifactReferenceSchema,
   CreateSuccessorActivityInputSchema,
@@ -466,8 +465,6 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     parseAcceptedProjectRevision,
     runPinnedVerification,
     createGitCommandGuard,
-    ProbeWorkflowInputSchema,
-    ProbeWorkflowStateSchema,
     ArtifactReferenceSchema,
     CreateSuccessorActivityInputSchema,
     DeliveryDecisionActivityInputSchema,

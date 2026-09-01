@@ -1,4 +1,4 @@
-import { log, type CancellationScope } from "../registry.js";
+import { log } from "../registry.js";
 
 import type { CapacityOperation, CapacityRole } from "../../capacity-contracts.js";
 import { IssueWorkflowStateSchema } from "../issue-contracts.js";
@@ -45,7 +45,6 @@ export interface IssueWorkflowContext {
   continuationRequested: boolean;
   initialProjectionComplete: boolean;
   decisionInFlight: boolean;
-  planningScope: CancellationScope | undefined;
   planningPromise: Promise<LeadPlanningResult> | undefined;
   readonly supervisedDeveloperTurns: boolean;
   readonly herdrExecutionSubstrateEnabled: boolean;
@@ -71,26 +70,6 @@ export interface IssueWorkflowContext {
   readonly failureBlockCategory: (code: string) => "authentication" | "configuration" | "capacity" | "execution_ownership" | undefined;
   readonly leadResultKind: (result: LeadPlanningResult) => "plan" | "decision_blocker";
   readonly applyLeadResult: (state: IssueWorkflowState, result: LeadPlanningResult) => IssueWorkflowState;
-  readonly applyLegacyLeadResult: (state: IssueWorkflowState, result: LeadPlanningResult) => IssueWorkflowState;
-  readonly leadPlanningPatch: string;
-  readonly leadResultRoutingPatch: string;
-  readonly planningProjectionIntegrityPatch: string;
-  readonly distinctPlanningStatesPatch: string;
-  readonly durableCapacityPatch: string;
-  readonly planGovernancePatch: string;
-  readonly decisionResolutionProjectionPatch: string;
-  readonly exhaustedActivityRecoveryPatch: string;
-  readonly developerFailureRecoveryPatch: string;
-  readonly developerReconciliationRecoveryPatch: string;
-  readonly developerBlockedRecoveryStatePatch: string;
-  readonly cancelBlockedDeveloperResultPatch: string;
-  readonly artifactBackedReviewPatch: string;
-  readonly exactDeliveryReviewPatch: string;
-  readonly typedReleaseResultPatch: string;
-  readonly targetBaseReconciliationPatch: string;
-  readonly exactAcceptanceReceiptPatch: string;
-  readonly artifactBackedConflictPatch: string;
-  readonly unconditionalCancelPatch: string;
   readonly rateLimitFailure: (error: unknown) => { retryAt?: string } | undefined;
   readonly maxReconciliationAttempts: number;
   runPublishTurn: () => Promise<IssueWorkflowState>;

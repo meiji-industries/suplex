@@ -8,7 +8,6 @@ export interface ArtifactInput { filename: string; mimeType: string; bytes: Buff
 export interface StoredArtifact { id: string; companyId: string; kind: string; filename: string; mimeType: string; byteSize: number; sha256: string; storagePath: string; createdAt: string }
 export interface StagedArtifact extends StoredArtifact { ref: string }
 export interface PlannedArtifact extends StoredArtifact { stagingPath: string }
-export const ArtifactManifestEntrySchema = { parse<T>(value: T): T { return value } };
 export class ArtifactFailure extends Error { constructor(readonly code: string, message: string) { super(message); this.name = "ArtifactFailure" } }
 
 function checked(root: string, companyId: string, path: string): string {
@@ -37,8 +36,6 @@ export class ArtifactStore {
   async getArtifact(artifact: Pick<StoredArtifact, "companyId" | "storagePath"> & Partial<Pick<StoredArtifact, "sha256">>): Promise<Buffer> { return readFile(checked(this.root, artifact.companyId, artifact.storagePath)); }
   getArtifactSync(artifact: Pick<StoredArtifact, "companyId" | "storagePath"> & Partial<Pick<StoredArtifact, "sha256">>): Buffer { return readFileSync(checked(this.root, artifact.companyId, artifact.storagePath)); }
   async removeArtifact(artifact: Pick<StoredArtifact, "companyId" | "storagePath">): Promise<void> { await rm(checked(this.root, artifact.companyId, artifact.storagePath), { force: true }) }
-  // Compatibility for persisted workflows; new production callers use put/getArtifact.
-  put = this.putArtifact.bind(this); read = this.getArtifact.bind(this); readSync = this.getArtifactSync.bind(this); remove = this.removeArtifact.bind(this);
   async putWithId(companyId: string, id: string, kind: string, value: ArtifactInput) { return this.putArtifact(companyId, kind, value, id) }
   async stage(companyId: string, kind: string, value: ArtifactInput): Promise<StagedArtifact> { const ref = `staging_${randomUUID().replaceAll("-", "")}`, sha256 = createHash("sha256").update(value.bytes).digest("hex"), storagePath = `${companyId}/staging/${ref}.bin`; await mkdir(resolve(checked(this.root, companyId, storagePath), ".."), { recursive: true, mode: 0o700 }); await writeFile(checked(this.root, companyId, storagePath), value.bytes, { flag: "wx", mode: 0o600 }); return { ref, id: ref, companyId, kind, filename: value.filename, mimeType: value.mimeType, byteSize: value.bytes.length, sha256, storagePath, createdAt: new Date().toISOString() } }
   async readStaged(companyId: string, ref: string) { return this.getArtifact({ companyId, storagePath: `${companyId}/staging/${ref}.bin` }) }

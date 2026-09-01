@@ -37,7 +37,7 @@ function projectState(database: ForgeDatabase, state: IssueWorkflowState, runId 
   database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId, eventId: state.lastEventId, state }));
 }
 
-async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listOpenPullRequests" | "getPullRequest"> } = {}): Promise<{ root: string; config: ForgeConfig; database: ForgeDatabase; auth: AuthService; projects: ProjectService; tasks: TaskService; workflow: IssueWorkflowPort; stateByTask: Map<string, IssueWorkflowState>; workflowInputsByTask: Map<string, IssueWorkflowInput>; adminId: string; companyId: string; projectId: string; profileId: string }> {
+async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listOpenPullRequests" | "getPullRequest"> } = {}): Promise<{ root: string; config: ForgeConfig; database: ForgeDatabase; auth: AuthService; projects: ProjectService; tasks: TaskService; workflow: IssueWorkflowPort; stateByTask: Map<string, IssueWorkflowState>; workflowInputsByTask: Map<string, IssueWorkflowInput>; planningInputsByTask: Map<string, StartPlanningInput>; adminId: string; companyId: string; projectId: string; profileId: string }> {
   const root = await mkdtemp(join(tmpdir(), "forge-task-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
@@ -57,6 +57,7 @@ async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listO
   await projects.activateProject("admin-1", project.id);
   const stateByTask = new Map<string, IssueWorkflowState>();
   const workflowInputsByTask = new Map<string, IssueWorkflowInput>();
+  const planningInputsByTask = new Map<string, StartPlanningInput>();
   let tasks!: TaskService;
   const workflow: IssueWorkflowPort = {
     async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) {
@@ -69,6 +70,7 @@ async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listO
     async execute(command, workflowId, input) {
       const current = [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
       if (input.expectedRevision !== current.revision) throw new Error("Stale workflow revision");
+      if (command === "start_planning") planningInputsByTask.set(current.issueId, input as StartPlanningInput);
       if (command === "start_planning") {
         const next = { ...current, phase: "planning" as const, revision: 1, owner: "lead" as const, allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:1` };
         stateByTask.set(next.issueId, next);
@@ -124,7 +126,7 @@ async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listO
     },
   };
   tasks = new TaskService(database, auth, projects, config, { workflow });
-  return { root, config, database, auth, projects, tasks, workflow, stateByTask, workflowInputsByTask, adminId: "admin-1", companyId: company.id, projectId: project.id, profileId: profile.id };
+  return { root, config, database, auth, projects, tasks, workflow, stateByTask, workflowInputsByTask, planningInputsByTask, adminId: "admin-1", companyId: company.id, projectId: project.id, profileId: profile.id };
 }
 
 test("a creator that loses its lease cannot advance the creation intent", async () => {
@@ -479,6 +481,29 @@ test("updates task title and description without changing its workflow state", a
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }
 });
+test("plans with the edited backlog brief", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Edit before planning", description: "Original brief", idempotencyKey: "edit-before-planning-0001", images: [] });
+    const updated = await value.tasks.updateTaskDetails(value.adminId, created.task.id, { description: "Edited brief" });
+    await value.tasks.executeCommand(value.adminId, created.task.id, "start_planning", { expectedRevision: updated.revision });
+    expect(value.planningInputsByTask.get(created.task.id)).toMatchObject({ briefArtifactId: updated.briefArtifactId });
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+test("locks the brief once planning starts", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Lock planning brief", description: "Original brief", idempotencyKey: "lock-planning-brief-0001", images: [] });
+    await value.tasks.executeCommand(value.adminId, created.task.id, "start_planning", { expectedRevision: created.task.revision });
+    await expect(value.tasks.updateTaskDetails(value.adminId, created.task.id, { description: "Changed brief" })).rejects.toMatchObject({ statusCode: 409, findings: [expect.objectContaining({ code: "brief-locked" })] });
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+
 
 test("retries draft publication from a typed provider-failure state", async () => {
   const value = await fixture();

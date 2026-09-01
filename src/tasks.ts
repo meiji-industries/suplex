@@ -1134,6 +1134,7 @@ export class TaskService {
     if (!titlePattern.test(title)) findings.push(finding("invalid-title", "title", "Title must contain 1 to 160 characters"));
     if (!description || description.length > 200_000) findings.push(finding("invalid-description", "description", "Markdown description is required and must be at most 200,000 characters"));
     if (findings.length) throw new TaskFailure("Task details are invalid", findings, 422);
+    if (input.description !== undefined && current.phase !== "backlog") throw new TaskFailure("Task description cannot change after planning starts", [finding("brief-locked", "description", "Task description cannot change after planning starts")], 409, current);
     const brief = input.description === undefined ? undefined : await this.artifacts.putArtifact(current.companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from(description, "utf8") });
     const now = this.now().toISOString();
     this.database.authTransaction((db) => {
@@ -1575,7 +1576,7 @@ export class TaskService {
       : deliveryChangesNote
       ? { expectedRevision, actorUserId, noteId: deliveryChangesNote.ref, noteSha256: deliveryChangesNote.sha256, ...(payload.idempotencyKey !== undefined ? { idempotencyKey: payload.idempotencyKey } : {}) }
       : descriptor.family === "start"
-      ? { expectedRevision, actorUserId, commandId: payload.commandId ?? randomUUID(), ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
+      ? { expectedRevision, actorUserId, commandId: payload.commandId ?? randomUUID(), ...(command === "start_planning" ? { briefArtifactId: task.briefArtifactId } : {}), ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
       : (command === "delete_worktree" || command === "recreate_worktree")
       ? { expectedRevision, actorUserId, ...(payload.confirmDiscardDirty !== undefined ? { confirmDiscardDirty: payload.confirmDiscardDirty } : {}) }
       : planInput;

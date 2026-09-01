@@ -10,6 +10,8 @@ export const StartPlanningInputSchema = z.object({
   actorUserId: durableId,
   commandId: durableId.optional().default("legacy-command"),
   reconcileOnly: z.literal(true).optional(),
+  /** Brief selected at the durable planning boundary. */
+  briefArtifactId: durableId.optional(),
 });
 
 const SendPlannerNoteBaseSchema = z.object({

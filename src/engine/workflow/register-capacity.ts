@@ -10,7 +10,7 @@ import { applyTargetBaseRevalidation } from "../target-base.js";
 import type { WorkflowDeliveryReviewResult } from "../issue-contracts.js";
 import type { IssueWorkflowContext } from "./context.js";
 export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
-  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   const agent = activityProxies;
   const resumeCapacityOperation = async (operation: capacityContracts.CapacityOperation): Promise<contracts.IssueWorkflowState> => {
     if (operation === "lead_planning") {

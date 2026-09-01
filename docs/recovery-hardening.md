@@ -1,53 +1,22 @@
-# Recovery hardening
+# Recovery
 
-## Convergence contract
+Forge reads live state instead of maintaining recovery queues.
 
-Recovery classifies durable task facts and live observations into one action.
-It is idempotent per task revision and evidence set.
+At boot, Forge loads every non-terminal workflow snapshot with
+`loadIssueRuns`. It then calls `failOrphanedExecutionsFromHerdr`.
+An execution stays active only when Herdr reports its current turn as live.
+Other active execution rows become failed and expose the workflow retry action.
 
-| Failure class | Action |
-| --- | --- |
-| transient_infrastructure, rate_limited | retry |
-| code_failure, ci_failure, merge_conflict_mechanical | repair |
-| credential_missing, product_ambiguity | attention |
-| missing_delivery_evidence, worktree_missing_active, dirty_worktree, no_progress | attention |
+Every 60 seconds, and when `POST /api/tasks/:id/refresh` runs, Forge calls
+`reconcile()`. The pass runs these operations in order:
 
-Other outcomes are `no_change`, `advance`, or `resume` when the durable state
-and live evidence support them.
+1. `reconcileActiveTurns` reads current Herdr turns.
+2. `reconcileWorktrees` reads the filesystem.
+3. `reconcileGithubObservations` reads pull requests and checks. The periodic
+   pass waits five minutes between GitHub reads.
+4. `CapacityManager.reconcileFromLedgers` updates capacity from its ledgers.
 
-## Attention cards
-
-| Card | Primary action |
-| --- | --- |
-| github_credential | Sign in to GitHub and retry |
-| worktree_missing | Recreate worktree and resume |
-| missing_turn_outcome | Resume Developer or Lead turn |
-| product_decision | Choose a behavior |
-| dirty_worktree_cleanup | Discard changes and delete worktree |
-| no_progress | Resume Developer turn or conflict resolution |
-| generic | The next available safe task command |
-
-Cards are typed server-side and are shared by the attention view and task
-detail view. Product decisions retain their choices and recommended choice.
-
-## Reconciliation triggers
-
-- Worker start
-- Active-turn and worktree heartbeat every 60 seconds
-- GitHub poll every 5 minutes
-- `POST /api/tasks/:id/refresh`
-
-## Commands
-
-- `delete_worktree`
-- `recreate_worktree`
-- `resume_preserved_work`
-- `report_worktree_missing`
-
-## Patch markers
-
-- `forge-turn-outcome-recovery-v1`
-- `forge-live-head-v1`
-- `forge-repair-no-progress-v1`
-- `forge-merge-resolution-loop-v1`
-- `forge-recoverable-cancellation-v1`
+If an engine loop fails, Forge stores the failure as Last workflow error.
+The next human command rebuilds that workflow from its latest snapshot before
+it runs the command. The retry control does the same, then sends the first
+allowed retry command.

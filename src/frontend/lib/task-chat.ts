@@ -194,7 +194,7 @@ function shouldShowMemberAction(entry: ApiTask["activity"][number]): boolean {
   if (entry.eventType !== "member_action") return true;
   const command = String(entry.metadata.command ?? entry.metadata.action ?? "");
   const commandId = String(entry.metadata.commandId ?? entry.metadata.command_id ?? "");
-  return Boolean(entry.actor) && !["start_planning", "start_development", "resync_projection"].includes(command)
+  return Boolean(entry.actor) && !["start_planning", "start_development"].includes(command)
     && !command.startsWith("retry_") && !command.startsWith("auto") && !commandId.includes(":auto-")
     && entry.metadata.automatic !== true && entry.metadata.automatic !== "true";
 }

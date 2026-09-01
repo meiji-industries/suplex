@@ -1,4 +1,4 @@
-import { condition, runExecution, setHandler, setInterruptHandler } from "../registry.js";
+import { runExecution, setHandler, setInterruptHandler } from "../registry.js";
 import { ApplicationFailure } from "../failures.js";
 import { z } from "zod";
 
@@ -69,8 +69,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     run: interruptDeveloperCancellation,
   });
   setHandler(issueUpdates.cancel_issue, ctx.guarded(async (rawInput: any) => {
-    if (!ctx.exactPlanAuthorityEnabled && ctx.captureInitialProjectionState) await condition(() => ctx.initialProjectionComplete);
-    if (ctx.initialProjectionBarrierEnabled) await ctx.initialProjection;
+    await ctx.initialProjection;
     const command = PlanCommandInputSchema.parse(rawInput);
     const unconditionalCancellation = true;
     if ((!unconditionalCancellation && command.expectedRevision !== ctx.state.revision) || TERMINAL_PHASES.has(ctx.state.phase)) throw new Error("Issue cancellation is not available in the current phase");
@@ -110,7 +109,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, deliveryDecisionArtifactId: decision.artifactId });
     }
     const resume = true && ctx.state.branchName ? ["resume_preserved_work" as const] : [];
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: [...(ctx.reviseContinueEnabled ? ["continue_work" as const] : []), ...resume], pendingAction: "Issue cancelled", acceptanceStatus, acceptanceReasonArtifactId, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: ["continue_work", ...resume], pendingAction: "Issue cancelled", acceptanceStatus, acceptanceReasonArtifactId, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     return ctx.state;
   }));
@@ -260,11 +259,4 @@ export function registerLifecycleHandlersContinuation(ctx: IssueWorkflowContext)
     if (!["done", "cancelled", "failed"].includes(ctx.state.phase)) throw new Error("Continue work is only available after a terminal issue state");
     if (!ctx.state.allowedCommands.includes("continue_work")) throw new Error("Continue work is not available in the current phase");
   } });
-  // Escape hatch: re-persist the projection from the workflow's current in-memory state.
-  // No revision check, no phase restriction — it must work even when the DB projection
-  // has drifted from ctx.state, which is exactly the situation this command repairs.
-  setHandler(issueUpdates.resync_projection, ctx.guarded(async () => {
-    await ctx.project();
-    return ctx.state;
-  }));
 }

@@ -123,6 +123,8 @@ export class IssueRun {
   private chain: Promise<unknown> = Promise.resolve();
   private workflowPromise?: Promise<IssueWorkflowState>;
   private loopError?: unknown;
+  private failureProjection?: Promise<void>;
+  private restarting?: Promise<IssueRun>;
   private initialState: IssueWorkflowState;
   private executionContext?: RunExecutionContext;
   private activeCommand: { name: string; controller: AbortController; deferredProjections: DeferredProjection[]; context: CommandExecutionContext; settled: Promise<void> } | undefined;
@@ -131,9 +133,6 @@ export class IssueRun {
   private interruptBarrier: Promise<void> | undefined;
   private releaseInterrupt: (() => void) | undefined;
   private interrupting = new Map<string, Promise<InterruptOutcome>>();
-  private projectionTimes: number[] = [];
-  private projectionSignatures: string[] = [];
-  private runawayHalted = false;
 
   constructor(
     readonly input: IssueWorkflowInput,
@@ -142,6 +141,7 @@ export class IssueRun {
     private readonly clock: EngineClock = realClock,
     private readonly logger = new StructuredLogger(),
     private readonly invalidate?: (run: IssueRun) => void,
+    private readonly restart?: () => Promise<IssueRun>,
   ) {
     // A continuation snapshot is a partial state: layer it over the initial state as the workflow always did.
     const initial = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState(input), activeOperation: null, processedCommandIds: [], ...(input.continuationState ?? {}) });
@@ -186,40 +186,26 @@ export class IssueRun {
         await this.waitForActiveCommand(execution);
         if (this.interruptPending && !execution.interruptDispatch && !execution.acceptedInterrupt) throw new CancelledFailure();
         if (name === "projectIssueState") {
-          const now = this.clock.now();
-          this.projectionTimes = this.projectionTimes.filter((time) => now - time <= 10_000);
-          this.projectionSignatures = this.projectionSignatures.slice(-this.projectionTimes.length);
-          this.projectionTimes.push(now);
-          let event = args[0] as IssueProjectionEvent;
-          this.projectionSignatures.push(`${event.state.phase}\u0000${event.state.pendingAction}`);
-          if (this.projectionTimes.length > 50 && !this.runawayHalted && new Set(this.projectionSignatures).size <= 2 && this.projectionSignatures.every((signature) => signature.startsWith("merge_conflict_required\u0000") || signature.startsWith("merge_conflict_resolving\u0000"))) {
-            this.runawayHalted = true;
-            const state = IssueWorkflowStateSchema.parse({ ...event.state, owner: "human", allowedCommands: [...new Set([...event.state.allowedCommands, "cancel_issue"])], pendingAction: "Runaway transition loop halted", lastHandlerError: { command: "workflow", reason: "Runaway transition loop halted", at: new Date(now).toISOString() } });
-            this.initialState = state;
-            this.logger.error("Runaway transition loop halted", { workflowId: this.workflowId, runId: this.runId });
-            event = { ...event, eventId: state.lastEventId, state };
-          }
+          const event = args[0] as IssueProjectionEvent;
           if (execution.deferredProjections) {
             execution.projectionExpected = true;
             execution.deferredProjections.push({ event, options });
             return event.state;
           }
           const projected = await this.caller.call(name, [event], options, execution.signal, this.workflowId);
-          this.assertCommandAuthority(execution, event);
+          this.database.projectIssueEvents([event]);
+          if (event.state.revision >= this.initialState.revision) this.initialState = event.state;
+          this.updateCommandAuthority(execution, event);
           return projected;
         }
-        if (this.runawayHalted && name !== "projectIssueState") throw new Error("Runaway transition loop halted");
         if (execution.deferredProjections) await this.flushCommandProjections(execution);
-        this.assertCommandAuthority(execution);
         const effect = new AbortController();
         this.activeEffect = effect;
         try {
           const result = await this.caller.call(name, args, options, AbortSignal.any([execution.signal, effect.signal]), this.workflowId, async () => {
             await this.waitForActiveCommand(execution);
-            this.assertCommandAuthority(execution);
           });
           await this.waitForActiveCommand(execution);
-          this.assertCommandAuthority(execution);
           return result;
         } finally {
           if (this.activeEffect === effect) this.activeEffect = undefined;
@@ -230,7 +216,6 @@ export class IssueRun {
         await this.waitForActiveCommand(execution);
         if (this.interruptPending && !execution.interruptDispatch && !execution.acceptedInterrupt) { await this.interruptBarrier; return; }
         if (execution.deferredProjections) await this.flushCommandProjections(execution);
-        this.assertCommandAuthority(execution);
         const effect = new AbortController();
         this.activeEffect = effect;
         try {
@@ -242,29 +227,41 @@ export class IssueRun {
             return;
           }
           await this.waitForActiveCommand(execution);
-          this.assertCommandAuthority(execution);
         } finally {
           if (this.activeEffect === effect) this.activeEffect = undefined;
         }
       },
       now: () => this.clock.now(),
       wake: () => this.wakeable.wake(),
-      autoActionsHalted: () => this.runawayHalted,
+      autoActionsHalted: () => false,
     };
     if (durableProjection) (context as CommandExecutionContext).durableProjection = durableProjection;
     this.executionContext = context;
     this.workflowPromise = runExecution.run(context, () => issueWorkflow(this.input));
     void this.workflowPromise.catch(async (error) => {
       if (this.controller.signal.aborted || isCancellation(error)) return;
-      this.loopError = error;
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error("Issue workflow run failed", { workflowId: this.workflowId }, { error: message, stack: error instanceof Error ? error.stack : undefined });
-      const current = this.state;
+      const current = IssueWorkflowStateSchema.parse(this.queries.get("issueState")?.() ?? this.initialState);
       const now = new Date(this.clock.now()).toISOString();
-      const state = IssueWorkflowStateSchema.parse({ ...current, revision: current.revision + 1, owner: "human", allowedCommands: [...new Set([...current.allowedCommands, "cancel_issue"])], pendingAction: message, lastHandlerError: { command: "workflow", reason: message, at: now }, stateChangedAt: now, lastEventId: `${current.workflowId}:${current.revision + 1}` });
+      const state = IssueWorkflowStateSchema.parse({ ...current, owner: "human", lastHandlerError: { command: "workflow", reason: message.slice(0, 200), at: now } });
+      this.loopError = error;
       this.initialState = state;
-      await this.caller.call("projectIssueState", [{ schemaVersion: 1, runId: this.runId, eventId: state.lastEventId, state }], { startToCloseTimeout: "1 minute", retry: { maximumAttempts: 5, initialInterval: "1 second", maximumInterval: "15 seconds" } }, this.controller.signal, this.workflowId).catch((projectionError) => this.logger.error("Issue workflow failure projection failed", { workflowId: this.workflowId }, { error: projectionError instanceof Error ? projectionError.message : String(projectionError), stack: projectionError instanceof Error ? projectionError.stack : undefined }));
+      this.logger.error("Issue workflow run failed", { workflowId: this.workflowId }, { error: message, stack: error instanceof Error ? error.stack : undefined });
+      this.failureProjection = this.caller.call("projectIssueState", [{ schemaVersion: 1, runId: this.runId, eventId: state.lastEventId, state }], { startToCloseTimeout: "1 minute", retry: { maximumAttempts: 5, initialInterval: "1 second", maximumInterval: "15 seconds" } }, this.controller.signal, this.workflowId)
+        .then(() => {
+          this.database.authTransaction((db) => db.prepare("UPDATE forge_workflow_snapshots SET state_json = ?, updated_at = ? WHERE task_id = ? AND revision = ?").run(JSON.stringify(state), now, state.issueId, state.revision));
+        })
+        .catch((projectionError) => this.logger.error("Issue workflow failure projection failed", { workflowId: this.workflowId }, { error: projectionError instanceof Error ? projectionError.message : String(projectionError), stack: projectionError instanceof Error ? projectionError.stack : undefined }));
     });
+  }
+
+  private async restartAfterLoopFailure(name: string, input: unknown, commandId: string): Promise<IssueWorkflowState> {
+    await this.failureProjection;
+    if (!this.loopError || !this.restart) throw this.loopError;
+    this.logger.error("Restarting failed issue workflow", { workflowId: this.workflowId }, { error: this.loopError instanceof Error ? this.loopError.message : String(this.loopError) });
+    this.dispose();
+    const run = await (this.restarting ??= this.restart());
+    return run.execute(name, input, commandId);
   }
 
   async ready(): Promise<void> {
@@ -309,31 +306,6 @@ export class IssueRun {
     if (base && base !== context) base.durableProjection = event;
   }
 
-  private assertCommandAuthority(context: CommandExecutionContext, expected?: IssueProjectionEvent): void {
-    try {
-      if (expected) {
-        this.database.observeIssueProjection(expected);
-        if (expected.state.revision >= this.initialState.revision) this.initialState = expected.state;
-        this.updateCommandAuthority(context, expected);
-        return;
-      }
-      let authority = context.durableProjection ?? this.loadCommandAuthority();
-      const live = this.state;
-      if (projectionStateHash(live) !== projectionStateHash(authority.state)) {
-        if (live.workflowId !== authority.state.workflowId || live.revision !== authority.state.revision + 1 || live.lastEventId !== `${live.workflowId}:${live.revision}`) {
-          throw new ProjectionPersistenceFailure("conflict", "Live workflow state does not have an immutable durable predecessor");
-        }
-        authority = { schemaVersion: 1, runId: this.runId, eventId: live.lastEventId, state: live };
-        this.database.projectIssueEvents([authority]);
-      }
-      this.database.observeIssueProjection(authority);
-      this.updateCommandAuthority(context, authority);
-    } catch (error) {
-      this.failClosedToDurable(error);
-      throw error;
-    }
-  }
-
   private async replayDurableProjections(projections: DeferredProjection[], context: CommandExecutionContext): Promise<void> {
     for (const projection of projections) {
       try {
@@ -356,7 +328,9 @@ export class IssueRun {
         this.failClosedToDurable(error);
         throw error;
       }
-      this.assertCommandAuthority(context, pending.at(-1)!.event);
+      const latest = pending.at(-1)!.event;
+      if (latest.state.revision >= this.initialState.revision) this.initialState = latest.state;
+      this.updateCommandAuthority(context, latest);
     }
     deferred.splice(0);
     await this.replayDurableProjections(pending, context);
@@ -388,7 +362,6 @@ export class IssueRun {
     if (accepted === false) return { accepted: false, result: undefined };
     const active = this.activeCommand;
     if (interrupt.cancelActive && active) await this.flushCommandProjections(active.context);
-    this.assertCommandAuthority(this.executionContext as CommandExecutionContext);
     const deferredProjections = interrupt.cancelActive ? active?.deferredProjections : undefined;
     if (interrupt.cancelActive) {
       if (!this.interruptPending) this.interruptBarrier = new Promise<void>((resolve) => { this.releaseInterrupt = resolve; });
@@ -412,7 +385,7 @@ export class IssueRun {
       if (stored && (stored.workflow_id !== this.workflowId || stored.command !== name)) throw new ProjectionPersistenceFailure("conflict", "Issue command identity already belongs to another workflow or command");
       if (stored) return Promise.resolve(IssueWorkflowStateSchema.parse(jsonRequired(stored.result_json)));
     }
-    if (this.loopError) return Promise.reject(this.loopError);
+    if (this.loopError) return this.restartAfterLoopFailure(name, input, commandId);
     this.start();
     const registeredInterrupt = this.interrupts.get(name);
     const coalesceKey = registeredInterrupt?.coalesceKey?.(input);
@@ -428,11 +401,6 @@ export class IssueRun {
       await this.ready();
       if (this.loopError) throw this.loopError;
       const automatic = isAutomaticCommand(this.workflowId, commandId);
-      if (this.runawayHalted && !automatic && commandId !== "legacy-command") {
-        this.runawayHalted = false;
-        this.projectionTimes = [];
-        this.projectionSignatures = [];
-      }
       if (commandId !== "legacy-command") {
         if (this.loopError) throw this.loopError;
         const stored = this.database.authQuery((db) => db.prepare("SELECT workflow_id, command, result_json FROM forge_engine_commands WHERE command_id = ?").get(commandId) as { workflow_id: string; command: string; result_json: string } | undefined);
@@ -498,7 +466,6 @@ export class IssueRun {
 
   async signal(name: string, ...args: unknown[]): Promise<void> {
     await this.ready();
-    if (this.runawayHalted) return;
     const handler = this.commands.get(name);
     if (!handler) throw new Error(`Unknown issue signal: ${name}`);
     await runExecution.run(this.executionContext!, () => handler(...args as never[]));
@@ -528,7 +495,7 @@ export class IssueEngine {
   async create(input: IssueWorkflowInput): Promise<IssueRun> {
     const validated = IssueWorkflowInputSchema.parse(input);
     if (this.runs.has(validated.workflowId)) throw new Error(`Issue run already exists: ${validated.workflowId}`);
-    const run = new IssueRun(validated, this.database, this.caller, this.clock, undefined, (failed) => this.invalidateRun(failed));
+    const run = new IssueRun(validated, this.database, this.caller, this.clock, undefined, (failed) => this.invalidateRun(failed), () => createRunFromLatestSnapshot(this, validated.workflowId));
     this.runs.set(validated.workflowId, run);
     await run.ready();
     return run;
@@ -549,11 +516,24 @@ export class IssueEngine {
       if (state.revision !== 0) throw new ProjectionPersistenceFailure("not-durable", "Issue continuation has no exact persisted projection authority");
       this.database.bootstrapIssueProjection({ schemaVersion: 1, runId: `${workflowId}:snapshot-bootstrap`, eventId: state.lastEventId, state });
     }
-    const run = new IssueRun(input, this.database, this.caller, this.clock, undefined, (failed) => this.invalidateRun(failed));
+    const run = new IssueRun(input, this.database, this.caller, this.clock, undefined, (failed) => this.invalidateRun(failed), () => createRunFromLatestSnapshot(this, workflowId));
     this.runs.set(workflowId, run);
     run.start();
     return run;
   }
 
   dispose(): void { for (const run of this.runs.values()) run.dispose(); this.runs.clear(); }
+}
+
+export async function createRunFromLatestSnapshot(engine: IssueEngine, workflowId: string): Promise<IssueRun> {
+  const current = engine.runs.get(workflowId);
+  current?.dispose();
+  engine.runs.delete(workflowId);
+  const input = engine.database.authQuery((db) => {
+    const row = db.prepare(`SELECT s.task_id, s.state_json, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.request_hash, t.predecessor_task_id, t.auto_approve_plan, t.pull_request_mode, t.delivery_target, t.run_project_tests, t.visual_evidence FROM forge_workflow_snapshots s JOIN forge_tasks t ON t.id = s.task_id WHERE s.workflow_id = ? ORDER BY s.revision DESC LIMIT 1`).get(workflowId) as Record<string, unknown> | undefined;
+    if (!row) throw new Error(`Issue run snapshot is missing: ${workflowId}`);
+    const state = IssueWorkflowStateSchema.parse(jsonRequired(String(row.state_json)));
+    return issueRunInputFromSnapshotRow(db, row, state);
+  });
+  return engine.create(input);
 }

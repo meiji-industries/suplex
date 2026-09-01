@@ -33,11 +33,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const validatedInput = IssueWorkflowInputSchema.parse(input);
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);
   const continuation = validatedInput.continuationState;
-  const reviseContinueEnabled = true, guardedHandlersEnabled = true;
-  const failedRetryEnabled = true, herdrExecutionSubstrateEnabled = true;
   let sourcePullRequest = sourcePullRequestState(validatedInput, true);
   const projectionStamps: number[] = [];
-  const addRevisionCommand = (commands: IssueCommand[]): IssueCommand[] => reviseContinueEnabled && !commands.includes("revise_plan") ? [...commands, "revise_plan"] : commands;
+  const addRevisionCommand = (commands: IssueCommand[]): IssueCommand[] => !commands.includes("revise_plan") ? [...commands, "revise_plan"] : commands;
   let state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState(validatedInput),
     ...sourcePullRequest,
@@ -46,16 +44,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     ...(continuation ?? {}),
     continuationCount: continuation ? continuation.continuationCount + 1 : 0,
   });
-  const exactPlanAuthorityEnabled = true;
-  const isolatedDeveloperExecutionEnabled = true;
-  const initialProjectionBarrierEnabled = true;
-  const planApprovalBlockerEnabled = true;
   const approvalCommands = (exactSubject: boolean, supplementalReview: boolean): IssueCommand[] => {
     const commands: IssueCommand[] = exactSubject ? ["approve_plan", "request_plan_revision", "cancel_issue"] : ["approve_plan", "reject_plan", "cancel_issue"];
     return supplementalReview ? [...commands, "request_supplemental_review"] : commands;
   };
   const approvalBlocker = (result: LeadPlanningResult, exactSubject: boolean, supplementalReview: boolean): IssueBlocker | null => {
-    if (!planApprovalBlockerEnabled) return null;
     const actions: IssueBlockerAction[] = exactSubject
       ? [{ command: "approve_plan", label: "Approve plan", requiresNote: true, destructive: false }, { command: "request_plan_revision", label: "Request plan revision", requiresNote: true, destructive: false }]
       : [{ command: "approve_plan", label: "Approve plan", requiresNote: false, destructive: false }, { command: "reject_plan", label: "Request plan revision", requiresNote: true, destructive: false }];
@@ -63,7 +56,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     return humanBlocker("member_authorization", "Member approval is required for this material plan.", actions, evidencePointer(result.leadOutputArtifactId, "lead-plan"));
   };
   state = withWorktreeCommands(state);
-  const initialProjection = continuation || !exactPlanAuthorityEnabled ? Promise.resolve(state) : projectIssueState(state);
+  const initialProjection = continuation ? Promise.resolve(state) : projectIssueState(state);
   let continuationRequested = false;
   let initialProjectionComplete = Boolean(continuation);
   let decisionInFlight = false;
@@ -124,12 +117,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     });
   };
   const runTargetBaseCheckpoint = async (checkpoint: TargetBaseCheckpoint, verificationOnly = false): Promise<boolean> => {
-    if (!true) return true;
     if (!state.developerExecutionId || !state.targetBaseSha || !state.resultCommit || !state.resultTree) throw new Error("An exact Developer delivery is required before target-base reconciliation");
     const result = await reconcileTargetBase({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectRevisionId: validatedInput.projectRevisionId, checkpoint, developerExecutionId: state.developerExecutionId, expectedBaseSha: state.targetBaseSha, expectedHeadSha: state.resultCommit, expectedHeadTree: state.resultTree, ...(state.forwardMergeId ? { forwardMergeId: state.forwardMergeId } : {}), ...(verificationOnly ? { verificationOnly: true } : {}), ...(state.deliveryReviewId ? { deliveryReviewId: state.deliveryReviewId } : {}), ...(state.ciRunId ? { ciRunId: state.ciRunId } : {}), ...(state.finalReviewId ? { finalReviewId: state.finalReviewId } : {}), ...(state.acceptanceId ? { acceptanceId: state.acceptanceId } : {}), ...(state.releaseId ? { releaseId: state.releaseId } : {}) });
     if (result.outcome === "no_drift") {
       const priorRevision = state.revision;
-      if (true) state = IssueWorkflowStateSchema.parse({ ...state, targetBaseSha: result.observedBaseSha, resultCommit: result.headSha, resultTree: result.headTree });
+      state = IssueWorkflowStateSchema.parse({ ...state, targetBaseSha: result.observedBaseSha, resultCommit: result.headSha, resultTree: result.headTree });
       state = applyTargetBaseNoDrift(state, result);
       if (state.revision !== priorRevision) await projectIssueState(state);
       return true;
@@ -270,7 +262,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     return state.revision;
   };
   const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: projectIssueState });
-  const guarded = createGuarded({ get: () => state, set: (next) => { state = next; } }, { enabled: guardedHandlersEnabled, reviseContinueEnabled, failedRetryEnabled, project: projectIssueState });
+  const guarded = createGuarded({ get: () => state, set: (next) => { state = next; } }, { project: projectIssueState });
   const workflowContext = createIssueWorkflowContext(validatedInput, state, {
     project: () => {
       // A run projecting more than 100 revisions in a wall-clock second is a hot loop, not progress:
@@ -284,14 +276,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       return projectIssueState(state);
     },
     projectState: (value) => { state = withWorktreeCommands(value); return projectIssueState(state); },
-    projectInitialPlanningState: async (next, distinctPlanningStates) => { if (distinctPlanningStates || !true) await projectIssueState(next); },
-    planningProjectionFlags: () => { const distinctPlanningStates = true; return { distinctPlanningStates, shouldProject: distinctPlanningStates || !true }; },
-    leadPlanningEnabled: () => true,
-    durablePlanningCapacityEnabled: () => true,
-    leadResultRoutingEnabled: () => true,
-    planGovernanceEnabled: () => true,
-    decisionResolutionProjectionEnabled: () => true,
-    continueAfter: 0, reviseContinueEnabled, exactPlanAuthorityEnabled, isolatedDeveloperExecutionEnabled, initialProjectionBarrierEnabled, planApprovalBlockerEnabled,
+    projectInitialPlanningState: async (next) => { await projectIssueState(next); },
+    planningProjectionFlags: () => ({ distinctPlanningStates: true, shouldProject: true }),
+    continueAfter: 0,
     guarded, captureInitialProjectionState, initialProjectionState, initialProjection,
     get stateMutationLocked() { return stateMutationLocked; },
     set stateMutationLocked(value: boolean) { stateMutationLocked = value; },
@@ -303,7 +290,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     set decisionInFlight(value: boolean) { decisionInFlight = value; },
     get planningPromise() { return planningPromise; },
     set planningPromise(value: Promise<LeadPlanningResult> | undefined) { planningPromise = value; },
-    supervisedDeveloperTurns, herdrExecutionSubstrateEnabled, shouldContinueAsNew, currentState, addRevisionCommand, approvalCommands, approvalBlocker,
+    supervisedDeveloperTurns, shouldContinueAsNew, currentState, addRevisionCommand, approvalCommands, approvalBlocker,
     withStateMutation, commandAlreadyProcessed, markCommandProcessed, recordHandlerNoop,
     applyTargetBaseBlocked, runTargetBaseCheckpoint, recoveryFields, applyCompletedDeveloperResult, projectCapacityState, acquireExternalTurn,
     cancelCurrentCapacity: async () => { throw new Error("Capacity cancellation is not initialized"); },
@@ -336,15 +323,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   registerLifecycleHandlersContinuation(workflowContext);
   registerPlanningHandlersReject(workflowContext);
   registerCapacityHandlers(workflowContext);
-  void true;
   assertPayloadWithinLimit("Issue Workflow result", state);
   // Continue-As-New carries the last business revision into a fresh run; re-emitting it would read as conflicting authoritative history.
   try {
-    if (workflowContext.exactPlanAuthorityEnabled) await workflowContext.initialProjection;
-    else {
-      if (!continuation) await workflowContext.projectState(workflowContext.captureInitialProjectionState ? workflowContext.initialProjectionState : workflowContext.state);
-      workflowContext.initialProjectionComplete = true;
-    }
+    await workflowContext.initialProjection;
     function shouldWake(): boolean {
       return githubSyncRequested // GitHub changed.
         || (!workflowContext.state.allowedCommands.includes("delete_worktree") && (workflowContext.state.phase === "done" || (workflowContext.state.phase === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) // A terminal state needs completion.
@@ -357,10 +339,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         || canAutoRetryDeliveryBlocker(workflowContext); // A delivery blocker can retry.
     }
     while (true) {
-      if ((workflowContext.state.phase === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.phase === "cancelled" && !(true && (workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree"))))) { return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
+      if ((workflowContext.state.phase === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.phase === "cancelled" && !(workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree")))) { return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
       if (githubSyncRequested) {
         githubSyncRequested = false;
-        if (true) await syncGithubPullRequest();
+        await syncGithubPullRequest();
         continue;
       }
       if (workflowContext.state.phase === "releasing" && workflowContext.state.activeOperation === null && !workflowContext.state.releaseRetryAt) {
@@ -382,10 +364,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         const delay = Math.max(0, pollAt - Date.now());
         if (delay > 0) await sleep(delay);
         if (workflowContext.state.phase !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
-        if (true) await syncGithubPullRequest();
+        await syncGithubPullRequest();
         // CI reconciliation needs a release; without one the PR sync above is the only observer. Never throw from the loop.
         if (workflowContext.state.phase === "ci_waiting" && workflowContext.state.releaseId) await workflowContext.reconcileCiTurn();
-        else if (workflowContext.state.phase === "ci_waiting" && true && workflowContext.state.resultCommit && workflowContext.state.branchName && !workflowContext.state.deliveryReviewId) {
+        else if (workflowContext.state.phase === "ci_waiting" && workflowContext.state.resultCommit && workflowContext.state.branchName && !workflowContext.state.deliveryReviewId) {
           // ci_waiting without a release is a dead end: an unreleased exact delivery goes back through review and publish.
           workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision: workflowContext.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", ciNextPollAt: null, lastEventId: `${workflowContext.state.workflowId}:${workflowContext.state.revision + 1}` });
           await workflowContext.project();
@@ -393,8 +375,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         else if (workflowContext.state.phase === "ci_waiting") await sleep("60 seconds");
         continue;
       }
-      if (workflowContext.state.phase === "manual_merge" && true) {
-        if (true) { await condition(() => githubSyncRequested, "60 seconds"); githubSyncRequested = false; } else await sleep("60 seconds"); // a sync signal (webhook, operator) wakes the poll
+      if (workflowContext.state.phase === "manual_merge") {
+        await condition(() => githubSyncRequested, "60 seconds"); githubSyncRequested = false; // a sync signal (webhook, operator) wakes the poll
         if (workflowContext.state.phase === "manual_merge") await syncGithubPullRequest();
         continue;
       }

@@ -17,11 +17,13 @@ import { herdrRuntime, type HerdrProviderRuntime } from "./agent-providers/herdr
 import type { AgentProviderKind } from "./agent-providers/provider.js";
 import { redact } from "./logging.js";
 import { jsonRequired } from "./task-utils.js";
-import { claimTurnRecoveryPrompt } from "./turn-recovery-receipt.js";
 
 type ExecutionRole = "planner" | "reviewer" | "builder" | "integrator";
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const iso = () => new Date().toISOString();
+function claimTurnRecoveryPrompt(database: ForgeDatabase, claim: { turnId: string; timestamp: string; attentionExcerpt: string; [key: string]: unknown }): boolean {
+  return database.authTransaction((db) => db.prepare("UPDATE forge_herdr_turns SET recovery_prompt_sent_at = ?, status = 'awaiting_human', attention_excerpt = ?, updated_at = ? WHERE turn_id = ? AND recovery_prompt_sent_at IS NULL").run(claim.timestamp, claim.attentionExcerpt, claim.timestamp, claim.turnId).changes === 1);
+}
 const responseStyleBlock = `Forge response style
 - Use ASD-STE100 Simplified Technical English for all human-readable prose.
 - In normal prose fields and public progress messages, write short, direct, unambiguous sentences and use consistent terms.

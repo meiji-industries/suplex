@@ -51,7 +51,6 @@ export async function reconcileIssueDeveloperDelivery(config: ForgeConfig, workf
   return getIssueEngine(config).run(workflowId).execute(issueUpdates.retry_development, { ...validated, reconcileOnly: true }, validated.commandId);
 }
 export async function resolveIssueDecisionBlocker(config: ForgeConfig, workflowId: string, input: ResolveDecisionBlockerInput): Promise<IssueWorkflowState> { return dedicated(config, workflowId, "resolve_decision_blocker", input, ResolveDecisionBlockerInputSchema); }
-export async function resyncIssueProjection(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return dedicated(config, workflowId, "resync_projection", input, StartPlanningInputSchema); }
 export async function rejectIssuePlan(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> { return dedicated(config, workflowId, "reject_plan", input, PlanCommandInputSchema); }
 export async function reviseIssuePlan(config: ForgeConfig, workflowId: string, input: PlanRevisionCommand): Promise<IssueWorkflowState> { return dedicated(config, workflowId, "revise_plan", input, PlanRevisionCommandSchema); }
 export async function continueIssueWork(config: ForgeConfig, workflowId: string, input: ContinueWorkCommand): Promise<IssueWorkflowState> { return dedicated(config, workflowId, "continue_work", input, ContinueWorkCommandSchema); }
@@ -77,7 +76,7 @@ export async function connectEngine(config: ForgeConfig) {
     describe: async () => ({ runId: engine.run(workflowId).runId, rootExecution: { runId: engine.run(workflowId).runId }, status: { name: "RUNNING" } }),
     fetchHistory: async () => ({ events: [] }),
   });
-  return { connection: { close: async () => undefined, workflowService: { describeWorkflowExecution: async ({ execution }: { execution: { workflowId: string }; namespace?: string }) => ({ workflowExecutionInfo: { status: "RUNNING", execution: { workflowId: execution.workflowId, runId: engine.run(execution.workflowId).runId } }, pendingWorkflowTask: undefined }) } }, client: { workflow: { getHandle } } };
+  return { connection: { close: async () => undefined }, client: { workflow: { getHandle } } };
 }
 export async function ensureEngineFoundation(..._args: unknown[]): Promise<void> {}
 export class EngineHealthProbe {

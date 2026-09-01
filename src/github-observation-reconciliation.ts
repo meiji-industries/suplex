@@ -1,6 +1,7 @@
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { createGithubReleasePort, type GithubPullRequestObservation } from "./github-release.js";
+import { githubPullRequestObservationFields } from "./github-pull-request-observation.js";
 import { json } from "./task-utils.js";
 import { connectEngine, durableCommand, executeIssueCommand } from "./engine/service.js";
 import { IssueWorkflowStateSchema, type IssueWorkflowState } from "./engine/issue-contracts.js";
@@ -37,13 +38,14 @@ function remoteConflict(database: ForgeDatabase, result: Extract<RemoteIntegrati
 }
 
 /** Projects a task as done because its pull request merged on GitHub and the workflow cannot process the observation. */
-function adoptMergedPullRequest(database: ForgeDatabase, candidate: Candidate): void {
+function adoptMergedPullRequest(database: ForgeDatabase, candidate: Candidate, observed: GithubPullRequestObservation): void {
   const revision = candidate.revision + 1;
-  const state = { ...candidate.state, revision, phase: "done" as const, owner: "human" as const, allowedCommands: [], pendingAction: "Merged", blocker: null, mergeOutcome: "merged" as const, githubPullRequestState: "merged" as const, lastEventId: `${candidate.workflowId}:${revision}`, stateChangedAt: new Date().toISOString() };
-  database.projectIssueState({ taskId: candidate.taskId, companyId: candidate.companyId, projectId: candidate.state.projectId, workflowId: candidate.workflowId, revision, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Merged", lastEventId: state.lastEventId, state });
+  const observedAt = new Date().toISOString();
+  const state = { ...candidate.state, ...githubPullRequestObservationFields(observed, observedAt), revision, phase: "done" as const, owner: "human" as const, allowedCommands: [], pendingAction: observed.state === "merged" ? "Merged" : candidate.state.pendingAction, blocker: null, ...(observed.state === "merged" ? { mergeOutcome: "merged" as const } : {}), lastEventId: `${candidate.workflowId}:${revision}`, stateChangedAt: observedAt };
+  database.projectIssueState({ taskId: candidate.taskId, companyId: candidate.companyId, projectId: candidate.state.projectId, workflowId: candidate.workflowId, revision, phase: "done", owner: "human", allowedCommands: [], pendingAction: state.pendingAction, lastEventId: state.lastEventId, state });
 }
 
-const IGNORED_PHASES = new Set(["backlog", "planning", "development", "reviewing_delivery", "repair_required", "done", "cancelled", "failed"]);
+const IGNORED_PHASES = new Set(["backlog", "planning", "development", "reviewing_delivery", "repair_required", "cancelled", "failed"]);
 
 function candidates(database: ForgeDatabase, taskId?: string): Candidate[] {
   const rows = database.authQuery((db) => db.prepare(`SELECT p.task_id AS taskId, p.company_id AS companyId, p.workflow_id AS workflowId, p.revision, p.phase, r.repository, r.head_branch AS branch, r.pr_number AS pullRequestNumber, w.worktree_path AS worktreePath, w.starting_sha AS targetBaseSha, s.state_json AS stateJson
@@ -55,7 +57,9 @@ function candidates(database: ForgeDatabase, taskId?: string): Candidate[] {
   return rows.flatMap((row) => {
     if (IGNORED_PHASES.has(row.phase)) return [];
     const state = IssueWorkflowStateSchema.safeParse(json(row.stateJson, undefined));
-    return state.success ? [{ ...row, state: state.data }] : [];
+    if (!state.success) return [];
+    if (row.phase === "done" && (row.pullRequestNumber === null || ["merged", "closed"].includes(state.data.githubPullRequestState ?? ""))) return [];
+    return [{ ...row, state: state.data }];
   });
 }
 
@@ -103,7 +107,7 @@ export async function reconcileGithubObservations(database: ForgeDatabase, confi
       const command = integration === "conflict" ? "integrate_remote_conflict" : commandFor(candidate, observation);
       // A merge on GitHub is terminal truth. When the workflow cannot take the command (wrong phase, or the
       // Engine run is closed), adopt the merge into the projection directly instead of leaving the task stale.
-      if (observation === "merged" && !command) { adoptMergedPullRequest(database, candidate); signalled += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: "adopt_merged", commandId: null, deduplicated: false }); continue; }
+      if (candidate.phase === "done" || (observation === "merged" && !command)) { adoptMergedPullRequest(database, candidate, observed); signalled += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: "adopt_merged", commandId: null, deduplicated: false }); continue; }
       if (!command) { skipped += 1; outcomes.push({ taskId: candidate.taskId, workflowId: candidate.workflowId, observation, commandKind: null, commandId: null, deduplicated: false, ...(integration ? { integration } : {}) }); continue; }
       const input = conflict
         ? durableCommand(candidate.workflowId, "integrate-remote-conflict", { expectedRevision: candidate.revision, actorUserId: "github-reconciler", forwardMergeId: conflict.forwardMergeId, priorHead: conflict.priorHead, priorTree: conflict.priorTree, remoteHead: conflict.remoteHead, conflictArtifact: { id: conflict.conflictArtifactId, kind: "forward-merge-conflict" as const }, conflictFileCount: conflict.conflictFileCount })
@@ -115,7 +119,7 @@ export async function reconcileGithubObservations(database: ForgeDatabase, confi
           else await execute(config, candidate.workflowId, command, input);
         } catch (error) {
           if (observation !== "merged") throw error;
-          adoptMergedPullRequest(database, candidate);
+          adoptMergedPullRequest(database, candidate, observed);
         }
         signalled += 1;
       }

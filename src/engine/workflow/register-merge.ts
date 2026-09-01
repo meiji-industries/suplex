@@ -8,7 +8,7 @@ import { issueUpdates } from "../issue-updates.js";
 import { mergeCommands } from "../../commands/definitions/merge.js";
 import type { IssueWorkflowContext } from "./context.js";
 export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
-  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   const reconcileMergeTurn = async (): Promise<contracts.IssueWorkflowState> => {
     const exactAcceptanceReceipts = true;
     if (!ctx.state.releaseId || !ctx.state.expectedHeadSha || !ctx.state.acceptanceId) throw new Error("Exact accepted release head is required for merge reconciliation");
@@ -97,7 +97,7 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
 }
 
 export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
-  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   const block = async (reason: string, developerAttempt = ctx.state.developerAttempt): Promise<contracts.IssueWorkflowState> => {
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "human", allowedCommands: [...new Set([...ctx.state.allowedCommands, "resolve_merge_conflict", "cancel_issue"])], pendingAction: reason, lastHandlerError: { command: "resolve_merge_conflict", reason, at: new Date().toISOString() }, developerAttempt, activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
@@ -135,6 +135,15 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
   if (!ctx.state.mergeResolutionPlanArtifactId && ctx.state.mergeDecision) return ctx.state;
   if (!ctx.state.mergeResolutionPlanArtifactId) return block("A Lead conflict plan is required");
   for (let retry = 0; retry < 2; retry += 1) {
+    const automatic = command.commandId.startsWith(`${ctx.state.workflowId}:auto-resolve_merge_conflict:`);
+    const progress = automatic
+      ? stateTransitions.withRepairProgress(ctx.state, { signature: stateTransitions.repairSignature({ source: "merge", code: "merge_conflict" }), commit: ctx.state.resultCommit ?? null, diagnosticHash: null })
+      : ctx.state;
+    if (automatic && (progress.repairProgress?.repeats ?? 0) >= (ctx.input.repairCycleLimit ?? 0)) {
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Merge conflict needs your call", activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      await ctx.project();
+      return ctx.state;
+    }
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
     const turnExecutionId = developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "merge_conflict_resolution");
     const prior = { forwardMergeId: ctx.state.forwardMergeId, developerExecutionId: ctx.state.developerExecutionId, developerSessionRef: ctx.state.developerSessionRef, branchName: ctx.state.branchName, priorHead: ctx.state.forwardMergePriorHead, priorTree: ctx.state.forwardMergePriorTree, targetBaseSha: ctx.state.forwardMergeTargetBaseSha, expectedBaseSha: ctx.state.targetBaseSha, conflictArtifact: ctx.state.forwardMergeConflictArtifact, conflictFileCount: ctx.state.forwardMergeConflictFileCount, planArtifactId: ctx.state.mergeResolutionPlanArtifactId };
@@ -142,7 +151,7 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
       // A deterministic turn ID is not a Developer execution until the
       // activity has inserted its ledger row. Keep the last persisted ID as
       // the retry anchor while this prospective turn starts.
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_resolving", owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer resolving forward-merge conflicts", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerAttempt, developerTurnKind: "merge_conflict_resolution", ...ctx.recoveryFields("starting", null, "Starting Developer merge-conflict resolution.", null), activeOperation: { commandId: command.commandId, kind: "repair", startedRevision: ctx.state.revision + 1 } });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, phase: "merge_conflict_resolving", owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer resolving forward-merge conflicts", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerAttempt, developerTurnKind: "merge_conflict_resolution", ...ctx.recoveryFields("starting", null, "Starting Developer merge-conflict resolution.", null), activeOperation: { commandId: command.commandId, kind: "repair", startedRevision: ctx.state.revision + 1 } });
     });
     await ctx.project();
     try {

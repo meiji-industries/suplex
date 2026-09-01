@@ -41,7 +41,7 @@ export function fixTaskDraft(task: ApiTask, diagnostics: TaskDiagnostics | undef
     `- Owner: ${task.owner}`,
     `- Revision: ${task.revision}`,
     `- Pending action: ${task.pendingAction ?? "none"}`,
-    `- Projection: ${task.projection.status} (${task.projection.projectedRevision}/${task.projection.authoritativeRevision})`,
+    `- Projection revision: ${task.projection.revision}`,
     `- Last handler error: ${task.lastHandlerError ? `${task.lastHandlerError.command} · ${oneLine(task.lastHandlerError.reason)} · ${task.lastHandlerError.at}` : "none"}`,
     `- Failed invocation: ${invocation}`,
     `- Invocation summary: ${failedInvocation?.failureSummary ? oneLine(failedInvocation.failureSummary, 500) : "none"}`,

@@ -3,7 +3,7 @@ import { AGENT_PROVIDER_KINDS } from "./agent-providers/kinds.js";
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
-export const CapacityOperationSchema = z.enum([
+const CapacityOperationSchema = z.enum([
   "lead_planning",
   "supplemental_review",
   "lead_consolidation",
@@ -19,29 +19,18 @@ export const CapacityOperationSchema = z.enum([
 ]);
 export type CapacityOperation = z.infer<typeof CapacityOperationSchema>;
 
-export const CapacityRoleSchema = z.enum(["planner", "builder", "reviewer", "integrator"]);
+const CapacityRoleSchema = z.enum(["planner", "builder", "reviewer", "integrator"]);
 export type CapacityRole = z.infer<typeof CapacityRoleSchema>;
 
 const legacyRoles: Record<string, string> = { lead: "planner", analyst: "planner", developer: "builder", implementer: "builder" };
 const PersistedCapacityRoleSchema = z.preprocess((value) => typeof value === "string" ? legacyRoles[value] ?? value : value, CapacityRoleSchema);
 
-export const CapacityRequestStatusSchema = z.enum(["queued", "active", "rate_limited", "released", "cancelled", "stale", "ownership_ambiguous", "exhausted"]);
-export type CapacityRequestStatus = z.infer<typeof CapacityRequestStatusSchema>;
+const CapacityRequestStatusSchema = z.enum(["queued", "active", "rate_limited", "released", "cancelled", "stale", "ownership_ambiguous", "exhausted"]);
 
 export const CapacityWaitReasonSchema = z.enum(["lane_full", "issue_active", "session_active", "worktree_active", "rate_limit_reset"]);
-export type CapacityWaitReason = z.infer<typeof CapacityWaitReasonSchema>;
 
-export const CapacityTerminalReasonSchema = z.enum(["completed", "failed_before_start", "process_failed", "cancelled", "proven_dead", "stored_result", "rate_limited", "wait_exhausted", "ownership_ambiguous"]);
+const CapacityTerminalReasonSchema = z.enum(["completed", "failed_before_start", "process_failed", "cancelled", "proven_dead", "stored_result", "rate_limited", "wait_exhausted", "ownership_ambiguous"]);
 export type CapacityTerminalReason = z.infer<typeof CapacityTerminalReasonSchema>;
-
-export const CapacitySettingsSchema = z.object({
-  profileId: durableId,
-  provider: z.enum(AGENT_PROVIDER_KINDS),
-  model: z.string().min(1).max(256),
-  reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]),
-  servicePriority: z.enum(["standard", "priority", "fast"]),
-  requestedCapacity: z.number().int().min(1).max(32),
-});
 
 export const WorkflowCapacityStateSchema = z.object({
   requestId: durableId,
@@ -58,7 +47,6 @@ export const WorkflowCapacityStateSchema = z.object({
   retryAt: z.string().datetime().nullable(),
   rateLimitAttempts: z.number().int().nonnegative(),
 });
-export type WorkflowCapacityState = z.infer<typeof WorkflowCapacityStateSchema>;
 
 export const CapacityBlockerSchema = z.object({
   category: z.enum(["capacity_exhausted", "ownership_ambiguous"]),
@@ -66,7 +54,6 @@ export const CapacityBlockerSchema = z.object({
   nextAction: z.string(),
   resumeOperation: CapacityOperationSchema,
 });
-export type CapacityBlocker = z.infer<typeof CapacityBlockerSchema>;
 
 export const CapacityRequestSnapshotSchema = z.object({
   id: durableId,
@@ -135,9 +122,8 @@ export const CapacityExecutionOwnerSchema = z.object({
   sessionRef: durableId.nullable().optional(),
   worktreePath: z.string().max(1_000).nullable().optional(),
 });
-export type CapacityExecutionOwner = z.infer<typeof CapacityExecutionOwnerSchema>;
 
-export const PublicCapacityStatusSchema = z.object({
+const PublicCapacityStatusSchema = z.object({
   profileId: durableId,
   agentName: z.string().min(1).max(120),
   avatarSeed: z.string(),
@@ -162,7 +148,7 @@ export const AdminCapacityLaneSchema = z.object({
 });
 export type AdminCapacityLane = z.infer<typeof AdminCapacityLaneSchema>;
 
-export const CapacityReconciliationResultSchema = z.object({
+const CapacityReconciliationResultSchema = z.object({
   requestId: durableId,
   status: CapacityRequestStatusSchema,
   reason: z.string(),

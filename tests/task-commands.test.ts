@@ -36,7 +36,6 @@ test("task command descriptors project every routed command", () => {
     { name: "reconcile_merge", label: "Reconcile merge", endpoint: "reconcile-merge", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "continue_work", label: "Continue work", endpoint: "continue-work", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "retry_capacity", label: "Retry capacity", endpoint: "retry-capacity", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
-    { name: "resync_projection", label: "Resync projection", endpoint: "resync-projection", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "send_planner_note", label: "Tell the Planner", endpoint: "tell-planner", method: "POST", expectedRevision: 7, note: "required", idempotency: "none" },
     { name: "delete_worktree", label: "Delete worktree", endpoint: "delete-worktree", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "recreate_worktree", label: "Recreate worktree and resume", endpoint: "recreate-worktree", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },

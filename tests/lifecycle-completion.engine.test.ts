@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { ProjectionRebuildService } from "../src/projection-rebuild.js";
 import type { IssueActivities, IssueWorkflowInput, IssueWorkflowState } from "../src/engine/issue-contracts.js";
-import { continueIssueWork, executeIssueCommand, queryIssueWorkflow, recoverClosedProjection, rejectIssuePlan, resyncIssueProjection, resolveIssueDecisionBlocker, startIssueWorkflow } from "../src/engine/service.js";
+import { continueIssueWork, executeIssueCommand, queryIssueWorkflow, recoverClosedProjection, rejectIssuePlan, resolveIssueDecisionBlocker, startIssueWorkflow } from "../src/engine/service.js";
 import { createEngineHarness, engineFixture, type EngineHarness } from "./helpers/engine-harness.js";
 
 const sha = "9".repeat(64), nextBase = "d".repeat(40), mergedHead = "e".repeat(40), mergedTree = "f".repeat(40);
@@ -135,7 +135,7 @@ test("target-base retry self-heals persisted delivery readiness into Lead review
 });
 
 test("projection rebuild replaces a lagged projection with the latest engine snapshot", async () => {
-  const h = await createEngineHarness(); h.seedTask("rebuild"); h.activities.projectIssueState = async (event) => { h.database.projectIssueEvent(event); h.database.observeIssueProjection(event); return event.state; };
+  const h = await createEngineHarness(); h.seedTask("rebuild"); h.activities.projectIssueState = async (event) => { h.database.projectIssueEvents([event]); return event.state; };
   try {
     const started = await startIssueWorkflow(h.config, input(h, "rebuild", undefined));
     await h.settle(started.workflowId, () => (h.calls.get("projectIssueState") ?? 0) > 0);
@@ -186,12 +186,11 @@ const restartCases = {
 } as const;
 for (const [matrix, phases] of Object.entries(restartCases)) test(`interruption matrix: ${matrix}`, async () => {
   for (const [index, phase] of phases.entries()) {
-    const issueId = `${matrix}-${index}`; const h = await createEngineHarness({ projectIssueState: async (event) => { h.database.projectIssueEvent(event); h.database.observeIssueProjection(event); return event.state; } }); h.seedTask(issueId);
+    const issueId = `${matrix}-${index}`; const h = await createEngineHarness({ projectIssueState: async (event) => { h.database.projectIssueEvents([event]); return event.state; } }); h.seedTask(issueId);
     try {
       const terminal = phase === "done"; const state = { ...baseState(h, issueId, phase as IssueWorkflowState["phase"], 20), owner: terminal ? "human" as const : "lead" as const, allowedCommands: terminal ? [] : ["cancel_issue" as const], ...(phase === "development" ? { developerExecutionId: "developer", developerSessionRef: "session" } : {}), ...(String(phase).startsWith("merge_conflict") ? { leadSessionRef: "lead", leadOutputArtifactId: "plan", developerExecutionId: "developer", developerSessionRef: "session", worktreePath: join(h.root, "worktrees", issueId), branchName: `forge/issue/${issueId}`, targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, forwardMergeId: "forward", forwardMergePriorHead: engineFixture.commit, forwardMergePriorTree: engineFixture.tree, forwardMergeTargetBaseSha: nextBase, forwardMergeConflictArtifact: { id: "conflict", kind: "forward-merge-conflict" as const }, forwardMergeConflictFileCount: 1 } : {}) };
       const started = await h.startContinuation(issueId, state);
       const startedRevision = (await queryIssueWorkflow(h.config, started.workflowId)).revision;
-      await resyncIssueProjection(h.config, started.workflowId, { expectedRevision: startedRevision, actorUserId: engineFixture.actorUserId, commandId: `persist-${issueId}` });
       await h.restart();
       const resumed = terminal ? await recoverClosedProjection(h.config, started.workflowId) : await queryIssueWorkflow(h.config, started.workflowId); expect(resumed).toMatchObject({ phase, revision: terminal ? startedRevision : startedRevision + 1 });
       if (!terminal) expect(await executeIssueCommand(h.config, started.workflowId, "cancel_issue", { expectedRevision: resumed.revision, actorUserId: engineFixture.actorUserId })).toMatchObject({ phase: "cancelled" });

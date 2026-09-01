@@ -21,7 +21,7 @@ function githubPullRequestLifecycleFields(
 }
 
 export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
-  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   const blockDelivery = async (failure: GithubReleaseFailure): Promise<contracts.IssueWorkflowState> => {
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: failure.summary, releaseStatus: "blocked", releaseFailureCode: failure.code, releaseFailureSummary: failure.summary, releaseRetryAt: failure.retryAt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();

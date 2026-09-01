@@ -65,8 +65,8 @@ const authorityObservationCommands = [
   ["rev-parse", "HEAD^{tree}"],
 ];
 
-function expectOnlyAuthorityObservations(calls: string[][]): void {
-  expect(calls).toEqual(authorityObservationCommands);
+function expectOnlyAuthorityObservations(calls: string[][], count = 1): void {
+  expect(calls).toEqual(Array.from({ length: count }, () => authorityObservationCommands).flat());
   expect(calls.filter(([command]) => command === "fetch" || command === "merge")).toEqual([]);
 }
 
@@ -139,8 +139,8 @@ test("remote branch integration is clean", async () => {
   const remoteHead = await git(fastForward.peer, "rev-parse", "HEAD"); await git(fastForward.peer, "push", "origin", "forge/task");
   expect(await integrateRemote(fastForward, remoteHead)).toMatchObject({ kind: "fast_forwarded", to: remoteHead });
   const fastForwardCalls: string[][] = [];
-  await expect(integrateRemote(fastForward, remoteHead, fastForwardCalls)).resolves.toMatchObject({ kind: "fast_forwarded", to: remoteHead });
-  expectOnlyAuthorityObservations(fastForwardCalls);
+  await expect(integrateRemote(fastForward, remoteHead, fastForwardCalls)).resolves.toEqual({ kind: "up_to_date", head: remoteHead });
+  expectOnlyAuthorityObservations(fastForwardCalls, 2);
 
   const merged = await remoteFixture();
   await writeFile(join(merged.worktreePath, "LOCAL.md"), "local\n"); await git(merged.worktreePath, "add", "LOCAL.md"); await git(merged.worktreePath, "commit", "-m", "local");
@@ -150,7 +150,14 @@ test("remote branch integration is clean", async () => {
   expect(first).toMatchObject({ kind: "merged", remoteHead: divergedHead });
   const mergeCalls: string[][] = [];
   await expect(integrateRemote(merged, divergedHead, mergeCalls)).resolves.toEqual(first);
-  expectOnlyAuthorityObservations(mergeCalls);
+  expect(mergeCalls).toEqual([
+    ...authorityObservationCommands,
+    ["fetch", "--no-tags", "origin", "+refs/heads/forge/task:refs/remotes/origin/forge/task"],
+    ["merge-base", "--is-ancestor", "HEAD", divergedHead],
+    ["merge", "--no-edit", divergedHead],
+    ["rev-parse", "HEAD"],
+    ...authorityObservationCommands,
+  ]);
 });
 
 test("remote branch integration conflicts and auto-enters resolution", () => {
@@ -187,7 +194,7 @@ test("cancellation races a late agent result and a webhook", () => {
   expect(twice(facts({ cancelled: true }), live({ github: { headSha: "b".repeat(40), merged: true, closed: false, checks: "passed", authenticated: true } }))).toMatchObject({ action: "no_change", evidence: ["task:terminal"] });
 });
 
-test("worker schedules all three reconciliation entry points", async () => {
+test("worker schedules the shared reconciliation pass", async () => {
   const worker = await readFile(new URL("../src/engine/host.ts", import.meta.url), "utf8");
-  for (const name of ["reconcileActiveTurns", "reconcileWorktrees", "reconcileGithubObservations"]) expect(worker).toContain(name);
+  expect(worker).toContain("schedule(60_000, () => reconcile(");
 });

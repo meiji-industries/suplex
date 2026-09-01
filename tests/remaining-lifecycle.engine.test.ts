@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { ApplicationFailure } from "../src/engine/failures.js";
-import { executeIssueCommand, queryIssueWorkflow, resyncIssueProjection, signalIssueGithubPullRequestSync } from "../src/engine/service.js";
+import { executeIssueCommand, queryIssueWorkflow, signalIssueGithubPullRequestSync } from "../src/engine/service.js";
 import { createEngineHarness, engineFixture, type EngineHarness } from "./helpers/engine-harness.js";
 
 const head = "b".repeat(40), tree = "c".repeat(40), remoteHead = "d".repeat(40);
@@ -56,10 +56,10 @@ test("host restarts resume CI reconciliation from the same persisted phase", asy
   const h = await createEngineHarness({ projectIssueState: async (event) => event.state, observeGithubPullRequest: async () => ({ exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: "UNKNOWN", checks: { total: 0, pending: 0, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }), reconcileCi: async (input) => ({ runId: "ci", attemptId: `attempt-${++polls}`, attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: "ci-evidence", outcome: "passed", reason: "checks_passed_merged", owner: null, repairable: false, summary: "Merged", retryAt: null, nextPollAt: null, policyHash: engineFixture.sha256, propagationDeadline: null, overallDeadline: null }) });
   h.seedTask("restart-ci");
   try {
-    h.activities.projectIssueState = async (event) => { h.database.projectIssueEvent(event); h.database.observeIssueProjection(event); return event.state; };
+  h.activities.projectIssueState = async (event) => { h.database.projectIssueEvents([event]); return event.state; };
     const blocked = { ...ciState(h, "restart-ci"), phase: "delivery_blocked" as const, owner: "human" as const, allowedCommands: ["reconcile_ci" as const, "cancel_issue" as const], pendingAction: "Retry CI" };
     const started = await h.startContinuation("restart-ci", blocked);
-    const waiting = await resyncIssueProjection(h.config, started.workflowId, { expectedRevision: blocked.revision, actorUserId: engineFixture.actorUserId });
+    const waiting = await queryIssueWorkflow(h.config, started.workflowId);
     await h.restart();
     const restarted = await queryIssueWorkflow(h.config, started.workflowId);
     expect(restarted).toMatchObject({ phase: waiting.phase });

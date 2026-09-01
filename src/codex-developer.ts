@@ -28,20 +28,12 @@ import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, Develo
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
 import { jsonRequired } from "./task-utils.js";
-import { acquireWorktreeMutation, beginOperation, fenceOperation, fenceWorktreeMutation, recordOperationEffect, releaseWorktreeMutation, type OperationExecution, type WorktreeMutationOwnership } from "./operation-claims.js";
 import { ensureResultSchema } from "./result-schema-files.js";
-import { claimDeveloperResult, DeveloperResultConflict } from "./developer-result-claims.js";
 import { runCommand } from "./command-runner.js";
 import { BrowserProofFailure, BrowserProofInputSchema, BrowserProofService, normalizeBrowserProofPath, normalizeBrowserProofPaths, type DurableBrowserProof } from "./browser-proof.js";
 
-
-type OperationAware = { operationClaim?: OperationExecution };
-export function isDeveloperExecutionActiveLeaseCollision(error: unknown): boolean {
-  const sqliteError = error as { code?: unknown; message?: unknown };
-  return sqliteError?.code === "SQLITE_CONSTRAINT_UNIQUE"
-    && typeof sqliteError.message === "string"
-    && sqliteError.message.includes("forge_developer_executions.task_id");
-}
+type OperationExecution = { signal?: AbortSignal | undefined };
+type OperationAware = OperationExecution;
 
 async function git(args: string[], cwd: string, timeout = 8_000): Promise<string> {
   const result = await runCommand({ taskId: null, stepId: null, command: "git", args, cwd, timeout });
@@ -279,37 +271,10 @@ export class DeveloperService {
     return this.database.authTransaction((db) => db.prepare(`UPDATE forge_developer_executions
       SET status = 'starting', failure_code = NULL, failure_summary = NULL, finished_at = NULL, started_at = ?, heartbeat_at = ?, current_step = NULL
       WHERE id = ? AND status = 'failed'
-        AND NOT EXISTS (SELECT 1 FROM forge_developer_result_claims WHERE execution_id = ?)
-        AND NOT EXISTS (SELECT 1 FROM forge_developer_result_conflicts WHERE execution_id = ?)`).run(startedAt, startedAt, executionId, executionId, executionId).changes === 1);
+        `).run(startedAt, startedAt, executionId).changes === 1);
   }
 
-  private fenceExternalEffect(input: OperationAware): void {
-    if (input.operationClaim?.signal?.aborted) throw new AgentFailure("cancelled", "Developer execution was cancelled before dispatch", { nonRetryable: true });
-    if (!input.operationClaim) return;
-    if (!beginOperation(this.database, input.operationClaim.key, input.operationClaim.ownership) || !fenceOperation(this.database, input.operationClaim.key, input.operationClaim.ownership)) {
-      throw new AgentFailure("cancelled", "Developer operation ownership changed before dispatch", { nonRetryable: true });
-    }
-  }
-
-  private persistOperationResult(input: OperationAware, promptKind: string, result: unknown): void {
-    if (!input.operationClaim) return;
-    if (!recordOperationEffect(this.database, input.operationClaim.key, input.operationClaim.ownership, { kind: "developer-service-result", promptKind, result })) {
-      throw new AgentFailure("operation-result-persist-failed", "Developer service result could not be persisted", { nonRetryable: true });
-    }
-  }
-
-  private acquireMutation(input: OperationAware, worktreePath: string): WorktreeMutationOwnership | undefined {
-    if (!input.operationClaim) return undefined;
-    const lease = acquireWorktreeMutation(this.database, worktreePath, input.operationClaim.key, input.operationClaim.ownership.ownerToken ?? undefined);
-    if (!lease) throw new AgentFailure("worktree-mutation-in-progress", "The task worktree is being changed by another operation");
-    return lease;
-  }
-
-  private fenceMutation(lease: WorktreeMutationOwnership | undefined): void {
-    if (lease && !fenceWorktreeMutation(this.database, lease)) throw new AgentFailure("worktree-mutation-lost", "Developer worktree mutation ownership changed", { nonRetryable: true });
-  }
-
-  async run(rawInput: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity> & OperationAware): Promise<DeveloperExecutionResult> {
+  async run(rawInput: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<DeveloperExecutionResult> {
     const input = rawInput;
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, t.description, b.storage_path AS legacyBriefStoragePath, b.sha256 AS legacyBriefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256, e.id AS outputId, e.original_plan_revision AS originalPlanRevision, e.output_revision AS outputRevision, e.final_version AS finalVersion, e.output_artifact_id AS artifactId, pa.sha256 AS artifactSha256, e.session_ref AS leadSessionRef, e.id AS leadExecutionId, e.evidence_manifest_artifact_id AS evidenceManifestArtifactId, em.sha256 AS evidenceManifestSha256
       FROM forge_tasks t
@@ -349,13 +314,6 @@ export class DeveloperService {
       FROM forge_plan_revision_requests WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { id: string; disposition: "reuse" | "new"; status: "accepted" | "authorized"; authorizedPlanRevision: number | null; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null } | undefined) : undefined;
     if (input.revisionRequestId && (!revisionAuthorization || revisionAuthorization.status !== "authorized" || revisionAuthorization.authorizedPlanRevision !== input.planRevision)) throw new AgentFailure("revision-not-authorized", "Developer execution is not authorized for this plan revision");
     const executionId = input.developerTurnExecutionId ?? input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
-    const claimedResult = this.database.authQuery((db) => db.prepare("SELECT activity_result_json AS activityResultJson FROM forge_developer_result_claims WHERE execution_id = ?").get(executionId) as { activityResultJson: string } | undefined);
-    if (claimedResult) {
-      const result = jsonRequired(claimedResult.activityResultJson) as DeveloperExecutionResult;
-      this.fenceExternalEffect(input);
-      this.persistOperationResult(input, "implementation", result);
-      return result;
-    }
     const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, failure_code AS failureCode, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as DeveloperExecutionIdentity | undefined);
     const sourceBranch = taskConfiguration.source?.kind === "pull_request" ? taskConfiguration.source.headBranch : taskConfiguration.source?.kind === "branch" ? taskConfiguration.source.branch : undefined;
     const pinnedBase = existing?.targetBaseSha ?? prior?.target_base_sha ?? (revisionAuthorization?.disposition === "new" ? revisionAuthorization.exactBaseSha : revisionAuthorization?.baseSha);
@@ -370,9 +328,6 @@ export class DeveloperService {
     const startedAt = this.now().toISOString();
     const reopened = existing ? this.reAdoptOrphanExecution(executionId, existing, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, attempt, branchName, targetBaseSha, supersedesExecutionId }, startedAt) : false;
     if (existing && !reopened && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== branchName || existing.targetBaseSha !== targetBaseSha || existing.supersedesExecutionId !== supersedesExecutionId || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic Developer execution ID is already bound to different coordinates", { nonRetryable: true });
-    const recordedWorktreePath = this.database.authQuery((db) => (db.prepare("SELECT worktree_path AS worktreePath FROM forge_issue_worktrees WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status <> 'released'").get(input.taskId, input.companyId, input.workflowId) as { worktreePath: string } | undefined)?.worktreePath);
-    let mutationLease = recordedWorktreePath ? this.acquireMutation(input, recordedWorktreePath) : undefined;
-    if (recordedWorktreePath && !mutationLease) throw new AgentFailure("worktree-mutation-in-progress", "The task worktree is being changed by another operation");
     let worktree;
     try {
       if (existing && !reopened) {
@@ -395,10 +350,6 @@ export class DeveloperService {
       if (error instanceof Error && "code" in error) throw new AgentFailure(String((error as { code: string }).code), error.message);
       throw error;
     }
-    mutationLease ??= this.acquireMutation(input, worktree.worktreePath);
-    if (!mutationLease && input.operationClaim) throw new AgentFailure("worktree-mutation-in-progress", "The task worktree is being changed by another operation");
-    this.fenceExternalEffect(input);
-    this.fenceMutation(mutationLease);
     this.database.authTransaction((db) => {
       if (reopened) db.prepare("UPDATE forge_developer_executions SET task_id = ?, company_id = ?, workflow_id = ?, plan_revision = ?, attempt = ?, branch_name = ?, worktree_path = ?, target_base_sha = ?, supersedes_execution_id = ? WHERE id = ?").run(input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, supersedesExecutionId, executionId);
       db.prepare(`INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, NULL, NULL, ?, ?, ?, NULL)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, supersedesExecutionId, startedAt, startedAt);
@@ -421,7 +372,7 @@ export class DeveloperService {
           await this.roleSessions.retireRoleSession(task.taskId, "builder");
           evidenceLines.push(JSON.stringify({ type: "forge.session", retired: "developer", reason: "no-progress-retry" }));
         }
-        const turn = await this.turnRunner.run({ task: { ...task, worktreePath: worktree.worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "builder", ledger: "developer", executionId, promptKind: "implementation", prompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperDeliveryReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-delivery", DeveloperDeliveryReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision, signal: input.operationClaim?.signal, dispatchFence: () => { this.fenceExternalEffect(input); this.fenceMutation(mutationLease); } });
+        const turn = await this.turnRunner.run({ task: { ...task, worktreePath: worktree.worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "builder", ledger: "developer", executionId, promptKind: "implementation", prompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperDeliveryReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-delivery", DeveloperDeliveryReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision });
         sessionRef = turn.roleSessionId;
         const execution = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined);
         if (!execution || !["starting", "running"].includes(execution.status)) throw new AgentFailure(execution?.status === "cancelled" ? "developer-cancelled" : "developer-superseded", "Developer execution was cancelled before completion");
@@ -440,21 +391,13 @@ export class DeveloperService {
         const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
         const blocked = delivery.blocker !== null;
         const activityResult = { developerExecutionId: executionId, developerSessionRef: sessionRef ?? executionId, worktreePath: worktree.worktreePath, branchName: worktree.branchName, targetBaseSha: worktree.targetBaseSha, currentStep: null, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, deliveryArtifactId: deliveryArtifact.id, evidenceArtifactId: evidence.id, deliverySummary: parsedReport.summary, outcome: blocked ? "blocked" as const : "completed" as const, steps: parsedReport.steps.map(({ number, status }) => ({ number, status })), authorizedStepsNotCompleted: parsedReport.authorizedStepsNotCompleted, blocker: delivery.blocker };
-        let claimed: typeof activityResult;
-        try {
-          claimed = claimDeveloperResult(this.database, { executionId, claimKey: `developer:${executionId}`, resultHash: turn.resultHash, activityResult, deliveryArtifactId: deliveryArtifact.id, evidenceArtifactId: evidence.id }) as typeof activityResult;
-        } catch (error) {
-          if (error instanceof DeveloperResultConflict) throw new AgentFailure("developer-result-claim-conflict", error.message, { nonRetryable: true });
-          throw error;
-        }
         const terminalStatus = this.database.authTransaction((db) => {
           const updated = db.prepare("UPDATE forge_developer_executions SET status = ?, session_ref = ?, finished_at = ?, heartbeat_at = ?, current_step = NULL, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ? AND status IN ('starting', 'running')").run(blocked ? "blocked" : "completed", sessionRef, this.now().toISOString(), this.now().toISOString(), gitState.headSha, gitState.treeSha, gitState.dirtyState, deliveryArtifact.id, evidence.id, executionId);
-          if (updated.changes === 1) this.persistOperationResult(input, "implementation", claimed);
           return updated.changes === 1 ? blocked ? "blocked" : "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
         });
         if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "Developer execution was cancelled before completion");
         if (terminalStatus !== (blocked ? "blocked" : "completed")) throw new AgentFailure("developer-superseded", "Developer execution was superseded before completion");
-        return claimed;
+        return activityResult;
     } catch (error) {
       // Keep the real cause: a swallowed message made launch-path bugs look like Builder failures.
       const failure = error instanceof AgentFailure ? error : new AgentFailure("developer-failed", `Builder could not start: ${error instanceof Error ? error.message : String(error)}`);
@@ -465,9 +408,7 @@ export class DeveloperService {
         db.prepare("UPDATE forge_developer_executions SET status = CASE WHEN status IN ('starting', 'running') THEN 'failed' ELSE status END, session_ref = COALESCE(session_ref, ?), finished_at = COALESCE(finished_at, ?), heartbeat_at = ?, failure_code = CASE WHEN status IN ('starting', 'running') THEN ? ELSE failure_code END, failure_summary = CASE WHEN status IN ('starting', 'running') THEN ? ELSE failure_summary END, evidence_artifact_id = COALESCE(evidence_artifact_id, ?) WHERE id = ?").run(sessionRef ?? null, finishedAt, finishedAt, failure.code, failure.message, evidence.id, executionId);
       });
       throw failure;
-    } finally {
-      if (mutationLease) releaseWorktreeMutation(this.database, mutationLease);
-    }
+    } finally {}
   }
 
 
@@ -488,8 +429,6 @@ export class DeveloperService {
     }
     input.developerExecutionId = prior.id;
     input.worktreePath ||= prior.worktree_path;
-    const mutationLease = this.acquireMutation(input, input.worktreePath);
-    if (!mutationLease && input.operationClaim) throw new AgentFailure("worktree-mutation-in-progress", "The task worktree is being changed by another operation");
     try {
       const inspected = await this.worktrees.inspectDelivery(input.worktreePath, input.branchName);
       if (inspected.branchName !== input.branchName) throw new AgentFailure("merge-resolution-identity-mismatch", "The owned Developer worktree branch does not match the recorded branch");
@@ -527,8 +466,6 @@ export class DeveloperService {
     const startedAt = this.now().toISOString();
     const reopened = existing ? this.reAdoptOrphanExecution(executionId, existing, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, attempt, branchName: input.branchName, worktreePath: input.worktreePath, targetBaseSha: input.targetBaseSha, supersedesExecutionId: input.developerExecutionId, sessionRef: input.developerSessionRef }, startedAt) : false;
     if (existing && !reopened && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== input.branchName || existing.worktreePath !== input.worktreePath || existing.targetBaseSha !== input.targetBaseSha || existing.supersedesExecutionId !== input.developerExecutionId || existing.sessionRef !== input.developerSessionRef || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic merge-resolution ID is already bound to different coordinates", { nonRetryable: true });
-    this.fenceExternalEffect(input);
-    this.fenceMutation(mutationLease);
     const guard = await createGitCommandGuard(this.config.runtimeRoot);
     this.database.authTransaction((db) => {
       if (reopened) db.prepare("UPDATE forge_developer_executions SET task_id = ?, company_id = ?, workflow_id = ?, plan_revision = ?, attempt = ?, branch_name = ?, worktree_path = ?, target_base_sha = ?, supersedes_execution_id = ?, session_ref = ? WHERE id = ?").run(input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, input.worktreePath, input.targetBaseSha, input.developerExecutionId, input.developerSessionRef, executionId);
@@ -543,7 +480,7 @@ export class DeveloperService {
       const task = this.taskContext(input);
       const report = adoptingResolvedWorktree
         ? { summary: "Adopted an already-resolved forward merge from the owned worktree", resolvedFiles: conflict.conflictFiles, resultCommit: inspectedWorktree.headSha, resultTree: inspectedWorktree.treeSha, blocker: null }
-        : (await this.turnRunner.run({ task: { ...task, worktreePath: input.worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "integrator", ledger: "developer", executionId, promptKind: "merge-conflict-resolution", prompt: mergePrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperMergeConflictResolutionReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "merge-conflict-resolution", DeveloperMergeConflictResolutionReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision, signal: input.operationClaim?.signal, dispatchFence: () => { this.fenceExternalEffect(input); this.fenceMutation(mutationLease); } })).result;
+        : (await this.turnRunner.run({ task: { ...task, worktreePath: input.worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "integrator", ledger: "developer", executionId, promptKind: "merge-conflict-resolution", prompt: mergePrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperMergeConflictResolutionReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "merge-conflict-resolution", DeveloperMergeConflictResolutionReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision, signal: input.signal })).result;
       const missingFiles = conflict.conflictFiles.filter((file) => !report.resolvedFiles.includes(file));
       if (missingFiles.length || report.blocker !== null) throw new AgentFailure("merge-resolution-incomplete", missingFiles.length ? `The Developer did not resolve: ${missingFiles.join(", ")}` : report.blocker ?? "Merge-conflict resolution is blocked");
       const gitState = await this.worktrees.inspectDelivery(input.worktreePath, input.branchName);
@@ -572,7 +509,6 @@ export class DeveloperService {
         if (updated.changes === 1) {
           db.prepare("UPDATE forge_forward_merges SET status = 'merged', merge_commit = ?, tree = ?, result_head = ?, result_tree = ?, developer_execution_id = ?, verification_artifact_id = ?, delivery_artifact_id = ?, updated_at = ? WHERE task_id = ? AND company_id = ? AND conflict_artifact_id = ?").run(gitState.headSha, gitState.treeSha, gitState.headSha, gitState.treeSha, executionId, verificationArtifactRecord.id, deliveryArtifact.id, now, input.taskId, input.companyId, input.conflictArtifact.id);
           db.prepare("UPDATE forge_merge_conflict_resolutions SET developer_execution_id = ?, developer_session_ref = ?, result_commit = ?, result_tree = ?, status = 'completed', updated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ?").run(executionId, input.developerSessionRef, gitState.headSha, gitState.treeSha, now, input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha);
-          this.persistOperationResult(input, "merge-conflict-resolution", activityResult);
         }
         return updated.changes === 1 ? "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
       });
@@ -590,7 +526,6 @@ export class DeveloperService {
           db.prepare("UPDATE forge_developer_executions SET status = 'blocked', finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = 'clean', failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ? AND status IN ('starting', 'running')").run(now, now, blockedMerge.headSha, blockedMerge.treeSha, failure.code, failure.message, evidence.id, executionId);
           db.prepare("UPDATE forge_forward_merges SET status = 'merged', merge_commit = ?, tree = ?, result_head = ?, result_tree = ?, developer_execution_id = ?, verification_artifact_id = ?, failure_code = ?, failure_summary = ?, updated_at = ? WHERE task_id = ? AND company_id = ? AND conflict_artifact_id = ?").run(blockedMerge.headSha, blockedMerge.treeSha, blockedMerge.headSha, blockedMerge.treeSha, executionId, blockedVerificationArtifact.id, failure.code, failure.message, now, input.taskId, input.companyId, input.conflictArtifact.id);
           db.prepare("UPDATE forge_merge_conflict_resolutions SET developer_execution_id = ?, developer_session_ref = ?, result_commit = ?, result_tree = ?, status = 'blocked', updated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ?").run(executionId, input.developerSessionRef, blockedMerge.headSha, blockedMerge.treeSha, now, input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha);
-          this.persistOperationResult(input, "merge-conflict-resolution", { outcome: "verification_blocked", developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, resultCommit: blockedMerge.headSha, resultTree: blockedMerge.treeSha, evidenceArtifactId: evidence.id, verificationArtifact: { id: blockedVerificationArtifact.id, kind: "forward-merge-verification" as const }, code: failure.code, summary: failure.message });
         });
         return { outcome: "verification_blocked", developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, resultCommit: blockedMerge.headSha, resultTree: blockedMerge.treeSha, evidenceArtifactId: evidence.id, verificationArtifact: { id: blockedVerificationArtifact.id, kind: "forward-merge-verification" as const }, code: failure.code as "verification_failed" | "verification_timed_out" | "verification_evidence_too_large", summary: failure.message };
       }
@@ -599,7 +534,7 @@ export class DeveloperService {
         db.prepare("UPDATE forge_merge_conflict_resolutions SET developer_execution_id = ?, developer_session_ref = ?, status = 'blocked', updated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ?").run(executionId, input.developerSessionRef, this.now().toISOString(), input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha);
       });
       throw failure;
-    } finally { if (mutationLease) releaseWorktreeMutation(this.database, mutationLease); await guard.cleanup(); }
+    } finally { await guard.cleanup(); }
   }
 
   private async mergeState(worktreePath: string): Promise<{ head: string; mergeHead: string; conflicts: string[] }> {
@@ -613,7 +548,7 @@ export class DeveloperService {
   }
 
   async runRepair(rawInput: DeveloperRepairActivityInput & Partial<DeveloperSupervisorActivityIdentity> & OperationAware): Promise<DeveloperRepairActivityResult> {
-    const input = { ...DeveloperRepairActivityInputSchema.parse(rawInput), ...(rawInput.developerTurnExecutionId ? { developerTurnExecutionId: rawInput.developerTurnExecutionId } : {}), ...(rawInput.developerAttempt ? { developerAttempt: rawInput.developerAttempt } : {}), ...(rawInput.turnKind ? { turnKind: rawInput.turnKind } : {}), ...(rawInput.operationClaim ? { operationClaim: rawInput.operationClaim } : {}) };
+    const input = { ...DeveloperRepairActivityInputSchema.parse(rawInput), ...(rawInput.developerTurnExecutionId ? { developerTurnExecutionId: rawInput.developerTurnExecutionId } : {}), ...(rawInput.developerAttempt ? { developerAttempt: rawInput.developerAttempt } : {}), ...(rawInput.turnKind ? { turnKind: rawInput.turnKind } : {}), ...(rawInput.signal ? { signal: rawInput.signal } : {}) };
     if (input.blockingFindings.length === 0 && !input.repairPlan) throw new AgentFailure("repair-findings-missing", "Developer repair requires blocking findings or a repair plan");
     const prior = this.database.authQuery((db) => db.prepare(`SELECT id, status, session_ref, branch_name, worktree_path, target_base_sha, result_commit, result_tree, delivery_artifact_id, evidence_artifact_id
       FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; status: string; session_ref: string | null; branch_name: string; worktree_path: string; target_base_sha: string; result_commit: string | null; result_tree: string | null; delivery_artifact_id: string | null; evidence_artifact_id: string | null } | undefined);
@@ -631,13 +566,9 @@ export class DeveloperService {
     const repairAttemptId = `delivery_repair_${executionId.slice("developer_".length)}`;
     let repairRowCreated = false;
     let worktreePath = input.worktreePath;
-    const mutationLease = this.acquireMutation(input, worktreePath);
-    if (!mutationLease && input.operationClaim) throw new AgentFailure("worktree-mutation-in-progress", "The task worktree is being changed by another operation");
     const evidenceLines: string[] = [];
     try {
-      this.fenceExternalEffect(input);
-      this.fenceMutation(mutationLease);
-      this.database.authTransaction((db) => {
+    this.database.authTransaction((db) => {
         if (reopened) db.prepare("UPDATE forge_developer_executions SET task_id = ?, company_id = ?, workflow_id = ?, plan_revision = ?, attempt = ?, branch_name = ?, worktree_path = ?, target_base_sha = ?, supersedes_execution_id = ?, session_ref = ? WHERE id = ?").run(input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, worktreePath, input.targetBaseSha, input.developerExecutionId, input.developerSessionRef, executionId);
         db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL)").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, worktreePath, input.targetBaseSha, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt);
         db.prepare("INSERT OR IGNORE INTO forge_delivery_repairs (id, task_id, company_id, workflow_id, review_id, developer_execution_id, cycle, status, subject_commit, subject_tree, developer_session_ref, branch_name, worktree_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?)").run(repairAttemptId, input.taskId, input.companyId, input.workflowId, input.reviewId, executionId, input.cycle, input.subjectCommit, input.subjectTree, input.developerSessionRef, input.branchName, worktreePath, startedAt);
@@ -652,7 +583,7 @@ export class DeveloperService {
       const repairPrompt = this.repairPrompt(input.blockingFindings, { branchName: input.branchName, worktreePath, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree }, `${this.projectTestControl(input.taskId, input.companyId)} ${this.visualEvidenceInstruction(visualEvidence)}`);
       evidenceLines.push(JSON.stringify({ type: "forge.prompt", text: redact(repairPrompt) }));
       const task = this.taskContext(input);
-      const turn = await this.turnRunner.run({ task: { ...task, worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "builder", ledger: "developer", executionId, promptKind: "delivery-repair", prompt: repairPrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperRepairReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-repair", DeveloperRepairReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision, signal: input.operationClaim?.signal, dispatchFence: () => { this.fenceExternalEffect(input); this.fenceMutation(mutationLease); } });
+      const turn = await this.turnRunner.run({ task: { ...task, worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "builder", ledger: "developer", executionId, promptKind: "delivery-repair", prompt: repairPrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperRepairReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-repair", DeveloperRepairReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision, signal: input.signal });
       const report = turn.result;
       let durableProof: DurableBrowserProof | undefined, proofBlocker: string | null = null;
       let reportedPaths: string[] = [];
@@ -676,7 +607,6 @@ export class DeveloperService {
         const failureSummary = blocked ? persistedReport.blocker : null;
         const updated = db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ? AND status IN ('starting', 'running')").run(blocked ? "blocked" : "completed", this.now().toISOString(), this.now().toISOString(), gitState.headSha, gitState.treeSha, gitState.dirtyState, repairArtifact.id, evidence.id, executionId);
         if (updated.changes === 1) db.prepare("UPDATE forge_delivery_repairs SET status = ?, result_commit = ?, result_tree = ?, delivery_artifact_id = ?, evidence_artifact_id = ?, failure_code = ?, failure_summary = ?, finished_at = ? WHERE id = ?").run(blocked ? "blocked" : "completed", gitState.headSha, gitState.treeSha, repairArtifact.id, evidence.id, failureCode, failureSummary, this.now().toISOString(), row?.id);
-        if (updated.changes === 1) this.persistOperationResult(input, "delivery-repair", activityResult);
         return updated.changes === 1 ? blocked ? "blocked" : "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
       });
       if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "Developer execution was cancelled before completion");
@@ -701,14 +631,10 @@ export class DeveloperService {
       this.database.authTransaction((db) => {
         db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, result_commit = ?, result_tree = ?, dirty_state = ?, evidence_artifact_id = ? WHERE id = ?").run(effectiveExpected ? "blocked" : "failed", this.now().toISOString(), this.now().toISOString(), effectiveCode, effectiveSummary, observed?.headSha ?? null, observed?.treeSha ?? null, observed?.dirtyState ?? null, evidence.id, executionId);
         if (repairRowCreated) db.prepare("UPDATE forge_delivery_repairs SET status = ?, result_commit = ?, result_tree = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ?, finished_at = ? WHERE developer_execution_id = ? AND cycle = ?").run(effectiveExpected ? "blocked" : "failed", observed?.headSha ?? null, observed?.treeSha ?? null, effectiveCode, effectiveSummary, evidence.id, this.now().toISOString(), executionId, input.cycle);
-        if (blockedResult) this.persistOperationResult(input, "delivery-repair", blockedResult);
       });
       if (!effectiveExpected) throw error;
       return blockedResult!;
-    } finally {
-      if (mutationLease) releaseWorktreeMutation(this.database, mutationLease);
     }
-
   }
 
   async runCiRepair(rawInput: CiRepairActivityInput & Partial<DeveloperSupervisorActivityIdentity> & OperationAware): Promise<CiRepairActivityResult> {
@@ -734,14 +660,10 @@ export class DeveloperService {
     // Draft is not part of the pull request identity: acceptance marks a delivery ready for review while CI is still observed, so CI repair must still run on the exact head.
     if (pullRequest.state !== "open" || pullRequest.repository.toLowerCase() !== plan.repository.toLowerCase() || pullRequest.number !== plan.pullRequestNumber || pullRequest.url.replace(/\/$/, "").toLowerCase() !== plan.pullRequestUrl.replace(/\/$/, "").toLowerCase() || pullRequest.headBranch !== plan.headBranch || pullRequest.baseBranch !== plan.baseBranch || pullRequest.baseSha.toLowerCase() !== plan.baseSha.toLowerCase() || pullRequest.headSha.toLowerCase() !== input.failedHeadSha.toLowerCase()) throw new AgentFailure("ci-repair-pull-request-changed", "The pull request changed before CI repair");
     const worktreePath = await scopedRepository(this.config.worktreeRoot, input.worktreePath);
-    const mutationLease = this.acquireMutation(input, worktreePath);
-    if (!mutationLease && input.operationClaim) throw new AgentFailure("worktree-mutation-in-progress", "The task worktree is being changed by another operation");
     const executionId = input.developerTurnExecutionId ?? `developer_${randomBytes(12).toString("hex")}`;
     const repairId = `ci_repair_${createHash("sha256").update(executionId).digest("hex").slice(0, 24)}`;
     let evidenceLines: string[] = [];
     try {
-    this.fenceExternalEffect(input);
-    this.fenceMutation(mutationLease);
     let current = await this.worktrees.inspectDelivery(worktreePath, input.branchName);
     // A previously failed repair attempt can leave its own unpushed commit on HEAD.
     // Discard it and retry the same exact repair instead of refusing forever.
@@ -755,22 +677,17 @@ export class DeveloperService {
       throw new AgentFailure("developer-execution-identity-conflict", "The deterministic CI repair execution is bound to different coordinates", { nonRetryable: true });
     }
     const startedAt = this.now().toISOString();
-    try {
-      this.database.authTransaction((db) => {
+    this.database.authTransaction((db) => {
         // Attempt must climb: (workflow_id, plan_revision, attempt) is unique, so a
         // hardcoded attempt 1 made every CI repair after the first fail on insert.
         db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at) VALUES (?, ?, ?, ?, 0, (SELECT COALESCE(MAX(attempt), 0) + 1 FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = 0), 'starting', ?, ?, ?, NULL, NULL, ?, ?, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.workflowId, input.branchName, worktreePath, plan.baseSha, input.priorDeveloperExecutionId, input.priorDeveloperSessionRef, startedAt, startedAt);
         db.prepare("INSERT OR IGNORE INTO forge_ci_repairs (id, repair_plan_id, prior_developer_execution_id, prior_developer_session_ref, worktree_path, branch_name, prior_commit, prior_tree, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?)").run(repairId, input.repairPlanId, prior.id, input.priorDeveloperSessionRef, worktreePath, input.branchName, input.priorCommit, input.priorTree, startedAt);
-      });
-    } catch (error) {
-      if (isDeveloperExecutionActiveLeaseCollision(error)) throw new AgentFailure("active-lease", "A Developer execution is already active for this issue");
-      throw error;
-    }
+    });
     evidenceLines = [JSON.stringify({ type: "forge.ci-repair-context", ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, failedHeadSha: input.failedHeadSha, plan: redact(planText), evidence: redact(evidenceText) })];
     const ciRepairPrompt = this.ciRepairPrompt(planText, { branchName: input.branchName, worktreePath, priorCommit: input.priorCommit, priorTree: input.priorTree }, this.projectTestControl(input.taskId, input.companyId));
     const profile = this.executionProfile(input);
       const task = this.taskContext(input);
-      const turn = await this.turnRunner.run({ task: { ...task, worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "integrator", ledger: "developer", executionId, promptKind: "ci-repair", prompt: ciRepairPrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperRepairReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-repair", DeveloperRepairReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: 0, signal: input.operationClaim?.signal, dispatchFence: () => { this.fenceExternalEffect(input); this.fenceMutation(mutationLease); } });
+      const turn = await this.turnRunner.run({ task: { ...task, worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "integrator", ledger: "developer", executionId, promptKind: "ci-repair", prompt: ciRepairPrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperRepairReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-repair", DeveloperRepairReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: 0, signal: input.signal });
       const report = turn.result;
       const gitState = await this.worktrees.inspectDelivery(worktreePath, input.branchName);
       if (gitState.branchName !== input.branchName || gitState.dirtyState !== "clean" || report.blocker !== null) throw new AgentFailure("ci-repair-revision-invalid", "CI repair did not leave a clean task branch");
@@ -788,7 +705,6 @@ export class DeveloperService {
             db.prepare("UPDATE forge_releases SET status = 'superseded', superseded_at = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND superseded_at IS NULL").run(now, now, input.releaseId, input.taskId, input.companyId);
             db.prepare("UPDATE forge_ci_runs SET superseded_at = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND superseded_at IS NULL").run(now, now, input.ciRunId, input.taskId, input.companyId);
           }
-          this.persistOperationResult(input, "ci-repair", activityResult);
         }
         return updated.changes === 1 ? "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
       });
@@ -807,8 +723,6 @@ export class DeveloperService {
         db.prepare("UPDATE forge_ci_repair_plans SET status = 'planned', updated_at = ? WHERE id = ?").run(this.now().toISOString(), input.repairPlanId);
       });
       throw failure;
-    } finally {
-      if (mutationLease) releaseWorktreeMutation(this.database, mutationLease);
     }
   }
 

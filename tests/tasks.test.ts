@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -119,9 +119,6 @@ async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listO
     async recordProgress(workflowId: string, _input: RecordProgressInput) {
       return [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
     },
-    async resyncProjection(workflowId: string, _input: StartPlanningInput) {
-      return [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
-    },
     async query(workflowId: string) {
       return [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
     },
@@ -129,23 +126,6 @@ async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listO
   tasks = new TaskService(database, auth, projects, config, { workflow });
   return { root, config, database, auth, projects, tasks, workflow, stateByTask, workflowInputsByTask, planningInputsByTask, adminId: "admin-1", companyId: company.id, projectId: project.id, profileId: profile.id };
 }
-
-test("a creator that loses its lease cannot advance the creation intent", async () => {
-  const value = await fixture();
-  try {
-    const tasks = new TaskService(value.database, value.auth, value.projects, value.config, {
-      workflow: value.workflow,
-      fault(point, ids) {
-        if (point === "after_manifest_persisted") value.database.authTransaction((db) => db.prepare("UPDATE forge_task_creation_intents SET lease_token = 'lease-stolen' WHERE id = ?").run(ids.intentId));
-      },
-    });
-    await expect(tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Lease task", description: "body", idempotencyKey: "lease-task-0001", images: [] })).rejects.toMatchObject({ statusCode: 409, findings: [expect.objectContaining({ code: "creation-lease-lost" })] });
-    expect(value.database.authQuery((db) => db.prepare("SELECT state, lease_token, artifact_ids_json FROM forge_task_creation_intents WHERE idempotency_key = 'lease-task-0001'").get())).toEqual({ state: "staging", lease_token: "lease-stolen", artifact_ids_json: "[]" });
-    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE idempotency_key = 'lease-task-0001'").get())).toEqual({ count: 0 });
-  } finally {
-    value.database.close(); await rm(value.root, { recursive: true, force: true });
-  }
-});
 
 test("task details use the current unreleased worktree lease", async () => {
   const value = await fixture();
@@ -295,43 +275,6 @@ test("planning returns after its accepted projection while a rejected update rem
     await expect(value.tasks.executeCommand(value.adminId, rejected.task.id, "start_planning", { expectedRevision: 0 })).rejects.toMatchObject({ statusCode: 409, findings: [expect.objectContaining({ code: "workflow-update-rejected" })] });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
-
-for (const faultPoint of ["after_artifact_finalized", "after_task_committed", "before_response"] as const) {
-  test(`an exact retry converges after ${faultPoint}`, async () => {
-    const value = await fixture();
-    try {
-      let failOnce = true;
-      const faulting = new TaskService(value.database, value.auth, value.projects, value.config, {
-        workflow: value.workflow,
-        fault(point) {
-          if (point === faultPoint && failOnce) {
-            failOnce = false;
-            throw new Error(`simulated crash at ${point}`);
-          }
-        },
-      });
-      const taskInput = { projectId: value.projectId, title: `Recovery ${faultPoint}`, description: "durable body", idempotencyKey: `recovery-${faultPoint.replaceAll("_", "-")}`, images: [] };
-      await expect(faulting.createTask(value.adminId, value.companyId, taskInput)).rejects.toBeDefined();
-
-      const beforeRetry = value.database.authQuery((db) => db.prepare("SELECT state FROM forge_task_creation_intents WHERE idempotency_key = ?").get(taskInput.idempotencyKey) as { state: string });
-      expect(beforeRetry.state).toBe(faultPoint === "after_artifact_finalized" ? "failed_before_start" : faultPoint === "after_task_committed" ? "workflow_starting" : "started");
-      if (faultPoint === "after_artifact_finalized") {
-        expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE idempotency_key = ?").get(taskInput.idempotencyKey))).toEqual({ count: 0 });
-        const files = await readdir(join(value.root, "artifacts"), { recursive: true }).catch(() => [] as string[]);
-        expect(files.filter((entry) => entry.endsWith(".bin") || entry.endsWith(".tmp"))).toEqual([]);
-      }
-
-      const retried = await value.tasks.createTask(value.adminId, value.companyId, taskInput);
-      expect(retried.created).toBe(faultPoint === "after_artifact_finalized");
-      expect(retried.task).toMatchObject({ phase: "backlog", revision: 0 });
-      expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE idempotency_key = ?").get(taskInput.idempotencyKey))).toEqual({ count: 1 });
-      expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts WHERE company_id = ?").get(value.companyId))).toEqual({ count: 2 });
-      expect(value.database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all(retried.task.id))).toEqual([{ revision: 0 }]);
-    } finally {
-      value.database.close(); await rm(value.root, { recursive: true, force: true });
-    }
-  });
-}
 
 test("concurrent identical submissions converge and conflicting submissions fail closed", async () => {
   const value = await fixture();
@@ -580,7 +523,7 @@ test("shows the current target-base blocker instead of stale Developer recovery 
   }
 });
 
-test("repairs the legacy revision-zero seed without rewinding the latest projection", async () => {
+test("does not rewind the latest projection when a legacy revision-zero seed remains", async () => {
   const value = await fixture();
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Legacy seed", description: "body", idempotencyKey: "legacy-seed-0001", images: [] });
@@ -606,8 +549,8 @@ test("repairs the legacy revision-zero seed without rewinding the latest project
       timeline: db.prepare("SELECT event_hash FROM forge_issue_timeline WHERE task_id = ? AND revision = 0").get(issueId) as { event_hash: string },
       projection: db.prepare("SELECT revision, event_hash FROM forge_issue_projections WHERE task_id = ?").get(issueId) as { revision: number; event_hash: string },
     }));
-    expect(jsonRequired(repaired.snapshot.state_json)).toEqual(canonical);
-    expect(repaired.timeline.event_hash).toBe(projectionStateHash(canonical));
+    expect(jsonRequired(repaired.snapshot.state_json)).toEqual(legacy);
+    expect(repaired.timeline.event_hash).toBe(legacyHash);
     expect(repaired.projection).toEqual({ revision: 2, event_hash: projectionStateHash(approval) });
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });

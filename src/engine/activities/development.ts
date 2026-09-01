@@ -27,18 +27,14 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
           JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.task_id = execution.task_id
           WHERE execution.task_id = ? AND execution.company_id = ? AND execution.workflow_id = ?
             AND execution.status IN ('starting', 'running', 'failed', 'completed', 'blocked')
-            AND (execution.status <> 'failed' OR NOT EXISTS (SELECT 1 FROM forge_developer_result_claims claim WHERE claim.execution_id = execution.id))
-            AND (execution.status NOT IN ('completed', 'blocked') OR EXISTS (SELECT 1 FROM forge_developer_result_claims claim WHERE claim.execution_id = execution.id))
+            AND execution.status NOT IN ('completed', 'blocked')
             AND session.session_role IN ('builder', 'integrator') AND session.is_current = 1
             AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed')
-            AND NOT EXISTS (SELECT 1 FROM forge_developer_result_conflicts conflict WHERE conflict.execution_id = execution.id)
           ORDER BY execution.started_at DESC LIMIT 2`).all(input.taskId, input.companyId, input.workflowId) as Array<{ executionId: string; planRevision: number; attempt: number; sessionRef: string; worktreePath: string; branchName: string; targetBaseSha: string; supersedesExecutionId: string | null }>;
         if (executions.length !== 1) return [];
         const candidate = executions[0]!;
         const reopened = db.prepare(`UPDATE forge_developer_executions SET status = 'running', failure_code = NULL, finished_at = NULL
-          WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND status = 'failed'
-            AND NOT EXISTS (SELECT 1 FROM forge_developer_result_claims claim WHERE claim.execution_id = forge_developer_executions.id)
-            AND NOT EXISTS (SELECT 1 FROM forge_developer_result_conflicts conflict WHERE conflict.execution_id = forge_developer_executions.id)`).run(candidate.executionId, input.taskId, input.companyId, input.workflowId);
+          WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND status = 'failed'`).run(candidate.executionId, input.taskId, input.companyId, input.workflowId);
         if (reopened.changes === 0) {
           const current = db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(candidate.executionId) as { status: string } | undefined;
           if (!current || !["starting", "running", "completed", "blocked"].includes(current.status)) return [];
@@ -58,12 +54,12 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) });
     },
     async runDeveloperExecutionSupervised(input) {
-      return invokeAgent(input, () => runSupervised<WorkflowDeveloperExecutionResult>(input, "implementation", async (service, operationClaim) => {
-        const result = await service.run({ ...input, executionId: input.developerTurnExecutionId, operationClaim });
+      return invokeAgent(input, () => runSupervised<WorkflowDeveloperExecutionResult>(input, "implementation", async (service) => {
+        const result = await service.run({ ...input, executionId: input.developerTurnExecutionId });
         activityWorktrees.set(result.developerExecutionId, result.worktreePath);
         activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
         return workflowExecutionResult(result);
-      }, workflowExecutionResult), "builder");
+      }), "builder");
     },
     async runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput) {
       const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null } | undefined) ?? { worktreePath: latestWorktree(input, input.developerExecutionId), branchName: input.branchName, targetBaseSha: input.targetBaseSha, resultCommit: input.subjectCommit, resultTree: input.subjectTree };
@@ -78,13 +74,13 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, summary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.summary)) });
     },
     async runDeveloperRepairSupervised(input) {
-      return invokeAgent(input, () => runSupervised<WorkflowDeveloperRepairResult>(input, "delivery-repair", async (service, operationClaim) => {
+      return invokeAgent(input, () => runSupervised<WorkflowDeveloperRepairResult>(input, "delivery-repair", async (service, operation) => {
         const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null } | undefined) ?? { worktreePath: latestWorktree(input, input.developerExecutionId), branchName: input.branchName, targetBaseSha: input.targetBaseSha, resultCommit: input.subjectCommit, resultTree: input.subjectTree };
-        const result = await service.runRepair({ ...input, blockingFindings: input.blockingFindings ?? [], worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree!, operationClaim });
+        const result = await service.runRepair({ ...input, blockingFindings: input.blockingFindings ?? [], worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree!, signal: operation.signal });
         activityWorktrees.set(result.developerExecutionId, result.worktreePath);
         activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
         return workflowRepairResult(result);
-      }, workflowRepairResult), "builder");
+      }), "builder");
     },
     async cancelDeveloperExecution(input) {
       const result = await cancelDeveloperExecution(database, input.executionId, input.taskId);

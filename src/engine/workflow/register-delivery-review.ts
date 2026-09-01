@@ -41,7 +41,7 @@ function canRecoverRevalidatedReview(state: contracts.IssueWorkflowState): boole
 }
 
 export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
-  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
     let result: contracts.DeliveryReviewActivityResult | LegacyReviewResult;
     if (canRecoverRevalidatedReview(ctx.state)) {
       let recovered: contracts.RecoverRevalidatedDeliveryReviewResult;
@@ -183,7 +183,7 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
  */
 export async function resumeReviewedDeliveryTarget(ctx: IssueWorkflowContext): Promise<contracts.IssueWorkflowState> {
   if (ctx.state.phase !== "delivery_reviewed") return ctx.state;
-  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   if (ctx.input.deliveryTarget === "remote_branch") {
     await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName!, commitSha: ctx.state.resultCommit! });
   } else if (ctx.input.deliveryTarget !== "local_worktree") {
@@ -196,7 +196,7 @@ export async function resumeReviewedDeliveryTarget(ctx: IssueWorkflowContext): P
 }
 
 export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void {
-  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   setHandler(issueUpdates.review_delivery, ctx.guarded(async (rawInput: any) => {
     assertPayloadWithinLimit("delivery review command", rawInput);
     return reviewDelivery(ctx, contracts.StartPlanningInputSchema.parse(rawInput));
@@ -238,7 +238,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
 }
 
 export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
-  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
     const noProgressEnabled = true;
     const cycle = ctx.state.targetBaseOutcome === "revalidated" ? 1 : (ctx.state.repairCycle ?? 0) + 1;
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;

@@ -50,7 +50,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
   const projectState = (state: IssueWorkflowState): void => {
     const event = IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state });
     workerDatabase.projectIssueEvent(event);
-    workerDatabase.observeIssueProjection(event);
+    workerDatabase.projectIssueEvents([event]);
   };
   const beginPlanning = (workflowId: string, expectedRevision: number): IssueWorkflowState => {
     const taskId = workflowId.split("-issue-")[1]!;

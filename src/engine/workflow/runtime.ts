@@ -12,6 +12,7 @@ import { repairDelivery, resumeReviewedDeliveryTarget, reviewDelivery } from "./
 import { startDevelopment } from "./register-development.js";
 import { resolveMergeConflict } from "./register-merge.js";
 import { evidencePointer, humanBlocker } from "./state-transitions.js";
+import * as stateTransitions from "./state-transitions.js";
 import { TERMINAL_PHASES } from "../../issue-phases.js";
 import type { IssueWorkflowContext, StateRef } from "./context.js";
 
@@ -180,12 +181,18 @@ const CAPACITY_FAILURE_CODES = new Set(["not-found", "not-owner", "duplicate", "
 export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): { command: string; commandId: string } | null {
   void patchId;
   const command = AUTO_CHAINED_COMMANDS[ctx.state.phase as keyof typeof AUTO_CHAINED_COMMANDS];
-  if (!command || !ctx.state.allowedCommands.includes(command) || !true) return null;
+  if (!command || !ctx.state.allowedCommands.includes(command)) return null;
   if (command === "resolve_merge_conflict" && (ctx.state.mergeDecision || ctx.state.owner !== "lead")) return null;
+  if (command === "resolve_merge_conflict") {
+    const progress = stateTransitions.withRepairProgress(ctx.state, { signature: stateTransitions.repairSignature({ source: "merge", code: "merge_conflict" }), commit: ctx.state.resultCommit ?? null, diagnosticHash: null });
+    if ((progress.repairProgress?.repeats ?? 0) >= (ctx.input.repairCycleLimit ?? 0)) {
+      ctx.state = IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Merge conflict needs your call", activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      return null;
+    }
+  }
   // Routine (non-material) plans land in ready_for_development without going through autoApprovePlan's
   // auto-start, so this table entry needs its own gate to keep old histories that parked here replayable.
-  if (ctx.state.phase === "ready_for_development" && !true) return null;
-  if (haltedChains.has(chainKey(ctx.state.workflowId, command)) && true) return null;
+  if (haltedChains.has(chainKey(ctx.state.workflowId, command))) return null;
   if (runExecution.current().autoActionsHalted()) return null;
   const commandId = `${ctx.state.workflowId}:auto-${command}:${ctx.state.revision}`;
   return ctx.commandAlreadyProcessed(commandId) ? null : { command, commandId };
@@ -336,7 +343,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
 // that the projection never saw: recover to a retryable failed state and project it.
 export function createGuarded(
   store: { get: () => IssueWorkflowState; set: (next: IssueWorkflowState) => void },
-  options: { enabled: boolean; reviseContinueEnabled: boolean; failedRetryEnabled: boolean; project: (state: IssueWorkflowState) => Promise<unknown> },
+  options: { project: (state: IssueWorkflowState) => Promise<unknown> },
 ) {
   return <A extends unknown[], R>(fn: (...args: A) => Promise<R>, command?: string) => async (...args: A): Promise<R> => {
     const before = store.get();
@@ -380,7 +387,7 @@ export function createGuarded(
         await options.project(recorded);
         return recorded as R;
       }
-      if (!options.enabled || state === before) throw error;
+      if (state === before) throw error;
       const failure = permanentActivityFailure(error, true);
       const summary = failure?.summary ?? "The command failed; retry is available";
       const revision = state.revision + 1;
@@ -428,13 +435,12 @@ export function createGuarded(
         await options.project(retryable);
         throw error;
       }
-      const canRetryDevelopment = options.failedRetryEnabled
-        && state.planMaterial === true
+      const canRetryDevelopment = state.planMaterial === true
         && Boolean(state.leadOutputArtifactId)
         && Boolean(state.leadSessionRef);
       const allowedCommands = canRetryDevelopment
-        ? ["retry_development", "start_planning", ...(options.reviseContinueEnabled ? ["continue_work"] : []), "cancel_issue"]
-        : options.reviseContinueEnabled ? ["start_planning", "continue_work", "cancel_issue"] : ["start_planning", "cancel_issue"];
+        ? ["retry_development", "start_planning", "continue_work", "cancel_issue"]
+        : ["start_planning", "continue_work", "cancel_issue"];
       const retryActions = canRetryDevelopment
         ? [{ command: "retry_development" as const, label: "Retry development", requiresNote: false, destructive: false }, { command: "start_planning" as const, label: "Start planning", requiresNote: false, destructive: false }]
         : [{ command: "start_planning" as const, label: "Retry planning", requiresNote: false, destructive: false }];

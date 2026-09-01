@@ -214,7 +214,7 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
   const [revisionReason, setRevisionReason] = useState("");
   const [continueOpen, setContinueOpen] = useState(false);
   const [continueReason, setContinueReason] = useState("");
-  const disabled = busy || task.projection.status === "lagging" || Boolean(getWorkerHealthFailure(healthSnapshot));
+  const disabled = busy || Boolean(getWorkerHealthFailure(healthSnapshot));
   const canRevise = task.allowedCommands.includes("revise_plan");
   const canContinue = task.allowedCommands.includes("continue_work");
   const canReviewDelivery = task.allowedCommands.includes("review_delivery");
@@ -240,13 +240,6 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
   const hasDescription = canReviewDelivery || canAcceptDelivery || canRetryFinalReview || canRepairDelivery || (isBlocked && Boolean(task.lastHandlerError));
   const hasContent = canReviewDelivery || canPublishDraft || revisionOpen || continueOpen || Boolean(decisionControls);
   const actionTitle = canReviewDelivery ? deliveryAgent?.agentName && deliveryAgent.avatarSeed ? <span className="inline-flex items-center gap-1.5"><ProfileAvatar name={deliveryAgent.agentName} seed={deliveryAgent.avatarSeed} size="xs" />{deliveryAgent.agentName} completed the approved work.</span> : "Completed the approved work" : canRetryFinalReview ? "Final review did not finish" : canRepairDelivery ? "More proof is needed" : canPublishDraft ? updatesPullRequest ? "Ready to Update Pull Request" : "Ready to Create Pull Request" : canAcceptDelivery ? "Pull request review" : decisionControls ? "Review final plan" : task.allowedCommands.includes("start_planning") ? "Start planning" : supplementalCommand ? "Request supplemental review" : task.allowedCommands.includes("start_development") ? "Start development" : task.allowedCommands.includes("retry_development") ? "Retry development" : task.allowedCommands.includes("cancel_development") ? "Cancel development" : canContinuePastReview ? "Continue delivery" : task.allowedCommands.includes("retry_capacity") ? "Retry capacity" : task.allowedCommands.includes("resolve_merge_conflict") ? "Resolve merge conflict" : task.allowedCommands.includes("retry_target_base_reconciliation") ? "Retry target-base reconciliation" : task.allowedCommands.includes("retry_forward_merge_verification") ? "Retry verification" : task.allowedCommands.includes("reconcile_ci") ? "Check CI" : task.allowedCommands.includes("repair_ci") ? "Repair CI" : task.allowedCommands.includes("request_delivery_changes") ? "Request changes" : task.allowedCommands.includes("final_review") ? "Final review" : task.allowedCommands.includes("reconcile_acceptance") ? "Check ready state" : task.allowedCommands.includes("reconcile_merge") ? "Check merge" : canRevise ? "Revise plan" : canContinue ? "Continue work" : "Needs attention";
-  if (task.projection.status === "stalled") return <Card data-task-actions data-task-status-card size="sm" role="alert">
-    <CardHeader>
-      <CardTitle><h3>Forge's workflow is stuck</h3></CardTitle>
-      <CardDescription>{task.projection.message ?? "legacy workflow service reported a workflow failure."}</CardDescription>
-    </CardHeader>
-    <CardFooter className="justify-end"><Button size="sm" onClick={() => void onPlanAction("resync-projection")} disabled={busy}>Resync projection</Button></CardFooter>
-  </Card>;
   // Status-only phases render nothing here: the sidebar's "Next action" and the Chat already say what Forge is doing.
   if (task.phase === "development" || recoveryOwnsActions || (!hasDescription && !isBlocked && !hasContent && !hasFooterActions)) return <></>;
   return (
@@ -415,12 +408,11 @@ function DeliveryChecksCard({ task }: { task: ApiTask }): ReactElement {
   </Card>;
 }
 
-function TaskOptions({ canArchive, canCancel, archived, busy, resyncBusy, onArchive, onCancel, onSaveTemplate, onDuplicate, onResync, onUnarchive }: { canArchive: boolean; canCancel: boolean; archived: boolean; busy: boolean; resyncBusy: boolean; onArchive: () => void; onCancel: () => void; onSaveTemplate: () => void; onDuplicate: () => void; onResync: () => void; onUnarchive: () => void }): ReactElement {
+function TaskOptions({ canArchive, canCancel, archived, busy, onArchive, onCancel, onSaveTemplate, onDuplicate, onUnarchive }: { canArchive: boolean; canCancel: boolean; archived: boolean; busy: boolean; onArchive: () => void; onCancel: () => void; onSaveTemplate: () => void; onDuplicate: () => void; onUnarchive: () => void }): ReactElement {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Task options" title="Task options" />}><Ellipsis /></DropdownMenuTrigger>
-      {/* Resync stays enabled even while the projection is lagging — that's the state it exists to repair, so it can't share the lagging-gated `busy` flag the other items use. */}
-      <DropdownMenuContent align="start"><DropdownMenuItem disabled={busy} onClick={onSaveTemplate}>Save as template…</DropdownMenuItem><DropdownMenuItem disabled={busy} onClick={onDuplicate}>Duplicate…</DropdownMenuItem><DropdownMenuItem disabled={resyncBusy} onClick={onResync}>Resync</DropdownMenuItem>{archived ? <DropdownMenuItem disabled={busy} onClick={onUnarchive}><ArchiveRestore />Unarchive</DropdownMenuItem> : <>{canArchive ? <DropdownMenuItem disabled={busy} onClick={onArchive}><Archive />Archive task</DropdownMenuItem> : null}{canCancel ? <DropdownMenuItem variant="destructive" disabled={busy} onClick={onCancel}>Cancel task</DropdownMenuItem> : null}</>}</DropdownMenuContent>
+      <DropdownMenuContent align="start"><DropdownMenuItem disabled={busy} onClick={onSaveTemplate}>Save as template…</DropdownMenuItem><DropdownMenuItem disabled={busy} onClick={onDuplicate}>Duplicate…</DropdownMenuItem>{archived ? <DropdownMenuItem disabled={busy} onClick={onUnarchive}><ArchiveRestore />Unarchive</DropdownMenuItem> : <>{canArchive ? <DropdownMenuItem disabled={busy} onClick={onArchive}><Archive />Archive task</DropdownMenuItem> : null}{canCancel ? <DropdownMenuItem variant="destructive" disabled={busy} onClick={onCancel}>Cancel task</DropdownMenuItem> : null}</>}</DropdownMenuContent>
     </DropdownMenu>
   );
 }
@@ -435,13 +427,13 @@ function RescueControls({ task, busy, onRescue }: { task: ApiTask; busy: boolean
   return <Card data-task-rescue size="sm" aria-label="Task recovery">
     <CardHeader>
       <CardTitle><h3>Task recovery</h3></CardTitle>
-      <CardAction><div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmOpen(true)}>{busy ? "Rescuing…" : "Rescue"}</Button><Button size="sm" variant="ghost" onClick={loadDiagnostics} aria-expanded={diagnosticsOpen}>Diagnostics</Button></div></CardAction>
+      <CardAction><div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmOpen(true)}>{busy ? "Retrying…" : "Retry workflow"}</Button><Button size="sm" variant="ghost" onClick={loadDiagnostics} aria-expanded={diagnosticsOpen}>Diagnostics</Button></div></CardAction>
     </CardHeader>
     {report || diagnosticsOpen ? <CardContent>
       {report ? <div className="space-y-1 text-xs" data-rescue-report>{report.steps.map((step) => <div key={step.name}><span className="font-medium">{step.name}</span> · {step.outcome}: {step.detail}</div>)}</div> : null}
-      {diagnosticsOpen ? <div className="border-l pl-3 text-xs" data-task-diagnostics>{diagnostics ? <><div>Workflow: {diagnostics.workflow.status}{diagnostics.workflow.pendingWorkflowTaskAgeSeconds !== null ? ` · pending ${diagnostics.workflow.pendingWorkflowTaskAgeSeconds}s` : ""}</div>{diagnostics.workflow.lastWorkflowTaskFailure ? <div>Last failure: {diagnostics.workflow.lastWorkflowTaskFailure}</div> : null}<div>Executions: {diagnostics.executions.map((entry) => `${entry.kind} ${entry.status}`).join(", ") || "none"}</div><div>Capacity: {diagnostics.capacityRequests.map((entry) => entry.status).join(", ") || "none"}</div><div>Leases: {diagnostics.leases.map((entry) => entry.status).join(", ") || "none"}</div></> : "Loading diagnostics…"}</div> : null}
+      {diagnosticsOpen ? <div className="border-l pl-3 text-xs" data-task-diagnostics>{diagnostics ? <><div>Workflow: {diagnostics.workflow.status}{diagnostics.workflow.pendingWorkflowTaskAgeSeconds !== null ? ` · pending ${diagnostics.workflow.pendingWorkflowTaskAgeSeconds}s` : ""}</div>{diagnostics.workflow.lastWorkflowTaskFailure ? <div>Last failure: {diagnostics.workflow.lastWorkflowTaskFailure}</div> : null}<div>Executions: {diagnostics.executions.map((entry) => `${entry.kind} ${entry.status}`).join(", ") || "none"}</div></> : "Loading diagnostics…"}</div> : null}
     </CardContent> : null}
-    <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Rescue this task?</AlertDialogTitle><AlertDialogDescription>Forge will re-dispatch the workflow to the current worker, release stale locks, and retry the current step.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => void run()}>Rescue task</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+    <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Retry workflow?</AlertDialogTitle><AlertDialogDescription>Restart this task's workflow from its last saved state and retry the current step.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => void run()}>Retry workflow</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
   </Card>;
 }
 
@@ -666,7 +658,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
     {hasChecks ? <TabsContent value="checks"><CiPanel ci={task.ci!} /></TabsContent> : null}
   </>;
   return <>
-    <ApplicationFrame title={task.issueKey ? `${task.issueKey} · ${task.title}` : task.title} headerActions={<TaskOptions canArchive={["done", "cancelled", "failed"].includes(task.phase) && task.worktreeState !== "cleaned"} canCancel={task.allowedCommands.includes("cancel_issue")} archived={Boolean(task.archivedAt)} busy={busy || archiveBusy || task.projection.status === "lagging"} resyncBusy={busy} onArchive={() => setArchiveDialog("initial")} onCancel={() => void onPlanAction("cancel")} onSaveTemplate={() => void onSaveTemplate()} onDuplicate={() => void onDuplicate()} onResync={() => void onPlanAction("resync-projection")} onUnarchive={() => void unarchiveTask()} />}>
+    <ApplicationFrame title={task.issueKey ? `${task.issueKey} · ${task.title}` : task.title} headerActions={<TaskOptions canArchive={["done", "cancelled", "failed"].includes(task.phase) && task.worktreeState !== "cleaned"} canCancel={task.allowedCommands.includes("cancel_issue")} archived={Boolean(task.archivedAt)} busy={busy || archiveBusy} onArchive={() => setArchiveDialog("initial")} onCancel={() => void onPlanAction("cancel")} onSaveTemplate={() => void onSaveTemplate()} onDuplicate={() => void onDuplicate()} onUnarchive={() => void unarchiveTask()} />}>
       <article data-task-detail className="min-w-0">
         <div data-task-body className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_260px]">
           <div className="min-w-0">

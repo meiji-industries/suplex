@@ -393,26 +393,6 @@ test("keeps final-plan decisions together in the actions card", () => {
   expect(html).toContain(">Request review<");
 });
 
-test("keeps the stalled-projection task-actions card", () => {
-  const task = {
-    phase: "planning",
-    allowedCommands: [],
-    commands: [],
-    pendingAction: "Lead planning",
-    projection: { status: "stalled", message: "Workflow activity timed out." },
-  } as unknown as ApiTask;
-  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
-    task,
-    busy: false,
-    onStartPlanning: async () => undefined,
-    onPlanAction: async () => undefined,
-    onRevisePlan: async () => undefined,
-    onContinueWork: async () => undefined,
-  }) }));
-  expect(html).toContain('data-task-status-card="true"');
-  expect(html).toContain("Workflow activity timed out.");
-});
-
 test("explains delivery review without internal role language", () => {
   const task = {
     phase: "reviewing_delivery",

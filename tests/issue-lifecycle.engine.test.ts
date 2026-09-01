@@ -6,7 +6,7 @@ import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js"
 
 test("workflow identity dedupes, worktree governance persists across host restart", async () => {
   const h = await createEngineHarness(); h.seedTask("recovery");
-  h.activities.projectIssueState = async (event) => { h.database.projectIssueEvent(event); h.database.observeIssueProjection(event); return event.state; };
+  h.activities.projectIssueState = async (event) => { h.database.projectIssueEvents([event]); return event.state; };
   h.activities.cleanupTaskWorktree = async () => ({ outcome: "cleaned", dirtyFileCount: 0, evidenceArtifactId: "cleanup-evidence" });
   const input = { companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "recovery", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false, continuationState: { phase: "delivery_blocked" as const, revision: 20, owner: "human" as const, allowedCommands: ["retry_development" as const, "cancel_issue" as const], pendingAction: "Developer retry is available", lastEventId: "recovery:20", continuationCount: 0, lastSummaryHash: null, activeOperation: null, worktreePath: join(h.root, "worktrees", "recovery"), worktreeState: "present" as const, branchName: "forge/issue/recovery", targetBaseSha: engineFixture.base } };
   try {

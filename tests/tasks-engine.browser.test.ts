@@ -16,7 +16,7 @@ const github: GithubAdapter = { async checkAuthentication() {}, async getReposit
 test("the task detail remains backed by the engine snapshot after a host restart", async () => {
   class BrowserClock extends ImmediateClock { override async wait(milliseconds: number, signal: AbortSignal) { await new Promise<void>((resolve, reject) => { const timer = setTimeout(resolve, milliseconds); signal.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason); }, { once: true }); }); } }
   const h = await createEngineHarness({}, new BrowserClock()); h.seedTask("browser-engine");
-  h.activities.projectIssueState = async (event) => { h.database.projectIssueEvent(event); h.database.observeIssueProjection(event); return event.state; };
+  h.activities.projectIssueState = async (event) => { h.database.projectIssueEvents([event]); return event.state; };
   const auth = new AuthService(h.database, h.config, { webAuthn: webauthn });
   const projects = new ProjectService(h.database, auth, h.config, { localRepository, github });
   const tasks = new TaskService(h.database, auth, projects, h.config);
@@ -26,7 +26,6 @@ test("the task detail remains backed by the engine snapshot after a host restart
   const address = app.server.address(); if (!address || typeof address !== "object") throw new Error("Engine browser server has no port");
   try {
     const started = await startIssueWorkflow(h.config, { companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "browser-engine", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false });
-    const { resyncIssueProjection } = await import("../src/engine/service.js"); await resyncIssueProjection(h.config, started.workflowId, { expectedRevision: 0, actorUserId: engineFixture.actorUserId });
     const invitation = auth.createRecoveryInvitation({ confirmed: true, initiationMethod: "local-cli", installationId: h.config.installationId });
     const options = await app.inject({ method: "POST", url: "/api/auth/recovery/options", payload: { token: invitation.token } });
     const enrolled = await app.inject({ method: "POST", url: "/api/auth/recovery/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: "engine-browser-admin", type: "public-key" } } });

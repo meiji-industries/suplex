@@ -294,15 +294,3 @@ test("a worker-restart orphan is reopened in place while different coordinates s
     expect(fake.calls).toHaveLength(1);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
-test("a retry returns its recorded claim without rerunning the Developer", async () => {
-  const value = await fixture();
-  const fake = fakeTurnRunner(() => new Error("runner must not start"));
-  const result = { developerExecutionId: "developer_claimed", developerSessionRef: "session", worktreePath: "/worktree", branchName: "work/claimed", targetBaseSha: "a".repeat(40), currentStep: null, resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean", deliveryArtifactId: "delivery", evidenceArtifactId: "evidence", deliverySummary: "Already completed", outcome: "completed" };
-  try {
-    const artifactId = (value.database.authQuery((db) => db.prepare("SELECT id FROM forge_artifacts LIMIT 1").get()) as { id: string }).id;
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?)").run("developer_claimed", "task_1", "company_1", "workflow_1", 1, 1, "work/claimed", "/worktree", "a".repeat(40), new Date().toISOString()));
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_result_claims (execution_id, claim_key, result_hash, activity_result_json, delivery_artifact_id, evidence_artifact_id, claimed_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run("developer_claimed", "developer:developer_claimed", "hash", JSON.stringify(result), artifactId, artifactId, new Date().toISOString()));
-    await expect(new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run({ ...value.input, developerTurnExecutionId: "developer_claimed" })).resolves.toEqual(result);
-    expect(fake.calls).toEqual([]);
-  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
-});

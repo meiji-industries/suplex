@@ -10,7 +10,6 @@ import { ArtifactStore } from "../src/artifacts.js";
 import { AgentFailure, AgentService, deliveryBlockCode, isAgentExecutionActiveLeaseCollision, LeadOutputSchema, safeBlockSummary } from "../src/codex-lead.js";
 import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
-import { isDeveloperExecutionActiveLeaseCollision } from "../src/codex-developer.js";
 import { ForgeDatabase } from "../src/database.js";
 import { buildGitBranchName } from "../src/git-branch-name.js";
 import { fallbackGitPresentation } from "../src/git-presentation.js";
@@ -50,24 +49,6 @@ test("delivery failure codes identify malformed output and failed turns", () => 
 test("an OpenRouter missing-key planner failure keeps its actionable attention summary", () => {
   const summary = safeBlockSummary("authentication-required", false, "OpenRouter API key is not configured. Add it in Settings > Providers and retry.");
   expect(summary).toContain("OpenRouter API key is not configured");
-});
-
-test("recognizes the real SQLite error for an active developer execution lease", () => {
-  const database = new Database(":memory:");
-  try {
-    database.exec("CREATE TABLE forge_developer_executions (id text PRIMARY KEY, task_id text NOT NULL, status text NOT NULL); CREATE UNIQUE INDEX forge_developer_active_lease_idx ON forge_developer_executions (task_id) WHERE status IN ('starting', 'running', 'cancelling');");
-    database.prepare("INSERT INTO forge_developer_executions (id, task_id, status) VALUES ('first', 'task', 'starting')").run();
-    let collision: unknown;
-    try {
-      database.prepare("INSERT INTO forge_developer_executions (id, task_id, status) VALUES ('second', 'task', 'starting')").run();
-    } catch (error) {
-      collision = error;
-    }
-    expect(collision).toMatchObject({ code: "SQLITE_CONSTRAINT_UNIQUE", message: "UNIQUE constraint failed: forge_developer_executions.task_id" });
-    expect(isDeveloperExecutionActiveLeaseCollision(collision)).toBe(true);
-  } finally {
-    database.close();
-  }
 });
 
 async function execFileAsync(command: string, args: string[], options: { cwd?: string } = {}) {

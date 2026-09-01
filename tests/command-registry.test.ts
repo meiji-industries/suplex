@@ -29,7 +29,7 @@ test("task command routes stay in registry parity", async () => {
   try {
     const commandSlugs = [...ISSUE_COMMAND_SLUGS, "reject-plan"];
     const routes = commandSlugs.filter((slug) => app.hasRoute({ method: "POST", url: `/api/tasks/:taskId/${slug}` })).sort();
-    const expected = [...routedIssueCommands.map((descriptor) => descriptor.slug!), "revise-plan", "continue-work", "reject-plan", "resolve-decision-blocker", "resync-projection"].sort();
+    const expected = [...routedIssueCommands.map((descriptor) => descriptor.slug!), "revise-plan", "continue-work", "reject-plan", "resolve-decision-blocker"].sort();
 
     expect(routes).toEqual(expected);
     expect(routes).toMatchInlineSnapshot(`
@@ -54,7 +54,6 @@ test("task command routes stay in registry parity", async () => {
         "resolve-decision-blocker",
         "resolve-merge-conflict",
         "respond-plan-blocker",
-        "resync-projection",
         "retry-capacity",
         "retry-development",
         "retry-forward-merge-verification",

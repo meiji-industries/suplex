@@ -4,7 +4,7 @@ import { reconcileGithubObservations } from "../src/github-observation-reconcili
 import type { GithubPullRequestObservation } from "../src/github-release.js";
 import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/engine/issue-contracts.js";
 
-function state(phase: "ci_waiting" | "manual_merge" | "development", allowedCommands: string[], expectedHeadSha = "a".repeat(40)) {
+function state(phase: "ci_waiting" | "manual_merge" | "development" | "done", allowedCommands: string[], expectedHeadSha = "a".repeat(40)) {
   return IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState({ workflowId: `workflow-${phase}`, companyId: "company", projectId: "project", issueId: `task-${phase}`, projectRevisionId: "revision", briefArtifactId: "brief", briefSha256: "a".repeat(64), imageArtifactIds: [], requestHash: "b".repeat(64), roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }),
     phase,
@@ -80,4 +80,14 @@ test("a merged pull request is adopted into the projection when the workflow can
   expect(result.signalled).toBe(1);
   expect(projectIssueState).toHaveBeenCalledTimes(1);
   expect(projectIssueState.mock.calls[0]![0]).toMatchObject({ taskId: "merge", phase: "done", pendingAction: "Merged", revision: 4 });
+});
+
+test("updates a done task when GitHub reports its open pull request merged", async () => {
+  const done = { ...state("done", []), githubPullRequestState: "open" as const };
+  const rows = [{ taskId: "done", phase: "done", stateJson: JSON.stringify(done) }];
+  const projectIssueState = vi.fn();
+  const result = await reconcileGithubObservations({ ...database(rows), projectIssueState } as never, {} as never, { observe: async () => observed({ state: "merged" }) });
+
+  expect(result).toMatchObject({ inspected: 1, signalled: 1, errors: 0 });
+  expect(projectIssueState).toHaveBeenCalledWith(expect.objectContaining({ state: expect.objectContaining({ githubPullRequestState: "merged", mergeOutcome: "merged", pendingAction: "Merged" }) }));
 });

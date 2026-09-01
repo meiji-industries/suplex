@@ -30,8 +30,8 @@ test("a rejected workflow immediately projects a human-owned rescue state and lo
     for (let attempt = 0; attempt < 20 && !run.error; attempt += 1) await Promise.resolve();
     for (let attempt = 0; attempt < 20 && (!run.error || projected.length === 0); attempt += 1) await Promise.resolve();
     expect(run.error).toBeInstanceOf(Error);
-    expect(run.state).toMatchObject({ phase: "ci_waiting", owner: "human", allowedCommands: ["cancel_issue"], pendingAction: "Activity observeGithubPullRequest failed", lastHandlerError: { command: "workflow", reason: "Activity observeGithubPullRequest failed" } });
-    expect(projected).toContainEqual(expect.objectContaining({ owner: "human", pendingAction: "Activity observeGithubPullRequest failed" }));
+    expect(run.state).toMatchObject({ phase: "ci_waiting", owner: "human", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for CI", lastHandlerError: { command: "workflow", reason: "Activity observeGithubPullRequest failed" } });
+    expect(projected).toContainEqual(expect.objectContaining({ owner: "human", pendingAction: "Waiting for CI" }));
     expect(records).toContainEqual(expect.objectContaining({ level: 50, message: "Issue workflow run failed", workflowId, error: "Activity observeGithubPullRequest failed" }));
   } finally { run.dispose(); await h.stop(); }
 });

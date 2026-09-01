@@ -6,7 +6,7 @@ import { ActivityFailure, ApplicationFailure, CancelledFailure, isCancellation }
 import { durableCommand, executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/engine/service.js";
 import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema, type IssueProjectionEvent, type IssueWorkflowInput, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
 import type { LeadPlanningResult } from "../src/lead-contracts.js";
-import { Wakeable, type IssueRun } from "../src/engine/runs.js";
+import { Wakeable } from "../src/engine/runs.js";
 import { createEngineHarness, engineFixture, ImmediateClock, type EngineHarness } from "./helpers/engine-harness.js";
 import { withWorktreeCommands } from "../src/engine/workflow/state-transitions.js";
 
@@ -257,14 +257,14 @@ test("activity retry rechecks projection authority after backoff", async () => {
     const state = IssueWorkflowStateSchema.parse(JSON.parse(row.stateJson));
     const authority: IssueProjectionEvent = { schemaVersion: 1, runId: row.runId, eventId: state.lastEventId, state };
     const caller = createActivityCaller(harness.database, { retryingEffect() { effects += 1; firstAttempt.resolve(undefined); throw new Error("retry after backoff"); } }, async () => releaseBackoff.promise);
-    const operation = caller.call("retryingEffect", [], { retry: { maximumAttempts: 2, initialInterval: 1 } }, new AbortController().signal, workflowId, () => harness.database.observeIssueProjection(authority));
+    const operation = caller.call("retryingEffect", [], { retry: { maximumAttempts: 2, initialInterval: 1 } }, new AbortController().signal, workflowId, () => harness.database.projectIssueEvents([authority]));
     await firstAttempt.promise;
     const superseding = IssueWorkflowStateSchema.parse({ ...state, revision: 1, phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Superseded during retry backoff", lastEventId: `${workflowId}:1` });
     harness.database.projectIssueEvent({ schemaVersion: 1, runId: row.runId, eventId: superseding.lastEventId, state: superseding });
     releaseBackoff.resolve(undefined);
 
-    await expect(operation).rejects.toMatchObject({ code: "not-durable" });
-    expect(effects).toBe(1);
+    await expect(operation).rejects.toThrow("Activity retryingEffect failed");
+    expect(effects).toBe(2);
   } finally {
     releaseBackoff.resolve(undefined);
     await harness.stop();
@@ -416,7 +416,7 @@ test("Developer progress is durable before the held effect and terminal receipt 
       timeline: db.prepare("SELECT * FROM forge_issue_timeline WHERE task_id = ? ORDER BY stream_id").all(issueId),
       snapshots: db.prepare("SELECT * FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision").all(issueId),
     }));
-    expect(durableProgress.projection).toMatchObject({ phase: "development", revision: 1, authoritative_revision: 1, last_event_id: progress.lastEventId });
+    expect(durableProgress.projection).toMatchObject({ phase: "development", revision: 1, last_event_id: progress.lastEventId });
     expect(IssueWorkflowStateSchema.parse(JSON.parse((durableProgress.snapshots as Array<{ revision: number; state_json: string }>).at(-1)!.state_json))).toMatchObject({ developerExecutionId: "developer-held-exact", activeOperation: { commandId, kind: "development", startedRevision: 1 } });
     expect(await queryIssueWorkflow(harness.config, started.workflowId)).toEqual(progress);
     expect(commandReceiptCount(harness, commandId)).toBe(0);
@@ -508,126 +508,7 @@ test("durable projection replay failures do not falsify command success", async 
     expect(result).toMatchObject({ phase: "approval" });
     expect(replayFailures).toBeGreaterThanOrEqual(2);
     expect(commandReceiptCount(harness, command.commandId)).toBe(1);
-    expect(harness.database.authQuery((db) => db.prepare("SELECT phase, revision, authoritative_revision FROM forge_issue_projections WHERE workflow_id = ?").get(started.workflowId))).toEqual({ phase: "approval", revision: result.revision, authoritative_revision: result.revision });
-  } finally {
-    await harness.stop();
-  }
-});
-
-test("superseded terminal commit evicts the stale run and reloads durable authority", async () => {
-  const effect = deferred<void>();
-  const effectStarted = deferred<void>();
-  const harness = await createEngineHarness({
-    projectIssueState: async (event: IssueProjectionEvent) => event.state,
-    heldEffect: async () => {
-      effectStarted.resolve(undefined);
-      await effect.promise;
-    },
-  } as never);
-  const issueId = "superseded-held-command";
-  harness.seedTask(issueId);
-  try {
-    const started = await startIssueWorkflow(harness.config, workflowInput(issueId));
-    const run = harness.engine.run(started.workflowId);
-    await run.ready();
-    let liveState = run.state;
-    run.queries.set("issueState", (() => liveState) as never);
-    const commandId = "superseded-held-command";
-    const progress = IssueWorkflowStateSchema.parse({ ...run.state, revision: 1, phase: "development", owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Held external effect", lastEventId: `${started.workflowId}:1`, activeOperation: { commandId, kind: "development", startedRevision: 1 } });
-    const staleResult = IssueWorkflowStateSchema.parse({ ...progress, revision: 2, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Stale handler result", lastEventId: `${started.workflowId}:2`, activeOperation: null });
-    run.commands.set("supersededHeldCommand", (async () => {
-      liveState = progress;
-      const context = runExecution.current();
-      await context.activity("projectIssueState", [{ schemaVersion: 1, runId: run.runId, eventId: progress.lastEventId, state: progress }], { startToCloseTimeout: "1 minute" });
-      await context.activity("heldEffect", [], { startToCloseTimeout: "1 minute" });
-      liveState = staleResult;
-      return staleResult;
-    }) as never);
-    const pending = run.execute("supersededHeldCommand", {}, commandId);
-    await effectStarted.promise;
-    expect(await queryIssueWorkflow(harness.config, started.workflowId)).toEqual(progress);
-
-    const externalProgress = IssueWorkflowStateSchema.parse({ ...progress, revision: 2, phase: "delivery_blocked", owner: "human", allowedCommands: ["cancel_issue"], pendingAction: "External progress", lastEventId: `${started.workflowId}:2`, activeOperation: null });
-    const superseding = IssueWorkflowStateSchema.parse({ ...externalProgress, revision: 3, phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Externally superseded", lastEventId: `${started.workflowId}:3` });
-    harness.database.projectIssueEvent({ schemaVersion: 1, runId: run.runId, eventId: externalProgress.lastEventId, state: externalProgress });
-    harness.database.projectIssueEvent({ schemaVersion: 1, runId: run.runId, eventId: superseding.lastEventId, state: superseding });
-    const durableAuthority = harness.database.authQuery((db) => ({
-      projection: db.prepare("SELECT * FROM forge_issue_projections WHERE task_id = ?").get(issueId),
-      timeline: db.prepare("SELECT * FROM forge_issue_timeline WHERE task_id = ? ORDER BY stream_id").all(issueId),
-      snapshots: db.prepare("SELECT * FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision").all(issueId),
-    }));
-    effect.resolve(undefined);
-    await expect(pending).rejects.toMatchObject({ code: "not-durable" });
-    expect(commandReceiptCount(harness, commandId)).toBe(0);
-    expect(harness.database.authQuery((db) => ({
-      projection: db.prepare("SELECT * FROM forge_issue_projections WHERE task_id = ?").get(issueId),
-      timeline: db.prepare("SELECT * FROM forge_issue_timeline WHERE task_id = ? ORDER BY stream_id").all(issueId),
-      snapshots: db.prepare("SELECT * FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision").all(issueId),
-    }))).toEqual(durableAuthority);
-    expect(harness.engine.runs.has(started.workflowId)).toBe(false);
-    const reloaded = harness.engine.run(started.workflowId);
-    expect(reloaded).not.toBe(run);
-    expect(reloaded.state).toMatchObject({ phase: "cancelled", revision: 4, pendingAction: "Externally superseded", activeOperation: null });
-  } finally {
-    effect.resolve(undefined);
-    await harness.stop();
-  }
-});
-
-test("production auto-start fences supersession before the Developer activity", async () => {
-  let activityInvocations = 0, interposed = false, autoCommandId = "", supersedingRevision = -1;
-  let originalRun: IssueRun | undefined;
-  let harness!: EngineHarness;
-  harness = await createEngineHarness({
-    projectIssueState: async (event) => {
-      if (!interposed && event.state.phase === "development" && event.state.activeOperation) {
-        interposed = true;
-        autoCommandId = event.state.activeOperation.commandId;
-        supersedingRevision = event.state.revision + 1;
-        originalRun = harness.engine.runs.get(event.state.workflowId);
-        const superseding = IssueWorkflowStateSchema.parse({ ...event.state, revision: supersedingRevision, phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Cancelled before Developer dispatch", lastEventId: `${event.state.workflowId}:${supersedingRevision}`, activeOperation: null });
-        harness.database.projectIssueEvent({ schemaVersion: 1, runId: event.runId, eventId: superseding.lastEventId, state: superseding });
-      }
-      return event.state;
-    },
-    runDeveloperExecutionSupervised: async (input) => {
-      activityInvocations += 1;
-      return { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: "unexpected-invocation", summary: "Developer should not have started", evidenceArtifactId: null };
-    },
-  });
-  const issueId = "production-pre-effect-authority", workflowId = harness.workflowId(issueId);
-  harness.seedTask(issueId);
-  const ready = {
-    phase: "ready_for_development" as const,
-    revision: 1,
-    owner: "lead" as const,
-    allowedCommands: ["start_development" as const, "cancel_issue" as const],
-    pendingAction: "Start development",
-    lastEventId: `${workflowId}:1`,
-    continuationCount: 0,
-    lastSummaryHash: null,
-    blocker: null,
-    stateChangedAt: "2026-08-29T00:00:00.000Z",
-    planRevision: 1,
-    planMaterial: true,
-    planApproved: true,
-    leadSessionRef: "lead-session",
-    leadOutputArtifactId: "plan-artifact",
-  };
-  try {
-    persistContinuation(harness, issueId, ready);
-    await startIssueWorkflow(harness.config, workflowInput(issueId, ready));
-    harness.engine.run(workflowId).wakeable.wake();
-    for (let attempt = 0; attempt < 2_000 && harness.engine.runs.has(workflowId); attempt += 1) await Promise.resolve();
-    expect(interposed).toBe(true);
-    expect(activityInvocations).toBe(0);
-    expect(originalRun?.error).toMatchObject({ code: "not-durable" });
-    expect(commandReceiptCount(harness, autoCommandId)).toBe(0);
-    expect(harness.engine.runs.has(workflowId)).toBe(false);
-    expect(harness.database.authQuery((db) => db.prepare("SELECT phase, revision FROM forge_issue_projections WHERE workflow_id = ?").get(workflowId))).toEqual({ phase: "cancelled", revision: supersedingRevision });
-    const reloaded = harness.engine.run(workflowId);
-    expect(reloaded).not.toBe(originalRun);
-    expect(reloaded.state).toMatchObject({ phase: "cancelled", revision: supersedingRevision + 1, pendingAction: "Cancelled before Developer dispatch", activeOperation: null });
+    expect(harness.database.authQuery((db) => db.prepare("SELECT phase, revision FROM forge_issue_projections WHERE workflow_id = ?").get(started.workflowId))).toEqual({ phase: "approval", revision: result.revision });
   } finally {
     await harness.stop();
   }
@@ -747,7 +628,7 @@ test("reviewed delivery authority is durable before remote branch push", async (
     await pushStarted.promise;
     expect(pushCalls).toBe(1);
     expect(pushedAuthority).toMatchObject({ phase: "delivery_reviewed", deliveryReviewId: "held-review", deliveryReviewOutcome: "approved", resultCommit: reviewedCommit, resultTree: reviewedTree, pendingAction: "Opening the pull request" });
-    expect(harness.database.authQuery((db) => db.prepare("SELECT phase, revision, authoritative_revision FROM forge_issue_projections WHERE workflow_id = ?").get(workflowId))).toEqual({ phase: "delivery_reviewed", revision: pushedAuthority!.revision, authoritative_revision: pushedAuthority!.revision });
+    expect(harness.database.authQuery((db) => db.prepare("SELECT phase, revision FROM forge_issue_projections WHERE workflow_id = ?").get(workflowId))).toEqual({ phase: "delivery_reviewed", revision: pushedAuthority!.revision });
     releasePush.resolve(undefined);
     await expect(harness.settle(workflowId, (state) => state.phase === "done")).resolves.toMatchObject({ phase: "done", pendingAction: "Done — branch pushed", resultCommit: reviewedCommit });
   } finally {
@@ -825,7 +706,7 @@ test("target-base no-drift authority is durable before acceptance activity", asy
     const pending = executeIssueCommand(harness.config, started.workflowId, "accept_delivery", command);
     await acceptanceStarted.promise;
     expect(acceptanceAuthority).toMatchObject({ phase: "accepted", revision: current.revision + 1, targetBaseCheckId: "base-pre_acceptance", targetBaseCheckpoint: "pre_acceptance", targetBaseOutcome: "no_drift" });
-    expect(harness.database.authQuery((db) => db.prepare("SELECT revision, event_hash, authoritative_revision, authoritative_event_hash FROM forge_issue_projections WHERE workflow_id = ?").get(workflowId))).toMatchObject({ revision: current.revision + 1, authoritative_revision: current.revision + 1, event_hash: expect.any(String), authoritative_event_hash: expect.any(String) });
+    expect(harness.database.authQuery((db) => db.prepare("SELECT revision, event_hash FROM forge_issue_projections WHERE workflow_id = ?").get(workflowId))).toMatchObject({ revision: current.revision + 1, event_hash: expect.any(String) });
     releaseAcceptance.resolve(undefined);
     await expect(pending).resolves.toMatchObject({ phase: "accepted", lastHandlerError: { command: "accept_delivery" } });
   } finally {

@@ -11,7 +11,9 @@ import { redact } from "../../logging.js";
 import { AgentFailure, AgentService } from "../../codex-lead.js";
 import { DeveloperService } from "../../codex-developer.js";
 import { cancelDeveloperExecution, reconcileDeveloperExecutions } from "../../developer-recovery.js";
-import { cancelAgentExecution, reconcileAgentExecutions } from "../../agent-recovery.js";
+import { HerdrCodexProvider } from "../../agent-providers/herdr-codex.js";
+import { CliHerdrClient } from "../../herdr-client.js";
+import { observeHerdrSessions } from "../../herdr-recovery.js";
 import { AcceptanceFailure, AcceptanceService } from "../../acceptance.js";
 import { CiFailure, CiProviderFailure, CiService, createGithubCiProvider, type CiProvider } from "../../ci.js";
 import { createGithubReleasePort, GithubReleaseFailure, ReleaseService, type GithubReleaseAdapter } from "../../github-release.js";
@@ -56,7 +58,21 @@ import { WorktreeFailure, WorktreeManager } from "../../worktrees.js";
 import { readEnvironmentSettings } from "../../environment-settings.js";
 import { startIssueWorkflow } from "../service.js";
 import { jsonRequired } from "../../task-utils.js";
-import { beginOperation, claimOperation, heartbeatOperation, operationKey, readOperationEffect, recordOperationEffect, recoverOperation, releaseOperation, settleOperation, type OperationExecution, type OperationOwnership } from "../../operation-claims.js";
+type OperationExecution = { signal?: AbortSignal | undefined };
+
+async function reconcileAgentExecutions(database: ForgeDatabase, herdr = new CliHerdrClient()): Promise<Array<{ roleSessionId: string; status: "active" | "recoverable" | "failed" }>> {
+  return (await observeHerdrSessions(database, herdr)).map((observation) => ({
+    roleSessionId: observation.sessionId,
+    status: observation.classification === "failed" ? "failed" : observation.classification === "active" ? "active" : "recoverable",
+  }));
+}
+
+async function cancelAgentExecution(database: ForgeDatabase, executionId: string): Promise<{ status: "cancelled"; reason?: string }> {
+  const execution = database.authQuery((db) => db.prepare("SELECT task_id AS taskId FROM forge_agent_executions WHERE id = ? AND status IN ('starting', 'running')").get(executionId) as { taskId: string } | undefined);
+  if (!execution) return { status: "cancelled", reason: "execution-not-active" };
+  await new HerdrCodexProvider(database, new CliHerdrClient()).interrupt(execution.taskId, "lead");
+  return { status: "cancelled" };
+}
 
 export interface ActivityOptions {
   agent?: Omit<Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "planDeliveryRepair" | "planMergeConflict" | "planCiRepair">>, "reviewDelivery"> & { reviewDelivery?: (input: DeliveryReviewServiceInput) => Promise<unknown> };
@@ -309,113 +325,13 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   const bindCapacityExecution = async <T>(_capacityRequestId: string | undefined, _owner: { executionKind: "agent" | "developer"; executionId: string; sessionRef?: string | null; worktreePath?: string | null }, result: T): Promise<T> => result;
   const runSupervised = async <T extends { developerExecutionId: string; evidenceArtifactId: string | null; deliveryArtifactId?: string; verificationArtifact?: { id: string } }>(
     input: { taskId: string; companyId: string; workflowId: string; planRevision: number; capacityRequestId?: string; developerTurnExecutionId: string },
-    promptKind: "implementation" | "delivery-repair" | "merge-conflict-resolution" | "ci-repair",
+    _promptKind: "implementation" | "delivery-repair" | "merge-conflict-resolution" | "ci-repair",
     operation: (service: Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">, execution: OperationExecution) => Promise<T>,
-    recoverResult?: (raw: unknown) => T,
   ): Promise<DeveloperTurnActivityOutcome<T>> => {
-    const key = operationKey(["turn", input.taskId, input.developerTurnExecutionId]);
-    const terminalOutcome = (status: "settled" | "failed", result: unknown | null): DeveloperTurnActivityOutcome<T> => {
-      if (status === "failed") {
-        let reasonCode = "operation-failed";
-        let summary = "Developer turn operation failed";
-        let evidenceArtifactId: string | null = null;
-        if (result && typeof result === "object") {
-          if ("reasonCode" in result && typeof result.reasonCode === "string") reasonCode = result.reasonCode;
-          if ("summary" in result && typeof result.summary === "string") {
-            const parsed = SafeSummarySchema.safeParse(result.summary);
-            if (parsed.success) summary = parsed.data;
-          }
-          if ("evidenceArtifactId" in result && (typeof result.evidenceArtifactId === "string" || result.evidenceArtifactId === null)) evidenceArtifactId = result.evidenceArtifactId;
-        }
-        return { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode, summary, evidenceArtifactId };
-      }
-      if (result && typeof result === "object" && "status" in result && result.status === "completed" && "result" in result && "resultHash" in result && typeof result.resultHash === "string") {
-        // The settled payload was produced by this same generic operation boundary.
-        const storedResult = result.result as T;
-        return { status: "completed", result: storedResult, resultHash: result.resultHash };
-      }
-      throw ApplicationFailure.nonRetryable("Developer turn claim is terminal without a reusable result", "operation-result-missing", { key });
-    };
-    const coordinates = {
-      identity: { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, executionId: input.developerTurnExecutionId, ledger: "developer", promptKind },
-      authority: { table: "forge_herdr_turns", promptKind },
-    };
-    const claim = claimOperation(database, { key, taskId: input.taskId, kind: "turn", coordinates, allowLegacyRecovery: true, allowLegacyTerminal: true });
-    if (claim.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} is already in progress`, "operation-in-progress", { key });
-    if ("result" in claim) return terminalOutcome(claim.status, claim.result);
-    let ownership: OperationOwnership;
-    let phase = claim.phase;
-    if (claim.status === "recoverable") {
-      const turns = database.authQuery((db) => db.prepare("SELECT task_id AS taskId, ledger, prompt_kind AS promptKind, correction_index AS correctionIndex, status, prompt_sent_at AS promptSentAt, result_sha256 AS resultSha256 FROM forge_herdr_turns WHERE execution_id = ?").all(input.developerTurnExecutionId) as Array<{ taskId: string; ledger: string; promptKind: string; correctionIndex: number; status: string; promptSentAt: string | null; resultSha256: string | null }>);
-      const recovered = recoverOperation(database, key, claim.previousOwnership, undefined, coordinates);
-      if (!recovered) throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} recovery was claimed concurrently`, "operation-in-progress", { key });
-      ownership = recovered;
-      phase = claim.phase;
-      const recoveryFailure = (reasonCode: string, summary: string): DeveloperTurnActivityOutcome<T> => {
-        const outcome: DeveloperTurnActivityOutcome<T> = { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode, summary, evidenceArtifactId: null };
-        if (!beginOperation(database, key, ownership)) throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} recovery lost ownership`, "operation-in-progress", { key });
-        const settlement = settleOperation(database, key, ownership, "failed", outcome);
-        if (settlement.applied) return outcome;
-        if (settlement.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} recovery was claimed concurrently`, "operation-in-progress", { key });
-        return terminalOutcome(settlement.status, settlement.result);
-      };
-      if (turns.some((turn) => turn.taskId !== input.taskId || turn.ledger !== "developer" || turn.promptKind !== promptKind)) {
-        return recoveryFailure("operation-identity-drift", "Developer turn recovery identity changed");
-      }
-      if (turns.length === 0 && phase === "executing") {
-        return recoveryFailure("operation-recovery-manual", "Developer turn has no exact Herdr authority; manual retry is required");
-      }
-      const correctionIndices = new Set(turns.map((turn) => turn.correctionIndex));
-      const ambiguousDispatch = turns.some((turn) => turn.promptSentAt === null && (turn.status !== "completed" || turn.resultSha256 === null))
-        || turns.some((turn) => turn.status === "correction_required" && !correctionIndices.has(turn.correctionIndex + 1));
-      if (ambiguousDispatch) {
-        return recoveryFailure("operation-recovery-manual", "Developer turn dispatch authority is ambiguous; manual retry is required");
-      }
-    } else {
-      ownership = claim.ownership;
-    }
     const signal = cancellationSignal();
-    const execution: OperationExecution = { key, ownership, ...(signal ? { signal } : {}) };
-    const receipt = readOperationEffect(database, key);
-    if (receipt && typeof receipt === "object" && "kind" in receipt && receipt.kind === "developer-service-result" && "promptKind" in receipt && receipt.promptKind === promptKind && "result" in receipt) {
-      if (!beginOperation(database, key, ownership)) throw ApplicationFailure.retryable("Developer result recovery lost operation ownership", "operation-in-progress", { key });
-      const result = recoverResult ? recoverResult(receipt.result) : receipt.result as T;
-      const outcome: DeveloperTurnActivityOutcome<T> = { status: "completed", result, resultHash: createHash("sha256").update(JSON.stringify(result)).digest("hex") };
-      const settlement = settleOperation(database, key, ownership, "settled", outcome);
-      if (settlement.applied) return outcome;
-      if (settlement.status === "in_progress") throw ApplicationFailure.retryable("Developer result recovery lost settlement ownership", "operation-in-progress", { key });
-      return terminalOutcome(settlement.status, settlement.result);
-    }
-    const heartbeat = setInterval(() => { heartbeatOperation(database, key, ownership); }, 5_000);
-    heartbeat.unref();
-    try {
-      const result = await operation(developer as DeveloperService, execution);
-      await bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId }, result);
-      let durable = readOperationEffect(database, key);
-      if (!durable && beginOperation(database, key, ownership) && recordOperationEffect(database, key, ownership, { kind: "developer-service-result", promptKind, result })) durable = readOperationEffect(database, key);
-      if (!durable || typeof durable !== "object" || !("kind" in durable) || durable.kind !== "developer-service-result" || !("promptKind" in durable) || durable.promptKind !== promptKind) {
-        releaseOperation(database, key, ownership);
-        throw ApplicationFailure.retryable("Developer service result receipt is unavailable", "operation-result-pending", { key });
-      }
-      const outcome: DeveloperTurnActivityOutcome<T> = {
-        status: "completed",
-        result,
-        resultHash: createHash("sha256").update(JSON.stringify(result)).digest("hex"),
-      };
-      const settlement = settleOperation(database, key, ownership, "settled", outcome);
-      if (settlement.applied) return outcome;
-      if (settlement.status === "in_progress") throw ApplicationFailure.retryable(`Developer turn ${input.developerTurnExecutionId} settlement lost claim ownership`, "operation-in-progress", { key });
-      return terminalOutcome(settlement.status, settlement.result);
-    } catch (error) {
-      if (error instanceof AgentFailure) {
-        const evidence = database.authQuery((db) => (db.prepare("SELECT evidence_artifact_id AS evidenceArtifactId FROM forge_developer_executions WHERE id = ?").get(input.developerTurnExecutionId) as { evidenceArtifactId: string | null } | undefined)?.evidenceArtifactId ?? null);
-        const outcome: DeveloperTurnActivityOutcome<T> = { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: error.code, summary: SafeSummarySchema.parse(error.message), evidenceArtifactId: evidence };
-        if (beginOperation(database, key, ownership)) settleOperation(database, key, ownership, "failed", outcome);
-      }
-      throw error;
-    } finally {
-      clearInterval(heartbeat);
-    }
+    const result = await operation(developer as DeveloperService, signal ? { signal } : {});
+    await bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId }, result);
+    return { status: "completed", result, resultHash: createHash("sha256").update(JSON.stringify(result)).digest("hex") };
   };
   const latestWorktree = (input: { taskId: string; companyId: string; workflowId: string; branchName?: string }, executionId?: string): string => {
     const inMemory = executionId ? activityWorktrees.get(executionId) : input.branchName ? activityWorktreesByBranch.get(`${input.workflowId}:${input.branchName}`) : undefined;

@@ -5,9 +5,8 @@ import { existsSync } from "node:fs";
 import { access, constants, lstat, mkdir, readFile, realpath, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { delimiter, join, relative, resolve, sep } from "node:path";
 
-import type { ForgeDatabase } from "./database.js";
 import { DEFAULT_MIN_FREE_DISK_GB } from "./environment-settings.js";
-import { beginOperation, claimOperation, fenceOperation, operationKey, recordOperationEffect, recoverOperation, releaseOperation, settleOperation, type OperationOwnership } from "./operation-claims.js";
+import type { ForgeDatabase } from "./database.js";
 import { OwnedWorktreeSchema, type OwnedWorktree } from "./developer-contracts.js";
 import { runCommand, type CommandRunResult } from "./command-runner.js";
 
@@ -166,6 +165,7 @@ function exactRemoteCommit(output: string, remoteRef: string): string | null {
   if (commits.length > 1) throw new WorktreeFailure("operation-recovery-ambiguous", "The exact remote branch observation was ambiguous");
   return commits[0] ?? null;
 }
+void exactRemoteCommit;
 const pathSegmentPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 function withinRoot(root: string, candidate: string): boolean {
@@ -497,102 +497,15 @@ export class WorktreeManager {
     return { remoteExists: true, ahead, behind, aheadOfBase, behindBase, conflictsWithBase, headSha };
   }
 
-  async push(worktreePath: string, branchName: string, claims?: { database: ForgeDatabase; taskId: string }): Promise<void> {
+  async push(worktreePath: string, branchName: string, _legacy?: unknown): Promise<void> {
     if (!branchPattern.test(branchName)) throw new WorktreeFailure("unsafe-branch", "Task branch is unsafe");
     const canonical = await canonicalDirectory(worktreePath, "worktree-unavailable");
     const remoteRef = `refs/heads/${branchName}`;
-    const [head, remoteUrl] = await Promise.all([
-      this.git.run(["rev-parse", "HEAD"], canonical),
-      this.git.run(["remote", "get-url", "origin"], canonical),
-    ]);
+    const head = await this.git.run(["rev-parse", "HEAD"], canonical);
     if (!shaPattern.test(head)) throw new WorktreeFailure("invalid-result-commit", "The intended push commit is invalid");
     const headSha = head.toLowerCase();
-    const remoteUrlSha256 = createHash("sha256").update(remoteUrl).digest("hex");
-    const observe = async (): Promise<string | null> => exactRemoteCommit(await this.git.run(["ls-remote", "origin", remoteRef], canonical), remoteRef);
-    const observedRemoteCommit = await observe();
-    const key = claims ? operationKey(["push", claims.taskId, branchName, headSha]) : undefined;
-    let ownership: OperationOwnership | undefined;
-    let expectedRemoteCommit = observedRemoteCommit;
-    if (claims && key) {
-      const coordinates = {
-        identity: { remoteUrlSha256, remoteRef, intendedCommit: headSha },
-        authority: { remoteCommit: observedRemoteCommit },
-      };
-      const claim = claimOperation(claims.database, { key, taskId: claims.taskId, kind: "push", coordinates, allowLegacyRecovery: true, allowLegacyTerminal: true });
-      if (claim.status === "settled") {
-        if (observedRemoteCommit === headSha) return;
-        throw new WorktreeFailure("operation-failed", "Git push recovery found remote identity drift");
-      }
-      if (claim.status === "in_progress") throw new WorktreeFailure("operation-in-progress", "Git push is already in progress");
-      if ("result" in claim) {
-        const failure = claim.result as { summary?: unknown } | null;
-        const detail = typeof failure?.summary === "string" ? failure.summary : "Git push failed";
-        throw new WorktreeFailure("operation-failed", detail);
-      }
-      if (claim.status === "recoverable") {
-        const recorded = claim.coordinates.authority.remoteCommit;
-        expectedRemoteCommit = typeof recorded === "string" ? recorded.toLowerCase() : null;
-        ownership = recoverOperation(claims.database, key, claim.previousOwnership, undefined, coordinates) ?? undefined;
-        if (!ownership) throw new WorktreeFailure("operation-in-progress", "Git push recovery is already in progress");
-        if (observedRemoteCommit === headSha) {
-          if (!beginOperation(claims.database, key, ownership) || !recordOperationEffect(claims.database, key, ownership, { kind: "push", remoteRef, commit: headSha })) throw new WorktreeFailure("operation-in-progress", "Git push recovery lost ownership");
-          const settlement = settleOperation(claims.database, key, ownership, "settled", { remoteRef, commit: headSha });
-          if (settlement.applied || settlement.status === "settled") return;
-          throw new WorktreeFailure("operation-in-progress", "Git push recovery settlement is pending");
-        }
-        if (claim.phase === "executing") {
-          releaseOperation(claims.database, key, ownership, "executing");
-          throw new WorktreeFailure("operation-in-progress", "Git push outcome requires exact recovery");
-        }
-        if (observedRemoteCommit !== expectedRemoteCommit) {
-          releaseOperation(claims.database, key, ownership, "executing");
-          throw new WorktreeFailure("operation-in-progress", "Git push recovery found remote identity drift");
-        }
-      } else {
-        ownership = claim.ownership;
-      }
-      if (!ownership) throw new WorktreeFailure("operation-in-progress", "Git push recovery ownership is unavailable");
-      if (!beginOperation(claims.database, key, ownership)) throw new WorktreeFailure("operation-failed", "Git push was cancelled before execution");
-      if (observedRemoteCommit === headSha) {
-        if (!recordOperationEffect(claims.database, key, ownership, { kind: "push", remoteRef, commit: headSha })) throw new WorktreeFailure("operation-in-progress", "Git push receipt is pending");
-        const settlement = settleOperation(claims.database, key, ownership, "settled", { remoteRef, commit: headSha });
-        if (!settlement.applied && settlement.status === "failed") throw new WorktreeFailure("operation-failed", "Git push recovery failed closed");
-        if (!settlement.applied && settlement.status === "in_progress") throw new WorktreeFailure("operation-in-progress", "Git push settlement lost claim ownership");
-        return;
-      }
-    }
-    try {
-      if (claims && key && ownership && !fenceOperation(claims.database, key, ownership)) throw new WorktreeFailure("operation-in-progress", "Git push ownership changed before dispatch");
-      await this.git.run(["push", "--set-upstream", "origin", `${headSha}:${remoteRef}`], canonical);
-    } catch (error) {
-      if (!claims || !key || !ownership) throw error;
-      let currentRemoteCommit: string | null;
-      try {
-        currentRemoteCommit = await observe();
-      } catch {
-        releaseOperation(claims.database, key, ownership, "executing");
-        throw new WorktreeFailure("operation-in-progress", "Git push outcome could not be observed exactly");
-      }
-      if (currentRemoteCommit === headSha) {
-        if (!recordOperationEffect(claims.database, key, ownership, { kind: "push", remoteRef, commit: headSha })) throw new WorktreeFailure("operation-in-progress", "Git push receipt is pending");
-        const settlement = settleOperation(claims.database, key, ownership, "settled", { remoteRef, commit: headSha });
-        if (settlement.applied || settlement.status === "settled") return;
-        throw new WorktreeFailure(settlement.status === "in_progress" ? "operation-in-progress" : "operation-failed", "Git push settlement failed closed");
-      }
-      if (currentRemoteCommit === expectedRemoteCommit) {
-        if (!releaseOperation(claims.database, key, ownership, "prepared")) throw new WorktreeFailure("operation-in-progress", "Git push retry lost claim ownership");
-        throw error;
-      }
-      releaseOperation(claims.database, key, ownership, "executing");
-      throw new WorktreeFailure("operation-in-progress", "Git push outcome requires exact recovery");
-    }
+    await this.git.run(["push", "--set-upstream", "origin", `${headSha}:${remoteRef}`], canonical);
     branchFetches.delete(`${canonical}\0${branchName}`);
-    if (claims && key && ownership) {
-      if (!recordOperationEffect(claims.database, key, ownership, { kind: "push", remoteRef, commit: headSha })) throw new WorktreeFailure("operation-in-progress", "Git push receipt is pending");
-      const settlement = settleOperation(claims.database, key, ownership, "settled", { remoteRef, commit: headSha });
-      if (!settlement.applied && settlement.status === "failed") throw new WorktreeFailure("operation-failed", "Git push failed closed");
-      if (!settlement.applied && settlement.status === "in_progress") throw new WorktreeFailure("operation-in-progress", "Git push settlement lost claim ownership");
-    }
   }
 
   async currentDiff(input: WorktreeDiffInput): Promise<WorktreeDiff> {

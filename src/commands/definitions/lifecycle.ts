@@ -30,18 +30,6 @@ export const lifecycleCommands = {
     note: "none",
     idempotency: "none",
   }),
-  resync_projection: defineIssueCommand({
-    name: "resync_projection",
-    slug: "resync-projection",
-    updateName: "resyncProjection",
-    label: "Resync projection",
-    family: "bespoke",
-    durableCommandKind: null,
-    payloadLabel: "resyncProjection command",
-    body: ExpectedRevisionBodySchema,
-    note: "none",
-    idempotency: "none",
-  }),
   delete_worktree: defineIssueCommand({
     name: "delete_worktree",
     slug: "delete-worktree",

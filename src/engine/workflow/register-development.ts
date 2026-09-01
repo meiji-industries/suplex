@@ -23,7 +23,7 @@ export async function blockFailedDeveloperStart(ctx: IssueWorkflowContext, comma
 }
 
 export async function startDevelopment(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
-    const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+    const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
     if (ctx.commandAlreadyProcessed(command.commandId)) {
       await ctx.recordHandlerNoop("start_development", "This development command was already processed.");
       return ctx.state;
@@ -128,7 +128,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
 }
 
 export async function retryDevelopment(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>, operatorNote?: string): Promise<contracts.IssueWorkflowState> {
-  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   if (ctx.commandAlreadyProcessed(command.commandId)) {
     await ctx.recordHandlerNoop("retry_development", "This retry command was already processed.");
     return ctx.state;

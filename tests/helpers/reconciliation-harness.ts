@@ -58,7 +58,7 @@ export async function createReconciliationHarness() {
     return database.authQuery((db) => {
       const projection = db.prepare("SELECT phase, owner, pending_action AS pendingAction, allowed_commands_json AS allowedCommands FROM forge_issue_projections WHERE task_id = ?").get(taskId) as { phase?: string; owner?: string; pendingAction?: string; allowedCommands?: string } | undefined;
       const all = (sql: string): unknown[] => db.prepare(sql).all(taskId) as unknown[];
-      return { phase: projection?.phase ?? null, owner: projection?.owner ?? null, pendingAction: projection?.pendingAction ?? null, blocker: null, allowedCommands: projection?.allowedCommands ? JSON.parse(projection.allowedCommands) : [], turnRows: all("SELECT turn_id, status, result_sha256 FROM forge_herdr_turns WHERE task_id = ? ORDER BY turn_id"), executionRows: all("SELECT id, status FROM forge_agent_executions WHERE task_id = ? ORDER BY id"), timelineRows: all("SELECT event_type, metadata_json FROM forge_issue_timeline WHERE task_id = ? ORDER BY id"), claimRows: all("SELECT * FROM forge_operation_claims WHERE task_id = ? ORDER BY id"), pushes: [] };
+      return { phase: projection?.phase ?? null, owner: projection?.owner ?? null, pendingAction: projection?.pendingAction ?? null, blocker: null, allowedCommands: projection?.allowedCommands ? JSON.parse(projection.allowedCommands) : [], turnRows: all("SELECT turn_id, status, result_sha256 FROM forge_herdr_turns WHERE task_id = ? ORDER BY turn_id"), executionRows: all("SELECT id, status FROM forge_agent_executions WHERE task_id = ? ORDER BY id"), timelineRows: all("SELECT event_type, metadata_json FROM forge_issue_timeline WHERE task_id = ? ORDER BY id"), claimRows: [], pushes: [] };
     });
   }
 

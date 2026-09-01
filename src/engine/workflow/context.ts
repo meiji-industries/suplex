@@ -24,19 +24,9 @@ export interface IssueWorkflowContext {
   state: IssueWorkflowState;
   readonly project: () => Promise<IssueWorkflowState>;
   readonly projectState: (state: IssueWorkflowState) => Promise<IssueWorkflowState>;
-  readonly projectInitialPlanningState: (next: IssueWorkflowState, distinctPlanningStates: boolean) => Promise<void>;
+  readonly projectInitialPlanningState: (next: IssueWorkflowState) => Promise<void>;
   readonly planningProjectionFlags: () => { distinctPlanningStates: boolean; shouldProject: boolean };
-  readonly leadPlanningEnabled: () => boolean;
-  readonly durablePlanningCapacityEnabled: () => boolean;
-  readonly leadResultRoutingEnabled: () => boolean;
-  readonly planGovernanceEnabled: () => boolean;
-  readonly decisionResolutionProjectionEnabled: () => boolean;
   readonly continueAfter: number;
-  readonly reviseContinueEnabled: boolean;
-  readonly exactPlanAuthorityEnabled: boolean;
-  readonly isolatedDeveloperExecutionEnabled: boolean;
-  readonly initialProjectionBarrierEnabled: boolean;
-  readonly planApprovalBlockerEnabled: boolean;
   readonly guarded: <A extends unknown[], R>(fn: (...args: A) => Promise<R>, command?: string) => (...args: A) => Promise<R>;
   readonly captureInitialProjectionState: boolean;
   readonly initialProjectionState: IssueWorkflowState;
@@ -47,7 +37,6 @@ export interface IssueWorkflowContext {
   decisionInFlight: boolean;
   planningPromise: Promise<LeadPlanningResult> | undefined;
   readonly supervisedDeveloperTurns: boolean;
-  readonly herdrExecutionSubstrateEnabled: boolean;
   readonly shouldContinueAsNew: (revision: number) => boolean;
   readonly currentState: () => IssueWorkflowState;
   readonly assignState: (next: () => unknown) => IssueWorkflowState;

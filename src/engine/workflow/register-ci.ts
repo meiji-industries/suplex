@@ -26,7 +26,7 @@ export function adoptCiPullRequestRelease(state: contracts.IssueWorkflowState, r
 }
 
 export function registerCiHandlers(ctx: IssueWorkflowContext): void {
-  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   const agent = activityProxies;
   const validateReconcileCi = (rawInput: contracts.StartPlanningInput): contracts.StartPlanningInput => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);

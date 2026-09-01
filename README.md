@@ -1,8 +1,70 @@
 # Forge
 
-Forge is a local-first, Tailscale-only software-delivery control plane.
+Forge is the working name for an operating system for an agent-powered software
+agency. It gives an established independent developer one place to run client
+projects, specialist agents, code, and delivery without turning the work into a
+click-heavy dashboard.
 
-The health surface uses a source-owned shadcn/Rhea-style component layer with Base UI primitives, Tailwind v4 design tokens, and a dense desktop application layout inspired by Linear and Paperclip.
+Forge is local-first and Tailscale-only: it runs beside the repositories and
+developer tools that do the work, while the web application provides a clear,
+shared operating surface. It is designed to feel capable and straightforward:
+close to the work, explicit about what is happening, and warm without being
+ornamental.
+
+![Forge task-detail workspace](docs/images/forge/07-task-detail-workspace.png)
+
+## What Forge does
+
+Forge starts with a repository-backed project. You connect the local providers
+and agent profiles you want to use, create a task with the relevant context,
+and move work through a durable delivery process. Tasks can be managed in an
+index, Kanban board, or timeline; each represents the same underlying work,
+not a separate planning system.
+
+The normal path is:
+
+```text
+project + repository → task → plan → review → build → integration
+                         → checks + CI → pull request → merge → complete
+```
+
+Planner, reviewer, builder/developer, and integrator roles keep judgment and
+execution visible. Forge can also host first-class Hermes agents that bring in
+outside context and create work when that context becomes actionable. The task
+detail is the central work area: it brings together chat, live agent and Herdr
+panes, plans, activity, diffs, checks, pull-request and delivery status, and a
+property rail rather than scattering that evidence across tools.
+
+![Task index](docs/images/forge/02-task-index.png)
+
+![Kanban board](docs/images/forge/03-kanban-board.png)
+
+## Configure an agency, not just a task board
+
+Forge configuration covers companies and workspaces, users and passkeys,
+projects, agents and their capacity, providers, model catalogues, cascading
+prompts, runtime environment settings, and host health. Profiles select an
+agent provider, model, reasoning level, and service priority so a role uses a
+deliberate setup instead of an ad-hoc model choice.
+
+Today, Forge supports local Codex and Claude Code sessions, plus OpenRouter
+models through `omp`. Provider logins stay on the host; OpenRouter is the
+exception where Forge stores the local API key securely and excludes it from
+backups. See [Product guide](docs/product.md) for the product model, current
+screens, and the next design priorities.
+
+![Provider configuration](docs/images/forge/12-providers.png)
+
+## Product guide
+
+Read [docs/product.md](docs/product.md) for the intended user, the current
+Forge workflow, role and configuration model, screen map, and the design work
+that comes next. The terms used in the codebase are defined in
+[CONTEXT.md](CONTEXT.md); durable technical decisions live in [docs/adr](docs/adr).
+
+The health surface uses a source-owned shadcn/Rhea-style component layer with
+Base UI primitives, Tailwind v4 design tokens, and a dense desktop application
+layout inspired by Linear and Paperclip.
 
 ## Architecture
 

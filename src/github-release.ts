@@ -736,9 +736,7 @@ export class ReleaseService {
       await this.github.checkAuthentication();
       if ((await this.github.getRemoteRepository({ cwd: coordinates.worktreePath })) !== coordinates.repository.toLowerCase()) throw providerFailure("wrong-remote", "Local origin does not match the pinned repository");
       const local = await this.github.inspectLocalRevision({ cwd: coordinates.worktreePath });
-      if (local.branch !== coordinates.headBranch) throw providerFailure("stale-reviewed-revision", "Task worktree is on another branch");
-      reviewed.commitSha = local.headSha;
-      reviewed.treeSha = local.treeSha;
+      if (!local.clean || local.branch !== coordinates.headBranch || local.headSha.toLowerCase() !== reviewed.commitSha.toLowerCase() || local.treeSha.toLowerCase() !== reviewed.treeSha.toLowerCase()) throw providerFailure("stale-reviewed-revision", "Local worktree no longer matches the exact reviewed revision");
       const base = await this.github.getBranchHead({ repository: coordinates.repository, branch: coordinates.baseBranch });
       if (base === null) throw providerFailure("provider-unavailable", "Target base branch is unavailable");
       if (base.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase()) throw providerFailure("target-base-drift", "Target base moved after delivery review");

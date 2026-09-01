@@ -30,7 +30,7 @@ import { PlanDecisionForm } from "../components/app/plan-decision-form.js";
 import { SupplementalReviewPanel } from "../components/app/supplemental-review-panel.js";
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import { PullRequestCard as GithubPullRequestCard } from "../components/app/pull-request-card.js";
-import { TaskChat } from "../components/app/task-chat/task-chat.js";
+import { LivePaneDock, TaskChat } from "../components/app/task-chat/task-chat.js";
 import { TaskBrowserProof } from "../components/app/task-browser-proof.js";
 import { CopyButton } from "../components/app/copy-button.js";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip.js";
@@ -725,6 +725,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                 <FixInNewTaskAction busy={busy} onCreate={onFixInNewTask} />
               </div>
             </div>
+            {activeWorkTab === "chat" ? <LivePaneDock task={task} /> : null}
           </div>
           <aside data-task-properties className="border-border border-t bg-muted/20 px-4 py-6 sm:px-6 lg:sticky lg:top-0 lg:h-fit lg:border-t-0 lg:border-l">
             <div className="mb-6 space-y-4">{pullRequestInMain ? null : <GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} onRepairCi={async () => onPlanAction("repair-ci")} />}<BranchSyncCard taskId={task.id} updatedAt={task.updatedAt} baseBranch={project?.baseBranch ?? "base"} allowedCommands={task.allowedCommands} busy={busy} onRefresh={onRefresh} onAction={(path) => onPlanAction(path)} /><TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} agentInvocations={task.agentInvocations} activeCapacity={task.capacity?.status === "active" ? task.capacity : undefined} /></div>

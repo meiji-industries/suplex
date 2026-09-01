@@ -62,5 +62,5 @@ export function LivePaneTerminal({ role, text }: { role: string; text: string })
     });
   }, [text]);
 
-  return <div aria-label={`Live pane output for ${role}`} className="mt-1 h-48 overflow-hidden bg-[#1e1e2e] p-2" ref={hostRef} />;
+  return <div aria-label={`Live pane output for ${role}`} className="mt-1 h-[40vh] overflow-hidden bg-[#1e1e2e] p-2" ref={hostRef} />;
 }

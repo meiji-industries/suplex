@@ -16,11 +16,7 @@ type LivePane = { role: string; text: string };
 export function selectedLivePane(panes: readonly LivePane[], selectedRole: string | undefined): LivePane | undefined {
   return panes.find((pane) => pane.role === selectedRole) ?? panes[0];
 }
-
-
-export function TaskChat({ task, busy, pullRequestBusy = busy, onRefresh, onMarkReady, onRepairCi, onOpenDiff, onSendPlannerNote, composerDisabledReason }: { task: ApiTask; busy: boolean; pullRequestBusy?: boolean; onRefresh: () => Promise<void>; onMarkReady: () => Promise<void>; onRepairCi: () => Promise<void>; onOpenDiff: () => void; onSendPlannerNote: (note: string, commandId: string) => Promise<void>; composerDisabledReason?: string | undefined }) {
-  const { liveEventsByExecution, loadEvents } = useTaskChatStream(task.id, task, onRefresh);
-  const [optimistic, setOptimistic] = useState<Extract<ChatItem, { kind: "member" }>[]>([]);
+export function LivePaneDock({ task }: { task: ApiTask }) {
   const [panes, setPanes] = useState<LivePane[]>([]);
   const [selectedRole, setSelectedRole] = useState<string>();
   // Panes keep moving in every non-terminal phase (CI repair, reviews, integrator work), so keep tailing.
@@ -36,6 +32,14 @@ export function TaskChat({ task, busy, pullRequestBusy = busy, onRefresh, onMark
   useEffect(() => {
     setSelectedRole((current) => current === selectedPane?.role ? current : selectedPane?.role);
   }, [selectedPane?.role]);
+  return selectedPane ? <section className="sticky bottom-0 z-10 border-t border-border bg-background" aria-label="Live agent output"><Tabs value={selectedPane.role} onValueChange={setSelectedRole}><div className="overflow-x-auto border-b border-border"><TabsList>{panes.map((pane) => <TabsTrigger key={pane.role} value={pane.role}>{pane.role}</TabsTrigger>)}</TabsList></div><TabsContent value={selectedPane.role}><LivePaneTerminal role={selectedPane.role} text={selectedPane.text} /></TabsContent></Tabs></section> : null;
+}
+
+
+
+export function TaskChat({ task, busy, pullRequestBusy = busy, onRefresh, onMarkReady, onRepairCi, onOpenDiff, onSendPlannerNote, composerDisabledReason }: { task: ApiTask; busy: boolean; pullRequestBusy?: boolean; onRefresh: () => Promise<void>; onMarkReady: () => Promise<void>; onRepairCi: () => Promise<void>; onOpenDiff: () => void; onSendPlannerNote: (note: string, commandId: string) => Promise<void>; composerDisabledReason?: string | undefined }) {
+  const { liveEventsByExecution, loadEvents } = useTaskChatStream(task.id, task, onRefresh);
+  const [optimistic, setOptimistic] = useState<Extract<ChatItem, { kind: "member" }>[]>([]);
   const transcript = useMemo(() => sortChatItems([...buildChatTranscript(task, liveEventsByExecution), ...optimistic]), [liveEventsByExecution, optimistic, task]);
-  return <section className="space-y-3" data-task-chat aria-label="Chat"><div className="space-y-4">{transcript.map((item) => item.kind === "member" ? <ChatMemberMessage item={item} key={item.id} /> : item.kind === "agent_turn" ? <ChatAgentTurn item={item} onOpenDiff={onOpenDiff} onLoadEvents={() => loadEvents(task.agentInvocations.find((invocation) => `agent-${invocation.id}` === item.id)!)} key={item.id} /> : item.kind === "pull_request" ? <PullRequestCard task={task} busy={pullRequestBusy} onRefresh={onRefresh} onMarkReady={onMarkReady} onRepairCi={onRepairCi} key={item.id} /> : <ChatSystemLine item={item} key={item.id} />)}</div>{selectedPane ? <div className="sticky bottom-0 z-10 bg-background pt-3"><Tabs value={selectedPane.role} onValueChange={setSelectedRole}><div className="overflow-x-auto border border-border"><TabsList>{panes.map((pane) => <TabsTrigger key={pane.role} value={pane.role}>{pane.role}</TabsTrigger>)}</TabsList></div><TabsContent value={selectedPane.role}><LivePaneTerminal role={selectedPane.role} text={selectedPane.text} /></TabsContent></Tabs></div> : null}<ChatComposer disabled={busy} disabledReason={composerDisabledReason} onSubmit={async (note, commandId) => { setOptimistic((current) => [...current, { kind: "member", id: `optimistic-${commandId}`, at: new Date().toISOString(), actor: { name: "You", avatarSeed: "member" }, markdown: note }]); await onSendPlannerNote(note, commandId); setOptimistic([]); }} /></section>;
+  return <section className="space-y-3" data-task-chat aria-label="Chat"><div className="space-y-4">{transcript.map((item) => item.kind === "member" ? <ChatMemberMessage item={item} key={item.id} /> : item.kind === "agent_turn" ? <ChatAgentTurn item={item} onOpenDiff={onOpenDiff} onLoadEvents={() => loadEvents(task.agentInvocations.find((invocation) => `agent-${invocation.id}` === item.id)!)} key={item.id} /> : item.kind === "pull_request" ? <PullRequestCard task={task} busy={pullRequestBusy} onRefresh={onRefresh} onMarkReady={onMarkReady} onRepairCi={onRepairCi} key={item.id} /> : <ChatSystemLine item={item} key={item.id} />)}</div><ChatComposer disabled={busy} disabledReason={composerDisabledReason} onSubmit={async (note, commandId) => { setOptimistic((current) => [...current, { kind: "member", id: `optimistic-${commandId}`, at: new Date().toISOString(), actor: { name: "You", avatarSeed: "member" }, markdown: note }]); await onSendPlannerNote(note, commandId); setOptimistic([]); }} /></section>;
 }

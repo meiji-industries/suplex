@@ -107,6 +107,9 @@ test("inspects local branch sync and pushes it to origin", async () => {
     await expect(manager.inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ remoteExists: true, ahead: 0, behind: 0, aheadOfBase: 1, behindBase: 0, conflictsWithBase: false });
     await expect(manager.inspectSync(value.repositoryPath, branchName, "main")).resolves.toMatchObject({ remoteExists: true, ahead: 0, behind: 0, aheadOfBase: 1, behindBase: 0, conflictsWithBase: false });
     expect(logs.map((line) => JSON.parse(line)).filter((line) => line.message.includes(`+refs/heads/${branchName}:refs/remotes/origin/${branchName}`))).toHaveLength(1);
+    logs.length = 0;
+    await Promise.all(Array.from({ length: 3 }, () => manager.inspectSync(value.repositoryPath, branchName, "main")));
+    expect(logs.map((line) => JSON.parse(line)).filter((line) => line.message === `Command completed: git ls-remote --exit-code --heads origin ${branchName}`)).toHaveLength(1);
   } finally {
     setCommandRunnerLogger(new StructuredLogger());
     await rm(value.root, { recursive: true, force: true });

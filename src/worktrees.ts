@@ -185,6 +185,7 @@ function exactRegisteredWorktree(output: string, worktreePath: string, branchNam
 
 const branchFetches = new Map<string, number>();
 const branchConflictProbes = new Map<string, { conflictsWithBase: boolean; probedAt: number }>();
+const branchSyncProbes = new Map<string, Promise<BranchSync>>();
 const branchProbeIntervalMs = 60_000;
 
 const defaultGit: GitAdapter = {
@@ -440,6 +441,19 @@ export class WorktreeManager {
   async inspectSync(worktreePath: string, branchName: string, baseBranch: string, observedConflict?: boolean): Promise<BranchSync> {
     if (!branchPattern.test(branchName) || !branchPattern.test(baseBranch)) throw new WorktreeFailure("unsafe-branch", "Task branch is unsafe");
     const canonical = await canonicalDirectory(worktreePath, "worktree-unavailable");
+    const key = `${canonical}\0${branchName}\0${baseBranch}\0${observedConflict ?? ""}`;
+    const existing = branchSyncProbes.get(key);
+    if (existing) return existing;
+    const probe = this.inspectSyncAt(canonical, branchName, baseBranch, observedConflict);
+    branchSyncProbes.set(key, probe);
+    try {
+      return await probe;
+    } finally {
+      if (branchSyncProbes.get(key) === probe) branchSyncProbes.delete(key);
+    }
+  }
+
+  private async inspectSyncAt(canonical: string, branchName: string, baseBranch: string, observedConflict?: boolean): Promise<BranchSync> {
     const headSha = await this.git.run(["rev-parse", "HEAD"], canonical);
     const remoteRef = `refs/remotes/origin/${branchName}`;
     const baseRef = `refs/remotes/origin/${baseBranch}`;

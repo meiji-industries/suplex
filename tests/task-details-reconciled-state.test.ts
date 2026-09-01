@@ -34,6 +34,20 @@ test("pull request cards show the latest failing check separately from metadata"
   expect(html).not.toContain("Checks failing 1/1 ·");
 });
 
+test("pull request cards offer Fix CI only for actionable failing checks", () => {
+  const task = {
+    id: "task-1", title: "Pull request task", phase: "development", release: null, allowedCommands: ["repair_ci"],
+    githubPullRequest: { exists: true, number: 42, url: "https://github.com/acme/forge/pull/42", state: "open", isDraft: false, checks: { total: 1, pending: 0, failing: 1, successful: 0 }, mergeable: "MERGEABLE", observedAt: null, autoMergeEnabled: false },
+  } as unknown as ApiTask;
+  const props = { busy: false, onRefresh: async () => undefined, onMarkReady: async () => undefined, onRepairCi: async () => undefined };
+  expect(renderToStaticMarkup(createElement(PullRequestCard, { task, ...props }))).toContain("Fix CI");
+  const busyHtml = renderToStaticMarkup(createElement(PullRequestCard, { task, ...props, busy: true }));
+  expect(busyHtml).toContain("Starting…");
+  expect(busyHtml).toContain('disabled=""');
+  expect(renderToStaticMarkup(createElement(PullRequestCard, { task: { ...task, githubPullRequest: { ...task.githubPullRequest!, checks: { ...task.githubPullRequest!.checks, failing: 0, successful: 1 } } }, ...props }))).not.toContain("Fix CI");
+  expect(renderToStaticMarkup(createElement(PullRequestCard, { task: { ...task, allowedCommands: [] }, ...props }))).not.toContain("Fix CI");
+});
+
 test("draft pull requests render the primary ready action and icon-only refresh", () => {
   const draftTask = {
     id: "task-1", title: "Draft task", phase: "development", release: null,

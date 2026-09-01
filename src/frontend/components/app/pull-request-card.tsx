@@ -42,7 +42,7 @@ function CheckRow({ check, fallback }: { check: CiCheck | undefined; fallback: {
   return <div className={`flex min-w-0 items-center gap-1.5 text-[11px] ${presentation.className}`}><Icon aria-hidden="true" className="size-3 shrink-0" />{check ? check.detailsUrl ? <a className="min-w-0 truncate text-foreground hover:underline" href={check.detailsUrl} target="_blank" rel="noreferrer">{check.name}</a> : <span className="min-w-0 truncate text-foreground">{check.name}</span> : <span className="text-foreground">Checks</span>}<span className="shrink-0">{presentation.label}</span></div>;
 }
 
-export function PullRequestCard({ task, busy, onRefresh, onMarkReady }: { task: ApiTask; busy: boolean; onRefresh: () => Promise<void>; onMarkReady: () => Promise<void> }): React.ReactElement | null {
+export function PullRequestCard({ task, busy, onRefresh, onMarkReady, onRepairCi }: { task: ApiTask; busy: boolean; onRefresh: () => Promise<void>; onMarkReady: () => Promise<void>; onRepairCi?: () => Promise<void> }): React.ReactElement | null {
   const pr = task.githubPullRequest;
   if (!pr?.exists || pr.number === null || !pr.url) return null;
   const title = task.release?.title ?? task.title;
@@ -54,6 +54,7 @@ export function PullRequestCard({ task, busy, onRefresh, onMarkReady }: { task: 
   const fallback = !pr.checks.total ? { label: "Pending", className: "text-muted-foreground", icon: "pending" as const } : pr.checks.failing ? { label: `Failing ${pr.checks.failing}/${pr.checks.total}`, className: "text-red-600 dark:text-red-400", icon: "failed" as const } : pr.checks.successful === pr.checks.total ? { label: `Passed ${pr.checks.successful}/${pr.checks.total}`, className: "text-emerald-600 dark:text-emerald-400", icon: "passed" as const } : { label: `Running ${pr.checks.successful}/${pr.checks.total}`, className: "text-sky-600 dark:text-sky-400", icon: "running" as const };
   const metadata = `${pr.mergeable ? `Mergeability ${pr.mergeable.toLowerCase()}` : "Mergeability pending"} · Auto-merge ${pr.autoMergeEnabled ? "on" : "off"} · ${syncedAgo(pr.observedAt)}`;
   const waitingForMerge = task.phase === "manual_merge" && status !== "Merged";
+  const canFixCi = pr.checks.failing > 0 && task.allowedCommands?.includes("repair_ci") && onRepairCi;
   if (status === "Merged") return <Card data-pull-request-card size="sm" aria-label={`Pull request #${pr.number}`}>
     <CardHeader>
       <CardTitle><span className="min-w-0 break-words">{title} <a className="font-normal text-muted-foreground hover:underline" href={pr.url} target="_blank" rel="noreferrer">#{pr.number}</a></span></CardTitle>
@@ -77,6 +78,6 @@ export function PullRequestCard({ task, busy, onRefresh, onMarkReady }: { task: 
       </div> : null}
       <div className="space-y-0.5"><CheckRow check={check} fallback={fallback} /><div className="text-[11px] text-muted-foreground">{metadata}</div></div>
     </CardContent>
-    <CardFooter><div className="flex w-full items-center justify-end gap-2"><Button size="icon-xs" variant="ghost" aria-label="Refresh" title="Refresh" onClick={() => void onRefresh()} disabled={busy}><RefreshCw aria-hidden="true" /></Button><a className={buttonVariants({ variant: "ghost", size: "icon-xs" })} href={pr.url} target="_blank" rel="noreferrer" aria-label="Open pull request on GitHub" title="Open pull request on GitHub"><ExternalLink aria-hidden="true" /></a>{pr.state === "open" && pr.isDraft ? <Button size="sm" onClick={() => void onMarkReady()} disabled={busy}>{busy ? "Marking ready…" : "Ready for review"}</Button> : null}</div></CardFooter>
+    <CardFooter><div className="flex w-full items-center justify-end gap-2"><Button size="icon-xs" variant="ghost" aria-label="Refresh" title="Refresh" onClick={() => void onRefresh()} disabled={busy}><RefreshCw aria-hidden="true" /></Button><a className={buttonVariants({ variant: "ghost", size: "icon-xs" })} href={pr.url} target="_blank" rel="noreferrer" aria-label="Open pull request on GitHub" title="Open pull request on GitHub"><ExternalLink aria-hidden="true" /></a>{canFixCi ? <Button size="xs" onClick={() => void onRepairCi()} disabled={busy}>{busy ? "Starting…" : "Fix CI"}</Button> : null}{pr.state === "open" && pr.isDraft ? <Button size="sm" onClick={() => void onMarkReady()} disabled={busy}>{busy ? "Marking ready…" : "Ready for review"}</Button> : null}</div></CardFooter>
   </Card>;
 }

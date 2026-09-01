@@ -36,8 +36,8 @@ from layout order or examples.
 Use native Herdr commands by default. Repository or user-level helper scripts
 are optional conveniences: verify that a helper exists and understand its
 behavior before relying on it. A portable workflow must not assume a
-particular helper path, agent runner, model, approval mode, task runner, or
-development stack.
+particular helper path, model, approval mode, task runner, or development
+stack. Implementation delegation uses Codex.
 
 ## Prepare the work
 
@@ -71,11 +71,11 @@ herdr pane split --current --direction right --cwd "$PWD" --no-focus
 ```
 
 Use `--direction down` when that better fits the layout. Read the new pane ID
-from `.result.pane.pane_id`, give the agent a short unique name, and start the
-requested supported agent kind:
+from `.result.pane.pane_id`, give the agent a short unique name, and start
+Codex:
 
 ```sh
-herdr agent start <name> --kind <kind> --pane <pane-id> -- <agent-options>
+herdr agent start <name> --kind codex --pane <pane-id> -- <agent-options>
 herdr agent prompt <name> "Read and carry out <brief.md>; report the result."
 ```
 

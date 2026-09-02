@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { AgentTimelineEvent } from "../../http/contracts/agent-events.js";
 import { taskDetailNeedsRefresh, type TaskDetailStatus } from "./task-detail-status.js";
-import { chatEventFromTimelineEvent, type ChatEvent } from "./task-chat.js";
+import { chatEventFromTimelineEvent, mergeChatEvent, type ChatEvent } from "./task-chat.js";
 import type { ApiTask } from "./view-shared.js";
 
 type AgentEventHistory = { events: AgentTimelineEvent[]; status: TaskDetailStatus };
@@ -12,7 +12,9 @@ export function useTaskChatStream(taskId: string, _task: ApiTask, onRefresh: () 
   const cursor = useRef(0);
   const status = useRef<TaskDetailStatus | undefined>(undefined);
   const failures = useRef(0);
+  const onRefreshRef = useRef(onRefresh);
   const [streamFailed, setStreamFailed] = useState(false);
+  onRefreshRef.current = onRefresh;
   useEffect(() => { setLiveEventsByExecution(new Map()); cursor.current = 0; status.current = undefined; failures.current = 0; setStreamFailed(false); }, [taskId]);
   useEffect(() => {
     let active = true;
@@ -22,9 +24,11 @@ export function useTaskChatStream(taskId: string, _task: ApiTask, onRefresh: () 
       if (!mapped) return;
       cursor.current = Math.max(cursor.current, event.streamId);
       setLiveEventsByExecution((current) => {
+        const events = current.get(event.executionId!) ?? [];
+        const merged = mergeChatEvent(events, mapped);
+        if (merged.length === events.length && merged.every((candidate, index) => candidate === events[index])) return current;
         const next = new Map(current);
-        const events = next.get(event.executionId!) ?? [];
-        next.set(event.executionId!, [...events.filter((candidate) => candidate.id !== mapped.id), mapped]);
+        next.set(event.executionId!, merged);
         return next;
       });
     };
@@ -38,7 +42,7 @@ export function useTaskChatStream(taskId: string, _task: ApiTask, onRefresh: () 
       } catch { /* The stream reconnect remains the source of live recovery. */ }
     };
     void load();
-    const stream = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/agent-events`);
+    const stream = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/agent-events?after=${cursor.current}`);
     stream.onopen = () => { failures.current = 0; };
     stream.addEventListener("activity", (message) => {
         try {
@@ -48,7 +52,7 @@ export function useTaskChatStream(taskId: string, _task: ApiTask, onRefresh: () 
     stream.addEventListener("status", (message) => {
         try {
           const next = JSON.parse((message as MessageEvent<string>).data) as TaskDetailStatus;
-          if (taskDetailNeedsRefresh(status.current, next)) void onRefresh();
+          if (taskDetailNeedsRefresh(status.current, next)) void onRefreshRef.current();
           status.current = next;
         } catch { /* Keep the stream alive. */ }
     });
@@ -60,6 +64,6 @@ export function useTaskChatStream(taskId: string, _task: ApiTask, onRefresh: () 
       }
     };
     return () => { active = false; stream.close(); };
-  }, [onRefresh, taskId]);
+  }, [taskId]);
   return { liveEventsByExecution, streamFailed, loadEvents: async (_invocation: ApiTask["agentInvocations"][number]): Promise<void> => undefined };
 }

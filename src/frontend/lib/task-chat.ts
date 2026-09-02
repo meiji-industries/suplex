@@ -162,6 +162,11 @@ function matchingCommand(started: ChatEvent, finished: ChatEvent): boolean {
     && started.stepNumber === finished.stepNumber && commandLabel(started) === commandLabel(finished);
 }
 
+export function mergeChatEvent(events: ChatEvent[], event: ChatEvent): ChatEvent[] {
+  const index = events.findIndex((candidate) => candidate.id === event.id);
+  return index === -1 ? [...events, event] : events.map((candidate, candidateIndex) => candidateIndex === index ? event : candidate);
+}
+
 export function compactChatEvents(events: ChatEvent[], intro?: ChatEvent): ChatEvent[] {
   const paired: ChatEvent[] = [];
   for (let index = 0; index < events.length; index += 1) {

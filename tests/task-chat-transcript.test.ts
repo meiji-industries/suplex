@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildChatTranscript, chatEventFromTimelineEvent, compactChatEvents, type ChatEvent, type ChatItem } from "../src/frontend/lib/task-chat.js";
+import { buildChatTranscript, chatEventFromTimelineEvent, compactChatEvents, mergeChatEvent, type ChatEvent, type ChatItem } from "../src/frontend/lib/task-chat.js";
 import type { ApiTask } from "../src/frontend/lib/view-shared.js";
 
 const at = (second: number) => `2026-08-23T00:00:${String(second).padStart(2, "0")}.000Z`;
@@ -10,6 +10,23 @@ const reviewer = (id: string, startedAt: string, finishedAt: string | null) => (
 const deliveryReview = (id: string, leadExecutionId: string, outcome: "approved" | "blocking", summary: string, createdAt: string): ApiTask["deliveryReviewHistory"][number] => ({ id, leadExecutionId, outcome, summary, planRevision: 1, baseSha: "base", subjectCommit: "commit", subjectTree: "tree", opinionArtifactId: "opinion", evidenceArtifactId: "evidence", repairCycle: 0, createdAt });
 
 describe("buildChatTranscript", () => {
+  it("replaces a duplicate chat event in place without mutating the transcript", () => {
+    const first: ChatEvent = { id: "first", at: at(1), kind: "message", text: "First" };
+    const original: ChatEvent = { id: "replace", at: at(2), kind: "message", text: "Before" };
+    const last: ChatEvent = { id: "last", at: at(3), kind: "message", text: "Last" };
+    const replacement: ChatEvent = { ...original, text: "After" };
+    const events = [first, original, last];
+
+    const replaced = mergeChatEvent(events, replacement);
+    const appended = mergeChatEvent(replaced, { id: "new", at: at(4), kind: "message", text: "New" });
+
+    expect(replaced).not.toBe(events);
+    expect(replaced).toEqual([first, replacement, last]);
+    expect(events).toEqual([first, original, last]);
+    expect(appended).not.toBe(replaced);
+    expect(appended).toEqual([...replaced, { id: "new", at: at(4), kind: "message", text: "New" }]);
+  });
+
   it("maps neutral rollout events without parsing command prose", () => {
     expect(chatEventFromTimelineEvent({ streamId: 1, id: "timeline", eventType: "file_change", metadata: { kind: "file_change", data: { path: "src/app.ts", status: "modified" } }, createdAt: at(1), executionId: "execution", executionRole: "builder", sessionId: "session", forgeTurnId: "turn" })).toEqual({ id: "timeline", at: at(1), kind: "file_change", text: "src/app.ts", files: ["src/app.ts"], exitCode: null });
   });

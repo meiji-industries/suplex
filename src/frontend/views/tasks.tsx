@@ -368,13 +368,13 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
     finally { setBusy(false); }
   };
-  const refreshTask = async (): Promise<void> => {
+  const refreshTask = useCallback(async (): Promise<void> => {
     if (!selected) return;
     const refreshed = await readJson<ApiTask>(`/api/tasks/${encodeURIComponent(selected.id)}?refresh=1`);
     selectedRef.current = refreshed;
     setSelected(refreshed);
     setTasks((current) => current.map((task) => task.id === refreshed.id ? refreshed : task));
-  };
+  }, [selected?.id]);
   const duplicateTask = async (): Promise<void> => {
     if (!selected) return;
     setBusy(true); setError(""); setCreateError("");

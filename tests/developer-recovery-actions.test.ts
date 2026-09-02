@@ -165,6 +165,30 @@ test("keeps task-actions cards with an available command", () => {
   expect(html).toContain(">Start planning<");
 });
 
+test("keeps incomplete verification actionable without a blocker card", () => {
+  const task = {
+    phase: "reviewing",
+    owner: "human",
+    allowedCommands: ["repair_delivery", "review_delivery", "cancel_issue"],
+    commands: [{ name: "repair_delivery", endpoint: "repair-delivery" }, { name: "review_delivery", endpoint: "review-delivery" }],
+    pendingAction: "Verification incomplete",
+    projection: { status: "current" },
+  } as unknown as ApiTask;
+  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
+    task,
+    busy: false,
+    onStartPlanning: async () => undefined,
+    onPlanAction: async () => undefined,
+    onRevisePlan: async () => undefined,
+    onContinueWork: async () => undefined,
+  }) }));
+
+  expect(html).toContain("Verification incomplete");
+  expect(html).toContain("Run missing check");
+  expect(html).toContain("Continue to review");
+  expect(html).not.toContain("data-task-blocked-card");
+});
+
 test("keeps final-plan decisions together in the actions card", () => {
   const task = {
     phase: "approval",

@@ -10,7 +10,6 @@ import {
   PlanRevisionCommandSchema,
   SendPlannerNoteInputSchema,
   StartPlanningInputSchema,
-  type IssueCommand,
   type IssueWorkflowState,
   type LeadPlanningResult,
   type PlanCommandInput,
@@ -33,15 +32,10 @@ import { evidencePointer, humanBlocker } from "./state-transitions.js";
 import type { IssueWorkflowContext } from "./context.js";
 
 async function autoApprovePlan(ctx: IssueWorkflowContext, autoStart = true): Promise<void> {
-  if (!ctx.input.autoApprovePlan || !ctx.input.autoApprovePlanActorUserId || ctx.state.step !== "approval" || !ctx.state.planMaterial) return;
-  const subject = ctx.state.finalPlanSubject && ctx.state.materialityEvidence ? { plan: ctx.state.finalPlanSubject, materiality: ctx.state.materialityEvidence, expectedWorkflowRevision: ctx.state.revision } : undefined;
-  const planRevision = subject?.plan.outputRevision ?? ctx.state.planRevision ?? ctx.state.revision;
-  const autoApprovalKey = subject ? `auto-approve:${subject.plan.artifactId}` : undefined;
-  const decision = await recordPlanDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, planRevision, actorUserId: ctx.input.autoApprovePlanActorUserId, decision: "approve", ...(subject ? { subject } : {}), note: "Plan auto-approved when the task was created", ...(autoApprovalKey ? { idempotencyKey: autoApprovalKey } : {}) });
-  // Routine plans are already operator-authorized by task creation.  Do not
-  // manufacture a human approval dependency that can later conflict with a
-  // regenerated plan artifact.
-  ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ready_for_development"), owner: "lead", allowedCommands: ctx.state.finalPlanSubject ? ["start_development", "request_plan_revision", "cancel_issue"] : ctx.addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, decisionId: decision.decisionId, planApproved: true, planApprovedAt: new Date().toISOString(), planApprovedBy: ctx.input.autoApprovePlanActorUserId, blocker: null, stateChangedAt: new Date().toISOString(), ...(subject && autoApprovalKey ? { planDecisionReceipt: { idempotencyKey: autoApprovalKey, decisionId: decision.decisionId, decision: "approve" as const, subjectArtifactId: subject.plan.artifactId } } : {}) });
+  if (!ctx.input.autoApprovePlan || !ctx.input.autoApprovePlanActorUserId || ctx.state.step !== "approval") return;
+  const planRevision = ctx.state.planRevision ?? ctx.state.revision;
+  const decision = await recordPlanDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, planRevision, artifactId: ctx.state.leadOutputArtifactId!, actorUserId: ctx.input.autoApprovePlanActorUserId, decision: "approve", note: "Plan auto-approved when the task was created" });
+  ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ready_for_development"), owner: "lead", allowedCommands: ["start_development", "request_plan_revision", "cancel_issue"], pendingAction: "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, decisionId: decision.decisionId, planApproved: true, planApprovedAt: new Date().toISOString(), planApprovedBy: ctx.input.autoApprovePlanActorUserId, blocker: null, stateChangedAt: new Date().toISOString(), planDecisionReceipt: { decisionId: decision.decisionId, decision: "approve" } });
   // Auto-approve means "run to completion without me": start the Developer turn here instead of parking on a human click.
   if (!autoStart || ctx.state.step !== "ready_for_development" || !ctx.state.allowedCommands.includes("start_development")) return;
   // Project the landing revision first: chaining straight into the Developer turn would
@@ -76,7 +70,7 @@ async function runPlanReview(ctx: IssueWorkflowContext, plan: LeadPlanningResult
       (capacityRequestId) => agentActivities(true).consolidateLeadPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supplementalReviewArtifactId: review.reviewArtifactId, ...(capacityRequestId ? { capacityRequestId } : {}) }),
       (result) => result.leadExecutionId,
     );
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...revised, leadReviewResponseArtifactId: revised.leadReviewResponseArtifactId ?? null, finalPlanSubject: revised.planSubject ?? ctx.state.finalPlanSubject });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...revised, leadReviewResponseArtifactId: revised.leadReviewResponseArtifactId ?? null });
     return revised;
   } catch (error) {
     // A missing second opinion must never hold up a plan.
@@ -149,7 +143,8 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
         if (true && ["cancelled", "done"].includes(ctx.state.phase as string)) return ctx.state;
         const failure = ctx.permanentActivityFailure(error, true);
         if (!failure) throw error;
-        const summary = failure.code === "activity-failed" ? "Planning failed; retry is available" : failure.summary;
+        const unreadablePlannerResult = failure.code === "invalid-output-schema" || failure.code === "awaiting_human";
+        const summary = unreadablePlannerResult ? "Planner's result was not readable" : failure.code === "activity-failed" ? "Planning failed; retry is available" : failure.summary;
         const failureBase = durablePlanningCapacity ? ctx.state : next;
         const failureRevision = failureBase.revision + 1;
         const capacityFailure = ["not-found", "not-owner", "duplicate", "conflict", "stale-revision", "profile-unavailable", "invalid-status", "deadline-exhausted"].includes(failure.code);
@@ -162,10 +157,10 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
           ...at(capacityFailure ? "backlog" : "planning"),
           revision: failureRevision,
           owner: "human",
-          allowedCommands: resumeTurn ? ["start_planning", "cancel_issue"] : capacityFailure ? ["start_planning", "cancel_issue"] : ["start_planning", "continue_work", "cancel_issue"],
-          pendingAction: resumeTurn ? "Resume Lead turn" : capacityFailure ? `${summary} Retry planning.` : summary,
+          allowedCommands: unreadablePlannerResult || resumeTurn ? ["start_planning", "cancel_issue"] : capacityFailure ? ["start_planning", "cancel_issue"] : ["start_planning", "continue_work", "cancel_issue"],
+          pendingAction: unreadablePlannerResult ? summary : resumeTurn ? "Resume Lead turn" : capacityFailure ? `${summary} Retry planning.` : summary,
           lastHandlerError: { command: "start_planning", reason: failure.summary, at: new Date().toISOString() },
-          blocker: startupBlocked ? humanBlocker("member_authorization", summary, [{ command: "start_planning", label: "Retry after answering the agent prompt", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : resumeTurn ? humanBlocker("agent_exhausted", summary, [{ command: "start_planning", label: "Resume Lead turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : failure.category ? humanBlocker(failure.category, summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : null,
+          blocker: unreadablePlannerResult ? humanBlocker("agent_exhausted", summary, [{ command: "start_planning", label: "Start planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : startupBlocked ? humanBlocker("member_authorization", summary, [{ command: "start_planning", label: "Retry after answering the agent prompt", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : resumeTurn ? humanBlocker("agent_exhausted", summary, [{ command: "start_planning", label: "Resume Lead turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : failure.category ? humanBlocker(failure.category, summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : null,
           stateChangedAt: new Date().toISOString(),
           lastEventId: `${ctx.state.workflowId}:${failureRevision}`,
         });
@@ -184,7 +179,7 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
         leadResult = await agentActivities(true).runLeadPlanning({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: planningBase.revision, leadSessionRef: leadResult.leadSessionRef, operatorNotes: queuedNotes });
       }
       {
-        ctx.state = IssueWorkflowStateSchema.parse({ ...planningBase, ...leadResult, ...(distinctPlanningStates ? { revision: planningBase.revision + 1, lastEventId: `${planningBase.workflowId}:${planningBase.revision + 1}` } : {}), planRevision: next.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, preservedWorktreeCompatibility: leadResult.preservedWorktreeCompatibility ?? null, supplementalReviewUsed: false, blocker: null, stateChangedAt: new Date().toISOString(), originalPlanSubject: leadResult.planSubject ?? null, finalPlanSubject: leadResult.planSubject ?? null, materialityEvidence: leadResult.materialityEvidence ?? null, planBlockerSubject: leadResult.blockerSubject ?? null });
+        ctx.state = IssueWorkflowStateSchema.parse({ ...planningBase, ...leadResult, ...(distinctPlanningStates ? { revision: planningBase.revision + 1, lastEventId: `${planningBase.workflowId}:${planningBase.revision + 1}` } : {}), planRevision: next.revision, preservedWorktreeCompatibility: leadResult.preservedWorktreeCompatibility ?? null, supplementalReviewUsed: false, blocker: null, stateChangedAt: new Date().toISOString(), planBlockerSubject: leadResult.blockerSubject ?? null });
       }
       if (ctx.state.revisionRequestId && ctx.state.revisedExecutionCoordinates?.disposition === "reuse" && ctx.state.preservedWorktreeCompatibility !== true) {
         ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...at("development"), owner: "human", allowedCommands: ["revise_plan", "cancel_issue"], pendingAction: "Choose a new worktree for the revised plan", blockerCode: "preserved-worktree-incompatible" });
@@ -194,10 +189,8 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
       if (ctx.state.revisionRequestId) await authorizePlanRevision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, revisionRequestId: ctx.state.revisionRequestId, planRevision: ctx.state.planRevision ?? ctx.state.revision });
       leadResult = await runPlanReview(ctx, leadResult);
       if (true) {
-        const route = routeLeadResult({ kind: leadResult.leadOutputKind, material: leadResult.material });
-        const exactSubject = Boolean(ctx.state.finalPlanSubject);
-        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...at(route.step), owner: route.owner, allowedCommands: route.step === "approval" ? ctx.approvalCommands(exactSubject, ctx.input.supplementalReview) : route.step === "ready_for_development" && !exactSubject ? ctx.addRevisionCommand(route.allowedCommands as IssueCommand[]) : route.allowedCommands, pendingAction: route.pendingAction, blocker: route.step === "approval" ? ctx.approvalBlocker(leadResult, exactSubject, ctx.input.supplementalReview) : route.step === "planning" ? humanBlocker("member_decision", "Needs your call", [{ command: "resolve_decision_blocker", label: "Resolve decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(leadResult.leadOutputArtifactId, "decision-blocker")) : null, stateChangedAt: new Date().toISOString() });
-        if (route.step === "ready_for_development") ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, planApproved: true, planApprovedAt: new Date().toISOString(), planApprovedBy: null });
+        const route = routeLeadResult({ kind: leadResult.leadOutputKind }, { supplementalReview: ctx.input.supplementalReview, reviewerConfigured: Boolean(ctx.input.roleProfiles.reviewer) });
+        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...at(route.step), owner: route.owner, allowedCommands: route.allowedCommands, pendingAction: route.pendingAction, blocker: route.step === "planning" ? humanBlocker("member_decision", "Needs your call", [{ command: "resolve_decision_blocker", label: "Resolve decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(leadResult.leadOutputArtifactId, "decision-blocker")) : null, stateChangedAt: new Date().toISOString() });
         await autoApprovePlan(ctx);
       }
       assertPayloadWithinLimit("Issue Workflow result", ctx.state);
@@ -220,15 +213,12 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
     if (ctx.state.step !== "approval") throw new Error("Plan command is not available in the current phase");
     return command;
   };
-  const hashFreeArtifacts = true;
-  const executeLeadTurn = async (leadSessionRef?: string, revisionNote?: { artifactId: string; sha256?: string }, memberResponse?: { artifactId: string; sha256?: string }, operatorNotes?: string[], resumeDevelopment = false): Promise<IssueWorkflowState> => {
-    const leadResult = await agentActivities(true).runLeadPlanning({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision, ...(leadSessionRef ? { leadSessionRef } : {}), ...(revisionNote ? { revisionNoteArtifactId: revisionNote.artifactId, ...(!hashFreeArtifacts && revisionNote.sha256 ? { revisionNoteSha256: revisionNote.sha256 } : {}) } : {}), ...(memberResponse ? { memberResponseArtifactId: memberResponse.artifactId, ...(!hashFreeArtifacts && memberResponse.sha256 ? { memberResponseSha256: memberResponse.sha256 } : {}) } : {}), ...(operatorNotes?.length ? { operatorNotes } : {}) });
+  const executeLeadTurn = async (leadSessionRef?: string, revisionNote?: { artifactId: string }, memberResponse?: { artifactId: string }, operatorNotes?: string[], resumeDevelopment = false): Promise<IssueWorkflowState> => {
+    const leadResult = await agentActivities(true).runLeadPlanning({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision, ...(leadSessionRef ? { leadSessionRef } : {}), ...(revisionNote ? { revisionNoteArtifactId: revisionNote.artifactId } : {}), ...(memberResponse ? { memberResponseArtifactId: memberResponse.artifactId } : {}), ...(operatorNotes?.length ? { operatorNotes } : {}) });
     if (true && ctx.currentState().step === "cancelled") return ctx.currentState();
     const acceptedRevision = ctx.state.revision + 1;
-    const route = routeLeadResult({ kind: leadResult.leadOutputKind, material: leadResult.material });
-    const exactSubject = Boolean(leadResult.planSubject);
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...leadResult, revision: acceptedRevision, ...at(route.step), owner: route.owner, allowedCommands: route.step === "approval" ? ctx.approvalCommands(exactSubject, ctx.input.supplementalReview) : route.step === "ready_for_development" && !exactSubject ? ctx.addRevisionCommand(route.allowedCommands as IssueCommand[]) : route.allowedCommands, pendingAction: route.pendingAction, blocker: route.step === "approval" ? ctx.approvalBlocker(leadResult, exactSubject, ctx.input.supplementalReview) : route.step === "planning" ? humanBlocker("member_decision", "Needs your call", [{ command: "resolve_decision_blocker", label: "Resolve decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(leadResult.leadOutputArtifactId, "decision-blocker")) : null, lastEventId: `${ctx.state.workflowId}:${acceptedRevision}`, planRevision: ctx.state.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, supplementalReviewUsed: false, originalPlanSubject: leadResult.planSubject ?? null, finalPlanSubject: leadResult.planSubject ?? null, materialityEvidence: leadResult.materialityEvidence ?? null, planBlockerSubject: leadResult.blockerSubject ?? null });
-    if (route.step === "ready_for_development") ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, planApproved: true, planApprovedAt: new Date().toISOString(), planApprovedBy: null });
+    const route = routeLeadResult({ kind: leadResult.leadOutputKind }, { supplementalReview: ctx.input.supplementalReview, reviewerConfigured: Boolean(ctx.input.roleProfiles.reviewer) });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...leadResult, revision: acceptedRevision, ...at(route.step), owner: route.owner, allowedCommands: route.allowedCommands, pendingAction: route.pendingAction, blocker: route.step === "planning" ? humanBlocker("member_decision", "Needs your call", [{ command: "resolve_decision_blocker", label: "Resolve decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(leadResult.leadOutputArtifactId, "decision-blocker")) : null, lastEventId: `${ctx.state.workflowId}:${acceptedRevision}`, planRevision: ctx.state.revision, supplementalReviewUsed: false, planBlockerSubject: leadResult.blockerSubject ?? null });
     await autoApprovePlan(ctx, !resumeDevelopment);
     await ctx.project();
     return ctx.state;
@@ -241,20 +231,18 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
     await ctx.project();
     const review = await ctx.acquireExternalTurn<import("../issue-contracts.js").SupplementalReviewResult>(
       { operation: "supplemental_review", role: "reviewer", profileId: ctx.input.roleProfiles.reviewer },
-      (capacityRequestId) => agentActivities(true).runSupplementalReview({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.originalPlanSubject?.originalPlanRevision ?? ctx.state.planRevision ?? ctx.state.revision, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, leadEvidenceArtifactId: ctx.state.leadEvidenceArtifactId!, ...(ctx.state.originalPlanSubject ? { originalPlanSubject: ctx.state.originalPlanSubject, primaryLeadSessionRef: ctx.state.originalPlanSubject.leadSessionRef, evidenceManifestArtifactId: ctx.state.originalPlanSubject.evidenceManifestArtifactId, ...(!hashFreeArtifacts && ctx.state.originalPlanSubject.evidenceManifestSha256 ? { evidenceManifestSha256: ctx.state.originalPlanSubject.evidenceManifestSha256 } : {}) } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) }),
+      (capacityRequestId) => agentActivities(true).runSupplementalReview({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.planRevision ?? ctx.state.revision, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, leadEvidenceArtifactId: ctx.state.leadEvidenceArtifactId!, ...(ctx.state.leadSessionRef ? { primaryLeadSessionRef: ctx.state.leadSessionRef } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) }),
       (result) => result.executionId,
     );
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...at("plan_consolidation"), owner: "lead", allowedCommands: [], revision: ctx.state.revision + 1, pendingAction: "Lead consolidation", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, supplementalReviewUsed: true, supplementalReviewArtifactId: review.reviewArtifactId, supplementalReviewSubject: review.subject ?? null });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...at("plan_consolidation"), owner: "lead", allowedCommands: [], revision: ctx.state.revision + 1, pendingAction: "Lead consolidation", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, supplementalReviewUsed: true, supplementalReviewArtifactId: review.reviewArtifactId });
     await ctx.project();
     const consolidated = await ctx.acquireExternalTurn<LeadPlanningResult>(
       { operation: "lead_consolidation", role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: ctx.state.leadSessionRef },
-      (capacityRequestId) => agentActivities(true).consolidateLeadPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supplementalReviewArtifactId: review.reviewArtifactId, ...(ctx.state.originalPlanSubject ? { originalPlanSubject: ctx.state.originalPlanSubject, evidenceManifestArtifactId: ctx.state.originalPlanSubject.evidenceManifestArtifactId, ...(!hashFreeArtifacts && ctx.state.originalPlanSubject.evidenceManifestSha256 ? { evidenceManifestSha256: ctx.state.originalPlanSubject.evidenceManifestSha256 } : {}) } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) }),
+      (capacityRequestId) => agentActivities(true).consolidateLeadPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supplementalReviewArtifactId: review.reviewArtifactId, ...(capacityRequestId ? { capacityRequestId } : {}) }),
       (result) => result.leadExecutionId,
     );
-    const route = routeLeadResult({ kind: consolidated.leadOutputKind, material: consolidated.material });
-    const exactSubject = Boolean(consolidated.planSubject);
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...consolidated, revision: ctx.state.revision + 1, ...at(route.step), owner: route.owner, allowedCommands: route.step === "approval" ? ctx.approvalCommands(exactSubject, false) : route.step === "ready_for_development" && !exactSubject ? ctx.addRevisionCommand(route.allowedCommands as IssueCommand[]) : route.allowedCommands, pendingAction: route.pendingAction, blocker: route.step === "approval" ? ctx.approvalBlocker(consolidated, exactSubject, false) : route.step === "planning" ? humanBlocker("member_decision", "Needs your call", [{ command: "resolve_decision_blocker", label: "Resolve decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(consolidated.leadOutputArtifactId, "decision-blocker")) : null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, finalPlanSubject: consolidated.planSubject ?? null, originalPlanSubject: ctx.state.originalPlanSubject, materialityEvidence: consolidated.materialityEvidence ?? null, planBlockerSubject: consolidated.blockerSubject ?? null, planMaterial: consolidated.material, materialCategories: consolidated.materialCategories, planRevision: ctx.state.planRevision ?? ctx.state.revision });
-    if (route.step === "ready_for_development") ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, planApproved: true, planApprovedAt: new Date().toISOString(), planApprovedBy: null });
+    const route = routeLeadResult({ kind: consolidated.leadOutputKind }, { supplementalReview: false, reviewerConfigured: false });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...consolidated, revision: ctx.state.revision + 1, ...at(route.step), owner: route.owner, allowedCommands: route.allowedCommands, pendingAction: route.pendingAction, blocker: route.step === "planning" ? humanBlocker("member_decision", "Needs your call", [{ command: "resolve_decision_blocker", label: "Resolve decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(consolidated.leadOutputArtifactId, "decision-blocker")) : null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, planBlockerSubject: consolidated.blockerSubject ?? null, planRevision: ctx.state.planRevision ?? ctx.state.revision });
     await autoApprovePlan(ctx);
     await ctx.project();
     void command;
@@ -262,50 +250,47 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
   }), { validator(rawInput) {
     validatePlanCommand(rawInput);
     if (!ctx.input.supplementalReview || ctx.state.supplementalReviewUsed) throw new Error("Supplemental review is not available");
-    if (!ctx.state.planMaterial || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef || !ctx.state.originalPlanSubject) throw new Error("A material Lead plan is required before supplemental review");
+    if (!ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef) throw new Error("A Lead plan is required before supplemental review");
     if (!ctx.input.roleProfiles.reviewer) throw new Error("A supplemental reviewer profile is required");
   } });
 
   setHandler(issueUpdates.approve_plan, ctx.guarded(async (rawInput: any) => {
     assertPayloadWithinLimit("plan approval command", rawInput);
     const command = validatePlanCommand(rawInput);
-    const decisionSubject = ctx.state.finalPlanSubject && ctx.state.materialityEvidence ? { plan: ctx.state.finalPlanSubject, materiality: ctx.state.materialityEvidence, expectedWorkflowRevision: command.expectedRevision } : undefined;
     if (ctx.decisionInFlight) throw new Error("A plan decision is already being processed");
     ctx.decisionInFlight = true;
     try {
       const planRevision = ctx.state.planRevision ?? ctx.state.revision;
       if (ctx.state.revisionRequestId) await authorizePlanRevision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, revisionRequestId: ctx.state.revisionRequestId, planRevision });
-      const decision = await recordPlanDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, planRevision, actorUserId: command.actorUserId, decision: "approve", ...(command.note !== undefined ? { note: command.note } : {}), ...(decisionSubject ? { subject: decisionSubject } : {}), ...(command.noteStagingRef ? { noteStagingRef: command.noteStagingRef } : {}), ...(command.idempotencyKey ? { idempotencyKey: command.idempotencyKey } : {}), ...(ctx.state.revisionRequestId ? { revisionRequestId: ctx.state.revisionRequestId } : {}) });
+      const decision = await recordPlanDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, planRevision, artifactId: ctx.state.leadOutputArtifactId!, actorUserId: command.actorUserId, decision: "approve", ...(command.note !== undefined ? { note: command.note } : {}), ...(ctx.state.revisionRequestId ? { revisionRequestId: ctx.state.revisionRequestId } : {}) });
       const plannerNote = ctx.state.developerExecutionId ? ctx.state.pendingPlannerNotes?.at(-1) : undefined;
-      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ready_for_development"), owner: "lead", allowedCommands: ctx.state.planMaterial && ctx.state.finalPlanSubject ? ["start_development", "request_plan_revision", "cancel_issue"] : ctx.addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, decisionId: decision.decisionId, planApproved: true, planApprovedAt: new Date().toISOString(), planApprovedBy: command.actorUserId, blocker: null, stateChangedAt: new Date().toISOString(), pendingPlannerNotes: [], ...(command.idempotencyKey && decisionSubject ? { planDecisionReceipt: { idempotencyKey: command.idempotencyKey, decisionId: decision.decisionId, decision: "approve" as const, subjectArtifactId: decisionSubject.plan.artifactId } } : {}) });
+      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ready_for_development"), owner: "lead", allowedCommands: ["start_development", "request_plan_revision", "cancel_issue"], pendingAction: "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, decisionId: decision.decisionId, planApproved: true, planApprovedAt: new Date().toISOString(), planApprovedBy: command.actorUserId, blocker: null, stateChangedAt: new Date().toISOString(), pendingPlannerNotes: [], planDecisionReceipt: { decisionId: decision.decisionId, decision: "approve" } });
       if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
       await ctx.project();
       if (ctx.state.developerExecutionId) return await retryDevelopment(ctx, { expectedRevision: ctx.state.revision, actorUserId: command.actorUserId, commandId: `${command.commandId}:resume` }, plannerNote);
       return ctx.state;
     } finally { ctx.decisionInFlight = false; }
-  }, "approve_plan"), { validator(rawInput) { validatePlanCommand(rawInput); if (!ctx.state.planMaterial) throw new Error("Routine plans do not require approval"); } });
+  }, "approve_plan"), { validator(rawInput) { validatePlanCommand(rawInput); } });
 
   setHandler(issueUpdates.request_plan_revision, ctx.guarded(async (rawInput: any) => {
     assertPayloadWithinLimit("exact plan revision command", rawInput);
     const command = PlanCommandInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    if ((ctx.state.step !== "approval" && ctx.state.step !== "ready_for_development") || !ctx.state.planMaterial || !ctx.state.finalPlanSubject) throw new Error("Exact plan revision is not available in the current phase");
+    if (ctx.state.step !== "approval" && ctx.state.step !== "ready_for_development") throw new Error("Plan revision is not available in the current phase");
     if (ctx.decisionInFlight) throw new Error("A plan decision is already being processed");
-    const decisionSubject = ctx.state.materialityEvidence ? { plan: ctx.state.finalPlanSubject, materiality: ctx.state.materialityEvidence, expectedWorkflowRevision: command.expectedRevision } : undefined;
-    if (!command.idempotencyKey || !command.noteStagingRef || (!hashFreeArtifacts && !command.noteSha256)) throw new Error("A required revision note and idempotency key are required");
     ctx.decisionInFlight = true;
     try {
       const previousRevision = ctx.state.revision;
-      const decision = await recordPlanDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, planRevision: ctx.state.finalPlanSubject.outputRevision, actorUserId: command.actorUserId, decision: "request_revision", ...(decisionSubject ? { subject: decisionSubject } : {}), noteStagingRef: command.noteStagingRef, idempotencyKey: command.idempotencyKey });
-      const primaryLeadSessionRef = ctx.state.finalPlanSubject.leadSessionRef;
-      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: previousRevision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${ctx.state.workflowId}:${previousRevision + 1}`, planRevision: null, planMaterial: null, materialCategories: [], supplementalReviewUsed: false, supplementalReviewArtifactId: null, originalPlanSubject: null, finalPlanSubject: null, materialityEvidence: null, planDecisionReceipt: { idempotencyKey: command.idempotencyKey, decisionId: decision.decisionId, decision: "request_revision" as const, subjectArtifactId: decisionSubject?.plan.artifactId ?? ctx.state.finalPlanSubject.artifactId }, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null });
+      const decision = await recordPlanDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, planRevision: ctx.state.planRevision ?? ctx.state.revision, artifactId: ctx.state.leadOutputArtifactId!, actorUserId: command.actorUserId, decision: "request_revision", ...(command.note !== undefined ? { note: command.note } : {}) });
+      const primaryLeadSessionRef = ctx.state.leadSessionRef;
+      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: previousRevision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${ctx.state.workflowId}:${previousRevision + 1}`, planRevision: null, supplementalReviewUsed: false, supplementalReviewArtifactId: null, planDecisionReceipt: { decisionId: decision.decisionId, decision: "request_revision" }, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null });
       await ctx.project();
-      return await executeLeadTurn(primaryLeadSessionRef, decision.noteArtifactId ? { artifactId: decision.noteArtifactId } : undefined);
+      return await executeLeadTurn(primaryLeadSessionRef ?? undefined, decision.noteArtifactId ? { artifactId: decision.noteArtifactId } : undefined);
     } finally { ctx.decisionInFlight = false; }
   }), { validator(rawInput) {
     const command = PlanCommandInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    if ((ctx.state.step !== "approval" && ctx.state.step !== "ready_for_development") || !ctx.state.planMaterial || !ctx.state.finalPlanSubject) throw new Error("Exact plan revision is not available in the current phase");
+    if (ctx.state.step !== "approval" && ctx.state.step !== "ready_for_development") throw new Error("Plan revision is not available in the current phase");
   } });
 
   setHandler(issueUpdates.respond_plan_blocker, ctx.guarded(async (rawInput: any) => {
@@ -317,10 +302,9 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
     if (ctx.decisionInFlight) throw new Error("A plan decision is already being processed");
     ctx.decisionInFlight = true;
     try {
-      const response = await recordPlanBlockerResponse({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, actorUserId: command.actorUserId, blockerArtifactId: ctx.state.planBlockerSubject.artifactId, ...(ctx.state.planBlockerSubject.artifactSha256 ? { blockerArtifactSha256: ctx.state.planBlockerSubject.artifactSha256 } : {}), expectedWorkflowRevision: command.expectedWorkflowRevision, answerStagingRef: command.answerStagingRef, idempotencyKey: command.idempotencyKey });
-      if (!true && (hashFreeArtifacts || !ctx.state.planBlockerSubject.artifactSha256)) throw new Error("legacy receipt");
+      const response = await recordPlanBlockerResponse({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, actorUserId: command.actorUserId, blockerArtifactId: ctx.state.planBlockerSubject.artifactId, expectedWorkflowRevision: command.expectedWorkflowRevision, answerStagingRef: command.answerStagingRef, idempotencyKey: command.idempotencyKey });
       const primaryLeadSessionRef = ctx.state.planBlockerSubject.leadSessionRef;
-      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision after blocker response", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, planRevision: null, planMaterial: null, materialCategories: [], planBlockerSubject: null, planBlockerResponseReceipt: { idempotencyKey: command.idempotencyKey, responseId: response.responseId, blockerSubjectHash: ctx.state.planBlockerSubject.artifactSha256 ?? null }, originalPlanSubject: null, finalPlanSubject: null, materialityEvidence: null, supplementalReviewUsed: false, supplementalReviewArtifactId: null });
+      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision after blocker response", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, planRevision: null, planBlockerSubject: null, planBlockerResponseReceipt: { idempotencyKey: command.idempotencyKey, responseId: response.responseId }, supplementalReviewUsed: false, supplementalReviewArtifactId: null });
       await ctx.project();
       const carryBlockerAnswer = true;
       if (!response.answerArtifactId) log.warn("Plan blocker response has no answer artifact", { workflowId: ctx.input.workflowId, responseId: response.responseId });
@@ -396,7 +380,7 @@ export function registerPlanningHandlersRevision(ctx: IssueWorkflowContext): voi
     if (prepared.status === "blocked") {
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("development"), owner: "human", allowedCommands: ctx.addRevisionCommand(["revise_plan", "cancel_issue"]), pendingAction: "Plan revision is blocked", blocker: humanBlocker("unsafe_recovery", "Plan revision is blocked", [{ command: "revise_plan", label: "Revise plan", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(undefined, "attention-evidence")), blockerCode: prepared.blockerCode, revisionRequestId: prepared.revisionRequestId, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     } else {
-      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", blockerCode: null, revisionRequestId: prepared.revisionRequestId, revisedExecutionCoordinates: prepared.coordinates, planRevision: null, planMaterial: null, materialCategories: [], supplementalReviewUsed: false, supplementalReviewArtifactId: null, decisionId: null, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", blockerCode: null, revisionRequestId: prepared.revisionRequestId, revisedExecutionCoordinates: prepared.coordinates, planRevision: null, supplementalReviewUsed: false, supplementalReviewArtifactId: null, decisionId: null, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     }
     await ctx.project();
     return ctx.state;
@@ -428,8 +412,8 @@ export function registerPlanningHandlersReject(ctx: IssueWorkflowContext): void 
       if (ctx.state.capacity) await ctx.settleCancelledCapacity(ctx.state.developerExecutionId!);
     }
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, planRevision: null, planMaterial: null, materialCategories: [], supplementalReviewUsed: false, supplementalReviewArtifactId: null, blocker: null, stateChangedAt: new Date().toISOString() });
-    const decision = await recordPlanDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, planRevision: ctx.state.revision - 1, actorUserId: command.actorUserId, decision: "reject", note: `${command.note ?? "Member requested an explicit plan revision"}; worktree=${command.worktreeDecision ?? "new"}; exactBase=${command.exactBaseSha ?? "recorded-current-base"}` });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, planRevision: null, supplementalReviewUsed: false, supplementalReviewArtifactId: null, blocker: null, stateChangedAt: new Date().toISOString() });
+    const decision = await recordPlanDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, planRevision: ctx.state.revision - 1, artifactId: ctx.state.leadOutputArtifactId!, actorUserId: command.actorUserId, decision: "reject", note: `${command.note ?? "Member requested an explicit plan revision"}; worktree=${command.worktreeDecision ?? "new"}; exactBase=${command.exactBaseSha ?? "recorded-current-base"}` });
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, leadResumeInstructionArtifactId: decision.noteArtifactId ?? null, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null });
     await ctx.project();
     return ctx.state;
@@ -437,7 +421,6 @@ export function registerPlanningHandlersReject(ctx: IssueWorkflowContext): void 
     const command = PlanCommandInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (!["approval", "development", "delivery_ready", "delivery_reviewed", "repair_required"].includes(ctx.state.step)) throw new Error("Plan revision is not available in the current phase");
-    if (!ctx.state.planMaterial) throw new Error("Routine plans do not require revision");
     if (ctx.state.step === "development" && !ctx.state.developerExecutionId) throw new Error("Active Developer execution is unavailable for cancellation");
   } });
 }

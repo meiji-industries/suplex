@@ -2,16 +2,7 @@ import { z } from "zod";
 
 import { DeveloperContextSchema, PlanStepVerificationSchema } from "./developer-contracts.js";
 import { GitPresentationSchema } from "./git-presentation.js";
-import {
-  PlanMaterialCategorySchema,
-  canonicalMaterialCategories,
-  validateAffectedPaths,
-  validateMaterialityEvidence,
-  type MaterialityEvidenceSubject,
-  type PlanBlockerSubject,
-  type PlanMaterialCategory,
-  type PlanSubject,
-} from "./plan-governance.js";
+import { type PlanBlockerSubject, type PlanSubject } from "./plan-governance.js";
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
@@ -49,14 +40,8 @@ export const LeadPlanSchema = z.object({
   operationalAnalysis: z.string().min(1),
   verificationStrategy: z.string().min(1),
   unresolvedTechnicalQuestions: z.array(z.string()).length(0),
-  materialCategories: z.array(PlanMaterialCategorySchema).max(6),
   preservedWorktreeCompatibility: z.boolean().nullable().default(null),
-  affectedPaths: z.array(z.string().min(1)).min(1),
-  materiality: z.array(z.object({
-    category: PlanMaterialCategorySchema,
-    rationale: z.string().min(1),
-    evidenceRefs: z.array(z.string().min(1)).min(1),
-  }).strict()).max(6),
+  affectedPaths: z.array(z.string().min(1)).optional(),
   developerContext: DeveloperContextSchema.default({
     includeTaskBrief: false,
     evidenceArtifactIds: [],
@@ -64,21 +49,7 @@ export const LeadPlanSchema = z.object({
     repositoryInstructionPaths: [],
     artifactStepNumbers: {},
   }),
-}).strict().superRefine((value, context) => {
-  const stepNumbers = value.steps.map((step) => step.number);
-  try {
-    const affectedPaths = validateAffectedPaths(value.affectedPaths);
-    const materiality = value.materiality.length
-      ? value.materiality
-      : value.materialCategories.map((category) => ({ category, rationale: "Lead-declared material category", evidenceRefs: ["step:1"] }));
-    validateMaterialityEvidence({ affectedPaths, categories: materiality, stepNumbers });
-  } catch (error) {
-    context.addIssue({ code: "custom", path: ["materiality"], message: error instanceof Error ? error.message : "Materiality evidence is invalid" });
-  }
-  if (JSON.stringify(canonicalMaterialCategories(value.materialCategories)) !== JSON.stringify(value.materialCategories)) {
-    context.addIssue({ code: "custom", path: ["materialCategories"], message: "Material categories must use canonical order" });
-  }
-});
+}).strict();
 
 export const AskUserQuestionOptionSchema = z.object({
   label: z.string().min(1),
@@ -89,11 +60,10 @@ export const AskUserQuestionSchema = z.object({
   header: z.string().min(1),
   id: z.string().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/),
   question: z.string().min(1),
-  options: z.array(AskUserQuestionOptionSchema).length(3),
+  options: z.array(AskUserQuestionOptionSchema).min(1).max(3),
   isOther: z.literal(true),
   isSecret: z.literal(false),
 }).strict().superRefine((value, context) => {
-  if (!value.options[0]?.label.endsWith(" (Recommended)")) context.addIssue({ code: "custom", path: ["options", 0, "label"], message: "The recommended option must be first and labeled (Recommended)" });
   if (new Set(value.options.map((option) => option.label)).size !== value.options.length) context.addIssue({ code: "custom", path: ["options"], message: "Question option labels must be unique" });
 });
 
@@ -112,39 +82,10 @@ export const DecisionBlockerSchema = z.object({ ...decisionBlockerShape, askUser
 export const LeadOutputSchema = z.discriminatedUnion("kind", [LeadPlanSchema, DecisionBlockerSchema]);
 export const LeadOutputJsonSchema = z.toJSONSchema(LeadOutputSchema);
 
-// Lead plans are persisted as immutable artifacts. Plans written before exact
-// plan authority did not record repository paths or materiality evidence, and
-// plans written before the Git presentation contract did not record public
-// branch/PR copy. Projection readers keep both generations readable while new
-// provider output continues to use LeadOutputSchema above.
 const PersistedLegacyLeadPlanSchema = z.object({
   ...LeadPlanSchema.shape,
   gitPresentation: GitPresentationSchema.nullable().default(null),
-  affectedPaths: z.array(z.string().min(1)).default([]),
-  materiality: z.array(z.object({
-    category: PlanMaterialCategorySchema,
-    rationale: z.string().min(1),
-    evidenceRefs: z.array(z.string().min(1)).min(1),
-  }).strict()).max(6).default([]),
-}).strict().superRefine((value, context) => {
-  const stepNumbers = value.steps.map((step) => step.number);
-  if (!value.affectedPaths.length) {
-    if (value.materiality.length) context.addIssue({ code: "custom", path: ["materiality"], message: "Materiality evidence requires affected paths" });
-  } else {
-    try {
-      const affectedPaths = validateAffectedPaths(value.affectedPaths);
-      const materiality = value.materiality.length
-        ? value.materiality
-        : value.materialCategories.map((category) => ({ category, rationale: "Lead-declared material category", evidenceRefs: ["step:1"] }));
-      validateMaterialityEvidence({ affectedPaths, categories: materiality, stepNumbers });
-    } catch (error) {
-      context.addIssue({ code: "custom", path: ["materiality"], message: error instanceof Error ? error.message : "Materiality evidence is invalid" });
-    }
-  }
-  if (JSON.stringify(canonicalMaterialCategories(value.materialCategories)) !== JSON.stringify(value.materialCategories)) {
-    context.addIssue({ code: "custom", path: ["materialCategories"], message: "Material categories must use canonical order" });
-  }
-});
+}).strip();
 
 const PersistedLegacyDecisionBlockerSchema = z.object({ ...decisionBlockerShape, question: z.string().min(1) }).strict();
 
@@ -238,8 +179,6 @@ export interface LeadPlanningResult {
   leadOutputArtifactId: string;
   leadOutputKind: "plan" | "decision_blocker";
   leadSummary: string;
-  materialCategories: PlanMaterialCategory[];
-  material: boolean;
   /** Historical activity-result compatibility; ignored by current workflows. */
   leadEvidenceArtifactSha256?: string;
   leadOutputArtifactSha256?: string;
@@ -252,7 +191,6 @@ export interface LeadPlanningResult {
   resumePhase?: "planning";
   preservedWorktreeCompatibility?: boolean | null;
   planSubject?: PlanSubject;
-  materialityEvidence?: MaterialityEvidenceSubject;
   blockerSubject?: PlanBlockerSubject;
   leadReviewResponseArtifactId?: string;
   leadReviewResponseArtifactSha256?: string;

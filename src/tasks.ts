@@ -23,8 +23,7 @@ import { createInitialIssueWorkflowState, DeliveryOperationBlockCodeSchema, Issu
 import { at, isBlocked, TERMINAL_PHASES, type IssuePhase, type IssueStep } from "./issue-phases.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { taskCommandDescriptors, type TaskCommandDescriptor } from "./task-commands.js";
-import { MaterialityEvidenceArtifactSchema, PlanSubjectSchema, deterministicMaterialCategories, type MaterialityEvidenceSubject, type PlanBlockerSubject, type PlanMaterialCategory, type PlanSubject } from "./plan-governance.js";
-import { PlanGovernanceRepository } from "./plan-governance-repository.js";
+import { PlanSubjectSchema, type PlanBlockerSubject, type PlanSubject } from "./plan-governance.js";
 import { IssueTimelineEvents } from "./issue-timeline-events.js";
 import type { TaskActivityEvent } from "./task-activity.js";
 import type { HermesPrincipal } from "./hermes-agents.js";
@@ -371,13 +370,6 @@ export interface PlanArtifactView {
   status: "current" | "superseded";
 }
 
-export interface MaterialityView {
-  categories: PlanMaterialCategory[];
-  evidenceArtifactId: string;
-  evidenceArtifactSha256: string;
-  evidence: Array<{ category: PlanMaterialCategory; source: "lead" | "deterministic"; refs: string[]; rationale: string }>;
-}
-
 export interface SupplementalReviewView {
   reviewId: string;
   reviewerProfile: { id: string; name: string };
@@ -414,7 +406,6 @@ export interface PlanGovernanceView {
   originalPlan?: PlanArtifactView;
   finalPlan?: PlanArtifactView;
   previousPlans?: PlanArtifactView[];
-  materiality?: MaterialityView;
   supplementalReview?: SupplementalReviewView;
   decision?: PlanDecisionView;
   blocker?: PlanBlockerView;
@@ -469,7 +460,6 @@ export interface ForgeTask {
     originalPlan?: PlanArtifactView;
     finalPlan?: PlanArtifactView;
     previousPlans?: PlanArtifactView[];
-    materiality?: MaterialityView;
     supplementalReview?: SupplementalReviewView;
     decision?: PlanDecisionView;
     blocker?: PlanBlockerView;
@@ -478,19 +468,13 @@ export interface ForgeTask {
   planRevision?: number | null;
   planAuthorizationId?: string | null;
   planArtifactSha256?: string | null;
-  planMaterial?: boolean | null;
-  materialCategories?: PlanMaterialCategory[];
   supplementalReviewUsed?: boolean;
   supplementalReviewArtifactId?: string | null;
   decisionId?: string | null;
   leadInputManifestArtifactId?: string | undefined;
-  leadInputManifestSha256?: string | undefined;
-  leadEvidenceSha256?: string | undefined;
-  leadOutputSha256?: string | undefined;
   blockedCategory?: "human_decision" | "authentication" | "configuration" | "capacity" | "execution_ownership" | null | undefined;
   blockedResumePhase?: "planning" | null | undefined;
   blockerArtifactId?: string | null | undefined;
-  blockerArtifactSha256?: string | null | undefined;
   deliveryDecisionArtifactId?: string | null;
   predecessorTaskId?: string | null;
   successorTaskId?: string | null;
@@ -1457,17 +1441,9 @@ export class TaskService {
     const boundInput = input;
     const isBlocker = commandName === "respond_plan_blocker";
     const note = boundInput.note;
-    // The same idempotency key always resolves to the row it first wrote: a resubmit is a no-op, never a conflict.
-    if (boundInput.idempotencyKey) {
-      const governance = new PlanGovernanceRepository(this.database);
-      const existing = isBlocker ? governance.findBlockerResponseByIdempotency(task.workflowId, boundInput.idempotencyKey) : governance.findDecisionByIdempotency(task.workflowId, boundInput.idempotencyKey);
-      if (existing) return task;
-    }
     if (boundInput.expectedRevision !== task.revision || !task.allowedCommands.includes(commandName)) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
     if (!note?.trim()) throw new TaskFailure("A decision note is required", [finding("required-note", isBlocker ? "answer" : "note", "Enter a concise response")], 422);
-    if (!boundInput.idempotencyKey) throw new TaskFailure("An idempotency key is required", [finding("required-idempotency-key", "idempotencyKey", "Retry with the same key")], 422);
-    const staged = await this.artifacts.stage(task.companyId, isBlocker ? "plan-blocker-response" : "plan-decision", { filename: `${boundInput.idempotencyKey}.md`, mimeType: "text/markdown", bytes: Buffer.from(note.trim(), "utf8") });
-    const workflowInput: PlanCommandInput = { expectedRevision: boundInput.expectedRevision, actorUserId, idempotencyKey: boundInput.idempotencyKey, ...(isBlocker ? { answerStagingRef: staged.ref, expectedWorkflowRevision: boundInput.expectedWorkflowRevision ?? boundInput.expectedRevision } : { noteStagingRef: staged.ref }) };
+    const workflowInput: PlanCommandInput = { expectedRevision: boundInput.expectedRevision, actorUserId, commandId: crypto.randomUUID(), ...(note ? { note } : {}) };
     try {
       let state = await this.workflow.execute(commandName, task.workflowId, workflowInput);
       this.recordTaskCommand(task, actorUserId, commandName, state.revision);
@@ -1484,7 +1460,6 @@ export class TaskService {
       }
       return this.getTask(actorUserId, taskId);
     } catch (error) {
-      if (error instanceof Error && /stale|subject|conflict|idempotency/i.test(error.message)) await this.artifacts.discardStaged(staged);
       const stale = error instanceof Error && /stale|subject|conflict/i.test(error.message);
       const current = this.getTask(actorUserId, taskId);
       const message = stale ? "Task changed before this action was accepted" : current.lastHandlerError?.reason ?? "Task action could not be accepted";
@@ -1846,48 +1821,29 @@ export class TaskService {
   }
 
   private planGovernanceView(row: TaskRow, state: Partial<IssueWorkflowState>): PlanGovernanceView | undefined {
-    const originalSubject = state.originalPlanSubject;
-    const finalSubject = state.finalPlanSubject;
-    const materialitySubject = state.materialityEvidence;
     const planRows = this.database.authQuery((db) => db.prepare(`SELECT io.id, io.output_summary AS summary, io.finished_at AS createdAt, io.original_plan_revision AS originalPlanRevision, io.output_revision AS outputRevision, io.final_version AS finalVersion, io.output_artifact_id AS artifactId, a.sha256 AS artifactSha256, io.session_ref AS leadSessionRef, io.id AS leadExecutionId, io.evidence_manifest_artifact_id AS evidenceManifestArtifactId, em.sha256 AS evidenceManifestSha256, io.output_kind AS kind, a.storage_path AS storagePath, a.sha256 AS storedSha256
       FROM forge_agent_executions io JOIN forge_artifacts a ON a.id = io.output_artifact_id
       LEFT JOIN forge_artifacts em ON em.id = io.evidence_manifest_artifact_id
       WHERE io.task_id = ? AND io.company_id = ? AND io.workflow_id = ? 
-      ORDER BY io.original_plan_revision, io.final_version, io.output_revision`).all(row.id, row.company_id, row.workflow_id) as Array<{ id: string; summary: string; createdAt: string; originalPlanRevision: number; outputRevision: number; finalVersion: 1 | 2; artifactId: string; artifactSha256: string; leadSessionRef: string; leadExecutionId: string; evidenceManifestArtifactId: string; evidenceManifestSha256: string; kind: "plan" | "decision_blocker"; storagePath: string; storedSha256: string }>);
+      ORDER BY io.output_revision`).all(row.id, row.company_id, row.workflow_id) as Array<{ id: string; summary: string; createdAt: string; outputRevision: number; artifactId: string; leadSessionRef: string; kind: "plan" | "decision_blocker"; storagePath: string; storedSha256: string }>);
     const plans = planRows.flatMap((planRow): PlanArtifactView[] => {
       try {
-        const subject = PlanSubjectSchema.parse({ companyId: row.company_id, issueId: row.id, workflowId: row.workflow_id, originalPlanRevision: planRow.originalPlanRevision, outputId: planRow.id, outputRevision: planRow.outputRevision, finalVersion: planRow.finalVersion, artifactId: planRow.artifactId, artifactSha256: planRow.artifactSha256, leadSessionRef: planRow.leadSessionRef, leadExecutionId: planRow.leadExecutionId, evidenceManifestArtifactId: planRow.evidenceManifestArtifactId, evidenceManifestSha256: undefined });
+        const subject = PlanSubjectSchema.parse({ planRevision: planRow.outputRevision, artifactId: planRow.artifactId, leadSessionRef: planRow.leadSessionRef });
         const content = PersistedLeadOutputSchema.parse(jsonRequired(this.artifacts.getArtifactSync({ companyId: row.company_id, storagePath: planRow.storagePath, sha256: planRow.storedSha256 }).toString("utf8")));
-        return [{ subject, summary: planRow.summary, content, createdAt: planRow.createdAt, status: subject.outputId === finalSubject?.outputId ? "current" : "superseded" }];
+        return [{ subject, summary: planRow.summary, content, createdAt: planRow.createdAt, status: "superseded" }];
       } catch {
         return [];
       }
     });
     const blocker = state.planBlockerSubject ? this.planBlockerView(state.planBlockerSubject, plans) : undefined;
-    const finalPlan = finalSubject ? plans.find((plan) => plan.subject.outputId === finalSubject.outputId) : undefined;
-    if (!finalSubject || !finalPlan) return blocker ? { blocker } : undefined;
-    const originalPlan = (originalSubject ? plans.find((plan) => plan.subject.outputId === originalSubject.outputId) : undefined) ?? finalPlan;
-    const previousPlans = plans.filter((plan) => plan.subject.outputId !== finalSubject.outputId);
-    const materiality = materialitySubject ? this.materialityView(row.company_id, materialitySubject) : undefined;
+    const finalPlan = plans.at(-1);
+    if (!finalPlan) return blocker ? { blocker } : undefined;
+    finalPlan.status = "current";
+    const originalPlan = plans[0] ?? finalPlan;
+    const previousPlans = plans.slice(0, -1);
     const supplementalReview = this.supplementalReviewView(row);
-    const decision = this.planDecisionView(row, finalSubject);
-    return { originalPlan, finalPlan, previousPlans, ...(materiality ? { materiality } : {}), ...(supplementalReview ? { supplementalReview } : {}), ...(decision ? { decision } : {}), ...(blocker ? { blocker } : {}) };
-  }
-
-  private materialityView(companyId: string, subject: MaterialityEvidenceSubject): MaterialityView {
-    const row = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'materiality-evidence'").get(subject.artifactId, companyId) as { storagePath: string; sha256: string } | undefined);
-    if (!row) return { categories: subject.categories, evidenceArtifactId: subject.artifactId, evidenceArtifactSha256: subject.artifactSha256 ?? "", evidence: [] };
-    try {
-      const artifact = MaterialityEvidenceArtifactSchema.parse(jsonRequired(this.artifacts.getArtifactSync({ companyId, storagePath: row.storagePath, sha256: row.sha256 }).toString("utf8")));
-      const evidence: MaterialityView["evidence"] = artifact.evidence.map((entry) => ({ category: entry.category, source: "lead" as const, refs: entry.evidenceRefs, rationale: entry.rationale }));
-      const leadCategories = new Set(artifact.evidence.map((entry) => entry.category));
-      for (const category of deterministicMaterialCategories(artifact.affectedPaths)) {
-        if (!leadCategories.has(category)) evidence.push({ category, source: "deterministic", refs: artifact.affectedPaths, rationale: "Affected repository paths deterministically require this category." });
-      }
-      return { categories: subject.categories, evidenceArtifactId: subject.artifactId, evidenceArtifactSha256: row.sha256, evidence };
-    } catch {
-      return { categories: subject.categories, evidenceArtifactId: subject.artifactId, evidenceArtifactSha256: row.sha256, evidence: [] };
-    }
+    const decision = this.planDecisionView(row, finalPlan.subject);
+    return { originalPlan, finalPlan, previousPlans, ...(supplementalReview ? { supplementalReview } : {}), ...(decision ? { decision } : {}), ...(blocker ? { blocker } : {}) };
   }
 
   private supplementalReviewView(task: TaskRow): SupplementalReviewView | undefined {
@@ -1911,8 +1867,8 @@ export class TaskService {
   private planDecisionView(task: TaskRow, finalSubject: PlanSubject): PlanDecisionView | undefined {
     const row = this.database.authQuery((db) => db.prepare(`SELECT d.id AS decisionId, d.decision, d.actor_user_id AS actorId, u.display_name AS actorName, d.note_artifact_id AS noteArtifactId, d.created_at AS createdAt, a.storage_path AS noteStoragePath, a.sha256 AS noteSha256
       FROM forge_plan_decisions d JOIN forge_users u ON u.id = d.actor_user_id JOIN forge_artifacts a ON a.id = d.note_artifact_id
-      WHERE d.task_id = ? AND d.company_id = ? AND d.workflow_id = ? AND d.plan_output_id = ?
-      ORDER BY d.created_at DESC, d.id DESC LIMIT 1`).get(task.id, task.company_id, task.workflow_id, finalSubject.outputId) as { decisionId: string; decision: "approve" | "request_revision" | "reject"; actorId: string; actorName: string; noteArtifactId: string; createdAt: string; noteStoragePath: string; noteSha256: string } | undefined);
+      WHERE d.task_id = ? AND d.company_id = ? AND d.workflow_id = ? AND d.plan_revision = ?
+      ORDER BY d.created_at DESC, d.id DESC LIMIT 1`).get(task.id, task.company_id, task.workflow_id, finalSubject.planRevision) as { decisionId: string; decision: "approve" | "request_revision" | "reject"; actorId: string; actorName: string; noteArtifactId: string; createdAt: string; noteStoragePath: string; noteSha256: string } | undefined);
     if (!row) return undefined;
     try {
       const note = this.artifacts.getArtifactSync({ companyId: task.company_id, storagePath: row.noteStoragePath, sha256: row.noteSha256 }).toString("utf8");
@@ -2167,7 +2123,7 @@ export class TaskService {
     const roleAgents = parseRoleAgents(row.role_agents_json);
     const commands = taskCommandDescriptors(allowedCommands, row.projection_revision);
     const attentionCard = attentionCardFromBlocker(workflowState.blocker ?? undefined, { summary: row.pending_action, pendingAction: row.pending_action, actions: commands.map((command) => ({ command: command.name, label: command.label, ...(command.note === "required" ? { requiresNote: true } : {}) })), ...(workflowState.mergeDecision ? { mergeDecision: workflowState.mergeDecision } : {}) });
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleAgents, supplementalReview: row.supplemental_review === 1, autoApprovePlan: row.autoApprovePlan === 1, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), executionControls: { runProjectTests: row.run_project_tests === 1, visualEvidence: row.visual_evidence, supplementalReview: row.supplemental_review === 1 }, browserProof: this.browserProof.projectSync(row.id, row.company_id), deliveryReceipt: row.delivery_worktree_path || row.delivery_branch_name || row.delivery_commit ? { worktreePath: row.delivery_worktree_path, branchName: row.delivery_branch_name, commit: row.delivery_commit } : null, worktreeState: workflowState.worktreeState ?? null, worktreePath: ownedWorktree?.worktreePath ?? (workflowState.worktreeState === "cleaned" ? null : developerExecution?.worktreePath ?? null), pullRequestMode: row.pull_request_mode, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, prompts: { overrides: prompts?.overrides ?? [] }, ...(source ? { source } : {}), phase: row.phase, step: row.step, blocked: isBlocked(workflowState), revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, attentionCard, lastHandlerError: workflowState.lastHandlerError ?? null, createdAt: row.created_at, updatedAt: row.updated_at, timeline, activity, agentInvocations, capacity, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, projection: { revision: row.projection_revision, projectedAt: row.projected_at }, reviewLineage, targetBaseReconciliation, ...(deliveryGate ? { deliveryGate } : {}), ...(githubPullRequest ? { githubPullRequest } : {}), ...(workflowState ? { planRevision: workflowState.planRevision ?? null, planMaterial: workflowState.planMaterial ?? null, materialCategories: workflowState.materialCategories ?? [], supplementalReviewUsed: workflowState.supplementalReviewUsed ?? false, supplementalReviewArtifactId: workflowState.supplementalReviewArtifactId ?? null, decisionId: workflowState.planDecisionReceipt?.decisionId ?? null, leadInputManifestArtifactId: workflowState.leadInputManifestArtifactId ?? undefined, leadInputManifestSha256: workflowState.leadInputManifestSha256 ?? undefined, leadEvidenceSha256: workflowState.leadEvidenceSha256 ?? undefined, leadOutputSha256: workflowState.leadOutputSha256 ?? undefined, blockedCategory: workflowState.blockedCategory ?? null, blockedResumePhase: workflowState.blockedResumePhase ?? null, blockerArtifactId: workflowState.blockerArtifactId ?? null, blockerArtifactSha256: workflowState.blockerArtifactSha256 ?? null, deliveryDecisionArtifactId: workflowState.deliveryDecisionArtifactId ?? null, predecessorTaskId: row.predecessor_task_id, successorTaskId: row.successor_task_id, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), ...(developerExecution ? { developerExecution: { ...developerExecution, branchName: developerExecution.branch_name, summary: developerSummary } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(leadOutput ? { leadOutput } : {}), ...(release !== undefined ? { release } : {}), ...(ci ? { ci } : {}) };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleAgents, supplementalReview: row.supplemental_review === 1, autoApprovePlan: row.autoApprovePlan === 1, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), executionControls: { runProjectTests: row.run_project_tests === 1, visualEvidence: row.visual_evidence, supplementalReview: row.supplemental_review === 1 }, browserProof: this.browserProof.projectSync(row.id, row.company_id), deliveryReceipt: row.delivery_worktree_path || row.delivery_branch_name || row.delivery_commit ? { worktreePath: row.delivery_worktree_path, branchName: row.delivery_branch_name, commit: row.delivery_commit } : null, worktreeState: workflowState.worktreeState ?? null, worktreePath: ownedWorktree?.worktreePath ?? (workflowState.worktreeState === "cleaned" ? null : developerExecution?.worktreePath ?? null), pullRequestMode: row.pull_request_mode, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, prompts: { overrides: prompts?.overrides ?? [] }, ...(source ? { source } : {}), phase: row.phase, step: row.step, blocked: isBlocked(workflowState), revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, attentionCard, lastHandlerError: workflowState.lastHandlerError ?? null, createdAt: row.created_at, updatedAt: row.updated_at, timeline, activity, agentInvocations, capacity, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, projection: { revision: row.projection_revision, projectedAt: row.projected_at }, reviewLineage, targetBaseReconciliation, ...(deliveryGate ? { deliveryGate } : {}), ...(githubPullRequest ? { githubPullRequest } : {}), ...(workflowState ? { planRevision: workflowState.planRevision ?? null, supplementalReviewUsed: workflowState.supplementalReviewUsed ?? false, supplementalReviewArtifactId: workflowState.supplementalReviewArtifactId ?? null, decisionId: workflowState.planDecisionReceipt?.decisionId ?? null, leadInputManifestArtifactId: workflowState.leadInputManifestArtifactId ?? undefined, blockedCategory: workflowState.blockedCategory ?? null, blockedResumePhase: workflowState.blockedResumePhase ?? null, blockerArtifactId: workflowState.blockerArtifactId ?? null, deliveryDecisionArtifactId: workflowState.deliveryDecisionArtifactId ?? null, predecessorTaskId: row.predecessor_task_id, successorTaskId: row.successor_task_id, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), ...(developerExecution ? { developerExecution: { ...developerExecution, branchName: developerExecution.branch_name, summary: developerSummary } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(leadOutput ? { leadOutput } : {}), ...(release !== undefined ? { release } : {}), ...(ci ? { ci } : {}) };
   }
 
   private developerReportSummary(companyId: string, artifactId: string): string | null {

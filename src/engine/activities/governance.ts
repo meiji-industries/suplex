@@ -10,30 +10,19 @@ export function createGovernanceActivities(ctx: ActivityContext): GovernanceActi
       const scoped = database.authQuery((db) => actor.role === "admin" ? db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(input.taskId, input.companyId, input.workflowId) : db.prepare("SELECT t.id FROM forge_tasks t JOIN forge_memberships m ON m.company_id = t.company_id WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND m.user_id = ? AND m.status = 'active'").get(input.taskId, input.companyId, input.workflowId, input.actorUserId)) as { id: string } | undefined;
       if (!scoped) throw new Error("Plan decision scope is unavailable");
       const store = new ArtifactStore(config.artifactRoot);
-      const staging = input.noteStagingRef ? { companyId: input.companyId, storagePath: `${input.companyId}/staging/${input.noteStagingRef}.bin` } : undefined;
       const repository = new PlanGovernanceRepository(database);
-      if (input.idempotencyKey) {
-        const existing = repository.findDecisionByIdempotency(input.workflowId, input.idempotencyKey);
-        if (existing) {
-          if (staging) await store.discardStaged(staging);
-          return { decisionId: existing.decisionId, duplicate: true, noteArtifactId: existing.noteArtifactId };
-        }
-      }
-      const bytes = input.noteStagingRef
-        ? await store.readStaged(input.companyId, input.noteStagingRef)
-        : Buffer.from((redact(input.note?.trim() ?? "") as string) || `${input.decision} plan`, "utf8");
-      const noteArtifact = await store.putArtifact(input.companyId, "plan-decision", { filename: `${input.idempotencyKey ?? `decision_${input.planRevision}`}.md`, mimeType: "text/markdown", bytes });
+      const bytes = Buffer.from((redact(input.note?.trim() ?? "") as string) || `${input.decision} plan`, "utf8");
+      const noteArtifact = await store.putArtifact(input.companyId, "plan-decision", { filename: `decision_${input.planRevision}.md`, mimeType: "text/markdown", bytes });
       let result;
       try {
         database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(noteArtifact.id, noteArtifact.companyId, noteArtifact.kind, noteArtifact.filename, noteArtifact.mimeType, noteArtifact.byteSize, noteArtifact.sha256, noteArtifact.storagePath, noteArtifact.createdAt));
-        result = repository.recordDecisionIdempotently({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, actorUserId: input.actorUserId, decision: input.decision, planRevision: input.planRevision, ...(input.subject ? { subject: input.subject } : {}), noteArtifactId: noteArtifact.id, ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}) });
+        result = repository.recordDecision({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, actorUserId: input.actorUserId, decision: input.decision, planRevision: input.planRevision, artifactId: input.artifactId, noteArtifactId: noteArtifact.id });
       } catch (error) {
         database.authTransaction((db) => db.prepare("DELETE FROM forge_artifacts WHERE id = ? AND company_id = ?").run(noteArtifact.id, input.companyId));
         await store.removeArtifact(noteArtifact);
         throw asNonRetryableApplicationFailure(error) ?? error;
       }
-      if (staging) await store.discardStaged(staging);
-      return { decisionId: result.decisionId, duplicate: result.duplicate, noteArtifactId: result.noteArtifactId };
+      return { decisionId: result.decisionId, noteArtifactId: result.noteArtifactId };
     },
     async recordDecisionBlockerResolution(input) {
       const actor = database.authQuery((db) => db.prepare("SELECT id, role, status FROM forge_users WHERE id = ?").get(input.actorUserId) as { id: string; role: string; status: string } | undefined);

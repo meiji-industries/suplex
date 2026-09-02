@@ -16,22 +16,22 @@ const baseState = (h: EngineHarness, issueId: string, step: IssueStep, revision 
 
 test("plan rejection revises, a planner decision blocker resolves, and a done task continues", async () => {
   let plans = 0;
-  const plan = (material = true) => ({ leadExecutionId: `lead-${++plans}`, leadSessionRef: "lead-session", leadOutputArtifactId: `plan-${plans}`, leadEvidenceArtifactId: `evidence-${plans}`, leadOutputArtifactSha256: sha, leadOutputKind: "plan" as const, leadSummary: "Revised plan", materialCategories: material ? ["security_permissions" as const] : [], material });
+  const plan = () => ({ leadExecutionId: `lead-${++plans}`, leadSessionRef: "lead-session", leadOutputArtifactId: `plan-${plans}`, leadEvidenceArtifactId: `evidence-${plans}`, leadOutputArtifactSha256: sha, leadOutputKind: "plan" as const, leadSummary: "Revised plan" });
   const h = await createEngineHarness({
     projectIssueState: async (event) => event.state,
     recordPlanDecision: async () => ({ decisionId: `decision-${plans}`, noteArtifactId: "revision-note" }),
-    runLeadPlanning: async () => plan(true),
+    runLeadPlanning: async () => plan(),
     recordDecisionBlockerResolution: async () => ({ resolutionId: "resolution-1" }),
     createSuccessor: async (value) => ({ successorTaskId: value.successorTaskId, successorWorkflowId: value.successorWorkflowId, predecessorTaskId: value.predecessorTaskId, projectRevisionId: engineFixture.projectRevisionId, creationRevision: value.acceptedRevision }),
   });
   for (const id of ["governance", "blocker", "continued"]) h.seedTask(id);
   try {
-    const approval = { ...baseState(h, "governance", "approval", 4), owner: "human" as const, allowedCommands: ["approve_plan" as const, "reject_plan" as const, "cancel_issue" as const], planRevision: 1, planMaterial: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-original" };
+    const approval = { ...baseState(h, "governance", "approval", 4), owner: "human" as const, allowedCommands: ["approve_plan" as const, "reject_plan" as const, "cancel_issue" as const], planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-original" };
     const governed = await h.startContinuation("governance", approval);
     const rejected = await rejectIssuePlan(h.config, governed.workflowId, { expectedRevision: (await queryIssueWorkflow(h.config, governed.workflowId)).revision, actorUserId: engineFixture.actorUserId, note: "Address the boundary" });
-    expect(rejected).toMatchObject({ step: "planning", planRevision: null, planMaterial: null });
+    expect(rejected).toMatchObject({ step: "planning", planRevision: null });
     const revised = await executeIssueCommand(h.config, governed.workflowId, "start_planning", { expectedRevision: rejected.revision, actorUserId: engineFixture.actorUserId });
-    expect(revised).toMatchObject({ step: "approval", planMaterial: true, leadSummary: "Revised plan" });
+    expect(revised).toMatchObject({ step: "approval", leadSummary: "Revised plan" });
     expect(await executeIssueCommand(h.config, governed.workflowId, "approve_plan", { expectedRevision: revised.revision, actorUserId: engineFixture.actorUserId })).toMatchObject({ step: "ready_for_development", planApproved: true });
 
     const blocked = { ...baseState(h, "blocker", "planning", 7), owner: "human" as const, allowedCommands: ["resolve_decision_blocker" as const, "cancel_issue" as const], blockedCategory: "human_decision" as const, blockedResumePhase: "planning" as const, blockerArtifactId: "blocker-artifact", leadSessionRef: "lead-session", blocker: { category: "member_decision" as const, summary: "Needs your call", unblockOwner: "human" as const, actions: [{ command: "resolve_decision_blocker" as const, label: "Resolve decision", requiresNote: false, destructive: false }, { command: "cancel_issue" as const, label: "Cancel issue", requiresNote: false, destructive: true }], evidence: { artifactId: "blocker-artifact", kind: "decision-blocker" as const }, createdAt: new Date(h.clock.now()).toISOString(), retry: null } };
@@ -54,7 +54,7 @@ test("cancelling a queued Developer turn prevents its start and retry starts exa
   });
   h.seedTask("queued");
   try {
-    const activeState = { ...baseState(h, "queued", "development", 2), allowedCommands: ["cancel_development" as const, "cancel_issue" as const], planRevision: 1, planMaterial: true, planApproved: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan", developerExecutionId: "queued-execution", developerAttempt: 1 };
+    const activeState = { ...baseState(h, "queued", "development", 2), allowedCommands: ["cancel_development" as const, "cancel_issue" as const], planRevision: 1, planApproved: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan", developerExecutionId: "queued-execution", developerAttempt: 1 };
     const started = await h.startContinuation("queued", activeState);
     const active = await queryIssueWorkflow(h.config, started.workflowId);
     const cancelled = await executeIssueCommand(h.config, started.workflowId, "cancel_development", { expectedRevision: active.revision, actorUserId: engineFixture.actorUserId, commandId: "cancel-queued" });

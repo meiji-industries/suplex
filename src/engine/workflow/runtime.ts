@@ -48,14 +48,6 @@ export function leadResultKind(result: LeadPlanningResult): "plan" | "decision_b
   return "kind" in result ? result.kind : result.leadOutputKind;
 }
 
-export function leadResultMaterial(result: LeadPlanningResult): boolean {
-  return leadResultKind(result) === "plan" && "material" in result ? result.material : false;
-}
-
-export function leadResultCategories(result: LeadPlanningResult) {
-  return leadResultKind(result) === "plan" && "materialCategories" in result ? result.materialCategories : [];
-}
-
 export function applyLeadResult(state: IssueWorkflowState, result: LeadPlanningResult): IssueWorkflowState {
   const kind = leadResultKind(result);
   const common = {
@@ -65,10 +57,7 @@ export function applyLeadResult(state: IssueWorkflowState, result: LeadPlanningR
     leadOutputArtifactId: result.leadOutputArtifactId,
     leadOutputKind: kind,
     leadSummary: result.leadSummary,
-    ...(("leadEvidenceSha256" in result && result.leadEvidenceSha256) ? { leadEvidenceSha256: result.leadEvidenceSha256 } : {}),
-    ...(("leadOutputSha256" in result && result.leadOutputSha256) ? { leadOutputSha256: result.leadOutputSha256 } : {}),
     ...(("leadInputManifestArtifactId" in result && result.leadInputManifestArtifactId) ? { leadInputManifestArtifactId: result.leadInputManifestArtifactId } : {}),
-    ...(("leadInputManifestSha256" in result && result.leadInputManifestSha256) ? { leadInputManifestSha256: result.leadInputManifestSha256 } : {}),
   };
   if (kind === "decision_blocker") {
     return IssueWorkflowStateSchema.parse({
@@ -82,22 +71,16 @@ export function applyLeadResult(state: IssueWorkflowState, result: LeadPlanningR
       blockedResumePhase: "planning",
       blocker: humanBlocker("member_decision", "Needs your call", [{ command: "resolve_decision_blocker", label: "Resolve decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.leadOutputArtifactId, "decision-blocker")),
       blockerArtifactId: result.leadOutputArtifactId,
-      blockerArtifactSha256: "leadOutputSha256" in result ? result.leadOutputSha256 : null,
       planRevision: null,
-      planMaterial: null,
-      materialCategories: [],
     });
   }
   return IssueWorkflowStateSchema.parse({
     ...state,
     ...common,
     planRevision: state.revision,
-    planMaterial: leadResultMaterial(result),
-    materialCategories: leadResultCategories(result),
     blockedCategory: null,
     blockedResumePhase: null,
     blockerArtifactId: null,
-    blockerArtifactSha256: null,
   });
 }
 
@@ -106,8 +89,6 @@ export function applyLegacyLeadResult(state: IssueWorkflowState, result: LeadPla
     ...state,
     ...result,
     planRevision: state.revision,
-    planMaterial: leadResultMaterial(result),
-    materialCategories: leadResultCategories(result),
   });
 }
 
@@ -444,8 +425,7 @@ export function createGuarded(
         await options.project(retryable);
         throw error;
       }
-      const canRetryDevelopment = state.planMaterial === true
-        && Boolean(state.leadOutputArtifactId)
+      const canRetryDevelopment = Boolean(state.leadOutputArtifactId)
         && Boolean(state.leadSessionRef);
       const allowedCommands = canRetryDevelopment
         ? ["retry_development", "start_planning", "continue_work", "cancel_issue"]

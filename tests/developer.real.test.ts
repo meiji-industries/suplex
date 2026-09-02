@@ -59,7 +59,7 @@ realTest("real Codex passes the authorized Developer service seam with scoped ar
         { number: 1, instruction: "Create proof.txt containing exactly proof and verify that it exists. Do not touch README.md.", verification: "proof.txt exists", verificationCommands: ["test -f proof.txt"] },
         { number: 2, instruction: "Create exactly one ordinary commit containing only proof.txt and leave the worktree clean.", verification: "One clean commit descends directly from the accepted revision", verificationCommands: ["git rev-parse HEAD", "git rev-parse HEAD^{tree}", "git status --porcelain"] },
       ],
-      compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "Owner-controlled local execution with provider observation.", verificationStrategy: "Use the exact commands on each numbered step.", unresolvedTechnicalQuestions: [], materialCategories: [],
+      compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "Owner-controlled local execution with provider observation.", verificationStrategy: "Use the exact commands on each numbered step.", unresolvedTechnicalQuestions: [],
       developerContext: { includeTaskBrief: false, evidenceArtifactIds: [supplemental.id], imageArtifactIds: [referencedImage.id], repositoryInstructionPaths: [], artifactStepNumbers: { [supplemental.id]: [1], [referencedImage.id]: [1] } },
     };
     const plan = await artifacts.putArtifact("company_real", "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify(planValue)) });

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 
 import { TaskActivity } from "../src/frontend/components/app/task-history.js";
-import { activityRole, activitySentence, agentTurnActivityRows, compactActivityRows, withoutLegacyMaterialitySummary } from "../src/frontend/lib/task-activity-feed.js";
+import { activityRole, activitySentence, agentTurnActivityRows, compactActivityRows, withoutLegacyPlanSummary } from "../src/frontend/lib/task-activity-feed.js";
 
 test("compacts live heartbeats, duplicate activity, and command labels", () => {
   const rows = compactActivityRows([
@@ -33,10 +33,9 @@ test("labels and compacts repeated human CI decisions", () => {
   ]).map((row) => row.id)).toEqual(["ci-1", "ci-2"]);
 });
 
-test("removes legacy materiality suffixes from plan summaries", () => {
-  expect(withoutLegacyMaterialitySummary("Plan the update (Material plan: user_visible_behavior)")).toBe("Plan the update");
-  expect(withoutLegacyMaterialitySummary("Plan the update (Routine plan)")).toBe("Plan the update");
-  expect(activitySentence({ eventType: "planner_note_revised", metadata: { summary: "Plan the update (Material plan: user_visible_behavior)" } }, "planner")).toBe("Planner revised the plan: Plan the update");
+test("keeps plan summaries intact", () => {
+  expect(withoutLegacyPlanSummary("Plan the update")).toBe("Plan the update");
+  expect(activitySentence({ eventType: "planner_note_revised", metadata: { summary: "Plan the update" } }, "planner")).toBe("Planner revised the plan: Plan the update");
 });
 
 test("keeps separate Tell-the-Planner rounds when planner lifecycle text repeats", () => {

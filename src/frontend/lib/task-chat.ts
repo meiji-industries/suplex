@@ -1,4 +1,4 @@
-import { activitySentence, activityRole, withoutLegacyMaterialitySummary } from "./task-activity-feed.js";
+import { activitySentence, activityRole, withoutLegacyPlanSummary } from "./task-activity-feed.js";
 import type { ApiTask } from "./view-shared.js";
 import type { AgentTimelineEvent } from "../../http/contracts/agent-events.js";
 import type { Patch, PatchFile, PatchRow } from "../../codex-patch.js";
@@ -108,7 +108,7 @@ function turnSummary(task: ApiTask, invocation: ApiTask["agentInvocations"][numb
     const summary = task.leadOutput?.executionId === invocation.id ? task.leadOutput.summary
       : task.planHistory.find((plan) => plan.executionId === invocation.id)?.summary
         ?? matching.find((entry) => entry.eventType === "planner_note_revised")?.metadata.summary as string | undefined;
-    if (summary) return withoutLegacyMaterialitySummary(summary);
+    if (summary) return withoutLegacyPlanSummary(summary);
     return matching.some((entry) => entry.eventType === "planning_started" || entry.eventType === "planner_note_revised" || /(?:^|_)plan_approved$/.test(entry.eventType)) ? storedSummary : undefined;
   }
   if (invocation.role === "builder") {

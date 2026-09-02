@@ -1,20 +1,17 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
 import { ArtifactStore } from "../src/artifacts.js";
-import { BrowserProofFailure, BrowserProofService } from "../src/browser-proof.js";
+import { BrowserProofService } from "../src/browser-proof.js";
 import { ForgeDatabase } from "../src/database.js";
 import { runCommand } from "../src/command-runner.js";
 
 const commit = "a".repeat(40), tree = "b".repeat(40);
 const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from([0, 0, 0, 13]), Buffer.from("IHDR"), Buffer.alloc(17), Buffer.from([0, 0, 0, 0]), Buffer.from("IEND"), Buffer.alloc(4)]);
-const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0xff, 0xda, 0x00, 0x02, 1, 2, 3, 4, 0xff, 0xd9]);
-const webp = Buffer.concat([Buffer.from("RIFF"), Buffer.from([12, 0, 0, 0]), Buffer.from("WEBPVP8 "), Buffer.alloc(4)]);
-function paddedPng(size: number): Buffer { const bytes = Buffer.alloc(size); png.subarray(0, 33).copy(bytes); Buffer.from([0, 0, 0, 0]).copy(bytes, size - 12); Buffer.from("IEND").copy(bytes, size - 8); return bytes; }
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "forge-proof-")), worktree = join(root, "worktree"), proof = join(worktree, ".forge-proof"), artifactRoot = join(root, "artifacts");
@@ -33,10 +30,10 @@ async function fixture() {
   return { root, worktree, proof, artifactRoot, database, artifacts, service, ingest };
 }
 
-test("ingests structured PNG/JPEG/WebP proof and retries without duplicates", async () => {
+test("ingests extension-typed proof and retries without duplicates", async () => {
   const value = await fixture();
   try {
-    await writeFile(join(value.proof, "screen.png"), png); await writeFile(join(value.proof, "photo.jpg"), jpeg); await writeFile(join(value.proof, "view.webp"), webp);
+    await writeFile(join(value.proof, "screen.png"), png); await writeFile(join(value.proof, "photo.jpg"), Buffer.from("jpeg attachment")); await writeFile(join(value.proof, "view.webp"), Buffer.from("webp attachment"));
     const evidence = { captured: true, summary: "Desktop and narrow", captures: [{ path: ".forge-proof/screen.png", caption: "Desktop", viewport: { width: 1440, height: 900, deviceScaleFactor: 2 }, capturedAt: "2026-08-26T12:00:00.000Z" }, { path: ".forge-proof/photo.jpg" }, { path: ".forge-proof/view.webp" }] };
     const first = await value.ingest(evidence), second = await value.ingest(evidence);
     expect(second).toEqual(first);
@@ -46,41 +43,30 @@ test("ingests structured PNG/JPEG/WebP proof and retries without duplicates", as
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("enforces mode, staging path, regular-file, symlink, count, and metadata boundaries", async () => {
+test("skips unsupported screenshot attachments with an advisory note", async () => {
   const value = await fixture();
   try {
-    await writeFile(join(value.proof, "ok.png"), png); await writeFile(join(value.root, "outside.png"), png); await symlink(join(value.root, "outside.png"), join(value.proof, "escape.png"));
-    await expect(value.ingest(undefined)).rejects.toMatchObject({ code: "proof-required" });
-    await expect(value.ingest({ captured: true, paths: ["../outside.png"] })).rejects.toBeInstanceOf(BrowserProofFailure);
-    await expect(value.ingest({ captured: true, paths: [".forge-proof/escape.png"] })).rejects.toBeInstanceOf(BrowserProofFailure);
-    await expect(value.ingest({ captured: false, paths: [".forge-proof/ok.png"] })).rejects.toMatchObject({ code: "invalid-proof" });
-    await expect(value.ingest({ captured: true, paths: Array.from({ length: 9 }, (_, index) => `.forge-proof/${index}.png`) } as never)).rejects.toBeTruthy();
-    await expect(value.ingest({ captured: true, captures: [{ path: ".forge-proof/ok.png", viewport: { width: 0, height: 900 } }] } as never)).rejects.toBeTruthy();
+    await writeFile(join(value.proof, "ok.png"), png); await writeFile(join(value.proof, "notes.txt"), "not an attachment");
+    const notes: string[] = [];
+    const proof = await value.ingest({ captured: true, paths: [".forge-proof/ok.png", ".forge-proof/notes.txt"] }, { onAdvisory: (note) => notes.push(note) });
+    expect(proof?.artifactIds).toHaveLength(1);
+    expect(notes).toEqual(["Skipped .forge-proof/notes.txt: unsupported screenshot extension."]);
     await expect(value.ingest(undefined, { control: "capture" })).resolves.toBeUndefined();
     await expect(value.ingest({ captured: true, paths: [".forge-proof/ok.png"] }, { control: "off" })).resolves.toBeUndefined();
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("rejects spoofed and truncated image structures", async () => {
-  const value = await fixture();
-  try {
-    for (const [name, bytes] of [["text.png", Buffer.from("not an image")], ["short.png", png.subarray(0, 24)], ["short.jpg", Buffer.from([0xff, 0xd8, 0xff, 0xd9])], ["short.webp", Buffer.concat([Buffer.from("RIFF"), Buffer.from([8, 0, 0, 0]), Buffer.from("WEBP")])]] as const) {
-      await writeFile(join(value.proof, name), bytes);
-      await expect(value.ingest({ captured: true, paths: [`.forge-proof/${name}`] })).rejects.toMatchObject({ code: "invalid-proof" });
-    }
-  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
-});
-
-test("rejects tracked proof and per-file or aggregate overflow", async () => {
+test("skips tracked and oversized attachments with advisory notes", async () => {
   const value = await fixture();
   try {
     await writeFile(join(value.proof, "tracked.png"), png); const add = await runCommand({ taskId: null, stepId: null, command: "git", args: ["add", ".forge-proof/tracked.png"], cwd: value.worktree }); expect(add.exitCode).toBe(0);
-    await expect(value.ingest({ captured: true, paths: [".forge-proof/tracked.png"] })).rejects.toMatchObject({ code: "invalid-proof" });
-    await writeFile(join(value.proof, "large.png"), paddedPng(5 * 1024 * 1024 + 1));
-    await expect(value.ingest({ captured: true, paths: [".forge-proof/large.png"] })).rejects.toMatchObject({ code: "proof-too-large" });
-    const paths: string[] = [];
-    for (let index = 0; index < 6; index++) { const name = `.forge-proof/aggregate-${index}.png`; paths.push(name); await writeFile(join(value.worktree, name), paddedPng(4_500_000)); }
-    await expect(value.ingest({ captured: true, paths })).rejects.toMatchObject({ code: "proof-too-large" });
+    const trackedNotes: string[] = [];
+    await expect(value.ingest({ captured: true, paths: [".forge-proof/tracked.png"] }, { onAdvisory: (note) => trackedNotes.push(note) })).resolves.toBeUndefined();
+    expect(trackedNotes).toContain("Browser proof must not be staged, tracked, or committed");
+    await writeFile(join(value.proof, "large.png"), Buffer.alloc(5 * 1024 * 1024 + 1));
+    const largeNotes: string[] = [];
+    await expect(value.ingest({ captured: true, paths: [".forge-proof/large.png"] }, { onAdvisory: (note) => largeNotes.push(note) })).resolves.toBeUndefined();
+    expect(largeNotes).toContain("Skipped .forge-proof/large.png: A browser proof image exceeds the 5 MiB limit");
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -90,7 +76,7 @@ test("off and empty capture preserve staging while successful cleanup removes on
     await writeFile(join(value.proof, "reported.png"), png); await writeFile(join(value.proof, "sibling.txt"), "keep");
     await expect(value.ingest(undefined, { control: "off" })).resolves.toBeUndefined(); expect(await readFile(join(value.proof, "sibling.txt"), "utf8")).toBe("keep");
     await expect(value.ingest(undefined, { control: "capture" })).resolves.toBeUndefined(); expect(await readFile(join(value.proof, "reported.png"))).toEqual(png);
-    const evidence = { captured: true, captures: [{ path: ".forge-proof/reported.png" }] }, durable = await value.ingest(evidence, { control: "capture" });
+    const evidence = { captured: true, captures: [{ path: ".forge-proof/reported.png" }, { path: ".forge-proof/sibling.txt" }] }, durable = await value.ingest(evidence, { control: "capture" });
     await value.service.cleanupPersisted(value.worktree, evidence, durable!);
     await expect(access(join(value.proof, "reported.png"))).rejects.toBeTruthy(); expect(await readFile(join(value.proof, "sibling.txt"), "utf8")).toBe("keep");
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
@@ -121,7 +107,7 @@ test("rejects wrong embedded bindings and tampered bytes from projection and dow
     const imageRow = value.database.authQuery((db) => db.prepare("SELECT storage_path FROM forge_artifacts WHERE id = ?").get(imageId) as { storage_path: string });
     await writeFile(join(value.artifactRoot, imageRow.storage_path), Buffer.from("tampered"));
     expect(value.service.projectSync("task-1", "company-1")).toEqual([]);
-    expect(() => value.service.readForDownload("task-1", "company-1", imageId)).toThrow(BrowserProofFailure);
+    expect(() => value.service.readForDownload("task-1", "company-1", imageId)).toThrowError("Browser proof content failed integrity verification");
 
     await writeFile(join(value.artifactRoot, imageRow.storage_path), png);
     const manifestRow = value.database.authQuery((db) => db.prepare("SELECT storage_path FROM forge_artifacts WHERE id = ?").get(manifestId) as { storage_path: string });

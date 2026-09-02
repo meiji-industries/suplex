@@ -2,21 +2,8 @@ export interface AcceptDeliveryActivityInput {
   taskId: string;
   companyId: string;
   workflowId: string;
-  projectRevisionId: string;
-  releaseId: string;
-  deliveryReviewId: string;
-  finalReviewId: string;
-  ciRunId: string;
   actorUserId: string;
-  pullRequestNumber: number;
-  repository: string;
-  baseBranch: string;
-  baseSha: string;
-  leadSessionRef: string;
   expectedHeadSha: string;
-  expectedHeadTree: string;
-  noteId?: string;
-  noteSha256?: string;
   note?: string;
   autoMerge?: boolean;
 }

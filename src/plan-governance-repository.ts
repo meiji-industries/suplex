@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 
 import type { ForgeDatabase } from "./database.js";
-import { PlanSubjectSchema, SupplementalReviewSubjectSchema, type PlanDecisionSubject, type PlanSubject, type SupplementalReviewSubject } from "./plan-governance.js";
+import { PlanSubjectSchema, type PlanSubject } from "./plan-governance.js";
 
 export class PlanGovernanceConflict extends Error {
   readonly code = "plan-governance-conflict" as const;
@@ -23,21 +23,13 @@ function artifact(database: ForgeDatabase, companyId: string, artifactId: string
 
 export interface AppendPlanVersionInput {
   subject: PlanSubject;
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  leadExecutionId: string;
   kind: "plan" | "decision_blocker";
   evidenceArtifactId: string;
-  materialityEvidenceArtifactId?: string;
   summary: string;
-  supersedesOutputId?: string;
-}
-
-export interface AppendSupplementalReviewInput {
-  subject: SupplementalReviewSubject;
-  reviewId: string;
-  executionId: string;
-  opinionArtifactId: string;
-  evidenceArtifactId: string;
-  summary: string;
-  reviewerSessionRef: string;
 }
 
 export interface AppendLeadReviewResponseInput {
@@ -59,18 +51,13 @@ export interface RecordDecisionInput {
   workflowId: string;
   actorUserId: string;
   decision: "approve" | "request_revision" | "reject";
-  subject?: PlanDecisionSubject;
   planRevision: number;
+  artifactId: string;
   noteArtifactId: string;
-  idempotencyKey?: string;
 }
 
 export class PlanGovernanceRepository {
   constructor(private readonly database: ForgeDatabase) {}
-
-  findDecisionByIdempotency(workflowId: string, idempotencyKey: string): { decisionId: string; decision: string; noteArtifactId: string } | undefined {
-    return this.database.authQuery((db) => db.prepare("SELECT id AS decisionId, decision, note_artifact_id AS noteArtifactId FROM forge_plan_decisions WHERE workflow_id = ? AND idempotency_key = ?").get(workflowId, idempotencyKey)) as { decisionId: string; decision: string; noteArtifactId: string } | undefined;
-  }
 
   findBlockerResponseByIdempotency(workflowId: string, idempotencyKey: string): { responseId: string; answerArtifactId: string } | undefined {
     return this.database.authQuery((db) => db.prepare("SELECT id AS responseId, answer_artifact_id AS answerArtifactId FROM forge_plan_blocker_responses WHERE workflow_id = ? AND idempotency_key = ?").get(workflowId, idempotencyKey)) as { responseId: string; answerArtifactId: string } | undefined;
@@ -78,28 +65,17 @@ export class PlanGovernanceRepository {
 
   appendPlanVersion(input: AppendPlanVersionInput): PlanSubject {
     const subject = PlanSubjectSchema.parse(input.subject);
-    artifact(this.database, subject.companyId, subject.artifactId);
-    artifact(this.database, subject.companyId, input.evidenceArtifactId);
+    artifact(this.database, input.companyId, subject.artifactId);
+    artifact(this.database, input.companyId, input.evidenceArtifactId);
     this.database.authTransaction((db) => {
-      const task = db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(subject.issueId, subject.companyId, subject.workflowId);
+      const task = db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(input.taskId, input.companyId, input.workflowId);
       if (!task) throw new PlanGovernanceConflict("The plan subject is outside the current company and issue scope");
       const updated = db.prepare(`UPDATE forge_agent_executions
         SET output_kind = ?, output_artifact_id = ?, output_revision = ?, output_summary = ?,
-            original_plan_revision = ?, final_version = ?, evidence_manifest_artifact_id = ?,
-            materiality_evidence_artifact_id = ?, evidence_artifact_id = COALESCE(evidence_artifact_id, ?),
-            session_ref = COALESCE(session_ref, ?)
-        WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).run(input.kind, subject.artifactId, subject.outputRevision, input.summary, subject.originalPlanRevision, subject.finalVersion, subject.evidenceManifestArtifactId, input.materialityEvidenceArtifactId ?? null, input.evidenceArtifactId, subject.leadSessionRef, subject.leadExecutionId, subject.issueId, subject.companyId, subject.workflowId);
+            evidence_artifact_id = COALESCE(evidence_artifact_id, ?), session_ref = COALESCE(session_ref, ?)
+        WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).run(input.kind, subject.artifactId, subject.planRevision, input.summary, input.evidenceArtifactId, subject.leadSessionRef, input.leadExecutionId, input.taskId, input.companyId, input.workflowId);
       if (updated.changes !== 1) throw new PlanGovernanceConflict("The Lead execution is unavailable");
     });
-    return subject;
-  }
-
-  appendSupplementalReview(input: AppendSupplementalReviewInput): SupplementalReviewSubject {
-    const subject = SupplementalReviewSubjectSchema.parse(input.subject);
-    artifact(this.database, subject.originalPlan.companyId, input.opinionArtifactId);
-    artifact(this.database, subject.originalPlan.companyId, input.evidenceArtifactId);
-    this.database.authTransaction((db) => db.prepare(`INSERT OR IGNORE INTO forge_plan_reviews (id, task_id, company_id, workflow_id, plan_revision, profile_id, execution_id, session_ref, opinion_artifact_id, evidence_artifact_id, summary, created_at, original_plan_revision, plan_output_id, plan_artifact_id, evidence_manifest_artifact_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(input.reviewId, subject.originalPlan.issueId, subject.originalPlan.companyId, subject.originalPlan.workflowId, subject.originalPlan.outputRevision, subject.reviewerProfileId, input.executionId, input.reviewerSessionRef, input.opinionArtifactId, input.evidenceArtifactId, input.summary, new Date().toISOString(), subject.originalPlan.originalPlanRevision, subject.originalPlan.outputId, subject.originalPlan.artifactId, subject.evidenceManifestArtifactId));
     return subject;
   }
 
@@ -111,26 +87,15 @@ export class PlanGovernanceRepository {
     return existing;
   }
 
-  /** Idempotency is (workflow_id, idempotency_key): the same key always returns the row it first wrote. */
-  recordDecisionIdempotently(input: RecordDecisionInput): { decisionId: string; duplicate: boolean; noteArtifactId: string } {
-    const plan = input.subject?.plan;
-    let decisionId = id("decision");
-    let duplicate = false;
-    let noteArtifactId = input.noteArtifactId;
+  recordDecision(input: RecordDecisionInput): { decisionId: string; noteArtifactId: string } {
+    const decisionId = id("decision");
     this.database.authTransaction((db) => {
-      const existing = input.idempotencyKey ? db.prepare("SELECT id, note_artifact_id AS noteArtifactId FROM forge_plan_decisions WHERE workflow_id = ? AND idempotency_key = ?").get(input.workflowId, input.idempotencyKey) as { id: string; noteArtifactId: string } | undefined : undefined;
-      if (existing) {
-        decisionId = existing.id;
-        noteArtifactId = existing.noteArtifactId;
-        duplicate = true;
-        return;
-      }
       const task = db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(input.taskId, input.companyId, input.workflowId);
       if (!task) throw new PlanGovernanceConflict();
-      db.prepare(`INSERT INTO forge_plan_decisions (id, task_id, company_id, workflow_id, plan_revision, decision, actor_user_id, note_artifact_id, created_at, original_plan_revision, final_version, plan_output_id, plan_artifact_id, materiality_evidence_artifact_id, expected_workflow_revision, idempotency_key)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(decisionId, input.taskId, input.companyId, input.workflowId, plan?.outputRevision ?? input.planRevision, input.decision, input.actorUserId, input.noteArtifactId, new Date().toISOString(), plan?.originalPlanRevision ?? null, plan?.finalVersion ?? null, plan?.outputId ?? null, plan?.artifactId ?? null, input.subject?.materiality.artifactId ?? null, input.subject?.expectedWorkflowRevision ?? null, input.idempotencyKey ?? null);
+      db.prepare(`INSERT INTO forge_plan_decisions (id, task_id, company_id, workflow_id, plan_revision, decision, actor_user_id, note_artifact_id, created_at, plan_artifact_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(decisionId, input.taskId, input.companyId, input.workflowId, input.planRevision, input.decision, input.actorUserId, input.noteArtifactId, new Date().toISOString(), input.artifactId);
     });
-    return { decisionId, duplicate, noteArtifactId };
+    return { decisionId, noteArtifactId: input.noteArtifactId };
   }
 
   recordBlockerResponseIdempotently(input: { taskId: string; companyId: string; workflowId: string; blockerArtifactId: string; blockerArtifactSha256?: string | null; answerArtifactId: string; answerArtifactSha256?: string | null; actorUserId: string; expectedWorkflowRevision: number; idempotencyKey: string }): { responseId: string; duplicate: boolean; answerArtifactId: string } {

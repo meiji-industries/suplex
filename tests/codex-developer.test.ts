@@ -40,7 +40,7 @@ export async function fixture() {
   const database = new ForgeDatabase(config.databasePath);
   const artifacts = new ArtifactStore(config.artifactRoot);
   const brief = await artifacts.putArtifact("company_1", "task-brief", { filename: "brief.md", mimeType: "text/markdown", bytes: Buffer.from("Fix fixture.") });
-  const plan = await artifacts.putArtifact("company_1", "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Fixture", gitPresentation: { branchSlug: "fixture", pullRequestTitle: "Fixture", pullRequestDescription: "Fixture" }, reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Add marker", verification: "Marker exists", verificationCommands: [] }], compatibilityAnalysis: "None", operationalAnalysis: "None", verificationStrategy: "Check", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["MARKER.md"], materiality: [] })) });
+  const plan = await artifacts.putArtifact("company_1", "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Fixture", gitPresentation: { branchSlug: "fixture", pullRequestTitle: "Fixture", pullRequestDescription: "Fixture" }, reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Add marker", verification: "Marker exists", verificationCommands: [] }], compatibilityAnalysis: "None", operationalAnalysis: "None", verificationStrategy: "Check", unresolvedTechnicalQuestions: [], affectedPaths: ["MARKER.md"] })) });
   const evidence = await artifacts.putArtifact("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") });
   const taskConfiguration = await artifacts.putArtifact("company_1", "task-project-configuration", { filename: "configuration.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ projectId: "project_1", projectName: "Project", repositoryPath: repository, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", baseSha: targetSha, targetSha, setupCommand: "true", verificationCommand: "pnpm test", requiredChecks: [], roleAgents: { builder: "profile_1" }, roleProfiles: { builder: "profile_1" }, capturedAt: new Date().toISOString() })) });
   const now = new Date().toISOString();
@@ -160,6 +160,23 @@ test("required Developer proof is ingested and persisted without local paths", a
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("unsupported screenshot attachments add an advisory and complete delivery", async () => {
+  const value = await fixture(), worktree = join(value.root, "worktrees", "task_1");
+  const fake = fakeTurnRunner(async () => {
+    await mkdir(join(worktree, ".forge-proof"), { recursive: true }); await writeFile(join(worktree, ".forge-proof", "notes.txt"), "not an image"); await writeFile(join(worktree, "MARKER.md"), "done\n");
+    await command("git", ["add", "MARKER.md"], worktree); await command("git", ["commit", "-m", "deliver with note"], worktree);
+    return { kind: "delivery", summary: "Delivered", steps: [{ number: 1, status: "completed", filesChanged: ["MARKER.md"], notes: "done" }], authorizedStepsNotCompleted: [], resultCommit: "a".repeat(40), resultTree: "b".repeat(40), dirtyState: "clean", blocker: null, visualEvidence: { captured: true, paths: [".forge-proof/notes.txt"] } };
+  });
+  try {
+    const result = await new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run({ ...value.input, visualEvidence: "required" });
+    expect(result.outcome).toBe("completed");
+    const row = value.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ?").get(result.deliveryArtifactId) as { storage_path: string; sha256: string });
+    const delivery = JSON.parse(new ArtifactStore(value.config.artifactRoot).getArtifactSync({ companyId: "company_1", storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8"));
+    expect(delivery.summary).toContain("Screenshots: Skipped .forge-proof/notes.txt: unsupported screenshot extension.");
+    expect(delivery.visualEvidence).toBeUndefined();
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("source finalization preserves tracked staging content and excludes reported proof", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-proof-index-"));
   try {
@@ -185,7 +202,7 @@ test("source finalization rejects agent-controlled proof pathspecs without repos
     await command("git", ["init"], root); await command("git", ["config", "user.email", "forge@example.invalid"], root); await command("git", ["config", "user.name", "Forge"], root); await command("git", ["add", "README.md"], root); await command("git", ["commit", "-m", "base"], root);
     const head = await command("git", ["rev-parse", "HEAD"], root), tree = await command("git", ["write-tree"], root), status = await command("git", ["status", "--porcelain=v1", "--untracked-files=all"], root);
     for (const path of ["/tmp/proof.png", "../proof.png", ".forge-proof/../proof.png", ".forge-proof\\proof.png", ":(glob).forge-proof/*.png", ".forge-proof/:(glob)*", ".forge-proof", ".forge-proof/", ".forge-proof/bad\0.png"]) {
-      await expect(finalizeDeveloperSourceCommit(root, head, [path])).rejects.toMatchObject({ code: "invalid-proof" });
+      await expect(finalizeDeveloperSourceCommit(root, head, [path])).rejects.toThrowError("Browser proof source is outside the allowed staging directory");
       expect(await command("git", ["rev-parse", "HEAD"], root)).toBe(head);
       expect(await command("git", ["write-tree"], root)).toBe(tree);
       expect(await command("git", ["status", "--porcelain=v1", "--untracked-files=all"], root)).toBe(status);

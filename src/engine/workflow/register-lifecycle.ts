@@ -101,8 +101,8 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     }
     let acceptanceStatus = ctx.state.acceptanceStatus;
     let acceptanceReasonArtifactId = ctx.state.acceptanceReasonArtifactId;
-    if (ctx.state.acceptanceId && ctx.state.releaseId && ctx.state.deliveryReviewId && ctx.state.finalReviewId && ctx.state.ciRunId && ctx.state.pullRequestNumber && ctx.state.releaseRepository && ctx.state.baseBranch && ctx.state.targetBaseSha && ctx.state.expectedHeadSha && ctx.state.expectedHeadTree && ctx.state.leadSessionRef) {
-      const result = await acceptDelivery({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, releaseId: ctx.state.releaseId, deliveryReviewId: ctx.state.deliveryReviewId, finalReviewId: ctx.state.finalReviewId, ciRunId: ctx.state.ciRunId, actorUserId: command.actorUserId, pullRequestNumber: ctx.state.pullRequestNumber, repository: ctx.state.releaseRepository, baseBranch: ctx.state.baseBranch, baseSha: ctx.state.targetBaseSha, leadSessionRef: ctx.state.leadSessionRef, expectedHeadSha: ctx.state.expectedHeadSha, expectedHeadTree: ctx.state.expectedHeadTree, decision: "cancel", ...(command.note !== undefined ? { note: command.note } : {}) });
+    if (ctx.state.acceptanceId && ctx.state.expectedHeadSha) {
+      const result = await acceptDelivery({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, actorUserId: command.actorUserId, expectedHeadSha: ctx.state.expectedHeadSha, decision: "cancel", ...(command.note !== undefined ? { note: command.note } : {}) });
       acceptanceStatus = result.status;
       acceptanceReasonArtifactId = result.reasonArtifactId ?? acceptanceReasonArtifactId;
     } else if (command.note?.trim()) {

@@ -49,6 +49,12 @@ const orderedStateFields = {
 export const IssueWorkflowStateSchema = z.preprocess((raw) => {
   if (raw && typeof raw === "object") {
     const state = { ...(raw as Record<string, unknown>) };
+    for (const key of ["planMaterial", "materialCategories", "materialityEvidence", "finalPlanSubject", "originalPlanSubject", "leadReviewResponseArtifactSha256", "blockerArtifactSha256", "leadResumeInstructionSha256", "leadEvidenceSha256", "leadOutputSha256", "leadInputManifestSha256", "supplementalReviewArtifactSha256"]) delete state[key];
+    if (state.planBlockerResponseReceipt && typeof state.planBlockerResponseReceipt === "object") {
+      const receipt = { ...(state.planBlockerResponseReceipt as Record<string, unknown>) };
+      delete receipt.blockerSubjectHash;
+      state.planBlockerResponseReceipt = receipt;
+    }
     if (state.step === undefined && typeof state.phase === "string") {
       const legacyPhase = state.phase;
       const commands = Array.isArray(state.allowedCommands) ? state.allowedCommands.flatMap((command) => {

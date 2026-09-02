@@ -39,7 +39,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
       ctx.markCommandProcessed(command.commandId);
     });
     await ctx.project();
-    const legacyInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, ...(ctx.state.developerContinuation ? { continuation: { ...ctx.state.developerContinuation, previousDeliverySummary: ctx.state.deliverySummary ?? "Prior delivery" } } : {}), ...(ctx.state.revisionRequestId ? { revisionRequestId: ctx.state.revisionRequestId } : {}), ...(ctx.state.finalPlanSubject ? { finalPlanSubject: ctx.state.finalPlanSubject } : {}), ...(ctx.state.materialityEvidence ? { materialityEvidence: ctx.state.materialityEvidence } : {}), ...(ctx.state.planDecisionReceipt ? { approvalDecisionId: ctx.state.planDecisionReceipt.decisionId } : {}), ...(ctx.input.runProjectTests !== undefined ? { runProjectTests: ctx.input.runProjectTests } : {}), ...(ctx.input.visualEvidence !== undefined ? { visualEvidence: ctx.input.visualEvidence } : {}) };
+  const legacyInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, ...(ctx.state.developerContinuation ? { continuation: { ...ctx.state.developerContinuation, previousDeliverySummary: ctx.state.deliverySummary ?? "Prior delivery" } } : {}), ...(ctx.state.revisionRequestId ? { revisionRequestId: ctx.state.revisionRequestId } : {}), ...(ctx.state.planDecisionReceipt ? { approvalDecisionId: ctx.state.planDecisionReceipt.decisionId } : {}), ...(ctx.input.runProjectTests !== undefined ? { runProjectTests: ctx.input.runProjectTests } : {}), ...(ctx.input.visualEvidence !== undefined ? { visualEvidence: ctx.input.visualEvidence } : {}) };
     const recoverDeveloperFailures = ctx.supervisedDeveloperTurns ? false : true;
     let outcome: Awaited<ReturnType<typeof activityProxies.runDeveloperExecutionSupervised>> | { status: "completed"; result: Awaited<ReturnType<typeof activityProxies.runDeveloperExecution>>; resultHash: string };
     try {
@@ -95,7 +95,12 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
           && ctx.state.developerContinuation
           && result.dirtyState === "clean"
           && (result.authorizedStepsNotCompleted ?? []).join(",") === ctx.state.developerContinuation.remainingSteps.join(",");
-        if (disposition === "incomplete" || repeatedContinuation) {
+        if (disposition === "incomplete") {
+          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "human", allowedCommands: ["repair_delivery", "review_delivery", "cancel_issue"], pendingAction: "Verification incomplete", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, developerContinuation: null, activeOperation: null, blocker: null, stateChangedAt: new Date().toISOString() });
+          if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
+          return true;
+        }
+        if (repeatedContinuation) {
           const remainingSteps = result.authorizedStepsNotCompleted ?? [];
           const completedSteps = (result.steps ?? []).filter((step) => step.status === "completed" || step.status === "not_applicable_locally").map((step) => step.number);
           const progress = stateTransitions.withRepairProgress(ctx.state, { signature: stateTransitions.repairSignature({ source: "review", code: "developer-continuation", firstFailingLine: remainingSteps.join(",") }), commit: result.resultCommit ?? null, diagnosticHash: null });
@@ -165,7 +170,7 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
     ctx.markCommandProcessed(command.commandId);
   });
   await ctx.project();
-  const legacyInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, ...(continuation ? { continuation } : {}), ...(ctx.state.revisionRequestId ? { revisionRequestId: ctx.state.revisionRequestId } : {}), ...(reconcileOnly ? { supersedesExecutionId: recovered?.supersedesExecutionId ?? undefined, reuseWorktree: true } : { supersedesExecutionId, reuseWorktree: true }), ...(operatorNote ? { operatorNote } : {}), ...(ctx.state.finalPlanSubject ? { finalPlanSubject: ctx.state.finalPlanSubject } : {}), ...(ctx.state.materialityEvidence ? { materialityEvidence: ctx.state.materialityEvidence } : {}), ...(ctx.state.planDecisionReceipt ? { approvalDecisionId: ctx.state.planDecisionReceipt.decisionId } : {}), ...(ctx.input.runProjectTests != null ? { runProjectTests: ctx.input.runProjectTests } : {}), ...(ctx.input.visualEvidence ? { visualEvidence: ctx.input.visualEvidence } : {}) };
+  const legacyInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, ...(continuation ? { continuation } : {}), ...(ctx.state.revisionRequestId ? { revisionRequestId: ctx.state.revisionRequestId } : {}), ...(reconcileOnly ? { supersedesExecutionId: recovered?.supersedesExecutionId ?? undefined, reuseWorktree: true } : { supersedesExecutionId, reuseWorktree: true }), ...(operatorNote ? { operatorNote } : {}), ...(ctx.state.planDecisionReceipt ? { approvalDecisionId: ctx.state.planDecisionReceipt.decisionId } : {}), ...(ctx.input.runProjectTests != null ? { runProjectTests: ctx.input.runProjectTests } : {}), ...(ctx.input.visualEvidence ? { visualEvidence: ctx.input.visualEvidence } : {}) };
   let outcome: Awaited<ReturnType<typeof activityProxies.runDeveloperExecutionSupervised>> | { status: "completed"; result: Awaited<ReturnType<typeof activityProxies.runDeveloperExecution>>; resultHash: string };
   try {
     outcome = reconcileOnly
@@ -242,7 +247,7 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
     if (command.expectedRevision !== ctx.state.revision && !joinsAutomaticStart) throw new Error("Stale workflow revision");
     if (joinsAutomaticStart) return;
     if (ctx.state.step !== "ready_for_development") throw new Error("Development can only start after plan approval");
-    if (ctx.state.planMaterial === null || ctx.state.planMaterial === undefined || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef) throw new Error("A validated Lead plan is required before development");
+    if (!ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef) throw new Error("A Lead plan is required before development");
     if (ctx.state.planApproved !== true) throw new Error("A plan must be approved before development");
   } });
   setHandler(issueUpdates.retry_development, ctx.guarded(async (rawInput: any) => {
@@ -252,10 +257,8 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (ctx.commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    if (ctx.state.step !== "development" && !isBlocked(ctx.state) && !(isBlocked(ctx.state) && true && ctx.state.planMaterial === true && ctx.state.leadOutputArtifactId && ctx.state.leadSessionRef)) throw new Error("Developer retry is not available in the current phase");
-    // Materiality only has to be decided, not true — same check start_development makes.
-    // Truthiness here made every routine (non-material) plan permanently unretryable.
-    if (!ctx.state.developerExecutionId || ctx.state.planMaterial === null || ctx.state.planMaterial === undefined || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef) throw new Error("A preserved Developer attempt and approved plan are required before retry");
+    if (ctx.state.step !== "development" && !isBlocked(ctx.state)) throw new Error("Developer retry is not available in the current phase");
+    if (!ctx.state.developerExecutionId || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef) throw new Error("A preserved Developer attempt and approved plan are required before retry");
   } });
 
 }

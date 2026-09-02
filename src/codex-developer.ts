@@ -380,13 +380,13 @@ export class DeveloperService {
         let durableProof: DurableBrowserProof | undefined, proofBlocker: string | null = null;
         let reportedPaths: string[] = [];
         try { reportedPaths = normalizeBrowserProofPaths(parsedReport.visualEvidence); await this.browserProof.assertReportedProofUntracked(worktree.worktreePath, reportedPaths); }
-        catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
-        const source = proofBlocker ? undefined : await finalizeDeveloperSourceCommit(worktree.worktreePath, worktree.targetBaseSha, reportedPaths);
-        try { if (!proofBlocker && source) durableProof = await this.browserProof.ingest({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: executionId, resultCommit: source.headSha, resultTree: source.treeSha, worktreePath: worktree.worktreePath, control: input.visualEvidence ?? "off", ...(parsedReport.visualEvidence ? { evidence: parsedReport.visualEvidence } : {}) }); }
+        catch (error) { if (!(error instanceof Error)) throw error; proofBlocker = `${error.message}.`; reportedPaths = []; }
+        const source = await finalizeDeveloperSourceCommit(worktree.worktreePath, worktree.targetBaseSha, reportedPaths);
+        try { if (source) durableProof = await this.browserProof.ingest({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: executionId, resultCommit: source.headSha, resultTree: source.treeSha, worktreePath: worktree.worktreePath, control: input.visualEvidence ?? "off", ...(parsedReport.visualEvidence ? { evidence: parsedReport.visualEvidence } : {}), onAdvisory: (note) => { proofBlocker = [proofBlocker, note].filter(Boolean).join(" "); } }); }
         catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
         if (durableProof && parsedReport.visualEvidence) await this.browserProof.cleanupPersisted(worktree.worktreePath, parsedReport.visualEvidence, durableProof);
         const gitState = await this.worktrees.inspectDelivery(worktree.worktreePath, worktree.branchName);
-        const delivery = { ...parsedReport, blocker: parsedReport.blocker ?? proofBlocker, visualEvidence: durableProof, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, branchName: worktree.branchName, worktreePath: worktree.worktreePath, targetBaseSha: worktree.targetBaseSha };
+        const delivery = { ...parsedReport, summary: proofBlocker ? `${parsedReport.summary}\n\nScreenshots: ${proofBlocker}` : parsedReport.summary, visualEvidence: durableProof, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, branchName: worktree.branchName, worktreePath: worktree.worktreePath, targetBaseSha: worktree.targetBaseSha };
         const deliveryArtifact = await this.artifacts.putArtifact(input.companyId, "developer-delivery", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(delivery, null, 2), "utf8"), taskId: input.taskId });
         const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
         const blocked = delivery.blocker !== null;
@@ -587,14 +587,14 @@ export class DeveloperService {
       const report = turn.result;
       let durableProof: DurableBrowserProof | undefined, proofBlocker: string | null = null;
       let reportedPaths: string[] = [];
-      try { reportedPaths = normalizeBrowserProofPaths(report.visualEvidence); await this.browserProof.assertReportedProofUntracked(worktreePath, reportedPaths); }
-      catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
-      const source = proofBlocker ? undefined : await finalizeDeveloperSourceCommit(worktreePath, input.targetBaseSha, reportedPaths);
-      try { if (!proofBlocker && source) durableProof = await this.browserProof.ingest({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: executionId, resultCommit: source.headSha, resultTree: source.treeSha, worktreePath, control: visualEvidence, ...(report.visualEvidence ? { evidence: report.visualEvidence } : {}) }); }
+        try { reportedPaths = normalizeBrowserProofPaths(report.visualEvidence); await this.browserProof.assertReportedProofUntracked(worktreePath, reportedPaths); }
+        catch (error) { if (!(error instanceof Error)) throw error; proofBlocker = `${error.message}.`; reportedPaths = []; }
+        const source = await finalizeDeveloperSourceCommit(worktreePath, input.targetBaseSha, reportedPaths);
+        try { if (source) durableProof = await this.browserProof.ingest({ taskId: input.taskId, companyId: input.companyId, developerExecutionId: executionId, resultCommit: source.headSha, resultTree: source.treeSha, worktreePath, control: visualEvidence, ...(report.visualEvidence ? { evidence: report.visualEvidence } : {}), onAdvisory: (note) => { proofBlocker = [proofBlocker, note].filter(Boolean).join(" "); } }); }
       catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
       if (durableProof && report.visualEvidence) await this.browserProof.cleanupPersisted(worktreePath, report.visualEvidence, durableProof);
       const gitState = await this.worktrees.inspectDelivery(worktreePath, input.branchName);
-      const persistedReport = { ...report, blocker: report.blocker ?? proofBlocker, visualEvidence: durableProof, cycle: input.cycle, reviewId: input.reviewId, supersedesExecutionId: input.developerExecutionId };
+      const persistedReport = { ...report, summary: proofBlocker ? `${report.summary}\n\nScreenshots: ${proofBlocker}` : report.summary, visualEvidence: durableProof, cycle: input.cycle, reviewId: input.reviewId, supersedesExecutionId: input.developerExecutionId };
       const repairArtifact = await this.artifacts.putArtifact(input.companyId, "developer-repair", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(persistedReport, null, 2), "utf8"), taskId: input.taskId });
       const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
       const blocked = persistedReport.blocker !== null;

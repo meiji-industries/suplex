@@ -37,7 +37,7 @@ test("branch checkout blockers explain the duplicate-task recovery choices", () 
 
 test("repair limit blockers show the delivery decision", () => {
   const actions = [
-    { command: "record_delivery_decision", label: "Continue anyway", requiresNote: true },
+    { command: "record_delivery_decision", label: "Continue to review", requiresNote: true },
     { command: "cancel_issue", label: "Cancel issue", destructive: true },
   ];
   expect(attentionCardFromBlocker(

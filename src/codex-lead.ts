@@ -17,7 +17,6 @@ import { IssueTimelineEvents } from "./issue-timeline-events.js";
 import { HerdrSessionStore } from "./herdr-session-store.js";
 import { HerdrTurnRunner, type HerdrTurnInput, type HerdrTurnOutput } from "./herdr-turn-runner.js";
 import { redact } from "./logging.js";
-import { classifyPlanMateriality } from "./plan-governance.js";
 import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./engine/issue-contracts.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
@@ -401,20 +400,6 @@ export class AgentService {
       throw new AgentFailure("scope_configuration", "The configured Lead profile has invalid turn settings", { nonRetryable: true });
     }
     const repositoryEvidence = await this.repositoryEvidence(worktreePath);
-    const repositoryEvidenceArtifact = await this.artifacts.putArtifact(input.companyId, "repository-evidence", { filename: `${input.taskId}-${input.revision}.json`, mimeType: "application/json", bytes: Buffer.from(repositoryEvidence, "utf8") });
-    const planningManifest = {
-      version: 1,
-      companyId: input.companyId,
-      issueId: input.taskId,
-      workflowId: input.workflowId,
-      projectId: input.projectId,
-      taskDescription: brief,
-      taskImages: images.map((image) => ({ artifactId: image.id, sha256: image.sha256, mimeType: "image/*", filename: image.filename })),
-      projectRevision: { id: input.projectRevisionId, identity: row.normalized_json, baseSha: jsonRequired(row.normalized_json).baseSha ?? "", targetSha: jsonRequired(row.normalized_json).targetSha ?? "" },
-      profiles: { lead: leadProfile, reviewer: input.roleProfiles.reviewer ? profileSettings.find((profile) => profile.id === input.roleProfiles.reviewer) ?? null : null },
-      repositoryEvidence: { artifactId: repositoryEvidenceArtifact.id, sha256: repositoryEvidenceArtifact.sha256 },
-    };
-    const manifestArtifact = await this.artifacts.putArtifact(input.companyId, "planning-evidence-manifest", { filename: `${input.taskId}-${input.revision}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(planningManifest), "utf8") });
     let executionId = `agent_${randomBytes(12).toString("hex")}`;
     let sessionRef: string | undefined = resumeSessionRef;
     let resumeInstruction = "";
@@ -479,7 +464,6 @@ export class AgentService {
     }
 
     const evidenceLines: string[] = [];
-    const inputManifestArtifact = await this.artifacts.putArtifact(input.companyId, "lead-input-manifest", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ companyId: input.companyId, taskId: input.taskId, projectId: input.projectId, workflowId: input.workflowId, taskDescription: brief, imageArtifacts: input.imageArtifactIds.map((id) => { const image = images.find((candidate) => candidate.id === id); return image ? { artifactId: id, sha256: image.sha256, mimeType: image.mime_type, filename: image.filename } : { artifactId: id }; }), projectRevisionId: input.projectRevisionId, normalizedRevisionSha256: createHash("sha256").update(row.normalized_json).digest("hex") }), "utf8") });
     this.database.authTransaction((db) => {
       db.prepare("UPDATE forge_agent_executions SET session_ref = ? WHERE id = ?").run(sessionRef ?? null, executionId);
     });
@@ -490,9 +474,8 @@ export class AgentService {
         : `${this.initialPrompt(input, row.title, brief, row.normalized_json, profileSettings, repositoryEvidence, revisionContext)}\n\nPlan only work that can be completed and verified inside an isolated git worktree. Do not add steps for deployment, rollout, physical device checks or production verification — mention them in a 'Follow-up outside Forge' note instead.`;
       const result = await this.turnRunner.run({ task: { taskId: input.taskId, projectId: input.projectId, projectSlug: row.project_slug, ...(row.issue_key ? { issueKey: row.issue_key } : {}), worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "planner", ledger: "agent", executionId, promptKind: revisionPrompt ? "lead-plan-revision" : "lead-plan", prompt: `${prompt}${sourceGuidance}${resumeInstruction ? `\n\nMember instruction for this ${input.resume?.reason ?? "revision"}:\n${resumeInstruction}` : ""}`, profile: leadProfile, resultSchema: LeadOutputSchema, schemaPath: await this.ensureResultSchema("lead-plan", LeadOutputSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.revision, signal: runtime.signal });
       sessionRef = result.roleSessionId;
-      const artifacts = await this.persistOutput(input, executionId, sessionRef, evidenceLines, result.result, { id: manifestArtifact.id, sha256: manifestArtifact.sha256 });
+      const artifacts = await this.persistOutput(input, executionId, sessionRef, evidenceLines, result.result);
       await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', session_ref = ?, process_pid = NULL, process_group_id = NULL, finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), this.now().toISOString(), artifacts.evidence.id, executionId));
-      Object.assign(artifacts.result, { leadInputManifestArtifactId: inputManifestArtifact.id, leadInputManifestSha256: inputManifestArtifact.sha256 });
       return artifacts.result;
     } catch (error) {
       const cancelled = runtime.signal?.aborted === true;
@@ -853,9 +836,7 @@ export class AgentService {
       if (visualEvidenceMissing) {
         review = DeliveryReviewSchema.parse({
           ...review,
-          outcome: "blocking",
-          summary: `${review.summary} Visual evidence is required before delivery can continue.`,
-          findings: [...review.findings, { findingId: `visual_evidence_${randomBytes(12).toString("hex")}`, severity: "blocking", rationale: "The task requires visual evidence, but the Developer delivery has no valid durable browser-proof manifest.", evidenceRef: "developer-delivery:visualEvidence", disposition: "open", repairInstruction: "Capture relevant browser proof under .forge-proof/ so Forge can ingest and attach it to the delivery." }],
+          findings: [...review.findings, { findingId: `visual_evidence_${randomBytes(12).toString("hex")}`, severity: "advisory", rationale: "The task requires visual evidence, but the Developer delivery has no valid durable browser-proof manifest.", evidenceRef: "developer-delivery:visualEvidence", disposition: "open", repairInstruction: "Capture relevant browser proof under .forge-proof/ so Forge can ingest and attach it to the delivery." }],
         });
       }
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
@@ -988,7 +969,7 @@ export class AgentService {
     });
     const lines: string[] = [];
     try {
-      const expectedRevision = rawInput.originalPlanSubject?.originalPlanRevision ?? rawInput.revision;
+      const expectedRevision = rawInput.revision;
       let correction = false;
       let turn;
       let response;
@@ -1000,8 +981,7 @@ export class AgentService {
         correction = true;
       }
       const output = response.result;
-      const manifest = undefined;
-      const persisted = await this.persistOutput({ taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, projectId: rawInput.projectId, projectRevisionId: rawInput.projectRevisionId, briefArtifactId: rawInput.briefArtifactId, imageArtifactIds: rawInput.imageArtifactIds, roleProfiles: rawInput.roleProfiles, revision: rawInput.revision }, executionId, turn.roleSessionId, lines, output, manifest, { finalVersion: 2, ...(rawInput.originalPlanSubject ? { originalPlanRevision: rawInput.originalPlanSubject.originalPlanRevision, supersedesOutputId: rawInput.originalPlanSubject.outputId } : {}) });
+      const persisted = await this.persistOutput({ taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, projectId: rawInput.projectId, projectRevisionId: rawInput.projectRevisionId, briefArtifactId: rawInput.briefArtifactId, imageArtifactIds: rawInput.imageArtifactIds, roleProfiles: rawInput.roleProfiles, revision: rawInput.revision }, executionId, turn.roleSessionId, lines, output);
       const responseArtifact = await this.artifacts.putArtifact(rawInput.companyId, "lead-review-response", { filename: `${executionId}-review-response.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(response, null, 2), "utf8") });
       const reviewRow = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_plan_reviews WHERE opinion_artifact_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(rawInput.supplementalReviewArtifactId, rawInput.taskId, rawInput.companyId, rawInput.workflowId) as { id: string } | undefined);
       if (reviewRow) this.database.authQuery((db) => db.prepare("UPDATE forge_plan_reviews SET planner_response_artifact_id = ? WHERE id = ?").run(responseArtifact.id, reviewRow.id));
@@ -1122,7 +1102,7 @@ export class AgentService {
   }
 
   private async completedPlanningResult(input: LeadPlanningActivityInput): Promise<LeadPlanningResult | undefined> {
-    const persisted = this.database.authQuery((db) => db.prepare(`SELECT e.id AS executionId, e.session_ref AS sessionRef, e.output_artifact_id AS outputArtifactId, e.evidence_artifact_id AS evidenceArtifactId, e.output_summary AS summary,
+    const persisted = this.database.authQuery((db) => db.prepare(`SELECT e.id AS executionId, e.session_ref AS sessionRef, e.output_artifact_id AS outputArtifactId, e.output_revision AS outputRevision, e.evidence_artifact_id AS evidenceArtifactId, e.output_summary AS summary,
         output.storage_path AS outputStoragePath, output.sha256 AS outputSha256, evidence.storage_path AS evidenceStoragePath, evidence.sha256 AS evidenceSha256
       FROM forge_agent_executions e
       JOIN forge_artifacts output ON output.id = e.output_artifact_id AND output.company_id = e.company_id
@@ -1132,6 +1112,7 @@ export class AgentService {
         executionId: string;
         sessionRef: string;
         outputArtifactId: string;
+        outputRevision: number;
         evidenceArtifactId: string;
         summary: string;
         outputStoragePath: string;
@@ -1143,36 +1124,27 @@ export class AgentService {
     if (!/^session_[A-Za-z0-9._:-]{1,128}$/.test(persisted.sessionRef)) throw new AgentFailure("internal_persistence", "The completed Lead session reference is invalid", { nonRetryable: true });
     const output = PersistedLeadOutputSchema.parse(jsonRequired((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: persisted.outputStoragePath, sha256: persisted.outputSha256 })).toString("utf8")));
     await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: persisted.evidenceStoragePath, sha256: persisted.evidenceSha256 });
-    const manifest = this.database.authQuery((db) => db.prepare("SELECT id, sha256, storage_path FROM forge_artifacts WHERE company_id = ? AND kind = 'lead-input-manifest' AND filename = ?").get(input.companyId, `${persisted.executionId}.json`) as { id: string; sha256: string; storage_path: string } | undefined);
-    if (!manifest) throw new AgentFailure("internal_persistence", "The completed Lead input manifest is unavailable", { nonRetryable: true });
-    await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: manifest.storage_path, sha256: manifest.sha256 });
-    const categories = output.kind === "plan" ? classifyPlanMateriality(`${output.summary}\n${output.steps.map((step) => step.instruction).join("\n")}`, output.materialCategories) : [];
     const result: LeadPlanningResult = output.kind === "plan"
-      ? { kind: "plan", leadOutputKind: "plan", leadSessionRef: persisted.sessionRef, leadExecutionId: persisted.executionId, leadEvidenceArtifactId: persisted.evidenceArtifactId, leadEvidenceSha256: persisted.evidenceSha256, leadOutputArtifactId: persisted.outputArtifactId, leadOutputSha256: persisted.outputSha256, leadInputManifestArtifactId: manifest.id, leadInputManifestSha256: manifest.sha256, leadSummary: persisted.summary, materialCategories: categories, material: categories.length > 0 }
-      : { kind: "decision_blocker", leadOutputKind: "decision_blocker", leadSessionRef: persisted.sessionRef, leadExecutionId: persisted.executionId, leadEvidenceArtifactId: persisted.evidenceArtifactId, leadEvidenceSha256: persisted.evidenceSha256, leadOutputArtifactId: persisted.outputArtifactId, leadOutputSha256: persisted.outputSha256, leadInputManifestArtifactId: manifest.id, leadInputManifestSha256: manifest.sha256, leadSummary: persisted.summary, materialCategories: [], material: false, blockedCategory: "human_decision", unblockOwner: "human", resumePhase: "planning" };
+      ? { kind: "plan", leadOutputKind: "plan", leadSessionRef: persisted.sessionRef, leadExecutionId: persisted.executionId, leadEvidenceArtifactId: persisted.evidenceArtifactId, leadOutputArtifactId: persisted.outputArtifactId, leadSummary: persisted.summary, planSubject: { planRevision: persisted.outputRevision, artifactId: persisted.outputArtifactId, leadSessionRef: persisted.sessionRef } }
+      : { kind: "decision_blocker", leadOutputKind: "decision_blocker", leadSessionRef: persisted.sessionRef, leadExecutionId: persisted.executionId, leadEvidenceArtifactId: persisted.evidenceArtifactId, leadOutputArtifactId: persisted.outputArtifactId, leadSummary: persisted.summary, blockedCategory: "human_decision", unblockOwner: "human", resumePhase: "planning", blockerSubject: { companyId: input.companyId, issueId: input.taskId, workflowId: input.workflowId, artifactId: persisted.outputArtifactId, leadSessionRef: persisted.sessionRef, leadExecutionId: persisted.executionId, category: "human_decision", resumePhase: "planning" } };
     return result;
   }
 
-  private async persistOutput(input: LeadPlanningActivityInput, executionId: string, sessionRef: string, lines: string[], output: LeadOutput, manifest?: { id: string; sha256: string }, options: { finalVersion?: number; originalPlanRevision?: number; supersedesOutputId?: string } = {}): Promise<{ evidence: StoredArtifact; result: LeadPlanningResult }> {
+  private async persistOutput(input: LeadPlanningActivityInput, executionId: string, sessionRef: string, lines: string[], output: LeadOutput): Promise<{ evidence: StoredArtifact; result: LeadPlanningResult }> {
     const evidence = await this.persistEvidence(input.companyId, executionId, lines);
     const outputKind = output.kind === "plan" ? "lead-plan" : "decision-blocker";
     const outputArtifact = await this.artifacts.putArtifact(input.companyId, outputKind, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(output, null, 2), "utf8") });
-    const categories = output.kind === "plan" ? classifyPlanMateriality(`${output.summary}\n${output.steps.map((step) => step.instruction).join("\n")}`, output.materialCategories, output.affectedPaths) : [];
     const summary = output.summary;
-    const outputId = `output_${randomBytes(12).toString("hex")}`;
-    const materialityArtifact = output.kind === "plan" ? await this.artifacts.putArtifact(input.companyId, "materiality-evidence", { filename: `${executionId}-materiality.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, categories, affectedPaths: output.affectedPaths, evidence: output.materiality }), "utf8") }) : undefined;
-    const finalVersion: 1 | 2 = options.finalVersion === 2 ? 2 : 1;
-    const planSubject = manifest ? { companyId: input.companyId, issueId: input.taskId, workflowId: input.workflowId, originalPlanRevision: options.originalPlanRevision ?? input.revision + 1, outputId, outputRevision: input.revision, finalVersion, artifactId: outputArtifact.id, artifactSha256: outputArtifact.sha256, leadSessionRef: sessionRef, leadExecutionId: executionId, evidenceManifestArtifactId: manifest.id, evidenceManifestSha256: manifest.sha256 } as const : undefined;
-    const materialityEvidence = materialityArtifact ? { categories, artifactId: materialityArtifact.id, artifactSha256: materialityArtifact.sha256 } as const : undefined;
-    const blockerSubject = output.kind === "decision_blocker" && manifest ? { companyId: input.companyId, issueId: input.taskId, workflowId: input.workflowId, artifactId: outputArtifact.id, artifactSha256: outputArtifact.sha256, leadSessionRef: sessionRef, leadExecutionId: executionId, evidenceManifestArtifactId: manifest.id, evidenceManifestSha256: manifest.sha256, category: "human_decision" as const, resumePhase: "planning" as const } : undefined;
-    if (planSubject && manifest) {
-      new PlanGovernanceRepository(this.database).appendPlanVersion({ subject: planSubject, kind: output.kind, evidenceArtifactId: evidence.id, ...(materialityArtifact ? { materialityEvidenceArtifactId: materialityArtifact.id } : {}), summary, ...(options.supersedesOutputId ? { supersedesOutputId: options.supersedesOutputId } : {}) });
+    const planSubject = output.kind === "plan" ? { planRevision: input.revision, artifactId: outputArtifact.id, leadSessionRef: sessionRef } : undefined;
+    const blockerSubject = output.kind === "decision_blocker" ? { companyId: input.companyId, issueId: input.taskId, workflowId: input.workflowId, artifactId: outputArtifact.id, leadSessionRef: sessionRef, leadExecutionId: executionId, category: "human_decision" as const, resumePhase: "planning" as const } : undefined;
+    if (planSubject) {
+      new PlanGovernanceRepository(this.database).appendPlanVersion({ subject: planSubject, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, leadExecutionId: executionId, kind: output.kind, evidenceArtifactId: evidence.id, summary });
     } else {
       this.database.authTransaction((db) => db.prepare("UPDATE forge_agent_executions SET output_kind = ?, output_artifact_id = ?, output_revision = ?, output_summary = ?, evidence_artifact_id = ?, session_ref = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(output.kind, outputArtifact.id, input.revision, summary, evidence.id, sessionRef, executionId, input.taskId, input.companyId, input.workflowId));
     }
     const result: LeadPlanningResult = output.kind === "plan"
-      ? { kind: "plan", leadSessionRef: sessionRef, leadExecutionId: executionId, leadEvidenceArtifactId: evidence.id, leadEvidenceSha256: evidence.sha256, leadOutputArtifactId: outputArtifact.id, leadOutputSha256: outputArtifact.sha256, leadOutputKind: "plan", leadSummary: summary, materialCategories: categories, material: categories.length > 0, preservedWorktreeCompatibility: output.preservedWorktreeCompatibility, ...(planSubject ? { planSubject } : {}), ...(materialityEvidence ? { materialityEvidence } : {}) }
-      : { kind: "decision_blocker", leadSessionRef: sessionRef, leadExecutionId: executionId, leadEvidenceArtifactId: evidence.id, leadEvidenceSha256: evidence.sha256, leadOutputArtifactId: outputArtifact.id, leadOutputSha256: outputArtifact.sha256, leadOutputKind: "decision_blocker", leadSummary: summary, materialCategories: categories, material: false, blockedCategory: "human_decision", unblockOwner: "human", resumePhase: "planning", ...(blockerSubject ? { blockerSubject } : {}) };
+      ? { kind: "plan", leadSessionRef: sessionRef, leadExecutionId: executionId, leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: outputArtifact.id, leadOutputKind: "plan", leadSummary: summary, preservedWorktreeCompatibility: output.preservedWorktreeCompatibility, ...(planSubject ? { planSubject } : {}) }
+      : { kind: "decision_blocker", leadSessionRef: sessionRef, leadExecutionId: executionId, leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: outputArtifact.id, leadOutputKind: "decision_blocker", leadSummary: summary, blockedCategory: "human_decision", unblockOwner: "human", resumePhase: "planning", ...(blockerSubject ? { blockerSubject } : {}) };
     return { evidence, result };
   }
 }

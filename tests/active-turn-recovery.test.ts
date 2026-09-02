@@ -25,9 +25,7 @@ const validLeadPlan = {
   operationalAnalysis: "Recovery is one-shot.",
   verificationStrategy: "Run the focused test.",
   unresolvedTechnicalQuestions: [],
-  materialCategories: [],
   affectedPaths: ["src/active-turn-recovery.ts"],
-  materiality: [],
 };
 const validDeveloperDelivery = {
   kind: "delivery",

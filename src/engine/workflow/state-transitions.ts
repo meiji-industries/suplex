@@ -105,10 +105,10 @@ export function repairRequiredState(state: IssueWorkflowState, result: Completed
   const owner = step === "repair_required" ? "lead" : "human";
   const allowedCommands: IssueWorkflowState["allowedCommands"] = step === "repair_required" ? ["record_delivery_decision", "repair_delivery", "cancel_issue"] : exhausted ? ["retry_development", "cancel_issue"] : step === "development" ? ["record_delivery_decision", "cancel_issue"] : ["publish_draft", "cancel_issue"];
   const pendingAction = step === "repair_required" ? "Fixing review findings" : step === "development" && !exhausted ? "Review problems are not fixed" : step === "development" ? "Needs your call" : "Opening the pull request";
-  const repairLimitSummary = `Review found ${openBlocking.length} blocking problem${openBlocking.length === 1 ? "" : "s"}. The Developer made ${state.repairCycle ?? 0} repair attempt${(state.repairCycle ?? 0) === 1 ? "" : "s"} and did not fix them. Read the review findings. Then continue anyway or cancel the issue.`;
+  const repairLimitSummary = `Review found ${openBlocking.length} blocking problem${openBlocking.length === 1 ? "" : "s"}. The Developer made ${state.repairCycle ?? 0} repair attempt${(state.repairCycle ?? 0) === 1 ? "" : "s"} and did not fix them. Read the review findings. Then continue to review or cancel the issue.`;
   return IssueWorkflowStateSchema.parse({
     ...revisioned(progress, step, owner, allowedCommands, pendingAction),
-    blocker: exhausted ? humanBlocker("agent_exhausted", `Automatic repair is not making progress: ${result.review.summary}`, [{ command: "retry_development", label: "Resume Developer turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.review.reviewArtifact?.artifactId ?? result.review.evidenceArtifactId, "delivery-review")) : step === "development" ? humanBlocker("agent_exhausted", repairLimitSummary, [{ command: "record_delivery_decision", label: "Continue anyway", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.review.reviewArtifact?.artifactId ?? result.review.evidenceArtifactId, "delivery-review")) : null,
+    blocker: exhausted ? humanBlocker("agent_exhausted", `Automatic repair is not making progress: ${result.review.summary}`, [{ command: "retry_development", label: "Resume Developer turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.review.reviewArtifact?.artifactId ?? result.review.evidenceArtifactId, "delivery-review")) : step === "development" ? humanBlocker("agent_exhausted", repairLimitSummary, [{ command: "record_delivery_decision", label: "Continue to review", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.review.reviewArtifact?.artifactId ?? result.review.evidenceArtifactId, "delivery-review")) : null,
     deliveryReviewId: result.review.reviewId,
     deliveryReviewAttemptId: result.attemptId,
     deliveryReviewOutcome: result.review.opinion,
@@ -124,6 +124,18 @@ export function repairRequiredState(state: IssueWorkflowState, result: Completed
 }
 
 export function repairBlockedState(state: IssueWorkflowState, result: BlockedRepair, repairCycleLimit: number, noProgressEnabled = false): IssueWorkflowState {
+  const verificationIncomplete = result.code === "repair-incomplete" || result.code === "repair-scope";
+  if (verificationIncomplete) {
+    return IssueWorkflowStateSchema.parse({
+      ...revisioned(state, "delivery_ready", "human", ["repair_delivery", "review_delivery", "cancel_issue"], "Verification incomplete"),
+      blocker: null,
+      repairCycle: result.cycle,
+      deliveryRepairAttemptId: result.repairAttemptId,
+      deliveryRepairBlockerCode: result.code,
+      deliveryRepairBlockerSummary: result.summary,
+      deliveryRepairBlockerEvidenceArtifactId: result.evidenceArtifactId,
+    });
+  }
   const progressState = withRepairProgress(state, { signature: repairSignature({ source: "local_check", code: result.code }), commit: state.resultCommit ?? null, diagnosticHash: result.evidenceArtifactId ?? null });
   const exhausted = noProgressEnabled ? (progressState.repairProgress?.repeats ?? 0) >= 1 : result.cycle > repairCycleLimit;
   const retry = !exhausted;

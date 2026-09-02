@@ -20,7 +20,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
         (capacityRequestId) => agent.runLeadPlanning({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision, ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (value) => value.leadExecutionId,
       );
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...result, planRevision: ctx.state.revision, planMaterial: result.material, materialCategories: result.materialCategories, supplementalReviewUsed: false, ...at(result.material ? "approval" : "ready_for_development"), owner: result.material ? "human" : "lead", allowedCommands: result.material ? ["approve_plan", "reject_plan", "cancel_issue"] : ["start_development", "cancel_issue"], pendingAction: result.material ? "Approve final plan" : "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, revision: ctx.state.revision + 1 });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...result, planRevision: ctx.state.revision, supplementalReviewUsed: false, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue", ...(ctx.input.supplementalReview && ctx.input.roleProfiles.reviewer ? ["request_supplemental_review" as const] : [])], pendingAction: "Approve final plan", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, revision: ctx.state.revision + 1 });
       await ctx.project();
       return ctx.state;
     }
@@ -35,7 +35,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (operation === "supplemental_review") {
-      if (ctx.state.step !== "approval" || !ctx.state.planMaterial || !ctx.state.leadOutputArtifactId || !ctx.state.leadEvidenceArtifactId || !ctx.state.leadSessionRef || !ctx.input.roleProfiles.reviewer) throw new Error("Supplemental review prerequisites changed; start the review command again");
+      if (ctx.state.step !== "approval" || !ctx.state.leadOutputArtifactId || !ctx.state.leadEvidenceArtifactId || !ctx.state.leadSessionRef || !ctx.input.roleProfiles.reviewer) throw new Error("Supplemental review prerequisites changed; start the review command again");
       const review = await ctx.acquireExternalTurn<contracts.SupplementalReviewResult>(
         { operation, role: "reviewer", profileId: ctx.input.roleProfiles.reviewer },
         (capacityRequestId) => agent.runSupplementalReview({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.planRevision ?? ctx.state.revision, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, leadEvidenceArtifactId: ctx.state.leadEvidenceArtifactId!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
@@ -46,18 +46,18 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
         (capacityRequestId) => agent.consolidateLeadPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision + 1, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supplementalReviewArtifactId: review.reviewArtifactId, ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (result) => result.leadExecutionId,
       );
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...consolidated, revision: ctx.state.revision + 1, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "reject_plan", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, supplementalReviewUsed: true, supplementalReviewArtifactId: review.reviewArtifactId, planMaterial: consolidated.material, materialCategories: consolidated.materialCategories, planRevision: ctx.state.planRevision ?? ctx.state.revision });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...consolidated, revision: ctx.state.revision + 1, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, supplementalReviewUsed: true, supplementalReviewArtifactId: review.reviewArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision });
       await ctx.project();
       return ctx.state;
     }
     if (operation === "lead_consolidation") {
-      if (ctx.state.step !== "approval" || !ctx.state.planMaterial || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef || !ctx.state.supplementalReviewArtifactId) throw new Error("Lead consolidation prerequisites changed; request supplemental review again");
+      if (ctx.state.step !== "approval" || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef || !ctx.state.supplementalReviewArtifactId) throw new Error("Lead consolidation prerequisites changed; request supplemental review again");
       const consolidated = await ctx.acquireExternalTurn<contracts.LeadPlanningResult>(
         { operation, role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: ctx.state.leadSessionRef },
         (capacityRequestId) => agent.consolidateLeadPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision + 1, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supplementalReviewArtifactId: ctx.state.supplementalReviewArtifactId!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (result) => result.leadExecutionId,
       );
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...consolidated, revision: ctx.state.revision + 1, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "reject_plan", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, supplementalReviewUsed: true, planMaterial: consolidated.material, materialCategories: consolidated.materialCategories, planRevision: ctx.state.planRevision ?? ctx.state.revision });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...consolidated, revision: ctx.state.revision + 1, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, supplementalReviewUsed: true, planRevision: ctx.state.planRevision ?? ctx.state.revision });
       await ctx.project();
       return ctx.state;
     }

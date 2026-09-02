@@ -39,9 +39,7 @@ export function registerGovernanceHandlers(ctx: IssueWorkflowContext): void {
     if (ctx.state.revision !== next.revision || ctx.state.step !== "planning") return ctx.state;
     ctx.state = ctx.applyLeadResult(next, leadResult);
     if (!isBlocked(ctx.state)) {
-      ctx.state = ctx.state.planMaterial
-        ? IssueWorkflowStateSchema.parse({ ...ctx.state, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "reject_plan", "cancel_issue", ...(ctx.input.supplementalReview ? ["request_supplemental_review" as const] : [])], pendingAction: "Approve final plan" })
-        : IssueWorkflowStateSchema.parse({ ...ctx.state, ...at("ready_for_development"), owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development" });
+      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue", ...(ctx.input.supplementalReview && ctx.input.roleProfiles.reviewer ? ["request_supplemental_review" as const] : [])], pendingAction: "Approve final plan" });
     }
     await ctx.project();
     return ctx.state;

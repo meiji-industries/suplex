@@ -136,9 +136,23 @@ export class HerdrTurnRunner {
           this.update("UPDATE forge_herdr_turns SET result_sha256 = ?, task_complete_seen_at = ?, codex_turn_id = ?, rollout_artifact_id = ?, status = 'completed', finished_at = ?, updated_at = ? WHERE turn_id = ?", resultHash, iso(), completion.codexTurnId ?? null, rollout?.id ?? null, iso(), iso(), turnId);
           return { turnId, sessionId: session.codexSessionId ?? session.agentName, roleSessionId: session.id, result: parsed.data, resultHash };
         }
-        if (correction >= 1) throw new AgentFailure("invalid-output-schema", "The interactive role result does not satisfy its advertised schema", { nonRetryable: true });
+        const issues = this.excerpt(JSON.stringify(parsed.error.issues));
+        if (correction >= 1) {
+          const handoff = await this.gitHandoffResult(input, session, turnId, resultPath);
+          if (handoff) {
+            session = handoff.session ?? session;
+            continue;
+          }
+          if (input.ledger === "agent") {
+            await this.updateAttention(session, turnId, "awaiting_human", issues);
+            validationIssues = issues;
+            await this.sleep(1_000);
+            continue;
+          }
+          throw new AgentFailure("invalid-output-schema", "The interactive role result does not satisfy its advertised schema", { nonRetryable: true });
+        }
         this.update("UPDATE forge_herdr_turns SET status = 'correction_required', updated_at = ? WHERE turn_id = ?", iso(), turnId);
-        validationIssues = this.excerpt(JSON.stringify(parsed.error.issues));
+        validationIssues = issues;
         correction += 1;
       }
     } catch (error) {
@@ -193,29 +207,8 @@ export class HerdrTurnRunner {
         idlePolls += 1;
         const idleThreshold = live.screenDetectionSkipped ? 1 : 5;
         if (idlePolls >= idleThreshold) {
-          if (input.ledger === "developer" && input.promptKind === "implementation" && input.executionRole === "builder") {
-            const execution = this.database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha FROM forge_developer_executions WHERE id = ?").get(input.executionId) as { worktreePath: string; branchName: string; targetBaseSha: string } | undefined);
-            const previousCommit = this.database.authQuery((db) => db.prepare("SELECT subject_commit FROM forge_delivery_reviews WHERE workflow_id = ? ORDER BY created_at DESC, id DESC LIMIT 1").get(input.workflowId) as { subject_commit: string } | undefined)?.subject_commit ?? execution?.targetBaseSha ?? null;
-            const handoff = execution && await detectGitHandoff({ worktreePath: execution.worktreePath, branchName: execution.branchName, previousCommit, taskId: input.task.taskId, database: this.database });
-            if (handoff?.kind === "clean_commit") {
-              const summary = `Delivery taken from Git commit ${handoff.headSha.slice(0, 7)}; the Developer's completion message was not received.`;
-              const parsed = input.resultSchema.safeParse({ kind: "delivery", summary, steps: [{ number: 1, status: "completed", filesChanged: [], notes: "Git handoff." }], authorizedStepsNotCompleted: [], resultCommit: handoff.headSha, resultTree: handoff.treeSha, dirtyState: "clean", blocker: null });
-              if (parsed.success) {
-                const result = JSON.stringify(parsed.data);
-                const temporary = `${resultPath}.git-handoff-${randomUUID()}`;
-                await mkdir(dirname(resultPath), { recursive: true, mode: 0o700 });
-                await writeFile(temporary, result, { mode: 0o600 });
-                await rename(temporary, resultPath);
-                const now = iso();
-                this.database.authTransaction((db) => {
-                  const sequence = (db.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS value FROM forge_developer_execution_events WHERE execution_id = ?").get(input.executionId) as { value: number }).value;
-                  db.prepare("INSERT OR IGNORE INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, occurred_at, summary, idempotency_key) VALUES (?, ?, 0, ?, 'git_handoff', ?, ?, ?)").run(randomUUID(), input.executionId, sequence, now, summary, `git-handoff:${handoff.headSha}`);
-                  db.prepare("UPDATE forge_herdr_turns SET result_sha256 = ?, task_complete_seen_at = ?, status = 'completed', finished_at = ?, updated_at = ? WHERE turn_id = ?").run(hash(result), now, now, now, turnId);
-                });
-                return { marker: true, completed: true, steeredAfterCompletion: false, session };
-              }
-            }
-          }
+          const handoff = await this.gitHandoffResult(input, session, turnId, resultPath);
+          if (handoff) return handoff;
           // A direct question is already a durable human-attention boundary. Do
           // not overwrite it with the one-time completion resume request.
           const row = this.database.authQuery((db) => db.prepare("SELECT status, prompt_sent_at AS promptSentAt, result_relative_path AS resultRelativePath FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { status: string; promptSentAt: string | null; resultRelativePath: string } | undefined);
@@ -238,6 +231,30 @@ export class HerdrTurnRunner {
       }
       await this.sleep(1_000);
     }
+  }
+
+  private async gitHandoffResult(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, resultPath: string): Promise<Completion | undefined> {
+    if (input.ledger !== "developer") return undefined;
+    const execution = this.database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha FROM forge_developer_executions WHERE id = ? AND worktree_path IS NOT NULL").get(input.executionId) as { worktreePath: string; branchName: string; targetBaseSha: string } | undefined);
+    if (!execution) return undefined;
+    const previousCommit = this.database.authQuery((db) => db.prepare("SELECT subject_commit FROM forge_delivery_reviews WHERE workflow_id = ? ORDER BY created_at DESC, id DESC LIMIT 1").get(input.workflowId) as { subject_commit: string } | undefined)?.subject_commit ?? execution.targetBaseSha ?? null;
+    const handoff = await detectGitHandoff({ worktreePath: execution.worktreePath, branchName: execution.branchName, previousCommit, taskId: input.task.taskId, database: this.database });
+    if (handoff.kind !== "clean_commit") return undefined;
+    const summary = `Delivery taken from Git commit ${handoff.headSha.slice(0, 7)}; the Developer's completion message was not received.`;
+    const parsed = input.resultSchema.safeParse({ kind: "delivery", summary, steps: [{ number: 1, status: "completed", filesChanged: [], notes: "Git handoff." }], authorizedStepsNotCompleted: [], resultCommit: handoff.headSha, resultTree: handoff.treeSha, dirtyState: "clean", blocker: null });
+    if (!parsed.success) return undefined;
+    const result = JSON.stringify(parsed.data);
+    const temporary = `${resultPath}.git-handoff-${randomUUID()}`;
+    await mkdir(dirname(resultPath), { recursive: true, mode: 0o700 });
+    await writeFile(temporary, result, { mode: 0o600 });
+    await rename(temporary, resultPath);
+    const now = iso();
+    this.database.authTransaction((db) => {
+      const sequence = (db.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS value FROM forge_developer_execution_events WHERE execution_id = ?").get(input.executionId) as { value: number }).value;
+      db.prepare("INSERT OR IGNORE INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, occurred_at, summary, idempotency_key) VALUES (?, ?, 0, ?, 'git_handoff', ?, ?, ?)").run(randomUUID(), input.executionId, sequence, now, summary, `git-handoff:${handoff.headSha}`);
+      db.prepare("UPDATE forge_herdr_turns SET result_sha256 = ?, task_complete_seen_at = ?, status = 'completed', finished_at = ?, updated_at = ? WHERE turn_id = ?").run(hash(result), now, now, now, turnId);
+    });
+    return { marker: true, completed: true, steeredAfterCompletion: false, session };
   }
 
   private async resolveIdentity(

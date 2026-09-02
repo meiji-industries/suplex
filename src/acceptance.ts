@@ -12,57 +12,17 @@ const sha = z.string().regex(/^[a-f0-9]{40,64}$/i);
 export const AcceptanceDecisionSchema = z.enum(["accept", "request_changes", "cancel"]);
 export type AcceptanceDecision = z.infer<typeof AcceptanceDecisionSchema>;
 
-export const AcceptanceEvidenceSchema = z.object({
+export const AcceptanceInputSchema = z.object({
   taskId: durableId,
   companyId: durableId,
   workflowId: durableId,
-  projectRevisionId: durableId,
-  releaseId: durableId,
-  deliveryReviewId: durableId,
-  finalReviewId: durableId,
-  ciRunId: durableId,
-  pullRequestNumber: z.number().int().positive(),
-  repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
-  baseBranch: z.string().min(1).max(256),
-  baseSha: sha,
-  headSha: sha,
-  headTree: sha,
-  leadSessionRef: durableId,
-  actorUserId: durableId,
-  decision: AcceptanceDecisionSchema,
-});
-export type AcceptanceEvidence = z.infer<typeof AcceptanceEvidenceSchema>;
-
-const RawAcceptanceInputSchema = z.object({
-  taskId: durableId,
-  companyId: durableId,
-  workflowId: durableId,
-  projectRevisionId: durableId,
-  releaseId: durableId,
-  deliveryReviewId: durableId.optional(),
-  reviewId: durableId.optional(),
-  finalReviewId: durableId,
-  ciRunId: durableId,
-  pullRequestNumber: z.number().int().positive(),
-  repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
-  baseBranch: z.string().min(1).max(256),
-  baseSha: sha,
-  headSha: sha,
-  headTree: sha,
-  leadSessionRef: durableId,
   actorUserId: durableId,
   decision: AcceptanceDecisionSchema.default("accept"),
-  reason: z.string().optional(),
-}).strict().superRefine((value, context) => {
-  if (!value.deliveryReviewId && !value.reviewId) context.addIssue({ code: "custom", path: ["deliveryReviewId"], message: "An exact delivery review is required" });
-  if (value.deliveryReviewId && value.reviewId && value.deliveryReviewId !== value.reviewId) context.addIssue({ code: "custom", path: ["deliveryReviewId"], message: "Delivery review references conflict" });
+  expectedHeadSha: sha,
+  note: z.string().optional(),
+  autoMerge: z.boolean().optional(),
 });
-
-export const AcceptanceInputSchema = RawAcceptanceInputSchema.transform((value) => ({
-  ...value,
-  deliveryReviewId: value.deliveryReviewId ?? value.reviewId!,
-}));
-export type AcceptanceInput = z.input<typeof RawAcceptanceInputSchema>;
+export type AcceptanceInput = z.infer<typeof AcceptanceInputSchema>;
 
 export const ReadyReconciliationOutcomeSchema = z.enum(["pending_ready", "ready", "changed", "closed", "merged_early", "provider_unavailable"]);
 export type ReadyReconciliationOutcome = z.infer<typeof ReadyReconciliationOutcomeSchema>;
@@ -80,8 +40,8 @@ export const AcceptanceBlockerSchema = z.object({
 export type AcceptanceBlocker = z.infer<typeof AcceptanceBlockerSchema>;
 
 export class AcceptanceFailure extends Error {
-  constructor(readonly code: "malformed" | "not-ready" | "stale" | "scope" | "provider" | "identity-conflict") {
-    super(`Acceptance ${code}`);
+  constructor(readonly code: "malformed" | "not-ready" | "stale" | "scope" | "provider" | "identity-conflict", message?: string) {
+    super(message ?? `Acceptance ${code}`);
     this.name = "AcceptanceFailure";
   }
 }
@@ -125,36 +85,6 @@ interface AcceptanceServiceOptions {
   now?: () => Date;
 }
 
-interface EvidenceRow extends AcceptanceEvidence {
-  deliveryReviewOutcome: string;
-  deliveryPlanRevision: number;
-  deliveryBaseSha: string;
-  deliveryHeadSha: string;
-  deliveryHeadTree: string;
-  deliverySessionRef: string;
-  finalReviewOutcome: string;
-  finalPlanRevision: number;
-  finalBaseSha: string;
-  finalHeadSha: string;
-  finalHeadTree: string;
-  finalCiRunId: string;
-  finalDeliveryReviewId: string;
-  finalReviewSessionRef: string;
-  finalReviewOpinionArtifactId: string;
-  finalReviewEvidenceArtifactId: string;
-  developerExecutionId: string;
-  developerSessionRef: string;
-  releaseStatus: string;
-  releasePrUrl: string;
-  releaseHeadBranch: string;
-  ciStatus: string;
-  ciExpectedHeadSha: string;
-  developerTargetBaseSha: string;
-  developerHeadSha: string | null;
-  developerHeadTree: string | null;
-  authoritativeLeadSessionRef: string;
-}
-
 interface AcceptanceRow {
   id: string;
   task_id: string;
@@ -162,9 +92,9 @@ interface AcceptanceRow {
   workflow_id: string;
   project_revision_id: string | null;
   release_id: string;
-  review_id: string;
+  review_id: string | null;
   final_review_id: string | null;
-  ci_run_id: string;
+  ci_run_id: string | null;
   pr_number: number | null;
   repository: string;
   base_branch: string;
@@ -186,14 +116,6 @@ function id(prefix: string): string {
   return `${prefix}_${randomBytes(12).toString("hex")}`;
 }
 
-function lower(value: string): string {
-  return value.toLowerCase();
-}
-
-function operationKey(input: AcceptanceEvidence): string {
-  return `${input.taskId}:acceptance:${input.releaseId}:${input.finalReviewId}:${input.ciRunId}:${input.headSha}:${input.decision}`;
-}
-
 function retryAt(now: string, attempt: number): string {
   return new Date(Date.parse(now) + Math.min(15 * 60_000, 5_000 * 2 ** Math.min(attempt, 7))).toISOString();
 }
@@ -213,34 +135,23 @@ export class AcceptanceService {
 
   async accept(rawInput: AcceptanceInput): Promise<AcceptanceResult> {
     const input = AcceptanceInputSchema.parse(rawInput);
-    const decision = input.decision ?? "accept";
-    const evidenceInput = AcceptanceEvidenceSchema.parse({ ...input, deliveryReviewId: input.deliveryReviewId, decision });
-    const evidence = this.loadEvidence(evidenceInput);
-    if (!evidence) throw new AcceptanceFailure("not-ready");
-    if (evidence.releaseId !== input.releaseId || evidence.repository !== input.repository || evidence.pullRequestNumber !== input.pullRequestNumber || evidence.deliveryPlanRevision !== evidence.finalPlanRevision || evidence.finalCiRunId !== input.ciRunId || evidence.finalDeliveryReviewId !== input.deliveryReviewId || evidence.deliverySessionRef !== evidence.finalReviewSessionRef || evidence.finalReviewSessionRef !== input.leadSessionRef || evidence.authoritativeLeadSessionRef !== input.leadSessionRef || evidence.deliveryReviewOutcome !== "approved" || evidence.ciStatus !== "passed" || (decision === "accept" && evidence.finalReviewOutcome !== "approved") || (decision === "request_changes" && !["approved", "blocking"].includes(evidence.finalReviewOutcome)) || (decision === "cancel" && !["approved", "blocking"].includes(evidence.finalReviewOutcome))) throw new AcceptanceFailure("not-ready");
-
-    const identity = { ...evidenceInput, decision };
-    let current: GithubPullRequest | null = null;
-    if (decision === "accept") {
-      try {
-        current = await this.observeExactPullRequest(input);
-      } catch (error) {
-        if (error instanceof AcceptanceFailure && error.code === "provider") {
-          const next = retryAt(this.now().toISOString(), 1);
-          return { acceptanceId: null, status: "blocked", outcome: "provider_unavailable", retryAt: next, pullRequest: current, blocker: { code: "provider_unavailable", owner: "provider", summary: "GitHub acceptance evidence is temporarily unavailable", retryAt: next, evidenceArtifactId: null } };
-        }
-        throw error;
-      }
+    const release = this.loadRelease(input);
+    if (!release) throw new AcceptanceFailure("not-ready");
+    let current: GithubPullRequest;
+    try { current = await this.currentPr(release.repository, release.prNumber); }
+    catch {
+      const next = retryAt(this.now().toISOString(), 1);
+      return { acceptanceId: null, status: "blocked", outcome: "provider_unavailable", retryAt: next, pullRequest: null, blocker: { code: "provider_unavailable", owner: "provider", summary: "GitHub acceptance evidence is temporarily unavailable", retryAt: next, evidenceArtifactId: null } };
     }
-    if (decision === "request_changes" && !input.reason?.trim()) throw new AcceptanceFailure("malformed");
+    if (current.headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) throw new AcceptanceFailure("stale", `Acceptance stale: GitHub head is ${current.headSha}`);
+    if (input.decision === "request_changes" && !input.note?.trim()) throw new AcceptanceFailure("malformed");
 
-    const reasonArtifact = input.reason?.trim() ? await this.putArtifact(input.companyId, "delivery-decision", `acceptance-${input.finalReviewId}.md`, input.reason.trim()) : undefined;
-    const accepted = this.insertOrGetAcceptance(identity, reasonArtifact);
-    if (accepted.conflict) throw new AcceptanceFailure("identity-conflict");
-    if (accepted.row.status !== "pending_ready" || decision !== "accept") {
+    const reasonArtifact = input.note?.trim() ? await this.putArtifact(input.companyId, "delivery-decision", `acceptance-${release.id}.md`, input.note.trim()) : undefined;
+    const accepted = this.insertOrGetAcceptance(input, release, reasonArtifact);
+    if (accepted.row.status !== "pending_ready" || input.decision !== "accept") {
       return { acceptanceId: accepted.row.id, status: accepted.row.status, pullRequest: current, acceptedAt: accepted.row.created_at, reasonArtifactId: accepted.row.reason_artifact_id };
     }
-    return this.reconcileReady({ ...input, decision });
+    return this.reconcileReady({ acceptanceId: accepted.row.id, taskId: input.taskId, companyId: input.companyId });
   }
 
   async enableAutoMerge(input: { repository: string; pullRequestNumber: number; baseBranch: string; baseSha: string; headSha: string }): Promise<void> {
@@ -251,11 +162,11 @@ export class AcceptanceService {
   }
 
   async reconcileReady(rawInput: AcceptanceInput | { acceptanceId: string; taskId: string; companyId: string }): Promise<ReadyReconciliationResult> {
-    const input = "acceptanceId" in rawInput ? this.inputForAcceptance(rawInput.acceptanceId, rawInput.taskId, rawInput.companyId) : AcceptanceInputSchema.parse(rawInput);
-    const acceptanceId = "acceptanceId" in rawInput ? rawInput.acceptanceId : this.findAcceptanceId(input);
+    const input = "acceptanceId" in rawInput ? rawInput : AcceptanceInputSchema.parse(rawInput);
+    const acceptanceId = "acceptanceId" in rawInput ? rawInput.acceptanceId : this.findAcceptanceId(rawInput);
     if (!acceptanceId) throw new AcceptanceFailure("scope");
     const row = this.database.authQuery((db) => db.prepare("SELECT id, task_id, company_id, workflow_id, project_revision_id, release_id, review_id, final_review_id, ci_run_id, pr_number, repository, base_branch, base_sha, head_sha, head_tree, lead_session_ref, actor_user_id, decision, status, ready_at, failure_code, retry_at, reason_artifact_id, created_at FROM forge_acceptances WHERE id = ? AND task_id = ? AND company_id = ?").get(acceptanceId, input.taskId, input.companyId) as AcceptanceRow | undefined);
-    if (!row || row.decision !== "accept" || !row.final_review_id || row.pr_number === null || row.project_revision_id === null || row.workflow_id === null || row.base_sha === null || row.lead_session_ref === null) throw new AcceptanceFailure("scope");
+    if (!row || row.decision !== "accept" || row.pr_number === null || row.workflow_id === null) throw new AcceptanceFailure("scope");
     if (row.status === "accepted") return { acceptanceId, status: "accepted", outcome: "ready", retryAt: null, pullRequest: null, readyAt: row.ready_at, acceptedAt: row.created_at };
     if (row.status === "blocked") return { acceptanceId, status: "blocked", outcome: "changed", retryAt: row.retry_at, pullRequest: null, blocker: this.rowBlocker(row), readyAt: row.ready_at, acceptedAt: row.created_at };
 
@@ -360,27 +271,15 @@ export class AcceptanceService {
     return { outcome: result.outcome === "changed_head" || result.outcome === "changed_base" ? "changed" : result.outcome, pullRequest: result.pullRequest };
   }
 
-  private loadEvidence(input: AcceptanceEvidence): EvidenceRow | undefined {
-    const evidence = this.database.authQuery((db) => db.prepare(`SELECT r.id AS releaseId, r.repository, r.base_branch AS baseBranch, r.base_sha AS baseSha, r.head_sha AS headSha, r.head_tree AS headTree, r.pr_number AS pullRequestNumber, r.status AS releaseStatus, r.pr_url AS releasePrUrl, r.head_branch AS releaseHeadBranch,
-      dr.id AS deliveryReviewId, dr.outcome AS deliveryReviewOutcome, dr.plan_revision AS deliveryPlanRevision, dr.base_sha AS deliveryBaseSha, dr.subject_commit AS deliveryHeadSha, dr.subject_tree AS deliveryHeadTree, dr.session_ref AS deliverySessionRef,
-      fr.id AS finalReviewId, fr.outcome AS finalReviewOutcome, fr.plan_revision AS finalPlanRevision, fr.base_sha AS finalBaseSha, fr.subject_commit AS finalHeadSha, fr.subject_tree AS finalHeadTree, fr.ci_run_id AS finalCiRunId, fr.delivery_review_id AS finalDeliveryReviewId, fr.session_ref AS finalReviewSessionRef, fr.opinion_artifact_id AS finalReviewOpinionArtifactId, fr.evidence_artifact_id AS finalReviewEvidenceArtifactId, fr.developer_execution_id AS developerExecutionId,
-      de.session_ref AS developerSessionRef, de.target_base_sha AS developerTargetBaseSha, de.result_commit AS developerHeadSha, de.result_tree AS developerHeadTree, c.status AS ciStatus, c.expected_head_sha AS ciExpectedHeadSha, io.session_ref AS authoritativeLeadSessionRef
-      FROM forge_tasks t
-      JOIN forge_releases r ON r.id = ? AND r.task_id = t.id AND r.company_id = t.company_id AND r.workflow_id = ? AND r.superseded_at IS NULL AND r.status IN ('draft', 'ready')
-      JOIN forge_delivery_reviews dr ON dr.id = ? AND dr.task_id = t.id AND dr.company_id = t.company_id AND dr.workflow_id = t.workflow_id
-      JOIN forge_final_reviews fr ON fr.id = ? AND fr.task_id = t.id AND fr.company_id = t.company_id AND fr.workflow_id = t.workflow_id AND fr.release_id = r.id AND fr.delivery_review_id = dr.id
-      JOIN forge_developer_executions de ON de.id = fr.developer_execution_id AND de.task_id = t.id AND de.company_id = t.company_id AND de.workflow_id = t.workflow_id
-      JOIN forge_ci_runs c ON c.id = ? AND c.task_id = t.id AND c.company_id = t.company_id AND c.release_id = r.id
-      JOIN forge_agent_executions io ON io.task_id = t.id AND io.company_id = t.company_id AND io.workflow_id = t.workflow_id AND io.output_revision = fr.plan_revision AND io.output_kind = 'plan' AND io.session_ref = fr.session_ref AND io.session_ref <> de.session_ref
+  private loadRelease(input: AcceptanceInput): { id: string; repository: string; baseBranch: string; baseSha: string; headSha: string; headTree: string; prNumber: number; projectRevisionId: string; deliveryReviewId: string | null; finalReviewId: string | null; ciRunId: string | null; leadSessionRef: string | null } | undefined {
+    return this.database.authQuery((db) => db.prepare(`SELECT r.id, r.repository, r.base_branch AS baseBranch, r.base_sha AS baseSha, r.head_sha AS headSha, r.head_tree AS headTree, r.pr_number AS prNumber, t.project_revision_id AS projectRevisionId,
+      (SELECT id FROM forge_delivery_reviews WHERE task_id = t.id AND company_id = t.company_id AND workflow_id = t.workflow_id ORDER BY created_at DESC LIMIT 1) AS deliveryReviewId,
+      (SELECT id FROM forge_final_reviews WHERE task_id = t.id AND company_id = t.company_id AND workflow_id = t.workflow_id ORDER BY created_at DESC LIMIT 1) AS finalReviewId,
+      (SELECT id FROM forge_ci_runs WHERE task_id = t.id AND company_id = t.company_id AND release_id = r.id ORDER BY updated_at DESC LIMIT 1) AS ciRunId,
+      (SELECT session_ref FROM forge_final_reviews WHERE task_id = t.id AND company_id = t.company_id AND workflow_id = t.workflow_id ORDER BY created_at DESC LIMIT 1) AS leadSessionRef
+      FROM forge_tasks t JOIN forge_releases r ON r.task_id = t.id AND r.company_id = t.company_id AND r.superseded_at IS NULL
       JOIN forge_users u ON u.id = ? AND u.status = 'active' AND (u.role = 'admin' OR EXISTS (SELECT 1 FROM forge_memberships m WHERE m.user_id = u.id AND m.company_id = t.company_id))
-      WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_revision_id = ?`).get(
-      input.releaseId, input.workflowId, input.deliveryReviewId, input.finalReviewId, input.ciRunId, input.actorUserId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId,
-    ) as EvidenceRow | undefined);
-    return evidence;
-  }
-
-  private async observeExactPullRequest(input: AcceptanceInput): Promise<GithubPullRequest> {
-    return this.currentPr(input.repository, input.pullRequestNumber);
+      WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? ORDER BY r.updated_at DESC LIMIT 1`).get(input.actorUserId, input.taskId, input.companyId, input.workflowId) as { id: string; repository: string; baseBranch: string; baseSha: string; headSha: string; headTree: string; prNumber: number; projectRevisionId: string; deliveryReviewId: string | null; finalReviewId: string | null; ciRunId: string | null; leadSessionRef: string | null } | undefined);
   }
 
   private async currentPr(repository: string, number: number): Promise<GithubPullRequest> {
@@ -388,21 +287,14 @@ export class AcceptanceService {
     try { return await this.github.getPullRequest({ repository, number }); } catch { throw new AcceptanceFailure("provider"); }
   }
 
-  private insertOrGetAcceptance(input: AcceptanceEvidence, reasonArtifact?: StoredArtifact): { row: AcceptanceRow; conflict: boolean } {
-    const key = operationKey(input);
+  private insertOrGetAcceptance(input: AcceptanceInput, release: NonNullable<ReturnType<AcceptanceService["loadRelease"]>>, reasonArtifact?: StoredArtifact): { row: AcceptanceRow } {
     return this.database.authTransaction((db) => {
-      const existing = db.prepare("SELECT id, task_id, company_id, workflow_id, project_revision_id, release_id, review_id, final_review_id, ci_run_id, pr_number, repository, base_branch, base_sha, head_sha, head_tree, lead_session_ref, actor_user_id, decision, status, ready_at, failure_code, retry_at, reason_artifact_id, created_at FROM forge_acceptances WHERE operation_key = ?").get(key) as AcceptanceRow | undefined;
-      if (existing) {
-        const same = existing.task_id === input.taskId && existing.company_id === input.companyId && existing.workflow_id === input.workflowId && existing.project_revision_id === input.projectRevisionId && existing.release_id === input.releaseId && existing.review_id === input.deliveryReviewId && existing.final_review_id === input.finalReviewId && existing.ci_run_id === input.ciRunId && existing.pr_number === input.pullRequestNumber && existing.repository === input.repository && existing.base_branch === input.baseBranch && lower(existing.base_sha ?? "") === lower(input.baseSha) && lower(existing.head_sha) === lower(input.headSha) && lower(existing.head_tree) === lower(input.headTree) && existing.lead_session_ref === input.leadSessionRef && existing.actor_user_id === input.actorUserId && existing.decision === input.decision;
-        return { row: existing, conflict: !same };
-      }
       const acceptanceId = id("acceptance");
       const now = this.now().toISOString();
       if (reasonArtifact) db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reasonArtifact.id, reasonArtifact.companyId, reasonArtifact.kind, reasonArtifact.filename, reasonArtifact.mimeType, reasonArtifact.byteSize, reasonArtifact.sha256, reasonArtifact.storagePath, reasonArtifact.createdAt);
       db.prepare(`INSERT INTO forge_acceptances (id, task_id, company_id, workflow_id, operation_key, project_revision_id, release_id, review_id, final_review_id, ci_run_id, pr_number, repository, base_branch, base_sha, head_sha, head_tree, lead_session_ref, actor_user_id, decision, status, reason_artifact_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(acceptanceId, input.taskId, input.companyId, input.workflowId, key, input.projectRevisionId, input.releaseId, input.deliveryReviewId, input.finalReviewId, input.ciRunId, input.pullRequestNumber, input.repository, input.baseBranch, input.baseSha, input.headSha, input.headTree, input.leadSessionRef, input.actorUserId, input.decision, input.decision === "accept" ? "pending_ready" : input.decision === "request_changes" ? "requested_changes" : "cancelled", reasonArtifact?.id ?? null, now, now);
-      db.prepare("INSERT INTO forge_provider_operations (id, operation_key, task_id, company_id, kind, status, result_json, created_at, updated_at) VALUES (?, ?, ?, ?, 'acceptance', ?, ?, ?, ?)").run(id("provider"), key, input.taskId, input.companyId, input.decision === "accept" ? "pending_ready" : input.decision, JSON.stringify({ acceptanceId, decision: input.decision, headSha: input.headSha }), now, now);
-      return { row: db.prepare("SELECT id, task_id, company_id, workflow_id, project_revision_id, release_id, review_id, final_review_id, ci_run_id, pr_number, repository, base_branch, base_sha, head_sha, head_tree, lead_session_ref, actor_user_id, decision, status, ready_at, failure_code, retry_at, reason_artifact_id, created_at FROM forge_acceptances WHERE id = ?").get(acceptanceId) as AcceptanceRow, conflict: false };
+        VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(acceptanceId, input.taskId, input.companyId, input.workflowId, release.projectRevisionId, release.id, release.deliveryReviewId, release.finalReviewId, release.ciRunId, release.prNumber, release.repository, release.baseBranch, release.baseSha, release.headSha, release.headTree, release.leadSessionRef, input.actorUserId, input.decision, input.decision === "accept" ? "pending_ready" : input.decision === "request_changes" ? "requested_changes" : "cancelled", reasonArtifact?.id ?? null, now, now);
+      return { row: db.prepare("SELECT id, task_id, company_id, workflow_id, project_revision_id, release_id, review_id, final_review_id, ci_run_id, pr_number, repository, base_branch, base_sha, head_sha, head_tree, lead_session_ref, actor_user_id, decision, status, ready_at, failure_code, retry_at, reason_artifact_id, created_at FROM forge_acceptances WHERE id = ?").get(acceptanceId) as AcceptanceRow };
     });
   }
 
@@ -450,14 +342,8 @@ export class AcceptanceService {
     });
   }
 
-  private inputForAcceptance(acceptanceId: string, taskId: string, companyId: string): AcceptanceInput {
-    const row = this.database.authQuery((db) => db.prepare("SELECT workflow_id AS workflowId, project_revision_id AS projectRevisionId, release_id AS releaseId, review_id AS deliveryReviewId, final_review_id AS finalReviewId, ci_run_id AS ciRunId, pr_number AS pullRequestNumber, repository, base_branch AS baseBranch, base_sha AS baseSha, head_sha AS headSha, head_tree AS headTree, lead_session_ref AS leadSessionRef, actor_user_id AS actorUserId, decision FROM forge_acceptances WHERE id = ? AND task_id = ? AND company_id = ?").get(acceptanceId, taskId, companyId) as Omit<AcceptanceInput, "taskId" | "companyId"> | undefined);
-    if (!row || row.finalReviewId === null || row.projectRevisionId === null || row.workflowId === null || row.pullRequestNumber === null || row.baseSha === null || row.leadSessionRef === null) throw new AcceptanceFailure("scope");
-    return { taskId, companyId, ...row, decision: "accept" } as AcceptanceInput;
-  }
-
   private findAcceptanceId(input: AcceptanceInput): string | undefined {
-    const row = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_acceptances WHERE task_id = ? AND company_id = ? AND operation_key = ?").get(input.taskId, input.companyId, operationKey({ ...input, deliveryReviewId: input.deliveryReviewId!, decision: input.decision ?? "accept" })) as { id: string } | undefined);
+    const row = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_acceptances WHERE task_id = ? AND company_id = ? AND head_sha = ? AND decision = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.companyId, input.expectedHeadSha, input.decision) as { id: string } | undefined);
     return row?.id;
   }
 

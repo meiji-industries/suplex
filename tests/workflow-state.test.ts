@@ -52,7 +52,7 @@ test("accepts a sha-less plan blocker response receipt", () => {
     },
   });
 
-  expect(parsed.planBlockerResponseReceipt?.blockerSubjectHash).toBeNull();
+  expect(parsed.planBlockerResponseReceipt?.blockerSubjectHash).toBeUndefined();
 });
 
 test("assigns final review to the Reviewer, with Planner fallback", () => {
@@ -121,6 +121,10 @@ test("delivery workflow constructors keep blockers retryable and approvals exact
   if (retryableRepair.outcome !== "blocked") throw new Error("Expected a retryable blocked repair fixture");
   const retryableState = repairBlockedState(repairRequired, retryableRepair, 2);
   expect(retryableState).toMatchObject({ ...at("development"), blocker: { unblockOwner: "human" }, allowedCommands: ["record_delivery_decision", "repair_delivery", "retry_development", "cancel_issue"], developerExecutionId: subject.developerExecutionId, developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", targetBaseSha: subject.targetBaseSha, resultCommit: subject.subjectCommit, resultTree: subject.subjectTree, dirtyState: "clean", deliveryArtifactId: subject.deliveryArtifactId, developerEvidenceArtifactId: subject.developerEvidenceArtifactId, deliveryRepairAttemptId: "repair_retryable" });
+
+  const incompleteVerification = DeveloperRepairActivityResultSchema.parse({ outcome: "blocked", repairAttemptId: "repair_incomplete", cycle: 1, reviewId: "review_1", subject, code: "repair-incomplete", summary: "A required check did not run.", evidenceArtifactId: "artifact_repair_evidence", developerExecutionId: subject.developerExecutionId, developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", resultCommit: subject.subjectCommit, resultTree: subject.subjectTree, dirtyState: "clean" });
+  if (incompleteVerification.outcome !== "blocked") throw new Error("Expected an incomplete verification fixture");
+  expect(repairBlockedState(repairRequired, incompleteVerification, 2)).toMatchObject({ ...at("delivery_ready"), owner: "human", pendingAction: "Verification incomplete", allowedCommands: ["repair_delivery", "review_delivery", "cancel_issue"], blocker: null, deliveryRepairBlockerCode: "repair-incomplete" });
 
   const repaired = DeveloperRepairActivityResultSchema.parse({ outcome: "completed", repairAttemptId: "repair_2", cycle: 2, reviewId: "review_1", subject, developerExecutionId: "developer_2", developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", resultCommit: "d".repeat(40), resultTree: "e".repeat(40), dirtyState: "clean", deliveryArtifactId: "artifact_repaired", evidenceArtifactId: "artifact_repair_evidence", summary: "The defect was repaired." });
   if (repaired.outcome !== "completed") throw new Error("Expected a completed repair fixture");

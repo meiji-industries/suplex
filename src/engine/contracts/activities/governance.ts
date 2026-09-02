@@ -1,18 +1,13 @@
-import type { PlanDecisionSubject } from "../../../plan-governance.js";
-
 export interface PlanDecisionActivityInput {
   taskId: string;
   companyId: string;
   workflowId: string;
   planRevision: number;
+  artifactId: string;
   actorUserId: string;
   decision: "approve" | "request_revision" | "reject";
   note?: string;
   revisionRequestId?: string;
-  /** Plan identity for the recorded row; the workflow supplies it from its own state, never the caller. */
-  subject?: PlanDecisionSubject;
-  noteStagingRef?: string;
-  idempotencyKey?: string;
 }
 
 export interface PlanBlockerResponseActivityInput {

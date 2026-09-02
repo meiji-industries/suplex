@@ -28,10 +28,10 @@ Provider + profile configuration
         ↓
 Task intake and prioritisation
         ↓
-Planning → review → building → integration
-        ↓
-Checks and CI → pull request → merge → delivery complete
+backlog → planning → approval → building → reviewing → shipping → done
 ```
+
+A blocked task keeps its phase and shows one card with the actions that unblock it.
 
 Tasks are available in three complementary views:
 

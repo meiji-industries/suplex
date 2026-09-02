@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { RevisedExecutionCoordinatesSchema, SuccessorReferenceSchema, durableId, exactSha } from "../primitives.js";
 import type { LeadPlanningActivityInput, LeadPlanningResult } from "../../../lead-contracts.js";
-import type { PlanSubject, SupplementalReviewSubject } from "../../../plan-governance.js";
 
 export interface SupplementalReviewActivityInput {
   taskId: string;
@@ -17,9 +16,7 @@ export interface SupplementalReviewActivityInput {
   leadOutputArtifactId: string;
   leadEvidenceArtifactId: string;
   capacityRequestId?: string;
-  evidenceManifestArtifactId?: string;
   primaryLeadSessionRef?: string;
-  originalPlanSubject?: PlanSubject;
 }
 
 export interface SupplementalReviewResult {
@@ -31,7 +28,6 @@ export interface SupplementalReviewResult {
   summary: string;
   verdict?: "approve" | "revise";
   concerns?: Array<{ severity: "blocking" | "advisory"; text: string; step?: number }>;
-  subject?: SupplementalReviewSubject;
 }
 
 export interface ConsolidateLeadPlanActivityInput {
@@ -49,8 +45,6 @@ export interface ConsolidateLeadPlanActivityInput {
   leadOutputArtifactId: string;
   supplementalReviewArtifactId: string;
   capacityRequestId?: string;
-  evidenceManifestArtifactId?: string;
-  originalPlanSubject?: PlanSubject;
 }
 
 export const PreparePlanRevisionActivityInputSchema = z.object({

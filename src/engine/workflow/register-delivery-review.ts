@@ -215,7 +215,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
   }), { validator(rawInput) {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    if (ctx.state.step !== "repair_required" && !isBlocked(ctx.state)) throw new Error("Delivery repair is not available in the current phase");
+    if (ctx.state.step !== "repair_required" && !isBlocked(ctx.state) && !ctx.state.allowedCommands.includes("repair_delivery")) throw new Error("Delivery repair is not available in the current phase");
     if (!ctx.state.deliveryReviewId || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open")) throw new Error("Open blocking findings are required");
     if (isBlocked(ctx.state) && !ctx.state.deliveryRepairBlockerCode) throw new Error("A repair blocker is required before retrying delivery repair");
     if (ctx.input.repairCycleLimit !== undefined && (ctx.state.repairCycle ?? 0) >= ctx.repairCycleLimit) throw new Error("Delivery repair limit is exhausted");

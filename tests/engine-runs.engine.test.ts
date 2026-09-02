@@ -50,7 +50,7 @@ function persistContinuation(harness: EngineHarness, issueId: string, continuati
   }
 }
 
-function leadPlan(workflowId: string, issueId: string): LeadPlanningResult {
+function leadPlan(): LeadPlanningResult {
   return {
     leadExecutionId: "lead-plan",
     leadSessionRef: "lead-session",
@@ -58,23 +58,11 @@ function leadPlan(workflowId: string, issueId: string): LeadPlanningResult {
     leadEvidenceArtifactId: "plan-evidence",
     leadOutputArtifactSha256: engineFixture.sha256,
     leadOutputKind: "plan",
-    leadSummary: "A material plan",
-    materialCategories: ["security_permissions"],
-    material: true,
+    leadSummary: "A plan",
     planSubject: {
-      companyId: engineFixture.companyId,
-      issueId,
-      workflowId,
-      originalPlanRevision: 1,
-      outputId: "plan-output",
-      outputRevision: 1,
-      finalVersion: 1,
+      planRevision: 1,
       artifactId: "plan-artifact",
-      artifactSha256: engineFixture.sha256,
       leadSessionRef: "lead-session",
-      leadExecutionId: "lead-plan",
-      evidenceManifestArtifactId: "plan-evidence",
-      evidenceManifestSha256: engineFixture.sha256,
     },
   };
 }
@@ -369,7 +357,7 @@ test("issue cancellation interrupts held planning and late completion cannot res
     await planningRejected;
     expect(cancelled).toMatchObject({ step: "cancelled", activeOperation: null, pendingAction: "Issue cancelled" });
 
-    planning.resolve(leadPlan(started.workflowId, issueId));
+    planning.resolve(leadPlan());
     await Promise.resolve();
     expect(await queryIssueWorkflow(harness.config, started.workflowId)).toMatchObject({ step: "cancelled", revision: cancelled.revision });
     expect(await executeIssueCommand(harness.config, started.workflowId, "cancel_issue", command)).toEqual(cancelled);
@@ -499,7 +487,7 @@ test("durable projection replay failures do not falsify command success", async 
       replayFailures += 1;
       throw new Error("injected durable projection replay failure");
     },
-    runLeadPlanning: async (input) => leadPlan(input.workflowId, input.taskId),
+    runLeadPlanning: async () => leadPlan(),
   });
   const issueId = "best-effort-projection-replay";
   harness.seedTask(issueId);
@@ -535,7 +523,7 @@ test("cancelling a held production Developer turn prevents late resurrection", a
   });
   const issueId = "cancel-held-developer", workflowId = harness.workflowId(issueId);
   harness.seedTask(issueId);
-  const ready = { ...at("ready_for_development"), revision: 1, owner: "lead" as const, allowedCommands: ["start_development" as const, "cancel_issue" as const], pendingAction: "Start development", lastEventId: `${workflowId}:1`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: "2026-08-29T00:00:00.000Z", planRevision: 1, planMaterial: true, planApproved: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" };
+  const ready = { ...at("ready_for_development"), revision: 1, owner: "lead" as const, allowedCommands: ["start_development" as const, "cancel_issue" as const], pendingAction: "Start development", lastEventId: `${workflowId}:1`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: "2026-08-29T00:00:00.000Z", planRevision: 1, planApproved: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" };
   try {
     persistContinuation(harness, issueId, ready);
     await startIssueWorkflow(harness.config, workflowInput(issueId, ready));
@@ -813,7 +801,6 @@ test("cancellation interrupts coalesce by target across command IDs and types", 
       pendingAction: "Developer execution",
       lastEventId: `${workflowId}:3`,
       planRevision: 1,
-      planMaterial: true,
       planApproved: true,
       developerExecutionId: executionId,
       developerAttempt: 1,
@@ -900,7 +887,7 @@ test("concurrent duplicate planner notes interrupt once and mutate state only af
     expect(await queryIssueWorkflow(harness.config, started.workflowId)).toEqual(active);
     expect(projections).toHaveLength(projectionCount);
 
-    planning.resolve(leadPlan(started.workflowId, issueId));
+    planning.resolve(leadPlan());
     const planned = await planningCommand;
     const [firstResult, secondResult] = await notes;
     expect(firstResult).toEqual(secondResult);
@@ -921,9 +908,9 @@ test("concurrent duplicate commands recheck the durable receipt inside the seria
   let planningCalls = 0;
   const harness = await createEngineHarness({
     projectIssueState: async (event) => event.state,
-    runLeadPlanning: async (input) => {
+    runLeadPlanning: async () => {
       planningCalls += 1;
-      return leadPlan(input.workflowId, input.taskId);
+      return leadPlan();
     },
   });
   const issueId = "duplicate-serialized-command";

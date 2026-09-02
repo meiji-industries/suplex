@@ -60,11 +60,6 @@ describe("buildChatTranscript", () => {
     expect(value.find((item) => item.kind === "pull_request")).toMatchObject({ at: at(25) });
   });
 
-  it("removes legacy materiality suffixes from planner turn summaries", () => {
-    const value = buildChatTranscript(task({ activity: [{ id: "summary", revision: 1, eventType: "planner_note_revised", metadata: { summary: "Plan A (Routine plan)" }, createdAt: at(20), kind: "workflow" }], agentInvocations: [planner("one", at(10), at(20))] }));
-    expect(value.find((item) => item.kind === "agent_turn")).toMatchObject({ summary: "Plan A" });
-  });
-
   it("promotes the completed Planner recap despite its preceding planning marker", () => {
     const invocations = [planner("planner-62be", at(10), at(20)), planner("wrong-planner", at(30), at(40))];
     const value = buildChatTranscript(task({

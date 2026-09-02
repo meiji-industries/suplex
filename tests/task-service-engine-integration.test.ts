@@ -31,7 +31,7 @@ test("TaskService consumes atomic engine projections for decision, revise-plan, 
   harness = await createEngineHarness({
     projectIssueState: async (event) => { harness.database.projectIssueEvent(event); return event.state; },
     recordPlanDecision: async () => ({ decisionId: "decision-task-service" }),
-    runLeadPlanning: async () => ({ leadExecutionId: "lead-revised", leadSessionRef: "lead-session", leadOutputArtifactId: "plan-revised", leadEvidenceArtifactId: "evidence-revised", leadOutputArtifactSha256: "d".repeat(64), leadOutputKind: "plan", leadSummary: "Revised plan", materialCategories: ["security_permissions"], material: true }),
+    runLeadPlanning: async () => ({ leadExecutionId: "lead-revised", leadSessionRef: "lead-session", leadOutputArtifactId: "plan-revised", leadEvidenceArtifactId: "evidence-revised", leadOutputArtifactSha256: "d".repeat(64), leadOutputKind: "plan", leadSummary: "Revised plan" }),
     preparePlanRevision: async () => ({ status: "blocked", revisionRequestId: "revision-request-task-service", blockerCode: "test-blocker" }),
     createSuccessor: async (input) => {
       const now = "2026-08-30T12:00:00.000Z";
@@ -54,10 +54,9 @@ test("TaskService consumes atomic engine projections for decision, revise-plan, 
   await writeFile(join(harness.config.artifactRoot, storagePath), brief);
   harness.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET byte_size = ?, sha256 = ?, storage_path = ? WHERE id = ?").run(brief.byteLength, briefSha256, storagePath, engineFixture.briefArtifactId));
   try {
-    const decisionIssueId = "task-service-decision", decisionWorkflowId = harness.workflowId(decisionIssueId);
-    const finalPlanSubject = { companyId: engineFixture.companyId, issueId: decisionIssueId, workflowId: decisionWorkflowId, originalPlanRevision: 1, outputId: "plan-output", outputRevision: 1, finalVersion: 1 as const, artifactId: "plan-artifact", artifactSha256: "d".repeat(64), leadSessionRef: "lead-session", leadExecutionId: "lead-original", evidenceManifestArtifactId: "plan-evidence", evidenceManifestSha256: "e".repeat(64) };
-    const approval = seedContinuation(harness, decisionIssueId, { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan", planRevision: 1, planMaterial: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact", finalPlanSubject });
-    const revision = seedContinuation(harness, "task-service-revision", { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "revise_plan", "cancel_issue"], pendingAction: "Approve final plan", planRevision: 1, planMaterial: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" });
+    const decisionIssueId = "task-service-decision";
+    const approval = seedContinuation(harness, decisionIssueId, { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan", planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" });
+    const revision = seedContinuation(harness, "task-service-revision", { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "revise_plan", "cancel_issue"], pendingAction: "Approve final plan", planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" });
     const done = seedContinuation(harness, "task-service-continue", { ...at("done"), owner: "human", allowedCommands: ["continue_work"], pendingAction: "Done" });
     await Promise.all([startIssueWorkflow(harness.config, workflowInput(approval)), startIssueWorkflow(harness.config, workflowInput(revision)), startIssueWorkflow(harness.config, workflowInput(done))]);
     for (const workflowId of [approval.workflowId, revision.workflowId, done.workflowId]) harness.engine.run(workflowId);

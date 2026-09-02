@@ -21,6 +21,14 @@ import { DeveloperDeliverySchema } from "../src/developer-contracts.js";
 // The runner polls Herdr every second in production; the tests only need ordering, not wall-clock time.
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const fastSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, Math.min(ms, 20)));
+async function waitForTurnStatus(database: ForgeDatabase, status: string): Promise<{ status: string; attention_excerpt: string | null }> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const turn = database.authQuery((db) => db.prepare("SELECT status, attention_excerpt FROM forge_herdr_turns ORDER BY correction_index DESC LIMIT 1").get() as { status: string; attention_excerpt: string | null } | undefined);
+    if (turn?.status === status) return turn;
+    await fastSleep(20);
+  }
+  throw new Error(`Turn did not reach ${status}`);
+}
 const makeRunner = (...args: ConstructorParameters<typeof HerdrTurnRunner>) => new HerdrTurnRunner(args[0], args[1], args[2], args[3], args[4], args[5], args[6] ?? fastSleep, args[7]);
 const ResultSchema = z.object({ status: z.enum(["ok", "blocked"]) }).strict();
 const task = { taskId: "task", projectId: "project", projectSlug: "project", worktreePath: "/worktree", runtimeRoot: "" };
@@ -1263,6 +1271,49 @@ test("synthesizes one Developer delivery from a clean Git handoff", async () => 
     expect(prompts).toBe(1);
     const event = setup.database.authQuery((db) => db.prepare("SELECT idempotency_key FROM forge_developer_execution_events WHERE execution_id = 'developer'").all());
     expect(event).toEqual([{ idempotency_key: `git-handoff:${first.result.resultCommit}` }]);
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
+test("uses a clean Git handoff after a Developer writes malformed JSON twice", async () => {
+  const setup = await developerTurnFixture();
+  let prompts = 0;
+  const herdr = {
+    prompt: async (_name: string, prompt: string) => {
+      prompts += 1;
+      await complete(setup.session, prompt, { kind: "not_delivery" });
+      return setup.session.live;
+    },
+    getAgent: async () => setup.session.live,
+  };
+  const runner = makeRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
+  try {
+    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { kind: "delivery", summary: expect.stringMatching(/^Delivery taken from Git commit/) } });
+    expect(prompts).toBe(2);
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
+test("keeps a Lead turn awaiting human after malformed JSON twice", async () => {
+  const setup = await fixture();
+  const controller = new AbortController();
+  let prompts = 0;
+  const herdr = {
+    prompt: async (_name: string, prompt: string) => {
+      prompts += 1;
+      await complete(setup.session, prompt, { invalid: true });
+      return setup.session.live;
+    },
+    getAgent: async () => setup.session.live,
+  };
+  const runner = makeRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
+  try {
+    const running = runner.run({ ...setup.input, signal: controller.signal });
+    expect(await waitForTurnStatus(setup.database, "awaiting_human")).toEqual({
+      status: "awaiting_human",
+      attention_excerpt: expect.stringContaining("invalid_value"),
+    });
+    expect(prompts).toBe(2);
+    controller.abort();
+    await expect(running).rejects.toMatchObject({ code: "cancelled", nonRetryable: true });
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 

@@ -5,7 +5,6 @@ import {
 } from "../primitives.js";
 import type { DeliveryFinding } from "../primitives.js";
 import type { AuthorizedPlanSubject } from "../../../developer-contracts.js";
-import type { MaterialityEvidenceSubject, PlanSubject } from "../../../plan-governance.js";
 
 export const DeveloperRepairActivityInputSchema = z.object({
   taskId: durableId,
@@ -87,8 +86,6 @@ export interface DeveloperExecutionActivityInput {
   developerExecutionId?: string;
   developerAttempt?: number;
   turnKind?: DeveloperTurnKind;
-  finalPlanSubject?: PlanSubject;
-  materialityEvidence?: MaterialityEvidenceSubject;
   approvalDecisionId?: string;
   supersedesExecutionId?: string | undefined;
   reuseWorktree?: boolean | undefined;

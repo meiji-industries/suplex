@@ -20,9 +20,9 @@ export function createWorkflowPortFake(options: WorkflowPortFakeOptions): IssueW
     return projectState(state);
   };
   const execute = async (command: string, workflowId: string, input: StartPlanningInput | PlanCommandInput): Promise<IssueWorkflowState> => {
-    if (command === "start_planning") return nextState(workflowId, input, { step: "approval", owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "reject_plan"], pendingAction: "Approve final plan", planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: false });
-    if (command === "request_supplemental_review") return nextState(workflowId, input, { step: "approval", owner: "human", allowedCommands: ["approve_plan", "reject_plan"], pendingAction: "Approve final plan", planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: true });
-    if (command === "approve_plan") return nextState(workflowId, input, { step: "ready_for_development", owner: "lead", allowedCommands: ["start_development"], pendingAction: "Start development", planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: true });
+    if (command === "start_planning") return nextState(workflowId, input, { step: "approval", owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "reject_plan"], pendingAction: "Approve final plan", planRevision: 1, supplementalReviewUsed: false });
+    if (command === "request_supplemental_review") return nextState(workflowId, input, { step: "approval", owner: "human", allowedCommands: ["approve_plan", "reject_plan"], pendingAction: "Approve final plan", planRevision: 1, supplementalReviewUsed: true });
+    if (command === "approve_plan") return nextState(workflowId, input, { step: "ready_for_development", owner: "lead", allowedCommands: ["start_development"], pendingAction: "Start development", planRevision: 1, supplementalReviewUsed: true });
     return nextState(workflowId, input, {});
   };
   const start = async (input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string; existing?: boolean }> => {

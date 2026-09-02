@@ -116,9 +116,7 @@ function routinePlan(summary = "A bounded fixture plan") {
     operationalAnalysis: "The change is local.",
     verificationStrategy: "Run the focused suite.",
     unresolvedTechnicalQuestions: [],
-    materialCategories: [],
     affectedPaths: ["README.md"],
-    materiality: [],
   };
 }
 
@@ -264,7 +262,7 @@ test("Lead delivery review prompt honors Screenshots off", async () => {
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("Lead decision blockers retain the immutable output artifact SHA-256", async () => {
+test("Lead decision blockers retain the output artifact", async () => {
   const value = await fixture();
   const fake = fakeTurnRunner({ "lead-plan": () => decisionBlocker() });
   try {
@@ -272,9 +270,8 @@ test("Lead decision blockers retain the immutable output artifact SHA-256", asyn
     const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
     expect(result.blockerSubject).toMatchObject({
       artifactId: result.leadOutputArtifactId,
-      artifactSha256: result.leadOutputSha256,
     });
-    expect(result.blockerSubject?.artifactSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.blockerSubject?.artifactId).toBe(result.leadOutputArtifactId);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -479,7 +476,7 @@ test("permanent agent failures become non-retryable Engine application failures"
 test("supplemental review uses a fresh session and primary Lead consolidation resumes its session", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const draft = await artifactStore.putArtifact("company_1", "lead-plan", { filename: "draft.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Draft plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
+  const draft = await artifactStore.putArtifact("company_1", "lead-plan", { filename: "draft.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Draft plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], affectedPaths: ["README.md"] })) });
   const priorEvidence = await artifactStore.putArtifact("company_1", "agent-evidence", { filename: "prior.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"turn.completed\"}\n") });
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();

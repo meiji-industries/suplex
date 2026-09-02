@@ -155,9 +155,12 @@ const AUTO_CHAINED_COMMANDS: Partial<Record<IssueStep, IssueWorkflowState["allow
 // (plan conflict -> required -> resolve throws -> plan conflict ...) and each pass has a new revision.
 const haltedChains = new Set<string>();
 const chainKey = (workflowId: string, command: string) => `${workflowId}:${command}`;
+const stalePublishCycles = new Map<string, number>();
+const stalePublishCycleKey = (workflowId: string, resultCommit: string) => `${workflowId}:${resultCommit.toLowerCase()}`;
 
 export function clearAutomaticChainHalt(workflowId: string): void {
   for (const key of haltedChains) if (key.startsWith(`${workflowId}:`)) haltedChains.delete(key);
+  for (const key of stalePublishCycles.keys()) if (key.startsWith(`${workflowId}:`)) stalePublishCycles.delete(key);
 }
 const AUTO_RETRY_BLOCKER_DELAYS = [30_000, 120_000, 300_000] as const;
 const AUTO_RETRY_BLOCKER_COMMANDS = new Set(["review_delivery", "repair_delivery", "repair_ci", "final_review", "accept_delivery", "reconcile_acceptance", "reconcile_merge", "retry_target_base_reconciliation"]);
@@ -199,7 +202,7 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision, lastEventId: `${ctx.state.workflowId}:${revision}` });
     await ctx.project();
   }
-  const before = { step: ctx.state.step, owner: ctx.state.owner, pendingAction: ctx.state.pendingAction, blocked: isBlocked(ctx.state) };
+  const before = { step: ctx.state.step, owner: ctx.state.owner, pendingAction: ctx.state.pendingAction, blocked: isBlocked(ctx.state), resultCommit: ctx.state.resultCommit };
   const command = { expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId ?? ctx.input.autoApprovePlanActorUserId ?? "forge-auto-chain", commandId: chained.commandId };
   let failure: unknown;
   try {
@@ -214,6 +217,34 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   } catch (error) {
     if (isCancellation(error)) return;
     failure = error;
+  }
+  const resultCommit = before.resultCommit;
+  if (chained.command === "publish_draft"
+    && typeof resultCommit === "string"
+    && ctx.state.step === "delivery_ready"
+    && ctx.state.releaseFailureCode === "stale-reviewed-revision"
+    && ctx.state.resultCommit?.toLowerCase() === resultCommit.toLowerCase()) {
+    const cycleKey = stalePublishCycleKey(ctx.state.workflowId, resultCommit);
+    const cycles = (stalePublishCycles.get(cycleKey) ?? 0) + 1;
+    stalePublishCycles.set(cycleKey, cycles);
+    if (cycles >= 2) {
+      const summary = ctx.state.releaseFailureSummary ?? "The exact approved Developer revision is unavailable";
+      haltedChains.add(chainKey(ctx.state.workflowId, "review_delivery"));
+      haltedChains.add(chainKey(ctx.state.workflowId, "publish_draft"));
+      ctx.state = IssueWorkflowStateSchema.parse({
+        ...ctx.state,
+        revision: ctx.state.revision + 1,
+        ...at("delivery_ready"),
+        owner: "human",
+        allowedCommands: ["review_delivery", "publish_draft", "cancel_issue"],
+        pendingAction: summary,
+        blocker: humanBlocker("agent_exhausted", summary, [{ command: "review_delivery", label: "Review delivery", requiresNote: false, destructive: false }, { command: "publish_draft", label: "Publish draft", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(ctx.state.deliveryReviewArtifact?.artifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence")),
+        stateChangedAt: new Date().toISOString(),
+        lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
+      });
+      await ctx.project();
+      return;
+    }
   }
   const unchanged = ctx.state.step === before.step && ctx.state.owner === before.owner && ctx.state.pendingAction === before.pendingAction && isBlocked(ctx.state) === before.blocked;
   if (!failure && !unchanged) return;

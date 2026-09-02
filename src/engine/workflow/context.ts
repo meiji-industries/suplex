@@ -11,6 +11,7 @@ import type {
   ReconcileTargetBaseActivityResult,
   TargetBaseCheckpoint,
 } from "../issue-contracts.js";
+import type { GithubPullRequestObservationResult } from "../contracts/activities/github-sync.js";
 
 export type Failure = { code: string; summary: string; category?: IssueBlocker["category"]; evidenceArtifactId?: string; evidenceSha256?: string };
 export type StateRef = { get(): IssueWorkflowState; set(next: IssueWorkflowState): void };
@@ -62,7 +63,7 @@ export interface IssueWorkflowContext {
   readonly rateLimitFailure: (error: unknown) => { retryAt?: string } | undefined;
   readonly maxReconciliationAttempts: number;
   runPublishTurn: () => Promise<IssueWorkflowState>;
-  reconcileCiTurn: () => Promise<IssueWorkflowState>;
+  reconcileCiTurn: (observation?: GithubPullRequestObservationResult | null) => Promise<IssueWorkflowState>;
   reconcileMergeTurn: () => Promise<IssueWorkflowState>;
   reconcileAcceptanceTurn: () => Promise<IssueWorkflowState>;
   retryAcceptDelivery: (command: { expectedRevision: number; actorUserId: string; commandId: string }) => Promise<IssueWorkflowState>;

@@ -1,5 +1,5 @@
 import { at, isBlocked } from "../../issue-phases.js";
-import { isCancellation, setHandler } from "../registry.js";
+import { isCancellation, runExecution, setHandler } from "../registry.js";
 import * as contracts from "../issue-contracts.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
@@ -8,6 +8,7 @@ import { developerExecutionId } from "../deterministic-id.js";
 import { classifyRepairFailure } from "./runtime.js";
 import type { IssueBlocker } from "../issue-contracts.js";
 import type { IssueWorkflowContext } from "./context.js";
+import type { GithubPullRequestObservationResult } from "../contracts/activities/github-sync.js";
 
 /** Reruns are for flaky/unrelated failures; two per CI cycle, then repair the code. */
 export const CI_RERUN_LIMIT = 2;
@@ -75,11 +76,11 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     await ctx.project();
     return ctx.state;
   };
-  const reconcileCiTurn = async (): Promise<contracts.IssueWorkflowState> => {
+  const reconcileCiTurn = async (initialObservation?: GithubPullRequestObservationResult | null): Promise<contracts.IssueWorkflowState> => {
     const expectedBaseSha = ctx.state.targetBaseSha;
-    let observed = ctx.state.releaseRepository && ctx.state.branchName
+    let observed = initialObservation ?? (ctx.state.releaseRepository && ctx.state.branchName
       ? await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
-      : null;
+      : null);
     if (!ctx.state.expectedHeadSha && observed?.exists && observed.state === "open" && observed.headSha) ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, expectedHeadSha: observed.headSha });
     if (!ctx.state.expectedHeadSha) {
       ctx.state = deferCiReconciliation(ctx.state, new Date().toISOString());
@@ -108,11 +109,11 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     const expectedRevision = ctx.state.revision;
     let result;
     try {
-      const observed = true && ctx.state.releaseRepository && ctx.state.branchName
+      const observed = initialObservation ?? (ctx.state.releaseRepository && ctx.state.branchName
         ? await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
         : true && ctx.state.releaseRepository && ctx.state.branchName
           ? await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
-          : null;
+          : null);
       if (true && observed?.exists && observed.state === "open" && observed.headSha && observed.headSha.toLowerCase() !== expectedHeadSha.toLowerCase()) {
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
         await ctx.project();
@@ -137,7 +138,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     if (ctx.state.step !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId || ctx.state.expectedHeadSha !== expectedHeadSha) return ctx.state;
     const ciOwner = (result.owner as "system" | "integrator" | "human" | "lead" | null) === "lead" ? "integrator" : result.owner;
     const pending = result.outcome === "waiting" || result.outcome === "rate_limited";
-    const minimumPollAt = new Date(Date.now() + CI_PENDING_POLL_DELAY_MS).toISOString();
+    const minimumPollAt = new Date(runExecution.current().now() + CI_PENDING_POLL_DELAY_MS).toISOString();
     const ciNextPollAt = pending && (!result.nextPollAt || Date.parse(result.nextPollAt) < Date.parse(minimumPollAt)) ? minimumPollAt : result.nextPollAt;
     ctx.assignState(() => contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, expectedHeadSha: result.expectedHeadSha, ciAttempt: result.attemptNumber, ciAttemptId: result.attemptId, ciRunId: result.runId, ciOutcome: result.outcome, ciReason: result.reason, ciOwner, ciRepairable: result.repairable, ciEvidenceArtifactId: result.evidenceArtifactId, ciPropagationDeadline: result.propagationDeadline, ciOverallDeadline: result.overallDeadline, ciNextPollAt, pendingAction: pending ? "Waiting for CI" : result.summary, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }));
     await ctx.project();

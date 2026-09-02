@@ -65,6 +65,7 @@ const DUPLICATE_PROJECTION_LIMIT = 20;
 
 export class ProjectionBurstGuard {
   private readonly timestampsByState = new Map<string, number[]>();
+  private readonly loggedSkips = new Set<string>();
 
   shouldSkip(state: IssueWorkflowState, now: number): boolean {
     const key = JSON.stringify([state.phase, state.step, state.owner, state.pendingAction, state.blocker]);
@@ -72,6 +73,13 @@ export class ProjectionBurstGuard {
     timestamps.push(now);
     this.timestampsByState.set(key, timestamps);
     return timestamps.length > DUPLICATE_PROJECTION_LIMIT;
+  }
+
+  shouldLogSkip(state: IssueWorkflowState): boolean {
+    const key = JSON.stringify([state.workflowId, state.step, state.phase]);
+    if (this.loggedSkips.has(key)) return false;
+    this.loggedSkips.add(key);
+    return true;
   }
 }
 
@@ -207,7 +215,7 @@ export class IssueRun {
         if (name === "projectIssueState") {
           const event = args[0] as IssueProjectionEvent;
           if (this.projectionBurstGuard.shouldSkip(event.state, this.clock.now())) {
-            this.logger.error("Issue run skipped duplicate projections", { workflowId: this.workflowId }, { step: event.state.step, phase: event.state.phase, revision: event.state.revision });
+            if (this.projectionBurstGuard.shouldLogSkip(event.state)) this.logger.warn("Issue run skipped duplicate projections", { workflowId: this.workflowId }, { step: event.state.step, phase: event.state.phase, revision: event.state.revision });
             return event.state;
           }
           if (execution.deferredProjections) {

@@ -30,7 +30,10 @@ test("projection burst guard skips duplicate shipping projections after twenty r
   for (let revision = 1; revision <= 20; revision += 1) {
     expect(guard.shouldSkip(IssueWorkflowStateSchema.parse({ ...state, revision, ...at("ci_waiting"), owner: "lead", pendingAction: "Waiting for CI", lastEventId: `guarded-projection:${revision}` }), 1_000)).toBe(false);
   }
-  expect(guard.shouldSkip(IssueWorkflowStateSchema.parse({ ...state, revision: 21, ...at("ci_waiting"), owner: "lead", pendingAction: "Waiting for CI", lastEventId: "guarded-projection:21" }), 1_000)).toBe(true);
+  const skipped = IssueWorkflowStateSchema.parse({ ...state, revision: 21, ...at("ci_waiting"), owner: "lead", pendingAction: "Waiting for CI", lastEventId: "guarded-projection:21" });
+  expect(guard.shouldSkip(skipped, 1_000)).toBe(true);
+  expect(guard.shouldLogSkip(skipped)).toBe(true);
+  expect(guard.shouldLogSkip(skipped)).toBe(false);
 });
 
 function workflowInput(issueId: string, continuationState?: IssueWorkflowInput["continuationState"]): Omit<IssueWorkflowInput, "workflowId"> {

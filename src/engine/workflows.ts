@@ -8,6 +8,7 @@ import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "./target-ba
 import { advanceSourcePullRequestState, isSourcePullRequestPreDelivery, sourcePullRequestState } from "./github-source-pull-request.js";
 import { githubPullRequestObservationFields } from "../github-pull-request-observation.js";
 import { pullRequestObservationKey, reconcile, type PullRequestObservation, type PullRequestTarget } from "../pull-request-reconciler.js";
+import type { GithubPullRequestObservationResult } from "./contracts/activities/github-sync.js";
 import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, loadTaskSourcePullRequest, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
 import { syncGithubPullRequestSignal } from "./issue-updates.js";
 import { evidencePointer, humanBlocker, withWorktreeCommands } from "./workflow/state-transitions.js";
@@ -180,8 +181,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   };
   setHandler(issueStateQuery, () => state);
   setHandler(syncGithubPullRequestSignal, () => { githubSyncRequested = true; });
-  const syncGithubPullRequest = async (): Promise<void> => {
-    if (runExecution.current().autoActionsHalted()) return;
+  const syncGithubPullRequest = async (): Promise<GithubPullRequestObservationResult | null> => {
+    if (runExecution.current().autoActionsHalted()) return null;
     if (!state.releaseRepository && !sourcePullRequest && true) {
       sourcePullRequest = await loadTaskSourcePullRequest({ taskId: state.issueId, companyId: state.companyId }).then(
         (source) => sourcePullRequestState(source, true),
@@ -192,19 +193,19 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       );
     }
     if (!state.releaseRepository && sourcePullRequest) { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, sourcePullRequest)); await projectIssueState(state); }
-    if (!state.releaseRepository || !state.branchName) return;
+    if (!state.releaseRepository || !state.branchName) return null;
     // GitHub reconciliation only runs while Forge is waiting on GitHub. While an agent turn or a
     // publish is in flight, an observation must not rewrite the phase under it. delivery_ready holds an
     // unreleased local head (after a repair the PR still points at the failed commit), so it is skipped too.
     const syncSkipsAgentPhases = true;
-    if (syncSkipsAgentPhases && !isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "releasing", "merge_conflict_reviewing", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review", ...(true ? ["delivery_ready"] : [])].includes(state.step))) return;
+    if (syncSkipsAgentPhases && !isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "releasing", "merge_conflict_reviewing", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review", ...(true ? ["delivery_ready"] : [])].includes(state.step))) return null;
     const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch((error) => {
       if (isCancellation(error)) throw error;
       return null;
     });
-    if (!observed) return;
+    if (!observed) return null;
     const common = githubPullRequestObservationFields(observed, new Date().toISOString());
-    if (isSourcePullRequestPreDelivery(state, sourcePullRequest) && observed.state !== "merged") { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, common)); await projectIssueState(state); return; }
+    if (isSourcePullRequestPreDelivery(state, sourcePullRequest) && observed.state !== "merged") { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, common)); await projectIssueState(state); return observed; }
     if (true) {
       const target: PullRequestTarget = validatedInput.deliveryTarget === "merged" ? "merged" : validatedInput.deliveryTarget === "pull_request_ready" ? "ready" : "draft";
       const checks: PullRequestObservation["checks"] = observed.checks.failing > 0 ? "failed" : observed.checks.pending > 0 ? "pending" : observed.checks.total > 0 && observed.checks.successful === observed.checks.total ? "success" : "none";
@@ -215,10 +216,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         const allowedCommands = observed.mergeable === "CONFLICTING" && !state.allowedCommands.includes("resolve_merge_conflict") ? [...state.allowedCommands, "resolve_merge_conflict" as const] : state.allowedCommands;
         state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, allowedCommands, lastEventId: `${state.workflowId}:${state.revision + 1}` });
         await projectIssueState(state);
-        return;
+        return observed;
       }
       const reconciliation = reconcile({ observed: pullRequestObservation, target, current: { step: state.step, owner: state.owner, pendingAction: state.pendingAction, ...(state.pullRequestNumber !== undefined ? { pullRequestNumber: state.pullRequestNumber } : {}), ...(state.expectedHeadSha !== undefined ? { observedHeadSha: state.expectedHeadSha } : {}), ...(state.autoMergeAvailable !== undefined ? { autoMergeAvailable: state.autoMergeAvailable } : {}), ...(state.githubPullRequestObservationKey !== undefined ? { adoptedObservationKey: state.githubPullRequestObservationKey } : {}) } });
-      if (reconciliation.unchanged) return;
+      if (reconciliation.unchanged) return observed;
       const revision = state.revision + 1;
       const step = reconciliation.phase === "Done" ? "done" : reconciliation.phase === "Merging" ? "manual_merge" : reconciliation.phase === "Resolving conflicts" ? "merge_conflict_reviewing" : reconciliation.phase === "Waiting for CI" ? "ci_waiting" : reconciliation.phase === "Opening PR" ? "releasing" : state.step;
       state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, ...at(step), owner: reconciliation.owner === "human" ? "human" : "lead", allowedCommands: reconciliation.allowedCommands.filter((command): command is IssueCommand => command === "publish_draft" || command === "cancel_issue" || command === "send_planner_note"), pendingAction: reconciliation.pendingAction, githubPullRequestObservationKey: observationKey, mergeOutcome: observed.state === "merged" ? "merged" : state.mergeOutcome, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${revision}` });
@@ -251,8 +252,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         else if ((action.kind === "push_open_draft" || action.kind === "push_open_ready") && state.step === "releasing") await workflowContext.runPublishTurn();
         else if (action.kind === "repair_ci" && state.step === "ci_waiting") await workflowContext.reconcileCiTurn();
       }
-      return;
+      return observed;
     }
+    return observed;
   };
   const captureInitialProjectionState = true;
   const initialProjectionState = state;
@@ -358,13 +360,13 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         const sleepingRevision = workflowContext.state.revision;
         const sleepingReleaseId = workflowContext.state.releaseId;
         const sleepingHeadSha = workflowContext.state.expectedHeadSha;
-        const pollAt = workflowContext.state.ciNextPollAt ? isoEpochMillis(workflowContext.state.ciNextPollAt) : Date.now();
-        const delay = Math.max(0, pollAt - Date.now());
+        const pollAt = workflowContext.state.ciNextPollAt ? isoEpochMillis(workflowContext.state.ciNextPollAt) : runExecution.current().now();
+        const delay = Math.max(0, pollAt - runExecution.current().now());
         if (delay > 0) await sleep(delay);
         if (workflowContext.state.step !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
-        await syncGithubPullRequest();
+        const observation = await syncGithubPullRequest();
         // CI reconciliation needs a release; without one the PR sync above is the only observer. Never throw from the loop.
-        if (workflowContext.state.step === "ci_waiting" && workflowContext.state.releaseId) await workflowContext.reconcileCiTurn();
+        if (workflowContext.state.step === "ci_waiting" && workflowContext.state.releaseId) await workflowContext.reconcileCiTurn(observation);
         else if (workflowContext.state.step === "ci_waiting" && workflowContext.state.resultCommit && workflowContext.state.branchName && !workflowContext.state.deliveryReviewId) {
           // ci_waiting without a release is a dead end: an unreleased exact delivery goes back through review and publish.
           workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision: workflowContext.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", ciNextPollAt: null, lastEventId: `${workflowContext.state.workflowId}:${workflowContext.state.revision + 1}` });

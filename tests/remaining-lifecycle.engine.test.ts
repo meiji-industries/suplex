@@ -23,6 +23,21 @@ class FiveSecondClock extends ImmediateClock {
   }
 }
 
+class FifteenSecondWindowClock extends ImmediateClock {
+  private remaining = 15_000;
+  private elapsed!: () => void;
+  readonly windowElapsed = new Promise<void>((resolve) => { this.elapsed = resolve; });
+
+  override async wait(milliseconds: number, signal: AbortSignal): Promise<void> {
+    const elapsed = Math.min(milliseconds, this.remaining);
+    this.remaining -= elapsed;
+    await super.wait(elapsed, signal);
+    if (this.remaining > 0) return;
+    this.elapsed();
+    await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  }
+}
+
 function ciState(h: EngineHarness, issueId: string) {
   return { ...at("ci_waiting"), revision: 20, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Waiting for CI", lastEventId: `${issueId}:20`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: new Date(h.clock.now()).toISOString(), leadSessionRef: "lead-session", leadExecutionId: "lead-execution", leadOutputArtifactId: "plan", planRevision: 1, developerExecutionId: "developer", developerSessionRef: "developer-session", worktreePath: join(h.root, "worktrees", issueId), branchName: `forge/issue/${issueId}`, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: tree, dirtyState: "clean" as const, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "evidence", deliveryReviewId: "review", releaseId: `release-${issueId}`, releaseRepository: "acme/forge", pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", expectedHeadSha: head, expectedHeadTree: tree, ciAttempt: 0, ciOutcome: "waiting" as const, ciNextPollAt: null };
 }
@@ -54,6 +69,28 @@ test.each(["ci_waiting", "manual_merge", "releasing"] as const)("an unchanged %s
     expect(waitResult).toBe("sleeping");
     expect(after.revision - before).toBeLessThanOrEqual(2);
     expect(snapshots - snapshotCountBefore).toBeLessThanOrEqual(2);
+  } finally { await h.stop(); }
+});
+
+test("unchanged CI shipping observes GitHub once in a fifteen-second window", async () => {
+  const clock = new FifteenSecondWindowClock();
+  let observedTwice!: () => void;
+  const duplicateObservation = new Promise<void>((resolve) => { observedTwice = resolve; });
+  let observations = 0;
+  const h = await createEngineHarness({
+    observeGithubPullRequest: async () => {
+      observations += 1;
+      if (observations > 1) observedTwice();
+      return { exists: true, number: 42, url: "https://github.test/42", state: "open", isDraft: false, headSha: head, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null };
+    },
+    reconcileCi: async (input) => ({ runId: "ci", attemptId: "pending", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: "ci-evidence", outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Waiting for CI", retryAt: null, nextPollAt: null, policyHash: engineFixture.sha256, propagationDeadline: null, overallDeadline: null }),
+  }, clock);
+  h.seedTask("unchanged-ci-observation");
+  try {
+    const started = await h.startContinuation("unchanged-ci-observation", ciState(h, "unchanged-ci-observation"), { deliveryTarget: "merged" });
+    await h.settle(started.workflowId, (state) => state.step === "ci_waiting" && state.ciNextPollAt !== null);
+    expect(await Promise.race([clock.windowElapsed.then(() => "window-elapsed"), duplicateObservation.then(() => "observed-twice")])).toBe("window-elapsed");
+    expect(observations).toBe(1);
   } finally { await h.stop(); }
 });
 

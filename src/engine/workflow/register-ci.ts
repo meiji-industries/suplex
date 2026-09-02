@@ -12,6 +12,7 @@ import type { IssueWorkflowContext } from "./context.js";
 /** Reruns are for flaky/unrelated failures; two per CI cycle, then repair the code. */
 export const CI_RERUN_LIMIT = 2;
 const CI_RERUN_POLL_DELAY_MS = 60_000;
+const CI_PENDING_POLL_DELAY_MS = 15_000;
 const CI_COMMAND_STEPS = new Set(["ci_waiting", "ci_repair_planning", "ci_repairing"]);
 const shouldUpdateFromBaseBeforeCiRepair = (result: { outcome: string; repairable: boolean; owner: string | null }, baseUpdateCount: number): boolean => result.outcome === "failed" && result.repairable && result.owner === "lead" && baseUpdateCount < 2;
 
@@ -135,7 +136,10 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     }
     if (ctx.state.step !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId || ctx.state.expectedHeadSha !== expectedHeadSha) return ctx.state;
     const ciOwner = (result.owner as "system" | "integrator" | "human" | "lead" | null) === "lead" ? "integrator" : result.owner;
-    ctx.assignState(() => contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, expectedHeadSha: result.expectedHeadSha, ciAttempt: result.attemptNumber, ciAttemptId: result.attemptId, ciRunId: result.runId, ciOutcome: result.outcome, ciReason: result.reason, ciOwner, ciRepairable: result.repairable, ciEvidenceArtifactId: result.evidenceArtifactId, ciPropagationDeadline: result.propagationDeadline, ciOverallDeadline: result.overallDeadline, ciNextPollAt: result.nextPollAt, pendingAction: result.outcome === "waiting" || result.outcome === "rate_limited" ? "Waiting for CI" : result.summary, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }));
+    const pending = result.outcome === "waiting" || result.outcome === "rate_limited";
+    const minimumPollAt = new Date(Date.now() + CI_PENDING_POLL_DELAY_MS).toISOString();
+    const ciNextPollAt = pending && (!result.nextPollAt || Date.parse(result.nextPollAt) < Date.parse(minimumPollAt)) ? minimumPollAt : result.nextPollAt;
+    ctx.assignState(() => contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, expectedHeadSha: result.expectedHeadSha, ciAttempt: result.attemptNumber, ciAttemptId: result.attemptId, ciRunId: result.runId, ciOutcome: result.outcome, ciReason: result.reason, ciOwner, ciRepairable: result.repairable, ciEvidenceArtifactId: result.evidenceArtifactId, ciPropagationDeadline: result.propagationDeadline, ciOverallDeadline: result.overallDeadline, ciNextPollAt, pendingAction: pending ? "Waiting for CI" : result.summary, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }));
     await ctx.project();
     if (result.outcome === "failed" && ctx.state.ciOverallDeadline && Date.parse(ctx.state.ciOverallDeadline) <= Date.now()) {
       ctx.state = ciDeadlineBlockedState(ctx.state, result.summary, new Date().toISOString());

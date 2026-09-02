@@ -4,13 +4,58 @@ import { expect, test } from "vitest";
 import { at } from "../src/issue-phases.js";
 import { ApplicationFailure } from "../src/engine/failures.js";
 import { executeIssueCommand, queryIssueWorkflow, signalIssueGithubPullRequestSync } from "../src/engine/service.js";
-import { createEngineHarness, engineFixture, type EngineHarness } from "./helpers/engine-harness.js";
+import { createEngineHarness, engineFixture, ImmediateClock, type EngineHarness } from "./helpers/engine-harness.js";
 
 const head = "b".repeat(40), tree = "c".repeat(40), remoteHead = "d".repeat(40);
+
+class FiveSecondClock extends ImmediateClock {
+  private remaining = 5_000;
+  private blocked!: () => void;
+  readonly sleeping = new Promise<void>((resolve) => { this.blocked = resolve; });
+
+  override async wait(milliseconds: number, signal: AbortSignal): Promise<void> {
+    const elapsed = Math.min(milliseconds, this.remaining);
+    this.remaining -= elapsed;
+    await super.wait(elapsed, signal);
+    if (this.remaining > 0) return;
+    this.blocked();
+    await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  }
+}
 
 function ciState(h: EngineHarness, issueId: string) {
   return { ...at("ci_waiting"), revision: 20, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Waiting for CI", lastEventId: `${issueId}:20`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: new Date(h.clock.now()).toISOString(), leadSessionRef: "lead-session", leadExecutionId: "lead-execution", leadOutputArtifactId: "plan", planRevision: 1, developerExecutionId: "developer", developerSessionRef: "developer-session", worktreePath: join(h.root, "worktrees", issueId), branchName: `forge/issue/${issueId}`, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: tree, dirtyState: "clean" as const, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "evidence", deliveryReviewId: "review", releaseId: `release-${issueId}`, releaseRepository: "acme/forge", pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", expectedHeadSha: head, expectedHeadTree: tree, ciAttempt: 0, ciOutcome: "waiting" as const, ciNextPollAt: null };
 }
+
+test.each(["ci_waiting", "manual_merge", "releasing"] as const)("an unchanged %s shipping state does not re-project while it waits", async (step) => {
+  const clock = new FiveSecondClock();
+  let tooManyProjections!: () => void;
+  const hotLoop = new Promise<void>((resolve) => { tooManyProjections = resolve; });
+  let projections = 0;
+  const h = await createEngineHarness({
+    projectIssueState: async (event) => {
+      projections += 1;
+      if (projections >= 3) tooManyProjections();
+      return event.state;
+    },
+    loadTaskSourcePullRequest: async () => null,
+    observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.test/42", state: "open", isDraft: false, headSha: head, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
+    reconcileCi: async (input) => ({ runId: "ci", attemptId: "pending", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: "ci-evidence", outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Waiting for CI", retryAt: new Date(Date.now() + 60_000).toISOString(), nextPollAt: null, policyHash: engineFixture.sha256, propagationDeadline: null, overallDeadline: null }),
+  }, clock);
+  h.seedTask(`unchanged-${step}`);
+  try {
+    const initial = { ...ciState(h, `unchanged-${step}`), ...at(step), releaseRepository: null, releaseRetryAt: step === "releasing" ? new Date(Date.now() + 15_000).toISOString() : null };
+    const started = await h.startContinuation(`unchanged-${step}`, initial);
+    const before = h.engine.run(started.workflowId).state.revision;
+    const snapshotCountBefore = h.database.authQuery((db) => (db.prepare("SELECT count(*) AS count FROM forge_workflow_snapshots WHERE workflow_id = ?").get(started.workflowId) as { count: number }).count);
+    const waitResult = await Promise.race([clock.sleeping.then(() => "sleeping"), hotLoop.then(() => "hot-loop")]);
+    const after = h.engine.run(started.workflowId).state;
+    const snapshots = h.database.authQuery((db) => (db.prepare("SELECT count(*) AS count FROM forge_workflow_snapshots WHERE workflow_id = ?").get(started.workflowId) as { count: number }).count);
+    expect(waitResult).toBe("sleeping");
+    expect(after.revision - before).toBeLessThanOrEqual(2);
+    expect(snapshots - snapshotCountBefore).toBeLessThanOrEqual(2);
+  } finally { await h.stop(); }
+});
 
 test("foreign PR head changes return reviewed work to delivery review", async () => {
   const h = await createEngineHarness({ projectIssueState: async (event) => event.state, observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.test/42", state: "open", isDraft: false, headSha: remoteHead, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, autoMergeEnabled: false, reviewDecision: null }), reconcileMerge: async () => ({ outcome: "changed_head", observedHeadSha: remoteHead, mergeObservationId: "head-change", completionReceiptId: null, observedAt: new Date().toISOString(), mergedAt: null, retryAt: null, blockerCode: "head_changed", evidenceArtifactId: null, pullRequestNumber: 42, pullRequestUrl: "https://github.test/42" }) });

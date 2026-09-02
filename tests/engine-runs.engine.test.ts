@@ -8,7 +8,7 @@ import { ActivityFailure, ApplicationFailure, CancelledFailure, isCancellation }
 import { durableCommand, executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/engine/service.js";
 import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema, type IssueProjectionEvent, type IssueWorkflowInput, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
 import type { LeadPlanningResult } from "../src/lead-contracts.js";
-import { Wakeable } from "../src/engine/runs.js";
+import { ProjectionBurstGuard, Wakeable } from "../src/engine/runs.js";
 import { createEngineHarness, engineFixture, ImmediateClock, type EngineHarness } from "./helpers/engine-harness.js";
 import { withWorktreeCommands } from "../src/engine/workflow/state-transitions.js";
 
@@ -23,6 +23,15 @@ function commandReceiptCount(harness: EngineHarness, commandId: string): number 
   const row = harness.database.authQuery((db) => db.prepare("SELECT count(*) AS count FROM forge_engine_commands WHERE command_id = ?").get(commandId) as { count: number });
   return row.count;
 }
+
+test("projection burst guard skips duplicate shipping projections after twenty revisions", () => {
+  const state = IssueWorkflowStateSchema.parse(buildInitialIssueWorkflowState({ workflowId: "guarded-projection", ...workflowInput("guarded-projection") }));
+  const guard = new ProjectionBurstGuard();
+  for (let revision = 1; revision <= 20; revision += 1) {
+    expect(guard.shouldSkip(IssueWorkflowStateSchema.parse({ ...state, revision, ...at("ci_waiting"), owner: "lead", pendingAction: "Waiting for CI", lastEventId: `guarded-projection:${revision}` }), 1_000)).toBe(false);
+  }
+  expect(guard.shouldSkip(IssueWorkflowStateSchema.parse({ ...state, revision: 21, ...at("ci_waiting"), owner: "lead", pendingAction: "Waiting for CI", lastEventId: "guarded-projection:21" }), 1_000)).toBe(true);
+});
 
 function workflowInput(issueId: string, continuationState?: IssueWorkflowInput["continuationState"]): Omit<IssueWorkflowInput, "workflowId"> {
   return {

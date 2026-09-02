@@ -333,10 +333,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       return githubSyncRequested // GitHub changed.
         || (!workflowContext.state.allowedCommands.includes("delete_worktree") && (workflowContext.state.step === "done" || (workflowContext.state.step === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) // A terminal state needs completion.
         || workflowContext.continuationRequested // A continuation was requested.
-        || (workflowContext.state.step === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) // Publishing is due for retry.
-        || workflowContext.state.step === "ci_waiting" // CI needs polling.
-        || workflowContext.state.step === "ready_reconciliation" // Acceptance needs reconciliation.
-        || workflowContext.state.step === "manual_merge" // Merge status needs polling.
         || autoChainedCommand(workflowContext, "") !== null // A phase can advance automatically.
         || canAutoRetryDeliveryBlocker(workflowContext); // A delivery blocker can retry.
     }

@@ -60,6 +60,21 @@ type DeferredProjection = { event: IssueProjectionEvent; options: Parameters<Act
 type InterruptOutcome = { accepted: boolean; result: unknown; deferredProjections?: DeferredProjection[] };
 type CommandExecutionContext = RunExecutionContext & { deferredProjections?: DeferredProjection[] | undefined; durableProjection?: IssueProjectionEvent | undefined; projectionExpected?: boolean | undefined; interruptDispatch?: boolean | undefined };
 
+const DUPLICATE_PROJECTION_WINDOW_MS = 10_000;
+const DUPLICATE_PROJECTION_LIMIT = 20;
+
+export class ProjectionBurstGuard {
+  private readonly timestampsByState = new Map<string, number[]>();
+
+  shouldSkip(state: IssueWorkflowState, now: number): boolean {
+    const key = JSON.stringify([state.phase, state.step, state.owner, state.pendingAction, state.blocker]);
+    const timestamps = (this.timestampsByState.get(key) ?? []).filter((timestamp) => now - timestamp <= DUPLICATE_PROJECTION_WINDOW_MS);
+    timestamps.push(now);
+    this.timestampsByState.set(key, timestamps);
+    return timestamps.length > DUPLICATE_PROJECTION_LIMIT;
+  }
+}
+
 const AGENT_OWNED_STEPS: Partial<Record<IssueWorkflowState["step"], true>> = {
   planning: true, supplemental_review: true, plan_consolidation: true, development: true, reviewing_delivery: true, repair_required: true,
   releasing: true, merge_conflict_reviewing: true, merge_conflict_resolving: true, ci_repair_planning: true,
@@ -136,6 +151,7 @@ export class IssueRun {
   private interruptBarrier: Promise<void> | undefined;
   private releaseInterrupt: (() => void) | undefined;
   private interrupting = new Map<string, Promise<InterruptOutcome>>();
+  private readonly projectionBurstGuard = new ProjectionBurstGuard();
 
   constructor(
     readonly input: IssueWorkflowInput,
@@ -190,6 +206,10 @@ export class IssueRun {
         if (this.interruptPending && !execution.interruptDispatch && !execution.acceptedInterrupt) throw new CancelledFailure();
         if (name === "projectIssueState") {
           const event = args[0] as IssueProjectionEvent;
+          if (this.projectionBurstGuard.shouldSkip(event.state, this.clock.now())) {
+            this.logger.error("Issue run skipped duplicate projections", { workflowId: this.workflowId }, { step: event.state.step, phase: event.state.phase, revision: event.state.revision });
+            return event.state;
+          }
           if (execution.deferredProjections) {
             execution.projectionExpected = true;
             execution.deferredProjections.push({ event, options });

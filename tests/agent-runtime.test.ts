@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { projectAgentRuntime } from "../src/agent-runtime.js";
 import { ForgeDatabase } from "../src/database.js";
@@ -71,6 +71,23 @@ test("runtime projection excludes stale history and keeps in-flight turns and ob
       { taskId: "task-active-missing", role: "builder", paneId: "pane-active-missing", liveStatus: "missing", diagnosis: "recovering_runtime" },
       { taskId: "task-idle-live", role: "reviewer", paneId: "pane-idle-live", liveStatus: "active", diagnosis: "resting" },
     ]);
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shares a runtime snapshot within the five-second cache window", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-agent-runtime-memo-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    const runtimeSnapshot = vi.fn(async () => ({ agents: [], panes: [] }));
+    const herdr = { runtimeSnapshot } as never;
+    await Promise.all([
+      projectAgentRuntime(database, herdr, ["agent-a"], ["company-a"]),
+      projectAgentRuntime(database, herdr, ["agent-a"], ["company-a"]),
+    ]);
+    expect(runtimeSnapshot).toHaveBeenCalledOnce();
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });

@@ -62,7 +62,7 @@ describe("task list invalidation hub", () => {
     for (let index = 0; index < 10; index += 1) FakeEventSource.last.invalidate("company-a");
     expect(listener).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(999);
+    vi.advanceTimersByTime(2999);
     expect(listener).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(listener).toHaveBeenCalledTimes(1);
@@ -92,7 +92,7 @@ describe("task list invalidation hub", () => {
     const unsubscribe = hub.subscribe("company-a", listener);
 
     FakeEventSource.last.invalidate("company-b");
-    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(3000);
     expect(listener).not.toHaveBeenCalled();
 
     unsubscribe();
@@ -119,7 +119,7 @@ describe("task list invalidation hub", () => {
     expect(FakeEventSource.last.connected).toBe(false);
     version = "mutated";
     FakeEventSource.last.ready();
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(3000);
 
     await expect(Promise.all(refreshes)).resolves.toEqual([
       [{ id: "company-reconnect-a-mutated" }],
@@ -139,10 +139,33 @@ describe("task list invalidation hub", () => {
 
     FakeEventSource.last.invalidate("company-a");
     FakeEventSource.last.ready();
-    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(3000);
 
     expect(listener).toHaveBeenCalledOnce();
     expect(listener).toHaveBeenCalledWith("ready");
     unsubscribe();
+  });
+
+  it("reuses one resolved read for three listeners after an invalidation", async () => {
+    const hub = createHub();
+    const refreshes: Array<Promise<unknown>> = [];
+    const unsubscribes = Array.from({ length: 3 }, () => hub.subscribe("company-a", () => { refreshes.push(readTaskList("company-a")); }));
+    await readTaskList("company-a", false, true);
+    FakeEventSource.last.invalidate("company-a");
+    await vi.advanceTimersByTimeAsync(3000);
+
+    await expect(Promise.all(refreshes)).resolves.toEqual([[], [], []]);
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(2);
+    unsubscribes.forEach((unsubscribe) => unsubscribe());
+  });
+
+  it("expires a resolved task-list read after two seconds", async () => {
+    await readTaskList("company-ttl", false, true);
+    await readTaskList("company-ttl");
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await readTaskList("company-ttl");
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(2);
   });
 });

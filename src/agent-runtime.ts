@@ -1,6 +1,6 @@
 import type { ForgeDatabase } from "./database.js";
 import { observeHerdrSessions, type HerdrSessionObservation } from "./herdr-recovery.js";
-import { type HerdrClient, snapshotHerdrRuntime } from "./herdr-client.js";
+import { type HerdrClient, type HerdrRuntimeSnapshot, snapshotHerdrRuntime } from "./herdr-client.js";
 import { classifyRecovery, type DurableTaskFacts, type RuntimeDiagnosis, type TurnStatus } from "./recovery/convergence.js";
 
 export type AgentRuntimeLiveStatus = "active" | "terminal" | "missing" | "unavailable";
@@ -28,6 +28,26 @@ function inFlightTurn(row: RuntimeRow): DurableTaskFacts["turn"] {
   if (!ACTIVE_TURN_STATUSES.has(row.turnStatus)) return null;
   if (!row.executionStatus || !ACTIVE_EXECUTION_STATUSES.has(row.executionStatus)) return null;
   return { turnId: row.turnId, role: row.role, status: row.turnStatus as TurnStatus, resultPresent: row.resultHash !== null, resultValid: row.resultHash !== null, resumeRequestsSent: 0 };
+}
+
+const runtimeSnapshotTtlMs = 5000;
+const runtimeSnapshots = new WeakMap<HerdrClient, Map<string, { expiresAt: number; snapshot: Promise<HerdrRuntimeSnapshot> }>>();
+
+function cachedRuntimeSnapshot(herdr: HerdrClient, agentIds: readonly string[], companyIds?: readonly string[]): Promise<HerdrRuntimeSnapshot> {
+  const key = JSON.stringify([agentIds, companyIds ?? null]);
+  let snapshots = runtimeSnapshots.get(herdr);
+  if (!snapshots) {
+    snapshots = new Map();
+    runtimeSnapshots.set(herdr, snapshots);
+  }
+  const current = snapshots.get(key);
+  if (current && current.expiresAt > Date.now()) return current.snapshot;
+  const snapshot = snapshotHerdrRuntime(herdr).catch((error: unknown) => {
+    snapshots?.delete(key);
+    throw error;
+  });
+  snapshots.set(key, { expiresAt: Date.now() + runtimeSnapshotTtlMs, snapshot });
+  return snapshot;
 }
 
 function live(observation: HerdrSessionObservation | undefined, unavailable: boolean) {
@@ -64,7 +84,7 @@ export async function projectAgentRuntime(database: ForgeDatabase, herdr: HerdrC
   let observations: HerdrSessionObservation[] = [];
   let unavailable = false;
   try {
-    observations = await observeHerdrSessions(database, herdr, undefined, await snapshotHerdrRuntime(herdr));
+    observations = await observeHerdrSessions(database, herdr, undefined, await cachedRuntimeSnapshot(herdr, agentIds, companyIds));
   } catch {
     unavailable = true;
   }

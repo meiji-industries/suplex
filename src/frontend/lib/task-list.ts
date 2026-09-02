@@ -1,15 +1,21 @@
 import { readJson } from "./api.js";
 import type { ApiTaskSummary } from "./view-shared.js";
 
-const reads = new Map<string, Promise<ApiTaskSummary[]>>();
+const taskListTtlMs = 2000;
+const reads = new Map<string, { expiresAt: number; read: Promise<ApiTaskSummary[]> }>();
 
 export function readTaskList(companyId: string, archived = false, refresh = false): Promise<ApiTaskSummary[]> {
   const key = `${companyId}:${archived}`;
   if (refresh) reads.delete(key);
   const current = reads.get(key);
-  if (current) return current;
-  const read = readJson<{ tasks: ApiTaskSummary[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks${archived ? "?archived=true" : ""}`).then((result) => result.tasks).catch((error: unknown) => { reads.delete(key); throw error; });
-  reads.set(key, read);
+  if (current && current.expiresAt > Date.now()) return current.read;
+  const read = readJson<{ tasks: ApiTaskSummary[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks${archived ? "?archived=true" : ""}`).then((result) => result.tasks);
+  const entry = { expiresAt: Number.POSITIVE_INFINITY, read };
+  reads.set(key, entry);
+  void read.then(
+    () => { entry.expiresAt = Date.now() + taskListTtlMs; },
+    () => { if (reads.get(key) === entry) reads.delete(key); },
+  );
   return read;
 }
 
@@ -20,7 +26,7 @@ export type TaskListInvalidationHub = { subscribe(companyId: string, listener: (
 
 export function createTaskListInvalidationHub(options: { createEventSource?: (url: string) => EventSource; debounceMs?: number } = {}): TaskListInvalidationHub {
   const createEventSource = options.createEventSource ?? ((url: string) => new globalThis.EventSource(url));
-  const debounceMs = options.debounceMs ?? 1000;
+  const debounceMs = options.debounceMs ?? 3000;
   let source: EventSource | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const listeners = new Map<string, Set<(event: TaskListInvalidationEvent) => void>>();

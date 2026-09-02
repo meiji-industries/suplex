@@ -845,6 +845,7 @@ export class TaskService {
   private readonly eventListeners = new Set<{ afterCursor: number; send: (event: TaskEvent, cursor: number) => void }>();
   private readonly promptOverrides: PromptOverrideService;
   private readonly eventVersions = new Map<string, string>();
+  private readonly taskLists = new Map<string, { cursor: number; expiresAt: number; tasks: TaskListSummary[] }>();
   private eventCursor = 0;
   private eventPoller: NodeJS.Timeout | undefined;
 
@@ -877,6 +878,10 @@ export class TaskService {
 
   taskEventCursor(): number {
     return this.eventCursor;
+  }
+
+  private clearTaskLists(): void {
+    this.taskLists.clear();
   }
 
   subscribe(actorUserId: string, listener: (event: TaskEvent, cursor: number) => void, afterCursor = this.taskEventCursor()): () => void {
@@ -913,6 +918,7 @@ export class TaskService {
         for (const row of rows) {
           if (this.eventVersions.get(row.task_id) === current.get(row.task_id)) continue;
           const cursor = ++this.eventCursor;
+          this.clearTaskLists();
           const event: TaskEvent = { type: "invalidate", taskId: row.task_id, companyId: row.company_id, revision: row.revision, attentionChanged: false };
           for (const subscriber of this.eventListeners) {
             if (cursor > subscriber.afterCursor) subscriber.send(event, cursor);
@@ -928,6 +934,9 @@ export class TaskService {
 
   listTasks(actorUserId: string, companyId?: string, archived = false): TaskListSummary[] {
     if (companyId) this.auth.requireCompanyAccess(actorUserId, companyId);
+    const key = JSON.stringify([actorUserId, companyId ?? null, archived]);
+    const cached = this.taskLists.get(key);
+    if (cached && cached.cursor === this.eventCursor && cached.expiresAt > this.now().getTime()) return cached.tasks;
     const user = this.user(actorUserId);
     const rows = this.database.authQuery((db) => {
       const query = user.role === "admin"
@@ -939,7 +948,7 @@ export class TaskService {
       return result as TaskRow[];
     });
     // One task with an unreadable legacy snapshot must not take the whole list down: skip it and log.
-    return rows.flatMap((row) => {
+    const tasks = rows.flatMap((row) => {
       try {
         const task = this.taskListSummary(row);
         return task ? [task] : [];
@@ -949,6 +958,8 @@ export class TaskService {
         throw error;
       }
     });
+    this.taskLists.set(key, { cursor: this.eventCursor, expiresAt: this.now().getTime() + 2000, tasks });
+    return tasks;
   }
 
   getTask(actorUserId: string, taskId: string): ForgeTask {
@@ -1001,6 +1012,7 @@ export class TaskService {
       this.auth.recordAuditEventInTransaction(db, actorUserId, "task_agents_updated", undefined, current.companyId, { taskId, roleAgents: JSON.stringify(partial) });
       
     });
+    this.clearTaskLists();
     return this.getTask(actorUserId, taskId);
   }
 
@@ -1111,6 +1123,7 @@ export class TaskService {
       db.prepare("UPDATE forge_tasks SET title = ?, description = COALESCE(?, description), updated_at = ? WHERE id = ? AND company_id = ?").run(title, input.description === undefined ? null : description, now, taskId, current.companyId);
       this.auth.recordAuditEventInTransaction(db, actorUserId, "task_details_updated", undefined, current.companyId, { taskId, ...(input.title !== undefined ? { title } : {}), ...(input.description !== undefined ? { descriptionUpdated: "true" } : {}) });
     });
+    this.clearTaskLists();
     return this.getTask(actorUserId, taskId);
   }
 
@@ -1287,6 +1300,7 @@ export class TaskService {
       await Promise.all(artifacts.map((artifact) => this.artifacts.removeArtifact(artifact)));
       throw error;
     }
+    this.clearTaskLists();
     return { task: this.getTaskByIdInternal(taskId), created: true };
   }
 
@@ -1515,6 +1529,7 @@ export class TaskService {
   }
   private recordTaskCommand(task: ForgeTask, actorUserId: string, command: IssueCommand, revision: number, automatic = false): void {
     this.auth.recordAuditEvent(actorUserId, "task_command", undefined, task.companyId, { taskId: task.id, workflowId: task.workflowId, command, actionLabel: issueCommands[command].label, revision: String(revision), ...(automatic ? { automatic: "true" } : {}) });
+    this.clearTaskLists();
   }
 
   async getTaskImage(actorUserId: string, taskId: string, artifactId: string): Promise<{ artifact: TaskImage; bytes: Buffer }> {

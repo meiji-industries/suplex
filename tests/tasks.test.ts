@@ -871,3 +871,14 @@ test("task event polling invalidates once when pending action changes", async ()
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }
 });
+
+test("listTasks drops its memo after creating a task", async () => {
+  const value = await fixture();
+  try {
+    expect(value.tasks.listTasks(value.adminId, value.companyId)).toEqual([]);
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Memo invalidation", description: "body", idempotencyKey: "list-memo-invalidation", images: [] });
+    expect(value.tasks.listTasks(value.adminId, value.companyId)).toMatchObject([{ id: created.task.id }]);
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});

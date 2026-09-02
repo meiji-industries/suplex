@@ -25,6 +25,8 @@ import { TaskResponseSchema } from "../src/http/contracts/tasks.js";
 import { jsonRequired } from "../src/task-utils.js";
 import taskBranch from "../src/http/routes/task-branch.js";
 import { WorktreeManager } from "../src/worktrees.js";
+import { rebuildDriftedIssueProjections } from "../src/engine/host.js";
+import taskRoutes from "../src/http/routes/tasks.js";
 
 
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
@@ -128,6 +130,36 @@ async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listO
   tasks = new TaskService(database, auth, projects, config, { workflow });
   return { root, config, database, auth, projects, tasks, workflow, stateByTask, workflowInputsByTask, planningInputsByTask, adminId: "admin-1", companyId: company.id, projectId: project.id, profileId: profile.id };
 }
+
+test("rebuilds a legacy delivery-blocked projection before listing tasks", async () => {
+  const value = await fixture();
+  const app = Fastify({ logger: false });
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
+  app.decorateRequest("forgeUser", undefined as never);
+  app.addHook("preHandler", (request, _reply, done) => { request.forgeUser = { id: value.adminId } as never; done(); });
+  await app.register(taskRoutes, { tasks: value.tasks });
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Legacy delivery blocker", description: "body", idempotencyKey: "legacy-delivery-blocker", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    const { step: _step, ...legacy } = initial;
+    void _step;
+    value.database.authTransaction((db) => {
+      db.prepare("UPDATE forge_workflow_snapshots SET state_json = ? WHERE task_id = ? AND revision = 0").run(JSON.stringify({ ...legacy, phase: "delivery_blocked" }), created.task.id);
+      db.prepare("UPDATE forge_issue_projections SET phase = 'delivery_blocked', step = NULL WHERE task_id = ?").run(created.task.id);
+    });
+
+    expect(await rebuildDriftedIssueProjections(value.database, value.config)).toBe(1);
+
+    const response = await app.inject({ method: "GET", url: `/api/companies/${value.companyId}/tasks` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().tasks).toEqual([expect.objectContaining({ id: created.task.id, phase: "building", step: "development", blocked: true })]);
+  } finally {
+    await app.close();
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
 
 test("task details use the current unreleased worktree lease", async () => {
   const value = await fixture();

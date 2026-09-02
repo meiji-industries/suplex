@@ -20,7 +20,7 @@ import { executeWorktreeCommand, type WorktreeCommandInput } from "./engine/work
 import { issueCommands, IssueCommandSchema, type IssueCommand } from "./commands/registry.js";
 import type { ContinueWorkCommand, PlanCommandInput, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, SendPlannerNoteInput, StartPlanningInput } from "./commands/inputs.js";
 import { createInitialIssueWorkflowState, DeliveryOperationBlockCodeSchema, IssueWorkflowStateSchema, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueWorkflowInput, type IssueWorkflowState } from "./engine/issue-contracts.js";
-import { at, isBlocked, TERMINAL_PHASES, type IssuePhase, type IssueStep } from "./issue-phases.js";
+import { at, isBlocked, IssuePhaseSchema, IssueStepSchema, phaseOf, TERMINAL_PHASES, type IssuePhase, type IssueStep } from "./issue-phases.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { taskCommandDescriptors, type TaskCommandDescriptor } from "./task-commands.js";
 import { PlanSubjectSchema, type PlanBlockerSubject, type PlanSubject } from "./plan-governance.js";
@@ -750,8 +750,8 @@ interface TaskRow {
   description: string | null;
   projection_revision: number;
   projected_at: string;
-  phase: TaskPhase;
-  step: IssueStep;
+  phase: string;
+  step: string | null;
   owner: "human" | "lead";
   allowed_commands_json: string;
   pending_action: string | null;
@@ -759,6 +759,18 @@ interface TaskRow {
   live_status_json: string;
   predecessor_task_id: string | null;
   successor_task_id: string | null;
+}
+
+type ProjectionLifecycle = { phase: IssuePhase; step: IssueStep };
+
+function projectionLifecycle(row: Pick<TaskRow, "phase" | "step">): ProjectionLifecycle | undefined {
+  if (row.step === null) {
+    const legacyStep = IssueStepSchema.safeParse(row.phase);
+    return legacyStep.success ? { phase: phaseOf(legacyStep.data), step: legacyStep.data } : undefined;
+  }
+  const phase = IssuePhaseSchema.safeParse(row.phase);
+  const step = IssueStepSchema.safeParse(row.step);
+  return phase.success && step.success ? { phase: phase.data, step: step.data } : undefined;
 }
 
 interface ArtifactRow {
@@ -928,7 +940,10 @@ export class TaskService {
     });
     // One task with an unreadable legacy snapshot must not take the whole list down: skip it and log.
     return rows.flatMap((row) => {
-      try { return [this.taskListSummary(row)]; }
+      try {
+        const task = this.taskListSummary(row);
+        return task ? [task] : [];
+      }
       catch (error) {
         if (error instanceof TaskFailure && error.findings.some((item) => item.code === "projection-integrity")) { console.warn("Skipping task with unreadable workflow snapshot", row.id); return []; }
         throw error;
@@ -1887,10 +1902,15 @@ export class TaskService {
     return { subject, summary: plan.content.summary, evidence: plan.content.evidence, header: prompt.header, question: prompt.question, options: prompt.options, nextAction: plan.content.nextAction, createdAt: plan.createdAt };
   }
 
-  private taskListSummary(row: TaskRow): TaskListSummary {
+  private taskListSummary(row: TaskRow): TaskListSummary | undefined {
+    const lifecycle = projectionLifecycle(row);
+    if (!lifecycle) {
+      console.warn("Skipping task with invalid issue projection", row.id);
+      return undefined;
+    }
     const workflowState = this.workflowStateForTask(row);
     const hasPlan = this.database.authQuery((db) => Boolean(db.prepare("SELECT 1 FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND output_kind = 'plan' AND output_artifact_id IS NOT NULL LIMIT 1").get(row.id, row.company_id)));
-    const allowedCommands = derivedAllowedCommands(row.phase, IssueCommandSchema.array().safeParse(json<unknown[]>(row.allowed_commands_json, [])).data ?? [], workflowState.planRevision, hasPlan, Boolean(workflowState.successorTaskId));
+    const allowedCommands = derivedAllowedCommands(lifecycle.phase, IssueCommandSchema.array().safeParse(json<unknown[]>(row.allowed_commands_json, [])).data ?? [], workflowState.planRevision, hasPlan, Boolean(workflowState.successorTaskId));
     const agentInvocations = this.database.authQuery((db) => db.prepare(`SELECT e.id, e.role, e.status, e.attempt, e.started_at AS startedAt, e.finished_at AS finishedAt, ag.id AS agentId, ag.name AS agentName, ag.avatar_seed AS avatarSeed
       FROM forge_agent_executions e LEFT JOIN forge_agents ag ON ag.id = json_extract((SELECT role_agents_json FROM forge_tasks WHERE id = e.task_id), '$.' || e.role)
       WHERE e.task_id = ? AND e.company_id = ?
@@ -1903,11 +1923,13 @@ export class TaskService {
     const releaseState = workflowState.mergeOutcome === "merged" ? "merged" : workflowState.mergeOutcome === "closed_without_merge" ? "closed" : release?.status === "ready" ? "ready" : release ? "draft" : undefined;
     const githubPullRequestState = workflowState.githubPullRequestState === "open" || workflowState.githubPullRequestState === "closed" || workflowState.githubPullRequestState === "merged" ? workflowState.githubPullRequestState : null;
     const liveStatus = json<Array<{ role: string; status: string }>>(row.live_status_json, []).filter((entry) => typeof entry.role === "string" && typeof entry.status === "string");
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), phase: row.phase, step: row.step, blocked: isBlocked(workflowState), revision: row.projection_revision, owner: row.owner, allowedCommands, pendingAction: row.pending_action, worktreeState: workflowState.worktreeState ?? null, createdAt: row.created_at, updatedAt: row.updated_at, agentInvocations, liveStatus, capacity: capacity ? { status: capacity.status } : null, ...(release ? { release: { status: release.status, pullRequestNumber: release.pullRequestNumber, isDraft: release.pullRequestNumber !== null && release.status === "draft" } } : {}), ...(outcome ? { ci: { outcome: outcome.outcome } } : {}), ...(releaseState ? { deliveryGate: { release: { state: releaseState } } } : {}), ...(workflowState.githubPullRequestState !== undefined ? { githubPullRequest: { state: githubPullRequestState } } : {}) };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), phase: lifecycle.phase, step: lifecycle.step, blocked: isBlocked(workflowState), revision: row.projection_revision, owner: row.owner, allowedCommands, pendingAction: row.pending_action, worktreeState: workflowState.worktreeState ?? null, createdAt: row.created_at, updatedAt: row.updated_at, agentInvocations, liveStatus, capacity: capacity ? { status: capacity.status } : null, ...(release ? { release: { status: release.status, pullRequestNumber: release.pullRequestNumber, isDraft: release.pullRequestNumber !== null && release.status === "draft" } } : {}), ...(outcome ? { ci: { outcome: outcome.outcome } } : {}), ...(releaseState ? { deliveryGate: { release: { state: releaseState } } } : {}), ...(workflowState.githubPullRequestState !== undefined ? { githubPullRequest: { state: githubPullRequestState } } : {}) };
   }
 
   private publicTask(actorUserId: string, row: TaskRow): ForgeTask {
     void actorUserId;
+    const lifecycle = projectionLifecycle(row);
+    if (!lifecycle) throw new TaskFailure("Task projection is unreadable", [finding("projection-integrity", "projection", "Task projection has an unknown phase or step")], 500);
     const imageIds = parseImageIds(row.image_artifact_ids_json);
     const artifacts = this.database.authQuery((db) => {
       if (!imageIds.length) return [] as ArtifactRow[];
@@ -2053,7 +2075,7 @@ export class TaskService {
     const planHistory = this.database.authQuery((db) => db.prepare("SELECT output_revision AS revision, output_kind AS kind, output_summary AS summary, id AS executionId, output_artifact_id AS outputArtifactId, evidence_artifact_id AS evidenceArtifactId, finished_at AS createdAt FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND output_artifact_id IS NOT NULL ORDER BY output_revision, finished_at, id").all(row.id, row.company_id) as TaskPlanHistoryEntry[]);
     const rawAllowedCommands = json<unknown[]>(row.allowed_commands_json, []);
     const projectedCommands = IssueCommandSchema.array().safeParse(rawAllowedCommands).success ? IssueCommandSchema.array().parse(rawAllowedCommands) : [];
-    const allowedCommands = derivedAllowedCommands(row.phase, projectedCommands, workflowState.planRevision, planHistory.some((plan) => plan.kind === "plan"), Boolean(workflowState.successorTaskId));
+    const allowedCommands = derivedAllowedCommands(lifecycle.phase, projectedCommands, workflowState.planRevision, planHistory.some((plan) => plan.kind === "plan"), Boolean(workflowState.successorTaskId));
     const recoveryStatus = developerExecution?.leaseStatus === "result_ready" ? "result_pending_claim" : snapshotState?.success ? snapshotState.data.developerRecoveryStatus : undefined;
     const nextRecoveryCommand = recoveryStatus ? (["retry_development", "cancel_development", "cancel_issue"] as const).find((command) => allowedCommands.includes(command)) : undefined;
     const developerRecovery = recoveryStatus && snapshotState?.success ? {
@@ -2126,7 +2148,7 @@ export class TaskService {
     const roleAgents = parseRoleAgents(row.role_agents_json);
     const commands = taskCommandDescriptors(allowedCommands, row.projection_revision);
     const attentionCard = attentionCardFromBlocker(workflowState.blocker ?? undefined, { summary: row.pending_action, pendingAction: row.pending_action, actions: commands.map((command) => ({ command: command.name, label: command.label, ...(command.note === "required" ? { requiresNote: true } : {}) })), ...(workflowState.mergeDecision ? { mergeDecision: workflowState.mergeDecision } : {}) });
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleAgents, supplementalReview: row.supplemental_review === 1, autoApprovePlan: row.autoApprovePlan === 1, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), executionControls: { runProjectTests: row.run_project_tests === 1, visualEvidence: row.visual_evidence, supplementalReview: row.supplemental_review === 1 }, browserProof: this.browserProof.projectSync(row.id, row.company_id), deliveryReceipt: row.delivery_worktree_path || row.delivery_branch_name || row.delivery_commit ? { worktreePath: row.delivery_worktree_path, branchName: row.delivery_branch_name, commit: row.delivery_commit } : null, worktreeState: workflowState.worktreeState ?? null, worktreePath: ownedWorktree?.worktreePath ?? (workflowState.worktreeState === "cleaned" ? null : developerExecution?.worktreePath ?? null), pullRequestMode: row.pull_request_mode, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, prompts: { overrides: prompts?.overrides ?? [] }, ...(source ? { source } : {}), phase: row.phase, step: row.step, blocked: isBlocked(workflowState), revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, attentionCard, lastHandlerError: workflowState.lastHandlerError ?? null, createdAt: row.created_at, updatedAt: row.updated_at, timeline, activity, agentInvocations, capacity, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, projection: { revision: row.projection_revision, projectedAt: row.projected_at }, reviewLineage, targetBaseReconciliation, ...(deliveryGate ? { deliveryGate } : {}), ...(githubPullRequest ? { githubPullRequest } : {}), ...(workflowState ? { planRevision: workflowState.planRevision ?? null, supplementalReviewUsed: workflowState.supplementalReviewUsed ?? false, supplementalReviewArtifactId: workflowState.supplementalReviewArtifactId ?? null, decisionId: workflowState.planDecisionReceipt?.decisionId ?? null, leadInputManifestArtifactId: workflowState.leadInputManifestArtifactId ?? undefined, blockedCategory: workflowState.blockedCategory ?? null, blockedResumePhase: workflowState.blockedResumePhase ?? null, blockerArtifactId: workflowState.blockerArtifactId ?? null, deliveryDecisionArtifactId: workflowState.deliveryDecisionArtifactId ?? null, predecessorTaskId: row.predecessor_task_id, successorTaskId: row.successor_task_id, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), ...(developerExecution ? { developerExecution: { ...developerExecution, branchName: developerExecution.branch_name, summary: developerSummary } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(leadOutput ? { leadOutput } : {}), ...(release !== undefined ? { release } : {}), ...(ci ? { ci } : {}) };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleAgents, supplementalReview: row.supplemental_review === 1, autoApprovePlan: row.autoApprovePlan === 1, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), executionControls: { runProjectTests: row.run_project_tests === 1, visualEvidence: row.visual_evidence, supplementalReview: row.supplemental_review === 1 }, browserProof: this.browserProof.projectSync(row.id, row.company_id), deliveryReceipt: row.delivery_worktree_path || row.delivery_branch_name || row.delivery_commit ? { worktreePath: row.delivery_worktree_path, branchName: row.delivery_branch_name, commit: row.delivery_commit } : null, worktreeState: workflowState.worktreeState ?? null, worktreePath: ownedWorktree?.worktreePath ?? (workflowState.worktreeState === "cleaned" ? null : developerExecution?.worktreePath ?? null), pullRequestMode: row.pull_request_mode, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, prompts: { overrides: prompts?.overrides ?? [] }, ...(source ? { source } : {}), phase: lifecycle.phase, step: lifecycle.step, blocked: isBlocked(workflowState), revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, attentionCard, lastHandlerError: workflowState.lastHandlerError ?? null, createdAt: row.created_at, updatedAt: row.updated_at, timeline, activity, agentInvocations, capacity, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, projection: { revision: row.projection_revision, projectedAt: row.projected_at }, reviewLineage, targetBaseReconciliation, ...(deliveryGate ? { deliveryGate } : {}), ...(githubPullRequest ? { githubPullRequest } : {}), ...(workflowState ? { planRevision: workflowState.planRevision ?? null, supplementalReviewUsed: workflowState.supplementalReviewUsed ?? false, supplementalReviewArtifactId: workflowState.supplementalReviewArtifactId ?? null, decisionId: workflowState.planDecisionReceipt?.decisionId ?? null, leadInputManifestArtifactId: workflowState.leadInputManifestArtifactId ?? undefined, blockedCategory: workflowState.blockedCategory ?? null, blockedResumePhase: workflowState.blockedResumePhase ?? null, blockerArtifactId: workflowState.blockerArtifactId ?? null, deliveryDecisionArtifactId: workflowState.deliveryDecisionArtifactId ?? null, predecessorTaskId: row.predecessor_task_id, successorTaskId: row.successor_task_id, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), ...(developerExecution ? { developerExecution: { ...developerExecution, branchName: developerExecution.branch_name, summary: developerSummary } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(leadOutput ? { leadOutput } : {}), ...(release !== undefined ? { release } : {}), ...(ci ? { ci } : {}) };
   }
 
   private developerReportSummary(companyId: string, artifactId: string): string | null {

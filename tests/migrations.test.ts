@@ -8,6 +8,29 @@ import { describe, expect, test } from "vitest";
 import { applyMigrations, readMigrations } from "../src/database.js";
 
 describe("timestamp migrations", () => {
+  test("backfills nullable projection steps from legacy phases", () => {
+    const folder = resolve(process.cwd(), "drizzle");
+    const database = new Database(":memory:");
+    try {
+      const migration = readMigrations(folder).find((candidate) => candidate.tag.includes("backfill_projection_steps"))!;
+      database.exec("CREATE TABLE forge_issue_projections (phase TEXT, step TEXT)");
+      database.exec("INSERT INTO forge_issue_projections (phase, step) VALUES ('done', NULL), ('development', NULL), ('shipping', 'releasing'), ('delivery_blocked', NULL)");
+
+      for (const statement of readFileSync(`${folder}/${migration.tag}.sql`, "utf8").split("--> statement-breakpoint")) {
+        if (statement.trim()) database.exec(statement);
+      }
+
+      expect(database.prepare("SELECT phase, step FROM forge_issue_projections ORDER BY rowid").all()).toEqual([
+        { phase: "done", step: "done" },
+        { phase: "building", step: "development" },
+        { phase: "shipping", step: "releasing" },
+        { phase: "delivery_blocked", step: null },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
   test("recognizes migrations applied by the legacy Drizzle journal runner", () => {
     const folder = mkdtempSync(join(tmpdir(), "forge-migrations-"));
     const database = new Database(":memory:");

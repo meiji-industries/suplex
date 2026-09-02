@@ -8,6 +8,8 @@ import { createRunFromLatestSnapshot, IssueEngine } from "./runs.js";
 import { reconcile } from "../reconcile.js";
 import { CliHerdrClient, snapshotHerdrRuntime, type HerdrClient } from "../herdr-client.js";
 import { observeHerdrSessions, type HerdrSessionObservation } from "../herdr-recovery.js";
+import { ISSUE_PHASES } from "../issue-phases.js";
+import { ProjectionRebuildService } from "../projection-rebuild.js";
 
 type ExecutionConvergenceCounts = { agentExecutions: number; developerExecutions: number };
 
@@ -81,6 +83,15 @@ export async function loadIssueRuns(engine: IssueEngine): Promise<number> {
   return rows.length;
 }
 
+export async function rebuildDriftedIssueProjections(database: ForgeDatabase, config: ForgeConfig): Promise<number> {
+  const phases = ISSUE_PHASES.map(() => "?").join(", ");
+  const taskIds = database.authQuery((db) => db.prepare(`SELECT task_id FROM forge_issue_projections WHERE step IS NULL OR phase NOT IN (${phases})`).all(...ISSUE_PHASES) as Array<{ task_id: string }>);
+  const rebuild = new ProjectionRebuildService(database, config);
+  let rebuilt = 0;
+  for (const { task_id: taskId } of taskIds) rebuilt += (await rebuild.rebuild({ taskId })).rebuilt;
+  return rebuilt;
+}
+
 export interface EngineHostOptions {
   herdr?: HerdrClient;
   logger?: Pick<StructuredLogger, "info" | "warn">;
@@ -93,6 +104,8 @@ export async function startEngineHost(config: ForgeConfig, database = new ForgeD
   database.authTransaction((db) => db.prepare("DELETE FROM forge_engine_activities").run());
   const logger = options.logger ?? new StructuredLogger();
   const errorLogger = logger instanceof StructuredLogger ? logger : new StructuredLogger();
+  const rebuiltProjections = await rebuildDriftedIssueProjections(database, config);
+  logger.info(`Rebuilt ${rebuiltProjections} drifted issue projections`);
   await failOrphanedExecutionsFromHerdr(database, options.herdr ?? new CliHerdrClient(), logger);
   const engine = new IssueEngine(config, database); installIssueEngine(config, engine); await (options.loadRuns ?? loadIssueRuns)(engine);
   const workerId = `${runtimeIdentifiers(config.installationId).workerPrefix}-${process.pid}`;

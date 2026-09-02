@@ -58,7 +58,7 @@ function TaskRoleSelector({ role, agents, assignment, disabled, disabledReason: 
           {availableAgents.map((agent) => (
             <DropdownMenuRadioItem key={agent.id} value={agent.id}>
               <ProfileAvatar name={agent.name} seed={agent.avatarSeed} />
-              <span>{agent.name}</span>
+              <span>{agent.name} · {agent.model} · {agent.reasoningLevel} · {agent.servicePriority}</span>
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>

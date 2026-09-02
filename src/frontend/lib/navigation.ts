@@ -1,5 +1,5 @@
 const applicationPaths = [
-  /^\/admin(?:\/(?:profiles|agents|models|companies|invitations|passkeys|providers|prompts|environment))?$/,
+  /^\/admin(?:\/(?:agents|models|companies|invitations|passkeys|providers|prompts|environment))?$/,
   /^\/companies\/[^/]+\/settings$/,
   /^\/profile$/,
   /^\/(?:projects|tasks|board|timeline|attention|health)(?:\/[^/]+)?$/,

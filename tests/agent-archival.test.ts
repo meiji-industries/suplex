@@ -68,7 +68,8 @@ test("renames an agent without touching its other settings", async () => {
   try {
     const planner = value.agent("Planner", "planner");
     const renamed = value.projects.updateAgent("admin-1", planner.id, { name: "Strategist" });
-    expect(renamed).toMatchObject({ id: planner.id, name: "Strategist", role: "planner", profileId: value.profileId, avatarSeed: planner.avatarSeed, archivedAt: null });
+    expect(renamed).toMatchObject({ id: planner.id, name: "Strategist", role: "planner", avatarSeed: planner.avatarSeed, archivedAt: null });
+    expect(renamed.profileId).toBe(planner.profileId);
     value.agent("Reviewer", "reviewer");
     expect(() => value.projects.updateAgent("admin-1", planner.id, { name: "Reviewer" })).toThrowError("Agent configuration is invalid");
   } finally {
@@ -84,7 +85,8 @@ test("duplicates an agent with a disambiguated copy name and a fresh identity", 
     const second = value.projects.duplicateAgent("admin-1", builder.id);
     const third = value.projects.duplicateAgent("admin-1", builder.id);
     expect([first.name, second.name, third.name]).toEqual(["Builder (copy)", "Builder (copy 2)", "Builder (copy 3)"]);
-    expect(first).toMatchObject({ role: "builder", profileId: value.profileId, archivedAt: null });
+    expect(first).toMatchObject({ role: "builder", archivedAt: null });
+    expect(first.profileId).not.toBe(builder.profileId);
     expect(first.id).not.toBe(builder.id);
     expect(first.avatarSeed).not.toBe(builder.avatarSeed);
     expect(value.projects.listAgents("admin-1").filter((agent) => agent.name.startsWith("Builder"))).toHaveLength(4);

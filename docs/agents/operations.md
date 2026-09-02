@@ -28,8 +28,8 @@ checks SQLite's in-flight engine activity ledger before allowing a restart.
 
 ## Claude Code provider
 
-Create a profile with provider **Claude Code**, select a Claude model, then bind
-that profile to the required role. The worker user must already be logged in
+Create an agent with provider **Claude Code**, select a Claude model, then assign
+that agent to the required role. The worker user must already be logged in
 with `claude`. Forge pre-accepts
 `projects[realpath(cwd)].hasTrustDialogAccepted` and
 `bypassPermissionsModeAccepted` in `~/.claude.json`.

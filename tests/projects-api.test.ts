@@ -73,20 +73,18 @@ test("project API activates valid configuration, redacts typed failures, and pre
     const origin = config.reachableAddress;
     const company = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin }, payload: { name: "Project Company" } })).json() as { id: string };
     const otherCompany = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin }, payload: { name: "Other Project Company" } })).json() as { id: string };
-    const profile = (await app.inject({ method: "POST", url: "/api/admin/profiles", headers: { cookie: adminCookie, origin }, payload: { name: "API profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 } })).json() as { id: string; capacity: number; effectiveCapacity: number };
-    expect(profile).toMatchObject({ capacity: 2, effectiveCapacity: 2 });
-    const createAgent = async (name: string, role: "planner" | "builder" | "reviewer") => (await app.inject({ method: "POST", url: "/api/admin/agents", headers: { cookie: adminCookie, origin }, payload: { name, role, profileId: profile.id } })).json() as { id: string };
+    const createAgent = async (name: string, role: "planner" | "builder" | "reviewer") => (await app.inject({ method: "POST", url: "/api/admin/agents", headers: { cookie: adminCookie, origin }, payload: { name, role, model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 } })).json() as { id: string; profileId: string; capacity: number; effectiveCapacity: number };
     const planner = await createAgent("Planner", "planner");
     const builder = await createAgent("Builder", "builder");
     const reviewer = await createAgent("Reviewer", "reviewer");
     expect((await app.inject({ method: "GET", url: "/api/agents", headers: { cookie: adminCookie } })).statusCode).toBe(200);
-    const inheritedCapacity = await app.inject({ method: "PATCH", url: `/api/admin/profiles/${profile.id}/capacity`, headers: { cookie: adminCookie, origin }, payload: { capacity: null } });
+    const inheritedCapacity = await app.inject({ method: "PATCH", url: `/api/admin/agents/${planner.id}`, headers: { cookie: adminCookie, origin }, payload: { capacity: null } });
     expect(inheritedCapacity.json()).toMatchObject({ capacity: null, effectiveCapacity: config.externalTurnCapacity });
-    const restoredCapacity = await app.inject({ method: "PATCH", url: `/api/admin/profiles/${profile.id}/capacity`, headers: { cookie: adminCookie, origin }, payload: { capacity: 3 } });
+    const restoredCapacity = await app.inject({ method: "PATCH", url: `/api/admin/agents/${planner.id}`, headers: { cookie: adminCookie, origin }, payload: { capacity: 3 } });
     expect(restoredCapacity.json()).toMatchObject({ capacity: 3, effectiveCapacity: 3 });
     const capacityLanes = await app.inject({ method: "GET", url: "/api/admin/capacity", headers: { cookie: adminCookie } });
     expect(capacityLanes.statusCode).toBe(200);
-    expect(capacityLanes.json().lanes).toEqual(expect.arrayContaining([expect.objectContaining({ profileId: profile.id, profileName: "API profile", capacity: 3, effectiveCapacity: 3, activeCount: 0, queuedCount: 0, rateLimitedCount: 0, oldestQueuedAt: null })]));
+    expect(capacityLanes.json().lanes).toEqual(expect.arrayContaining([expect.objectContaining({ profileId: planner.profileId, profileName: "Planner", capacity: 3, effectiveCapacity: 3, activeCount: 0, queuedCount: 0, rateLimitedCount: 0, oldestQueuedAt: null })]));
     expect(JSON.stringify(capacityLanes.json())).not.toMatch(/taskId|session|process|wrapper|worktree|command|artifact/i);
     const models = (await app.inject({ method: "GET", url: "/api/admin/models", headers: { cookie: adminCookie } })).json() as { models: Array<{ id: string; status: string }> };
     expect(models.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: "gpt-5.6-sol", status: "active" })]));
@@ -122,7 +120,7 @@ test("project API activates valid configuration, redacts typed failures, and pre
   }
 });
 
-test("profile API accepts OpenRouter models and rejects unknown providers", async () => {
+test("agent API accepts OpenRouter models and rejects unknown providers", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-openrouter-profile-api-test-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   const config = createTestConfig(root, { reachableAddress: "https://forge.tailnet.ts.net:4111" });
@@ -143,14 +141,14 @@ test("profile API accepts OpenRouter models and rejects unknown providers", asyn
     const headers = { cookie: sessionCookie(enrolled), origin: config.reachableAddress };
     const model = await app.inject({ method: "POST", url: "/api/admin/models", headers, payload: { id: "acme/coder-1", provider: "openrouter", displayName: "Acme Coder" } });
     expect(model.statusCode).toBe(201);
-    const payload = { name: "OpenRouter profile", provider: "openrouter", model: "acme/coder-1", reasoningLevel: "medium", servicePriority: "standard" };
-    const created = await app.inject({ method: "POST", url: "/api/admin/profiles", headers, payload });
+    const payload = { name: "OpenRouter agent", role: "planner", provider: "openrouter", model: "acme/coder-1", reasoningLevel: "medium", servicePriority: "standard" };
+    const created = await app.inject({ method: "POST", url: "/api/admin/agents", headers, payload });
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ provider: "openrouter", model: "acme/coder-1" });
-    const updated = await app.inject({ method: "PATCH", url: `/api/admin/profiles/${created.json().id as string}`, headers, payload: { ...payload, name: "Updated OpenRouter profile" } });
+    const updated = await app.inject({ method: "PATCH", url: `/api/admin/agents/${created.json().id as string}`, headers, payload: { ...payload, name: "Updated OpenRouter agent" } });
     expect(updated.statusCode).toBe(200);
-    expect(updated.json()).toMatchObject({ name: "Updated OpenRouter profile", provider: "openrouter", model: "acme/coder-1" });
-    const unknown = await app.inject({ method: "POST", url: "/api/admin/profiles", headers, payload: { ...payload, name: "Unknown profile", provider: "hermes" } });
+    expect(updated.json()).toMatchObject({ name: "Updated OpenRouter agent", provider: "openrouter", model: "acme/coder-1" });
+    const unknown = await app.inject({ method: "POST", url: "/api/admin/agents", headers, payload: { ...payload, name: "Unknown agent", provider: "hermes" } });
     expect(unknown.statusCode).toBe(400);
   } finally {
     await app.close();

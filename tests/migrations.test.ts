@@ -8,6 +8,31 @@ import { describe, expect, test } from "vitest";
 import { applyMigrations, readMigrations } from "../src/database.js";
 
 describe("timestamp migrations", () => {
+  test("gives internal agents that share a profile independent settings rows", () => {
+    const folder = resolve(process.cwd(), "drizzle");
+    const database = new Database(":memory:");
+    try {
+      const migration = readMigrations(folder).find((candidate) => candidate.tag.includes("collapse_profiles_into_agents"))!;
+      database.exec("CREATE TABLE forge_profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, provider TEXT NOT NULL, model TEXT NOT NULL, reasoning_level TEXT NOT NULL, service_priority TEXT NOT NULL, capacity INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE forge_agents (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL UNIQUE, role TEXT, avatar_seed TEXT NOT NULL, profile_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);");
+      const profile = { id: "shared-profile", provider: "codex", model: "gpt-5.6-sol", reasoning_level: "medium", service_priority: "standard", capacity: 2, created_at: "2026-09-02T00:00:00.000Z", updated_at: "2026-09-02T00:00:00.000Z" };
+      database.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, 'Shared', ?, ?, ?, ?, ?, ?, ?)").run(profile.id, profile.provider, profile.model, profile.reasoning_level, profile.service_priority, profile.capacity, profile.created_at, profile.updated_at);
+      const now = new Date().toISOString();
+      database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('shared-agent-one', 'internal', 'Shared Agent One', 'planner', 'seed-one', ?, ?, ?), ('shared-agent-two', 'internal', 'Shared Agent Two', 'builder', 'seed-two', ?, ?, ?)").run(profile.id, now, now, profile.id, now, now);
+
+      for (const statement of readFileSync(`${folder}/${migration.tag}.sql`, "utf8").split("--> statement-breakpoint")) {
+        if (statement.trim()) database.exec(statement);
+      }
+
+      const agents = database.prepare("SELECT a.name, a.profile_id, p.provider, p.model, p.reasoning_level, p.service_priority, p.capacity FROM forge_agents a JOIN forge_profiles p ON p.id = a.profile_id WHERE a.id IN ('shared-agent-one', 'shared-agent-two') ORDER BY a.id").all();
+      expect(agents).toEqual([
+        { name: "Shared Agent One", profile_id: profile.id, provider: profile.provider, model: profile.model, reasoning_level: profile.reasoning_level, service_priority: profile.service_priority, capacity: profile.capacity },
+        { name: "Shared Agent Two", profile_id: `${profile.id}-shared-agent-two`, provider: profile.provider, model: profile.model, reasoning_level: profile.reasoning_level, service_priority: profile.service_priority, capacity: profile.capacity },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
   test("backfills nullable projection steps from legacy phases", () => {
     const folder = resolve(process.cwd(), "drizzle");
     const database = new Database(":memory:");

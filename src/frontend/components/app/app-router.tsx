@@ -19,9 +19,13 @@ import { EnvironmentSettingsView } from "../../views/environment-settings.js";
 
 function AppView(): ReactElement {
   const pathname = window.location.pathname;
+  if (pathname === "/admin/profiles") {
+    window.history.replaceState({}, "", "/admin/agents");
+    return <AdminView />;
+  }
   if (pathname === "/admin/providers") return <ProviderSettingsView />;
   if (pathname === "/admin/environment") return <EnvironmentSettingsView />;
-  if (pathname === "/admin" || pathname === "/admin/profiles" || pathname === "/admin/agents" || pathname === "/admin/models" || pathname === "/admin/companies" || pathname === "/admin/invitations" || pathname === "/admin/passkeys" || pathname === "/admin/prompts") return <AdminView />;
+  if (pathname === "/admin" || pathname === "/admin/agents" || pathname === "/admin/models" || pathname === "/admin/companies" || pathname === "/admin/invitations" || pathname === "/admin/passkeys" || pathname === "/admin/prompts") return <AdminView />;
   if (/^\/companies\/[^/]+\/settings$/.test(pathname)) return <CompanySettingsView />;
   if (pathname === "/profile") return <ProfileView />;
   if (pathname === "/projects") return <ProjectsView />;

@@ -8,9 +8,9 @@ import type { TaskResponse } from "../src/http/contracts/tasks.js";
 
 const approvedPlanOutput: NonNullable<TaskResponse["leadOutput"]> = { kind: "plan", summary: "Plan", executionId: "lead_1", outputArtifactId: "plan_1", evidenceArtifactId: "evidence_1", content: { kind: "plan", summary: "Plan", gitPresentation: { branchSlug: "stream-progress", pullRequestTitle: "Stream progress", pullRequestDescription: "Show live Developer progress." }, reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "First", entryPoint: null, completionCriterion: null, verification: "test one", verificationCommands: [] }, { number: 2, instruction: "Second", entryPoint: null, completionCriterion: null, verification: "test two", verificationCommands: [] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "No impact", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], preservedWorktreeCompatibility: null, affectedPaths: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: {} } } };
 
-test("labels an agent with its execution profile", () => {
-  expect(invocationActorLabel({ agentName: "Planner", profileName: "Smart", role: "planner" })).toBe("Planner (Smart)");
-  expect(invocationActorLabel({ agentName: "Planner", profileName: "Fast", role: "integrator" })).toBe("Integrator (Fast)");
+test("labels an agent with its execution settings", () => {
+  expect(invocationActorLabel({ agentName: "Planner", profileName: "Smart", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", role: "planner" })).toBe("Planner (gpt-5.6-sol · medium · standard)");
+  expect(invocationActorLabel({ agentName: "Integrator", profileName: "Fast", model: "gpt-5.6-sol", reasoningLevel: "high", servicePriority: "fast", role: "integrator" })).toBe("Integrator (gpt-5.6-sol · high · fast)");
 });
 
 test("labels post-approval ownership and system CI work accurately", () => {

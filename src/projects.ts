@@ -67,6 +67,12 @@ export interface Agent {
   role: ProjectRole;
   avatarSeed: string;
   profileId: string;
+  provider: AgentProviderKind;
+  model: string;
+  reasoningLevel: ReasoningLevel;
+  servicePriority: ServicePriority;
+  capacity: number | null;
+  effectiveCapacity: number;
   archivedAt: string | null;
   activeCount: number;
   lastSeenAt: string;
@@ -74,8 +80,8 @@ export interface Agent {
   updatedAt: string;
 }
 
-export type AgentInput = { name: string; role: ProjectRole; avatarSeed?: string | undefined; profileId: string };
-export type AgentUpdate = { name?: string | undefined; role?: ProjectRole | undefined; avatarSeed?: string | undefined; profileId?: string | undefined; archived?: boolean | undefined };
+export type AgentInput = { name: string; role: ProjectRole; avatarSeed?: string | undefined; provider?: AgentProviderKind | undefined; model?: string | undefined; reasoningLevel?: ReasoningLevel | undefined; servicePriority?: ServicePriority | undefined; capacity?: number | null | undefined; profileId?: string | undefined };
+export type AgentUpdate = { name?: string | undefined; role?: ProjectRole | undefined; avatarSeed?: string | undefined; provider?: AgentProviderKind | undefined; model?: string | undefined; reasoningLevel?: ReasoningLevel | undefined; servicePriority?: ServicePriority | undefined; capacity?: number | null | undefined; archived?: boolean | undefined };
 
 export type ModelStatus = "active" | "retired";
 
@@ -197,6 +203,11 @@ export interface AgentRow {
   last_seen_at?: string;
   created_at: string;
   updated_at: string;
+  provider: AgentProviderKind;
+  model: string;
+  reasoning_level: ReasoningLevel;
+  service_priority: ServicePriority;
+  capacity: number | null;
 }
 
 interface ModelRow {
@@ -307,8 +318,8 @@ function publicProfile(row: ProfileRow, config: Pick<ForgeConfig, "externalTurnC
   };
 }
 
-export function publicAgent(row: AgentRow): Agent {
-  return { id: row.id, name: row.name, role: row.role, avatarSeed: row.avatar_seed, profileId: row.profile_id, archivedAt: row.archived_at ?? null, activeCount: row.active_count ?? 0, lastSeenAt: row.last_seen_at ?? row.created_at, createdAt: row.created_at, updatedAt: row.updated_at };
+export function publicAgent(row: AgentRow, config: Pick<ForgeConfig, "externalTurnCapacity" | "externalTurnCapacityByProvider">): Agent {
+  return { id: row.id, name: row.name, role: row.role, avatarSeed: row.avatar_seed, profileId: row.profile_id, provider: row.provider, model: row.model, reasoningLevel: row.reasoning_level, servicePriority: row.service_priority, capacity: row.capacity, effectiveCapacity: effectiveProfileCapacity(row, config), archivedAt: row.archived_at ?? null, activeCount: row.active_count ?? 0, lastSeenAt: row.last_seen_at ?? row.created_at, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 export function resolveAgentProfiles(db: import("better-sqlite3").Database, roleAgents: RoleAssignments): RoleAssignments {
@@ -644,13 +655,12 @@ export class ProjectService {
 
   private validateAgentInput(input: AgentInput, skipName = false): Required<AgentInput> {
     const name = input.name.trim();
-    const profileId = input.profileId.trim();
     if (!skipName && !agentNamePattern.test(name)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-name", "name", "Agent name is invalid")]);
     if (!(["planner", "builder", "reviewer", "integrator"] as ProjectRole[]).includes(input.role)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-role", "role", "Agent role is invalid")]);
-    const profile = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_profiles WHERE id = ?").get(profileId) as { id: string } | undefined);
-    if (!profile) throw new ProjectFailure("Agent configuration is invalid", [finding("profile-unavailable", "profileId", "Agent profile is unavailable")]);
     if (input.avatarSeed !== undefined && !avatarSeedPattern.test(input.avatarSeed)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-avatar", "avatarSeed", "Avatar seed is invalid")]);
-    return { name, role: input.role, avatarSeed: input.avatarSeed ?? randomBytes(16).toString("hex"), profileId };
+    const legacyProfile = input.profileId ? this.database.authQuery((db) => db.prepare("SELECT * FROM forge_profiles WHERE id = ?").get(input.profileId) as ProfileRow | undefined) : undefined;
+    const profile = this.validateProfileInput({ name, provider: input.provider ?? legacyProfile?.provider ?? "codex", model: input.model ?? legacyProfile?.model ?? "", reasoningLevel: input.reasoningLevel ?? legacyProfile?.reasoning_level ?? "medium", servicePriority: input.servicePriority ?? legacyProfile?.service_priority ?? "standard", capacity: input.capacity ?? legacyProfile?.capacity ?? null });
+    return { name, role: input.role, avatarSeed: input.avatarSeed ?? randomBytes(16).toString("hex"), provider: profile.provider, model: profile.model, reasoningLevel: profile.reasoningLevel, servicePriority: profile.servicePriority, capacity: profile.capacity, profileId: input.profileId ?? "" };
   }
 
   createAgent(actorUserId: string, input: AgentInput): Agent {
@@ -658,19 +668,21 @@ export class ProjectService {
     const agentInput = this.validateAgentInput(input);
     const now = this.now().toISOString();
     const id = identifier("agent");
+    const profileId = identifier("profile");
     try {
       this.database.authTransaction((db) => {
-        db.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES (?, 'internal', ?, ?, ?, ?, ?, ?)").run(id, agentInput.name, agentInput.role, agentInput.avatarSeed, agentInput.profileId, now, now);
+        db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(profileId, agentInput.name, agentInput.provider, agentInput.model, agentInput.reasoningLevel, agentInput.servicePriority, agentInput.capacity, now, now);
+        db.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES (?, 'internal', ?, ?, ?, ?, ?, ?)").run(id, agentInput.name, agentInput.role, agentInput.avatarSeed, profileId, now, now);
         this.auth.recordAuditEventInTransaction(db, actorUserId, "agent_created", undefined, undefined, { agentId: id });
       });
     } catch {
       throw new ProjectFailure("Agent configuration is invalid", [finding("duplicate-name", "name", "Agent name is already in use")], 409);
     }
-    return this.database.authQuery((db) => publicAgent(db.prepare("SELECT * FROM forge_agents WHERE id = ?").get(id) as AgentRow));
+    return this.database.authQuery((db) => publicAgent(db.prepare("SELECT a.*, p.provider, p.model, p.reasoning_level, p.service_priority, p.capacity FROM forge_agents a JOIN forge_profiles p ON p.id = a.profile_id WHERE a.id = ?").get(id) as AgentRow, this.config));
   }
 
   private internalAgentRow(agentId: string): AgentRow {
-    const row = this.database.authQuery((db) => db.prepare("SELECT * FROM forge_agents WHERE id = ? AND kind = 'internal'").get(agentId) as AgentRow | undefined);
+    const row = this.database.authQuery((db) => db.prepare("SELECT a.*, p.provider, p.model, p.reasoning_level, p.service_priority, p.capacity FROM forge_agents a JOIN forge_profiles p ON p.id = a.profile_id WHERE a.id = ? AND a.kind = 'internal'").get(agentId) as AgentRow | undefined);
     if (!row) throw new ProjectFailure("Agent not found", [], 404);
     return row;
   }
@@ -690,15 +702,16 @@ export class ProjectService {
   updateAgent(actorUserId: string, agentId: string, input: AgentUpdate): Agent {
     this.requireAdmin(actorUserId);
     const existing = this.internalAgentRow(agentId);
-    const agentInput = this.validateAgentInput({ name: input.name ?? existing.name, role: input.role ?? existing.role, avatarSeed: input.avatarSeed ?? existing.avatar_seed, profileId: input.profileId ?? existing.profile_id }, input.name === undefined);
+    const agentInput = this.validateAgentInput({ name: input.name ?? existing.name, role: input.role ?? existing.role, avatarSeed: input.avatarSeed ?? existing.avatar_seed, provider: input.provider ?? existing.provider, model: input.model ?? existing.model, reasoningLevel: input.reasoningLevel ?? existing.reasoning_level, servicePriority: input.servicePriority ?? existing.service_priority, capacity: input.capacity === undefined ? existing.capacity : input.capacity }, input.name === undefined);
     if (input.archived === true && !existing.archived_at) this.assertArchivable(existing);
     const now = this.now().toISOString();
     const archivedAt = input.archived === undefined ? existing.archived_at : input.archived ? existing.archived_at ?? now : null;
     try {
       return this.database.authTransaction((db) => {
-        db.prepare("UPDATE forge_agents SET name = ?, role = ?, avatar_seed = ?, profile_id = ?, archived_at = ?, updated_at = ? WHERE id = ? AND kind = 'internal'").run(agentInput.name, agentInput.role, agentInput.avatarSeed, agentInput.profileId, archivedAt, now, agentId);
+        db.prepare("UPDATE forge_profiles SET name = ?, provider = ?, model = ?, reasoning_level = ?, service_priority = ?, capacity = ?, updated_at = ? WHERE id = ?").run(agentInput.name, agentInput.provider, agentInput.model, agentInput.reasoningLevel, agentInput.servicePriority, agentInput.capacity, now, existing.profile_id);
+        db.prepare("UPDATE forge_agents SET name = ?, role = ?, avatar_seed = ?, archived_at = ?, updated_at = ? WHERE id = ? AND kind = 'internal'").run(agentInput.name, agentInput.role, agentInput.avatarSeed, archivedAt, now, agentId);
         this.auth.recordAuditEventInTransaction(db, actorUserId, input.archived === undefined ? "agent_updated" : input.archived ? "agent_archived" : "agent_unarchived", undefined, undefined, { agentId });
-        return publicAgent(db.prepare("SELECT * FROM forge_agents WHERE id = ?").get(agentId) as AgentRow);
+        return publicAgent(db.prepare("SELECT a.*, p.provider, p.model, p.reasoning_level, p.service_priority, p.capacity FROM forge_agents a JOIN forge_profiles p ON p.id = a.profile_id WHERE a.id = ?").get(agentId) as AgentRow, this.config);
       });
     } catch (error) {
       if (error instanceof ProjectFailure) throw error;
@@ -711,15 +724,17 @@ export class ProjectService {
     const existing = this.internalAgentRow(agentId);
     const now = this.now().toISOString();
     const id = identifier("agent");
+    const profileId = identifier("profile");
     this.database.authTransaction((db) => {
       const taken = new Set((db.prepare("SELECT name FROM forge_agents WHERE kind = 'internal'").all() as Array<{ name: string }>).map((row) => row.name));
       const base = existing.name.slice(0, 60);
       let name = `${base} (copy)`;
       for (let copy = 2; taken.has(name); copy += 1) name = `${base} (copy ${copy})`;
-      db.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES (?, 'internal', ?, ?, ?, ?, ?, ?)").run(id, name, existing.role, randomBytes(16).toString("hex"), existing.profile_id, now, now);
+      db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(profileId, name, existing.provider, existing.model, existing.reasoning_level, existing.service_priority, existing.capacity, now, now);
+      db.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES (?, 'internal', ?, ?, ?, ?, ?, ?)").run(id, name, existing.role, randomBytes(16).toString("hex"), profileId, now, now);
       this.auth.recordAuditEventInTransaction(db, actorUserId, "agent_duplicated", undefined, undefined, { agentId: id, sourceAgentId: agentId });
     });
-    return publicAgent(this.database.authQuery((db) => db.prepare("SELECT * FROM forge_agents WHERE id = ?").get(id) as AgentRow));
+    return this.database.authQuery((db) => publicAgent(db.prepare("SELECT a.*, p.provider, p.model, p.reasoning_level, p.service_priority, p.capacity FROM forge_agents a JOIN forge_profiles p ON p.id = a.profile_id WHERE a.id = ?").get(id) as AgentRow, this.config));
   }
 
   listAgents(actorUserId: string, companyId?: string, includeArchived = false): Agent[] {
@@ -727,14 +742,14 @@ export class ProjectService {
     if (companyId) this.auth.requireCompanyAccess(actorUserId, companyId);
     const scope = companyId ? " AND t.company_id = ?" : user.role === "admin" ? "" : " AND EXISTS (SELECT 1 FROM forge_memberships m WHERE m.user_id = ? AND m.company_id = t.company_id)";
     const params = companyId ? [companyId, companyId, companyId, companyId] : user.role === "admin" ? [] : [actorUserId, actorUserId, actorUserId, actorUserId];
-    return this.database.authQuery((db) => (db.prepare(`SELECT a.*,
+    return this.database.authQuery((db) => (db.prepare(`SELECT a.*, p.provider, p.model, p.reasoning_level, p.service_priority, p.capacity,
       (SELECT COUNT(*) FROM forge_agent_executions e JOIN forge_tasks t ON t.id = e.task_id WHERE e.status IN ('starting', 'running', 'cancelling') AND json_extract(t.role_agents_json, '$.' || e.role) = a.id${scope})
       + (SELECT COUNT(*) FROM forge_developer_executions d JOIN forge_tasks t ON t.id = d.task_id WHERE d.status IN ('starting', 'running', 'cancelling') AND json_extract(t.role_agents_json, '$.builder') = a.id${scope}) AS active_count,
       COALESCE(NULLIF(MAX(
         COALESCE((SELECT MAX(COALESCE(e.heartbeat_at, e.finished_at, e.started_at)) FROM forge_agent_executions e JOIN forge_tasks t ON t.id = e.task_id WHERE json_extract(t.role_agents_json, '$.' || e.role) = a.id${scope}), ''),
         COALESCE((SELECT MAX(COALESCE(d.heartbeat_at, d.finished_at, d.started_at)) FROM forge_developer_executions d JOIN forge_tasks t ON t.id = d.task_id WHERE json_extract(t.role_agents_json, '$.builder') = a.id${scope}), '')
       ), ''), a.created_at) AS last_seen_at
-      FROM forge_agents a WHERE a.kind = 'internal'${includeArchived ? "" : " AND a.archived_at IS NULL"} ORDER BY (a.archived_at IS NOT NULL), active_count DESC, a.name COLLATE NOCASE, a.id`).all(...params) as AgentRow[]).map(publicAgent));
+      FROM forge_agents a JOIN forge_profiles p ON p.id = a.profile_id WHERE a.kind = 'internal'${includeArchived ? "" : " AND a.archived_at IS NULL"} ORDER BY (a.archived_at IS NOT NULL), active_count DESC, a.name COLLATE NOCASE, a.id`).all(...params) as AgentRow[]).map((row) => publicAgent(row, this.config)));
   }
 
   updateProfileCapacity(actorUserId: string, profileId: string, capacity: number | null): CodexProfile {

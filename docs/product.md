@@ -24,7 +24,7 @@ task becomes the durable record of the work from intake to completion.
 ```text
 Repository project
         ↓
-Provider + profile configuration
+Provider + agent configuration
         ↓
 Task intake and prioritisation
         ↓
@@ -88,13 +88,9 @@ agency’s delivery flow.
 
 Agent identity, capacity, provider, model, reasoning level, and priority are
 configured deliberately. A role does not silently fall back to an arbitrary
-model when its intended profile is unavailable.
+model when its assigned agent is unavailable.
 
 ![Agents](images/forge/11-agents.png)
-
-![Agent profiles](images/forge/13-profiles.png)
-
-![Profile editor](images/forge/14-profile-edit.png)
 
 ## Agency configuration
 
@@ -102,8 +98,8 @@ Forge configuration is organised around the operating reality of an agency:
 
 - Companies and workspaces, plus users authenticated with passkeys.
 - Projects created from repositories and configured for their delivery path.
-- Agent profiles and capacity lanes that set how much work each provider can
-  safely run.
+- Agents that carry their model, reasoning level, service priority, and
+  capacity settings.
 - Providers and local authentication, a model catalogue, and cascading prompts
   that establish agency, project, and role context.
 - Environment configuration and host health, so the people accountable for
@@ -136,8 +132,8 @@ Forge already provides the durable operating path behind the interface:
   pull requests, merge reconciliation, and completion.
 - Task evidence that connects plans, review, activity, diffs, checks, pull
   request state, and delivery receipts.
-- Configurable users, companies, projects, agents, profiles, capacity,
-  providers, models, prompts, and host readiness.
+- Configurable users, companies, projects, agents, providers, models, prompts,
+  capacity, and host readiness.
 - Passkey access, local-first data and artifacts, and Tailscale-only service
   exposure for the current operating boundary.
 

@@ -12,8 +12,9 @@ export function roleLabel(role: TaskInvocation["role"]): string {
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
-export function invocationActorLabel(invocation: Pick<TaskInvocation, "agentName" | "profileName" | "role">): string {
-  return `${roleLabel(invocation.role)}${invocation.profileName ? ` (${invocation.profileName})` : ""}`;
+export function invocationActorLabel(invocation: Pick<TaskInvocation, "agentName" | "profileName" | "model" | "reasoningLevel" | "servicePriority" | "role">): string {
+  const settings = [invocation.model, invocation.reasoningLevel, invocation.servicePriority].filter(Boolean).join(" · ");
+  return `${invocation.agentName ?? roleLabel(invocation.role)}${settings ? ` (${settings})` : ""}`;
 }
 
 const integratorOwnedSteps = new Set([

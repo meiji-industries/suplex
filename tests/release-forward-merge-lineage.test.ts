@@ -251,6 +251,22 @@ test("inherits the exact Developer delivery through a blocked execution supersed
   expect(text).toContain("all focused tests passed");
 });
 
+test("publishes through the uniquely matching completed execution when the state execution is stale", async () => {
+  const value = await fixture("direct");
+
+  await expect(value.activities.publishRelease({ ...value.publishInput, developerExecutionId: "developer-failed" })).resolves.toMatchObject({ outcome: "completed" });
+});
+
+test.each([
+  ["none", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'failed' WHERE id = ?").run(value.linkedExecutionId))],
+  ["two", (value: Fixture) => value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id) VALUES ('developer-fallback-copy', ?, ?, ?, 1, 2, 'completed', ?, ?, ?, 'developer-session', ?, ?, ?, ?, ?, 'clean', ?)").run(taskId, companyId, workflowId, branchName, value.linkedWorktree, currentBase, now, now, now, resultHead, resultTree, value.deliveryArtifactId))],
+] as const)("fails closed when fallback finds %s completed execution", async (_label, mutate) => {
+  const value = await fixture("direct");
+  mutate(value);
+
+  await expect(value.activities.publishRelease({ ...value.publishInput, developerExecutionId: "developer-failed" })).resolves.toMatchObject({ outcome: "blocked", code: "stale-reviewed-revision" });
+});
+
 test.each([
   ["wrong review tree", "completed-prior", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_delivery_reviews SET subject_tree = ? WHERE id = ?").run(wrongSha, reviewId))],
   ["wrong verification artifact kind", "completed-prior", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET kind = 'agent-evidence' WHERE id = ?").run(value.verificationArtifactId))],

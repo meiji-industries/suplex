@@ -122,13 +122,13 @@ function directReleaseContext(db: Database.Database, input: ReleaseContextInput)
       WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(input.branchName, input.subjectCommit, input.taskId, input.companyId, input.workflowId) as Omit<ReleaseContext, "delivery" | "reviewId"> | undefined;
     return direct ? { ...direct, reviewId: null, delivery: null } : undefined;
   }
-  const direct = db.prepare(`SELECT d.id AS developerExecutionId, d.worktree_path AS worktreePath, d.branch_name AS branchName,
+  const findCompletedExecution = (developerExecutionId: string | null) => db.prepare(`SELECT d.id AS developerExecutionId, d.worktree_path AS worktreePath, d.branch_name AS branchName,
       d.target_base_sha AS targetBaseSha, d.result_commit AS subjectCommit, d.result_tree AS subjectTree,
       da.id AS deliveryArtifactId, da.storage_path AS deliveryStoragePath, da.sha256 AS deliverySha,
       r.id AS reviewId, t.title
     FROM forge_tasks t
     JOIN forge_developer_executions d
-      ON d.id = ? AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
+      ON (? IS NULL OR d.id = ?) AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
       AND d.status = 'completed' AND d.branch_name = ?
       AND lower(d.target_base_sha) = lower(?) AND lower(d.result_commit) = lower(?) AND lower(d.result_tree) = lower(?)
     JOIN forge_delivery_reviews r
@@ -138,9 +138,12 @@ function directReleaseContext(db: Database.Database, input: ReleaseContextInput)
     JOIN forge_artifacts da
       ON da.id = d.delivery_artifact_id AND da.company_id = d.company_id
       AND da.kind IN ('developer-delivery', 'developer-repair', 'forward-merge-delivery')
-    WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(input.developerExecutionId, input.branchName, input.targetBaseSha, input.subjectCommit, input.subjectTree, input.reviewId, input.targetBaseSha, input.subjectCommit, input.subjectTree, input.taskId, input.companyId, input.workflowId) as (Omit<ReleaseContext, "delivery"> & { deliveryArtifactId: string; deliveryStoragePath: string; deliverySha: string }) | undefined;
-  if (!direct) return undefined;
-  return { ...direct, delivery: { id: direct.deliveryArtifactId, storagePath: direct.deliveryStoragePath, sha256: direct.deliverySha } };
+    WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).all(developerExecutionId, developerExecutionId, input.branchName, input.targetBaseSha, input.subjectCommit, input.subjectTree, input.reviewId, input.targetBaseSha, input.subjectCommit, input.subjectTree, input.taskId, input.companyId, input.workflowId) as Array<Omit<ReleaseContext, "delivery"> & { deliveryArtifactId: string; deliveryStoragePath: string; deliverySha: string }>;
+  const direct = findCompletedExecution(input.developerExecutionId);
+  const fallback = direct.length === 0 ? findCompletedExecution(null) : [];
+  const context = direct.length === 1 ? direct[0] : fallback.length === 1 ? fallback[0] : undefined;
+  if (!context) return undefined;
+  return { ...context, delivery: { id: context.deliveryArtifactId, storagePath: context.deliveryStoragePath, sha256: context.deliverySha } };
 }
 
 function forwardMergeReleaseContext(db: Database.Database, input: ReleaseContextInput): ReleaseContext | undefined {

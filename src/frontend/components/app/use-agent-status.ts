@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, readJson } from "../../lib/api.js";
+import { subscribeTaskListInvalidations } from "../../lib/task-list.js";
 import type { ApiAgent, ApiAgentRuntime } from "../../lib/view-shared.js";
+
+const runtimeRefreshIntervalMs = 5000;
 
 export function shouldMonitorAgentStatus({ authenticated, loading, authBlocked }: { authenticated: boolean; loading: boolean; authBlocked: boolean }): boolean {
   return authenticated && !loading && !authBlocked;
@@ -9,6 +12,10 @@ export function shouldMonitorAgentStatus({ authenticated, loading, authBlocked }
 
 export function reduceAgentAuthBlock(authBlocked: boolean, event: "unauthorized" | "authenticated"): boolean {
   return event === "authenticated" ? false : authBlocked || event === "unauthorized";
+}
+
+export function runtimeRefreshDelay(lastRequestedAt: number | undefined, now: number): number {
+  return lastRequestedAt === undefined ? 0 : Math.max(0, runtimeRefreshIntervalMs - (now - lastRequestedAt));
 }
 
 export function useAgentStatus({ companyId, authenticated, loading, onAuthenticationRequired }: { companyId?: string; authenticated: boolean; loading: boolean; onAuthenticationRequired: () => void }): { agents: ApiAgent[]; runtime: ApiAgentRuntime[] } {
@@ -21,7 +28,14 @@ export function useAgentStatus({ companyId, authenticated, loading, onAuthentica
     if (authenticated) setAuthBlocked((blocked) => reduceAgentAuthBlock(blocked, "authenticated"));
   }, [authenticated]);
 
-  const reload = useCallback(async (): Promise<void> => {
+  const handleError = useCallback((error: unknown): void => {
+    if (error instanceof ApiError && error.statusCode === 401) {
+      setAuthBlocked((blocked) => reduceAgentAuthBlock(blocked, "unauthorized"));
+      onAuthenticationRequired();
+    }
+  }, [onAuthenticationRequired]);
+
+  const reloadAll = useCallback(async (): Promise<void> => {
     try {
       const query = companyId ? `?companyId=${encodeURIComponent(companyId)}` : "";
       const [agentResponse, runtimeResponse] = await Promise.all([readJson<{ agents: ApiAgent[] }>(`/api/agents${query}`), readJson<{ runtime: ApiAgentRuntime[] }>(`/api/agent-runtime${query}`)]);
@@ -30,12 +44,20 @@ export function useAgentStatus({ companyId, authenticated, loading, onAuthentica
     } catch (error) {
       setAgents([]);
       setRuntime([]);
-      if (error instanceof ApiError && error.statusCode === 401) {
-        setAuthBlocked((blocked) => reduceAgentAuthBlock(blocked, "unauthorized"));
-        onAuthenticationRequired();
-      }
+      handleError(error);
     }
-  }, [companyId, onAuthenticationRequired]);
+  }, [companyId, handleError]);
+
+  const reloadRuntime = useCallback(async (): Promise<void> => {
+    try {
+      const query = companyId ? `?companyId=${encodeURIComponent(companyId)}` : "";
+      const response = await readJson<{ runtime: ApiAgentRuntime[] }>(`/api/agent-runtime${query}`);
+      setRuntime(response.runtime);
+    } catch (error) {
+      setRuntime([]);
+      handleError(error);
+    }
+  }, [companyId, handleError]);
 
   useEffect(() => {
     if (!enabled) {
@@ -44,20 +66,37 @@ export function useAgentStatus({ companyId, authenticated, loading, onAuthentica
       return;
     }
     let closed = false;
-    const refresh = (): void => { if (!closed) void reload(); };
-    refresh();
-    // Task invalidations refresh the authoritative runtime snapshot without a
-    // separate long-lived Herdr event subscription.
-    const events = new EventSource("/api/tasks/events");
-    events.addEventListener("ready", refresh);
-    events.addEventListener("invalidate", refresh);
-    // EventSource otherwise reconnects indefinitely after a lost session.
-    events.onerror = () => events.close();
+    let lastRuntimeRequestedAt: number | undefined;
+    let trailingTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshAll = (): void => {
+      if (closed) return;
+      if (trailingTimer !== undefined) clearTimeout(trailingTimer);
+      trailingTimer = undefined;
+      lastRuntimeRequestedAt = Date.now();
+      void reloadAll();
+    };
+    const refreshRuntime = (): void => {
+      if (closed) return;
+      if (trailingTimer !== undefined) clearTimeout(trailingTimer);
+      trailingTimer = undefined;
+      lastRuntimeRequestedAt = Date.now();
+      void reloadRuntime();
+    };
+    const scheduleRuntimeRefresh = (): void => {
+      const delay = runtimeRefreshDelay(lastRuntimeRequestedAt, Date.now());
+      if (delay === 0) refreshRuntime();
+      else trailingTimer ??= setTimeout(refreshRuntime, delay);
+    };
+    refreshAll();
+    const unsubscribe = companyId
+      ? subscribeTaskListInvalidations(companyId, (event) => { if (event === "ready") refreshAll(); else scheduleRuntimeRefresh(); })
+      : undefined;
     return () => {
       closed = true;
-      events.close();
+      unsubscribe?.();
+      if (trailingTimer !== undefined) clearTimeout(trailingTimer);
     };
-  }, [enabled, reload]);
+  }, [companyId, enabled, reloadAll, reloadRuntime]);
 
   return { agents, runtime };
 }

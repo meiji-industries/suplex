@@ -907,8 +907,8 @@ export class TaskService {
 
   private pollTaskEvents(notify = true): void {
     try {
-      const rows = this.database.authQuery((db) => db.prepare("SELECT task_id, company_id, revision, event_hash FROM forge_issue_projections").all() as Array<{ task_id: string; company_id: string; revision: number; event_hash: string }>);
-      const current = new Map(rows.map((row) => [row.task_id, `${row.revision}:${row.event_hash}`]));
+      const rows = this.database.authQuery((db) => db.prepare("SELECT task_id, company_id, revision, phase, step, owner, pending_action, blocker_json, state_changed_at FROM forge_issue_projections").all() as Array<{ task_id: string; company_id: string; revision: number; phase: string; step: string | null; owner: string; pending_action: string | null; blocker_json: string | null; state_changed_at: string | null }>);
+      const current = new Map(rows.map((row) => [row.task_id, JSON.stringify([row.revision, row.phase, row.step, row.owner, row.pending_action, row.blocker_json, row.state_changed_at])]));
       if (notify) {
         for (const row of rows) {
           if (this.eventVersions.get(row.task_id) === current.get(row.task_id)) continue;

@@ -15,38 +15,41 @@ export function readTaskList(companyId: string, archived = false, refresh = fals
 
 export function invalidateTaskList(companyId: string): void { for (const key of reads.keys()) if (key.startsWith(`${companyId}:`)) reads.delete(key); }
 
-export type TaskListInvalidationHub = { subscribe(companyId: string, listener: () => void): () => void };
+export type TaskListInvalidationEvent = "invalidate" | "ready";
+export type TaskListInvalidationHub = { subscribe(companyId: string, listener: (event: TaskListInvalidationEvent) => void): () => void };
 
 export function createTaskListInvalidationHub(options: { createEventSource?: (url: string) => EventSource; debounceMs?: number } = {}): TaskListInvalidationHub {
   const createEventSource = options.createEventSource ?? ((url: string) => new globalThis.EventSource(url));
-  const debounceMs = options.debounceMs ?? 300;
+  const debounceMs = options.debounceMs ?? 1000;
   let source: EventSource | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const listeners = new Map<string, Set<() => void>>();
-  const pending = new Set<string>();
+  const listeners = new Map<string, Set<(event: TaskListInvalidationEvent) => void>>();
+  const pending = new Map<string, TaskListInvalidationEvent>();
+  const queue = (companyId: string, event: TaskListInvalidationEvent): void => {
+    if (pending.get(companyId) !== "ready") pending.set(companyId, event);
+    timer ??= setTimeout(flush, debounceMs);
+  };
   const flush = (): void => {
     timer = undefined;
     const companies = [...pending];
     pending.clear();
-    for (const companyId of companies) {
+    for (const [companyId, event] of companies) {
       invalidateTaskList(companyId);
-      for (const listener of listeners.get(companyId) ?? []) listener();
+      for (const listener of listeners.get(companyId) ?? []) listener(event);
     }
   };
   const handle = (event: MessageEvent): void => {
     try {
       const data = JSON.parse(String(event.data)) as { companyId?: string };
       if (typeof data.companyId !== "string") return;
-      pending.add(data.companyId);
-      timer ??= setTimeout(flush, debounceMs);
+      queue(data.companyId, "invalidate");
     } catch { /* Ignore malformed events. */ }
   };
   const refreshSubscribed = (): void => {
-    for (const companyId of listeners.keys()) pending.add(companyId);
-    timer ??= setTimeout(flush, debounceMs);
+    for (const companyId of listeners.keys()) queue(companyId, "ready");
   };
   return {
-    subscribe(companyId: string, listener: () => void): () => void {
+    subscribe(companyId: string, listener: (event: TaskListInvalidationEvent) => void): () => void {
       let set = listeners.get(companyId);
       if (!set) { set = new Set(); listeners.set(companyId, set); }
       set.add(listener);

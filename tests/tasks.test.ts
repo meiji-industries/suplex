@@ -834,3 +834,40 @@ test("company branch sync queries only active task branches", async () => {
     expect(response.json()).toEqual({ building: { ahead: 0, behind: 0, aheadOfBase: 2, behindBase: 1, conflictsWithBase: false, remoteExists: true } });
   } finally { await app.close(); }
 });
+
+test("task event polling ignores projection hash changes when list-visible fields are unchanged", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Stable list projection", description: "body", idempotencyKey: "stable-list-projection", images: [] });
+    const events: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number; attentionChanged: boolean }> = [];
+    const unsubscribe = value.tasks.subscribe(value.adminId, (event) => events.push(event));
+    try {
+      value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET event_hash = ? WHERE task_id = ?").run("f".repeat(64), created.task.id));
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(events).toEqual([]);
+    } finally {
+      unsubscribe();
+    }
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("task event polling invalidates once when pending action changes", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Changed list projection", description: "body", idempotencyKey: "changed-list-projection", images: [] });
+    const events: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number; attentionChanged: boolean }> = [];
+    const unsubscribe = value.tasks.subscribe(value.adminId, (event) => events.push(event));
+    try {
+      value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET pending_action = ? WHERE task_id = ?").run("Review the updated task", created.task.id));
+      await expect.poll(() => events).toHaveLength(1);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(events).toEqual([{ type: "invalidate", taskId: created.task.id, companyId: value.companyId, revision: 0, attentionChanged: false }]);
+    } finally {
+      unsubscribe();
+    }
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});

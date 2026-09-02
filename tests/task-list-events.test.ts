@@ -62,8 +62,11 @@ describe("task list invalidation hub", () => {
     for (let index = 0; index < 10; index += 1) FakeEventSource.last.invalidate("company-a");
     expect(listener).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(300);
+    vi.advanceTimersByTime(999);
+    expect(listener).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
     expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith("invalidate");
 
     const second = await readTaskList("company-a");
     expect(second).toEqual([]);
@@ -89,7 +92,7 @@ describe("task list invalidation hub", () => {
     const unsubscribe = hub.subscribe("company-a", listener);
 
     FakeEventSource.last.invalidate("company-b");
-    vi.advanceTimersByTime(300);
+    vi.advanceTimersByTime(1000);
     expect(listener).not.toHaveBeenCalled();
 
     unsubscribe();
@@ -116,7 +119,7 @@ describe("task list invalidation hub", () => {
     expect(FakeEventSource.last.connected).toBe(false);
     version = "mutated";
     FakeEventSource.last.ready();
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(1000);
 
     await expect(Promise.all(refreshes)).resolves.toEqual([
       [{ id: "company-reconnect-a-mutated" }],
@@ -127,5 +130,19 @@ describe("task list invalidation hub", () => {
 
     firstUnsubscribe();
     secondUnsubscribe();
+  });
+
+  it("reports ready when reconnect and invalidation events are coalesced", () => {
+    const hub = createHub();
+    const listener = vi.fn();
+    const unsubscribe = hub.subscribe("company-a", listener);
+
+    FakeEventSource.last.invalidate("company-a");
+    FakeEventSource.last.ready();
+    vi.advanceTimersByTime(1000);
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith("ready");
+    unsubscribe();
   });
 });

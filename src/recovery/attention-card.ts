@@ -1,4 +1,5 @@
 import type { AttentionCard, AttentionChoice, FailureClass } from "./convergence.js";
+import { commandLabel, RESTART_LABELS } from "../frontend/lib/command-labels.js";
 
 export type AttentionCondition =
   | { kind: "github_credential"; detail?: string }
@@ -23,6 +24,10 @@ export interface AttentionCardContext {
 
 function shortTitle(value: string): string {
   return value.trim().replaceAll("_", " ").slice(0, 80) || "Needs attention";
+}
+
+function withRestartLabel(card: AttentionCard): AttentionCard {
+  return { ...card, primaryAction: { ...card.primaryAction, label: RESTART_LABELS[card.primaryAction.command] ?? commandLabel(card.primaryAction.command) } };
 }
 
 function genericCard(summary: string | null | undefined, context: AttentionCardContext): AttentionCard {
@@ -109,5 +114,5 @@ export function attentionCardFor(condition: AttentionCondition, overrides?: Part
       case "no_progress": { const merge = condition.failureClass === "merge_conflict_mechanical"; return { kind: condition.kind, title: "Automatic repair is not making progress", explanation: "The same repair problem repeated without new evidence of progress.", evidence: [{ kind: "text" as const, ref: condition.evidenceRef || condition.signature || "The repair repeated without new progress." }], primaryAction: merge ? { command: "resolve_merge_conflict", label: "Resume conflict resolution" } : { command: "retry_development", label: "Resume Developer turn" }, secondaryAction: { command: "cancel_issue", label: "Cancel issue", destructive: true } }; }
     }
   })();
-  return { ...card, ...overrides };
+  return withRestartLabel({ ...card, ...overrides });
 }

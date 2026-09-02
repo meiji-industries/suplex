@@ -42,6 +42,18 @@ test("client waits for a dispatched turn to enter working", async () => {
   expect(argv).toEqual([["agent", "prompt", "task-planner", "Plan this", "--wait", "--until", "working", "--timeout", "6000"]]);
 });
 
+test("client sends text without waiting and exposes the attach command", async () => {
+  const argv: string[][] = [];
+  const client = new CliHerdrClient("herdr", async (_file, args) => {
+    argv.push([...args]);
+    return { stdout: JSON.stringify({ id: "cli:agent:prompt", result: { agent: { name: "task-builder", pane_id: "pane-1" } } }) };
+  });
+
+  await expect(client.sendText("task-builder", "Keep going")).resolves.toBeUndefined();
+  expect(argv).toEqual([["agent", "prompt", "task-builder", "Keep going"]]);
+  expect(client.attachCommand("task-builder")).toBe("herdr agent attach task-builder");
+});
+
 test("client fails closed for malformed output and classifies syntax failures", async () => {
   const malformed = new CliHerdrClient("herdr", async () => ({ stdout: "not-json" }));
   await expect(malformed.listWorkspaces()).rejects.toMatchObject({ code: "invalid_response", retryable: false });

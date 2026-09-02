@@ -46,6 +46,7 @@ export class UnsupportedRuntimeError extends Error {
 
 export const SUPPORTED_NODE_VERSION = "26.7.0";
 
+/** FORGE_EDITOR_COMMAND selects the editor command used when Forge opens a task worktree. */
 function assertSupportedNodeRuntime(): void {
   if (process.versions.node !== SUPPORTED_NODE_VERSION) {
     throw new UnsupportedRuntimeError(SUPPORTED_NODE_VERSION, process.versions.node);

@@ -22,7 +22,9 @@ export interface AttentionItem {
   taskTitle: string;
   summary: string | null;
   sourceRevision: number;
+  phase: string;
   activatedAt: string;
+  liveStatus: Array<{ role: string; status: string }>;
   actions: AttentionAction[];
   card: AttentionCard;
 }
@@ -41,12 +43,14 @@ interface ProjectionRow {
   task_id: string;
   task_title: string;
   revision: number;
+  phase: string;
   allowed_commands_json: string;
   pending_action: string | null;
   activated_at: string;
   pane_id: string | null;
   agent_name: string | null;
   attention_excerpt: string | null;
+  live_status_json: string;
 }
 
 interface Blocker { category?: unknown; summary?: unknown; actions?: unknown }
@@ -69,13 +73,13 @@ export class AttentionService {
 
   list(actorUserId: string): CompanyAttentionOverview[] {
     return this.auth.listVisibleCompanies(actorUserId).map((company) => {
-      const rows = this.database.authQuery((db) => db.prepare(`SELECT ip.company_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, ip.task_id, t.title AS task_title, ip.revision, ip.allowed_commands_json, ip.pending_action, COALESCE(ip.state_changed_at, ip.updated_at) AS activated_at, NULL AS pane_id, NULL AS agent_name, NULL AS attention_excerpt
+      const rows = this.database.authQuery((db) => db.prepare(`SELECT ip.company_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, ip.task_id, t.title AS task_title, ip.revision, ip.phase, ip.allowed_commands_json, ip.pending_action, COALESCE(ip.state_changed_at, ip.updated_at) AS activated_at, NULL AS pane_id, NULL AS agent_name, NULL AS attention_excerpt, COALESCE((SELECT json_group_array(json_object('role', current_rs.session_role, 'status', current_rs.status)) FROM forge_herdr_role_sessions current_rs WHERE current_rs.task_id = ip.task_id AND current_rs.is_current = 1), '[]') AS live_status_json
         FROM forge_issue_projections ip
         JOIN forge_tasks t ON t.id = ip.task_id
         JOIN forge_companies c ON c.id = ip.company_id
         WHERE ip.company_id = ? AND (ip.owner = 'human' OR json_extract(ip.blocker_json, '$.unblockOwner') = 'human')
         UNION ALL
-        SELECT ip.company_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END, ip.task_id, t.title, ip.revision, '[]', NULL, ht.updated_at, rs.pane_id, rs.agent_name, ht.attention_excerpt
+        SELECT ip.company_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END, ip.task_id, t.title, ip.revision, ip.phase, '[]', NULL, ht.updated_at, rs.pane_id, rs.agent_name, ht.attention_excerpt, COALESCE((SELECT json_group_array(json_object('role', current_rs.session_role, 'status', current_rs.status)) FROM forge_herdr_role_sessions current_rs WHERE current_rs.task_id = ip.task_id AND current_rs.is_current = 1), '[]')
         FROM forge_herdr_turns ht
         JOIN forge_herdr_role_sessions rs ON rs.id = ht.role_session_id
         JOIN forge_issue_projections ip ON ip.task_id = ht.task_id
@@ -83,7 +87,7 @@ export class AttentionService {
         JOIN forge_companies c ON c.id = ip.company_id
         WHERE ip.company_id = ? AND ht.status IN ('blocked', 'awaiting_human') AND ip.phase NOT IN ('done', 'cancelled') AND rs.is_current = 1
         UNION ALL
-        SELECT ip.company_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END, ip.task_id, t.title, ip.revision, '[]', NULL, COALESCE(rs.attention_activated_at, rs.updated_at), rs.pane_id, rs.agent_name, rs.attention_excerpt
+        SELECT ip.company_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END, ip.task_id, t.title, ip.revision, ip.phase, '[]', NULL, COALESCE(rs.attention_activated_at, rs.updated_at), rs.pane_id, rs.agent_name, rs.attention_excerpt, COALESCE((SELECT json_group_array(json_object('role', current_rs.session_role, 'status', current_rs.status)) FROM forge_herdr_role_sessions current_rs WHERE current_rs.task_id = ip.task_id AND current_rs.is_current = 1), '[]')
         FROM forge_herdr_role_sessions rs
         JOIN forge_issue_projections ip ON ip.task_id = rs.task_id
         JOIN forge_tasks t ON t.id = ip.task_id
@@ -99,7 +103,8 @@ export class AttentionService {
           try { return snapshot?.state_json ? jsonRequired(snapshot.state_json) as { blocker?: Blocker; mergeDecision?: unknown } : undefined; } catch { return undefined; }
         });
         const card = attentionCardFromBlocker(snapshot?.blocker, { ...(row.pane_id ? { summary } : {}), pendingAction: row.pane_id ? "Agent is waiting for you" : row.pending_action, actions: actionList, ...(snapshot?.mergeDecision ? { mergeDecision: snapshot.mergeDecision } : {}) });
-        return { companyId: row.company_id, taskId: row.task_id, issueKey: row.issue_key, taskTitle: row.task_title, summary, sourceRevision: row.revision, activatedAt: row.activated_at, actions: actionList, card };
+        const liveStatus = jsonRequired(row.live_status_json ?? "[]") as unknown;
+        return { companyId: row.company_id, taskId: row.task_id, issueKey: row.issue_key, taskTitle: row.task_title, summary, sourceRevision: row.revision, phase: row.phase, activatedAt: row.activated_at, liveStatus: Array.isArray(liveStatus) ? liveStatus.filter((entry): entry is { role: string; status: string } => typeof entry === "object" && entry !== null && "role" in entry && "status" in entry && typeof entry.role === "string" && typeof entry.status === "string") : [], actions: actionList, card };
       });
       return { companyId: company.id, companyName: company.name, companyStatus: company.status, attentionCount: attention.length, attention };
     }).sort((left, right) => right.attentionCount - left.attentionCount || left.companyId.localeCompare(right.companyId));

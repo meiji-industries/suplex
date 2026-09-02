@@ -19,7 +19,7 @@ import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { getWorkerHealthFailure, useSystemHealth } from ".././components/app/system-health.js";
-import { ACTIVE_INVOCATION_STATUSES, TaskStatus, TaskStatusIcon, taskStatusAppearance, taskStatusLabel } from ".././components/app/task-status.js";
+import { ACTIVE_INVOCATION_STATUSES, LiveStatusDot, TaskStatus, TaskStatusIcon, taskStatusAppearance, taskStatusLabel } from ".././components/app/task-status.js";
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { invalidateTaskList, readTaskList, subscribeTaskListInvalidations } from ".././lib/task-list.js";
 import { navigate } from ".././lib/navigation.js";
@@ -295,7 +295,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const visibleProjects = scopeLoaded ? projects : [];
   const visibleTasks = scopeLoaded ? tasks : [];
   const boardTasks = boardProjectId === "all" ? visibleTasks : visibleTasks.filter((task) => task.projectId === boardProjectId);
-  const taskBoard = Object.fromEntries(taskPhases.map((phase) => [phase, boardTasks.filter((task) => task.phase === phase && (phase !== "done" || showArchived || task.worktreeState !== "cleaned"))])) as Record<(typeof taskPhases)[number], ApiTask[]>;
+  const taskBoard = Object.fromEntries(taskPhases.map((phase) => [phase, boardTasks.filter((task) => task.phase === phase && (phase !== "done" || showArchived || task.worktreeState !== "cleaned"))])) as Record<(typeof taskPhases)[number], ApiTaskSummary[]>;
   const selected = scopeLoaded ? selectedState : undefined;
   const availableProjects = visibleProjects.filter((project) => project.companyId === companyId);
   const forgeProject = currentCompany?.status === "active" ? findForgeProject(availableProjects) : undefined;
@@ -548,7 +548,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
                           return byAgent;
                         }, new Map<string | null | undefined, (typeof task.agentInvocations)[number]>()).values());
                         return <button type="button" className="block w-full rounded-md border border-border/90 bg-card px-3 py-2.5 text-left text-xs transition-colors hover:border-muted-foreground/35 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring" key={task.id} onClick={() => selectTask(task)}>
-                          <span className="block font-medium leading-4 text-card-foreground">{task.issueKey ? <span className="mr-1.5 font-normal text-muted-foreground">{task.issueKey}</span> : null}{task.title}</span>
+                          <span className="flex items-center gap-1.5 font-medium leading-4 text-card-foreground"><TaskStatusIcon phase={task.phase} blocked={task.blocked} pullRequestState={task.githubPullRequest?.state} /><LiveStatusDot liveStatus={task.liveStatus ?? []} /><span>{task.issueKey ? <span className="mr-1.5 font-normal text-muted-foreground">{task.issueKey}</span> : null}{task.title}</span></span>
                           {task.pendingAction ? <span className="mt-1 block truncate text-[11px] leading-4 text-muted-foreground">{task.pendingAction}</span> : null}
                           <span className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"><Layers3 className="size-3" />{project?.name ?? "Unknown project"}</span>
                           {activeInvocations.length ? <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
@@ -602,7 +602,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
                     const appearance = taskStatusAppearance(task.phase, task.blocked);
                     return (
                       <a data-task-row key={task.id} href={withCompany(`/tasks/${encodeURIComponent(task.id)}`, companyId)} className="group/task-row grid min-h-9 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md px-3 text-[13px] outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring/50 sm:grid-cols-[auto_minmax(0,1fr)_auto_auto] sm:px-4">
-                        <TaskStatusIcon phase={task.phase} blocked={task.blocked} pullRequestState={task.githubPullRequest?.state} />
+                        <span className="flex items-center gap-1.5"><TaskStatusIcon phase={task.phase} blocked={task.blocked} pullRequestState={task.githubPullRequest?.state} /><LiveStatusDot liveStatus={task.liveStatus ?? []} /></span>
                         <span className="flex min-w-0 items-center gap-2">
                           {task.issueKey ? <span className="shrink-0 text-xs text-muted-foreground">{task.issueKey}</span> : null}
                           <span className="truncate font-medium">{task.title}</span>

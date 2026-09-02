@@ -594,6 +594,7 @@ export type TaskListSummary = Pick<ForgeTask, "id" | "companyId" | "projectId" |
   archivedAt: string | null;
   worktreeState: "present" | "cleaned" | "removed_externally" | null;
   agentInvocations: Array<Pick<TaskAgentInvocation, "id" | "role" | "status" | "attempt" | "startedAt" | "finishedAt" | "agentId" | "agentName" | "avatarSeed">>;
+  liveStatus?: Array<{ role: string; status: string }>;
   capacity: Pick<PublicCapacityStatus, "status"> | null;
   release?: Pick<TaskRelease, "status" | "pullRequestNumber" | "isDraft"> | null;
   ci?: Pick<TaskCiProjection, "outcome">;
@@ -755,6 +756,7 @@ interface TaskRow {
   allowed_commands_json: string;
   pending_action: string | null;
   state_json: string;
+  live_status_json: string;
   predecessor_task_id: string | null;
   successor_task_id: string | null;
 }
@@ -1900,7 +1902,8 @@ export class TaskService {
     const capacity = this.capacity.statusForTask(row.id);
     const releaseState = workflowState.mergeOutcome === "merged" ? "merged" : workflowState.mergeOutcome === "closed_without_merge" ? "closed" : release?.status === "ready" ? "ready" : release ? "draft" : undefined;
     const githubPullRequestState = workflowState.githubPullRequestState === "open" || workflowState.githubPullRequestState === "closed" || workflowState.githubPullRequestState === "merged" ? workflowState.githubPullRequestState : null;
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), phase: row.phase, step: row.step, blocked: isBlocked(workflowState), revision: row.projection_revision, owner: row.owner, allowedCommands, pendingAction: row.pending_action, worktreeState: workflowState.worktreeState ?? null, createdAt: row.created_at, updatedAt: row.updated_at, agentInvocations, capacity: capacity ? { status: capacity.status } : null, ...(release ? { release: { status: release.status, pullRequestNumber: release.pullRequestNumber, isDraft: release.pullRequestNumber !== null && release.status === "draft" } } : {}), ...(outcome ? { ci: { outcome: outcome.outcome } } : {}), ...(releaseState ? { deliveryGate: { release: { state: releaseState } } } : {}), ...(workflowState.githubPullRequestState !== undefined ? { githubPullRequest: { state: githubPullRequestState } } : {}) };
+    const liveStatus = json<Array<{ role: string; status: string }>>(row.live_status_json, []).filter((entry) => typeof entry.role === "string" && typeof entry.status === "string");
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), phase: row.phase, step: row.step, blocked: isBlocked(workflowState), revision: row.projection_revision, owner: row.owner, allowedCommands, pendingAction: row.pending_action, worktreeState: workflowState.worktreeState ?? null, createdAt: row.created_at, updatedAt: row.updated_at, agentInvocations, liveStatus, capacity: capacity ? { status: capacity.status } : null, ...(release ? { release: { status: release.status, pullRequestNumber: release.pullRequestNumber, isDraft: release.pullRequestNumber !== null && release.status === "draft" } } : {}), ...(outcome ? { ci: { outcome: outcome.outcome } } : {}), ...(releaseState ? { deliveryGate: { release: { state: releaseState } } } : {}), ...(workflowState.githubPullRequestState !== undefined ? { githubPullRequest: { state: githubPullRequestState } } : {}) };
   }
 
   private publicTask(actorUserId: string, row: TaskRow): ForgeTask {
@@ -2216,7 +2219,7 @@ export class TaskService {
   }
 
   private taskQuery(scope: string): string {
-    return `SELECT t.id, t.company_id, t.project_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title, t.archived_at, t.brief_artifact_id, t.description, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.auto_approve_plan, t.auto_approve_plan AS autoApprovePlan, t.pull_request_mode, t.delivery_target, t.run_project_tests, t.visual_evidence, t.delivery_worktree_path, t.delivery_branch_name, t.delivery_commit, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.successor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.projected_at, ip.phase, ip.step, ip.owner, ip.allowed_commands_json, ip.pending_action, COALESCE((SELECT s.state_json FROM forge_workflow_snapshots s WHERE s.task_id = t.id AND s.revision = ip.revision), '{}') AS state_json FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope}`;
+    return `SELECT t.id, t.company_id, t.project_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title, t.archived_at, t.brief_artifact_id, t.description, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.auto_approve_plan, t.auto_approve_plan AS autoApprovePlan, t.pull_request_mode, t.delivery_target, t.run_project_tests, t.visual_evidence, t.delivery_worktree_path, t.delivery_branch_name, t.delivery_commit, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.successor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.projected_at, ip.phase, ip.step, ip.owner, ip.allowed_commands_json, ip.pending_action, COALESCE((SELECT s.state_json FROM forge_workflow_snapshots s WHERE s.task_id = t.id AND s.revision = ip.revision), '{}') AS state_json, COALESCE((SELECT json_group_array(json_object('role', rs.session_role, 'status', rs.status)) FROM forge_herdr_role_sessions rs WHERE rs.task_id = t.id AND rs.is_current = 1), '[]') AS live_status_json FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope}`;
   }
 
   private user(userId: string): AuthUser {

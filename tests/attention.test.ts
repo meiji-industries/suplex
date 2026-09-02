@@ -20,7 +20,7 @@ test("blocked and awaiting-human turns carry the pane, agent, and excerpt withou
 test("provider authentication blockers use the GitHub sign-in card", () => {
   const database = { authQuery(run: (db: { prepare: () => { all: () => unknown[]; get: () => unknown } }) => unknown) { return run({ prepare() { return { all() { return [{ company_id: "company", issue_key: null, task_id: "task", task_title: "Task", revision: 3, allowed_commands_json: "[]", pending_action: "GitHub access needed", activated_at: "2026-08-24T00:00:00.000Z", pane_id: null, agent_name: null, attention_excerpt: null }]; }, get() { return { state_json: JSON.stringify({ blocker: { category: "provider_authentication", summary: "GitHub access needed" } }) }; } }; } }); } };
   const service = new AttentionService(database as never, { listVisibleCompanies() { return [{ id: "company", name: "Company", status: "active" }]; } } as never);
-  expect(service.list("member")[0]?.attention[0]?.card.primaryAction.label).toBe("Sign in to GitHub and retry");
+  expect(service.list("member")[0]?.attention[0]?.card.primaryAction.label).toBe("Check CI");
 });
 
 test("branch checkout blockers explain the duplicate-task recovery choices", () => {

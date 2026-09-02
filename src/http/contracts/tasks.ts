@@ -126,6 +126,7 @@ export type TaskResponse = z.infer<typeof TaskResponseSchema>;
 export const TaskListTaskSchema = z.object({
   id: z.string(), companyId: z.string(), projectId: z.string(), issueKey: z.string().nullable(), title: z.string(), archivedAt: z.string().nullable().optional(), deliveryTarget: DeliveryTargetSchema, phase: TaskPhaseSchema, step: z.enum(ISSUE_STEPS), blocked: z.boolean(), revision: z.number(), owner: z.enum(["human", "lead"]), allowedCommands: z.array(IssueCommandSchema), pendingAction: z.string().nullable(), worktreeState: z.enum(["present", "cleaned", "removed_externally"]).nullable(), createdAt: z.string(), updatedAt: z.string(),
   agentInvocations: z.array(AgentInvocationResponseSchema.pick({ id: true, role: true, status: true, attempt: true, startedAt: true, finishedAt: true, agentId: true, agentName: true, avatarSeed: true })),
+  liveStatus: z.array(z.object({ role: z.string(), status: z.string() })).optional(),
   capacity: z.object({ status: z.enum(["queued", "active", "rate_limited", "exhausted"]) }).nullable(),
   release: TaskReleaseResponseSchema.pick({ status: true, pullRequestNumber: true, isDraft: true }).nullable().optional(),
   ci: z.object({ outcome: CiOutcomeSchema.nullable() }).optional(),
@@ -137,7 +138,7 @@ export const TaskListResponseSchema = z.object({ tasks: z.array(TaskListTaskSche
 export const ContinueWorkResponseSchema = z.object({ original: TaskResponseSchema, successor: TaskResponseSchema });
 export const ImageResponseSchema = z.object({ artifactId: z.string(), filename: z.string(), mimeType: z.string(), byteSize: z.number() });
 export const TaskDeveloperDiffResponseSchema = z.object({ patch: z.string(), branchName: z.string(), repository: z.string().optional(), baseSha: z.string(), headSha: z.string() });
-export const TaskPaneResponseSchema = z.object({ panes: z.array(z.object({ role: z.string(), text: z.string() })) });
+export const TaskPaneResponseSchema = z.object({ panes: z.array(z.object({ role: z.string(), text: z.string(), agentName: z.string(), status: z.string().nullable(), attachCommand: z.string() })) });
 export const DeveloperExecutionEventsResponseSchema = z.object({ events: z.array(DeveloperExecutionEventResponseSchema), hasMore: z.boolean() });
 export const TaskActivityCommandSchema = z.object({ id: z.string(), stepId: z.string(), command: z.string(), cwd: z.string().nullable(), exitCode: z.number().nullable(), durationMs: z.number().int().nonnegative(), stdout: z.string(), stderr: z.string(), entries: z.array(z.object({ stream: z.enum(["stdout", "stderr"]), text: z.string() })), at: z.string() });
 export const TaskActivityResponseSchema = z.object({ execution: z.object({ id: z.string(), role: z.enum(["planner", "builder", "reviewer", "integrator"]), status: z.string(), currentStep: z.string().nullable() }).nullable(), events: z.array(z.object({ at: z.string(), kind: z.enum(["thinking", "command", "output", "message", "status"]), text: z.string(), exitCode: z.number().optional() })), commands: z.array(TaskActivityCommandSchema) });

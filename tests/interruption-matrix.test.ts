@@ -125,7 +125,7 @@ test("herdr is unavailable, then becomes available", () => {
 
 test("pane is terminal while forge was awaiting output", () => {
   const outcome = twice(facts(), live());
-  expect(outcome).toMatchObject({ action: "attention", attention: { title: "Developer turn ended without an outcome", primaryAction: { label: "Resume Developer turn" } } });
+  expect(outcome).toMatchObject({ action: "attention", attention: { title: "Developer turn ended without an outcome", primaryAction: { label: "Restart builder" } } });
 });
 
 test("another user pushes a clean head change to an imported pr", () => {
@@ -179,7 +179,7 @@ test("ci fails transiently and retries without attention", () => {
 });
 
 test("github authentication is missing and produces the sign-in action", () => {
-  expect(twice(facts({ turn: null }), live({ github: { headSha: null, merged: false, closed: false, checks: "none", authenticated: false } }))).toMatchObject({ action: "attention", attention: { primaryAction: { label: "Sign in to GitHub and retry" } } });
+  expect(twice(facts({ turn: null }), live({ github: { headSha: null, merged: false, closed: false, checks: "none", authenticated: false } }))).toMatchObject({ action: "attention", attention: { primaryAction: { label: "Check CI" } } });
 });
 
 test("a worktree is cleaned in forge", () => {

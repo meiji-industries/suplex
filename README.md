@@ -21,12 +21,9 @@ and move work through a durable delivery process. Tasks can be managed in an
 index, Kanban board, or timeline; each represents the same underlying work,
 not a separate planning system.
 
-The normal path is:
+The normal path is `backlog → planning → approval → building → reviewing → shipping → done`.
 
-```text
-project + repository → task → plan → review → build → integration
-                         → checks + CI → pull request → merge → complete
-```
+A blocked task keeps its phase and shows one card with the actions that unblock it.
 
 Planner, reviewer, builder/developer, and integrator roles keep judgment and
 execution visible. Forge can also host first-class Hermes agents that bring in
@@ -227,7 +224,7 @@ pnpm run forge recover
 
 Recovery also prints a one-time passkey URL and revokes existing administrator access after the replacement passkey is enrolled.
 
-After enrollment, configure companies, Codex profiles/capacity, and direct-GitHub projects from `/admin` and `/projects`. Creating a project accepts an HTTPS or SSH GitHub repository URL, clones it to `~/forge/repos/<owner>/<repository>`, and reserves `~/forge/worktrees/<owner>/<repository>` for its worktrees. Override those roots with `FORGE_REPOSITORY_ROOT` and `FORGE_WORKTREE_ROOT`. Activation checks local Git identity and clean base/target refs, the literal setup/verification policy, required checks, allowed role profiles, and the host's existing `gh` authentication without storing provider credentials.
+After enrollment, configure companies, Codex profiles/capacity, and direct-GitHub projects from `/admin` and `/projects`. Creating a project accepts an HTTPS or SSH GitHub repository URL, clones it to `~/forge/repos/<owner>/<repository>`, and reserves `~/forge/worktrees/<owner>/<repository>` for its worktrees. Override those roots with `FORGE_REPOSITORY_ROOT` and `FORGE_WORKTREE_ROOT`. Set `FORGE_EDITOR_COMMAND` when the Forge host should use an editor command other than `code`. Activation checks local Git identity and clean base/target refs, the literal setup/verification policy, required checks, allowed role profiles, and the host's existing `gh` authentication without storing provider credentials.
 
 Create Forge-native work from `/tasks`: each task starts as a company-scoped Backlog card, stores its Markdown brief and optional images as hash-verified immutable artifacts, pins the active project revision, and starts planning only after the explicit expected-revision action. The board is a read model of the durable issue Workflow; it is not directly editable.
 

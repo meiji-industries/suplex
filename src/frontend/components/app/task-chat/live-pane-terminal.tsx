@@ -2,16 +2,22 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef } from "react";
+import { CopyButton } from "../copy-button.js";
+import { Button } from "../../ui/button.js";
+import { Input } from "../../ui/input.js";
 
 export function preservedViewportLine(wasFollowing: boolean, distanceFromBottom: number, newBottom: number): number {
   return wasFollowing ? newBottom : Math.max(0, newBottom - distanceFromBottom);
 }
 
-export function LivePaneTerminal({ role, text }: { role: string; text: string }) {
+type PaneInput = { text: string } | { keys: string[] };
+
+export function LivePaneTerminal({ role, text, attachCommand, onInput }: { role: string; text: string; attachCommand: string; onInput: (input: PaneInput) => Promise<void> }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const writeVersionRef = useRef(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -62,5 +68,12 @@ export function LivePaneTerminal({ role, text }: { role: string; text: string })
     });
   }, [text]);
 
-  return <div aria-label={`Live pane output for ${role}`} className="mt-1 h-full min-h-0 overflow-hidden bg-[#1e1e2e] p-2" ref={hostRef} />;
+  const sendText = (): void => {
+    const input = inputRef.current;
+    if (!input || input.value === "") return;
+    const { value: text } = input;
+    input.value = "";
+    void onInput({ text });
+  };
+  return <div className="flex h-full min-h-0 flex-col"><div aria-label={`Live pane output for ${role}`} className="mt-1 min-h-0 flex-1 overflow-hidden bg-[#1e1e2e] p-2" ref={hostRef} /><form className="flex shrink-0 items-center gap-1 border-t bg-background p-1" data-pane-input onSubmit={(event) => { event.preventDefault(); sendText(); }}><Input aria-label={`Send to ${role}`} placeholder={`Send to ${role}…`} ref={inputRef} /><Button size="xs" type="button" onClick={() => void onInput({ keys: ["enter"] })}>Enter</Button><Button size="xs" type="button" onClick={() => void onInput({ keys: ["esc"] })}>Esc</Button><Button size="xs" type="button" onClick={() => void onInput({ keys: ["ctrl+c"] })}>Ctrl+C</Button><Button size="xs" type="button" onClick={() => void onInput({ keys: ["y"] })}>y</Button><CopyButton value={attachCommand} label="Copy attach command" /></form></div>;
 }

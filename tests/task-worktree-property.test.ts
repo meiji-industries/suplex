@@ -15,6 +15,8 @@ test("worktree properties always show the current state", () => {
   expect(html).toContain('class="min-w-0 flex-1 truncate font-mono"');
   expect(html).toContain("task_11faa20d50cfa686e5bb197e");
   expect(html).toContain(`title="${path}"`);
+  expect(html).toContain("Open in editor");
+  expect(html).toContain("Open in terminal");
   expect(html).not.toContain('class="flex min-w-0 flex-wrap items-center gap-1"');
 
   expect(render({ worktreePath: null, worktreeState: "cleaned" })).toContain("Worktree removed");

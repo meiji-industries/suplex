@@ -281,7 +281,9 @@ export interface HerdrClient {
   readAgent(name: string, source?: "recent-unwrapped", lines?: number, format?: "text" | "ansi"): Promise<string>;
   waitAgent(name: string): Promise<HerdrAgent>;
   prompt(name: string, text: string, options?: PromptOptions): Promise<HerdrAgent>;
-  sendKeys(name: string, keys: ["ctrl+c"]): Promise<void>;
+  sendText(name: string, text: string): Promise<void>;
+  attachCommand(name: string): string;
+  sendKeys(name: string, keys: string[]): Promise<void>;
   startAgent(input: {
     name: string;
     paneId: string;
@@ -671,7 +673,14 @@ export class CliHerdrClient implements HerdrClient {
       ]), "agent"),
     );
   }
-  sendKeys(name: string, keys: ["ctrl+c"]): Promise<void> {
+  async sendText(name: string, text: string): Promise<void> {
+    await this.prompt(name, text);
+  }
+  attachCommand(name: string): string {
+    return `herdr agent attach ${name}`;
+  }
+  // Herdr accepts one or more positional key names. Use "esc" for Escape; "escape" also works.
+  sendKeys(name: string, keys: string[]): Promise<void> {
     return this.empty(["agent", "send-keys", name, ...keys]);
   }
   async startAgent(input: {

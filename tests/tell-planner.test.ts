@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 
 import { ISSUE_PHASES } from "../src/issue-phases.js";
 import { SendPlannerNoteBodySchema, plannerNoteAvailable } from "../src/commands/definitions/planning.js";
-import { TellPlannerForm } from "../src/frontend/components/app/tell-planner-form.js";
+import { ChatComposer } from "../src/frontend/components/app/task-chat/chat-composer.js";
 import { TaskActivity } from "../src/frontend/components/app/task-history.js";
 
 describe("Tell the Planner command", () => {
@@ -20,16 +20,16 @@ describe("Tell the Planner command", () => {
   });
 });
 
-test("renders the activity composer and optimistic feedback row", () => {
-  const form = renderToStaticMarkup(createElement(TellPlannerForm, { disabled: false, onSubmit: async () => undefined }));
-  expect(form).toContain("Tell the Planner");
+test("renders the chat composer and optimistic feedback row", () => {
+  const form = renderToStaticMarkup(createElement(ChatComposer, { taskId: "task-1", phase: "planning", disabled: false, plannerAvailable: true, onSubmit: async () => undefined }));
+  expect(form).toContain("Planner (plan note)");
+  expect(form).toContain("Send");
   expect(form).toContain("Cmd/Ctrl+Enter to send");
   const feed = renderToStaticMarkup(createElement(TaskActivity, { taskId: "task-1", timeline: [], optimisticRows: [{ id: "note-1", at: "2026-08-22T12:00:00.000Z", role: "you", text: "You told the Planner: Undo that please" }] }));
   expect(feed).toContain("told the Planner: Undo that please");
 });
 
-test("renders a disabled terminal composer with a reason", () => {
-  const html = renderToStaticMarkup(createElement(TellPlannerForm, { disabled: true, disabledReason: "Planner feedback is unavailable after this task has ended.", onSubmit: async () => undefined }));
-  expect(html).toContain("Planner feedback is unavailable after this task has ended.");
-  expect(html).toContain("disabled");
+test("hides the composer after the task ends", () => {
+  const html = renderToStaticMarkup(createElement(ChatComposer, { taskId: "task-1", phase: "done", disabled: false, plannerAvailable: false, onSubmit: async () => undefined }));
+  expect(html).toBe("");
 });

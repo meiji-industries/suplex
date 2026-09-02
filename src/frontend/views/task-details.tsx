@@ -15,7 +15,6 @@ import { ApplicationFrame } from "../components/app/application-frame.js";
 import { getWorkerHealthFailure, useSystemHealth } from "../components/app/system-health.js";
 import { TaskActivity } from "../components/app/task-history.js";
 import { Markdown, type MarkdownImageSource } from "../components/app/markdown.js";
-import { TellPlannerForm } from "../components/app/tell-planner-form.js";
 import { TaskLeadPlan } from "../components/app/task-lead-plan.js";
 import { invocationActorLabel } from "../components/app/task-invocations.js";
 import { TaskProgress } from "../components/app/task-progress.js";
@@ -33,16 +32,15 @@ import { PullRequestCard as GithubPullRequestCard } from "../components/app/pull
 import { LivePaneDock, TaskChat } from "../components/app/task-chat/task-chat.js";
 import { TaskBrowserProof } from "../components/app/task-browser-proof.js";
 import { CopyButton } from "../components/app/copy-button.js";
-import { COMMAND_LABELS } from "../lib/command-labels.js";
+import { COMMAND_LABELS, RESTART_LABELS } from "../lib/command-labels.js";
 import { adminDate, relativeTime, type ApiAgent, type ApiCi, type ApiProject, type ApiTask, type ApiTaskBranchSync } from "../lib/view-shared.js";
 import { isApiError, readJson, withCompany } from "../lib/api.js";
 import { requestTaskArchive } from "../lib/archive-task.js";
 import { invalidateTaskList } from "../lib/task-list.js";
 import { navigate } from "../lib/navigation.js";
 import type { IssueCommand, IssueCommandSlug } from "../../commands/registry.js";
-import { STEP_RETRY_COMMAND, TERMINAL_PHASES } from "../../issue-phases.js";
+import { STEP_RETRY_COMMAND } from "../../issue-phases.js";
 import { releaseFailureCopy } from "../../release-failures.js";
-import type { ActivityFeedRow } from "../lib/task-activity-feed.js";
 import { Archive, ArchiveRestore, Ellipsis, RefreshCw } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 
@@ -118,13 +116,23 @@ export function BranchSyncCard({ taskId, updatedAt, baseBranch, allowedCommands,
 
 export function WorktreeControls({ task, busy, onAction }: { task: ApiTask; busy: boolean; onAction: (path: TaskPlanAction) => Promise<void> }): ReactElement {
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [openMessage, setOpenMessage] = useState<string>();
   const canDelete = task.allowedCommands.includes("delete_worktree");
   const canRecreate = task.allowedCommands.includes("recreate_worktree");
   const path = task.worktreePath;
+  const openWorktree = async (app: "editor" | "terminal"): Promise<void> => {
+    try {
+      const result = await readJson<{ ok: boolean; error?: string }>(`/api/tasks/${encodeURIComponent(task.id)}/worktree/open`, { method: "POST", body: JSON.stringify({ app }) });
+      setOpenMessage(result.ok ? "Opened on the Forge host." : result.error ?? "Could not open the worktree");
+    } catch (error) {
+      setOpenMessage(error instanceof Error ? error.message : "Could not open the worktree");
+    }
+  };
   return <div className="space-y-1"><dt className="text-muted-foreground">Worktree</dt><dd className="space-y-1">
     <div className="flex min-w-0 items-center gap-1">
-      {task.worktreeState === "cleaned" ? <span>Worktree removed</span> : path ? <><CopyButton value={path} label="Copy worktree path" /><span className="min-w-0 flex-1 truncate font-mono" title={path}>{path.split("/").pop()}</span></> : <span>None</span>}
+      {task.worktreeState === "cleaned" ? <span>Worktree removed</span> : path ? <><CopyButton value={path} label="Copy worktree path" /><Button size="xs" variant="outline" onClick={() => void openWorktree("editor")} disabled={busy}>Open in editor</Button><Button size="xs" variant="outline" onClick={() => void openWorktree("terminal")} disabled={busy}>Open in terminal</Button><span className="min-w-0 flex-1 truncate font-mono" title={path}>{path.split("/").pop()}</span></> : <span>None</span>}
     </div>
+    {openMessage ? <p className="text-[11px] text-muted-foreground" role="status">{openMessage}</p> : null}
     {canDelete || canRecreate ? <div className="flex flex-wrap gap-1">
       {canDelete ? <Button size="xs" variant="destructive" onClick={() => setDeleteOpen(true)} disabled={busy}>Delete worktree</Button> : null}
       {canRecreate ? <Button size="xs" variant="outline" onClick={() => void onAction("recreate-worktree")} disabled={busy}>Recreate worktree</Button> : null}
@@ -221,7 +229,7 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
   const menu = <DropdownMenu><DropdownMenuTrigger render={<Button size="sm" variant="outline" disabled={disabled}>More</Button>} /><DropdownMenuContent align="end">{task.allowedCommands.filter((command) => !primaryCommands.includes(command)).map((command) => <DropdownMenuItem key={command} disabled={disabled} onClick={() => run(command)}>{COMMAND_LABELS[command]}</DropdownMenuItem>)}{onOpenDiff && task.developerExecution?.status === "completed" ? <DropdownMenuItem disabled={disabled} onClick={onOpenDiff}>Show diff</DropdownMenuItem> : null}{onRescue ? <DropdownMenuItem disabled={disabled} onClick={() => setRescueOpen(true)}>Retry workflow</DropdownMenuItem> : null}<DropdownMenuItem disabled={disabled} onClick={onArchive}>Archive</DropdownMenuItem><DropdownMenuItem disabled={disabled} onClick={onDuplicate}>Duplicate</DropdownMenuItem><DropdownMenuItem disabled={disabled} onClick={onSaveTemplate}>Save as template</DropdownMenuItem><DropdownMenuItem disabled={disabled || !onFixInNewTask} onClick={() => { if (onFixInNewTask) void onFixInNewTask(); }}>Fix in a new task</DropdownMenuItem></DropdownMenuContent></DropdownMenu>;
   const footer = <CardFooter><div className="flex w-full justify-end">{menu}</div></CardFooter>;
   const rescue = <RescueWorkflowDialog open={rescueOpen} onOpenChange={setRescueOpen} onRescue={onRescue} />;
-  if (task.blocked) return <Card data-task-actions data-task-blocked-card size="sm"><CardHeader><CardTitle><h3>{blocker?.summary ?? task.pendingAction}</h3></CardTitle>{task.lastHandlerError ? <CardDescription>Last {task.lastHandlerError.command} error: {task.lastHandlerError.reason}</CardDescription> : null}</CardHeader><CardContent><div className="flex flex-wrap gap-2">{(blocker?.actions ?? []).map((action, index, actions) => <Button key={action.command} size="sm" variant={action.command === "cancel_issue" ? "destructive" : index === actions.findIndex((candidate) => !candidate.destructive) ? "default" : "outline"} disabled={disabled} onClick={() => action.requiresNote ? setNoteAction(action.command) : run(action.command)}>{action.label || COMMAND_LABELS[action.command]}</Button>)}</div>{noteAction ? <form className="mt-3 space-y-2" onSubmit={(event) => { event.preventDefault(); run(noteAction as IssueCommand, note); setNoteAction(undefined); setNote(""); }}><Textarea required aria-label={`${COMMAND_LABELS[noteAction as IssueCommand]} note`} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add a concise note" /><Button type="submit" size="sm" disabled={disabled || !note.trim()}>{COMMAND_LABELS[noteAction as IssueCommand]}</Button></form> : null}</CardContent>{footer}{rescue}</Card>;
+  if (task.blocked) return <Card data-task-actions data-task-blocked-card size="sm"><CardHeader><CardTitle><h3>{blocker?.summary ?? task.pendingAction}</h3></CardTitle>{task.lastHandlerError ? <CardDescription>Last {task.lastHandlerError.command} error: {task.lastHandlerError.reason}</CardDescription> : null}</CardHeader><CardContent><div className="flex flex-wrap gap-2">{(blocker?.actions ?? []).map((action, index, actions) => <Button key={action.command} size="sm" variant={action.command === "cancel_issue" ? "destructive" : index === actions.findIndex((candidate) => !candidate.destructive) ? "default" : "outline"} disabled={disabled} onClick={() => action.requiresNote ? setNoteAction(action.command) : run(action.command)}>{RESTART_LABELS[action.command] ?? action.label ?? COMMAND_LABELS[action.command]}</Button>)}</div>{noteAction ? <form className="mt-3 space-y-2" onSubmit={(event) => { event.preventDefault(); run(noteAction as IssueCommand, note); setNoteAction(undefined); setNote(""); }}><Textarea required aria-label={`${COMMAND_LABELS[noteAction as IssueCommand]} note`} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add a concise note" /><Button type="submit" size="sm" disabled={disabled || !note.trim()}>{COMMAND_LABELS[noteAction as IssueCommand]}</Button></form> : null}</CardContent>{footer}{rescue}</Card>;
   if (task.owner === "human") return <Card data-task-actions size="sm"><CardHeader><CardTitle><h3>{task.pendingAction}</h3></CardTitle></CardHeader><CardContent>{task.phase === "approval" ? <div className="flex flex-wrap gap-2">{decisionControls}<Button size="sm" variant="outline" disabled={disabled} onClick={() => setRevisionOpen(true)}>Request changes</Button></div> : task.phase === "reviewing" && allowed("repair_delivery") ? <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={disabled} onClick={() => run("repair_delivery")}>Run missing check</Button><Button size="sm" disabled={disabled} onClick={() => run("review_delivery", "Continued to review with verification incomplete")}>Continue to review</Button></div> : task.phase === "reviewing" && allowed("review_delivery") ? <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={disabled} onClick={() => void onPlanAction("reject-plan", "Member requested delivery changes")}>Request changes</Button><Button size="sm" disabled={disabled} onClick={() => run("review_delivery")}>Looks good</Button></div> : primaryCommands[0] ? <Button size="sm" disabled={disabled} onClick={() => run(primaryCommands[0] as ApiTask["allowedCommands"][number])}>{COMMAND_LABELS[primaryCommands[0] as ApiTask["allowedCommands"][number]]}</Button> : null}{revisionOpen ? <form className="mt-3 space-y-3" onSubmit={(event) => { event.preventDefault(); void onRevisePlan({ reason: revisionReason }); }}><Field><FieldLabel htmlFor="revision-reason">Why revise this plan?</FieldLabel><Textarea id="revision-reason" required value={revisionReason} onChange={(event) => setRevisionReason(event.target.value)} placeholder="Describe the changed requirement or observed problem." /></Field><Button type="submit" size="sm" disabled={disabled || !revisionReason.trim()}>Submit revision</Button></form> : null}{continueOpen ? <form className="mt-3 space-y-3" onSubmit={(event) => { event.preventDefault(); void onContinueWork(continueReason); }}><Field><FieldLabel htmlFor="continue-reason">Why continue this work?</FieldLabel><Textarea id="continue-reason" required value={continueReason} onChange={(event) => setContinueReason(event.target.value)} placeholder="Describe the next outcome." /></Field><Button type="submit" size="sm" disabled={disabled || !continueReason.trim()}>Create successor</Button></form> : null}</CardContent>{footer}{rescue}</Card>;
   return <Card data-task-actions data-task-status-card size="sm"><CardHeader><CardTitle><h3>{task.pendingAction}</h3></CardTitle><CardDescription><AgentElapsed task={task} /></CardDescription></CardHeader>{footer}{rescue}</Card>;
 }
@@ -514,18 +522,9 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
   }, []);
   const leadPlan = visibleLeadPlan ? <TaskLeadPlan output={visibleLeadPlan} /> : undefined;
   const activityCount = task.activity.length;
-  const [optimisticPlannerNotes, setOptimisticPlannerNotes] = useState<ActivityFeedRow[]>([]);
-  useEffect(() => { setOptimisticPlannerNotes([]); }, [task.id]);
-  const plannerFeedbackEnded = TERMINAL_PHASES.has(task.phase) || Boolean(task.successorTaskId);
-  const plannerFeedbackDisabledReason = plannerFeedbackEnded ? "Planner feedback is unavailable after this task has ended." : !tellPlannerCommand ? "Planner feedback is unavailable while the task refreshes." : undefined;
   const activityContent = <>
     <PhaseTimings activity={task.activity} phase={task.phase} updatedAt={task.updatedAt} />
-    <TaskActivity taskId={task.id} timeline={task.activity} agentInvocations={task.agentInvocations} release={task.release} ci={task.ci} githubPullRequest={task.githubPullRequest} deliveryTarget={task.deliveryTarget} optimisticRows={optimisticPlannerNotes} onViewChanges={openDiff} />
-    <TellPlannerForm disabled={busy || !tellPlannerCommand} disabledReason={plannerFeedbackDisabledReason} onSubmit={async (note, commandId) => {
-      setOptimisticPlannerNotes((rows) => [...rows, { id: `optimistic-planner-note-${commandId}`, at: new Date().toISOString(), role: "you", text: `You told the Planner: ${note}`, revision: task.revision }]);
-      await onPlanAction("tell-planner", note, { commandId });
-      setOptimisticPlannerNotes([]);
-    }} />
+    <TaskActivity taskId={task.id} timeline={task.activity} agentInvocations={task.agentInvocations} release={task.release} ci={task.ci} githubPullRequest={task.githubPullRequest} deliveryTarget={task.deliveryTarget} onViewChanges={openDiff} />
   </>;
   const developerExecution = task.developerExecution;
   const hasChanges = developerExecution !== undefined;
@@ -544,7 +543,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
       <TabsTrigger value="checks" disabled={!hasChecks}>Checks</TabsTrigger>
       <TabsTrigger value="other">Other</TabsTrigger>
     </TabsList>
-    <TabsContent value="chat"><TaskChat task={task} busy={busy || !tellPlannerCommand} pullRequestBusy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} onRepairCi={async () => onPlanAction("repair-ci")} onOpenDiff={openDiff} composerDisabledReason={plannerFeedbackDisabledReason} onSendPlannerNote={async (note, commandId) => onPlanAction("tell-planner", note, { commandId })} /></TabsContent>
+    <TabsContent value="chat"><TaskChat task={task} busy={busy} pullRequestBusy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} onRepairCi={async () => onPlanAction("repair-ci")} onOpenDiff={openDiff} plannerAvailable={Boolean(tellPlannerCommand)} onSendPlannerNote={async (note, commandId) => onPlanAction("tell-planner", note, { commandId })} /></TabsContent>
     <TabsContent value="activity" className="space-y-7">{activityContent}</TabsContent>
     {hasChanges ? <TabsContent value="diffs" keepMounted><div ref={diffPanelRef} data-task-diff-panel className="scroll-mt-24"><Suspense fallback={<Skeleton className="h-48 w-full" />}><DeveloperDiff taskId={task.id} executionId={task.developerExecution!.id} poll={pollDeveloperDiff} onFileCount={setChangesFileCount} /></Suspense></div></TabsContent> : null}
     {hasChecks ? <TabsContent value="checks"><CiPanel ci={task.ci!} /></TabsContent> : null}
@@ -608,7 +607,14 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                 </Tabs>
               </div>
             </div>
-            {activeWorkTab === "chat" ? <LivePaneDock task={task} /> : null}
+            {activeWorkTab === "chat" ? <LivePaneDock task={task} onRestart={async (command) => {
+              if (command) {
+                const action = taskAttentionAction(task.commands, command);
+                await onPlanAction(action.path, action.note, action.payload);
+                return;
+              }
+              await onRescue();
+            }} /> : null}
           </div>
           <aside data-task-properties className="border-border border-t bg-muted/20 px-4 py-6 sm:px-6 lg:sticky lg:top-0 lg:h-fit lg:border-t-0 lg:border-l">
             <div className="mb-6 space-y-4">{pullRequestInMain ? null : <GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} onRepairCi={async () => onPlanAction("repair-ci")} />}<BranchSyncCard taskId={task.id} updatedAt={task.updatedAt} baseBranch={project?.baseBranch ?? "base"} allowedCommands={task.allowedCommands} busy={busy} onRefresh={onRefresh} onAction={(path) => onPlanAction(path)} /><TaskProgress phase={task.phase} blocked={task.blocked} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} agentInvocations={task.agentInvocations} activeCapacity={task.capacity?.status === "active" ? task.capacity : undefined} /></div>

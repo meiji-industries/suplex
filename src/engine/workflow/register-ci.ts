@@ -14,6 +14,7 @@ import type { GithubPullRequestObservationResult } from "../contracts/activities
 export const CI_RERUN_LIMIT = 2;
 const CI_RERUN_POLL_DELAY_MS = 60_000;
 const CI_PENDING_POLL_DELAY_MS = 15_000;
+const CI_OBSERVATION_FAILURE_POLL_DELAY_MS = 60_000;
 const CI_COMMAND_STEPS = new Set(["ci_waiting", "ci_repair_planning", "ci_repairing"]);
 const shouldUpdateFromBaseBeforeCiRepair = (result: { outcome: string; repairable: boolean; owner: string | null }, baseUpdateCount: number): boolean => result.outcome === "failed" && result.repairable && result.owner === "lead" && baseUpdateCount < 2;
 
@@ -78,9 +79,28 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
   };
   const reconcileCiTurn = async (initialObservation?: GithubPullRequestObservationResult | null): Promise<contracts.IssueWorkflowState> => {
     const expectedBaseSha = ctx.state.targetBaseSha;
-    let observed = initialObservation ?? (ctx.state.releaseRepository && ctx.state.branchName
-      ? await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
-      : null);
+    const deferObservationFailure = async (error: unknown): Promise<contracts.IssueWorkflowState> => {
+      if (isCancellation(error)) throw error;
+      const failure = ctx.permanentActivityFailure(error);
+      const failureClass = classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : failure?.code === "authentication-required" ? { category: "provider_authentication" } : {}), summary: failure?.summary ?? "Couldn't check CI — retry", source: "ci" });
+      const evidence = stateTransitions.evidencePointer(failure?.evidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence");
+      if (failureClass === "credential_missing") ctx.state = stateTransitions.credentialBlockedState(ctx.state, "reconcile_ci", evidence);
+      else {
+        const deferred = deferCiReconciliation(ctx.state, new Date(runExecution.current().now()).toISOString());
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...deferred, ciNextPollAt: new Date(runExecution.current().now() + CI_OBSERVATION_FAILURE_POLL_DELAY_MS).toISOString() });
+      }
+      await ctx.project();
+      return ctx.state;
+    };
+    let observed = initialObservation;
+    if (observed === undefined && ctx.state.releaseRepository && ctx.state.branchName) {
+      try {
+        observed = await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
+      } catch (error) {
+        return deferObservationFailure(error);
+      }
+    }
+    observed ??= null;
     if (!ctx.state.expectedHeadSha && observed?.exists && observed.state === "open" && observed.headSha) ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, expectedHeadSha: observed.headSha });
     if (!ctx.state.expectedHeadSha) {
       ctx.state = deferCiReconciliation(ctx.state, new Date().toISOString());
@@ -124,7 +144,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       if (isCancellation(error)) throw error;
       if (ctx.state.step !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId || ctx.state.expectedHeadSha !== expectedHeadSha) return ctx.state;
       const failure = ctx.permanentActivityFailure(error);
-      const failureClass = true ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary: failure?.summary ?? "Couldn't check CI — retry", source: "ci" }) : null;
+      const failureClass = true ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : failure?.code === "authentication-required" ? { category: "provider_authentication" } : {}), summary: failure?.summary ?? "Couldn't check CI — retry", source: "ci" }) : null;
       if (failureClass === "credential_missing") {
         const evidence = stateTransitions.evidencePointer(failure?.evidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence");
         ctx.state = stateTransitions.credentialBlockedState(ctx.state, "reconcile_ci", evidence);

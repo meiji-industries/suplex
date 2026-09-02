@@ -8,7 +8,7 @@ import { StructuredLogger } from "../src/logging.js";
 import { IssueRun } from "../src/engine/runs.js";
 import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
 
-test("a rejected workflow immediately projects a human-owned rescue state and logs", async () => {
+test("a failed GitHub observation keeps the workflow waiting with a backoff", async () => {
   const projected: unknown[] = [];
   const h = await createEngineHarness({
     projectIssueState: async (event) => { projected.push(event.state); return event.state; },
@@ -29,11 +29,10 @@ test("a rejected workflow immediately projects a human-owned rescue state and lo
   const run = new IssueRun(input, h.database, caller, h.clock, new StructuredLogger((line) => records.push(JSON.parse(line) as Record<string, unknown>)));
   try {
     await run.ready();
-    for (let attempt = 0; attempt < 20 && !run.error; attempt += 1) await Promise.resolve();
-    for (let attempt = 0; attempt < 20 && (!run.error || projected.length === 0); attempt += 1) await Promise.resolve();
-    expect(run.error).toBeInstanceOf(Error);
-    expect(run.state).toMatchObject({ step: "ci_waiting", owner: "human", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for CI", lastHandlerError: { command: "workflow", reason: "Activity observeGithubPullRequest failed" } });
-    expect(projected).toContainEqual(expect.objectContaining({ owner: "human", pendingAction: "Waiting for CI" }));
-    expect(records).toContainEqual(expect.objectContaining({ level: 50, message: "Issue workflow run failed", workflowId, error: "Activity observeGithubPullRequest failed" }));
+    for (let attempt = 0; attempt < 20 && projected.length === 0; attempt += 1) await Promise.resolve();
+    expect(run.error).toBeUndefined();
+    expect(run.state).toMatchObject({ step: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for CI", ciNextPollAt: expect.any(String) });
+    expect(projected).toContainEqual(expect.objectContaining({ owner: "lead", pendingAction: "Waiting for CI", ciNextPollAt: expect.any(String) }));
+    expect(records).not.toContainEqual(expect.objectContaining({ level: 50, message: "Issue workflow run failed", workflowId }));
   } finally { run.dispose(); await h.stop(); }
 });

@@ -11,7 +11,7 @@ import { pullRequestObservationKey, reconcile, type PullRequestObservation, type
 import type { GithubPullRequestObservationResult } from "./contracts/activities/github-sync.js";
 import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, loadTaskSourcePullRequest, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
 import { syncGithubPullRequestSignal } from "./issue-updates.js";
-import { evidencePointer, humanBlocker, withWorktreeCommands } from "./workflow/state-transitions.js";
+import { credentialBlockedState, evidencePointer, humanBlocker, withWorktreeCommands } from "./workflow/state-transitions.js";
 import { createIssueWorkflowContext } from "./workflow/context.js";
 import { registerGovernanceHandlers } from "./workflow/register-governance.js";
 import { registerLifecycleHandlers, registerLifecycleHandlersContinuation } from "./workflow/register-lifecycle.js";
@@ -24,7 +24,7 @@ import { registerDevelopmentHandlers } from "./workflow/register-development.js"
 import { registerMergeHandlers, registerMergeReconciliationHandler } from "./workflow/register-merge.js";
 import { registerReleaseHandlers } from "./workflow/register-release.js";
 import { registerTargetBaseHandlers } from "./workflow/register-target-base.js";
-import { applyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
+import { applyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, classifyRepairFailure, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
 export * from "./issue-updates.js";
 export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
 async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { const projected = withWorktreeCommands(state); return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: runExecution.current().runId, eventId: projected.lastEventId, state: projected })); }
@@ -67,6 +67,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const shouldContinueAsNew = (_revision: number): boolean => false;
   let stateMutationLocked = false;
   let githubSyncRequested = false;
+  let githubObservationFailure: unknown;
   const withStateMutation = async <T>(operation: () => T): Promise<T> => {
     await condition(() => !stateMutationLocked);
     stateMutationLocked = true;
@@ -199,11 +200,14 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     // unreleased local head (after a repair the PR still points at the failed commit), so it is skipped too.
     const syncSkipsAgentPhases = true;
     if (syncSkipsAgentPhases && !isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "releasing", "merge_conflict_reviewing", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review", ...(true ? ["delivery_ready"] : [])].includes(state.step))) return null;
+    githubObservationFailure = undefined;
     const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch((error) => {
       if (isCancellation(error)) throw error;
+      githubObservationFailure = error;
       return null;
     });
     if (!observed) return null;
+    githubObservationFailure = undefined;
     const common = githubPullRequestObservationFields(observed, new Date().toISOString());
     if (isSourcePullRequestPreDelivery(state, sourcePullRequest) && observed.state !== "merged") { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, common)); await projectIssueState(state); return observed; }
     if (true) {
@@ -365,6 +369,19 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         if (delay > 0) await sleep(delay);
         if (workflowContext.state.step !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
         const observation = await syncGithubPullRequest();
+        if (observation === null && githubObservationFailure) {
+          const failure = workflowContext.permanentActivityFailure(githubObservationFailure);
+          githubObservationFailure = undefined;
+          const failureClass = classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : failure?.code === "authentication-required" ? { category: "provider_authentication" } : {}), summary: failure?.summary ?? "Couldn't check CI — retry", source: "ci" });
+          const ciNextPollAt = new Date(runExecution.current().now() + 60_000).toISOString();
+          const deferred = IssueWorkflowStateSchema.parse({ ...workflowContext.state, ciNextPollAt });
+          const evidence = evidencePointer(failure?.evidenceArtifactId ?? deferred.ciEvidenceArtifactId ?? deferred.developerEvidenceArtifactId ?? undefined, "attention-evidence");
+          workflowContext.state = failureClass === "credential_missing"
+            ? credentialBlockedState(deferred, "reconcile_ci", evidence)
+            : IssueWorkflowStateSchema.parse({ ...deferred, revision: deferred.revision + 1, lastEventId: `${deferred.workflowId}:${deferred.revision + 1}` });
+          await workflowContext.project();
+          continue;
+        }
         // CI reconciliation needs a release; without one the PR sync above is the only observer. Never throw from the loop.
         if (workflowContext.state.step === "ci_waiting" && workflowContext.state.releaseId) await workflowContext.reconcileCiTurn(observation);
         else if (workflowContext.state.step === "ci_waiting" && workflowContext.state.resultCommit && workflowContext.state.branchName && !workflowContext.state.deliveryReviewId) {

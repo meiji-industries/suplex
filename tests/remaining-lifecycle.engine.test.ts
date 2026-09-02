@@ -94,6 +94,24 @@ test("unchanged CI shipping observes GitHub once in a fifteen-second window", as
   } finally { await h.stop(); }
 });
 
+test("a GitHub authentication failure blocks CI after one observation", async () => {
+  let observations = 0;
+  const h = await createEngineHarness({
+    observeGithubPullRequest: async () => {
+      observations += 1;
+      throw ApplicationFailure.nonRetryable("GitHub CLI authentication is unavailable", "authentication-required");
+    },
+  });
+  h.seedTask("ci-authentication-failure");
+  try {
+    const started = await h.startContinuation("ci-authentication-failure", ciState(h, "ci-authentication-failure"), { deliveryTarget: "merged" });
+    const blocked = await h.settle(started.workflowId, (state) => state.step === "ci_waiting" && state.owner === "human" && state.blocker?.category === "provider_authentication");
+    expect(observations).toBe(1);
+    expect(Date.parse(blocked.ciNextPollAt!)-h.clock.now()).toBe(60_000);
+    expect(blocked).toMatchObject({ allowedCommands: expect.arrayContaining(["reconcile_ci", "cancel_issue"]), pendingAction: "GitHub sign-in is required to continue.", blocker: { category: "provider_authentication" } });
+  } finally { await h.stop(); }
+});
+
 test("foreign PR head changes return reviewed work to delivery review", async () => {
   const h = await createEngineHarness({ projectIssueState: async (event) => event.state, observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.test/42", state: "open", isDraft: false, headSha: remoteHead, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, autoMergeEnabled: false, reviewDecision: null }), reconcileMerge: async () => ({ outcome: "changed_head", observedHeadSha: remoteHead, mergeObservationId: "head-change", completionReceiptId: null, observedAt: new Date().toISOString(), mergedAt: null, retryAt: null, blockerCode: "head_changed", evidenceArtifactId: null, pullRequestNumber: 42, pullRequestUrl: "https://github.test/42" }) });
   h.seedTask("foreign-head");

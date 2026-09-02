@@ -1,16 +1,17 @@
 import { IssueWorkflowStateSchema, type IssueWorkflowState, type ReconcileTargetBaseActivityResult } from "./issue-contracts.js";
+import { at, isBlocked } from "../issue-phases.js";
 
 export function applyTargetBaseNoDrift(state: IssueWorkflowState, result: Extract<ReconcileTargetBaseActivityResult, { outcome: "no_drift" }>): IssueWorkflowState {
-  const requiresResume = state.phase === "delivery_blocked" || (state.phase === "delivery_ready" && result.checkpoint === "pre_release");
+  const requiresResume = isBlocked(state) || (result.checkpoint === "pre_release" && (state.step === "delivery_ready" || (state.step === "development" && Boolean(state.deliveryArtifactId))));
   const resumed = !requiresResume
     ? {}
     : result.checkpoint === "pre_release"
       ? state.deliveryReviewId
-        ? { phase: "delivery_reviewed" as const, owner: "lead" as const, allowedCommands: ["publish_draft", "cancel_issue"] as const, pendingAction: "Publish one exact draft pull request" }
-        : { phase: "delivery_ready" as const, owner: "lead" as const, allowedCommands: ["review_delivery", "cancel_issue"] as const, pendingAction: "Lead delivery review" }
+        ? { ...at("delivery_reviewed"), owner: "lead" as const, allowedCommands: ["publish_draft", "cancel_issue"] as const, pendingAction: "Publish one exact draft pull request" }
+        : { ...at("delivery_ready"), owner: "lead" as const, allowedCommands: ["review_delivery", "cancel_issue"] as const, pendingAction: "Lead delivery review" }
       : result.checkpoint === "pre_final_review"
-        ? { phase: "final_review" as const, owner: "lead" as const, allowedCommands: ["final_review", "cancel_issue"] as const, pendingAction: "Final Lead review" }
-        : { phase: "accepted" as const, owner: "human" as const, allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"] as const, pendingAction: "Member acceptance required" };
+        ? { ...at("final_review"), owner: "lead" as const, allowedCommands: ["final_review", "cancel_issue"] as const, pendingAction: "Final Lead review" }
+        : { ...at("accepted"), owner: "human" as const, allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"] as const, pendingAction: "Member acceptance required" };
   const changed = requiresResume
     || state.targetBaseCheckId !== result.checkId
     || state.targetBaseCheckpoint !== result.checkpoint
@@ -26,7 +27,7 @@ export function applyTargetBaseRevalidation(
   const published = Boolean(state.releaseId && state.pullRequestNumber && state.pullRequestUrl);
   return IssueWorkflowStateSchema.parse({
     ...state,
-    phase: "delivery_ready",
+    ...at("delivery_ready"),
     owner: "lead",
     allowedCommands: ["review_delivery", "cancel_issue"],
     pendingAction: "Fresh Lead review required after target-base revalidation",

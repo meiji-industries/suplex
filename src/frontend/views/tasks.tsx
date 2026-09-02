@@ -19,12 +19,12 @@ import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { getWorkerHealthFailure, useSystemHealth } from ".././components/app/system-health.js";
-import { ACTIVE_INVOCATION_STATUSES, TaskStatus, TaskStatusIcon, taskPresentationPhase, taskStatusAppearance, taskStatusLabel } from ".././components/app/task-status.js";
+import { ACTIVE_INVOCATION_STATUSES, TaskStatus, TaskStatusIcon, taskStatusAppearance, taskStatusLabel } from ".././components/app/task-status.js";
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { invalidateTaskList, readTaskList, subscribeTaskListInvalidations } from ".././lib/task-list.js";
 import { navigate } from ".././lib/navigation.js";
 import { taskListGroups, type TaskListFilter } from "../lib/task-list-groups.js";
-import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
+import { ACTIVE_PHASES as activeTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
 import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, CircleDotDashed, CircleSlash, CircleX, Ellipsis, FileText, Filter, FolderKanban, Layers3, ListFilter, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type ReactElement } from "react";
 import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiCompanyBranchSync, type ApiProject, type ApiTask, type ApiTaskSummary, type ApiTaskTemplate } from "../lib/view-shared.js";
@@ -306,7 +306,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     reviewer: roleAgentOverrides.reviewer ?? newTaskProject?.roleDefaults.reviewer,
     integrator: roleAgentOverrides.integrator ?? newTaskProject?.roleDefaults.integrator,
   };
-  const activeCount = visibleTasks.filter((task) => activeTaskPhases.has(task.phase) || BLOCKED_PHASES.has(task.phase)).length;
+  const activeCount = visibleTasks.filter((task) => activeTaskPhases.has(task.phase) || task.blocked).length;
   const backlogCount = visibleTasks.filter((task) => task.phase === "backlog").length;
   const taskGroups = taskListGroups(visibleTasks, taskFilter);
   const archivedCount = taskFilter === "archived" ? taskGroups.reduce((count, group) => count + group.tasks.length, 0) : undefined;
@@ -362,7 +362,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     if (!selected) return;
     if (planningUnavailable) { setError(planningUnavailable); return; }
     setBusy(true); setError("");
-    const optimistic: ApiTask = { ...selected, phase: "planning", revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Planner planning" };
+    const optimistic: ApiTask = { ...selected, phase: "planning", step: "planning", blocked: false, revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Planner planning" };
     selectedRef.current = optimistic; setSelected(optimistic); setTasks((current) => current.map((task) => task.id === optimistic.id ? optimistic : task));
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); selectedRef.current = updated; setSelected(updated); setTasks((current) => current.map((task) => task.id === updated.id ? updated : task)); await reload(); }
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
@@ -599,18 +599,17 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
                 <Collapsible.Panel className="pt-0.5">
                   {group.tasks.map((task) => {
                     const project = visibleProjects.find((candidate) => candidate.id === task.projectId);
-                    const presentationPhase = taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands });
-                    const appearance = taskStatusAppearance(presentationPhase);
+                    const appearance = taskStatusAppearance(task.phase, task.blocked);
                     return (
                       <a data-task-row key={task.id} href={withCompany(`/tasks/${encodeURIComponent(task.id)}`, companyId)} className="group/task-row grid min-h-9 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md px-3 text-[13px] outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring/50 sm:grid-cols-[auto_minmax(0,1fr)_auto_auto] sm:px-4">
-                        <TaskStatusIcon phase={presentationPhase} pullRequestState={task.githubPullRequest?.state} />
+                        <TaskStatusIcon phase={task.phase} blocked={task.blocked} pullRequestState={task.githubPullRequest?.state} />
                         <span className="flex min-w-0 items-center gap-2">
                           {task.issueKey ? <span className="shrink-0 text-xs text-muted-foreground">{task.issueKey}</span> : null}
                           <span className="truncate font-medium">{task.title}</span>
                           {branchSync[task.id]?.ahead ? <ReuiBadge variant="secondary" size="sm" radius="full">↑{branchSync[task.id]?.ahead}</ReuiBadge> : null}
                           {project ? <><ChevronRight className="hidden size-3 shrink-0 text-muted-foreground/60 md:block" /><span className="hidden truncate text-xs text-muted-foreground md:block">{project.name}</span></> : null}
                         </span>
-                        <span className="hidden sm:inline-flex"><ReuiBadge variant={appearance.badge} size="sm" radius="full">{taskStatusLabel(presentationPhase, task.deliveryTarget, task.githubPullRequest?.state)}</ReuiBadge></span>
+                        <span className="hidden sm:inline-flex"><ReuiBadge variant={appearance.badge} size="sm" radius="full">{taskStatusLabel(task.phase, task.pendingAction)}</ReuiBadge></span>
                         <time dateTime={task.updatedAt} className="w-16 text-right text-[11px] text-muted-foreground">{taskListDate(task.updatedAt)}</time>
                       </a>
                     );

@@ -6,11 +6,12 @@ import { expect, test } from "vitest";
 
 import { ForgeDatabase } from "../src/database.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueProjectionEvent } from "../src/engine/issue-contracts.js";
+import { at } from "../src/issue-phases.js";
 
 function event(revision: number, companyId = "company"): IssueProjectionEvent {
   const state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState({ workflowId: "workflow", companyId, projectId: "project", issueId: "task", projectRevisionId: "revision", briefArtifactId: "brief", briefSha256: "a".repeat(64), imageArtifactIds: [], requestHash: "b".repeat(64), roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }),
-    revision, phase: revision === 0 ? "backlog" : "planning", owner: revision === 0 ? "human" : "lead", allowedCommands: revision === 0 ? ["start_planning"] : [], pendingAction: revision === 0 ? "Start planning" : "Planning", lastEventId: `workflow:${revision}`,
+    revision, ...at(revision === 0 ? "backlog" : "planning"), owner: revision === 0 ? "human" : "lead", allowedCommands: revision === 0 ? ["start_planning"] : [], pendingAction: revision === 0 ? "Start planning" : "Planning", lastEventId: `workflow:${revision}`,
   });
   return IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state });
 }

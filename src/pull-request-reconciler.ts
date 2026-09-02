@@ -23,7 +23,7 @@ export interface PullRequestObservation {
 }
 
 export interface PullRequestCurrent {
-  phase?: string | null;
+  step?: string | null;
   owner?: PullRequestOwner | null;
   pendingAction?: string | null;
   pullRequestNumber?: number | null;
@@ -100,7 +100,7 @@ export function reconcile(input: { observed: PullRequestObservation; target: Pul
     return { phase: "Done", pendingAction: "Pull request ready", owner: "none", allowedCommands: ["send_planner_note"], actions: [...feedOnce(current, observed, message), { kind: "send_planner_note", message }] };
   }
   if (target !== "merged") return done(current, observed, "Pull request ready");
-  if (current.owner === "human" && (current.phase === "ci_repair_required" || (current.phase === "delivery_blocked" && /\bCI\b/i.test(current.pendingAction ?? ""))) && current.adoptedObservationKey === pullRequestObservationKey(observed) && (observed.checks === "pending" || observed.checks === "none" || observed.checks === "failed")) return { phase: "Blocked", pendingAction: current.pendingAction ?? "", owner: "human", allowedCommands: [], actions: [], unchanged: true };
+  if (current.owner === "human" && (current.step === "ci_repairing" || (["delivery_ready", "reviewing_delivery", "delivery_reviewed", "final_review"].includes(current.step ?? "") && /\bCI\b/i.test(current.pendingAction ?? ""))) && current.adoptedObservationKey === pullRequestObservationKey(observed) && (observed.checks === "pending" || observed.checks === "none" || observed.checks === "failed")) return { phase: "Blocked", pendingAction: current.pendingAction ?? "", owner: "human", allowedCommands: [], actions: [], unchanged: true };
   if (observed.checks === "pending" || observed.checks === "none") return { phase: "Waiting for CI", pendingAction: "Waiting for CI", owner: "lead", allowedCommands: [], actions: feedOnce(current, observed, "Pull request marked ready on GitHub") };
   if (observed.checks === "failed") return { phase: "Waiting for CI", pendingAction: "Lead diagnosis", owner: "lead", allowedCommands: [], actions: [...feedOnce(current, observed, "CI failed on GitHub"), { kind: "repair_ci" }] };
   const number = observed.number!;

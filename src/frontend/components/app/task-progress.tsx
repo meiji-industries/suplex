@@ -11,7 +11,9 @@ import type { IssuePhase } from "../../../issue-phases.js";
 const stages = [
   { step: 1, title: "Plan" },
   { step: 2, title: "Build" },
-  { step: 3, title: "Release" },
+  { step: 3, title: "Review" },
+  { step: 4, title: "Ship" },
+  { step: 5, title: "Done" },
 ] as const;
 
 type ProgressEvent = Pick<TaskResponse["timeline"][number], "metadata" | "createdAt">;
@@ -19,11 +21,16 @@ type AgentInvocation = TaskResponse["agentInvocations"][number];
 type ActiveCapacity = NonNullable<TaskResponse["capacity"]>;
 type DeveloperLiveness = { status: string; lastHeartbeatAt: string | null };
 
-function taskProgressStep(phase: string, canRetryDevelopment: boolean): number {
-  if (["backlog", "planning", "approval", "failed"].includes(phase)) return 1;
-  if (["ready_for_development", "development", "repair_required"].includes(phase)) return 2;
-  if (phase === "delivery_blocked" && canRetryDevelopment) return 2;
-  return 3;
+function isIssuePhase(phase: string): phase is IssuePhase {
+  return ["backlog", "planning", "approval", "building", "reviewing", "shipping", "done", "cancelled"].includes(phase);
+}
+
+function taskProgressStep(phase: IssuePhase): number {
+  if (["backlog", "planning", "approval"].includes(phase)) return 1;
+  if (phase === "building") return 2;
+  if (phase === "reviewing") return 3;
+  if (phase === "shipping") return 4;
+  return 5;
 }
 
 function elapsedLabel(prefix: "Done in" | "In progress ·", startedAt: string, finishedAt: string): string {
@@ -32,7 +39,7 @@ function elapsedLabel(prefix: "Done in" | "In progress ·", startedAt: string, f
 }
 
 function stageStart(timeline: ProgressEvent[], minimumStep: number): string | undefined {
-  return timeline.find((event) => typeof event.metadata.phase === "string" && (minimumStep < 3 || event.metadata.phase !== "delivery_blocked") && taskProgressStep(event.metadata.phase, false) >= minimumStep)?.createdAt;
+  return timeline.find((event) => typeof event.metadata.phase === "string" && isIssuePhase(event.metadata.phase) && taskProgressStep(event.metadata.phase) >= minimumStep)?.createdAt;
 }
 
 function activeDuration(startedAt: string, now: number): string {
@@ -40,20 +47,20 @@ function activeDuration(startedAt: string, now: number): string {
   return `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
 }
 
-function activeAgent(phase: string, invocations: AgentInvocation[]): AgentInvocation | undefined {
-  const role = phase === "planning" ? "planner" : ["ready_for_development", "development", "repair_required"].includes(phase) ? "builder" : "reviewer";
+function activeAgent(phase: IssuePhase, invocations: AgentInvocation[]): AgentInvocation | undefined {
+  const role = phase === "planning" ? "planner" : phase === "building" ? "builder" : "reviewer";
   return [...invocations].reverse().find((invocation) => invocation.role === role && ["starting", "running", "cancelling"].includes(invocation.status));
 }
 
-export function TaskProgress({ phase, allowedCommands, createdAt, updatedAt, timeline, agentInvocations, activeCapacity, developerLiveness }: { phase: IssuePhase; allowedCommands: string[]; createdAt: string; updatedAt: string; timeline: ProgressEvent[]; agentInvocations: AgentInvocation[]; activeCapacity?: ActiveCapacity | undefined; developerLiveness?: DeveloperLiveness | undefined }) {
-  const currentStep = taskProgressStep(phase, allowedCommands.includes("retry_development"));
-  const terminal = ["accepted", "manual_merge", "done", "cancelled"].includes(phase);
-  const stageStarts: Array<string | undefined> = [createdAt, stageStart(timeline, 2), stageStart(timeline, 3)];
+export function TaskProgress({ phase, blocked = false, createdAt, updatedAt, timeline, agentInvocations, activeCapacity, developerLiveness }: { phase: IssuePhase; blocked?: boolean; createdAt: string; updatedAt: string; timeline: ProgressEvent[]; agentInvocations: AgentInvocation[]; activeCapacity?: ActiveCapacity | undefined; developerLiveness?: DeveloperLiveness | undefined }) {
+  const currentStep = taskProgressStep(phase);
+  const terminal = phase === "done" || phase === "cancelled";
+  const stageStarts: Array<string | undefined> = [createdAt, stageStart(timeline, 2), stageStart(timeline, 3), stageStart(timeline, 4), stageStart(timeline, 5)];
   const [now, setNow] = useState(() => Date.now());
-  const buildLive = phase === "development" && Boolean(developerLiveness?.lastHeartbeatAt) && ["starting", "running", "active", "reconnecting", "cancellation_requested", "cancelling"].includes(developerLiveness?.status ?? "") && now - Date.parse(developerLiveness!.lastHeartbeatAt!) <= 15_000;
-  const processing = taskIsProcessing({ phase, agentInvocations, capacityStatus: activeCapacity?.status });
-  const spinning = phase === "development" ? buildLive : processing;
-  const ticking = !terminal && !["delivery_blocked", "blocked", "failed"].includes(phase) && (currentStep !== 2 || buildLive);
+  const buildLive = phase === "building" && Boolean(developerLiveness?.lastHeartbeatAt) && ["starting", "running", "active", "reconnecting", "cancellation_requested", "cancelling"].includes(developerLiveness?.status ?? "") && now - Date.parse(developerLiveness!.lastHeartbeatAt!) <= 15_000;
+  const processing = taskIsProcessing({ phase, blocked, agentInvocations, capacityStatus: activeCapacity?.status });
+  const spinning = phase === "building" ? buildLive : processing;
+  const ticking = !terminal && !blocked;
   useEffect(() => {
     if (!ticking) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);

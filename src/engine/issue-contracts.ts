@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { DecisionIdempotencyKeySchema, PlanBlockerSubjectSchema, PlanDecisionSubjectSchema } from "../plan-governance.js";
 import { durableId } from "../commands/inputs.js";
+import { at } from "../issue-phases.js";
 
 export { ContinueWorkCommandSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, SendPlannerNoteInputSchema, StartPlanningInputSchema } from "../commands/inputs.js";
 export type { ContinueWorkCommand, PlanCommandInput, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, SendPlannerNoteInput, StartPlanningInput } from "../commands/inputs.js";
@@ -67,7 +68,7 @@ export function buildInitialIssueWorkflowState(input: IssueWorkflowInput & { sta
     projectRevisionId: input.projectRevisionId,
     ...(input.requestHash ? { requestHash: input.requestHash } : {}),
     ...(input.predecessorTaskId ? { predecessorTaskId: input.predecessorTaskId } : {}),
-    phase: "backlog",
+    ...at("backlog"),
     revision: 0,
     owner: "human",
     allowedCommands: ["start_planning"],

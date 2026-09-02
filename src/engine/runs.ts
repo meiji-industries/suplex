@@ -12,6 +12,8 @@ import { withWorktreeCommands } from "./workflow/state-transitions.js";
 import { runExecution, type Handler, type InterruptHandler, type RunExecutionContext } from "./registry.js";
 import { StructuredLogger } from "../logging.js";
 import { clearAutomaticChainHalt } from "./workflow/runtime.js";
+import { at } from "../issue-phases.js";
+import { evidencePointer, humanBlocker } from "./workflow/state-transitions.js";
 
 export interface EngineClock {
   now(): number;
@@ -58,9 +60,9 @@ type DeferredProjection = { event: IssueProjectionEvent; options: Parameters<Act
 type InterruptOutcome = { accepted: boolean; result: unknown; deferredProjections?: DeferredProjection[] };
 type CommandExecutionContext = RunExecutionContext & { deferredProjections?: DeferredProjection[] | undefined; durableProjection?: IssueProjectionEvent | undefined; projectionExpected?: boolean | undefined; interruptDispatch?: boolean | undefined };
 
-const AGENT_OWNED_PHASES: Record<string, true> = {
+const AGENT_OWNED_STEPS: Partial<Record<IssueWorkflowState["step"], true>> = {
   planning: true, supplemental_review: true, plan_consolidation: true, development: true, reviewing_delivery: true, repair_required: true,
-  releasing: true, merge_conflict_reviewing: true, merge_conflict_required: true, merge_conflict_resolving: true, ci_repair_planning: true,
+  releasing: true, merge_conflict_reviewing: true, merge_conflict_resolving: true, ci_repair_planning: true,
   ci_repairing: true, final_review: true, delivery_ready: true,
 };
 
@@ -82,8 +84,8 @@ function recoverInterruptedOperation(state: IssueWorkflowState, database: ForgeD
   // loop rather than a user command. Those turns therefore have no
   // `activeOperation` to recover, even though an interrupted planner or repair
   // must still be made actionable after a worker restart.
-  const ciRepairPhase = state.phase === "ci_repair_planning" || state.phase === "ci_repairing";
-  if ((!state.activeOperation && !ciRepairPhase) || !AGENT_OWNED_PHASES[state.phase]) return state;
+  const ciRepairStep = state.step === "ci_repair_planning" || state.step === "ci_repairing";
+  if ((!state.activeOperation && !ciRepairStep) || !AGENT_OWNED_STEPS[state.step]) return state;
   const live = database.authQuery((db) => Boolean(db.prepare(`
     SELECT 1 FROM forge_developer_executions execution
     JOIN forge_herdr_turns turn ON turn.ledger = 'developer' AND turn.execution_id = execution.id AND turn.task_id = execution.task_id
@@ -103,13 +105,14 @@ function recoverInterruptedOperation(state: IssueWorkflowState, database: ForgeD
   const revision = state.revision + 1;
   // Keep these projections aligned with the non-completed paths in the handlers.
   // A resumed run has no suspended handler to perform that transition itself.
-  if (state.phase === "development") return IssueWorkflowStateSchema.parse({ ...state, revision, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer execution was interrupted — retry is available", activeOperation: null, developerRecoveryStatus: "interrupted", developerRecoveryReasonCode: "execution_not_live", developerRecoverySummary: "Developer execution was interrupted.", lastEventId: `${state.workflowId}:${revision}` });
-  if (state.phase === "repair_required" || (state.phase === "delivery_blocked" && state.developerTurnKind === "repair")) return IssueWorkflowStateSchema.parse({ ...state, revision, phase: "delivery_blocked", owner: "human", allowedCommands: ["repair_delivery", "retry_development", "cancel_issue"], pendingAction: "Developer repair was interrupted — retry is available", activeOperation: null, developerRecoveryStatus: "interrupted", developerRecoveryReasonCode: "execution_not_live", developerRecoverySummary: "Developer repair was interrupted.", lastEventId: `${state.workflowId}:${revision}` });
-  if (state.phase === "merge_conflict_reviewing" || state.phase === "merge_conflict_resolving") return IssueWorkflowStateSchema.parse({ ...state, revision, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution was interrupted — retry is available", activeOperation: null, developerRecoveryStatus: "interrupted", developerRecoveryReasonCode: "execution_not_live", developerRecoverySummary: "Developer conflict resolution was interrupted.", lastEventId: `${state.workflowId}:${revision}` });
-  if (["planning", "supplemental_review", "plan_consolidation"].includes(state.phase)) return IssueWorkflowStateSchema.parse({ ...state, revision, phase: "planning", owner: "human", allowedCommands: ["start_planning", "cancel_issue"], pendingAction: "Planning was interrupted — retry is available", activeOperation: null, lastEventId: `${state.workflowId}:${revision}` });
-  if (["reviewing_delivery", "delivery_ready", "final_review"].includes(state.phase)) return IssueWorkflowStateSchema.parse({ ...state, revision, phase: "delivery_ready", owner: "human", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Delivery review was interrupted — retry is available", activeOperation: null, lastEventId: `${state.workflowId}:${revision}` });
-  if (["ci_repair_planning", "ci_repairing"].includes(state.phase)) return IssueWorkflowStateSchema.parse({ ...state, revision, phase: "ci_repair_required", owner: "human", allowedCommands: ["repair_ci", "reconcile_ci", "cancel_issue"], pendingAction: "CI repair was interrupted — retry is available", activeOperation: null, lastEventId: `${state.workflowId}:${revision}` });
-  return IssueWorkflowStateSchema.parse({ ...state, revision, owner: "human", pendingAction: "Agent operation was interrupted — human action is required", activeOperation: null, lastEventId: `${state.workflowId}:${revision}` });
+  const blocker = (summary: string, actions: IssueWorkflowState["allowedCommands"], evidence = evidencePointer(state.leadOutputArtifactId ?? undefined, "lead-plan")) => humanBlocker("agent_exhausted", summary, actions.map((command) => ({ command, label: command.replaceAll("_", " "), requiresNote: false, destructive: command === "cancel_issue" })), evidence);
+  if (state.step === "development") return IssueWorkflowStateSchema.parse({ ...state, ...at("development"), revision, owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer execution was interrupted — retry is available", blocker: blocker("Developer execution was interrupted.", ["retry_development", "cancel_issue"]), activeOperation: null, developerRecoveryStatus: "interrupted", developerRecoveryReasonCode: "execution_not_live", developerRecoverySummary: "Developer execution was interrupted.", lastEventId: `${state.workflowId}:${revision}` });
+  if (state.step === "repair_required") return IssueWorkflowStateSchema.parse({ ...state, ...at("repair_required"), revision, owner: "human", allowedCommands: ["repair_delivery", "retry_development", "cancel_issue"], pendingAction: "Developer repair was interrupted — retry is available", blocker: blocker("Developer repair was interrupted.", ["repair_delivery", "retry_development", "cancel_issue"]), activeOperation: null, developerRecoveryStatus: "interrupted", developerRecoveryReasonCode: "execution_not_live", developerRecoverySummary: "Developer repair was interrupted.", lastEventId: `${state.workflowId}:${revision}` });
+  if (state.step === "merge_conflict_reviewing" || state.step === "merge_conflict_resolving") return IssueWorkflowStateSchema.parse({ ...state, ...at("merge_conflict_resolving"), revision, owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution was interrupted — retry is available", blocker: blocker("Developer conflict resolution was interrupted.", ["resolve_merge_conflict", "cancel_issue"], evidencePointer(state.forwardMergeConflictArtifact?.id, "merge-conflict-plan")), activeOperation: null, developerRecoveryStatus: "interrupted", developerRecoveryReasonCode: "execution_not_live", developerRecoverySummary: "Developer conflict resolution was interrupted.", lastEventId: `${state.workflowId}:${revision}` });
+  if (["planning", "supplemental_review", "plan_consolidation"].includes(state.step)) return IssueWorkflowStateSchema.parse({ ...state, ...at("planning"), revision, owner: "human", allowedCommands: ["start_planning", "cancel_issue"], pendingAction: "Planning was interrupted — retry is available", blocker: blocker("Planning was interrupted.", ["start_planning", "cancel_issue"]), activeOperation: null, lastEventId: `${state.workflowId}:${revision}` });
+  if (["reviewing_delivery", "delivery_ready", "final_review"].includes(state.step)) return IssueWorkflowStateSchema.parse({ ...state, ...at("delivery_ready"), revision, owner: "human", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Delivery review was interrupted — retry is available", blocker: blocker("Delivery review was interrupted.", ["review_delivery", "cancel_issue"]), activeOperation: null, lastEventId: `${state.workflowId}:${revision}` });
+  if (["ci_repair_planning", "ci_repairing"].includes(state.step)) return IssueWorkflowStateSchema.parse({ ...state, ...at("ci_waiting"), revision, owner: "human", allowedCommands: ["repair_ci", "reconcile_ci", "cancel_issue"], pendingAction: "CI repair was interrupted — retry is available", blocker: blocker("CI repair was interrupted.", ["repair_ci", "reconcile_ci", "cancel_issue"], evidencePointer(state.ciEvidenceArtifactId ?? undefined, "ci-evidence")), activeOperation: null, lastEventId: `${state.workflowId}:${revision}` });
+  return IssueWorkflowStateSchema.parse({ ...state, revision, owner: "human", pendingAction: "Agent operation was interrupted — human action is required", blocker: blocker("Agent operation was interrupted.", ["cancel_issue"]), activeOperation: null, lastEventId: `${state.workflowId}:${revision}` });
 }
 
 

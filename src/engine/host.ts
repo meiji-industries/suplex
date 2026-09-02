@@ -69,7 +69,7 @@ export function createNonOverlappingRunner(operation: () => Promise<unknown> | u
 }
 
 export async function loadIssueRuns(engine: IssueEngine): Promise<number> {
-  const rows = engine.database.authQuery((db) => db.prepare(`SELECT s.workflow_id FROM forge_workflow_snapshots s JOIN forge_tasks t ON t.id = s.task_id JOIN (SELECT task_id, max(revision) revision FROM forge_workflow_snapshots GROUP BY task_id) latest ON latest.task_id=s.task_id AND latest.revision=s.revision WHERE t.archived_at IS NULL AND json_extract(s.state_json, '$.phase') NOT IN ('done','cancelled','failed')`).all() as Array<{ workflow_id: string }>);
+  const rows = engine.database.authQuery((db) => db.prepare(`SELECT s.workflow_id FROM forge_workflow_snapshots s JOIN forge_tasks t ON t.id = s.task_id JOIN (SELECT task_id, max(revision) revision FROM forge_workflow_snapshots GROUP BY task_id) latest ON latest.task_id=s.task_id AND latest.revision=s.revision WHERE t.archived_at IS NULL AND json_extract(s.state_json, '$.phase') NOT IN ('done','cancelled')`).all() as Array<{ workflow_id: string }>);
   for (const row of rows) {
     if (engine.runs.has(row.workflow_id)) continue;
     try {

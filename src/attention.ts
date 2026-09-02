@@ -73,7 +73,7 @@ export class AttentionService {
         FROM forge_issue_projections ip
         JOIN forge_tasks t ON t.id = ip.task_id
         JOIN forge_companies c ON c.id = ip.company_id
-        WHERE ip.company_id = ? AND (ip.owner = 'human' OR ip.phase IN ('delivery_blocked', 'blocked', 'failed'))
+        WHERE ip.company_id = ? AND (ip.owner = 'human' OR json_extract(ip.blocker_json, '$.unblockOwner') = 'human')
         UNION ALL
         SELECT ip.company_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END, ip.task_id, t.title, ip.revision, '[]', NULL, ht.updated_at, rs.pane_id, rs.agent_name, ht.attention_excerpt
         FROM forge_herdr_turns ht

@@ -38,18 +38,4 @@ export const developmentCommands = {
     note: "none",
     idempotency: "none",
   }),
-  // Persisted-history tombstone. Keep the name parseable, but expose no route,
-  // durable command, or handler. Live reconciliation uses retry_development.
-  verify_developer_ownership: defineIssueCommand({
-    name: "verify_developer_ownership",
-    slug: null,
-    updateName: "verifyDeveloperOwnership",
-    label: "Verify developer ownership",
-    family: "bespoke",
-    durableCommandKind: null,
-    payloadLabel: "Developer ownership verification command",
-    body: null,
-    note: "none",
-    idempotency: "none",
-  }),
 } as const;

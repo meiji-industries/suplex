@@ -16,9 +16,7 @@ describe("Tell the Planner command", () => {
   test("is available in every phase that has not ended", () => {
     const availability = Object.fromEntries(ISSUE_PHASES.map((phase) => [phase, plannerNoteAvailable(phase)]));
     expect(Object.entries(availability).filter(([, allowed]) => !allowed).map(([phase]) => phase)).toEqual(["done", "cancelled"]);
-    expect(availability.development).toBe(true);
-    expect(availability.failed).toBe(true);
-    expect(plannerNoteAvailable("failed", "successor-1")).toBe(false);
+    expect(availability.building).toBe(true);
   });
 });
 

@@ -27,7 +27,7 @@ function list(values: string[]): string { return values.length ? values.join(", 
 
 export function fixTaskDraft(task: ApiTask, diagnostics: TaskDiagnostics | undefined, sourceUrl: string, capturedAt = new Date().toISOString()): { title: string; description: string } {
   const failedInvocation = [...task.agentInvocations].reverse().find((invocation) => invocation.failureCode || invocation.failureSummary || invocation.status === "failed");
-  const failure = failedInvocation?.failureCode ?? task.lastHandlerError?.reason ?? (task.phase === "failed" ? task.pendingAction : null);
+  const failure = failedInvocation?.failureCode ?? task.lastHandlerError?.reason ?? (task.blocked ? task.pendingAction : null);
   const title = failure
     ? `Fix Forge task failure: ${oneLine(failure, 92)}`
     : `Fix Forge behavior observed in ${oneLine(task.issueKey ?? task.title, 88)}`;

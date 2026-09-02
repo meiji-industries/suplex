@@ -33,7 +33,7 @@ describe("pull request reconciler", () => {
 
 test("retains a human CI decision until GitHub changes", () => {
   const failed = observed({ checks: "failed" });
-  const current = { phase: "ci_repair_required", owner: "human" as const, pendingAction: "Required check failed: Test suite", adoptedObservationKey: `1484:open:false:${"a".repeat(40)}:none:failed` };
+  const current = { step: "ci_repairing", owner: "human" as const, pendingAction: "Required check failed: Test suite", adoptedObservationKey: `1484:open:false:${"a".repeat(40)}:none:failed` };
 
   expect(reconcile({ observed: failed, target: "merged", current })).toMatchObject({ unchanged: true, actions: [] });
   expect(reconcile({ observed: { ...failed, checks: "pending" }, target: "merged", current })).toMatchObject({ phase: "Waiting for CI", owner: "lead" });

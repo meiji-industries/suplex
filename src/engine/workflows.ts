@@ -1,3 +1,4 @@
+import { at } from "../issue-phases.js";
 import { condition, isCancellation, log, runExecution, setHandler, sleep } from "./registry.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, normalizeSafeSummary, type IssueBlocker, type IssueBlockerAction, type IssueWorkflowInput, type IssueWorkflowState, type ReconcileTargetBaseActivityResult, type TargetBaseCheckpoint } from "./issue-contracts.js";
 import type { IssueCommand } from "../commands/registry.js";
@@ -85,7 +86,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const summary = normalizeSafeSummary(result.summary, 200);
     if (reviewVerificationFailure && result.code === "verification_failed" && result.owner === "lead" && result.resultHead && result.resultTree && state.developerExecutionId) {
       const published = Boolean(state.releaseId && state.pullRequestNumber && state.pullRequestUrl);
-      state = IssueWorkflowStateSchema.parse({ ...state, blocker: null, revision: state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Project verification failed after the merge. Reviewing the merged changes.", lastEventId: `${state.workflowId}:${state.revision + 1}`,
+      state = IssueWorkflowStateSchema.parse({ ...state, blocker: null, revision: state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Project verification failed after the merge. Reviewing the merged changes.", lastEventId: `${state.workflowId}:${state.revision + 1}`,
         targetBaseSha: result.observedBaseSha ?? state.targetBaseSha, targetBaseCheckId: result.checkId, targetBaseCheckpoint: result.checkpoint, targetBaseOutcome: result.outcome, targetBaseBlockerCode: result.code, targetBaseBlockerOwner: result.owner, targetBaseBlockerRetryable: result.retryable, targetBaseBlockerSummary: summary,
         forwardMergeId: result.checkId, forwardMergePriorHead: result.priorHead ?? state.forwardMergePriorHead, forwardMergePriorTree: result.priorTree ?? state.forwardMergePriorTree, forwardMergeTargetBaseSha: result.observedBaseSha ?? state.forwardMergeTargetBaseSha, forwardMergeConflictArtifact: null, forwardMergeConflictFileCount: null,
         resultCommit: result.resultHead, resultTree: result.resultTree, dirtyState: "clean", deliverySummary: normalizeSafeSummary(`Project verification failed: ${summary}`, 200), developerOutcome: "completed", deliveryReviewSupersedesId: null, repairCycle: 0, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null,
@@ -97,7 +98,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       ...state,
       blocker: null,
       revision: state.revision + 1,
-      phase: "delivery_blocked",
+      ...at("development"),
       owner: result.owner === "lead" ? "lead" : "human",
       allowedCommands,
       pendingAction: summary,
@@ -129,14 +130,14 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (result.outcome === "revalidated") state = applyTargetBaseRevalidation(state, result);
     else if (result.outcome === "blocked") applyTargetBaseBlocked(result);
     else {
-      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_reviewing", owner: "lead", allowedCommands: [], pendingAction: "Lead conflict-resolution plan", targetBaseCheckId: result.checkId, targetBaseCheckpoint: result.checkpoint, targetBaseOutcome: result.outcome, targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null, forwardMergePriorHead: result.priorHead, forwardMergePriorTree: result.priorTree, forwardMergeTargetBaseSha: result.observedBaseSha, forwardMergeConflictArtifact: result.conflictArtifact, forwardMergeConflictFileCount: result.conflictFileCount, forwardMergeId: result.checkId, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("merge_conflict_reviewing"), owner: "lead", allowedCommands: [], pendingAction: "Lead conflict-resolution plan", targetBaseCheckId: result.checkId, targetBaseCheckpoint: result.checkpoint, targetBaseOutcome: result.outcome, targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null, forwardMergePriorHead: result.priorHead, forwardMergePriorTree: result.priorTree, forwardMergeTargetBaseSha: result.observedBaseSha, forwardMergeConflictArtifact: result.conflictArtifact, forwardMergeConflictFileCount: result.conflictFileCount, forwardMergeId: result.checkId, lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
       try {
         const plan = await planMergeConflict({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, worktreePath: state.worktreePath!, branchName: state.branchName!, priorHead: result.priorHead, targetBaseSha: result.observedBaseSha, conflictArtifact: result.conflictArtifact, conflictFileCount: result.conflictFileCount, forwardMergeId: result.checkId });
-        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_required", owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("merge_conflict_resolving"), owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, lastEventId: `${state.workflowId}:${state.revision + 1}` });
       } catch (error) {
         if (isCancellation(error)) throw error;
-        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Forge could not prepare a conflict plan. Try resolving again.", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Forge could not prepare a conflict plan. Try resolving again.", lastEventId: `${state.workflowId}:${state.revision + 1}` });
       }
     }
     await projectIssueState(state);
@@ -163,16 +164,16 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     };
     if (state.developerTurnKind === "implementation") {
       if (typeof result.branchName !== "string" || typeof result.targetBaseSha !== "string" || (result.dirtyState !== "clean" && result.dirtyState !== "dirty") || result.outcome !== "completed") return false;
-      state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Lead delivery review", branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: typeof result.currentStep === "number" ? result.currentStep : null, dirtyState: result.dirtyState, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Lead delivery review", branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: typeof result.currentStep === "number" ? result.currentStep : null, dirtyState: result.dirtyState, lastEventId: `${state.workflowId}:${state.revision + 1}` });
       return true;
     }
     if (state.developerTurnKind === "repair") {
       if (typeof result.branchName !== "string" || typeof result.targetBaseSha !== "string" || (result.dirtyState !== "clean" && result.dirtyState !== "dirty") || result.outcome !== "completed" || typeof result.cycle !== "number") return false;
-      state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", branchName: result.branchName, targetBaseSha: result.targetBaseSha, dirtyState: result.dirtyState, repairCycle: result.cycle, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", branchName: result.branchName, targetBaseSha: result.targetBaseSha, dirtyState: result.dirtyState, repairCycle: result.cycle, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
       return true;
     }
     if (state.developerTurnKind === "merge_conflict_resolution") {
-      state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", targetBaseSha: state.forwardMergeTargetBaseSha ?? state.targetBaseSha, dirtyState: "clean", deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, acceptanceId: null, mergeResolutionDeveloperExecutionId: result.developerExecutionId as string, mergeResolutionDeveloperSessionRef: result.developerSessionRef as string, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", targetBaseSha: state.forwardMergeTargetBaseSha ?? state.targetBaseSha, dirtyState: "clean", deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, acceptanceId: null, mergeResolutionDeveloperExecutionId: result.developerExecutionId as string, mergeResolutionDeveloperSessionRef: result.developerSessionRef as string, lastEventId: `${state.workflowId}:${state.revision + 1}` });
       return true;
     }
     return false;
@@ -196,7 +197,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     // publish is in flight, an observation must not rewrite the phase under it. delivery_ready holds an
     // unreleased local head (after a repair the PR still points at the failed commit), so it is skipped too.
     const syncSkipsAgentPhases = true;
-    if (syncSkipsAgentPhases && !isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review", ...(true ? ["delivery_ready"] : [])].includes(state.phase))) return;
+    if (syncSkipsAgentPhases && !isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "releasing", "merge_conflict_reviewing", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review", ...(true ? ["delivery_ready"] : [])].includes(state.step))) return;
     const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch((error) => {
       if (isCancellation(error)) throw error;
       return null;
@@ -216,10 +217,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         await projectIssueState(state);
         return;
       }
-      const reconciliation = reconcile({ observed: pullRequestObservation, target, current: { phase: state.phase, owner: state.owner, pendingAction: state.pendingAction, ...(state.pullRequestNumber !== undefined ? { pullRequestNumber: state.pullRequestNumber } : {}), ...(state.expectedHeadSha !== undefined ? { observedHeadSha: state.expectedHeadSha } : {}), ...(state.autoMergeAvailable !== undefined ? { autoMergeAvailable: state.autoMergeAvailable } : {}), ...(state.githubPullRequestObservationKey !== undefined ? { adoptedObservationKey: state.githubPullRequestObservationKey } : {}) } });
+      const reconciliation = reconcile({ observed: pullRequestObservation, target, current: { step: state.step, owner: state.owner, pendingAction: state.pendingAction, ...(state.pullRequestNumber !== undefined ? { pullRequestNumber: state.pullRequestNumber } : {}), ...(state.expectedHeadSha !== undefined ? { observedHeadSha: state.expectedHeadSha } : {}), ...(state.autoMergeAvailable !== undefined ? { autoMergeAvailable: state.autoMergeAvailable } : {}), ...(state.githubPullRequestObservationKey !== undefined ? { adoptedObservationKey: state.githubPullRequestObservationKey } : {}) } });
       if (reconciliation.unchanged) return;
       const revision = state.revision + 1;
-      state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, phase: reconciliation.phase === "Done" ? "done" : reconciliation.phase === "Merging" ? "manual_merge" : reconciliation.phase === "Resolving conflicts" ? "merge_conflict_reviewing" : reconciliation.phase === "Waiting for CI" ? "ci_waiting" : reconciliation.phase === "Opening PR" ? "releasing" : "delivery_blocked", owner: reconciliation.owner === "human" ? "human" : "lead", allowedCommands: reconciliation.allowedCommands.filter((command): command is IssueCommand => command === "publish_draft" || command === "cancel_issue" || command === "send_planner_note"), pendingAction: reconciliation.pendingAction, githubPullRequestObservationKey: observationKey, mergeOutcome: observed.state === "merged" ? "merged" : state.mergeOutcome, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${revision}` });
+      const step = reconciliation.phase === "Done" ? "done" : reconciliation.phase === "Merging" ? "manual_merge" : reconciliation.phase === "Resolving conflicts" ? "merge_conflict_reviewing" : reconciliation.phase === "Waiting for CI" ? "ci_waiting" : reconciliation.phase === "Opening PR" ? "releasing" : state.step;
+      state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, ...at(step), owner: reconciliation.owner === "human" ? "human" : "lead", allowedCommands: reconciliation.allowedCommands.filter((command): command is IssueCommand => command === "publish_draft" || command === "cancel_issue" || command === "send_planner_note"), pendingAction: reconciliation.pendingAction, githubPullRequestObservationKey: observationKey, mergeOutcome: observed.state === "merged" ? "merged" : state.mergeOutcome, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${revision}` });
       await projectIssueState(state);
       for (const action of reconciliation.actions) {
         if ((action.kind === "enable_auto_merge" || action.kind === "merge" || action.kind === "mark_ready") && state.releaseRepository) {
@@ -242,12 +244,12 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         }
         else if (action.kind === "resolve_conflicts") {
           if (await runTargetBaseCheckpoint("pre_release")) {
-            state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "GitHub reports merge conflicts, but the branch already contains the base branch. Waiting for GitHub to re-check.", ciNextPollAt: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+            state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("ci_waiting"), owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "GitHub reports merge conflicts, but the branch already contains the base branch. Waiting for GitHub to re-check.", ciNextPollAt: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
             await projectIssueState(state);
           }
         }
-        else if ((action.kind === "push_open_draft" || action.kind === "push_open_ready") && state.phase === "releasing") await workflowContext.runPublishTurn();
-        else if (action.kind === "repair_ci" && state.phase === "ci_waiting") await workflowContext.reconcileCiTurn();
+        else if ((action.kind === "push_open_draft" || action.kind === "push_open_ready") && state.step === "releasing") await workflowContext.runPublishTurn();
+        else if (action.kind === "repair_ci" && state.step === "ci_waiting") await workflowContext.reconcileCiTurn();
       }
       return;
     }
@@ -329,60 +331,60 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await workflowContext.initialProjection;
     function shouldWake(): boolean {
       return githubSyncRequested // GitHub changed.
-        || (!workflowContext.state.allowedCommands.includes("delete_worktree") && (workflowContext.state.phase === "done" || (workflowContext.state.phase === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) // A terminal state needs completion.
+        || (!workflowContext.state.allowedCommands.includes("delete_worktree") && (workflowContext.state.step === "done" || (workflowContext.state.step === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) // A terminal state needs completion.
         || workflowContext.continuationRequested // A continuation was requested.
-        || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) // Publishing is due for retry.
-        || workflowContext.state.phase === "ci_waiting" // CI needs polling.
-        || workflowContext.state.phase === "ready_reconciliation" // Acceptance needs reconciliation.
-        || workflowContext.state.phase === "manual_merge" // Merge status needs polling.
+        || (workflowContext.state.step === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) // Publishing is due for retry.
+        || workflowContext.state.step === "ci_waiting" // CI needs polling.
+        || workflowContext.state.step === "ready_reconciliation" // Acceptance needs reconciliation.
+        || workflowContext.state.step === "manual_merge" // Merge status needs polling.
         || autoChainedCommand(workflowContext, "") !== null // A phase can advance automatically.
         || canAutoRetryDeliveryBlocker(workflowContext); // A delivery blocker can retry.
     }
     while (true) {
-      if ((workflowContext.state.phase === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.phase === "cancelled" && !(workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree")))) { return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
+      if ((workflowContext.state.step === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.step === "cancelled" && !(workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree")))) { return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
       if (githubSyncRequested) {
         githubSyncRequested = false;
         await syncGithubPullRequest();
         continue;
       }
-      if (workflowContext.state.phase === "releasing" && workflowContext.state.activeOperation === null && !workflowContext.state.releaseRetryAt) {
-        workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision: workflowContext.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: workflowContext.addRevisionCommand(["review_delivery", "cancel_issue"]), pendingAction: "Publish was interrupted — re-review before publishing", lastEventId: `${workflowContext.state.workflowId}:${workflowContext.state.revision + 1}` });
+      if (workflowContext.state.step === "releasing" && workflowContext.state.activeOperation === null && !workflowContext.state.releaseRetryAt) {
+        workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision: workflowContext.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: workflowContext.addRevisionCommand(["review_delivery", "cancel_issue"]), pendingAction: "Publish was interrupted — re-review before publishing", lastEventId: `${workflowContext.state.workflowId}:${workflowContext.state.revision + 1}` });
         await workflowContext.project();
         continue;
       }
-      if (workflowContext.state.phase === "releasing" && workflowContext.state.releaseRetryAt) {
+      if (workflowContext.state.step === "releasing" && workflowContext.state.releaseRetryAt) {
         const delay = Math.max(0, Date.parse(workflowContext.state.releaseRetryAt) - Date.now());
         if (delay > 0) await sleep(delay);
-        if (workflowContext.state.phase === "releasing") await workflowContext.runPublishTurn();
+        if (workflowContext.state.step === "releasing") await workflowContext.runPublishTurn();
         continue;
       }
-      if (workflowContext.state.phase === "ci_waiting") {
+      if (workflowContext.state.step === "ci_waiting") {
         const sleepingRevision = workflowContext.state.revision;
         const sleepingReleaseId = workflowContext.state.releaseId;
         const sleepingHeadSha = workflowContext.state.expectedHeadSha;
         const pollAt = workflowContext.state.ciNextPollAt ? isoEpochMillis(workflowContext.state.ciNextPollAt) : Date.now();
         const delay = Math.max(0, pollAt - Date.now());
         if (delay > 0) await sleep(delay);
-        if (workflowContext.state.phase !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
+        if (workflowContext.state.step !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
         await syncGithubPullRequest();
         // CI reconciliation needs a release; without one the PR sync above is the only observer. Never throw from the loop.
-        if (workflowContext.state.phase === "ci_waiting" && workflowContext.state.releaseId) await workflowContext.reconcileCiTurn();
-        else if (workflowContext.state.phase === "ci_waiting" && workflowContext.state.resultCommit && workflowContext.state.branchName && !workflowContext.state.deliveryReviewId) {
+        if (workflowContext.state.step === "ci_waiting" && workflowContext.state.releaseId) await workflowContext.reconcileCiTurn();
+        else if (workflowContext.state.step === "ci_waiting" && workflowContext.state.resultCommit && workflowContext.state.branchName && !workflowContext.state.deliveryReviewId) {
           // ci_waiting without a release is a dead end: an unreleased exact delivery goes back through review and publish.
-          workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision: workflowContext.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", ciNextPollAt: null, lastEventId: `${workflowContext.state.workflowId}:${workflowContext.state.revision + 1}` });
+          workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision: workflowContext.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", ciNextPollAt: null, lastEventId: `${workflowContext.state.workflowId}:${workflowContext.state.revision + 1}` });
           await workflowContext.project();
         }
-        else if (workflowContext.state.phase === "ci_waiting") await sleep("60 seconds");
+        else if (workflowContext.state.step === "ci_waiting") await sleep("60 seconds");
         continue;
       }
-      if (workflowContext.state.phase === "manual_merge") {
+      if (workflowContext.state.step === "manual_merge") {
         await condition(() => githubSyncRequested, "60 seconds"); githubSyncRequested = false; // a sync signal (webhook, operator) wakes the poll
-        if (workflowContext.state.phase === "manual_merge") await syncGithubPullRequest();
+        if (workflowContext.state.step === "manual_merge") await syncGithubPullRequest();
         continue;
       }
-      if (workflowContext.state.phase === "ready_reconciliation") {
+      if (workflowContext.state.step === "ready_reconciliation") {
         await sleepUntil(workflowContext.state.acceptanceRetryAt);
-        if (workflowContext.state.phase === "ready_reconciliation") await workflowContext.reconcileAcceptanceTurn();
+        if (workflowContext.state.step === "ready_reconciliation") await workflowContext.reconcileAcceptanceTurn();
         continue;
       }
       if (await autoRetryDeliveryBlocker(workflowContext)) continue;
@@ -397,8 +399,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (!isCancellation(error)) throw error;
     // External cancellation projects the same cancelled phase as cancel_issue in a non-cancellable scope.
     await (async () => {
-      if (state.phase === "cancelled" || state.phase === "done") return;
-      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Issue cancelled externally", blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      if (state.step === "cancelled" || state.step === "done") return;
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("cancelled"), owner: "human", allowedCommands: [], pendingAction: "Issue cancelled externally", blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
     });
     throw error;

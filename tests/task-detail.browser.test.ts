@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { chromium } from "playwright";
 import { expect, test } from "vitest";
 
+import { at } from "../src/issue-phases.js";
+
 import { AuthService, type WebAuthnAdapter } from "../src/auth.js";
 import { ArtifactStore } from "../src/artifacts.js";
 import { createApp } from "../src/app.js";
@@ -54,7 +56,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
   };
   const beginPlanning = (workflowId: string, expectedRevision: number): IssueWorkflowState => {
     const taskId = workflowId.split("-issue-")[1]!;
-    plannedState = { ...plannedState!, revision: expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: expectedRevision + 1, ...at("planning"), owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${expectedRevision + 1}` };
     projectState(plannedState);
     database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, started_at) VALUES ('agent_browser', ?, ?, ?, 'planner', 'running', 1, 'planning', ?, ?, ?, ?, ?)").run(taskId, company.id, workflowId, profile.id, profile.model, profile.reasoningLevel, profile.servicePriority, new Date().toISOString()));
     return plannedState;
@@ -73,7 +75,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
     });
     const planSubject = { companyId: company.id, issueId: taskId, workflowId, originalPlanRevision: 1, outputId: "output_browser", outputRevision: 1, finalVersion: 1 as const, artifactId: output.id, artifactSha256: output.sha256, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", evidenceManifestArtifactId: evidence.id, evidenceManifestSha256: evidence.sha256 };
     const materialityEvidence = { categories: ["user_visible_behavior" as const], artifactId: evidence.id, artifactSha256: evidence.sha256 };
-    plannedState = { workflowId, companyId: company.id, projectId: project.id, issueId: taskId, projectRevisionId: plannedState!.projectRevisionId, phase: "approval", revision: input.expectedRevision + 2, owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "request_plan_revision"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 2}`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: output.id, leadOutputKind: "plan", leadSummary: "A focused browser plan", planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: false, originalPlanSubject: planSubject, finalPlanSubject: planSubject, materialityEvidence };
+    plannedState = { workflowId, companyId: company.id, projectId: project.id, issueId: taskId, projectRevisionId: plannedState!.projectRevisionId, ...at("approval"), revision: input.expectedRevision + 2, owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "request_plan_revision"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 2}`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: output.id, leadOutputKind: "plan", leadSummary: "A focused browser plan", planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: false, originalPlanSubject: planSubject, finalPlanSubject: planSubject, materialityEvidence };
     projectState(plannedState);
     return plannedState;
   };
@@ -97,7 +99,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
     projectState(plannedState);
     return plannedState;
   }, async approvePlan(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development"], pendingAction: "Start development", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("ready_for_development"), owner: "lead", allowedCommands: ["start_development"], pendingAction: "Start development", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
   }, async acceptDevelopment(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
@@ -109,24 +111,24 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(releaseBody.id, releaseBody.companyId, releaseBody.kind, releaseBody.filename, releaseBody.mimeType, releaseBody.byteSize, releaseBody.sha256, releaseBody.storagePath, releaseBody.createdAt);
       db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, body_artifact_id, reused, created_at, updated_at) VALUES ('release-browser', ?, ?, ?, 'release-browser-key', 'acme/forge', 'issue/browser-task', 'main', ?, ?, ?, 'draft', 21, 'https://github.com/acme/forge/pull/21', 'Browser task', ?, 1, ?, ?)").run(plannedState!.issueId, company.id, plannedState!.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), releaseBody.id, now, now);
     });
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue", "revise_plan"], pendingAction: "Waiting for CI", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("ci_waiting"), owner: "lead", allowedCommands: ["cancel_issue", "revise_plan"], pendingAction: "Waiting for CI", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
   }, async startDevelopment(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     const taskId = workflowId.split("-issue-")[1]!;
     const now = new Date().toISOString();
     database.authQuery((db) => db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, failure_code, failure_summary, updated_at) VALUES ('merge-browser', ?, ?, ?, ?, ?, NULL, NULL, 'blocked', '[]', ?, ?, ?, 'pre_release', ?, 'provider_unavailable', 'Provider unavailable', ?)").run(taskId, company.id, "a".repeat(40), "a".repeat(40), "c".repeat(40), now, workflowId, project.activeRevisionId!, "c".repeat(40), now));
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Provider unavailable", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseSha: "a".repeat(40), targetBaseCheckId: "merge-browser", targetBaseCheckpoint: "pre_release", targetBaseOutcome: "blocked", targetBaseBlockerCode: "provider_unavailable", targetBaseBlockerOwner: "provider", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Provider unavailable", resultCommit: "c".repeat(40), resultTree: "d".repeat(40) };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("development"), owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Provider unavailable", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseSha: "a".repeat(40), targetBaseCheckId: "merge-browser", targetBaseCheckpoint: "pre_release", targetBaseOutcome: "blocked", targetBaseBlockerCode: "provider_unavailable", targetBaseBlockerOwner: "provider", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Provider unavailable", resultCommit: "c".repeat(40), resultTree: "d".repeat(40) };
     projectState(plannedState);
     return plannedState!;
   }, async retryTargetBaseReconciliation(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET status = 'conflict', current_base_sha = ?, conflict_files_json = '[\"README.md\"]', conflict_file_count = 1, failure_code = NULL, failure_summary = NULL, updated_at = ? WHERE id = 'merge-browser'").run("b".repeat(40), new Date().toISOString()));
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "merge_conflict_required", owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseOutcome: "conflict", targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null, forwardMergeId: "merge-browser", forwardMergePriorHead: "c".repeat(40), forwardMergePriorTree: "d".repeat(40), forwardMergeTargetBaseSha: "b".repeat(40), forwardMergeConflictArtifact: { id: "conflict-browser", kind: "forward-merge-conflict" }, forwardMergeConflictFileCount: 1 };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("merge_conflict_resolving"), owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseOutcome: "conflict", targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null, forwardMergeId: "merge-browser", forwardMergePriorHead: "c".repeat(40), forwardMergePriorTree: "d".repeat(40), forwardMergeTargetBaseSha: "b".repeat(40), forwardMergeConflictArtifact: { id: "conflict-browser", kind: "forward-merge-conflict" }, forwardMergeConflictFileCount: 1 };
     projectState(plannedState!);
     return plannedState!;
   }, async resolveMergeConflict(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET status = 'merged', result_head = ?, result_tree = ?, failure_code = 'verification_failed', failure_summary = 'Pinned verification failed', updated_at = ? WHERE id = 'merge-browser'").run("f".repeat(40), "1".repeat(40), new Date().toISOString()));
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "delivery_blocked", owner: "lead", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], pendingAction: "Pinned verification failed", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseOutcome: "blocked", targetBaseBlockerCode: "verification_failed", targetBaseBlockerOwner: "lead", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Pinned verification failed", resultCommit: "f".repeat(40), resultTree: "1".repeat(40) };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("development"), owner: "lead", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], pendingAction: "Pinned verification failed", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseOutcome: "blocked", targetBaseBlockerCode: "verification_failed", targetBaseBlockerOwner: "lead", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Pinned verification failed", resultCommit: "f".repeat(40), resultTree: "1".repeat(40) };
     projectState(plannedState);
     return plannedState;
   }, async retryForwardMergeVerification(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
@@ -134,16 +136,16 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
     projectState(plannedState);
     await forwardMergeVerificationGate;
     database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET status = 'no_drift', failure_code = NULL, failure_summary = NULL, updated_at = ? WHERE id = 'merge-browser'").run(new Date().toISOString()));
-    plannedState = { ...plannedState!, revision: plannedState!.revision + 1, phase: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish one exact draft pull request", lastEventId: `${workflowId}:${plannedState!.revision + 1}`, targetBaseOutcome: "no_drift", targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null };
+    plannedState = { ...plannedState!, revision: plannedState!.revision + 1, ...at("delivery_reviewed"), owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish one exact draft pull request", lastEventId: `${workflowId}:${plannedState!.revision + 1}`, targetBaseOutcome: "no_drift", targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null };
     projectState(plannedState);
     return plannedState;
   }, async rejectPlan(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
   }, async revisePlan(_workflowId: string, input: PlanRevisionCommand): Promise<IssueWorkflowState> {
     if (input.worktreeDisposition !== "new") throw new Error("The browser fixture only supports a new exact-base worktree");
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: ["start_planning", "cancel_issue", "revise_plan"], pendingAction: "Run revised Lead planning", revisionRequestId: `revision_browser_${input.expectedRevision}`, revisedExecutionCoordinates: { disposition: "new", revisionRequestId: `revision_browser_${input.expectedRevision}`, exactBaseSha: input.exactBaseSha! }, lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning", "cancel_issue", "revise_plan"], pendingAction: "Run revised Lead planning", revisionRequestId: `revision_browser_${input.expectedRevision}`, revisedExecutionCoordinates: { disposition: "new", revisionRequestId: `revision_browser_${input.expectedRevision}`, exactBaseSha: input.exactBaseSha! }, lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
   } } as unknown as IssueWorkflowPort;

@@ -8,19 +8,19 @@ import { phaseTimingDuration, phaseTimingLanes, phaseTimings } from "../src/fron
 const activity = [
   { eventType: "phase_planning", createdAt: "2026-08-22T12:00:00.000Z" },
   { eventType: "phase_approval", createdAt: "2026-08-22T12:04:00.000Z" },
-  { eventType: "phase_development", createdAt: "2026-08-22T12:05:00.000Z" },
+  { eventType: "phase_building", createdAt: "2026-08-22T12:05:00.000Z" },
   { eventType: "member_action", createdAt: "2026-08-22T12:06:00.000Z" },
-  { eventType: "phase_reviewing_delivery", createdAt: "2026-08-22T12:17:00.000Z" },
+  { eventType: "phase_reviewing", createdAt: "2026-08-22T12:17:00.000Z" },
 ];
 
 test("derives chronological phase visits and duration labels from activity-feed phase changes", () => {
-  const timings = phaseTimings(activity, "reviewing_delivery", "2026-08-22T12:20:00.000Z");
+  const timings = phaseTimings(activity, "reviewing", "2026-08-22T12:20:00.000Z");
 
   expect(timings).toEqual([
     expect.objectContaining({ phase: "planning", label: "Planning", durationMs: 240_000, current: false }),
-    expect.objectContaining({ phase: "approval", label: "Approval", durationMs: 60_000, current: false }),
-    expect.objectContaining({ phase: "development", label: "In Development", durationMs: 720_000, current: false }),
-    expect.objectContaining({ phase: "reviewing_delivery", label: "In Review", durationMs: 180_000, current: true }),
+    expect.objectContaining({ phase: "approval", label: "Needs approval", durationMs: 60_000, current: false }),
+    expect.objectContaining({ phase: "building", label: "Building", durationMs: 720_000, current: false }),
+    expect.objectContaining({ phase: "reviewing", label: "Reviewing", durationMs: 180_000, current: true }),
   ]);
   expect(phaseTimingDuration(7_260_000)).toBe("2h 1m");
 });
@@ -29,22 +29,22 @@ test("derives planning and approval visits from legacy planning activity", () =>
   const timings = phaseTimings([
     { eventType: "planning_started", createdAt: "2026-08-22T12:00:00.000Z" },
     { eventType: "planning_started", metadata: { planningStage: "completed" }, createdAt: "2026-08-22T12:04:00.000Z" },
-    { eventType: "phase_development", createdAt: "2026-08-22T12:10:00.000Z" },
-  ], "development", "2026-08-22T12:15:00.000Z");
+    { eventType: "phase_building", createdAt: "2026-08-22T12:10:00.000Z" },
+  ], "building", "2026-08-22T12:15:00.000Z");
 
   expect(timings).toEqual([
     expect.objectContaining({ phase: "planning", durationMs: 240_000 }),
     expect.objectContaining({ phase: "approval", durationMs: 360_000 }),
-    expect.objectContaining({ phase: "development", durationMs: 300_000, current: true }),
+    expect.objectContaining({ phase: "building", durationMs: 300_000, current: true }),
   ]);
 });
 
 test("renders proportional timing segments, an active accessible current bar, and timestamps", () => {
-  const html = renderToStaticMarkup(createElement(PhaseTimings, { activity, phase: "reviewing_delivery", updatedAt: "2026-08-22T12:20:00.000Z" }));
+  const html = renderToStaticMarkup(createElement(PhaseTimings, { activity, phase: "reviewing", updatedAt: "2026-08-22T12:20:00.000Z" }));
 
   expect(html).toContain('data-phase-timings');
   expect(html).toContain("Timeline");
-  expect(html).toContain('data-phase-timing="development"');
+  expect(html).toContain('data-phase-timing="building"');
   expect(html).toContain("phase-timing-active");
   expect(html).toContain('data-phase-timing-active="true"');
   expect(html).toContain('role="listitem"');
@@ -53,31 +53,30 @@ test("renders proportional timing segments, an active accessible current bar, an
   expect(html).toContain("Total");
   expect(html).toContain("2026");
   expect(html).toContain('data-phase-time-axis');
-  expect(html).toContain('data-phase-lane="development"');
+  expect(html).toContain('data-phase-lane="building"');
 });
 
-test("keeps the active Needs attention visit green-striped while retaining its destructive indicator", () => {
+test("renders the active shipping visit", () => {
   const html = renderToStaticMarkup(createElement(PhaseTimings, {
     activity: [
       { eventType: "phase_planning", createdAt: "2026-08-22T12:00:00.000Z" },
-      { eventType: "phase_delivery_blocked", createdAt: "2026-08-22T12:04:00.000Z" },
+      { eventType: "phase_shipping", createdAt: "2026-08-22T12:04:00.000Z" },
     ],
-    phase: "delivery_blocked",
+    phase: "shipping",
     updatedAt: "2026-08-22T12:20:00.000Z",
   }));
 
-  expect(html).toContain('data-phase-timing="delivery_blocked"');
+  expect(html).toContain('data-phase-timing="shipping"');
   expect(html).toContain("phase-timing-active");
-  expect(html).toContain("bg-destructive");
-  expect(html).toContain("Needs attention");
+  expect(html).toContain("Shipping");
 });
 
 const thirtySegmentFixture = [
-  ["ready_for_development", 1], ["development", 1], ["development", 11], ["delivery_ready", 1], ["reviewing_delivery", 1], ["reviewing_delivery", 2],
-  ["repair_required", 1], ["repair_required", 1], ["repair_required", 1], ["delivery_reviewed", 1], ["releasing", 1], ["delivery_blocked", 63],
-  ["releasing", 80], ["ci_waiting", 4], ["final_review", 1], ["repair_required", 3], ["development", 2], ["delivery_ready", 1],
-  ["reviewing_delivery", 2], ["delivery_reviewed", 1], ["releasing", 3], ["ci_waiting", 5], ["final_review", 1], ["repair_required", 2],
-  ["development", 4], ["delivery_ready", 1], ["reviewing_delivery", 1], ["delivery_reviewed", 1], ["releasing", 1], ["final_review", 1],
+  ["building", 1], ["building", 1], ["building", 11], ["reviewing", 1], ["reviewing", 1], ["reviewing", 2],
+  ["building", 1], ["building", 1], ["building", 1], ["reviewing", 1], ["shipping", 1], ["shipping", 63],
+  ["shipping", 80], ["shipping", 4], ["reviewing", 1], ["building", 3], ["building", 2], ["reviewing", 1],
+  ["reviewing", 2], ["reviewing", 1], ["shipping", 3], ["shipping", 5], ["reviewing", 1], ["building", 2],
+  ["building", 4], ["reviewing", 1], ["reviewing", 1], ["reviewing", 1], ["shipping", 1], ["reviewing", 1],
 ] as const;
 
 const fixtureStart = Date.parse("2026-08-22T12:00:00.000Z");
@@ -92,11 +91,11 @@ const thirtySegmentActivity = (() => {
 
 test("merges consecutive visits and groups the thirty-segment history into first-seen lanes", () => {
   const asOf = new Date(fixtureStart + (thirtySegmentFixture.reduce((total, [, minutes]) => total + minutes, 0) * 60_000)).toISOString();
-  const timings = phaseTimings(thirtySegmentActivity, "final_review", asOf);
+  const timings = phaseTimings(thirtySegmentActivity, "reviewing", asOf);
   const lanes = phaseTimingLanes(timings);
 
   expect(thirtySegmentActivity).toHaveLength(30);
-  expect(timings.find((timing) => timing.phase === "development")).toMatchObject({ durationMs: 12 * 60_000 });
-  expect(lanes.map((lane) => lane.label)).toEqual(["Ready", "In Development", "Ready for review", "In Review", "Fixing review findings", "Reviewed", "Opening PR", "Needs attention", "Waiting for CI", "Final review"]);
-  expect(lanes.find((lane) => lane.phase === "repair_required")?.timings).toHaveLength(3);
+  expect(timings.find((timing) => timing.phase === "building")).toMatchObject({ durationMs: 13 * 60_000 });
+  expect(lanes.map((lane) => lane.label)).toEqual(["Building", "Reviewing", "Shipping"]);
+  expect(lanes.find((lane) => lane.phase === "building")?.timings).toHaveLength(4);
 });

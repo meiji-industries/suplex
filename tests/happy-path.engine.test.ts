@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+
 import type { IssueActivities } from "../src/engine/issue-contracts.js";
 import { executeIssueCommand, queryIssueWorkflow, signalIssueGithubPullRequestSync, startIssueWorkflow } from "../src/engine/service.js";
 import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
@@ -8,7 +9,7 @@ const observedCommit = "e".repeat(40), observedTree = "f".repeat(40);
 test("plan, build, review, publish, CI, merge reaches done", async () => {
   let merged = false, reviewed = false; const projections: string[] = [];
   const activities: Partial<IssueActivities> = {
-    projectIssueState: async (event) => { projections.push(event.state.phase); return event.state; },
+    projectIssueState: async (event) => { projections.push(event.state.step); return event.state; },
     runLeadPlanning: async (input) => ({ leadExecutionId: "lead-plan", leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact", leadEvidenceArtifactId: "plan-evidence", leadOutputArtifactSha256: engineFixture.sha256, leadOutputKind: "plan", leadSummary: "A safe exact plan", materialCategories: [], material: false, planSubject: { companyId: input.companyId, issueId: input.taskId, workflowId: input.workflowId, originalPlanRevision: 1, outputId: "plan-output", outputRevision: 1, finalVersion: 1, artifactId: "plan-artifact", artifactSha256: engineFixture.sha256, leadSessionRef: "lead-session", leadExecutionId: "lead-plan", evidenceManifestArtifactId: "plan-evidence", evidenceManifestSha256: engineFixture.sha256 } }),
     runDeveloperExecutionSupervised: async (input) => ({ status: "completed", resultHash: engineFixture.sha256, result: { developerExecutionId: input.developerTurnExecutionId, developerSessionRef: "developer-session", branchName: "forge/issue/happy", targetBaseSha: engineFixture.base, currentStep: null, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, dirtyState: "clean", deliveryArtifactId: "delivery", evidenceArtifactId: "developer-evidence", deliverySummary: "Implemented", outcome: "completed" } }),
     reviewDelivery: async (input) => ({ outcome: "completed", attemptId: "review-attempt", correctionAttempts: 0, subject: { ...input.subject, subjectCommit: observedCommit, subjectTree: observedTree }, review: { reviewId: "review", leadExecutionId: "lead-review", leadSessionRef: "lead-session", opinionArtifactId: "review-opinion", evidenceArtifactId: "review-evidence", opinion: "approved", summary: "Matches plan", repairPlan: null, findings: [], supersedesReviewId: null, reviewArtifact: { artifactId: "review-artifact", companyId: engineFixture.companyId, kind: "delivery-review", sha256: engineFixture.sha256, byteSize: 1, mimeType: "application/json" } } }),
@@ -27,10 +28,10 @@ test("plan, build, review, publish, CI, merge reaches done", async () => {
     await executeIssueCommand(h.config, started.workflowId, "start_planning", { expectedRevision: 0, actorUserId: engineFixture.actorUserId });
     await h.settle(started.workflowId, (state) => state.ciOutcome === "passed");
     await signalIssueGithubPullRequestSync(h.config, started.workflowId);
-    await h.settle(started.workflowId, (state) => state.phase === "manual_merge" && merged);
+    await h.settle(started.workflowId, (state) => state.step === "manual_merge" && merged);
     await signalIssueGithubPullRequestSync(h.config, started.workflowId);
-    const done = await h.settle(started.workflowId, (state) => state.phase === "done");
-    expect(done).toMatchObject({ phase: "done", pendingAction: "Merged", githubPullRequestState: "merged" });
+    const done = await h.settle(started.workflowId, (state) => state.step === "done");
+    expect(done).toMatchObject({ step: "done", pendingAction: "Merged", githubPullRequestState: "merged" });
     expect(projections).toEqual(expect.arrayContaining(["planning", "development", "delivery_ready", "reviewing_delivery", "releasing", "ci_waiting", "final_review", "manual_merge", "done"]));
     expect((await queryIssueWorkflow(h.config, started.workflowId)).revision).toBe(done.revision);
   } finally { await h.stop(); }

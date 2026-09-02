@@ -9,6 +9,7 @@ import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema, type IssueWor
 import { CancelledFailure } from "../src/engine/failures.js";
 import { continueIssueWork, executeIssueCommand, reviseIssuePlan, startIssueWorkflow } from "../src/engine/service.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
+import { at } from "../src/issue-phases.js";
 import { createEngineHarness, engineFixture, ImmediateClock, type EngineHarness } from "./helpers/engine-harness.js";
 
 function seedContinuation(harness: EngineHarness, issueId: string, fields: Partial<IssueWorkflowState>): IssueWorkflowState {
@@ -55,9 +56,9 @@ test("TaskService consumes atomic engine projections for decision, revise-plan, 
   try {
     const decisionIssueId = "task-service-decision", decisionWorkflowId = harness.workflowId(decisionIssueId);
     const finalPlanSubject = { companyId: engineFixture.companyId, issueId: decisionIssueId, workflowId: decisionWorkflowId, originalPlanRevision: 1, outputId: "plan-output", outputRevision: 1, finalVersion: 1 as const, artifactId: "plan-artifact", artifactSha256: "d".repeat(64), leadSessionRef: "lead-session", leadExecutionId: "lead-original", evidenceManifestArtifactId: "plan-evidence", evidenceManifestSha256: "e".repeat(64) };
-    const approval = seedContinuation(harness, decisionIssueId, { phase: "approval", owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan", planRevision: 1, planMaterial: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact", finalPlanSubject });
-    const revision = seedContinuation(harness, "task-service-revision", { phase: "approval", owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "revise_plan", "cancel_issue"], pendingAction: "Approve final plan", planRevision: 1, planMaterial: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" });
-    const done = seedContinuation(harness, "task-service-continue", { phase: "done", owner: "human", allowedCommands: ["continue_work"], pendingAction: "Done" });
+    const approval = seedContinuation(harness, decisionIssueId, { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan", planRevision: 1, planMaterial: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact", finalPlanSubject });
+    const revision = seedContinuation(harness, "task-service-revision", { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "revise_plan", "cancel_issue"], pendingAction: "Approve final plan", planRevision: 1, planMaterial: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" });
+    const done = seedContinuation(harness, "task-service-continue", { ...at("done"), owner: "human", allowedCommands: ["continue_work"], pendingAction: "Done" });
     await Promise.all([startIssueWorkflow(harness.config, workflowInput(approval)), startIssueWorkflow(harness.config, workflowInput(revision)), startIssueWorkflow(harness.config, workflowInput(done))]);
     for (const workflowId of [approval.workflowId, revision.workflowId, done.workflowId]) harness.engine.run(workflowId);
     const auth = new AuthService(harness.database, harness.config);
@@ -75,7 +76,7 @@ test("TaskService consumes atomic engine projections for decision, revise-plan, 
 
     const revisionCurrent = tasks.getTask(engineFixture.actorUserId, revision.issueId);
     const revised = await tasks.revisePlan(engineFixture.actorUserId, revision.issueId, { expectedRevision: revisionCurrent.revision, actorUserId: engineFixture.actorUserId, reason: "Rework the plan", worktreeDisposition: "reuse" });
-    expect(revised).toMatchObject({ phase: "delivery_blocked", pendingAction: "Plan revision is blocked" });
+    expect(revised).toMatchObject({ phase: "building", step: "development", blocked: true, pendingAction: "Plan revision is blocked" });
     expect(revised.revision).toBeGreaterThan(revisionCurrent.revision);
 
     const doneCurrent = tasks.getTask(engineFixture.actorUserId, done.issueId);

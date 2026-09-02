@@ -3,17 +3,18 @@ import { expect, test, vi } from "vitest";
 import { reconcileGithubObservations } from "../src/github-observation-reconciliation.js";
 import type { GithubPullRequestObservation } from "../src/github-release.js";
 import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/engine/issue-contracts.js";
+import { at } from "../src/issue-phases.js";
 
-function state(phase: "ci_waiting" | "manual_merge" | "development" | "done", allowedCommands: string[], expectedHeadSha = "a".repeat(40)) {
+function state(step: "ci_waiting" | "manual_merge" | "development" | "done", allowedCommands: string[], expectedHeadSha = "a".repeat(40)) {
   return IssueWorkflowStateSchema.parse({
-    ...buildInitialIssueWorkflowState({ workflowId: `workflow-${phase}`, companyId: "company", projectId: "project", issueId: `task-${phase}`, projectRevisionId: "revision", briefArtifactId: "brief", briefSha256: "a".repeat(64), imageArtifactIds: [], requestHash: "b".repeat(64), roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }),
-    phase,
+    ...buildInitialIssueWorkflowState({ workflowId: `workflow-${step}`, companyId: "company", projectId: "project", issueId: `task-${step}`, projectRevisionId: "revision", briefArtifactId: "brief", briefSha256: "a".repeat(64), imageArtifactIds: [], requestHash: "b".repeat(64), roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }),
+    ...at(step),
     revision: 3,
     owner: "lead",
     allowedCommands: allowedCommands as never,
     pendingAction: "Waiting",
     expectedHeadSha,
-    lastEventId: `workflow-${phase}:3`,
+    lastEventId: `workflow-${step}:3`,
   });
 }
 
@@ -28,23 +29,22 @@ function observed(overrides: Partial<Pick<GithubPullRequestObservation, "state" 
 
 test("selects active GitHub phases and maps observations to the accepted reconciliation command", async () => {
   const rows = [
-    { taskId: "ci", phase: "ci_waiting", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])) },
-    { taskId: "merge", phase: "manual_merge", stateJson: JSON.stringify(state("manual_merge", ["reconcile_merge"])) },
-    { taskId: "development", phase: "development", stateJson: JSON.stringify(state("development", [])) },
-    { taskId: "failed", phase: "failed", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])) },
-    { taskId: "archived", phase: "ci_waiting", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])), archived: true },
+    { taskId: "ci", phase: "shipping", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])) },
+    { taskId: "merge", phase: "shipping", stateJson: JSON.stringify(state("manual_merge", ["reconcile_merge"])) },
+    { taskId: "development", phase: "building", stateJson: JSON.stringify(state("development", [])) },
+    { taskId: "archived", phase: "shipping", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])), archived: true },
   ];
   const execute = vi.fn<(...args: any[]) => Promise<any>>(async () => ({}));
   const result = await reconcileGithubObservations(database(rows) as never, {} as never, { observe: async (input) => input.branch === "forge/merge" ? observed({ state: "closed" }) : observed({ pending: 1, successful: 0 }), execute: execute as never });
 
-  expect(result.inspected).toBe(2);
+  expect(result.inspected).toBe(3);
   expect(result.signalled).toBe(2);
-  expect(result.outcomes.map((outcome) => outcome.commandKind)).toEqual(["reconcile_ci", "reconcile_merge"]);
+  expect(result.outcomes.map((outcome) => outcome.commandKind)).toEqual(["reconcile_ci", "reconcile_merge", null]);
   expect(execute.mock.calls.map((call) => call[2])).toEqual(["reconcile_ci", "reconcile_merge"]);
 });
 
 test("deduplicates the same observation without additional workflow commands or timeline rows", async () => {
-  const rows = [{ taskId: "ci", phase: "ci_waiting", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])) }];
+  const rows = [{ taskId: "ci", phase: "shipping", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])) }];
   const execute = vi.fn<(...args: any[]) => Promise<any>>(async (_config, _workflowId, _kind, input) => {
     const current = JSON.parse(rows[0]!.stateJson);
     rows[0]!.stateJson = JSON.stringify({ ...current, processedCommandIds: [input.commandId] });
@@ -62,7 +62,7 @@ test("deduplicates the same observation without additional workflow commands or 
 });
 
 test("counts transient GitHub observation errors and continues", async () => {
-  const rows = [{ taskId: "ci", phase: "ci_waiting", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])) }];
+  const rows = [{ taskId: "ci", phase: "shipping", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])) }];
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const result = await reconcileGithubObservations(database(rows) as never, {} as never, { observe: async () => { throw new Error("rate limited"); } });
   warn.mockRestore();
@@ -71,7 +71,7 @@ test("counts transient GitHub observation errors and continues", async () => {
 });
 
 test("a merged pull request is adopted into the projection when the workflow cannot take the command", async () => {
-  const rows = [{ taskId: "merge", phase: "manual_merge", stateJson: JSON.stringify(state("manual_merge", ["reconcile_merge"])) }];
+  const rows = [{ taskId: "merge", phase: "shipping", stateJson: JSON.stringify(state("manual_merge", ["reconcile_merge"])) }];
   const projectIssueState = vi.fn();
   const db = { ...database(rows), projectIssueState };
   const execute = vi.fn<(...args: any[]) => Promise<any>>(async () => { throw new Error("workflow execution already completed"); });

@@ -16,8 +16,7 @@ test("smoke phase state machine accepts the auto-approved happy path and require
   expect(milestones).toEqual({ planning: true, approval: true, development: true, builderPid: true, reviewingDelivery: true, releasing: true });
 });
 
-test("smoke phase state machine stops on unexpected human intervention and failure phases", () => {
-  expect(advanceMilestones(task("delivery_blocked", "human"), emptyMilestones(), null).error).toMatch(/failure phase/);
+test("smoke phase state machine stops on unexpected human intervention", () => {
   expect(advanceMilestones(task("development", "human"), emptyMilestones(), 123).error).toMatch(/requires human action/);
   expect(advanceMilestones(task("approval", "human"), emptyMilestones(), null).error).toBeUndefined();
 });

@@ -1,3 +1,4 @@
+import { isBlocked } from "../../issue-phases.js";
 import { setHandler } from "../registry.js";
 import * as contracts from "../issue-contracts.js";
 import { issueUpdates } from "../issue-updates.js";
@@ -7,7 +8,7 @@ export function registerTargetBaseHandlers(ctx: IssueWorkflowContext): void {
   const validateRetryTargetBase = (rawInput: contracts.StartPlanningInput, verificationOnly: boolean): contracts.StartPlanningInput => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     const checkpoint = ctx.state.targetBaseCheckpoint;
-    const retryingBlocker = ctx.state.phase === "delivery_blocked" && Boolean(checkpoint);
+    const retryingBlocker = isBlocked(ctx.state) && Boolean(checkpoint);
     if (command.expectedRevision !== ctx.state.revision || (!retryingBlocker && !canSyncBranch())) throw new Error("Target-base reconciliation retry is not available in the current phase");
     if (verificationOnly && !["verification_failed", "verification_timed_out", "verification_evidence_too_large"].includes(ctx.state.targetBaseBlockerCode ?? "")) throw new Error("Verification retry is not available for the current blocker");
     return command;
@@ -23,10 +24,10 @@ export function registerTargetBaseHandlers(ctx: IssueWorkflowContext): void {
       throw error;
     }
     if (!checkpoint && canSyncBranch()) {
-      const previous = { phase: ctx.state.phase, owner: ctx.state.owner, allowedCommands: ctx.state.allowedCommands, pendingAction: ctx.state.pendingAction };
+      const previous = { step: ctx.state.step, owner: ctx.state.owner, allowedCommands: ctx.state.allowedCommands, pendingAction: ctx.state.pendingAction };
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Merging the latest base branch", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
-      if (await ctx.runTargetBaseCheckpoint("pre_release") && ctx.state.phase === previous.phase) {
+      if (await ctx.runTargetBaseCheckpoint("pre_release") && ctx.state.step === previous.step) {
         // A no-drift check outside a blocked transition only needs to undo the
         // transient "Merging" status. A checkpoint that changes phase owns its
         // review tuple, so restoring it would revive stale retry commands.
@@ -40,7 +41,7 @@ export function registerTargetBaseHandlers(ctx: IssueWorkflowContext): void {
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: automaticRetry ? ctx.state.pendingAction : verificationOnly ? "Checking the merge again" : "Checking for updates", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     await ctx.runTargetBaseCheckpoint(checkpoint, verificationOnly);
-    if (checkpoint === "pre_acceptance" && ctx.input.deliveryTarget === "merged" && ctx.input.autoMergeActorUserId && ctx.state.phase === "accepted" && true) return ctx.retryAcceptDelivery({ expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId, commandId: `${ctx.state.workflowId}:auto-accept-target-base:${ctx.state.revision}` });
+    if (checkpoint === "pre_acceptance" && ctx.input.deliveryTarget === "merged" && ctx.input.autoMergeActorUserId && ctx.state.step === "accepted" && true) return ctx.retryAcceptDelivery({ expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId, commandId: `${ctx.state.workflowId}:auto-accept-target-base:${ctx.state.revision}` });
     return ctx.state;
   };
   setHandler(issueUpdates.retry_target_base_reconciliation, ctx.guarded((rawInput) => retryTargetBase(rawInput, false), "retry_target_base_reconciliation"), { validator(rawInput) { validateRetryTargetBase(rawInput, false); } });

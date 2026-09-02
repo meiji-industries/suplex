@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+
+import { at } from "../src/issue-phases.js";
 import { credentialBlockedState, noProgress, repairSignature, transientRetryState, withRepairProgress } from "../src/engine/workflow/state-transitions.js";
 import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
 
@@ -20,16 +22,16 @@ describe("repair progress", () => {
 
   it("keeps transient failures retry-only and routes credentials to sign-in", () => {
     const initial = buildInitialIssueWorkflowState({ issueId: "issue_1", companyId: "company_1", workflowId: "workflow_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: "artifact_1", imageArtifactIds: [], roleProfiles: {}, supplementalReview: false });
-    expect(transientRetryState(initial, "repair_ci", "Provider unavailable")).toMatchObject({ phase: "delivery_blocked", owner: "lead", allowedCommands: ["repair_ci", "cancel_issue"], pendingAction: "Retrying after a temporary failure", blocker: null });
+    expect(transientRetryState(initial, "repair_ci", "Provider unavailable")).toMatchObject({ ...at("backlog"), owner: "lead", allowedCommands: ["repair_ci", "cancel_issue"], pendingAction: "Retrying after a temporary failure", blocker: null });
     const credential = credentialBlockedState(initial, "repair_ci", { artifactId: "evidence_1", kind: "attention-evidence" });
-    expect(credential).toMatchObject({ phase: "delivery_blocked", owner: "human", blocker: { category: "provider_authentication" } });
+    expect(credential).toMatchObject({ ...at("backlog"), owner: "human", blocker: { category: "provider_authentication", unblockOwner: "human" } });
     expect(credential.blocker?.actions[0]).toMatchObject({ command: "repair_ci", label: "Sign in to GitHub and retry" });
   });
 
   it("offers CI reconciliation after GitHub sign-in", () => {
     const initial = buildInitialIssueWorkflowState({ issueId: "issue_1", companyId: "company_1", workflowId: "workflow_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: "artifact_1", imageArtifactIds: [], roleProfiles: {}, supplementalReview: false });
     const credential = credentialBlockedState(initial, "reconcile_ci", { artifactId: "evidence_1", kind: "attention-evidence" });
-    expect(credential).toMatchObject({ phase: "delivery_blocked", owner: "human", allowedCommands: ["reconcile_ci", "cancel_issue"], blocker: { category: "provider_authentication" } });
+    expect(credential).toMatchObject({ ...at("backlog"), owner: "human", allowedCommands: ["reconcile_ci", "cancel_issue"], blocker: { category: "provider_authentication", unblockOwner: "human" } });
     expect(credential.blocker?.actions[0]).toMatchObject({ command: "reconcile_ci", label: "Sign in to GitHub and retry" });
   });
 });

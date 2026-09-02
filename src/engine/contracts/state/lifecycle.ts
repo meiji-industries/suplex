@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { ActiveOperationSchema, IssueBlockerSchema, IssueCommandSchema, IssuePhaseSchema, durableId } from "../primitives.js";
+import { IssueStepSchema } from "../../../issue-phases.js";
 
 export const lifecycleStateFields = {
+  step: IssueStepSchema,
   phase: IssuePhaseSchema,
   revision: z.number().int().nonnegative(),
   owner: z.enum(["human", "lead"]),

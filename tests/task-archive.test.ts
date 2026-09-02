@@ -1,13 +1,14 @@
 import { expect, test } from "vitest";
 
+import { at } from "../src/issue-phases.js";
 import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
 import { TaskArchiveService, type WorktreeCleanupPort } from "../src/task-archive.js";
 import { TaskFailure } from "../src/tasks.js";
 
 type FixtureOptions = { worktreeFailure?: "workflow-update-rejected" | "stale-revision"; cleanupWorktree?: WorktreeCleanupPort };
 
-function snapshotState(phase: "backlog" | "cancelled") {
-  return { ...buildInitialIssueWorkflowState({ workflowId: "workflow_1", companyId: "company", projectId: "project", issueId: "task", projectRevisionId: "revision_1", briefArtifactId: "brief", imageArtifactIds: [], roleProfiles: {}, supplementalReview: false }), revision: 1, phase, owner: "human" as const, allowedCommands: ["delete_worktree"], worktreeState: "present" as const, lastEventId: "workflow_1:1" };
+function snapshotState(step: "backlog" | "cancelled") {
+  return { ...buildInitialIssueWorkflowState({ workflowId: "workflow_1", companyId: "company", projectId: "project", issueId: "task", projectRevisionId: "revision_1", briefArtifactId: "brief", imageArtifactIds: [], roleProfiles: {}, supplementalReview: false }), revision: 1, ...at(step), owner: "human" as const, allowedCommands: ["delete_worktree"], worktreeState: "present" as const, lastEventId: "workflow_1:1" };
 }
 
 function fixture(phase: "backlog" | "cancelled" = "cancelled", dirty = false, cleanupFailure = false, options: FixtureOptions = {}) {

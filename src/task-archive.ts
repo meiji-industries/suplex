@@ -16,7 +16,7 @@ export class TaskArchiveService {
     let task = this.tasks.getTask(actorUserId, taskId);
     if (task.archivedAt) return { status: "archived", task };
     if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [{ code: "stale-revision", field: "expectedRevision", message: "Refresh the issue before this action" }], 409, task);
-    if (!["done", "cancelled", "failed"].includes(task.phase)) throw new TaskFailure("Task action is not available", [{ code: "illegal-command", field: "phase", message: "Only a terminal task can be archived" }], 409, task);
+    if (!["done", "cancelled"].includes(task.phase)) throw new TaskFailure("Task action is not available", [{ code: "illegal-command", field: "phase", message: "Only a terminal task can be archived" }], 409, task);
     if (task.worktreeState !== "cleaned") {
       let cleanedLocally = false;
       try {

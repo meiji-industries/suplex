@@ -1,5 +1,7 @@
 import { expect, test } from "vitest";
 
+import { at } from "../src/issue-phases.js";
+
 import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
 import { ApplicationFailure } from "../src/engine/failures.js";
 import { executeIssueCommand, queryIssueWorkflow, signalIssueGithubPullRequestSync } from "../src/engine/service.js";
@@ -21,7 +23,7 @@ test("repeated unchanged PR syncs retain a human CI decision", async () => {
   try {
     const continuationState = {
       ...buildInitialIssueWorkflowState({ workflowId: "workflow-human-ci", companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "human-ci", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-      phase: "ci_repair_required" as const,
+      ...at("ci_waiting"),
       revision: 20,
       owner: "human" as const,
       allowedCommands: ["repair_ci" as const, "reconcile_ci" as const, "cancel_issue" as const],
@@ -40,7 +42,7 @@ test("repeated unchanged PR syncs retain a human CI decision", async () => {
     await signalIssueGithubPullRequestSync(h.config, started.workflowId);
     await h.settle(started.workflowId, () => observations === 2);
 
-    expect(await queryIssueWorkflow(h.config, started.workflowId)).toMatchObject({ phase: "ci_repair_required", owner: "human", revision: 22, pendingAction: "Required check failed: Test suite", githubPullRequestMergeable: "MERGEABLE", githubPullRequestChecks: { total: 1, pending: 0, failing: 1, successful: 0 }, expectedHeadSha: head });
+    expect(await queryIssueWorkflow(h.config, started.workflowId)).toMatchObject({ step: "ci_waiting", owner: "human", revision: 22, pendingAction: "Required check failed: Test suite", githubPullRequestMergeable: "MERGEABLE", githubPullRequestChecks: { total: 1, pending: 0, failing: 1, successful: 0 }, expectedHeadSha: head });
   } finally { await h.stop(); }
 });
 
@@ -56,7 +58,7 @@ test("CI reconciliation rejects a changed PR head without replacing reviewed ide
   try {
     const continuationState = {
       ...buildInitialIssueWorkflowState({ workflowId: "workflow-ci-head-drift", companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "ci-head-drift", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-      phase: "delivery_blocked" as const,
+      ...at("ci_waiting"),
       revision: 20,
       owner: "human" as const,
       allowedCommands: ["reconcile_ci" as const, "cancel_issue" as const],
@@ -78,7 +80,7 @@ test("CI reconciliation rejects a changed PR head without replacing reviewed ide
 
     const changed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: (await queryIssueWorkflow(h.config, started.workflowId)).revision, actorUserId: engineFixture.actorUserId });
 
-    expect(changed).toMatchObject({ phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null });
+    expect(changed).toMatchObject({ step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null });
     expect(h.calls.get("reconcileCi") ?? 0).toBe(0);
   } finally { await h.stop(); }
 });
@@ -98,7 +100,7 @@ test.each([
   try {
     const continuationState = {
       ...buildInitialIssueWorkflowState({ workflowId: `workflow-${issueId}`, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-      phase: "delivery_blocked" as const,
+      ...at("ci_waiting"),
       revision: 20,
       owner: "human" as const,
       allowedCommands: ["reconcile_ci" as const, "cancel_issue" as const],
@@ -120,7 +122,7 @@ test.each([
 
     const changed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: (await queryIssueWorkflow(h.config, started.workflowId)).revision, actorUserId: engineFixture.actorUserId });
 
-    expect(changed).toMatchObject({ phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null });
+    expect(changed).toMatchObject({ step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null });
     expect(h.calls.get("adoptPullRequestRelease") ?? 0).toBe(0);
     expect(h.calls.get("reconcileCi") ?? 0).toBe(0);
   } finally { await h.stop(); }
@@ -143,7 +145,7 @@ test("missing-release CI recovery forwards pinned base and preserves reviewed id
   try {
     const continuationState = {
       ...buildInitialIssueWorkflowState({ workflowId: `workflow-${issueId}`, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-      phase: "delivery_blocked" as const,
+      ...at("ci_waiting"),
       revision: 20,
       owner: "human" as const,
       allowedCommands: ["reconcile_ci" as const, "cancel_issue" as const],
@@ -190,7 +192,7 @@ test("missing-release CI recovery adopts an unpinned legacy pull request identit
   try {
     const continuationState = {
       ...buildInitialIssueWorkflowState({ workflowId: `workflow-${issueId}`, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-      phase: "delivery_blocked" as const,
+      ...at("ci_waiting"),
       revision: 20,
       owner: "human" as const,
       allowedCommands: ["reconcile_ci" as const, "cancel_issue" as const],

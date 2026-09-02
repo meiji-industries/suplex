@@ -8,6 +8,7 @@ import { installIssueEngine } from "../../src/engine/index.js";
 import { buildInitialIssueWorkflowState, IssueContinuationStateSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, type IssueActivities, type IssueWorkflowInput, type IssueWorkflowState } from "../../src/engine/issue-contracts.js";
 import { IssueEngine, type EngineClock } from "../../src/engine/runs.js";
 import { runtimeIdentifiers } from "../../src/runtime-identifiers.js";
+import { isBlocked } from "../../src/issue-phases.js";
 
 export const engineFixture = { companyId: "issue-company", projectId: "issue-project", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", actorUserId: "issue-admin", sha256: "a".repeat(64), base: "a".repeat(40), commit: "b".repeat(40), tree: "c".repeat(40), roleProfiles: { planner: "profile", builder: "profile" } };
 
@@ -81,7 +82,7 @@ export async function createEngineHarness(overrides: Partial<IssueActivities> = 
       return { workflowId, runId: run.runId };
     },
     async restart() { engine.dispose(); database.close(); database = new ForgeDatabase(config.databasePath); engine = new IssueEngine(config, database, { activities: activityProxy, clock }); installIssueEngine(config, engine); await loadIssueRuns(engine); return engine; },
-    async settle(workflowId, predicate) { let last!: IssueWorkflowState; for (let attempt = 0; attempt < 2_000; attempt += 1) { const run = engine.run(workflowId); last = run.state; if (predicate(last)) return last; if (run.error) throw run.error; await Promise.resolve(); } throw new Error(`Engine run ${workflowId} did not settle from ${last.phase}: ${JSON.stringify(last.lastHandlerError)}`); },
+    async settle(workflowId, predicate) { let last!: IssueWorkflowState; for (let attempt = 0; attempt < 2_000; attempt += 1) { const run = engine.run(workflowId); last = run.state; if (predicate(last)) return last; if (run.error) throw run.error; await Promise.resolve(); } throw new Error(`Engine run ${workflowId} did not settle from ${last.phase}/${last.step}${isBlocked(last) ? " (blocked)" : ""}: ${JSON.stringify(last.lastHandlerError)}`); },
     async stop() { engine.dispose(); database.close(); await rm(root, { recursive: true, force: true }); },
   };
   return harness;

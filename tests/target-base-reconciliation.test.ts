@@ -16,6 +16,7 @@ import {
   ReconcileTargetBaseActivityResultSchema,
 } from "../src/engine/issue-contracts.js";
 import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "../src/engine/target-base.js";
+import { at } from "../src/issue-phases.js";
 
 const sha = (letter: string) => letter.repeat(40);
 const artifact = { id: "artifact_forward", kind: "forward-merge-delivery" as const };
@@ -660,15 +661,15 @@ describe("target-base reconciliation contracts", () => {
   test("resumes an exactly reviewed no-drift delivery to publication", () => {
     const resumed = applyTargetBaseNoDrift(IssueWorkflowStateSchema.parse({
       workflowId: "workflow-1", companyId: "company-1", projectId: "project-1", issueId: "task-1", projectRevisionId: "revision-1",
-      phase: "delivery_blocked", revision: 4, owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Provider unavailable", lastEventId: "workflow-1:4", continuationCount: 0, lastSummaryHash: null,
+      ...at("delivery_reviewed"), revision: 4, owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Provider unavailable", lastEventId: "workflow-1:4", continuationCount: 0, lastSummaryHash: null,
       targetBaseSha: sha("b"), resultCommit: sha("c"), resultTree: sha("d"), deliveryReviewId: "review-exact",
-      targetBaseBlockerCode: "provider_unavailable", targetBaseBlockerOwner: "provider", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Provider unavailable",
+      blocker: { category: "provider_connectivity_exhausted", summary: "Provider unavailable", unblockOwner: "human", actions: [{ command: "retry_target_base_reconciliation", label: "Retry reconciliation", requiresNote: false, destructive: false }], evidence: { artifactId: "blocker", kind: "attention-evidence" }, createdAt: "2026-09-01T00:00:00.000Z", retry: null }, targetBaseBlockerCode: "provider_unavailable", targetBaseBlockerOwner: "provider", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Provider unavailable",
     }), {
       outcome: "no_drift", checkId: "check-reviewed", checkpoint: "pre_release", expectedBaseSha: sha("b"), observedBaseSha: sha("b"), headSha: sha("c"), headTree: sha("d"),
     });
 
     expect(resumed).toMatchObject({
-      phase: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish one exact draft pull request", deliveryReviewId: "review-exact", targetBaseBlockerCode: null,
+      step: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish one exact draft pull request", deliveryReviewId: "review-exact", targetBaseBlockerCode: null,
     });
     expect(resumed.allowedCommands).not.toContain("review_delivery");
   });
@@ -676,15 +677,15 @@ describe("target-base reconciliation contracts", () => {
   test("requires Lead review when a no-drift delivery has no review identity", () => {
     const resumed = applyTargetBaseNoDrift(IssueWorkflowStateSchema.parse({
       workflowId: "workflow-1", companyId: "company-1", projectId: "project-1", issueId: "task-1", projectRevisionId: "revision-1",
-      phase: "delivery_blocked", revision: 4, owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Provider unavailable", lastEventId: "workflow-1:4", continuationCount: 0, lastSummaryHash: null,
+      ...at("delivery_reviewed"), revision: 4, owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Provider unavailable", lastEventId: "workflow-1:4", continuationCount: 0, lastSummaryHash: null,
       targetBaseSha: sha("b"), resultCommit: sha("c"), resultTree: sha("d"), deliveryReviewId: null,
-      targetBaseBlockerCode: "provider_unavailable", targetBaseBlockerOwner: "provider", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Provider unavailable",
+      blocker: { category: "provider_connectivity_exhausted", summary: "Provider unavailable", unblockOwner: "human", actions: [{ command: "retry_target_base_reconciliation", label: "Retry reconciliation", requiresNote: false, destructive: false }], evidence: { artifactId: "blocker", kind: "attention-evidence" }, createdAt: "2026-09-01T00:00:00.000Z", retry: null }, targetBaseBlockerCode: "provider_unavailable", targetBaseBlockerOwner: "provider", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Provider unavailable",
     }), {
       outcome: "no_drift", checkId: "check-unreviewed", checkpoint: "pre_release", expectedBaseSha: sha("b"), observedBaseSha: sha("b"), headSha: sha("c"), headTree: sha("d"),
     });
 
     expect(resumed).toMatchObject({
-      phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Lead delivery review", deliveryReviewId: null, targetBaseBlockerCode: null,
+      step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Lead delivery review", deliveryReviewId: null, targetBaseBlockerCode: null,
     });
     expect(resumed.allowedCommands).not.toContain("publish_draft");
     expect(resumed.phase).not.toBe("delivery_reviewed");
@@ -737,7 +738,7 @@ describe("target-base reconciliation contracts", () => {
       developerEvidenceArtifactId: "artifact-developer-evidence",
     });
     expect(next).toMatchObject({
-      phase: "delivery_ready",
+      step: "delivery_ready",
       owner: "lead",
       allowedCommands: ["review_delivery", "cancel_issue"],
       targetBaseSha: sha("e"),
@@ -770,7 +771,7 @@ describe("target-base reconciliation contracts", () => {
       verificationArtifact: { ...artifact, id: "artifact-verification-b", kind: "forward-merge-verification" },
     });
     expect(unpublished).toMatchObject({ releaseId: null, pullRequestNumber: null, pullRequestUrl: null, developerEvidenceArtifactId: "artifact-verification-b" });
-    const resumed = applyTargetBaseNoDrift(IssueWorkflowStateSchema.parse({ ...state, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Provider unavailable", targetBaseBlockerCode: "provider_unavailable", targetBaseBlockerOwner: "provider", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Provider unavailable" }), {
+    const resumed = applyTargetBaseNoDrift(IssueWorkflowStateSchema.parse({ ...state, ...at("delivery_reviewed"), owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Provider unavailable", blocker: { category: "provider_connectivity_exhausted", summary: "Provider unavailable", unblockOwner: "human", actions: [{ command: "retry_target_base_reconciliation", label: "Retry reconciliation", requiresNote: false, destructive: false }], evidence: { artifactId: "blocker", kind: "attention-evidence" }, createdAt: "2026-09-01T00:00:00.000Z", retry: null }, targetBaseBlockerCode: "provider_unavailable", targetBaseBlockerOwner: "provider", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Provider unavailable" }), {
       outcome: "no_drift",
       checkId: "check-6",
       checkpoint: "pre_release",
@@ -779,7 +780,7 @@ describe("target-base reconciliation contracts", () => {
       headSha: sha("c"),
       headTree: sha("d"),
     });
-    expect(resumed).toMatchObject({ phase: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], targetBaseBlockerCode: null });
+    expect(resumed).toMatchObject({ step: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], targetBaseBlockerCode: null });
   });
 
   test("drops an accepted human blocker when reconciliation replaces its commands", () => {
@@ -788,8 +789,8 @@ describe("target-base reconciliation contracts", () => {
       phase: "accepted", revision: 4, owner: "human", allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"], pendingAction: "Member acceptance required", lastEventId: "workflow-1:4", continuationCount: 0, lastSummaryHash: null,
       blocker: { category: "member_authorization", summary: "Member acceptance required", unblockOwner: "human", actions: [{ command: "accept_delivery", label: "Accept", requiresNote: false, destructive: false }], retry: null, evidence: { artifactId: "evidence-1", kind: "lead-plan" }, createdAt: "2026-08-22T00:00:00.000Z" },
     });
-    const blocked = IssueWorkflowStateSchema.parse({ ...accepted, revision: 5, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Configuration unavailable", lastEventId: "workflow-1:5" });
-    expect(blocked).toMatchObject({ phase: "delivery_blocked", blocker: null });
+    const blocked = IssueWorkflowStateSchema.parse({ ...accepted, revision: 5, ...at("accepted"), owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Configuration unavailable", lastEventId: "workflow-1:5" });
+    expect(blocked).toMatchObject({ step: "accepted", blocker: null });
   });
 
   test("installs reconciliation lineage columns without replacing legacy tables", async () => {

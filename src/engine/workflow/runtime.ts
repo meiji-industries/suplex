@@ -1,3 +1,4 @@
+import { at, isBlocked, type IssueStep } from "../../issue-phases.js";
 import { isCancellation, log, runExecution, sleep } from "../registry.js";
 import { ActivityFailure, ApplicationFailure } from "../failures.js";
 
@@ -73,12 +74,13 @@ export function applyLeadResult(state: IssueWorkflowState, result: LeadPlanningR
     return IssueWorkflowStateSchema.parse({
       ...state,
       ...common,
-      phase: "blocked",
+      ...at("planning"),
       owner: "human",
       allowedCommands: ["resolve_decision_blocker", "cancel_issue"],
       pendingAction: "Needs your call",
       blockedCategory: "human_decision",
       blockedResumePhase: "planning",
+      blocker: humanBlocker("member_decision", "Needs your call", [{ command: "resolve_decision_blocker", label: "Resolve decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.leadOutputArtifactId, "decision-blocker")),
       blockerArtifactId: result.leadOutputArtifactId,
       blockerArtifactSha256: "leadOutputSha256" in result ? result.leadOutputSha256 : null,
       planRevision: null,
@@ -160,7 +162,13 @@ export function createAcquireExternalTurn(
 
 // Forge is a single-operator tool: a phase whose next step is an agent turn must not park
 // on a button. The human gates stay plan approval and pull-request handling.
-const AUTO_CHAINED_COMMANDS = { delivery_ready: "review_delivery", delivery_reviewed: "publish_draft", repair_required: "repair_delivery", merge_conflict_required: "resolve_merge_conflict", ready_for_development: "start_development" } as const;
+const AUTO_CHAINED_COMMANDS: Partial<Record<IssueStep, IssueWorkflowState["allowedCommands"][number]>> = {
+  delivery_ready: "review_delivery",
+  delivery_reviewed: "publish_draft",
+  repair_required: "repair_delivery",
+  merge_conflict_resolving: "resolve_merge_conflict",
+  ready_for_development: "start_development",
+};
 
 // A chained step that threw is never chained again in this run: the phase may re-enter itself
 // (plan conflict -> required -> resolve throws -> plan conflict ...) and each pass has a new revision.
@@ -180,13 +188,14 @@ const CAPACITY_FAILURE_CODES = new Set(["not-found", "not-owner", "duplicate", "
 
 export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): { command: string; commandId: string } | null {
   void patchId;
-  const command = AUTO_CHAINED_COMMANDS[ctx.state.phase as keyof typeof AUTO_CHAINED_COMMANDS];
+  const command = AUTO_CHAINED_COMMANDS[ctx.state.step];
+  if (isBlocked(ctx.state)) return null;
   if (!command || !ctx.state.allowedCommands.includes(command)) return null;
   if (command === "resolve_merge_conflict" && (ctx.state.mergeDecision || ctx.state.owner !== "lead")) return null;
   if (command === "resolve_merge_conflict") {
     const progress = stateTransitions.withRepairProgress(ctx.state, { signature: stateTransitions.repairSignature({ source: "merge", code: "merge_conflict" }), commit: ctx.state.resultCommit ?? null, diagnosticHash: null });
     if ((progress.repairProgress?.repeats ?? 0) >= (ctx.input.repairCycleLimit ?? 0)) {
-      ctx.state = IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Merge conflict needs your call", activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      ctx.state = IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Merge conflict needs your call", activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       return null;
     }
   }
@@ -209,13 +218,13 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision, lastEventId: `${ctx.state.workflowId}:${revision}` });
     await ctx.project();
   }
-  const before = { phase: ctx.state.phase, owner: ctx.state.owner, pendingAction: ctx.state.pendingAction };
+  const before = { step: ctx.state.step, owner: ctx.state.owner, pendingAction: ctx.state.pendingAction, blocked: isBlocked(ctx.state) };
   const command = { expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId ?? ctx.input.autoApprovePlanActorUserId ?? "forge-auto-chain", commandId: chained.commandId };
   let failure: unknown;
   try {
     if (chained.command === "review_delivery") await reviewDelivery(ctx, command);
     else if (chained.command === "publish_draft") {
-      if (ctx.state.phase === "delivery_reviewed" && (ctx.input.deliveryTarget === "remote_branch" || ctx.input.deliveryTarget === "local_worktree")) await resumeReviewedDeliveryTarget(ctx);
+      if (ctx.state.step === "delivery_reviewed" && (ctx.input.deliveryTarget === "remote_branch" || ctx.input.deliveryTarget === "local_worktree")) await resumeReviewedDeliveryTarget(ctx);
       else await ctx.runPublishTurn();
     }
     else if (chained.command === "repair_delivery") await repairDelivery(ctx, command);
@@ -225,7 +234,7 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
     if (isCancellation(error)) return;
     failure = error;
   }
-  const unchanged = ctx.state.phase === before.phase && ctx.state.owner === before.owner && ctx.state.pendingAction === before.pendingAction;
+  const unchanged = ctx.state.step === before.step && ctx.state.owner === before.owner && ctx.state.pendingAction === before.pendingAction && isBlocked(ctx.state) === before.blocked;
   if (!failure && !unchanged) return;
   const reason = failure instanceof Error ? failure.message : failure ? String(failure) : `Automatic ${chained.command.replaceAll("_", " ")} made no progress`;
   haltedChains.add(chainKey(ctx.state.workflowId, chained.command));
@@ -243,7 +252,7 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
 }
 
 function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" | "repair_delivery" | "repair_ci" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation" | null {
-  if (ctx.state.phase !== "delivery_blocked") return null;
+  if (!isBlocked(ctx.state)) return null;
   const commands = ctx.state.blocker?.actions.map((action) => action.command) ?? ctx.state.allowedCommands;
   const candidates = commands.filter((command) => AUTO_RETRY_BLOCKER_COMMANDS.has(command));
   // A delivery cannot be reviewed or published against a moved target base, so reconciliation is
@@ -326,7 +335,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
     }
   }
   await sleep(AUTO_RETRY_BLOCKER_DELAYS[attempt]!);
-  if (ctx.state.phase !== "delivery_blocked" || retryOnlyBlockerCommand(ctx) !== command || retryScope(ctx, command) !== scope) return true;
+  if (!isBlocked(ctx.state) || retryOnlyBlockerCommand(ctx) !== command || retryScope(ctx, command) !== scope) return true;
   const input = { expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId ?? ctx.input.autoApprovePlanActorUserId ?? "forge-auto-retry", commandId };
   if (command === "review_delivery") await reviewDelivery(ctx, input);
   else if (command === "repair_delivery") await repairDelivery(ctx, input);
@@ -414,7 +423,7 @@ export function createGuarded(
       if (failure && CAPACITY_FAILURE_CODES.has(failure.code)) {
         const retryDevelopment = command === "start_development" || command === "retry_development";
         const retryCi = command === "repair_ci";
-        const phase = retryDevelopment ? "delivery_blocked" : retryCi ? "ci_repair_required" : "backlog";
+        const step = retryDevelopment ? "development" : retryCi ? "ci_waiting" : "backlog";
         const allowedCommands = retryDevelopment ? ["retry_development", "cancel_issue"] : retryCi ? ["repair_ci", "cancel_issue"] : ["start_planning", "cancel_issue"];
         const nextAction = retryDevelopment ? "retry development" : retryCi ? "retry CI repair" : "retry planning";
         const pendingAction = `${failure.summary} Forge reconciled the capacity record; ${nextAction}.`;
@@ -422,12 +431,12 @@ export function createGuarded(
           ...state,
           capacity: null,
           capacityBlocker: null,
-          phase,
+          ...at(step),
           revision,
           owner: "human",
           allowedCommands,
           pendingAction,
-          blocker: null,
+          blocker: humanBlocker("capacity_exhausted", pendingAction, allowedCommands.map((command) => ({ command: command as IssueWorkflowState["allowedCommands"][number], label: command === "cancel_issue" ? "Cancel issue" : `Retry ${command.replace(/_/g, " ")}`, requiresNote: false, destructive: command === "cancel_issue" })), evidencePointer(failure.evidenceArtifactId, "attention-evidence")),
           stateChangedAt: new Date().toISOString(),
           lastEventId: `${state.workflowId}:${revision}`,
         });
@@ -448,7 +457,7 @@ export function createGuarded(
         ...state,
         capacity: null,
         capacityBlocker: null,
-        phase: "failed",
+        ...at(state.step),
         revision,
         owner: "human",
         allowedCommands,

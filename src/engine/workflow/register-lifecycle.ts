@@ -1,3 +1,4 @@
+import { at, isBlocked } from "../../issue-phases.js";
 import { runExecution, setHandler, setInterruptHandler } from "../registry.js";
 import { ApplicationFailure } from "../failures.js";
 import { z } from "zod";
@@ -45,7 +46,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     }
     return "none";
   };
-  const developerCancellationAvailable = (): boolean => ctx.state.phase === "development" || (ctx.state.phase === "delivery_blocked" && (ctx.state.developerRecoveryStatus === "cancellation_requested" || (ctx.state.developerRecoveryStatus === "interrupted" && ctx.state.capacity !== null)));
+  const developerCancellationAvailable = (): boolean => ctx.state.step === "development" || (isBlocked(ctx.state) && (ctx.state.developerRecoveryStatus === "cancellation_requested" || (ctx.state.developerRecoveryStatus === "interrupted" && ctx.state.capacity !== null)));
   const interruptDeveloperCancellation = (): Promise<DeveloperCancellationInterruptResult> | undefined => {
     const executionId = ctx.state.developerExecutionId;
     if (!executionId || !["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling"].includes(ctx.state.developerRecoveryStatus ?? "")) return undefined;
@@ -88,7 +89,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       if (cancellation.status !== "completed_before_cancellation" && !["cancelled", "cancelled_confirmed", "interrupted"].includes(cancellation.status)) {
         const summary = "summary" in cancellation ? cancellation.summary : "Forge could not confirm Developer termination.";
         if (!unconditionalCancellation) {
-          ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: summary, ...ctx.recoveryFields("interrupted", "reasonCode" in cancellation ? cancellation.reasonCode : "developer-termination-unconfirmed", summary, ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+          ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("development"), owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: summary, ...ctx.recoveryFields("interrupted", "reasonCode" in cancellation ? cancellation.reasonCode : "developer-termination-unconfirmed", summary, ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
           await ctx.project();
           return ctx.state;
         }
@@ -109,7 +110,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, deliveryDecisionArtifactId: decision.artifactId });
     }
     const resume = true && ctx.state.branchName ? ["resume_preserved_work" as const] : [];
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: ["continue_work", ...resume], pendingAction: "Issue cancelled", acceptanceStatus, acceptanceReasonArtifactId, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("cancelled"), owner: "human", allowedCommands: ["continue_work", ...resume], pendingAction: "Issue cancelled", acceptanceStatus, acceptanceReasonArtifactId, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     return ctx.state;
   }));
@@ -133,7 +134,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       if (!ctx.state.developerExecutionId) {
         await ctx.withStateMutation(() => {
           if (ctx.state.revision !== command.expectedRevision || !developerCancellationAvailable()) throw new Error("Developer cancellation was superseded by another command");
-          ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, activeOperation: null });
+          ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ready_for_development"), owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, activeOperation: null });
           ctx.markCommandProcessed(command.commandId);
           if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
         });
@@ -144,7 +145,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       const interruptedCancellation = acceptedDeveloperCancellation(issueUpdates.cancel_development, executionId);
       await ctx.withStateMutation(() => {
         if (ctx.state.revision !== command.expectedRevision || !developerCancellationAvailable()) throw new Error("Developer cancellation was superseded by another command");
-        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: "Cancelling Developer turn", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("cancellation_requested", null, "Cancellation was sent to the recorded Developer supervisor.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
+        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("development"), owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: "Cancelling Developer turn", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("cancellation_requested", null, "Cancellation was sent to the recorded Developer supervisor.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
         ctx.markCommandProcessed(command.commandId);
       });
       await ctx.project();
@@ -156,7 +157,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
         }
         const cancelled = result.status === "cancelled" || result.status === "cancelled_confirmed";
         const terminal = result.status === "termination_failed" ? "interrupted" : result.status;
-        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: cancelled ? "Developer turn cancelled; preserved work is available for retry" : "summary" in result ? result.summary : "Developer process is ready for retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerOutcome: null, ...ctx.recoveryFields(cancelled ? "cancelled" : terminal === "interrupted" ? "interrupted" : "result_pending_claim", "reasonCode" in result ? result.reasonCode : null, cancelled ? "Developer termination was confirmed; the worktree was preserved." : "summary" in result ? result.summary : "The Developer result won the cancellation race.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
+        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("development"), owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: cancelled ? "Developer turn cancelled; preserved work is available for retry" : "summary" in result ? result.summary : "Developer process is ready for retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerOutcome: null, ...ctx.recoveryFields(cancelled ? "cancelled" : terminal === "interrupted" ? "interrupted" : "result_pending_claim", "reasonCode" in result ? result.reasonCode : null, cancelled ? "Developer termination was confirmed; the worktree was preserved." : "summary" in result ? result.summary : "The Developer result won the cancellation race.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
         if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
       });
       await ctx.project();
@@ -172,7 +173,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       ctx.state = IssueWorkflowStateSchema.parse({
         ...ctx.state,
         revision: ctx.state.revision + 1,
-        phase: executionId || hasCapacityOwnership ? "delivery_blocked" : "ready_for_development",
+        ...at(executionId || hasCapacityOwnership ? "development" : "ready_for_development"),
         owner: executionId || hasCapacityOwnership ? "human" : "lead",
         allowedCommands: executionId || hasCapacityOwnership ? ctx.addRevisionCommand(["retry_development", "cancel_issue"]) : ["start_development", "cancel_issue"],
         pendingAction: executionId || hasCapacityOwnership ? "Cancelling Developer turn" : "Start development",
@@ -188,7 +189,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     if (!executionId) {
       await ctx.cancelCurrentCapacity();
       await ctx.withStateMutation(() => {
-        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ctx.addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, activeOperation: null });
+        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ready_for_development"), owner: "lead", allowedCommands: ctx.addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, activeOperation: null });
       });
       await ctx.project();
       return ctx.state;
@@ -201,7 +202,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       }
       const cancelled = result.status === "cancelled" || result.status === "cancelled_confirmed";
         const terminal = result.status === "termination_failed" ? "interrupted" : result.status;
-        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: cancelled ? "Developer turn cancelled; preserved work is available for retry" : "summary" in result ? result.summary : "Developer process is ready for retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerOutcome: null, ...ctx.recoveryFields(cancelled ? "cancelled" : terminal === "interrupted" ? "interrupted" : "result_pending_claim", "reasonCode" in result ? result.reasonCode : null, cancelled ? "Developer termination was confirmed; the worktree was preserved." : "summary" in result ? result.summary : "The Developer result won the cancellation race.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
+        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("development"), owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: cancelled ? "Developer turn cancelled; preserved work is available for retry" : "summary" in result ? result.summary : "Developer process is ready for retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerOutcome: null, ...ctx.recoveryFields(cancelled ? "cancelled" : terminal === "interrupted" ? "interrupted" : "result_pending_claim", "reasonCode" in result ? result.reasonCode : null, cancelled ? "Developer termination was confirmed; the worktree was preserved." : "summary" in result ? result.summary : "The Developer result won the cancellation race.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
       if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
     });
     let capacityStateProjected = false;
@@ -231,13 +232,13 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
   }), { validator(raw) { const command = expected.extend({ confirmDiscardDirty: z.boolean().optional() }).parse(raw); if (command.expectedRevision !== ctx.state.revision || ctx.state.activeOperation) throw new Error("Worktree deletion was superseded"); } });
   setHandler(issueUpdates.recreate_worktree, ctx.guarded(async (raw: any) => {
     expected.parse(raw); const result = await recreateTaskWorktree({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName!, targetBaseSha: ctx.state.targetBaseSha! });
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Worktree recreated; resuming Developer", worktreePath: result.worktreePath, worktreeState: "present", blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }); await ctx.project(); return ctx.state;
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ready_for_development"), owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Worktree recreated; resuming Developer", worktreePath: result.worktreePath, worktreeState: "present", blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }); await ctx.project(); return ctx.state;
   }), { validator(raw) { const command = expected.parse(raw); if (command.expectedRevision !== ctx.state.revision || ctx.state.worktreeState !== "removed_externally" || !ctx.state.branchName || !ctx.state.targetBaseSha) throw new Error("Worktree recreation is not available"); } });
   setHandler(issueUpdates.resume_preserved_work, ctx.guarded(async (raw: any) => {
-    expected.parse(raw); ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: `Resuming from preserved branch ${ctx.state.branchName}`, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }); await ctx.project(); return ctx.state;
-  }), { validator(raw) { const command = expected.parse(raw); if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "cancelled" || !ctx.state.branchName) throw new Error("Preserved work is unavailable"); } });
+    expected.parse(raw); ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ready_for_development"), owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: `Resuming from preserved branch ${ctx.state.branchName}`, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }); await ctx.project(); return ctx.state;
+  }), { validator(raw) { const command = expected.parse(raw); if (command.expectedRevision !== ctx.state.revision || ctx.state.step !== "cancelled" || !ctx.state.branchName) throw new Error("Preserved work is unavailable"); } });
   setHandler(issueUpdates.report_worktree_missing, ctx.guarded(async (raw: any) => {
-    const command = expected.extend({ worktreePath: z.string().min(1) }).parse(raw); if (["done", "cancelled", "failed"].includes(ctx.state.phase)) { await ctx.recordHandlerNoop("report_worktree_missing", "The terminal task's missing worktree was recorded as history only."); return ctx.state; }
+    const command = expected.extend({ worktreePath: z.string().min(1) }).parse(raw); if (["done", "cancelled", "failed"].includes(ctx.state.step)) { await ctx.recordHandlerNoop("report_worktree_missing", "The terminal task's missing worktree was recorded as history only."); return ctx.state; }
     const inspected = await inspectTaskWorktree({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId });
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "human", allowedCommands: ctx.addRevisionCommand(["recreate_worktree", "cancel_issue"]), pendingAction: "Local worktree is missing", worktreeState: "removed_externally", blocker: stateTransitions.humanBlocker("unsafe_recovery", "The local worktree at " + command.worktreePath + " no longer exists.", [{ command: "recreate_worktree", label: "Recreate worktree and resume", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(inspected.evidenceArtifactId, "attention-evidence")), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }); await ctx.project(); return ctx.state;
   }), { validator(raw) { const command = expected.extend({ worktreePath: z.string().min(1) }).parse(raw); if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision"); } });
@@ -256,7 +257,7 @@ export function registerLifecycleHandlersContinuation(ctx: IssueWorkflowContext)
   }), { validator(rawInput) {
     const command = ContinueWorkCommandSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    if (!["done", "cancelled", "failed"].includes(ctx.state.phase)) throw new Error("Continue work is only available after a terminal issue state");
+    if (!["done", "cancelled", "failed"].includes(ctx.state.step)) throw new Error("Continue work is only available after a terminal issue state");
     if (!ctx.state.allowedCommands.includes("continue_work")) throw new Error("Continue work is not available in the current phase");
   } });
 }

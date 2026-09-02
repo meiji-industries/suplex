@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import { at, type IssuePhase, type IssueStep } from "./issue-phases.js";
+import type { IssueBlocker } from "./engine/contracts/primitives.js";
+
 export const PlanMaterialCategorySchema = z.enum([
   "architecture_dependencies",
   "schema_data_migration",
@@ -146,8 +149,24 @@ export function classifyPlanMateriality(_text: string, explicit: PlanMaterialCat
   return canonicalMaterialCategories([...explicit, ...deterministicMaterialCategories(affectedPaths)]);
 }
 
-export function routeLeadResult(result: { kind: "plan" | "decision_blocker"; material: boolean }): { phase: "ready_for_development" | "approval" | "blocked"; owner: "lead" | "human"; allowedCommands: string[]; pendingAction: string } {
-  if (result.kind === "decision_blocker") return { phase: "blocked", owner: "human", allowedCommands: ["respond_plan_blocker", "cancel_issue"], pendingAction: "Needs your call" };
-  if (result.material) return { phase: "approval", owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan" };
-  return { phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development" };
+export function routeLeadResult(result: { kind: "plan" | "decision_blocker"; material: boolean }): { step: IssueStep; phase: IssuePhase; owner: "lead" | "human"; allowedCommands: string[]; pendingAction: string; blocker?: IssueBlocker } {
+  if (result.kind === "decision_blocker") {
+    return {
+      ...at("planning"),
+      owner: "human",
+      allowedCommands: ["respond_plan_blocker", "cancel_issue"],
+      pendingAction: "Needs your call",
+      blocker: {
+        category: "member_decision",
+        summary: "Needs your call",
+        unblockOwner: "human",
+        actions: [{ command: "respond_plan_blocker", label: "Respond to blocker", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }],
+        evidence: { artifactId: "blocker", kind: "decision-blocker" },
+        createdAt: new Date().toISOString(),
+        retry: null,
+      },
+    };
+  }
+  if (result.material) return { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan" };
+  return { ...at("ready_for_development"), owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development" };
 }

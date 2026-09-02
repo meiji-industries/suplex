@@ -14,9 +14,9 @@ test("labels an agent with its execution profile", () => {
 });
 
 test("labels post-approval ownership and system CI work accurately", () => {
-  expect(workflowOwnerLabel({ owner: "lead", phase: "releasing" } as TaskResponse)).toBe("Integrator");
-  expect(workflowOwnerLabel({ owner: "lead", phase: "final_review" } as TaskResponse)).toBe("Reviewer");
-  expect(workflowOwnerLabel({ owner: "human", phase: "accepted" } as TaskResponse)).toBe("human");
+  expect(workflowOwnerLabel({ owner: "lead", step: "releasing" })).toBe("Integrator");
+  expect(workflowOwnerLabel({ owner: "lead", step: "final_review" })).toBe("Reviewer");
+  expect(workflowOwnerLabel({ owner: "human", step: "accepted" })).toBe("human");
 });
 
 test("makes conflict summaries easy to scan", () => {

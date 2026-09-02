@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 
+import { at } from "../src/issue-phases.js";
 import { boundedLogTail, ciRunIdFromDetailsUrl, createGithubCiProvider, CI_FAILED_LOG_MAX_LINES } from "../src/ci.js";
 import { CiRepairPlanSchema } from "../src/engine/contracts/primitives.js";
 import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/engine/issue-contracts.js";
@@ -45,18 +46,18 @@ test("reruns are bounded per CI cycle", () => {
 test("missing CI head evidence defers to human reconciliation controls", () => {
   const state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState({ workflowId: "workflow", companyId: "company", projectId: "project", issueId: "task", projectRevisionId: "revision", briefArtifactId: "brief", briefSha256: "a".repeat(64), imageArtifactIds: [], requestHash: "b".repeat(64), roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }),
-    phase: "ci_waiting", revision: 3, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Lead diagnosis", releaseId: null, expectedHeadSha: null, lastEventId: "workflow:3",
+    ...at("ci_waiting"), revision: 3, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Lead diagnosis", releaseId: null, expectedHeadSha: null, lastEventId: "workflow:3",
   });
   const waiting = deferCiReconciliation(state, "2026-08-28T00:00:00.000Z");
 
-  expect(waiting).toMatchObject({ phase: "ci_waiting", owner: "human", revision: 4, allowedCommands: ["reconcile_ci", "repair_ci", "cancel_issue"], pendingAction: "Waiting for CI — release evidence is unavailable", lastEventId: "workflow:4" });
-  expect(reconcile({ observed: { exists: true, number: 76, state: "merged", isDraft: false, headSha: "a".repeat(40), mergeable: null, checks: "failed", reviewDecision: null, autoMergeEnabled: false }, target: "merged", current: { phase: waiting.phase } }).phase).toBe("Done");
+  expect(waiting).toMatchObject({ ...at("ci_waiting"), owner: "human", blocker: { unblockOwner: "human" }, revision: 4, allowedCommands: ["reconcile_ci", "repair_ci", "cancel_issue"], pendingAction: "Waiting for CI — release evidence is unavailable", lastEventId: "workflow:4" });
+  expect(reconcile({ observed: { exists: true, number: 76, state: "merged", isDraft: false, headSha: "a".repeat(40), mergeable: null, checks: "failed", reviewDecision: null, autoMergeEnabled: false }, target: "merged", current: { step: waiting.step } }).phase).toBe("Done");
 });
 
 test("CI recovery adopts an observed pull request release without publishing", () => {
   const state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState({ workflowId: "workflow", companyId: "company", projectId: "project", issueId: "task", projectRevisionId: "revision", briefArtifactId: "brief", briefSha256: "a".repeat(64), imageArtifactIds: [], requestHash: "b".repeat(64), roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }),
-    phase: "ci_waiting", revision: 3, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for CI", releaseId: null, releaseRepository: "acme/forge", branchName: "forge/issue/adopt", baseBranch: "main", expectedHeadSha: null, expectedHeadTree: null, lastEventId: "workflow:3",
+    ...at("ci_waiting"), revision: 3, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for CI", releaseId: null, releaseRepository: "acme/forge", branchName: "forge/issue/adopt", baseBranch: "main", expectedHeadSha: null, expectedHeadTree: null, lastEventId: "workflow:3",
   });
   const adopted = adoptCiPullRequestRelease(state, { releaseId: "release-adopted", repository: "acme/forge", baseBranch: "main", targetBaseSha: "a".repeat(40), pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", headSha: "b".repeat(40), headTree: "c".repeat(40) });
 
@@ -66,7 +67,7 @@ test("CI recovery adopts an observed pull request release without publishing", (
 test("a failed CI deadline requires human repair controls", () => {
   const state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState({ workflowId: "workflow", companyId: "company", projectId: "project", issueId: "task", projectRevisionId: "revision", briefArtifactId: "brief", briefSha256: "a".repeat(64), imageArtifactIds: [], requestHash: "b".repeat(64), roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }),
-    phase: "ci_waiting", revision: 3, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for CI", lastEventId: "workflow:3",
+    ...at("ci_waiting"), revision: 3, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for CI", lastEventId: "workflow:3",
   });
-  expect(ciDeadlineBlockedState(state, "Required check failed: Test suite", "2026-08-28T00:00:00.000Z")).toMatchObject({ phase: "ci_repair_required", owner: "human", allowedCommands: ["repair_ci", "reconcile_ci", "cancel_issue"], pendingAction: "Required check failed: Test suite" });
+  expect(ciDeadlineBlockedState(state, "Required check failed: Test suite", "2026-08-28T00:00:00.000Z")).toMatchObject({ ...at("ci_waiting"), owner: "human", blocker: { unblockOwner: "human" }, allowedCommands: ["repair_ci", "reconcile_ci", "cancel_issue"], pendingAction: "Required check failed: Test suite" });
 });

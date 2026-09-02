@@ -53,7 +53,7 @@ export function PullRequestCard({ task, busy, onRefresh, onMarkReady, onRepairCi
   const check = latestChecks?.find(({ conclusion }) => conclusion === "failure" || conclusion === "timed_out" || conclusion === "action_required") ?? latestChecks?.find(({ status }) => status === "in_progress") ?? latestChecks?.find(({ status }) => status === "queued") ?? latestChecks?.[0];
   const fallback = !pr.checks.total ? { label: "Pending", className: "text-muted-foreground", icon: "pending" as const } : pr.checks.failing ? { label: `Failing ${pr.checks.failing}/${pr.checks.total}`, className: "text-red-600 dark:text-red-400", icon: "failed" as const } : pr.checks.successful === pr.checks.total ? { label: `Passed ${pr.checks.successful}/${pr.checks.total}`, className: "text-emerald-600 dark:text-emerald-400", icon: "passed" as const } : { label: `Running ${pr.checks.successful}/${pr.checks.total}`, className: "text-sky-600 dark:text-sky-400", icon: "running" as const };
   const metadata = `${pr.mergeable ? `Mergeability ${pr.mergeable.toLowerCase()}` : "Mergeability pending"} · Auto-merge ${pr.autoMergeEnabled ? "on" : "off"} · ${syncedAgo(pr.observedAt)}`;
-  const waitingForMerge = task.phase === "manual_merge" && status !== "Merged";
+  const waitingForMerge = task.step === "manual_merge" && status !== "Merged";
   const canFixCi = pr.checks.failing > 0 && task.allowedCommands?.includes("repair_ci") && onRepairCi;
   if (status === "Merged") return <Card data-pull-request-card size="sm" aria-label={`Pull request #${pr.number}`}>
     <CardHeader>

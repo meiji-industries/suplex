@@ -1,9 +1,12 @@
 import { expect, test } from "vitest";
 
+
+import { at } from "../src/issue-phases.js";
 import { buildInitialIssueWorkflowState, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
 import { runExecution, type RunExecutionContext } from "../src/engine/registry.js";
 import type { IssueWorkflowContext } from "../src/engine/workflow/context.js";
 import { autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, createAcquireExternalTurn } from "../src/engine/workflow/runtime.js";
+import { evidencePointer, humanBlocker } from "../src/engine/workflow/state-transitions.js";
 
 test("simple capacity admission preserves the current pending action", async () => {
   let state: IssueWorkflowState = {
@@ -20,7 +23,7 @@ test("simple capacity admission preserves the current pending action", async () 
       roleProfiles: {},
       supplementalReview: false,
     }),
-    phase: "planning",
+    ...at("planning"),
     owner: "lead",
     pendingAction: "Lead planning",
   };
@@ -73,7 +76,7 @@ function automaticRetryExecution(waits: number[]): RunExecutionContext {
 }
 
 function targetBaseDriftState(overrides: Partial<IssueWorkflowState> = {}): IssueWorkflowState {
-  return {
+  const state: IssueWorkflowState = {
     ...buildInitialIssueWorkflowState({
       workflowId: "workflow-target-base-retry",
       companyId: "company-target-base-retry",
@@ -87,7 +90,7 @@ function targetBaseDriftState(overrides: Partial<IssueWorkflowState> = {}): Issu
       roleProfiles: {},
       supplementalReview: false,
     }),
-    phase: "delivery_blocked",
+    ...at("releasing"),
     owner: "human",
     allowedCommands: ["publish_draft", "cancel_issue", "retry_target_base_reconciliation"],
     pendingAction: "Target base moved after delivery review",
@@ -95,6 +98,20 @@ function targetBaseDriftState(overrides: Partial<IssueWorkflowState> = {}): Issu
     targetBaseCheckpoint: "pre_release",
     releaseFailureCode: "target-base-drift",
     ...overrides,
+  };
+  return {
+    ...state,
+    blocker: state.blocker ?? humanBlocker(
+      "provider_connectivity_exhausted",
+      state.pendingAction ?? "Target base reconciliation needs attention",
+      state.allowedCommands.map((command) => ({
+          command,
+          label: command.replaceAll("_", " "),
+          requiresNote: false,
+          destructive: command === "cancel_issue",
+        })),
+      evidencePointer("artifact-target-base-retry", "attention-evidence"),
+    ),
   };
 }
 
@@ -177,7 +194,7 @@ test("target-base reconciliation precedes delivery review and retains capped bac
     { revision: 3, pendingAction: "Target base moved; reconciling automatically before publishing.", attempts: 2 },
     { revision: 4, pendingAction: "Target base moved; reconciling automatically before publishing.", attempts: 3 },
   ]);
-  expect(projections.every(({ blocker }) => blocker === null)).toBe(true);
+  expect(projections.every(({ blocker }) => blocker?.unblockOwner === "human")).toBe(true);
 });
 
 test("other auto-retry candidate pairs remain human decisions", async () => {

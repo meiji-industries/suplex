@@ -2,10 +2,11 @@ import { expect, test, vi } from "vitest";
 
 import { reconcileGithubObservations } from "../src/github-observation-reconciliation.js";
 import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/engine/issue-contracts.js";
+import { at } from "../src/issue-phases.js";
 
 const state = IssueWorkflowStateSchema.parse({
   ...buildInitialIssueWorkflowState({ workflowId: "workflow", companyId: "company", projectId: "project", issueId: "task", projectRevisionId: "revision", briefArtifactId: "brief", briefSha256: "a".repeat(64), imageArtifactIds: [], requestHash: "b".repeat(64), roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }),
-  phase: "ci_waiting", revision: 3, owner: "lead", allowedCommands: ["reconcile_ci"], pendingAction: "Waiting", expectedHeadSha: "a".repeat(40), lastEventId: "workflow:3",
+  ...at("ci_waiting"), revision: 3, owner: "lead", allowedCommands: ["reconcile_ci"], pendingAction: "Waiting", expectedHeadSha: "a".repeat(40), lastEventId: "workflow:3",
 });
 
 function database() {

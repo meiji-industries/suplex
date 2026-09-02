@@ -46,9 +46,9 @@ test("decision subjects bind the exact plan, materiality, and workflow revision"
 });
 
 test.each([
-  [{ kind: "plan" as const, material: false }, "ready_for_development", "lead", ["start_development", "cancel_issue"]],
-  [{ kind: "plan" as const, material: true }, "approval", "human", ["approve_plan", "request_plan_revision", "cancel_issue"]],
-  [{ kind: "decision_blocker" as const, material: false }, "blocked", "human", ["respond_plan_blocker", "cancel_issue"]],
-] as const)("Lead result routes to %s", (result, phase, owner, commands) => {
-  expect(routeLeadResult(result)).toMatchObject({ phase, owner, allowedCommands: commands });
+  [{ kind: "plan" as const, material: false }, "ready_for_development", "building", "lead", ["start_development", "cancel_issue"]],
+  [{ kind: "plan" as const, material: true }, "approval", "approval", "human", ["approve_plan", "request_plan_revision", "cancel_issue"]],
+  [{ kind: "decision_blocker" as const, material: false }, "planning", "planning", "human", ["respond_plan_blocker", "cancel_issue"]],
+] as const)("Lead result routes to %s", (result, step, phase, owner, commands) => {
+  expect(routeLeadResult(result)).toMatchObject({ step, phase, owner, allowedCommands: commands });
 });

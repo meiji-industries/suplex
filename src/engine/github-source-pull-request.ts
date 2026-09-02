@@ -10,7 +10,7 @@ export function sourcePullRequestState(input: SourcePullRequestInput | null | un
 }
 
 export function isSourcePullRequestPreDelivery(state: IssueWorkflowState, source: SourcePullRequestState | undefined): boolean {
-  return Boolean(source && ["backlog", "planning", "supplemental_review", "plan_consolidation", "approval", "ready_for_development", "development", "delivery_blocked"].includes(state.phase));
+  return Boolean(source && ["backlog", "planning", "supplemental_review", "plan_consolidation", "approval", "ready_for_development", "development"].includes(state.step));
 }
 export function advanceSourcePullRequestState(state: IssueWorkflowState, patch: Partial<IssueWorkflowState>): IssueWorkflowState {
   return { ...state, ...patch, revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` };

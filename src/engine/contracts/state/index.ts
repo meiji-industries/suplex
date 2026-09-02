@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import { TERMINAL_PHASES } from "../../../issue-phases.js";
-import { normalizeSafeSummary } from "../primitives.js";
+import { ISSUE_STEPS, TERMINAL_PHASES, isBlocked, phaseOf } from "../../../issue-phases.js";
+import { IssueCommandSchema, normalizeSafeSummary } from "../primitives.js";
 import { acceptanceStateFields } from "./acceptance.js";
 import { capacityStateFields } from "./capacity.js";
 import { ciStateFields } from "./ci.js";
@@ -49,6 +49,47 @@ const orderedStateFields = {
 export const IssueWorkflowStateSchema = z.preprocess((raw) => {
   if (raw && typeof raw === "object") {
     const state = { ...(raw as Record<string, unknown>) };
+    if (state.step === undefined && typeof state.phase === "string") {
+      const legacyPhase = state.phase;
+      const commands = Array.isArray(state.allowedCommands) ? state.allowedCommands.flatMap((command) => {
+        const parsed = IssueCommandSchema.safeParse(command);
+        return parsed.success ? [parsed.data] : [];
+      }) : [];
+      let step = ISSUE_STEPS.find((candidate) => candidate === legacyPhase);
+      if (!step) {
+        if (legacyPhase === "delivery_blocked") {
+          if (commands.includes("review_delivery")) step = "delivery_ready";
+          else if (commands.some((command) => ["publish_draft", "retry_target_base_reconciliation", "retry_forward_merge_verification"].includes(command))) step = "releasing";
+          else if (commands.some((command) => ["reconcile_ci", "repair_ci"].includes(command))) step = "ci_waiting";
+          else if (commands.includes("final_review")) step = "final_review";
+          else if (commands.some((command) => ["accept_delivery", "reconcile_acceptance"].includes(command))) step = "accepted";
+          else if (commands.includes("reconcile_merge")) step = "manual_merge";
+          else step = "development";
+        } else if (legacyPhase === "blocked") {
+          step = state.blockedCategory === "human_decision" ? "planning" : state.developerExecutionId ? "development" : "planning";
+        } else if (legacyPhase === "ci_repair_required") step = "ci_waiting";
+        else if (legacyPhase === "merge_conflict_required") step = "merge_conflict_resolving";
+        else if (legacyPhase === "failed") step = state.developerExecutionId ? "development" : "planning";
+      }
+      if (step) {
+        state.step = step;
+        state.phase = phaseOf(step);
+        if (["delivery_blocked", "blocked", "failed", "ci_repair_required", "merge_conflict_required"].includes(legacyPhase) && (state.blocker === null || state.blocker === undefined)) {
+          const orderedCommands = [...commands.filter((command) => command !== "cancel_issue"), ...commands.filter((command) => command === "cancel_issue")].slice(0, 3);
+          const blockerCommands = orderedCommands.length > 0 ? orderedCommands : ["cancel_issue"];
+          state.blocker = {
+            category: "agent_contradiction",
+            summary: state.pendingAction ?? "Needs your attention",
+            unblockOwner: "human",
+            actions: blockerCommands.map((command) => ({ command, label: command.split("_").map((word) => word[0]?.toUpperCase() + word.slice(1)).join(" "), destructive: command === "cancel_issue", requiresNote: false })),
+            evidence: { artifactId: typeof state.lastEventId === "string" && state.lastEventId ? state.lastEventId : "legacy-blocker", kind: "attention-evidence" },
+            createdAt: typeof state.stateChangedAt === "string" ? state.stateChangedAt : new Date().toISOString(),
+            retry: null,
+          };
+          state.owner = "human";
+        }
+      }
+    }
     // Activity-provided summaries are not trusted to fit the compact workflow
     // state fields. Normalize before validation so replaying an old activity
     // result cannot make a workflow task fail forever.
@@ -73,6 +114,7 @@ export const IssueWorkflowStateSchema = z.preprocess((raw) => {
   }
   return raw;
 }, z.object(orderedStateFields)).superRefine((state, context) => {
+  if (state.phase !== phaseOf(state.step)) context.addIssue({ code: "custom", path: ["phase"], message: "Phase must match step" });
   if (state.blocker?.unblockOwner !== "human") return;
   if (state.owner !== "human") context.addIssue({ code: "custom", path: ["owner"], message: "Human blockers require human ownership" });
   if (state.blocker.retry && !state.blocker.retry.exhausted && state.blocker.retry.retryAt !== null) context.addIssue({ code: "custom", path: ["blocker", "retry"], message: "Retryable blockers cannot be surfaced as human attention" });
@@ -85,7 +127,7 @@ export const IssueWorkflowStateSchema = z.preprocess((raw) => {
   // delivery-blocked retry is the natural recovery action; other in-flight
   // phases retain their universally safe cancellation action.
   if (TERMINAL_PHASES.has(state.phase) || state.allowedCommands.includes("cancel_issue")) return state;
-  const naturalRetry = state.phase === "delivery_blocked" ? ["retry_development" as const] : [];
+  const naturalRetry = isBlocked(state) && state.step === "development" ? ["retry_development" as const] : [];
   return { ...state, allowedCommands: [...naturalRetry, ...state.allowedCommands, "cancel_issue" as const] };
 });
 

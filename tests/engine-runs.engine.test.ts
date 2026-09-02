@@ -1,4 +1,6 @@
 import { expect, test } from "vitest";
+
+import { at } from "../src/issue-phases.js";
 import { activityContext } from "../src/engine/activity-context.js";
 import { runExecution } from "../src/engine/registry.js";
 import { createActivityCaller } from "../src/engine/activities.js";
@@ -43,7 +45,7 @@ function persistContinuation(harness: EngineHarness, issueId: string, continuati
   for (let revision = 0; revision <= (continuation.revision ?? 0); revision += 1) {
     const state = revision === continuation.revision
       ? IssueWorkflowStateSchema.parse({ ...initial, ...continuation })
-      : IssueWorkflowStateSchema.parse({ ...initial, revision, phase: revision === 0 ? "backlog" : "planning", owner: revision === 0 ? "human" : "lead", allowedCommands: revision === 0 ? ["start_planning"] : [], pendingAction: revision === 0 ? "Start planning" : "Lead planning", lastEventId: `${workflowId}:${revision}` });
+      : IssueWorkflowStateSchema.parse({ ...initial, revision, ...at(revision === 0 ? "backlog" : "planning"), owner: revision === 0 ? "human" : "lead", allowedCommands: revision === 0 ? ["start_planning"] : [], pendingAction: revision === 0 ? "Start planning" : "Lead planning", lastEventId: `${workflowId}:${revision}` });
     harness.database.projectIssueEvent({ schemaVersion: 1, runId: `seed-${issueId}`, eventId: state.lastEventId, state });
   }
 }
@@ -95,7 +97,7 @@ test("global command identity collision is rejected before another workflow effe
     const firstRun = harness.engine.run(first.workflowId), secondRun = harness.engine.run(second.workflowId);
     await Promise.all([firstRun.ready(), secondRun.ready()]);
     const commandId = "global-command-identity";
-    const firstResult = IssueWorkflowStateSchema.parse({ ...firstRun.state, revision: 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "First workflow", lastEventId: `${first.workflowId}:1` });
+    const firstResult = IssueWorkflowStateSchema.parse({ ...firstRun.state, revision: 1, ...at("planning"), owner: "lead", allowedCommands: [], pendingAction: "First workflow", lastEventId: `${first.workflowId}:1` });
     firstRun.commands.set("crossWorkflowCommand", (async () => {
       await runExecution.current().activity("projectIssueState", [{ schemaVersion: 1, runId: firstRun.runId, eventId: firstResult.lastEventId, state: firstResult }], { startToCloseTimeout: "1 minute" });
       return firstResult;
@@ -123,7 +125,7 @@ test("command receipt inherits the exact decorated final projection", async () =
     await run.ready();
     const live = run.state;
     const nextRevision = live.revision + 1;
-    const raw = IssueWorkflowStateSchema.parse({ ...live, revision: nextRevision, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Raw handler result", lastEventId: `${started.workflowId}:${nextRevision}`, branchName: "forge/decorated-result", worktreePath: "/worktrees/decorated-result", worktreeState: "present", developerExecutionId: "developer-decorated-result", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40) });
+    const raw = IssueWorkflowStateSchema.parse({ ...live, revision: nextRevision, ...at("planning"), owner: "lead", allowedCommands: [], pendingAction: "Raw handler result", lastEventId: `${started.workflowId}:${nextRevision}`, branchName: "forge/decorated-result", worktreePath: "/worktrees/decorated-result", worktreeState: "present", developerExecutionId: "developer-decorated-result", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40) });
     const decorated = withWorktreeCommands(IssueWorkflowStateSchema.parse({ ...raw, allowedCommands: ["cancel_issue"], pendingAction: "Decorated projection result" }));
     expect(decorated.allowedCommands).toEqual(["cancel_issue", "delete_worktree", "retry_target_base_reconciliation"]);
     run.commands.set("decoratedResultCommand", (async () => {
@@ -140,7 +142,7 @@ test("command receipt inherits the exact decorated final projection", async () =
     const conflictRun = harness.engine.run(conflictStarted.workflowId);
     await conflictRun.ready();
     const conflictRevision = conflictRun.state.revision + 1;
-    const firstDecoration = IssueWorkflowStateSchema.parse({ ...conflictRun.state, revision: conflictRevision, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "First decoration", lastEventId: `${conflictStarted.workflowId}:${conflictRevision}` });
+    const firstDecoration = IssueWorkflowStateSchema.parse({ ...conflictRun.state, revision: conflictRevision, ...at("planning"), owner: "lead", allowedCommands: [], pendingAction: "First decoration", lastEventId: `${conflictStarted.workflowId}:${conflictRevision}` });
     const secondDecoration = IssueWorkflowStateSchema.parse({ ...firstDecoration, pendingAction: "Conflicting decoration" });
     conflictRun.commands.set("conflictingDecorationCommand", (async () => {
       const execution = runExecution.current();
@@ -157,7 +159,7 @@ test("command receipt inherits the exact decorated final projection", async () =
     await mismatchRun.ready();
     const mismatchLive = mismatchRun.state;
     const mismatchRevision = mismatchLive.revision + 1;
-    const mismatchRaw = IssueWorkflowStateSchema.parse({ ...mismatchLive, revision: mismatchRevision, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Raw mismatch", lastEventId: `${mismatchStarted.workflowId}:${mismatchRevision}`, branchName: "forge/decorated-mismatch", worktreePath: "/worktrees/decorated-mismatch", worktreeState: "present", developerExecutionId: "developer-decorated-mismatch", targetBaseSha: "d".repeat(40), resultCommit: "e".repeat(40), resultTree: "f".repeat(40) });
+    const mismatchRaw = IssueWorkflowStateSchema.parse({ ...mismatchLive, revision: mismatchRevision, ...at("planning"), owner: "lead", allowedCommands: [], pendingAction: "Raw mismatch", lastEventId: `${mismatchStarted.workflowId}:${mismatchRevision}`, branchName: "forge/decorated-mismatch", worktreePath: "/worktrees/decorated-mismatch", worktreeState: "present", developerExecutionId: "developer-decorated-mismatch", targetBaseSha: "d".repeat(40), resultCommit: "e".repeat(40), resultTree: "f".repeat(40) });
     const wrongIdentity = IssueWorkflowStateSchema.parse({ ...mismatchRaw, issueId: "different-task" });
     mismatchRun.commands.set("decoratedMismatchCommand", (async () => {
       await runExecution.current().activity("projectIssueState", [{ schemaVersion: 1, runId: mismatchRun.runId, eventId: wrongIdentity.lastEventId, state: wrongIdentity }], { startToCloseTimeout: "1 minute" });
@@ -202,7 +204,7 @@ test("real macrotask idle cancellation preserves workflow health and receipt", a
     const active = await queryIssueWorkflow(harness.config, started.workflowId);
     const commandId = "real-clock-idle-cancel-command";
     const cancelled = await executeIssueCommand(harness.config, started.workflowId, "cancel_issue", { expectedRevision: active.revision, actorUserId: engineFixture.actorUserId, commandId });
-    expect(cancelled).toMatchObject({ phase: "cancelled", revision: active.revision + 1 });
+    expect(cancelled).toMatchObject({ step: "cancelled", revision: active.revision + 1 });
     expect(run.error).toBeUndefined();
     expect(run.state).toEqual(cancelled);
     expect(commandReceiptCount(harness, commandId)).toBe(1);
@@ -259,7 +261,7 @@ test("activity retry rechecks projection authority after backoff", async () => {
     const caller = createActivityCaller(harness.database, { retryingEffect() { effects += 1; firstAttempt.resolve(undefined); throw new Error("retry after backoff"); } }, async () => releaseBackoff.promise);
     const operation = caller.call("retryingEffect", [], { retry: { maximumAttempts: 2, initialInterval: 1 } }, new AbortController().signal, workflowId, () => harness.database.projectIssueEvents([authority]));
     await firstAttempt.promise;
-    const superseding = IssueWorkflowStateSchema.parse({ ...state, revision: 1, phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Superseded during retry backoff", lastEventId: `${workflowId}:1` });
+    const superseding = IssueWorkflowStateSchema.parse({ ...state, revision: 1, ...at("cancelled"), owner: "human", allowedCommands: [], pendingAction: "Superseded during retry backoff", lastEventId: `${workflowId}:1` });
     harness.database.projectIssueEvent({ schemaVersion: 1, runId: row.runId, eventId: superseding.lastEventId, state: superseding });
     releaseBackoff.resolve(undefined);
 
@@ -319,7 +321,7 @@ test("IssueEngine rejects a high-revision snapshot without exact projection auth
   harness.seedTask(issueId);
   try {
     const initial = buildInitialIssueWorkflowState({ workflowId, ...workflowInput(issueId) });
-    const unbacked = IssueWorkflowStateSchema.parse({ ...initial, revision: 3, phase: "planning", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Unbacked continuation", lastEventId: `${workflowId}:3` });
+    const unbacked = IssueWorkflowStateSchema.parse({ ...initial, revision: 3, ...at("planning"), owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Unbacked continuation", lastEventId: `${workflowId}:3` });
     harness.database.authQuery((db) => db.prepare("INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(issueId, engineFixture.companyId, workflowId, unbacked.revision, JSON.stringify(unbacked), new Date(harness.clock.now()).toISOString()));
 
     expect(() => harness.engine.run(workflowId)).toThrow("no exact persisted projection authority");
@@ -365,11 +367,11 @@ test("issue cancellation interrupts held planning and late completion cannot res
     const cancelled = await executeIssueCommand(harness.config, started.workflowId, "cancel_issue", command);
     await planningAborted.promise;
     await planningRejected;
-    expect(cancelled).toMatchObject({ phase: "cancelled", activeOperation: null, pendingAction: "Issue cancelled" });
+    expect(cancelled).toMatchObject({ step: "cancelled", activeOperation: null, pendingAction: "Issue cancelled" });
 
     planning.resolve(leadPlan(started.workflowId, issueId));
     await Promise.resolve();
-    expect(await queryIssueWorkflow(harness.config, started.workflowId)).toMatchObject({ phase: "cancelled", revision: cancelled.revision });
+    expect(await queryIssueWorkflow(harness.config, started.workflowId)).toMatchObject({ step: "cancelled", revision: cancelled.revision });
     expect(await executeIssueCommand(harness.config, started.workflowId, "cancel_issue", command)).toEqual(cancelled);
     expect(commandReceiptCount(harness, command.commandId)).toBe(1);
   } finally {
@@ -397,8 +399,8 @@ test("Developer progress is durable before the held effect and terminal receipt 
     let liveState = run.state;
     run.queries.set("issueState", (() => liveState) as never);
     const commandId = "held-development-atomic-receipt";
-    const progress = IssueWorkflowStateSchema.parse({ ...run.state, revision: 1, phase: "development", owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer execution", lastEventId: `${started.workflowId}:1`, developerExecutionId: "developer-held-exact", developerAttempt: 1, developerTurnKind: "implementation", developerRecoveryStatus: "starting", activeOperation: { commandId, kind: "development", startedRevision: 1 } });
-    const terminal = IssueWorkflowStateSchema.parse({ ...progress, revision: 2, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer failed", lastEventId: `${started.workflowId}:2`, developerRecoveryStatus: "failed", activeOperation: null });
+    const progress = IssueWorkflowStateSchema.parse({ ...run.state, revision: 1, ...at("development"), owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer execution", lastEventId: `${started.workflowId}:1`, developerExecutionId: "developer-held-exact", developerAttempt: 1, developerTurnKind: "implementation", developerRecoveryStatus: "starting", activeOperation: { commandId, kind: "development", startedRevision: 1 } });
+    const terminal = IssueWorkflowStateSchema.parse({ ...progress, revision: 2, ...at("development"), owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer failed", lastEventId: `${started.workflowId}:2`, developerRecoveryStatus: "failed", activeOperation: null });
     run.commands.set("heldDeveloperCommand", (async () => {
       liveState = progress;
       const context = runExecution.current();
@@ -416,7 +418,7 @@ test("Developer progress is durable before the held effect and terminal receipt 
       timeline: db.prepare("SELECT * FROM forge_issue_timeline WHERE task_id = ? ORDER BY stream_id").all(issueId),
       snapshots: db.prepare("SELECT * FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision").all(issueId),
     }));
-    expect(durableProgress.projection).toMatchObject({ phase: "development", revision: 1, last_event_id: progress.lastEventId });
+    expect(durableProgress.projection).toMatchObject({ step: "development", revision: 1, last_event_id: progress.lastEventId });
     expect(IssueWorkflowStateSchema.parse(JSON.parse((durableProgress.snapshots as Array<{ revision: number; state_json: string }>).at(-1)!.state_json))).toMatchObject({ developerExecutionId: "developer-held-exact", activeOperation: { commandId, kind: "development", startedRevision: 1 } });
     expect(await queryIssueWorkflow(harness.config, started.workflowId)).toEqual(progress);
     expect(commandReceiptCount(harness, commandId)).toBe(0);
@@ -435,7 +437,7 @@ test("Developer progress is durable before the held effect and terminal receipt 
     expect(commandReceiptCount(harness, commandId)).toBe(0);
     expect(harness.engine.runs.has(started.workflowId)).toBe(false);
     expect(harness.engine.run(started.workflowId).state).toMatchObject({
-      phase: "delivery_blocked",
+      step: "development",
       revision: 2,
       activeOperation: null,
       developerExecutionId: "developer-held-exact",
@@ -455,13 +457,13 @@ test("worker restart makes an orphaned autonomous CI repair actionable", async (
   harness.seedTask(issueId);
   const continuation = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-    phase: "ci_repair_planning", revision: 1, owner: "lead", allowedCommands: [], pendingAction: "Looking into the CI failure", lastEventId: `${workflowId}:1`, activeOperation: null,
+    ...at("ci_repair_planning"), revision: 1, owner: "lead", allowedCommands: [], pendingAction: "Looking into the CI failure", lastEventId: `${workflowId}:1`, activeOperation: null,
   });
   try {
     persistContinuation(harness, issueId, continuation);
     await startIssueWorkflow(harness.config, workflowInput(issueId, continuation));
     expect(await queryIssueWorkflow(harness.config, workflowId)).toMatchObject({
-      phase: "ci_repair_required",
+      step: "ci_waiting",
       owner: "human",
       allowedCommands: ["repair_ci", "reconcile_ci", "cancel_issue"],
       activeOperation: null,
@@ -508,7 +510,7 @@ test("durable projection replay failures do not falsify command success", async 
     expect(result).toMatchObject({ phase: "approval" });
     expect(replayFailures).toBeGreaterThanOrEqual(2);
     expect(commandReceiptCount(harness, command.commandId)).toBe(1);
-    expect(harness.database.authQuery((db) => db.prepare("SELECT phase, revision FROM forge_issue_projections WHERE workflow_id = ?").get(started.workflowId))).toEqual({ phase: "approval", revision: result.revision });
+    expect(harness.database.authQuery((db) => db.prepare("SELECT step, revision FROM forge_issue_projections WHERE workflow_id = ?").get(started.workflowId))).toEqual({ step: "approval", revision: result.revision });
   } finally {
     await harness.stop();
   }
@@ -533,19 +535,19 @@ test("cancelling a held production Developer turn prevents late resurrection", a
   });
   const issueId = "cancel-held-developer", workflowId = harness.workflowId(issueId);
   harness.seedTask(issueId);
-  const ready = { phase: "ready_for_development" as const, revision: 1, owner: "lead" as const, allowedCommands: ["start_development" as const, "cancel_issue" as const], pendingAction: "Start development", lastEventId: `${workflowId}:1`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: "2026-08-29T00:00:00.000Z", planRevision: 1, planMaterial: true, planApproved: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" };
+  const ready = { ...at("ready_for_development"), revision: 1, owner: "lead" as const, allowedCommands: ["start_development" as const, "cancel_issue" as const], pendingAction: "Start development", lastEventId: `${workflowId}:1`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: "2026-08-29T00:00:00.000Z", planRevision: 1, planMaterial: true, planApproved: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" };
   try {
     persistContinuation(harness, issueId, ready);
     await startIssueWorkflow(harness.config, workflowInput(issueId, ready));
     harness.engine.run(workflowId).wakeable.wake();
     await developerStarted.promise;
     const active = await queryIssueWorkflow(harness.config, workflowId);
-    expect(active.phase).toBe("development");
+    expect(active.step).toBe("development");
     const cancelled = await executeIssueCommand(harness.config, workflowId, "cancel_issue", { expectedRevision: active.revision, actorUserId: engineFixture.actorUserId, commandId: "cancel-held-developer" });
     expect(cancelled.phase).toBe("cancelled");
     releaseDeveloper.resolve(undefined);
     for (let attempt = 0; attempt < 20; attempt += 1) await Promise.resolve();
-    expect(await queryIssueWorkflow(harness.config, workflowId)).toMatchObject({ phase: "cancelled", revision: cancelled.revision });
+    expect(await queryIssueWorkflow(harness.config, workflowId)).toMatchObject({ step: "cancelled", revision: cancelled.revision });
     const settledRun = harness.engine.run(workflowId);
     expect(settledRun.error).toBeUndefined();
     expect(settledRun.state.allowedCommands).not.toContain("start_development");
@@ -575,7 +577,7 @@ test("cancelling explicit repair delivery preserves a complete receipt chain", a
   });
   const issueId = "cancel-held-repair", workflowId = harness.workflowId(issueId);
   harness.seedTask(issueId);
-  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), phase: "repair_required", revision: 1, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Repair delivery", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", developerExecutionId: "developer-original", developerSessionRef: "developer-session", branchName: "forge/issue/cancel-held-repair", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "developer-evidence", deliveryReviewId: "review", deliveryBlockingFindings: [{ findingId: "blocking-1", severity: "blocking", rationale: "Fix it", evidenceRef: "review", disposition: "open", repairInstruction: "Repair" }] });
+  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), ...at("repair_required"), revision: 1, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Repair delivery", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", developerExecutionId: "developer-original", developerSessionRef: "developer-session", branchName: "forge/issue/cancel-held-repair", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "developer-evidence", deliveryReviewId: "review", deliveryBlockingFindings: [{ findingId: "blocking-1", severity: "blocking", rationale: "Fix it", evidenceRef: "review", disposition: "open", repairInstruction: "Repair" }] });
   try {
     persistContinuation(harness, issueId, continuation);
     const started = await startIssueWorkflow(harness.config, workflowInput(issueId, continuation));
@@ -588,7 +590,7 @@ test("cancelling explicit repair delivery preserves a complete receipt chain", a
     expect(cancelled.phase).toBe("cancelled");
     releaseRepair.resolve(undefined);
     for (let attempt = 0; attempt < 20; attempt += 1) await Promise.resolve();
-    expect(await queryIssueWorkflow(harness.config, workflowId)).toMatchObject({ phase: "cancelled", revision: cancelled.revision });
+    expect(await queryIssueWorkflow(harness.config, workflowId)).toMatchObject({ step: "cancelled", revision: cancelled.revision });
     expect(harness.engine.run(workflowId).error).toBeUndefined();
     expect(commandReceiptCount(harness, "repair-held")).toBe(0);
     expect(commandReceiptCount(harness, "cancel-held-repair")).toBe(1);
@@ -620,17 +622,17 @@ test("reviewed delivery authority is durable before remote branch push", async (
   });
   const issueId = "held-reviewed-push", workflowId = harness.workflowId(issueId);
   harness.seedTask(issueId, { deliveryTarget: "remote_branch" });
-  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), phase: "delivery_ready", revision: 1, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Review delivery", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/held-reviewed-push", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery-artifact", developerEvidenceArtifactId: "developer-evidence" });
+  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), ...at("delivery_ready"), revision: 1, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Review delivery", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/held-reviewed-push", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery-artifact", developerEvidenceArtifactId: "developer-evidence" });
   try {
     persistContinuation(harness, issueId, continuation);
     await startIssueWorkflow(harness.config, { ...workflowInput(issueId, continuation), deliveryTarget: "remote_branch" });
     harness.engine.run(workflowId).wakeable.wake();
     await pushStarted.promise;
     expect(pushCalls).toBe(1);
-    expect(pushedAuthority).toMatchObject({ phase: "delivery_reviewed", deliveryReviewId: "held-review", deliveryReviewOutcome: "approved", resultCommit: reviewedCommit, resultTree: reviewedTree, pendingAction: "Opening the pull request" });
-    expect(harness.database.authQuery((db) => db.prepare("SELECT phase, revision FROM forge_issue_projections WHERE workflow_id = ?").get(workflowId))).toEqual({ phase: "delivery_reviewed", revision: pushedAuthority!.revision });
+    expect(pushedAuthority).toMatchObject({ step: "delivery_reviewed", deliveryReviewId: "held-review", deliveryReviewOutcome: "approved", resultCommit: reviewedCommit, resultTree: reviewedTree, pendingAction: "Opening the pull request" });
+    expect(harness.database.authQuery((db) => db.prepare("SELECT step, revision FROM forge_issue_projections WHERE workflow_id = ?").get(workflowId))).toEqual({ step: "delivery_reviewed", revision: pushedAuthority!.revision });
     releasePush.resolve(undefined);
-    await expect(harness.settle(workflowId, (state) => state.phase === "done")).resolves.toMatchObject({ phase: "done", pendingAction: "Done — branch pushed", resultCommit: reviewedCommit });
+    await expect(harness.settle(workflowId, (state) => state.step === "done")).resolves.toMatchObject({ step: "done", pendingAction: "Done — branch pushed", resultCommit: reviewedCommit });
   } finally {
     releasePush.resolve(undefined);
     await harness.stop();
@@ -655,20 +657,20 @@ test("cancelling a held production review prevents late review resurrection", as
   });
   const issueId = "cancel-held-review", workflowId = harness.workflowId(issueId);
   harness.seedTask(issueId, { deliveryTarget: "remote_branch" });
-  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), phase: "delivery_ready", revision: 1, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Review delivery", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/cancel-held-review", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery-artifact", developerEvidenceArtifactId: "developer-evidence" });
+  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), ...at("delivery_ready"), revision: 1, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Review delivery", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/cancel-held-review", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery-artifact", developerEvidenceArtifactId: "developer-evidence" });
   try {
     persistContinuation(harness, issueId, continuation);
     await startIssueWorkflow(harness.config, { ...workflowInput(issueId, continuation), deliveryTarget: "remote_branch" });
     harness.engine.run(workflowId).wakeable.wake();
     await reviewStarted.promise;
     const active = await queryIssueWorkflow(harness.config, workflowId);
-    expect(active.phase).toBe("reviewing_delivery");
+    expect(active.step).toBe("reviewing_delivery");
     const cancelled = await executeIssueCommand(harness.config, workflowId, "cancel_issue", { expectedRevision: active.revision, actorUserId: engineFixture.actorUserId, commandId: "cancel-held-review" });
     expect(cancelled.phase).toBe("cancelled");
     expect(reviewAborted).toBe(true);
     releaseReview.resolve(undefined);
     for (let attempt = 0; attempt < 20; attempt += 1) await Promise.resolve();
-    expect(await queryIssueWorkflow(harness.config, workflowId)).toMatchObject({ phase: "cancelled", revision: cancelled.revision });
+    expect(await queryIssueWorkflow(harness.config, workflowId)).toMatchObject({ step: "cancelled", revision: cancelled.revision });
     const settledRun = harness.engine.run(workflowId);
     expect(settledRun.error).toBeUndefined();
     expect(settledRun.state.allowedCommands).not.toContain("review_delivery");
@@ -697,7 +699,7 @@ test("target-base no-drift authority is durable before acceptance activity", asy
   });
   const issueId = "held-acceptance-authority", workflowId = harness.workflowId(issueId);
   harness.seedTask(issueId, { deliveryTarget: "merged" });
-  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), phase: "accepted", revision: 1, owner: "human", allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"], pendingAction: "Member acceptance required", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/held-acceptance", baseBranch: "main", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "developer-evidence", deliveryReviewId: "delivery-review", finalReviewId: "final-review", finalReviewOutcome: "approved", releaseId: "release", releaseRepository: "acme/forge", pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", expectedHeadSha: engineFixture.commit, expectedHeadTree: engineFixture.tree, ciRunId: "ci-run" });
+  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), ...at("accepted"), revision: 1, owner: "human", allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"], pendingAction: "Member acceptance required", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/held-acceptance", baseBranch: "main", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "developer-evidence", deliveryReviewId: "delivery-review", finalReviewId: "final-review", finalReviewOutcome: "approved", releaseId: "release", releaseRepository: "acme/forge", pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", expectedHeadSha: engineFixture.commit, expectedHeadTree: engineFixture.tree, ciRunId: "ci-run" });
   try {
     persistContinuation(harness, issueId, continuation);
     const started = await startIssueWorkflow(harness.config, { ...workflowInput(issueId, continuation), pullRequestMode: "auto_merge", deliveryTarget: "merged" });
@@ -705,10 +707,10 @@ test("target-base no-drift authority is durable before acceptance activity", asy
     const command = { expectedRevision: current.revision, actorUserId: engineFixture.actorUserId, commandId: "held-acceptance" };
     const pending = executeIssueCommand(harness.config, started.workflowId, "accept_delivery", command);
     await acceptanceStarted.promise;
-    expect(acceptanceAuthority).toMatchObject({ phase: "accepted", revision: current.revision + 1, targetBaseCheckId: "base-pre_acceptance", targetBaseCheckpoint: "pre_acceptance", targetBaseOutcome: "no_drift" });
+    expect(acceptanceAuthority).toMatchObject({ step: "accepted", revision: current.revision + 1, targetBaseCheckId: "base-pre_acceptance", targetBaseCheckpoint: "pre_acceptance", targetBaseOutcome: "no_drift" });
     expect(harness.database.authQuery((db) => db.prepare("SELECT revision, event_hash FROM forge_issue_projections WHERE workflow_id = ?").get(workflowId))).toMatchObject({ revision: current.revision + 1, event_hash: expect.any(String) });
     releaseAcceptance.resolve(undefined);
-    await expect(pending).resolves.toMatchObject({ phase: "accepted", lastHandlerError: { command: "accept_delivery" } });
+    await expect(pending).resolves.toMatchObject({ step: "accepted", lastHandlerError: { command: "accept_delivery" } });
   } finally {
     releaseAcceptance.resolve(undefined);
     await harness.stop();
@@ -748,8 +750,8 @@ test("development cancellation checks authority before interrupting held work", 
     let liveState = run.state;
     run.queries.set("issueState", (() => liveState) as never);
     const activeCommandId = "active-held-development", cancelCommandId = "cancel-held-development", retryCancelCommandId = "cancel-held-development-retry";
-    const progress = IssueWorkflowStateSchema.parse({ ...liveState, revision: 1, phase: "development", owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer execution", lastEventId: `${started.workflowId}:1`, developerExecutionId: "interrupt-execution", developerRecoveryStatus: "starting", activeOperation: { commandId: activeCommandId, kind: "development", startedRevision: 1 } });
-    const cancelled = IssueWorkflowStateSchema.parse({ ...progress, revision: 2, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer turn cancelled", lastEventId: `${started.workflowId}:2`, developerRecoveryStatus: "cancelled", activeOperation: null });
+    const progress = IssueWorkflowStateSchema.parse({ ...liveState, revision: 1, ...at("development"), owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer execution", lastEventId: `${started.workflowId}:1`, developerExecutionId: "interrupt-execution", developerRecoveryStatus: "starting", activeOperation: { commandId: activeCommandId, kind: "development", startedRevision: 1 } });
+    const cancelled = IssueWorkflowStateSchema.parse({ ...progress, revision: 2, ...at("development"), owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer turn cancelled", lastEventId: `${started.workflowId}:2`, developerRecoveryStatus: "cancelled", activeOperation: null });
     run.commands.set("activeHeldDevelopment", (async () => {
       liveState = progress;
       const context = runExecution.current();
@@ -779,7 +781,7 @@ test("development cancellation checks authority before interrupting held work", 
     expect(commandReceiptCount(harness, activeCommandId)).toBe(0);
     expect(commandReceiptCount(harness, cancelCommandId)).toBe(0);
     expect(commandReceiptCount(harness, retryCancelCommandId)).toBe(1);
-    expect(harness.database.authQuery((db) => db.prepare("SELECT phase, revision FROM forge_issue_projections WHERE workflow_id = ?").get(started.workflowId))).toEqual({ phase: "delivery_blocked", revision: 2 });
+    expect(harness.database.authQuery((db) => db.prepare("SELECT step, revision FROM forge_issue_projections WHERE workflow_id = ?").get(started.workflowId))).toEqual({ step: "development", revision: 2 });
     await expect(run.execute("cancelHeldDevelopment", {}, retryCancelCommandId)).resolves.toEqual(cancelled);
   } finally {
     held.resolve(undefined);
@@ -804,7 +806,7 @@ test("cancellation interrupts coalesce by target across command IDs and types", 
     const workflowId = harness.workflowId(issueId);
     return workflowInput(issueId, {
       ...buildInitialIssueWorkflowState({ workflowId, ...workflowInput(issueId) }),
-      phase: "development" as const,
+      ...at("development"),
       revision: 3,
       owner: "lead" as const,
       allowedCommands: ["cancel_development" as const, "cancel_issue" as const],
@@ -844,11 +846,11 @@ test("cancellation interrupts coalesce by target across command IDs and types", 
     const [firstResult, duplicateResult, issueResult, distinctResult] = await Promise.all([firstCancellation, duplicateCancellation, issueCancellation, distinctCancellation]);
 
     expect([...cancellationCalls].sort()).toEqual(["developer-target-a", "developer-target-b"]);
-    expect(firstResult).toMatchObject({ phase: "delivery_blocked", developerRecoveryStatus: "cancelled" });
-    expect(duplicateResult).toMatchObject({ phase: "delivery_blocked", developerRecoveryStatus: "cancelled", lastHandlerError: { reason: "Developer cancellation was superseded by another command" } });
+    expect(firstResult).toMatchObject({ step: "development", developerRecoveryStatus: "cancelled" });
+    expect(duplicateResult).toMatchObject({ step: "development", developerRecoveryStatus: "cancelled", lastHandlerError: { reason: "Developer cancellation was superseded by another command" } });
     expect(duplicateResult.revision).toBeGreaterThan(firstResult.revision);
     expect(issueResult).toMatchObject({ phase: "cancelled" });
-    expect(distinctResult).toMatchObject({ phase: "delivery_blocked", developerRecoveryStatus: "cancelled" });
+    expect(distinctResult).toMatchObject({ step: "development", developerRecoveryStatus: "cancelled" });
     expect(await executeIssueCommand(harness.config, firstRun.workflowId, "cancel_development", firstCommand)).toEqual(firstResult);
     expect(await executeIssueCommand(harness.config, firstRun.workflowId, "cancel_development", duplicateCommand)).toEqual(duplicateResult);
     expect(await executeIssueCommand(harness.config, firstRun.workflowId, "cancel_issue", issueCommand)).toEqual(issueResult);
@@ -902,7 +904,7 @@ test("concurrent duplicate planner notes interrupt once and mutate state only af
     const planned = await planningCommand;
     const [firstResult, secondResult] = await notes;
     expect(firstResult).toEqual(secondResult);
-    expect(firstResult).toMatchObject({ phase: "approval", revision: planned.revision + 1, processedCommandIds: expect.arrayContaining([command.commandId]) });
+    expect(firstResult).toMatchObject({ step: "approval", revision: planned.revision + 1, processedCommandIds: expect.arrayContaining([command.commandId]) });
     expect(harness.calls.get("recordPlannerNote")).toBe(1);
     expect(commandReceiptCount(harness, command.commandId)).toBe(1);
     await harness.restart();

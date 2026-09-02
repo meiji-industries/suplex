@@ -3,13 +3,13 @@ import { expect, test } from "vitest";
 import { taskListGroups } from "../src/frontend/lib/task-list-groups.js";
 
 const tasks = [
-  { id: "done", phase: "done", updatedAt: "2026-08-29T12:00:00.000Z" },
-  { id: "cancelled-old", phase: "cancelled", updatedAt: "2026-08-28T12:00:00.000Z" },
-  { id: "cancelled-new", phase: "cancelled", updatedAt: "2026-08-30T12:00:00.000Z" },
-  { id: "active", phase: "development", updatedAt: "2026-08-27T12:00:00.000Z" },
-  { id: "ci-repairing", phase: "ci_repairing", updatedAt: "2026-08-27T13:00:00.000Z" },
-  { id: "ci-repair-needed", phase: "ci_repair_required", updatedAt: "2026-08-27T14:00:00.000Z" },
-  { id: "backlog", phase: "backlog", updatedAt: "2026-08-26T12:00:00.000Z" },
+  { id: "done", phase: "done", blocked: false, updatedAt: "2026-08-29T12:00:00.000Z" },
+  { id: "cancelled-old", phase: "cancelled", blocked: false, updatedAt: "2026-08-28T12:00:00.000Z" },
+  { id: "cancelled-new", phase: "cancelled", blocked: false, updatedAt: "2026-08-30T12:00:00.000Z" },
+  { id: "active", phase: "building", blocked: false, updatedAt: "2026-08-27T12:00:00.000Z" },
+  { id: "ci-repairing", phase: "shipping", blocked: false, updatedAt: "2026-08-27T13:00:00.000Z" },
+  { id: "ci-repair-needed", phase: "shipping", blocked: true, updatedAt: "2026-08-27T14:00:00.000Z" },
+  { id: "backlog", phase: "backlog", blocked: false, updatedAt: "2026-08-26T12:00:00.000Z" },
 ] as const;
 
 test("separates completed and cancelled task groups", () => {

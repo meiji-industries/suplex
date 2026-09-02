@@ -1,5 +1,7 @@
 import { expect, test } from "vitest";
 
+import { at } from "../src/issue-phases.js";
+
 import { createActivityCaller } from "../src/engine/activities.js";
 import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
 import { StructuredLogger } from "../src/logging.js";
@@ -19,7 +21,7 @@ test("a rejected workflow immediately projects a human-owned rescue state and lo
     workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "run-failure", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2,
     continuationState: {
       ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "run-failure", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-      phase: "ci_waiting" as const, revision: 0, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Waiting for CI", releaseId: "release-existing", releaseRepository: "acme/forge", branchName: "forge/issue/failure", baseBranch: "main", expectedHeadSha: engineFixture.commit, expectedHeadTree: engineFixture.tree, lastEventId: `${workflowId}:0`,
+      ...at("ci_waiting"), revision: 0, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Waiting for CI", releaseId: "release-existing", releaseRepository: "acme/forge", branchName: "forge/issue/failure", baseBranch: "main", expectedHeadSha: engineFixture.commit, expectedHeadTree: engineFixture.tree, lastEventId: `${workflowId}:0`,
     },
   };
   h.database.projectIssueEvent({ schemaVersion: 1, runId: "seed-run-failure", eventId: input.continuationState.lastEventId, state: input.continuationState });
@@ -30,7 +32,7 @@ test("a rejected workflow immediately projects a human-owned rescue state and lo
     for (let attempt = 0; attempt < 20 && !run.error; attempt += 1) await Promise.resolve();
     for (let attempt = 0; attempt < 20 && (!run.error || projected.length === 0); attempt += 1) await Promise.resolve();
     expect(run.error).toBeInstanceOf(Error);
-    expect(run.state).toMatchObject({ phase: "ci_waiting", owner: "human", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for CI", lastHandlerError: { command: "workflow", reason: "Activity observeGithubPullRequest failed" } });
+    expect(run.state).toMatchObject({ step: "ci_waiting", owner: "human", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for CI", lastHandlerError: { command: "workflow", reason: "Activity observeGithubPullRequest failed" } });
     expect(projected).toContainEqual(expect.objectContaining({ owner: "human", pendingAction: "Waiting for CI" }));
     expect(records).toContainEqual(expect.objectContaining({ level: 50, message: "Issue workflow run failed", workflowId, error: "Activity observeGithubPullRequest failed" }));
   } finally { run.dispose(); await h.stop(); }

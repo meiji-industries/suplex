@@ -8,7 +8,7 @@ import { loadTaskConfiguration } from "../../task-project-configuration.js";
 import type { ForgeConfig } from "../../config.js";
 import type { ForgeDatabase } from "../../database.js";
 import { readEnvironmentSettings } from "../../environment-settings.js";
-import { WorktreeManager } from "../../worktrees.js";
+import { invalidateBranchSync, WorktreeManager } from "../../worktrees.js";
 import type { ActivityContext } from "./context.js";
 
 export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" | "config" | "worktrees" | "createHash">) {
@@ -77,6 +77,7 @@ export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" |
       const row = owned(input);
       if (!row) throw new Error("Recorded worktree is unavailable");
       const result = await worktrees.create({ repositoryPath: row.repositoryPath, worktreeRoot: row.worktreeRoot, taskId: input.taskId, branchName: input.branchName, targetBaseSha: input.targetBaseSha });
+      await invalidateBranchSync(result.worktreePath, input.branchName);
       database.authTransaction((db) => db.prepare("UPDATE forge_issue_worktrees SET worktree_path = ?, status = 'active', removed_externally_at = NULL, cleaned_at = NULL WHERE task_id = ?").run(result.worktreePath, input.taskId));
       recordTimeline(input, "worktree_recreated", { path: result.worktreePath, branchName: input.branchName, targetBaseSha: input.targetBaseSha });
       return { worktreePath: result.worktreePath };

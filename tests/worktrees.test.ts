@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { runCommand } from "../src/command-runner.js";
-import { WorktreeManager } from "../src/worktrees.js";
+import { invalidateBranchSync, WorktreeManager } from "../src/worktrees.js";
 
 async function git(cwd: string, args: string[]): Promise<string> {
   const result = await runCommand({ taskId: null, stepId: null, command: "git", args, cwd });
@@ -29,5 +29,32 @@ test("creates and inspects a worktree", async () => {
     await expect(stat(worktree.worktreePath)).resolves.toMatchObject({ isDirectory: expect.any(Function) });
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("caches branch sync probes until invalidated", async () => {
+  const worktreePath = await mkdtemp(join(tmpdir(), "forge-branch-sync-"));
+  const commands: string[][] = [];
+  const gitRunner = {
+    async run(args: string[]) {
+      commands.push(args);
+      if (args[0] === "rev-parse") return "a".repeat(40);
+      if (args[0] === "rev-list") return "0 0";
+      if (args[0] === "ls-remote") return "a".repeat(40);
+      return "";
+    },
+  };
+  const worktrees = new WorktreeManager(gitRunner);
+  try {
+    await worktrees.inspectSync(worktreePath, "forge/task", "main", true);
+    const firstProbeCommandCount = commands.length;
+    await worktrees.inspectSync(worktreePath, "forge/task", "main", true);
+    expect(commands).toHaveLength(firstProbeCommandCount);
+
+    await invalidateBranchSync(worktreePath, "forge/task");
+    await worktrees.inspectSync(worktreePath, "forge/task", "main", true);
+    expect(commands.length).toBeGreaterThan(firstProbeCommandCount);
+  } finally {
+    await rm(worktreePath, { recursive: true, force: true });
   }
 });

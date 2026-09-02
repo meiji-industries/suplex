@@ -21,7 +21,7 @@ import { issueCommands, IssueCommandSchema, type IssueCommand } from "./commands
 import type { ContinueWorkCommand, PlanCommandInput, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, SendPlannerNoteInput, StartPlanningInput } from "./commands/inputs.js";
 import { createInitialIssueWorkflowState, DeliveryOperationBlockCodeSchema, IssueWorkflowStateSchema, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueWorkflowInput, type IssueWorkflowState } from "./engine/issue-contracts.js";
 import { at, isBlocked, IssuePhaseSchema, IssueStepSchema, phaseOf, TERMINAL_PHASES, type IssuePhase, type IssueStep } from "./issue-phases.js";
-import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
+import { invalidateBranchSync, WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { taskCommandDescriptors, type TaskCommandDescriptor } from "./task-commands.js";
 import { PlanSubjectSchema, type PlanBlockerSubject, type PlanSubject } from "./plan-governance.js";
 import { IssueTimelineEvents } from "./issue-timeline-events.js";
@@ -1052,6 +1052,7 @@ export class TaskService {
     if (!context) return { available: false };
     try {
       await new WorktreeManager().push(context.worktreePath, context.branchName);
+      await invalidateBranchSync(context.worktreePath, context.branchName);
     } catch (error) {
       const stderr = error && typeof error === "object" && "stderr" in error ? error.stderr : undefined;
       throw new TaskFailure(String(stderr ?? (error instanceof Error ? error.message : error)).trim().slice(0, 300), [], 409);

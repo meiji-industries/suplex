@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { type ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 
+import { ACTIVE_PHASES } from "../../issue-phases.js";
 import type { TaskService } from "../../tasks.js";
 import { CompanyIdParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { CompanyBranchSyncResponseSchema, TaskBranchSyncResponseSchema, type CompanyBranchSyncResponse } from "../contracts/task-branch.js";
@@ -14,7 +15,7 @@ const taskBranch: FastifyPluginAsync<TaskBranchRoutesOptions> = async (app, opti
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const schema = { params: TaskIdParamsSchema, response: { 200: TaskBranchSyncResponseSchema, 409: z.object({ error: z.string() }) } };
   typed.get("/api/companies/:companyId/branch-sync", { schema: { params: CompanyIdParamsSchema, response: { 200: CompanyBranchSyncResponseSchema } } }, async (request, reply) => {
-    const taskIds = options.tasks.listTasks(request.forgeUser.id, request.params.companyId).map((task) => task.id);
+    const taskIds = options.tasks.listTasks(request.forgeUser.id, request.params.companyId).filter((task) => ACTIVE_PHASES.has(task.phase)).map((task) => task.id);
     const sync: CompanyBranchSyncResponse = {};
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(4, taskIds.length) }, async () => {

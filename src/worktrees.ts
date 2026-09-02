@@ -186,7 +186,17 @@ function exactRegisteredWorktree(output: string, worktreePath: string, branchNam
 const branchFetches = new Map<string, number>();
 const branchConflictProbes = new Map<string, { conflictsWithBase: boolean; probedAt: number }>();
 const branchSyncProbes = new Map<string, Promise<BranchSync>>();
+const branchSyncCache = new Map<string, { at: number; value: BranchSync }>();
 const branchProbeIntervalMs = 60_000;
+const branchSyncCacheTtlMs = 30_000;
+
+export async function invalidateBranchSync(worktreePath: string, branchName: string): Promise<void> {
+  const canonical = await realpath(worktreePath).catch(() => resolve(worktreePath));
+  const prefix = `${canonical}\0${branchName}\0`;
+  for (const key of branchSyncCache.keys()) {
+    if (key.startsWith(prefix)) branchSyncCache.delete(key);
+  }
+}
 
 const defaultGit: GitAdapter = {
   async run(args, cwd, activity, options) {
@@ -442,12 +452,17 @@ export class WorktreeManager {
     if (!branchPattern.test(branchName) || !branchPattern.test(baseBranch)) throw new WorktreeFailure("unsafe-branch", "Task branch is unsafe");
     const canonical = await canonicalDirectory(worktreePath, "worktree-unavailable");
     const key = `${canonical}\0${branchName}\0${baseBranch}\0${observedConflict ?? ""}`;
+    const cached = branchSyncCache.get(key);
+    if (cached && cached.at + branchSyncCacheTtlMs > Date.now()) return cached.value;
+    if (cached) branchSyncCache.delete(key);
     const existing = branchSyncProbes.get(key);
     if (existing) return existing;
     const probe = this.inspectSyncAt(canonical, branchName, baseBranch, observedConflict);
     branchSyncProbes.set(key, probe);
     try {
-      return await probe;
+      const value = await probe;
+      branchSyncCache.set(key, { at: Date.now(), value });
+      return value;
     } finally {
       if (branchSyncProbes.get(key) === probe) branchSyncProbes.delete(key);
     }

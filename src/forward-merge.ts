@@ -10,6 +10,7 @@ import type { GithubReleasePort } from "./github-release.js";
 import { redact } from "./logging.js";
 import { z } from "zod";
 import { jsonRequired } from "./task-utils.js";
+import { invalidateBranchSync } from "./worktrees.js";
 
 const execFileAsync = promisify(execFile);
 const shaPattern = /^[a-f0-9]{40,64}$/i;
@@ -149,6 +150,7 @@ export class ForwardMergeService {
     const tree = await this.git(["rev-parse", "HEAD^{tree}"], input.worktreePath);
     if (branch !== input.branchName) throw new ForwardMergeFailure("merge-state-ownership-mismatch");
     await this.assertMergedOwnership({ worktreePath: input.worktreePath, branchName: input.branchName, priorHead: ownership.headSha, targetBaseSha: observedBaseSha, mergeCommit, tree });
+    await invalidateBranchSync(input.worktreePath, input.branchName);
     const result: ForwardMergeResult = { status: "merged", priorHead: ownership.headSha, priorTree: ownership.treeSha, targetBaseSha: observedBaseSha, mergeCommit, tree, conflictFiles: [] };
     const forwardMergeId = this.record(input, result, ownership.treeSha);
     if (forwardMergeId) result.forwardMergeId = forwardMergeId;

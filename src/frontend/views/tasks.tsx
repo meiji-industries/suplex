@@ -247,12 +247,17 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     }
   }, [companyId, loading, mode, reloadCompanies, taskFilter]);
   useEffect(() => { void reload(); }, [reload]);
+  const activeTaskKey = tasks.filter((task) => activeTaskPhases.has(task.phase)).map((task) => task.id).sort().join(",");
   useEffect(() => {
-    if (!companyId || !loadedCompanyId || loadedCompanyId !== companyId) { setBranchSync({}); return; }
+    if (!companyId || !loadedCompanyId || loadedCompanyId !== companyId || !activeTaskKey) { setBranchSync({}); return; }
     let cancelled = false;
-    void readJson<ApiCompanyBranchSync>(`/api/companies/${encodeURIComponent(companyId)}/branch-sync`).then((value) => { if (!cancelled) setBranchSync(value); }).catch(() => { if (!cancelled) setBranchSync({}); });
-    return () => { cancelled = true; };
-  }, [companyId, loadedCompanyId, tasks]);
+    const refresh = () => {
+      void readJson<ApiCompanyBranchSync>(`/api/companies/${encodeURIComponent(companyId)}/branch-sync`).then((value) => { if (!cancelled) setBranchSync(value); }).catch(() => { if (!cancelled) setBranchSync({}); });
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 60_000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [companyId, loadedCompanyId, activeTaskKey]);
   useEffect(() => {
     if (!companyId || !routeTaskId || !loadedCompanyId || detailNotFound) return;
     let cancelled = false;

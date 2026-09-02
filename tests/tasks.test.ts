@@ -813,23 +813,24 @@ test("branch sync route reports unavailable before a task has a worktree", async
   }
 });
 
-test("company branch sync skips unavailable worktrees", async () => {
+test("company branch sync queries only active task branches", async () => {
   const app = Fastify({ logger: false });
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   app.decorateRequest("forgeUser", undefined as never);
   app.addHook("preHandler", (request, _reply, done) => { request.forgeUser = { id: "admin-1" } as never; done(); });
+  const queriedTaskIds: string[] = [];
   await app.register(taskBranch, { tasks: {
-    listTasks: () => [{ id: "missing" }, { id: "available" }],
+    listTasks: () => [{ id: "building", phase: "building" }, { id: "done", phase: "done" }, { id: "cancelled", phase: "cancelled" }],
     async getBranchSync(_actorUserId: string, taskId: string) {
-      return taskId === "missing"
-        ? { available: false as const, reason: "Worktree missing" }
-        : { branchName: "feat/available", worktreePath: "/tmp/available", remoteExists: true, ahead: 0, behind: 0, aheadOfBase: 2, behindBase: 1, conflictsWithBase: false, headSha: "a".repeat(40) };
+      queriedTaskIds.push(taskId);
+      return { branchName: "feat/building", worktreePath: "/tmp/building", remoteExists: true, ahead: 0, behind: 0, aheadOfBase: 2, behindBase: 1, conflictsWithBase: false, headSha: "a".repeat(40) };
     },
   } as unknown as TaskService });
   try {
     const response = await app.inject({ method: "GET", url: "/api/companies/company-1/branch-sync" });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ available: { ahead: 0, behind: 0, aheadOfBase: 2, behindBase: 1, conflictsWithBase: false, remoteExists: true } });
+    expect(queriedTaskIds).toEqual(["building"]);
+    expect(response.json()).toEqual({ building: { ahead: 0, behind: 0, aheadOfBase: 2, behindBase: 1, conflictsWithBase: false, remoteExists: true } });
   } finally { await app.close(); }
 });

@@ -190,6 +190,16 @@ export function credentialBlockedState(state: IssueWorkflowState, command: Issue
 }
 
 export function repairedDeliveryAwaitingFreshReviewState(state: IssueWorkflowState, result: CompletedRepair): IssueWorkflowState {
+  if (result.objections.length > 0 && result.resultCommit === result.subject.subjectCommit) {
+    return reviewArbitrationState(IssueWorkflowStateSchema.parse({
+      ...state,
+      deliveryRepairAttemptId: result.repairAttemptId,
+      deliveryArtifactId: result.deliveryArtifactId,
+      developerEvidenceArtifactId: result.evidenceArtifactId,
+      deliverySummary: result.summary,
+      developerOutcome: "completed",
+    }));
+  }
   return IssueWorkflowStateSchema.parse({
     ...revisioned(state, "delivery_ready", "lead", ["review_delivery", "cancel_issue"], "A new delivery review is necessary"),
     developerExecutionId: result.developerExecutionId,

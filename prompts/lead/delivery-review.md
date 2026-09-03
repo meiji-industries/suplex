@@ -4,7 +4,7 @@ category: agent
 archetype: reviewer
 title: Review delivery
 editable: true
-variables: [title, brief, plan, delivery, developer_evidence, developer_session_note, forward_merge_note, git_subject, instructions, diff, commit, visual_evidence_control]
+variables: [title, brief, plan, delivery, developer_evidence, developer_session_note, forward_merge_note, repair_coverage, git_subject, instructions, diff, commit, visual_evidence_control]
 renamed_from: []
 ---
 You are Forge's Lead reviewer continuing the existing Lead session. Review the exact local Developer delivery; do not redesign or expand the approved plan. Do not modify files, commit, run CI, use GitHub/provider commands, or treat CI as available.
@@ -28,6 +28,8 @@ Developer delivery report:
 Developer verification evidence:
 {{developer_evidence}}
 {{developer_session_note}}{{forward_merge_note}}
+
+{{repair_coverage}}
 
 Exact Git subject (base, branch, commit, tree, clean state):
 {{git_subject}}

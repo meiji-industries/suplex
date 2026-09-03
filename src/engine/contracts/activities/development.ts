@@ -50,6 +50,7 @@ export const DeveloperRepairActivityResultSchema = z.discriminatedUnion("outcome
     deliveryArtifactId: durableId,
     evidenceArtifactId: durableId,
     summary: z.string().min(1),
+    objections: z.array(z.object({ findingId: z.string().min(1), reason: z.string().min(1) }).strict()).default([]),
   }).strict(),
   z.object({
     outcome: z.literal("blocked"),

@@ -41,6 +41,20 @@ async function git(args: string[], cwd: string, timeout = 8_000): Promise<string
   return result.stdout.trim();
 }
 
+export type RepairCoverage = { findingId: string; path: string; touched: boolean };
+
+export function repairCoverage(findings: DeliveryFinding[], touchedFiles: Iterable<string>): RepairCoverage[] {
+  const touched = new Set(touchedFiles);
+  const paths = /(?:^|[\s`"'(])((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+)/g;
+  return findings.flatMap((finding) => {
+    const named = new Set<string>();
+    for (const text of [finding.evidenceRef, finding.repairInstruction ?? ""]) {
+      for (const match of text.matchAll(paths)) named.add(match[1]!.replace(/[.,;:]+$/, ""));
+    }
+    return [...named].map((path) => ({ findingId: finding.findingId, path, touched: touched.has(path) }));
+  });
+}
+
 export async function finalizeDeveloperSourceCommit(worktreePath: string, targetBaseSha: string, reportedPaths: string[]): Promise<{ headSha: string; treeSha: string }> {
   reportedPaths = [...new Set(reportedPaths.map(normalizeBrowserProofPath))];
   for (const path of reportedPaths) {
@@ -98,6 +112,7 @@ const DeveloperDeliveryStepSchema = z.object({
   testResults: z.array(z.string()).optional(),
   notes: z.string(),
 });
+export const DeveloperObjectionSchema = z.object({ findingId: z.string().min(1), reason: z.string().min(1) }).strict();
 export const DeveloperDeliveryReportSchema = z.object({
   kind: z.literal("delivery"),
   summary: z.string().min(1),
@@ -107,12 +122,14 @@ export const DeveloperDeliveryReportSchema = z.object({
   resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
   dirtyState: z.enum(["clean", "dirty"]),
   blocker: z.string().nullable(),
+  objections: z.array(DeveloperObjectionSchema).default([]),
   visualEvidence: BrowserProofInputSchema.optional(),
 });
 
 export const DeveloperRepairReportSchema = z.object({
   summary: z.string().min(1),
   blocker: z.string().nullable(),
+  objections: z.array(DeveloperObjectionSchema).default([]),
   visualEvidence: BrowserProofInputSchema.optional(),
 }).strict();
 
@@ -594,19 +611,21 @@ export class DeveloperService {
       catch (error) { if (!(error instanceof BrowserProofFailure)) throw error; proofBlocker = `${error.message}. Capture proof under .forge-proof/ and retry.`; }
       if (durableProof && report.visualEvidence) await this.browserProof.cleanupPersisted(worktreePath, report.visualEvidence, durableProof);
       const gitState = await this.worktrees.inspectDelivery(worktreePath, input.branchName);
+      const touchedFiles = (await git(["diff", "--name-only", input.subjectCommit, gitState.headSha], worktreePath)).split("\n").filter(Boolean);
+      const coverage = repairCoverage(input.blockingFindings, touchedFiles);
       const persistedReport = { ...report, summary: proofBlocker ? `${report.summary}\n\nScreenshots: ${proofBlocker}` : report.summary, visualEvidence: durableProof, cycle: input.cycle, reviewId: input.reviewId, supersedesExecutionId: input.developerExecutionId };
       const repairArtifact = await this.artifacts.putArtifact(input.companyId, "developer-repair", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(persistedReport, null, 2), "utf8"), taskId: input.taskId });
       const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
       const blocked = persistedReport.blocker !== null;
       const activityResult = blocked
         ? DeveloperRepairActivityResultSchema.parse({ outcome: "blocked", repairAttemptId, cycle: input.cycle, reviewId: input.reviewId, subject: priorSubject, code: "process-failed", summary: persistedReport.blocker!, evidenceArtifactId: evidence.id, developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, worktreePath, branchName: input.branchName, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState })
-        : DeveloperRepairActivityResultSchema.parse({ outcome: "completed", repairAttemptId, cycle: input.cycle, reviewId: input.reviewId, subject: priorSubject, developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, worktreePath, branchName: input.branchName, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: "clean", deliveryArtifactId: repairArtifact.id, evidenceArtifactId: evidence.id, summary: report.summary });
+        : DeveloperRepairActivityResultSchema.parse({ outcome: "completed", repairAttemptId, cycle: input.cycle, reviewId: input.reviewId, subject: priorSubject, developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, worktreePath, branchName: input.branchName, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: "clean", deliveryArtifactId: repairArtifact.id, evidenceArtifactId: evidence.id, summary: report.summary, objections: report.objections });
       const terminalStatus = this.database.authTransaction((db) => {
         const row = db.prepare("SELECT id FROM forge_delivery_repairs WHERE developer_execution_id = ? AND cycle = ?").get(executionId, input.cycle) as { id: string } | undefined;
         const failureCode = blocked ? "process-failed" : null;
         const failureSummary = blocked ? persistedReport.blocker : null;
         const updated = db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ? AND status IN ('starting', 'running')").run(blocked ? "blocked" : "completed", this.now().toISOString(), this.now().toISOString(), gitState.headSha, gitState.treeSha, gitState.dirtyState, repairArtifact.id, evidence.id, executionId);
-        if (updated.changes === 1) db.prepare("UPDATE forge_delivery_repairs SET status = ?, result_commit = ?, result_tree = ?, delivery_artifact_id = ?, evidence_artifact_id = ?, failure_code = ?, failure_summary = ?, finished_at = ? WHERE id = ?").run(blocked ? "blocked" : "completed", gitState.headSha, gitState.treeSha, repairArtifact.id, evidence.id, failureCode, failureSummary, this.now().toISOString(), row?.id);
+        if (updated.changes === 1) db.prepare("UPDATE forge_delivery_repairs SET status = ?, result_commit = ?, result_tree = ?, delivery_artifact_id = ?, evidence_artifact_id = ?, coverage_json = ?, failure_code = ?, failure_summary = ?, finished_at = ? WHERE id = ?").run(blocked ? "blocked" : "completed", gitState.headSha, gitState.treeSha, repairArtifact.id, evidence.id, JSON.stringify({ coverage, objections: report.objections }), failureCode, failureSummary, this.now().toISOString(), row?.id);
         return updated.changes === 1 ? blocked ? "blocked" : "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
       });
       if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "The build was cancelled before completion");

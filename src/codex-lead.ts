@@ -23,7 +23,7 @@ import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { loadDefaultPrompts, renderPrompt } from "./prompts.js";
 import { isVersionedPromptSet } from "./prompt-resolution.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
-import { jsonRequired } from "./task-utils.js";
+import { json, jsonRequired } from "./task-utils.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { readEnvironmentSettings } from "./environment-settings.js";
 import { BrowserProofService } from "./browser-proof.js";
@@ -87,6 +87,16 @@ function promptExcerpt(value: string, limit: number): string {
   if (value.length <= limit) return value;
   const tail = Math.min(4_000, Math.floor(limit / 5));
   return `${value.slice(0, limit - tail)}\n[truncated ${value.length - limit} characters]\n${value.slice(-tail)}`;
+}
+
+type StoredRepairCoverage = { findingId: string; path: string; touched: boolean };
+
+export function repairCoveragePrompt(raw: string | null): string {
+  if (!raw) return "";
+  const parsed = json(raw, {}) as { coverage?: StoredRepairCoverage[] };
+  const untouched = parsed.coverage?.filter((entry) => !entry.touched) ?? [];
+  if (untouched.length === 0) return "";
+  return `Repair coverage: ${untouched.map((entry) => `${entry.findingId} names ${entry.path}; the repair commit did not touch it.`).join(" ")}`;
 }
 
 async function readDeliveryGitEvidence(worktreePath: string, targetBaseSha: string, subjectCommit: string, repositoryPath: string): Promise<{ targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }> {
@@ -823,7 +833,10 @@ export class AgentService {
     const evidenceLines: string[] = [];
     let correctionAttempts = 0;
     try {
-      const initialPrompt = this.deliveryReviewPrompt(input, context.title, brief, plan, delivery, developerEvidence, gitEvidence, context.forwardMergePriorHead && context.forwardMergeTargetBaseSha ? { priorHead: context.forwardMergePriorHead, targetBaseSha: context.forwardMergeTargetBaseSha } : null, Boolean(context.developerSessionRef)) + (isFinalReview ? `\n\n${this.renderTaskPrompt(input, "lead/integrator.md", { release_id: String(input.releaseId), ci_run_id: String(input.ciRunId), status: String(finalContext?.status), head_sha: String(finalContext?.headSha), head_tree: String(finalContext?.headTree) })}` : "");
+      const coverage = !isFinalReview && input.supersedesReviewId
+        ? (this.database.authQuery((db) => db.prepare("SELECT coverage_json AS coverageJson FROM forge_delivery_repairs WHERE review_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND result_commit = ? ORDER BY finished_at DESC LIMIT 1").get(input.supersedesReviewId, input.taskId, input.companyId, input.workflowId, subjectCommit)) as { coverageJson: string | null } | undefined)
+        : undefined;
+      const initialPrompt = this.deliveryReviewPrompt(input, context.title, brief, plan, delivery, developerEvidence, gitEvidence, context.forwardMergePriorHead && context.forwardMergeTargetBaseSha ? { priorHead: context.forwardMergePriorHead, targetBaseSha: context.forwardMergeTargetBaseSha } : null, Boolean(context.developerSessionRef), repairCoveragePrompt(coverage?.coverageJson ?? null)) + (isFinalReview ? `\n\n${this.renderTaskPrompt(input, "lead/integrator.md", { release_id: String(input.releaseId), ci_run_id: String(input.ciRunId), status: String(finalContext?.status), head_sha: String(finalContext?.headSha), head_tree: String(finalContext?.headTree) })}` : "");
       const runReviewTurn = async (): Promise<{ review: DeliveryReview; sessionRef: string }> => {
         evidenceLines.push(JSON.stringify({ type: "forge.review-turn-start", turn: 1 }));
         const output = await this.turnRunner.run({ task: { taskId: input.taskId, projectId: input.projectId, projectSlug: context.projectSlug, ...(context.issueKey ? { issueKey: context.issueKey } : {}), worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: reviewRole, ledger: "agent", executionId, promptKind: isFinalReview ? "final-review" : "delivery-review", prompt: initialPrompt, profile: leadProfile, resultSchema: DeliveryReviewSchema, schemaPath, companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision, signal: runtime.signal });
@@ -890,10 +903,18 @@ export class AgentService {
     if (!artifact) throw new AgentFailure("scoped-input-missing", "The approved plan is unavailable");
     const plan = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 })).toString("utf8");
     const reviews = this.database.authQuery((db) => db.prepare("SELECT summary, outcome, repair_cycle AS repairCycle FROM forge_delivery_reviews WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at, id").all(input.taskId, input.companyId, input.workflowId));
-    const repairs = this.database.authQuery((db) => db.prepare("SELECT summary, status FROM forge_delivery_repairs WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at, id").all(input.taskId, input.companyId, input.workflowId));
+    const repairs = this.database.authQuery((db) => db.prepare("SELECT summary, status, coverage_json AS coverageJson FROM forge_delivery_repairs WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at, id").all(input.taskId, input.companyId, input.workflowId)) as Array<{ summary: string; status: string; coverageJson: string | null }>;
     const profile = await this.resolveTurnProfile(undefined, input.leadSessionRef, "Review arbitration");
     const executionId = `agent_${randomBytes(12).toString("hex")}`;
-    const prompt = this.renderTaskPrompt(input, "lead/review-arbitration.md", { brief: task.description ?? "", plan: promptExcerpt(plan, 24_000), reviews: JSON.stringify(reviews), repairs: JSON.stringify(repairs), objections: "[]", repair_coverage: "[]", diff: "The current delivery diff is available in the worktree.", repair_exhausted: String(input.repairExhausted), refused_decision: input.refusedDecision ? "Forge refused repair because its repair budget is spent. Choose ask, accept, or cancel." : "" });
+    const objections = repairs.flatMap((repair) => {
+      const parsed = typeof repair.coverageJson === "string" ? json(repair.coverageJson, {}) as { objections?: unknown[] } : {};
+      return Array.isArray(parsed.objections) ? parsed.objections : [];
+    });
+    const coverage = repairs.flatMap((repair) => {
+      const parsed = typeof repair.coverageJson === "string" ? json(repair.coverageJson, {}) as { coverage?: unknown[] } : {};
+      return Array.isArray(parsed.coverage) ? parsed.coverage : [];
+    });
+    const prompt = this.renderTaskPrompt(input, "lead/review-arbitration.md", { brief: task.description ?? "", plan: promptExcerpt(plan, 24_000), reviews: JSON.stringify(reviews), repairs: JSON.stringify(repairs), objections: JSON.stringify(objections), repair_coverage: JSON.stringify(coverage), diff: "The current delivery diff is available in the worktree.", repair_exhausted: String(input.repairExhausted), refused_decision: input.refusedDecision ? "Forge refused repair because its repair budget is spent. Choose ask, accept, or cancel." : "" });
     const output = await this.turnRunner.run({ task: { taskId: input.taskId, projectId: input.projectId, projectSlug: task.projectSlug, worktreePath: input.worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "planner", ledger: "agent", executionId, promptKind: "review-arbitration", prompt, profile, resultSchema: ReviewArbitrationSchema, schemaPath: await this.ensureResultSchema("review-arbitration", ReviewArbitrationSchema), companyId: input.companyId, workflowId: input.workflowId, revision: 0, signal: runtime.signal });
     const arbitration = ReviewArbitrationSchema.parse(output.result);
     if (input.repairExhausted && arbitration.decision === "repair") throw new AgentFailure("invalid-output-schema", "The Planner requested a repair after the repair budget was spent", { nonRetryable: true });
@@ -1029,11 +1050,11 @@ export class AgentService {
     return this.renderTaskPrompt(input, "lead/ci-repair.md", { title, ci_context: JSON.stringify({ ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, failedHeadSha: input.failedHeadSha }), failed_checks: JSON.stringify(failedChecks), required_checks: JSON.stringify(input.requiredChecks), local_verification: JSON.stringify(input.localVerification), evidence_artifact: input.evidenceArtifactId, failed_logs: failedLogs.length ? `\nFailing job logs (tail):\n${failedLogs.map((entry) => `--- ${entry.name} (run ${entry.runId}) ---\n${entry.log}`).join("\n\n")}` : "" });
   }
 
-  private deliveryReviewPrompt(input: { taskId: string; companyId: string; deliverySummary?: string | undefined; visualEvidence?: "off" | "capture" | "required" | undefined }, title: string, brief: string, plan: string, delivery: string, developerEvidence: string, gitEvidence: { targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }, forwardMerge: { priorHead: string; targetBaseSha: string } | null, hasDeveloperSession: boolean): string {
+  private deliveryReviewPrompt(input: { taskId: string; companyId: string; deliverySummary?: string | undefined; visualEvidence?: "off" | "capture" | "required" | undefined }, title: string, brief: string, plan: string, delivery: string, developerEvidence: string, gitEvidence: { targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }, forwardMerge: { priorHead: string; targetBaseSha: string } | null, hasDeveloperSession: boolean, repairCoverage: string): string {
     const verificationFailure = input.deliverySummary?.startsWith(PROJECT_VERIFICATION_FAILURE_PREFIX)
       ? `\n\nProject verification failed on this commit: ${input.deliverySummary.slice(PROJECT_VERIFICATION_FAILURE_PREFIX.length).trim()}`
       : "";
-    return this.renderTaskPrompt(input, "lead/delivery-review.md", { title, brief: promptExcerpt(brief, 8_000), plan: promptExcerpt(plan, 24_000), delivery: promptExcerpt(delivery, 32_000), developer_evidence: promptExcerpt(developerEvidence, 16_000), developer_session_note: hasDeveloperSession ? "" : "\n\nThere is no Developer session for this head; review the current diff against the base and treat the available delivery evidence as supplemental context.", forward_merge_note: forwardMerge ? `\n\nThis head is a clean forward merge of an already-reviewed delivery. Review the merge diff against the new base; its lineage is ${JSON.stringify(forwardMerge)}. Its pinned post-merge verification and prior delivery proof remain authoritative for unchanged behavior. Do not block solely because broader checks or manual smoke steps were not repeated after the merge; report those as advisory unless the exact merge diff shows a concrete regression or new risk.` : "", git_subject: JSON.stringify({ targetBaseSha: gitEvidence.targetBaseSha, branch: gitEvidence.branch, subjectCommit: gitEvidence.subjectCommit, subjectTree: gitEvidence.subjectTree, observedHead: gitEvidence.head, observedTree: gitEvidence.tree, dirtyState: gitEvidence.status ? "dirty" : "clean" }), instructions: promptExcerpt(gitEvidence.instructions || "(none found)", 12_000), diff: promptExcerpt(gitEvidence.diff, 72_000), commit: promptExcerpt(gitEvidence.commit, 12_000), visual_evidence_control: this.visualEvidenceInstruction(input.visualEvidence ?? "off") }) + verificationFailure;
+    return this.renderTaskPrompt(input, "lead/delivery-review.md", { title, brief: promptExcerpt(brief, 8_000), plan: promptExcerpt(plan, 24_000), delivery: promptExcerpt(delivery, 32_000), developer_evidence: promptExcerpt(developerEvidence, 16_000), developer_session_note: hasDeveloperSession ? "" : "\n\nThere is no Developer session for this head; review the current diff against the base and treat the available delivery evidence as supplemental context.", forward_merge_note: forwardMerge ? `\n\nThis head is a clean forward merge of an already-reviewed delivery. Review the merge diff against the new base; its lineage is ${JSON.stringify(forwardMerge)}. Its pinned post-merge verification and prior delivery proof remain authoritative for unchanged behavior. Do not block solely because broader checks or manual smoke steps were not repeated after the merge; report those as advisory unless the exact merge diff shows a concrete regression or new risk.` : "", repair_coverage: repairCoverage, git_subject: JSON.stringify({ targetBaseSha: gitEvidence.targetBaseSha, branch: gitEvidence.branch, subjectCommit: gitEvidence.subjectCommit, subjectTree: gitEvidence.subjectTree, observedHead: gitEvidence.head, observedTree: gitEvidence.tree, dirtyState: gitEvidence.status ? "dirty" : "clean" }), instructions: promptExcerpt(gitEvidence.instructions || "(none found)", 12_000), diff: promptExcerpt(gitEvidence.diff, 72_000), commit: promptExcerpt(gitEvidence.commit, 12_000), visual_evidence_control: this.visualEvidenceInstruction(input.visualEvidence ?? "off") }) + verificationFailure;
   }
 
   private reviewPrompt(input: { taskId: string; companyId: string }, title: string, brief: string, revision: string, draft: string, instructions: string): string {

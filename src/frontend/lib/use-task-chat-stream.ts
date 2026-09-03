@@ -6,6 +6,7 @@ import { chatEventFromTimelineEvent, mergeChatEvent, type ChatEvent } from "./ta
 import type { ApiTask } from "./view-shared.js";
 
 type AgentEventHistory = { events: AgentTimelineEvent[]; status: TaskDetailStatus };
+export type LivePaneState = { role: string; paneId: string | null; status: string | null };
 
 export function useTaskChatStream(taskId: string, _task: ApiTask, onRefresh: () => Promise<void>) {
   const [liveEventsByExecution, setLiveEventsByExecution] = useState<Map<string, ChatEvent[]>>(new Map());
@@ -14,6 +15,7 @@ export function useTaskChatStream(taskId: string, _task: ApiTask, onRefresh: () 
   const failures = useRef(0);
   const onRefreshRef = useRef(onRefresh);
   const [streamFailed, setStreamFailed] = useState(false);
+  const [panes, setPanes] = useState<LivePaneState[]>([]);
   onRefreshRef.current = onRefresh;
   useEffect(() => { setLiveEventsByExecution(new Map()); cursor.current = 0; status.current = undefined; failures.current = 0; setStreamFailed(false); }, [taskId]);
   useEffect(() => {
@@ -56,6 +58,7 @@ export function useTaskChatStream(taskId: string, _task: ApiTask, onRefresh: () 
           status.current = next;
         } catch { /* Keep the stream alive. */ }
     });
+    stream.addEventListener("panes", (message) => { try { setPanes(JSON.parse((message as MessageEvent<string>).data) as LivePaneState[]); } catch { /* Ignore malformed pane state. */ } });
     stream.onerror = () => {
       failures.current += 1;
       if (failures.current >= 3) {
@@ -65,5 +68,5 @@ export function useTaskChatStream(taskId: string, _task: ApiTask, onRefresh: () 
     };
     return () => { active = false; stream.close(); };
   }, [taskId]);
-  return { liveEventsByExecution, streamFailed, loadEvents: async (_invocation: ApiTask["agentInvocations"][number]): Promise<void> => undefined };
+  return { liveEventsByExecution, streamFailed, panes, loadEvents: async (_invocation: ApiTask["agentInvocations"][number]): Promise<void> => undefined };
 }

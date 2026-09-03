@@ -72,8 +72,6 @@ export function LivePaneDock({ task, onRestart }: { task: ApiTask; onRestart: (c
   const [selectedRole, setSelectedRole] = useState<string>();
   const [height, setHeight] = useState(readLivePaneHeight);
   const resize = useRef<{ originY: number; height: number } | null>(null);
-  // Panes keep moving in every non-terminal phase (CI repair, reviews, integrator work), so keep tailing.
-  const running = !["done", "cancelled"].includes(task.phase);
   const load = useCallback(async () => {
     const paneResult = await readJson<LivePaneResponse>(`/api/tasks/${encodeURIComponent(task.id)}/pane`);
     setPanes(paneResult.panes ?? []);
@@ -89,9 +87,10 @@ export function LivePaneDock({ task, onRestart }: { task: ApiTask; onRestart: (c
       }
     };
     void refresh();
-    const timer = running ? window.setInterval(() => void refresh(), 2_000) : undefined;
-    return () => { active = false; if (timer !== undefined) window.clearInterval(timer); };
-  }, [running, task.id]);
+    const stream = new EventSource(`/api/tasks/${encodeURIComponent(task.id)}/agent-events`);
+    stream.addEventListener("panes", (message) => { try { const statuses = JSON.parse((message as MessageEvent<string>).data) as Array<{ role: string; paneId: string | null; status: string | null }>; if (active) setPanes((current) => current.map((pane) => ({ ...pane, ...(statuses.find((status) => status.role === pane.role) ?? {}) }))); } catch { /* Ignore malformed live state. */ } });
+    return () => { active = false; stream.close(); };
+  }, [task.id]);
   const sendPaneInput = async (role: string, input: { text: string } | { keys: string[] }): Promise<void> => {
     try {
       await readJson(`/api/tasks/${encodeURIComponent(task.id)}/pane/${encodeURIComponent(role)}/input`, { method: "POST", body: JSON.stringify(input) });

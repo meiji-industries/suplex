@@ -8,7 +8,7 @@ import {
   type Pane,
 } from "./herdr-client.js";
 
-export type HerdrSessionClassification = "active" | "missing" | "unbound" | "failed";
+export type HerdrSessionClassification = "active" | "missing" | "unbound" | "failed" | "unverifiable";
 
 export interface HerdrSessionObservation {
   sessionId: string;
@@ -75,9 +75,14 @@ export async function observeHerdrSessions(
 ): Promise<HerdrSessionObservation[]> {
   const sessions = observableSessions(database, taskId);
   if (!sessions.length) return [];
-  const snapshot = runtimeSnapshot ?? (sessions.some((session) => session.paneId)
-    ? await snapshotHerdrRuntime(herdr)
-    : { agents: [], panes: [] });
+  let snapshot: HerdrRuntimeSnapshot;
+  try {
+    snapshot = runtimeSnapshot ?? (sessions.some((session) => session.paneId)
+      ? await snapshotHerdrRuntime(herdr)
+      : { agents: [], panes: [] });
+  } catch {
+    return sessions.map((session) => ({ sessionId: session.id, taskId: session.taskId, role: session.role, paneId: session.paneId, liveAgent: null, livePane: null, agentName: null, nativeSessionId: null, lifecycleStatus: null, classification: "unverifiable" as const, identityFailure: null }));
+  }
   const panesById = new Map(snapshot.panes.map((pane) => [pane.paneId, pane]));
   const agentsByPane = new Map(snapshot.agents.map((agent) => [agent.paneId, agent]));
   const tabsByTask = recordedTabs(database, sessions);

@@ -2,12 +2,13 @@ import type { FastifyPluginAsync } from "fastify";
 import { type ZodTypeProvider } from "@fastify/type-provider-zod";
 
 import type { TaskService } from "../../tasks.js";
+import type { ForgeDatabase } from "../../database.js";
 import { TaskIdParamsSchema } from "../contracts/common.js";
 import { AgentEventHistorySchema, AgentEventQuerySchema } from "../contracts/agent-events.js";
 
-export interface AgentEventRoutesOptions { tasks: TaskService }
+export interface AgentEventRoutesOptions { tasks: TaskService; database?: ForgeDatabase }
 
-const agentEvents: FastifyPluginAsync<AgentEventRoutesOptions> = async (app, { tasks }) => {
+const agentEvents: FastifyPluginAsync<AgentEventRoutesOptions> = async (app, { tasks, database }) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   typed.get("/api/tasks/:taskId/agent-events", { schema: { params: TaskIdParamsSchema, querystring: AgentEventQuerySchema, response: { 200: AgentEventHistorySchema } } }, async (request, reply) => {
     const after = cursor(request.headers["last-event-id"]) ?? request.query.after ?? 0;
@@ -16,6 +17,7 @@ const agentEvents: FastifyPluginAsync<AgentEventRoutesOptions> = async (app, { t
     let closed = false;
     let last = after;
     let status = "";
+    let panes = "";
     let timer: NodeJS.Timeout | undefined;
     let keepalive: NodeJS.Timeout | undefined;
     const close = (): void => {
@@ -37,6 +39,8 @@ const agentEvents: FastifyPluginAsync<AgentEventRoutesOptions> = async (app, { t
           reply.raw.write(`event: status\ndata: ${nextStatus}\n\n`);
           status = nextStatus;
         }
+        const nextPanes = JSON.stringify(database?.authQuery((db) => db.prepare("SELECT session_role AS role, status, pane_id AS paneId FROM forge_herdr_role_sessions WHERE task_id = ? AND is_current = 1 ORDER BY session_role").all(request.params.taskId)) ?? []);
+        if (nextPanes !== panes) { reply.raw.write(`event: panes\ndata: ${nextPanes}\n\n`); panes = nextPanes; }
       } catch {
         reply.raw.write("event: error\ndata: {\"code\":\"agent-events-unavailable\"}\n\n");
         close();

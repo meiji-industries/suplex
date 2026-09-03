@@ -169,6 +169,7 @@ export class HerdrTurnRunner {
     let activeTurnId: string | undefined;
     let polls = 0;
     let idlePolls = 0;
+    let unreachablePolls = 0;
     for (;;) {
       if (signal?.aborted || polls % 5 === 0 && !this.heartbeat(input))
         throw new AgentFailure("cancelled", "The interactive agent turn was cancelled.", { nonRetryable: true });
@@ -177,7 +178,16 @@ export class HerdrTurnRunner {
       const drained = await this.drain(input, session, turnId);
       session = drained.session;
       for (const event of drained.events) activeTurnId = await this.reduceCompletion(completion, activeTurnId, event, marker, resultPath);
-      const live = (await snapshotAgents(this.herdr)).find((agent) => agent.name === session.agentName) ?? await this.herdr.getAgent(session.agentName);
+      let live;
+      try {
+        live = (await snapshotAgents(this.herdr)).find((agent) => agent.name === session.agentName) ?? await this.herdr.getAgent(session.agentName);
+        unreachablePolls = 0;
+      } catch {
+        unreachablePolls += 1;
+        if (unreachablePolls >= 30) { await this.updateAttention(session, turnId, "blocked", "Herdr is not reachable"); return { ...completion, session }; }
+        await this.sleep(1_000);
+        continue;
+      }
       if (!live) {
         if (recoveredDispatch) throw new AgentFailure("recovery-agent-absent", "The previously dispatched interactive turn has no live agent", { nonRetryable: true });
         if (session.provider === "openrouter") { input.dispatchFence?.(); await this.recycleRejectedSession(input, prompt, resultPath, turnId); }

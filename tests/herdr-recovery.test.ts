@@ -81,6 +81,18 @@ test("live and missing observations never rewrite historical liveness columns", 
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("an unreachable runtime is unverifiable and does not rewrite live mirrors", async () => {
+  const value = await fixture();
+  const herdr = new FakeHerdrClient();
+  herdr.runtimeSnapshot = async () => { throw new Error("socket unavailable"); };
+  Object.assign(herdr, { listAgents: async () => { throw new Error("socket unavailable"); } });
+  const before = liveMirrors(value.database);
+  try {
+    await expect(observeHerdrSessions(value.database, herdr as unknown as HerdrClient)).resolves.toMatchObject([{ classification: "unverifiable", paneId: "pane-old" }]);
+    expect(liveMirrors(value.database)).toEqual(before);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("pane identity wins over mutable names and missing metadata remains legacy-compatible", async () => {
   const value = await fixture();
   const herdr = new FakeHerdrClient();

@@ -24,11 +24,15 @@ import { HermesAgentService } from "./hermes-agents.js";
 import { backfillDefaultTaskTemplates } from "./default-task-templates.js";
 import { startEngineHost } from "./engine/host.js";
 import type { IssueEngine } from "./engine/runs.js";
+import { startHerdrEventSubscriber } from "./herdr-events.js";
+import { herdrSocketPath } from "./herdr-socket.js";
+import { inspectHostHealth } from "./health.js";
 
 export interface ForgeServer {
   app: FastifyInstance;
   database: ForgeDatabase;
   engine: IssueEngine;
+  herdrEvents: ReturnType<typeof startHerdrEventSubscriber>;
 }
 
 export async function createForgeServer(config: ForgeConfig = loadConfig(), options: { logSink?: (line: string) => void } = {}): Promise<ForgeServer> {
@@ -36,6 +40,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   await mkdir(config.worktreeRoot, { recursive: true });
   const database = new ForgeDatabase(config.databasePath);
   const engine = await startEngineHost(config, database);
+  const herdrEvents = startHerdrEventSubscriber(database);
   const auth = new AuthService(database, config);
   const hermes = new HermesAgentService(database, auth);
   const projects = new ProjectService(database, auth, config);
@@ -55,6 +60,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   const dependencies = {
     config,
     health: createHostHealthDependencies(config, database),
+    getHealth: async () => ({ ...(await inspectHostHealth(config, createHostHealthDependencies(config, database))), herdr: { reachable: herdrEvents.reachable(), socketPath: herdrSocketPath() } }),
     auth,
     hermes,
     projects,
@@ -78,10 +84,10 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
       app = createApp(dependencies);
     }
   } catch (error) {
-    database.close();
+    herdrEvents.stop(); database.close();
     throw error;
   }
-  return { app, database, engine };
+  return { app, database, engine, herdrEvents };
 }
 
 export async function startServer(config: ForgeConfig = loadConfig()): Promise<void> {
@@ -96,6 +102,7 @@ export async function startServer(config: ForgeConfig = loadConfig()): Promise<v
         }
         closed = true;
         await server.app.close();
+        server.herdrEvents.stop();
         server.engine.dispose();
         server.database.close();
         resolve();
@@ -107,6 +114,7 @@ export async function startServer(config: ForgeConfig = loadConfig()): Promise<v
     if (!closed) {
       closed = true;
       await server.app.close().catch(() => undefined);
+      server.herdrEvents.stop();
       server.database.close();
     }
   }

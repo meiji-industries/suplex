@@ -13,11 +13,33 @@ test("extracts the Actions run id from a check-run details url", () => {
   expect(ciRunIdFromDetailsUrl(null)).toBeNull();
 });
 
-test("bounds and redacts a failing job log tail", () => {
-  const tail = boundedLogTail(Array.from({ length: 500 }, (_, index) => `line ${index}`).join("\n"));
+test("uses the prior tail behavior when a failing job log has no error markers", () => {
+  const log = Array.from({ length: 500 }, (_, index) => `line ${index}`).join("\n");
+  const tail = boundedLogTail(log);
+
   expect(tail.split("\n")).toHaveLength(CI_FAILED_LOG_MAX_LINES);
+  expect(tail).toBe(Array.from({ length: 200 }, (_, index) => `line ${index + 300}`).join("\n"));
   expect(tail.split("\n").at(-1)).toBe("line 499");
+});
+
+test("bounds a 400KB failing job log", () => {
   expect(Buffer.byteLength(boundedLogTail("x".repeat(400_000)), "utf8")).toBeLessThanOrEqual(16 * 1024);
+});
+
+test("keeps failing evidence and the final teardown from a long job log", () => {
+  const log = Array.from({ length: 500 }, (_, index) => {
+    if (index === 120) return "##[error] Test suite failed";
+    if (index === 140) return "AssertionError: expected true to be false";
+    return index >= 200 ? `teardown noise ${index}` : `setup ${index}`;
+  }).join("\n");
+
+  const excerpt = boundedLogTail(log);
+
+  expect(excerpt).toContain("##[error] Test suite failed");
+  expect(excerpt).toContain("AssertionError: expected true to be false");
+  expect(excerpt).toContain("teardown noise 499");
+  expect(excerpt.split("\n").length).toBeLessThanOrEqual(CI_FAILED_LOG_MAX_LINES);
+  expect(Buffer.byteLength(excerpt, "utf8")).toBeLessThanOrEqual(16 * 1024);
 });
 
 test("rerunFailedRuns re-runs only the failed jobs of each distinct run", async () => {

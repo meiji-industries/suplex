@@ -100,12 +100,38 @@ export function ciRunIdFromDetailsUrl(detailsUrl: string | null): string | null 
   return /\/actions\/runs\/(\d+)/.exec(detailsUrl ?? "")?.[1] ?? null;
 }
 
-/** Redacted, bounded tail of a job log, safe to store as evidence. */
+/** Redacted, bounded excerpt of a job log, safe to store as evidence. */
 export function boundedLogTail(raw: string): string {
-  const lines = String(redact(raw)).split(/\r?\n/).slice(-CI_FAILED_LOG_MAX_LINES);
-  let tail = lines.join("\n");
-  while (Buffer.byteLength(tail, "utf8") > CI_FAILED_LOG_MAX_BYTES) tail = tail.slice(Math.ceil(tail.length / 8));
-  return tail.trim();
+  const lines = String(redact(raw)).split(/\r?\n/).filter((line, index, all) => line !== all[index - 1] || !/^\s+at .+\(.+:\d+:\d+\)$/.test(line));
+  const markers = lines.reduce<number[]>((found, line, index) => {
+    if (/##\[error\]|^\s*Error:|\bFAIL\b|✕|AssertionError|exit code [1-9]\d*|\d+ failed|panicked at|^\s+at .+\(.+:\d+:\d+\)/.test(line)) found.push(index);
+    return found;
+  }, []);
+  if (markers.length === 0) {
+    let tail = lines.slice(-CI_FAILED_LOG_MAX_LINES).join("\n");
+    while (Buffer.byteLength(tail, "utf8") > CI_FAILED_LOG_MAX_BYTES) tail = tail.slice(Math.ceil(tail.length / 8));
+    return tail.trim();
+  }
+  const first = markers[0] ?? 0;
+  const last = markers.at(-1) ?? first;
+  const windows: [number, number][] = [[Math.max(0, first - 60), Math.min(lines.length, first + 41)], [Math.max(0, last - 40), Math.min(lines.length, last + 41)], [Math.max(0, lines.length - 40), lines.length]];
+  const ranges: [number, number][] = [];
+  for (const [start, end] of windows.sort(([left], [right]) => left - right)) {
+    const previous = ranges.at(-1);
+    if (previous && start <= previous[1]) previous[1] = Math.max(previous[1], end);
+    else ranges.push([start, end]);
+  }
+  const count = () => ranges.reduce((total, [start, end]) => total + end - start, ranges.length - 1);
+  for (let index = 1; count() > CI_FAILED_LOG_MAX_LINES && index < ranges.length; index += 1) {
+    const range = ranges[index];
+    if (!range) break;
+    const trim = Math.min(count() - CI_FAILED_LOG_MAX_LINES, range[1] - range[0]);
+    range[0] += Math.ceil(trim / 2);
+    range[1] -= Math.floor(trim / 2);
+  }
+  let excerpt = ranges.map(([start, end]) => lines.slice(start, end).join("\n")).join("\n…\n");
+  while (Buffer.byteLength(excerpt, "utf8") > CI_FAILED_LOG_MAX_BYTES) excerpt = excerpt.slice(0, Math.ceil(excerpt.length * 7 / 8));
+  return excerpt.trim();
 }
 
 export type GithubCommandRunner = (args: string[]) => Promise<{ stdout: string; stderr: string }>;

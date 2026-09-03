@@ -118,7 +118,7 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
     contracts.StartPlanningInputSchema.parse(rawInput);
     if (ctx.state.step === "delivery_reviewed" && (ctx.input.deliveryTarget === "remote_branch" || ctx.input.deliveryTarget === "local_worktree")) return resumeReviewedDeliveryTarget(ctx);
     return runPublishTurn();
-  }), { validator(rawInput) { const command = contracts.StartPlanningInputSchema.parse(rawInput); if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision"); if (!(ctx.state.step === "delivery_reviewed" || (isBlocked(ctx.state) && ctx.state.allowedCommands.includes("publish_draft"))) || !ctx.state.deliveryReviewId) throw new Error("Draft publication is not available in the current phase"); } });
+  }), { validator(rawInput) { const command = contracts.StartPlanningInputSchema.parse(rawInput); if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision"); if (!(ctx.state.step === "delivery_reviewed" || (isBlocked(ctx.state) && stateTransitions.blockerOffers(ctx.state, "publish_draft"))) || !ctx.state.deliveryReviewId) throw new Error("Draft publication is not available in the current phase"); } });
 
   ctx.runPublishTurn = runPublishTurn;
 }

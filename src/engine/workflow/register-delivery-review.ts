@@ -235,7 +235,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (!["delivery_ready", "reviewing_delivery", "delivery_reviewed", "final_review"].includes(ctx.state.step)) throw new Error("Delivery review is not available in the current phase");
-    if (isBlocked(ctx.state) && !ctx.state.deliveryReviewBlockerCode) throw new Error("A review blocker is required before retrying delivery review");
+    if (isBlocked(ctx.state) && !stateTransitions.blockerOffers(ctx.state, "review_delivery") && !ctx.state.deliveryReviewBlockerCode) throw new Error("A review blocker is required before retrying delivery review");
     const completeSubject = ctx.state.developerExecutionId && ctx.state.developerSessionRef && ctx.state.branchName && ctx.state.targetBaseSha && ctx.state.resultCommit && ctx.state.resultTree && ctx.state.deliveryArtifactId && ctx.state.developerEvidenceArtifactId && ctx.state.leadSessionRef && ctx.state.leadOutputArtifactId;
     if (!completeSubject && !canRecoverRevalidatedReview(ctx.state)) throw new Error("An exact Developer delivery and Lead session are required before review");
   } });
@@ -245,7 +245,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
   }), { validator(rawInput) {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    if (ctx.state.step !== "review_arbitration" || ctx.state.owner !== "lead" || isBlocked(ctx.state)) throw new Error("Review arbitration is not available in the current phase");
+    if (ctx.state.step !== "review_arbitration" || ctx.state.owner !== "lead" || (isBlocked(ctx.state) && !stateTransitions.blockerOffers(ctx.state, "arbitrate_review"))) throw new Error("Review arbitration is not available in the current phase");
     if ((ctx.state.arbitrationCount ?? 0) > 2) throw new Error("Review arbitration is exhausted");
   } });
   setHandler(issueUpdates.repair_delivery, ctx.guarded(async (rawInput: any) => {
@@ -256,7 +256,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (ctx.state.step !== "repair_required" && !isBlocked(ctx.state) && !ctx.state.allowedCommands.includes("repair_delivery")) throw new Error("Delivery repair is not available in the current phase");
     if (!ctx.state.deliveryReviewId || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open")) throw new Error("Open blocking findings are required");
-    if (isBlocked(ctx.state) && !ctx.state.deliveryRepairBlockerCode) throw new Error("A repair blocker is required before retrying delivery repair");
+    if (isBlocked(ctx.state) && !stateTransitions.blockerOffers(ctx.state, "repair_delivery") && !ctx.state.deliveryRepairBlockerCode) throw new Error("A repair blocker is required before retrying delivery repair");
     if (ctx.input.repairCycleLimit !== undefined && (ctx.state.repairCycle ?? 0) >= ctx.repairCycleLimit) throw new Error("Delivery repair limit is exhausted");
     if (!ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.leadSessionRef) throw new Error("The prior Developer delivery must be preserved before repair");
   } });
@@ -271,8 +271,9 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
   }, "record_delivery_decision"), { validator(rawInput) {
     const command = contracts.PlanCommandInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
+    const offeredDecision = stateTransitions.blockerOffers(ctx.state, "record_delivery_decision");
     const legacyRepairDecision = isBlocked(ctx.state) && ctx.state.allowedCommands.includes("repair_delivery");
-    if ((ctx.state.step !== "repair_required" && !isBlocked(ctx.state)) || (!ctx.state.allowedCommands.includes("record_delivery_decision") && !legacyRepairDecision) || !ctx.state.deliveryReviewId) throw new Error("A delivery decision is not available in the current phase");
+    if ((ctx.state.step !== "repair_required" && !isBlocked(ctx.state)) || (!ctx.state.allowedCommands.includes("record_delivery_decision") && !legacyRepairDecision && !offeredDecision) || !ctx.state.deliveryReviewId) throw new Error("A delivery decision is not available in the current phase");
   } });
 
 }

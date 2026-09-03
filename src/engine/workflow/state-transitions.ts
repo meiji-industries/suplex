@@ -13,6 +13,7 @@ import {
 import type { CapacityRole } from "../../capacity-contracts.js";
 import { at } from "../../issue-phases.js";
 import type { IssueWorkflowContext } from "./context.js";
+import type { IssueCommand } from "../../commands/registry.js";
 
 type CompletedReview = Extract<DeliveryReviewActivityResult, { outcome: "completed" }>;
 type CompletedRepair = Omit<Extract<DeveloperRepairActivityResult, { outcome: "completed" }>, "worktreePath"> & { worktreePath?: string };
@@ -38,6 +39,10 @@ export function evidencePointer(artifactId: string | undefined, kind: ArtifactPo
 
 export function humanBlocker(category: IssueBlocker["category"], summary: string, actions: IssueBlockerAction[], evidence: ArtifactPointer | undefined): IssueBlocker {
   return IssueBlockerSchema.parse({ category, summary: summary.replace(/[\r\n]+/g, " ").slice(0, 240), unblockOwner: "human", actions, evidence: evidence ?? { artifactId: "blocker", kind: "attention-evidence" }, createdAt: new Date().toISOString(), retry: null });
+}
+
+export function blockerOffers(state: IssueWorkflowState, command: IssueCommand): boolean {
+  return state.blocker?.actions.some((action) => action.command === command) ?? false;
 }
 
 export function revisioned(state: IssueWorkflowState, step: IssueWorkflowState["step"], owner: IssueWorkflowState["owner"], allowedCommands: IssueWorkflowState["allowedCommands"], pendingAction: string): IssueWorkflowState {

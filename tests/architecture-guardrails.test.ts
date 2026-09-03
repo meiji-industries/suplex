@@ -48,6 +48,7 @@ test("issue command registry stays complete across descriptors, updates, routes,
       [
         "accept-delivery",
         "approve-plan",
+        "arbitrate-review",
         "cancel",
         "cancel-development",
         "continue-work",

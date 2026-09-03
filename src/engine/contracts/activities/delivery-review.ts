@@ -192,6 +192,7 @@ export const ReviewArbitrationActivityInputSchema = z.object({
   leadSessionRef: durableId,
   worktreePath: z.string().min(1).max(1_000),
   repairExhausted: z.boolean(),
+  refusedDecision: z.literal("repair").optional(),
   answerArtifactId: durableId.optional(),
   capacityRequestId: durableId.optional(),
 }).strict();

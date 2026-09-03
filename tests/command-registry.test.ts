@@ -36,6 +36,7 @@ test("task command routes stay in registry parity", async () => {
       [
         "accept-delivery",
         "approve-plan",
+        "arbitrate-review",
         "cancel",
         "cancel-development",
         "continue-work",

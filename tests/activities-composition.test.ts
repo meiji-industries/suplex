@@ -26,6 +26,7 @@ const expectedActivityKeys = [
   "acceptDelivery",
   "adoptPullRequestRelease",
   "applyGithubPullRequestAction",
+  "arbitrateReview",
   "authorizePlanRevision",
   "cancelDeveloperExecution",
   "consolidateLeadPlan",

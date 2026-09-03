@@ -175,7 +175,7 @@ export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): 
   void patchId;
   const command = AUTO_CHAINED_COMMANDS[ctx.state.step];
   if (isBlocked(ctx.state)) return null;
-  if (!command || !ctx.state.allowedCommands.includes(command)) return null;
+  if (!command || (!ctx.state.allowedCommands.includes(command) && ctx.state.step !== "review_arbitration")) return null;
   if (command === "resolve_merge_conflict" && (ctx.state.mergeDecision || ctx.state.owner !== "lead")) return null;
   if (command === "resolve_merge_conflict") {
     const progress = stateTransitions.withRepairProgress(ctx.state, { signature: stateTransitions.repairSignature({ source: "merge", code: "merge_conflict" }), commit: ctx.state.resultCommit ?? null, diagnosticHash: null });

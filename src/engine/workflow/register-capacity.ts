@@ -8,6 +8,7 @@ import * as stateTransitions from "./state-transitions.js";
 import { classifyRepairFailure } from "./runtime.js";
 import { issueUpdates } from "../issue-updates.js";
 import { applyTargetBaseRevalidation } from "../target-base.js";
+import { arbitrateReview } from "./register-delivery-review.js";
 import type { WorkflowDeliveryReviewResult } from "../issue-contracts.js";
 import type { IssueWorkflowContext } from "./context.js";
 export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
@@ -146,6 +147,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (operation === "final_review") return ctx.runFinalReviewTurn();
+    if (operation === "review_arbitration") return arbitrateReview(ctx, { expectedRevision: ctx.state.revision, actorUserId: "forge-capacity-retry", commandId: `${ctx.state.workflowId}:retry-arbitration:${ctx.state.revision}` });
     throw new Error(`Capacity retry for ${operation} requires the original phase command to revalidate its inputs`);
   };
   setHandler(issueUpdates.retry_capacity, ctx.guarded(async (rawInput: any) => {
@@ -156,8 +158,8 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
       if (request.status === "active") throw new Error("Capacity cancellation must settle before retry");
     }
     const operation = ctx.state.capacityBlocker.resumeOperation;
-    const nextStep = operation === "lead_planning" ? "planning" : operation === "developer_execution" ? "development" : operation === "delivery_review" ? "reviewing_delivery" : operation === "developer_repair" ? "repair_required" : operation === "final_review" ? "final_review" : operation === "merge_conflict_resolution" ? "merge_conflict_resolving" : operation === "merge_conflict_plan" ? "merge_conflict_reviewing" : "approval";
-    const nextCommands = nextStep === "planning" ? [] : nextStep === "development" ? ["cancel_development", "cancel_issue"] : nextStep === "reviewing_delivery" ? [] : nextStep === "final_review" ? [] : nextStep === "repair_required" ? ["cancel_issue"] : nextStep === "merge_conflict_resolving" ? ["cancel_issue"] : nextStep === "merge_conflict_reviewing" ? ["cancel_issue"] : ["cancel_issue"];
+    const nextStep = operation === "lead_planning" ? "planning" : operation === "developer_execution" ? "development" : operation === "delivery_review" ? "reviewing_delivery" : operation === "review_arbitration" ? "review_arbitration" : operation === "developer_repair" ? "repair_required" : operation === "final_review" ? "final_review" : operation === "merge_conflict_resolution" ? "merge_conflict_resolving" : operation === "merge_conflict_plan" ? "merge_conflict_reviewing" : "approval";
+    const nextCommands = nextStep === "planning" ? [] : nextStep === "development" ? ["cancel_development", "cancel_issue"] : nextStep === "reviewing_delivery" || nextStep === "review_arbitration" ? [] : nextStep === "final_review" ? [] : nextStep === "repair_required" ? ["cancel_issue"] : nextStep === "merge_conflict_resolving" ? ["cancel_issue"] : nextStep === "merge_conflict_reviewing" ? ["cancel_issue"] : ["cancel_issue"];
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, capacity: null, capacityBlocker: null, ...at(nextStep), owner: nextStep === "approval" ? "human" : "lead", allowedCommands: nextCommands, pendingAction: `Retry ${operation.replaceAll("_", " ")}`, revision: ctx.state.revision + 1, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     void command;

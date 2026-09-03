@@ -85,7 +85,7 @@ export class ProjectionBurstGuard {
 }
 
 const AGENT_OWNED_STEPS: Partial<Record<IssueWorkflowState["step"], true>> = {
-  planning: true, supplemental_review: true, plan_consolidation: true, development: true, reviewing_delivery: true, repair_required: true,
+  planning: true, supplemental_review: true, plan_consolidation: true, development: true, reviewing_delivery: true, review_arbitration: true, repair_required: true,
   releasing: true, merge_conflict_reviewing: true, merge_conflict_resolving: true, ci_repair_planning: true,
   ci_repairing: true, final_review: true, delivery_ready: true,
 };

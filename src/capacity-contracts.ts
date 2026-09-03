@@ -124,7 +124,7 @@ export const CapacityExecutionOwnerSchema = z.object({
   worktreePath: z.string().max(1_000).nullable().optional(),
 });
 
-const PublicCapacityStatusSchema = z.object({
+export const PublicCapacityStatusSchema = z.object({
   profileId: durableId,
   agentName: z.string().min(1).max(120),
   avatarSeed: z.string(),
@@ -149,7 +149,7 @@ export const AdminCapacityLaneSchema = z.object({
 });
 export type AdminCapacityLane = z.infer<typeof AdminCapacityLaneSchema>;
 
-const CapacityReconciliationResultSchema = z.object({
+export const CapacityReconciliationResultSchema = z.object({
   requestId: durableId,
   status: CapacityRequestStatusSchema,
   reason: z.string(),

@@ -11,6 +11,7 @@ test("task command descriptors project every routed command", () => {
     { name: "start_planning", label: "Start planning", endpoint: "start-planning", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "request_supplemental_review", label: "Request a second review", endpoint: "request-supplemental-review", method: "POST", expectedRevision: 7, note: "none", idempotency: "required" },
     { name: "approve_plan", label: "Approve the plan", endpoint: "approve-plan", method: "POST", expectedRevision: 7, note: "required", idempotency: "required" },
+    { name: "arbitrate_review", label: "Decide the review outcome", endpoint: "arbitrate-review", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "request_plan_revision", label: "Request plan changes", endpoint: "request-plan-revision", method: "POST", expectedRevision: 7, note: "required", idempotency: "required" },
     { name: "respond_plan_blocker", label: "Answer the Planner", endpoint: "respond-plan-blocker", method: "POST", expectedRevision: 7, note: "required", idempotency: "required" },
     { name: "revise_plan", label: "Revise the plan", endpoint: "revise-plan", method: "POST", expectedRevision: 7, note: "required", idempotency: "none" },

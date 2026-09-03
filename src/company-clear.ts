@@ -42,7 +42,6 @@ const WIPE_STEPS: readonly WipeStep[] = [
   { table: "forge_issue_worktrees", scope: "company" },
   { table: "forge_merge_conflict_resolutions", scope: "company" },
   { table: "forge_merge_observations", scope: "company" },
-  { table: "forge_operation_claims", scope: "task" },
   { table: "forge_plan_blocker_responses", scope: "company" },
   { table: "forge_plan_decisions", scope: "company" },
   { table: "forge_plan_reviews", scope: "company" },
@@ -101,6 +100,8 @@ export function wipeCompanyData(database: ForgeDatabase, companyId: string): voi
         if ("sql" in step) {
           db.prepare(step.sql(companyId)).run();
         } else {
+          const tableExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(step.table);
+          if (!tableExists) continue;
           db.prepare(SQL_BY_SCOPE[step.scope](step.table)).run(companyId);
         }
       }

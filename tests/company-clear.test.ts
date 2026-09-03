@@ -59,6 +59,7 @@ test("clearCompany wipes company-scoped data and resets it to factory state", as
     // Seed one of each company-scoped shape across the FK buckets.
     value.database.authTransaction((db) => {
       const insert = (s: string, ...params: unknown[]): void => { db.prepare(s).run(...params); };
+      db.exec("CREATE TABLE probe_workflows (probe_id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, company_id TEXT NOT NULL, status TEXT NOT NULL)");
       insert("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('artifact-brief', ?, 'task-brief', 'brief.md', 'text/markdown', 4, ?, 'objects/ab/brief.bin', ?)", company.id, "a".repeat(64), now);
       insert("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('artifact-evidence', ?, 'lead-evidence', 'e.json', 'application/json', 2, ?, 'objects/ae/e.bin', ?)", company.id, "b".repeat(64), now);
       insert("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project-1', ?, 'P', '/repo/p', '/worktrees/p', 'main', 'main', 'true', 'true', '[]', '{}', 'active', ?, ?)", company.id, now, now);

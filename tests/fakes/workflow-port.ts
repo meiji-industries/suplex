@@ -1,4 +1,5 @@
 import { initialStateFixture } from "../fixtures/issue-state.js";
+import { at } from "../../src/issue-phases.js";
 import { IssueWorkflowStateSchema, type IssueWorkflowInput, type IssueWorkflowState } from "../../src/engine/issue-contracts.js";
 import type { ContinueWorkCommand, PlanCommandInput, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, StartPlanningInput } from "../../src/commands/inputs.js";
 import type { IssueWorkflowPort } from "../../src/tasks.js";
@@ -15,7 +16,7 @@ export function createWorkflowPortFake(options: WorkflowPortFakeOptions): IssueW
   const projectState = options.projectState ?? ((state: IssueWorkflowState): IssueWorkflowState => state);
   const nextState = (workflowId: string, input: StartPlanningInput | PlanCommandInput, update: Partial<IssueWorkflowState>): IssueWorkflowState => {
     const current = states.get(workflowId) ?? initialStateFixture();
-    const state = IssueWorkflowStateSchema.parse({ ...current, ...update, workflowId, companyId: options.companyId, projectId: options.projectId, projectRevisionId: current.projectRevisionId, revision: input.expectedRevision + 1, lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
+    const state = IssueWorkflowStateSchema.parse({ ...current, ...update, ...at(update.step ?? current.step), workflowId, companyId: options.companyId, projectId: options.projectId, projectRevisionId: current.projectRevisionId, revision: input.expectedRevision + 1, lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
     states.set(workflowId, state);
     return projectState(state);
   };

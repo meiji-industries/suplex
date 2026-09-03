@@ -7,6 +7,7 @@ import type { ForgeDatabase } from "../../database.js";
 import { CliHerdrClient, type HerdrClient } from "../../herdr-client.js";
 import { openHerdrTerminalBridge } from "../../herdr-terminal-bridge.js";
 import type { TaskService } from "../../tasks.js";
+import { json } from "../../task-utils.js";
 import type { AuthService } from "../../auth.js";
 import type { ForgeConfig } from "../../config.js";
 import { TaskIdParamsSchema } from "../contracts/common.js";
@@ -91,7 +92,7 @@ const taskPane: FastifyPluginAsync<TaskPaneRoutesOptions> = async (app, options)
         return;
       }
       try {
-        const command = JSON.parse(message.toString()) as { type?: string; cols?: number; rows?: number; direction?: "up" | "down"; lines?: number };
+        const command = json<{ type?: string; cols?: number; rows?: number; direction?: "up" | "down"; lines?: number } | null>(message.toString(), null) ?? {};
         if (command.type === "resize" && typeof command.cols === "number" && typeof command.rows === "number") bridge.resize(command.cols, command.rows);
         if (command.type === "scroll" && (command.direction === "up" || command.direction === "down") && typeof command.lines === "number") bridge.scroll(command.direction, command.lines);
       } catch {

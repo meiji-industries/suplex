@@ -1,5 +1,8 @@
+// eslint-disable-next-line no-restricted-imports -- the Herdr terminal bridge is a long-lived streaming child process, not a one-shot command.
 import { type ChildProcessWithoutNullStreams, spawn as nodeSpawn } from "node:child_process";
 import { createInterface } from "node:readline";
+
+import { json } from "./task-utils.js";
 
 export type BridgeFrame = { seq: number; full: boolean; width: number; height: number; bytes: Buffer };
 export type BridgeEvent =
@@ -10,15 +13,12 @@ export type BridgeEvent =
 const clamp = (value: number, minimum: number, maximum: number): number => Math.min(maximum, Math.max(minimum, Math.round(value)));
 
 export function parseBridgeRecord(line: string): BridgeEvent | null {
-  try {
-    const value = JSON.parse(line) as Record<string, unknown>;
-    if (value.type === "terminal.frame" && typeof value.bytes === "string") {
-      return { type: "frame", frame: { seq: Number(value.seq), full: Boolean(value.full), width: Number(value.width), height: Number(value.height), bytes: Buffer.from(value.bytes, "base64") } };
-    }
-    if (value.type === "terminal.closed") return { type: "closed", reason: String(value.reason ?? "closed") };
-  } catch {
-    return null;
+  const value = json<Record<string, unknown> | null>(line, null);
+  if (!value || typeof value !== "object") return null;
+  if (value.type === "terminal.frame" && typeof value.bytes === "string") {
+    return { type: "frame", frame: { seq: Number(value.seq), full: Boolean(value.full), width: Number(value.width), height: Number(value.height), bytes: Buffer.from(value.bytes, "base64") } };
   }
+  if (value.type === "terminal.closed") return { type: "closed", reason: String(value.reason ?? "closed") };
   return null;
 }
 

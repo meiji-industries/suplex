@@ -20,7 +20,7 @@ export interface HealthSnapshot {
   reachableAddress: string;
   ready: boolean;
   checks: HealthCheck[];
-  herdr?: { reachable: boolean; socketPath: string };
+  herdr?: { reachable: boolean; socketPath: string } | undefined;
 }
 
 export interface HostHealthDependencies {

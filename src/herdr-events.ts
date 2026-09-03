@@ -48,7 +48,9 @@ export function startHerdrEventSubscriber(database: ForgeDatabase, options: { so
       const snapshotSocket = await connect(options.socketPath);
       try {
         const snapshot = await snapshotSocket.request<Record<string, unknown>>("session.snapshot", {});
-        const panes = Array.isArray(snapshot.panes) ? snapshot.panes : Array.isArray(snapshot) ? snapshot : [];
+        // Herdr answers { type: "session_snapshot", snapshot: { panes, ... } }.
+        const body = snapshot.snapshot && typeof snapshot.snapshot === "object" ? snapshot.snapshot as Record<string, unknown> : snapshot;
+        const panes = Array.isArray(body.panes) ? body.panes : [];
         for (const pane of panes) if (pane && typeof pane === "object") apply(database, { event: "pane.agent_status_changed", data: pane as Record<string, unknown> });
       } finally { snapshotSocket.close(); }
       void unsubscribe;

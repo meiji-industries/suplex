@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import net from "node:net";
 
+import { json } from "./task-utils.js";
+
 export function herdrSocketPath(env: NodeJS.ProcessEnv = process.env): string {
   return env.HERDR_SOCKET_PATH ?? join(homedir(), ".config", "herdr", "herdr.sock");
 }
@@ -42,7 +44,9 @@ export async function connectHerdrSocket(path = herdrSocketPath()): Promise<Herd
       const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
       if (!line) continue;
       let message: Record<string, unknown>;
-      try { message = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
+      const parsed = json<Record<string, unknown> | null>(line, null);
+      if (!parsed || typeof parsed !== "object") continue;
+      message = parsed;
       if (typeof message.event === "string") { subscription?.({ event: message.event, data: (message.data ?? {}) as Record<string, unknown> }); continue; }
       const id = typeof message.id === "string" ? message.id : undefined;
       const entry = id ? pending.get(id) : undefined;

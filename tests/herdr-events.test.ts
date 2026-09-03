@@ -19,7 +19,7 @@ test("Herdr events project known panes and reconnect", async () => {
   database.authQuery((db) => db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, agent_name, pane_id, status, created_at, updated_at) VALUES ('s', 't', 'planner', 1, 1, 'codex', 'a', 'known', 'starting', 'x', 'x')").run());
   let event: ((value: { event: string; data: Record<string, unknown> }) => void) | undefined;
   let calls = 0;
-  const connect = async (): Promise<HerdrSocket> => ({ request: async <T,>(method: string) => (method === "session.snapshot" ? { panes: [{ pane_id: "known", agent_status: "idle" }] } : {}) as T, subscribe: async (_subscriptions, receive) => { event = receive; return () => undefined; }, close: () => undefined });
+  const connect = async (): Promise<HerdrSocket> => ({ request: async <T,>(method: string) => (method === "session.snapshot" ? { type: "session_snapshot", snapshot: { panes: [{ pane_id: "known", agent_status: "idle" }] } } : {}) as T, subscribe: async (_subscriptions, receive) => { event = receive; return () => undefined; }, close: () => undefined });
   const subscriber = startHerdrEventSubscriber(database, { connect: async () => { calls += 1; return connect(); } });
   await vi.advanceTimersByTimeAsync(0);
   expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_role_sessions WHERE id='s'").get())).toEqual({ status: "ready" });

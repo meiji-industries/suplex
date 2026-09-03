@@ -111,4 +111,5 @@ export const HealthSnapshotSchema = z.object({
   reachableAddress: z.string().url(),
   ready: z.boolean(),
   checks: z.array(HealthCheckSchema),
+  herdr: z.object({ reachable: z.boolean(), socketPath: z.string() }).optional(),
 });

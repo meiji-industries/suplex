@@ -249,7 +249,7 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
         const context = database.authQuery((db) => resolveReleaseContext(db, { kind: "publish", taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, branchName: input.branchName, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree, reviewId: input.reviewId, developerExecutionId: input.developerExecutionId }));
         if (!context?.delivery || !context.reviewId || !context.subjectTree) throw new GithubReleaseFailure("stale-reviewed-revision", "The exact approved Developer revision is unavailable");
         identity = { repository: "", branchName: context.branchName, headSha: context.subjectCommit, headTree: context.subjectTree };
-        let pinned: ReturnType<typeof pinnedProjectRevision> & { artifactId: string };
+        let pinned: ReturnType<ActivityContext["pinnedProjectRevision"]> & { artifactId: string };
         try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "The task project configuration is incomplete"); }
         identity.repository = pinned.repository;
         let delivery: ReturnType<typeof releaseDeliveryProjection>;

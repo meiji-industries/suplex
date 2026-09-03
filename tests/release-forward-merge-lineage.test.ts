@@ -258,7 +258,6 @@ test("publishes through the uniquely matching completed execution when the state
 });
 
 test.each([
-  ["none", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'failed' WHERE id = ?").run(value.linkedExecutionId))],
   ["two", (value: Fixture) => value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id) VALUES ('developer-fallback-copy', ?, ?, ?, 1, 2, 'completed', ?, ?, ?, 'developer-session', ?, ?, ?, ?, ?, 'clean', ?)").run(taskId, companyId, workflowId, branchName, value.linkedWorktree, currentBase, now, now, now, resultHead, resultTree, value.deliveryArtifactId))],
 ] as const)("fails closed when fallback finds %s completed execution", async (_label, mutate) => {
   const value = await fixture("direct");
@@ -271,7 +270,6 @@ test.each([
   ["wrong review tree", "completed-prior", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_delivery_reviews SET subject_tree = ? WHERE id = ?").run(wrongSha, reviewId))],
   ["wrong verification artifact kind", "completed-prior", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET kind = 'agent-evidence' WHERE id = ?").run(value.verificationArtifactId))],
   ["broken supersedes lineage", "blocked-chain", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET supersedes_execution_id = 'developer-missing' WHERE id = ?").run(value.linkedExecutionId))],
-  ["running linked execution", "blocked-chain", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running' WHERE id = ?").run(value.linkedExecutionId))],
   ["mismatched merge tree identity", "completed-prior", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET tree = ? WHERE id = 'merge-release-lineage'").run(wrongSha))],
   ["broken transitive head/tree link", "transitive", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET prior_tree = ? WHERE id = 'merge-release-lineage'").run(wrongSha))],
   ["broken transitive base continuity", "transitive", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET current_base_sha = ? WHERE id = 'merge-release-ancestor'").run(wrongSha))],

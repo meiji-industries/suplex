@@ -17,7 +17,14 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
   };
   return {
     async findActiveDeveloperExecution(input) {
-      return database.authQuery((db) => db.prepare("SELECT id AS executionId, session_ref AS sessionRef FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status IN ('starting', 'running', 'cancelling') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId) as { executionId: string; sessionRef: string } | undefined) ?? null;
+      return database.authQuery((db) => db.prepare(`SELECT execution.id AS executionId, session.id AS sessionRef
+        FROM forge_developer_executions execution
+        JOIN forge_herdr_turns turn ON turn.ledger = 'developer' AND turn.execution_id = execution.id AND turn.task_id = execution.task_id
+        JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.task_id = execution.task_id AND session.is_current = 1
+        WHERE execution.task_id = ? AND execution.company_id = ? AND execution.workflow_id = ?
+          AND turn.turn_id = (SELECT latest.turn_id FROM forge_herdr_turns latest WHERE latest.role_session_id = turn.role_session_id ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1)
+          AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating')
+        ORDER BY turn.updated_at DESC, turn.created_at DESC LIMIT 1`).get(input.taskId, input.companyId, input.workflowId) as { executionId: string; sessionRef: string } | undefined) ?? null;
     },
     async findRecoverableDeveloperExecution(input) {
       const rows = database.authQuery((db) => db.transaction(() => {
@@ -26,19 +33,11 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
           JOIN forge_herdr_turns turn ON turn.ledger = 'developer' AND turn.execution_id = execution.id AND turn.task_id = execution.task_id
           JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.task_id = execution.task_id
           WHERE execution.task_id = ? AND execution.company_id = ? AND execution.workflow_id = ?
-            AND execution.status IN ('starting', 'running', 'failed', 'completed', 'blocked')
-            AND execution.status NOT IN ('completed', 'blocked')
             AND session.session_role IN ('builder', 'integrator') AND session.is_current = 1
             AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed')
           ORDER BY execution.started_at DESC LIMIT 2`).all(input.taskId, input.companyId, input.workflowId) as Array<{ executionId: string; planRevision: number; attempt: number; sessionRef: string; worktreePath: string; branchName: string; targetBaseSha: string; supersedesExecutionId: string | null }>;
         if (executions.length !== 1) return [];
         const candidate = executions[0]!;
-        const reopened = db.prepare(`UPDATE forge_developer_executions SET status = 'running', failure_code = NULL, finished_at = NULL
-          WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND status = 'failed'`).run(candidate.executionId, input.taskId, input.companyId, input.workflowId);
-        if (reopened.changes === 0) {
-          const current = db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(candidate.executionId) as { status: string } | undefined;
-          if (!current || !["starting", "running", "completed", "blocked"].includes(current.status)) return [];
-        }
         return [candidate];
       })());
       return rows[0] ?? null;

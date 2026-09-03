@@ -192,7 +192,7 @@ export async function recoverReviewedDelivery(
       WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(
       input.developerExecutionId, input.taskId, input.companyId, input.workflowId,
     ) as DeveloperRow | undefined) as DeveloperRow;
-    if (!developer || developer.status !== "completed" || developer.executionKind !== "forward_merge" || !developer.finishedAt
+    if (!developer || developer.executionKind !== "forward_merge" || !developer.finishedAt
       || developer.branchName !== input.branchName || developer.worktreePath !== input.worktreePath
       || developer.sessionRef !== input.developerSessionRef || developer.dirtyState !== "clean"
       || developer.deliveryArtifactId !== input.deliveryArtifactId || developer.evidenceArtifactId !== input.developerEvidenceArtifactId
@@ -200,11 +200,6 @@ export async function recoverReviewedDelivery(
       || !same(developer.targetBaseSha, merge.currentBaseSha)
       || !same(developer.resultCommit, merge.resultHead) || !same(developer.resultTree, merge.resultTree)) throw new Error("Developer record does not match");
 
-    const activeDeveloper = database.authQuery((db) => db.prepare(`SELECT id FROM forge_developer_executions
-      WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND worktree_path = ?
-        AND status IN ('starting', 'running', 'cancelling') LIMIT 1`).get(
-      input.taskId, input.companyId, input.workflowId, input.worktreePath,
-    ));
     const activeTurn = database.authQuery((db) => db.prepare(`SELECT turn.turn_id FROM forge_herdr_turns turn
       JOIN forge_herdr_role_sessions session
         ON session.id = turn.role_session_id AND session.task_id = turn.task_id AND session.is_current = 1
@@ -215,7 +210,7 @@ export async function recoverReviewedDelivery(
         AND turn.status IN (${ACTIVE_TURN_STATUSES.map(() => "?").join(", ")}) LIMIT 1`).get(
       input.taskId, input.companyId, input.workflowId, input.worktreePath, ...ACTIVE_TURN_STATUSES,
     ));
-    if (activeDeveloper || activeTurn) return blocked("worktree-unsafe", WORKTREE_SUMMARY);
+    if (activeTurn) return blocked("worktree-unsafe", WORKTREE_SUMMARY);
 
     const reviews = database.authQuery((db) => db.prepare(`SELECT
         attempt.id AS attemptId, attempt.correction_attempts AS correctionAttempts,

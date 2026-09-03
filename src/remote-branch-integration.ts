@@ -23,8 +23,11 @@ type Git = (args: string[], cwd: string, taskId: string) => Promise<{ ok: boolea
 const shaPattern = /^[a-f0-9]{40,64}$/i;
 function inside(root: string, candidate: string): boolean { const path = relative(root, candidate); return path === "" || (!path.startsWith(`..${sep}`) && path !== ".."); }
 function active(database: ForgeDatabase, taskId: string): boolean {
-  return database.authQuery((db) => db.prepare(`SELECT 1 FROM forge_developer_executions WHERE task_id = ? AND status IN ('starting', 'running', 'cancelling')
-    UNION ALL SELECT 1 FROM forge_herdr_turns WHERE task_id = ? AND ledger = 'developer' AND status IN ('dispatching', 'waiting', 'validating') LIMIT 1`).get(taskId, taskId)) !== undefined;
+  return database.authQuery((db) => db.prepare(`SELECT 1 FROM forge_herdr_turns turn
+    JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.is_current = 1
+    WHERE turn.task_id = ? AND turn.ledger = 'developer'
+      AND turn.turn_id = (SELECT latest.turn_id FROM forge_herdr_turns latest WHERE latest.role_session_id = turn.role_session_id ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1)
+      AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating') LIMIT 1`).get(taskId)) !== undefined;
 }
 
 
@@ -46,8 +49,7 @@ function exactRemoteCommit(result: Awaited<ReturnType<Git>>, remoteRef: string):
 
 export async function integrateRemoteBranch(database: ForgeDatabase, config: ForgeConfig, input: { taskId: string; companyId: string; workflowId: string; repository: string; branchName: string; remoteHead: string; worktreePath: string | null; targetBaseSha: string | null }, deps: { git?: Git; now?: () => string } = {}): Promise<RemoteIntegration> {
   const worktreePath = input.worktreePath ? resolve(input.worktreePath) : null;
-  const owned = worktreePath && database.authQuery((db) => db.prepare("SELECT worktree_root AS worktreeRoot, branch_name AS branchName FROM forge_issue_worktrees WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND worktree_path = ? AND status <> 'released'").get(input.taskId, input.companyId, input.workflowId, worktreePath) as { worktreeRoot: string; branchName: string } | undefined);
-  if (!worktreePath || !owned || owned.branchName !== input.branchName || !inside(resolve(config.worktreeRoot), worktreePath) || !inside(resolve(owned.worktreeRoot), worktreePath)) return { kind: "not_owned" };
+  if (!worktreePath || !inside(resolve(config.worktreeRoot), worktreePath)) return { kind: "not_owned" };
   try { await access(worktreePath); } catch { return { kind: "missing_worktree" }; }
   if (!shaPattern.test(input.remoteHead)) throw new Error("Remote task branch identity is invalid");
   const intendedRemoteHead = input.remoteHead.toLowerCase();

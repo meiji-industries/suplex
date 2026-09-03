@@ -78,6 +78,9 @@ test("cleans a worktree when a stale dispatching turn belongs to a failed execut
       db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = ? WHERE id = 'developer_1'").run(now);
       db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES ('turn_stale', 'task_1', 'session_1', 'builder', 'developer', 'developer_1', 'implementation', ?, 'herdr-results/task_1/developer/result-turn_stale.json', 0, 'dispatching', ?, ?)").run("c".repeat(64), now, now);
     });
+    const resultPath = join(value.config.runtimeRoot, "herdr-results/task_1/developer/result-turn_stale.json");
+    await mkdir(join(resultPath, ".."), { recursive: true });
+    await writeFile(resultPath, JSON.stringify({ kind: "delivery", summary: "Done", steps: [{ number: 1, status: "completed", filesChanged: [], notes: "Done" }], authorizedStepsNotCompleted: [], resultCommit: "a".repeat(40), resultTree: "b".repeat(40), dirtyState: "clean", blocker: null }));
     await expect(activities(value).cleanupTaskWorktree({ taskId: "task_1", companyId: "company_1", workflowId: "workflow_1" })).resolves.toMatchObject({ outcome: "cleaned" });
     expect(existsSync(value.worktreePath)).toBe(false);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }

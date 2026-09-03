@@ -118,7 +118,7 @@ function directReleaseContext(db: Database.Database, input: ReleaseContextInput)
       FROM forge_tasks t
       JOIN forge_developer_executions d
         ON d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
-        AND d.branch_name = ? AND lower(d.result_commit) = lower(?) AND d.status = 'completed'
+        AND d.branch_name = ? AND lower(d.result_commit) = lower(?) AND d.delivery_artifact_id IS NOT NULL
       WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(input.branchName, input.subjectCommit, input.taskId, input.companyId, input.workflowId) as Omit<ReleaseContext, "delivery" | "reviewId"> | undefined;
     return direct ? { ...direct, reviewId: null, delivery: null } : undefined;
   }
@@ -129,7 +129,7 @@ function directReleaseContext(db: Database.Database, input: ReleaseContextInput)
     FROM forge_tasks t
     JOIN forge_developer_executions d
       ON (? IS NULL OR d.id = ?) AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
-      AND d.status = 'completed' AND d.branch_name = ?
+      AND d.branch_name = ? AND d.delivery_artifact_id IS NOT NULL
       AND lower(d.target_base_sha) = lower(?) AND lower(d.result_commit) = lower(?) AND lower(d.result_tree) = lower(?)
     JOIN forge_delivery_reviews r
       ON r.id = ? AND r.task_id = t.id AND r.company_id = t.company_id AND r.workflow_id = t.workflow_id
@@ -151,7 +151,7 @@ function forwardMergeReleaseContext(db: Database.Database, input: ReleaseContext
       m.checkpoint, m.expected_base_sha AS expectedBaseSha,
       m.current_base_sha AS currentBaseSha, m.prior_head AS priorHead, m.prior_tree AS priorTree,
       m.merge_commit AS mergeCommit, m.tree AS mergeTree, m.result_head AS resultHead, m.result_tree AS resultTree,
-      d.id AS developerExecutionId, d.status AS developerStatus, d.branch_name AS branchName,
+      d.id AS developerExecutionId, d.branch_name AS branchName,
       d.worktree_path AS worktreePath, d.target_base_sha AS developerTargetBaseSha,
       d.result_commit AS developerResultCommit, d.result_tree AS developerResultTree,
       r.id AS reviewId, r.base_sha AS reviewBaseSha, r.subject_commit AS reviewSubjectCommit,
@@ -182,9 +182,8 @@ function forwardMergeReleaseContext(db: Database.Database, input: ReleaseContext
       || !sameRevision(candidate.reviewSubjectCommit, candidate.resultHead)
       || !sameRevision(candidate.reviewSubjectTree, candidate.resultTree)
       || !sameRevision(candidate.reviewBaseSha, candidate.currentBaseSha)
-      || !["completed", "blocked"].includes(candidate.developerStatus)
       || !lineage
-      || lineage.developer.id !== candidate.developerExecutionId || lineage.developer.status !== candidate.developerStatus
+      || lineage.developer.id !== candidate.developerExecutionId
       || !sameRevision(lineage.developer.targetBaseSha, candidate.developerTargetBaseSha)
       || !sameRevision(lineage.developer.resultHead, candidate.developerResultCommit) || !sameRevision(lineage.developer.resultTree, candidate.developerResultTree)
       || lineage.current.id !== candidate.forwardMergeId

@@ -126,6 +126,7 @@ export interface TaskInput {
   roleAgents?: RoleAssignments;
   supplementalReview?: boolean;
   autoApprovePlan?: boolean;
+  startImmediately?: boolean;
   deliveryTarget?: DeliveryTarget;
   runProjectTests?: boolean;
   visualEvidence?: VisualEvidence;
@@ -1081,7 +1082,11 @@ export class TaskService {
   }
 
   async createTask(actorUserId: string, companyId: string, input: TaskInput): Promise<{ task: ForgeTask; created: boolean }> {
-    return this.createTaskInternal({ kind: "user", userId: actorUserId }, companyId, input);
+    const created = await this.createTaskInternal({ kind: "user", userId: actorUserId }, companyId, input);
+    if (!created.created || input.startImmediately !== true) return created;
+    // A refused start keeps the durable task in backlog and does not fail creation.
+    const task = await this.executeCommand(actorUserId, created.task.id, "start_planning", { expectedRevision: created.task.revision, automatic: true }).catch(() => this.getTask(actorUserId, created.task.id));
+    return { task, created: true };
   }
 
   async duplicateTask(actorUserId: string, taskId: string, idempotencyKey: string): Promise<ForgeTask> {
@@ -1102,12 +1107,13 @@ export class TaskService {
       roleAgents: source.roleAgents,
       supplementalReview: source.supplementalReview,
       autoApprovePlan: source.autoApprovePlan,
+      startImmediately: true,
       deliveryTarget: source.deliveryTarget,
       source: source.source?.kind === "pull_request" ? { kind: "pull_request", number: source.source.number } : source.source?.kind === "branch" ? { kind: "branch", branch: source.source.branch } : undefined,
       runProjectTests: source.executionControls.runProjectTests,
       visualEvidence: source.executionControls.visualEvidence,
     });
-    return created.created ? this.executeCommand(actorUserId, created.task.id, "start_planning", { expectedRevision: created.task.revision }) : created.task;
+    return created.task;
   }
 
   async updateTaskDetails(actorUserId: string, taskId: string, input: TaskDetailsInput): Promise<ForgeTask> {

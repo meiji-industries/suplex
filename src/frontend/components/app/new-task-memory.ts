@@ -2,6 +2,7 @@ export type NewTaskMemory = {
   projectId?: string;
   deliveryTarget: "local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged";
   autoApprovePlan: boolean;
+  startImmediately: boolean;
   runProjectTests: boolean;
   visualEvidence: "off" | "capture" | "required";
   supplementalReview: boolean;
@@ -11,6 +12,7 @@ export type NewTaskMemory = {
 export const newTaskMemoryDefaults: NewTaskMemory = {
   deliveryTarget: "pull_request_draft",
   autoApprovePlan: false,
+  startImmediately: true,
   runProjectTests: true,
   visualEvidence: "off",
   supplementalReview: false,
@@ -20,6 +22,7 @@ export const newTaskMemoryDefaults: NewTaskMemory = {
 export function newTaskFormSettings(memory: NewTaskMemory): Omit<NewTaskMemory, "projectId"> {
   return {
     autoApprovePlan: memory.autoApprovePlan,
+    startImmediately: memory.startImmediately,
     deliveryTarget: memory.deliveryTarget,
     runProjectTests: memory.runProjectTests,
     visualEvidence: memory.visualEvidence,
@@ -46,6 +49,7 @@ export function readNewTaskMemory(storage: Pick<Storage, "getItem"> = localStora
       ...(typeof value.projectId === "string" ? { projectId: value.projectId } : {}),
       deliveryTarget: deliveryTargets.has(value.deliveryTarget as NewTaskMemory["deliveryTarget"]) ? value.deliveryTarget as NewTaskMemory["deliveryTarget"] : newTaskMemoryDefaults.deliveryTarget,
       autoApprovePlan: value.autoApprovePlan === true,
+      startImmediately: value.startImmediately !== false,
       runProjectTests: value.runProjectTests === true,
       visualEvidence: visualEvidenceValues.has(value.visualEvidence as NewTaskMemory["visualEvidence"]) ? value.visualEvidence as NewTaskMemory["visualEvidence"] : newTaskMemoryDefaults.visualEvidence,
       supplementalReview: value.supplementalReview === true,

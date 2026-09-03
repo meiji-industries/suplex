@@ -12,7 +12,7 @@ function memoryStorage(): Pick<Storage, "getItem" | "setItem"> {
 
 test("round trips all new task settings", () => {
   const storage = memoryStorage();
-  const memory: NewTaskMemory = { projectId: "project-1", deliveryTarget: "merged", autoApprovePlan: true, runProjectTests: false, visualEvidence: "required", supplementalReview: true, roleAgents: { planner: "planner-1", builder: "builder-1", reviewer: "reviewer-1", integrator: "integrator-1" } };
+  const memory: NewTaskMemory = { projectId: "project-1", deliveryTarget: "merged", autoApprovePlan: true, startImmediately: false, runProjectTests: false, visualEvidence: "required", supplementalReview: true, roleAgents: { planner: "planner-1", builder: "builder-1", reviewer: "reviewer-1", integrator: "integrator-1" } };
 
   writeNewTaskMemory(memory, storage);
 
@@ -20,9 +20,9 @@ test("round trips all new task settings", () => {
 });
 
 test("derives all form settings and remembered role agents", () => {
-  const memory: NewTaskMemory = { projectId: "project-1", deliveryTarget: "merged", autoApprovePlan: true, runProjectTests: false, visualEvidence: "required", supplementalReview: true, roleAgents: { builder: "cheap-agent" } };
+  const memory: NewTaskMemory = { projectId: "project-1", deliveryTarget: "merged", autoApprovePlan: true, startImmediately: false, runProjectTests: false, visualEvidence: "required", supplementalReview: true, roleAgents: { builder: "cheap-agent" } };
 
-  expect(newTaskFormSettings(memory)).toEqual({ deliveryTarget: "merged", autoApprovePlan: true, runProjectTests: false, visualEvidence: "required", supplementalReview: true, roleAgents: { builder: "cheap-agent" } });
+  expect(newTaskFormSettings(memory)).toEqual({ deliveryTarget: "merged", autoApprovePlan: true, startImmediately: false, runProjectTests: false, visualEvidence: "required", supplementalReview: true, roleAgents: { builder: "cheap-agent" } });
 });
 
 test("copies remembered role agents into a fresh object", () => {
@@ -37,6 +37,12 @@ test("derives empty role agents from new task defaults", () => {
 
 test("returns defaults when the key is missing", () => {
   expect(readNewTaskMemory(memoryStorage())).toEqual(newTaskMemoryDefaults);
+});
+
+test("defaults start immediately for settings stored before the option", () => {
+  const storage = { getItem: () => JSON.stringify({ deliveryTarget: "merged", autoApprovePlan: true, runProjectTests: false, visualEvidence: "required", supplementalReview: true, roleAgents: {} }) };
+
+  expect(readNewTaskMemory(storage).startImmediately).toBe(true);
 });
 
 test("keeps valid fields and defaults invalid enum values", () => {

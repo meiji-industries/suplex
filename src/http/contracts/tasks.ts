@@ -96,6 +96,7 @@ export const TaskBodySchema = z.object({
   roleAgents: RoleAgentsSchema.optional(),
   supplementalReview: z.boolean().default(false),
   autoApprovePlan: z.boolean().default(false),
+  startImmediately: z.boolean().optional(),
   deliveryTarget: DeliveryTargetSchema.default("pull_request_draft"),
   runProjectTests: z.boolean().default(true),
   visualEvidence: VisualEvidenceSchema.default("off"),

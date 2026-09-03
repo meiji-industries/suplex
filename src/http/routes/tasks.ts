@@ -29,8 +29,8 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   typed.get("/api/tasks", { schema: { querystring: z.object({ archived: z.coerce.boolean().optional() }), response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, undefined, request.query.archived === true) }));
   typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, querystring: z.object({ archived: z.coerce.boolean().optional() }), response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId, request.query.archived === true) }));
   typed.post("/api/companies/:companyId/tasks", { bodyLimit: MAX_TASK_REQUEST_BYTES, schema: { params: CompanyIdParamsSchema, body: TaskBodySchema, response: { 200: TaskResponseSchema, 201: TaskResponseSchema } } }, async (request, reply) => {
-    const { roleAgents: rawRoleAgents, ...body } = request.body;
-    const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, { ...body, ...(rawRoleAgents ? { roleAgents: rawRoleAgents } : {}) });
+    const { roleAgents: rawRoleAgents, startImmediately, ...body } = request.body;
+    const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, { ...body, ...(rawRoleAgents ? { roleAgents: rawRoleAgents } : {}), ...(startImmediately !== undefined ? { startImmediately } : {}) });
     return reply.code(result.created ? 201 : 200).send(result.task);
   });
   typed.get("/api/tasks/:taskId", { schema: { params: TaskIdParamsSchema, querystring: z.object({ refresh: z.coerce.boolean().optional() }), ...taskResponse } }, async (request, reply) => { const task = tasks.getTask(request.forgeUser.id, request.params.taskId); if (request.query.refresh && options.config) void signalIssueGithubPullRequestSync(options.config, task.workflowId).catch(() => undefined); return reply.header("Cache-Control", "private, no-store").send(task); });

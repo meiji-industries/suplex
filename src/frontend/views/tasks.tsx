@@ -52,7 +52,7 @@ function taskListDate(timestamp: string): string {
   if (date.toDateString() === today.toDateString()) return relativeTime(timestamp);
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
-export function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId, onProjectChange, sourceSummary, onSourceSelect, onSourceClear, agents, roleAgents, onRoleAgentChange, onApplyTemplate, title, onTitleChange, description, onDescriptionChange, autoApprovePlan, onAutoApprovePlanChange, deliveryTarget, onDeliveryTargetChange, runProjectTests, onRunProjectTestsChange, visualEvidence, onVisualEvidenceChange, supplementalReview, onSupplementalReviewChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
+export function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId, onProjectChange, sourceSummary, onSourceSelect, onSourceClear, agents, roleAgents, onRoleAgentChange, onApplyTemplate, title, onTitleChange, description, onDescriptionChange, autoApprovePlan, onAutoApprovePlanChange, startImmediately, onStartImmediatelyChange, deliveryTarget, onDeliveryTargetChange, runProjectTests, onRunProjectTestsChange, visualEvidence, onVisualEvidenceChange, supplementalReview, onSupplementalReviewChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   companyStatus: CompanyStatus | undefined;
@@ -72,6 +72,8 @@ export function NewTaskDialog({ open, onOpenChange, companyStatus, projects, pro
   onDescriptionChange: (description: string) => void;
   autoApprovePlan: boolean;
   onAutoApprovePlanChange: (autoApprovePlan: boolean) => void;
+  startImmediately: boolean;
+  onStartImmediatelyChange: (startImmediately: boolean) => void;
   deliveryTarget: "local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged";
   onDeliveryTargetChange: (deliveryTarget: "local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged") => void;
   runProjectTests: boolean;
@@ -145,6 +147,7 @@ export function NewTaskDialog({ open, onOpenChange, companyStatus, projects, pro
                 {taskDeliveryTargetOptions.map(({ value, label }) => <label className="flex items-center gap-1.5 text-xs" key={value}><RadioGroupItem value={value} />{label}</label>)}
               </RadioGroup>
               <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border/60 pt-2.5 text-xs">
+                <label className="flex cursor-pointer items-center gap-2"><Checkbox id="task-start-immediately" checked={startImmediately} onCheckedChange={(checked) => onStartImmediatelyChange(checked === true)} />Start immediately</label>
                 <label className="flex cursor-pointer items-center gap-2"><Checkbox id="task-auto-approve-plan" checked={autoApprovePlan} onCheckedChange={(checked) => onAutoApprovePlanChange(checked === true)} />Auto-approve plan</label>
                 {hasProjectTests ? <label className="flex items-center gap-2"><Checkbox checked={runProjectTests} onCheckedChange={(checked) => onRunProjectTestsChange(checked === true)} />Run project tests</label> : <span className="text-muted-foreground">No project test command configured.</span>}
                 {canSupplementalReview ? <label className="flex items-center gap-2"><Checkbox checked={supplementalReview} onCheckedChange={(checked) => onSupplementalReviewChange(checked === true)} />Second review</label> : null}
@@ -186,6 +189,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const [sourceSummary, setSourceSummary] = useState<TaskSourceSummary>();
   const sourcePrefill = useRef({ title: "", description: "" });
   const [autoApprovePlan, setAutoApprovePlan] = useState(remembered.current.autoApprovePlan);
+  const [startImmediately, setStartImmediately] = useState(remembered.current.startImmediately);
   const [deliveryTarget, setDeliveryTarget] = useState<"local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged">(remembered.current.deliveryTarget);
   const [runProjectTests, setRunProjectTests] = useState(remembered.current.runProjectTests);
   const [visualEvidence, setVisualEvidence] = useState<"off" | "capture" | "required">(remembered.current.visualEvidence);
@@ -207,7 +211,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
   const resetNewTaskSettings = (): void => {
     const settings = newTaskFormSettings(remembered.current);
-    setAutoApprovePlan(settings.autoApprovePlan); setDeliveryTarget(settings.deliveryTarget); setRunProjectTests(settings.runProjectTests); setVisualEvidence(settings.visualEvidence); setSupplementalReview(settings.supplementalReview); setRoleAgentOverrides(settings.roleAgents);
+    setAutoApprovePlan(settings.autoApprovePlan); setStartImmediately(settings.startImmediately); setDeliveryTarget(settings.deliveryTarget); setRunProjectTests(settings.runProjectTests); setVisualEvidence(settings.visualEvidence); setSupplementalReview(settings.supplementalReview); setRoleAgentOverrides(settings.roleAgents);
   };
 
   useEffect(() => { selectedRef.current = selectedState; }, [selectedState]);
@@ -327,22 +331,13 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     if (!companyId || currentCompany?.status !== "active") return;
     setBusy(true); setCreateError(""); setError("");
     try {
-      const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, roleAgents: newTaskRoleAgents, autoApprovePlan, deliveryTarget, runProjectTests, visualEvidence, supplementalReview, ...(source ? { source } : {}), idempotencyKey: crypto.randomUUID() }) });
+      const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, roleAgents: newTaskRoleAgents, autoApprovePlan, startImmediately, deliveryTarget, runProjectTests, visualEvidence, supplementalReview, ...(source ? { source } : {}), idempotencyKey: crypto.randomUUID() }) });
       invalidateTaskList(companyId);
       setTasks((current) => [...current.filter((task) => task.id !== result.id), result]);
-      const memory: NewTaskMemory = { projectId, deliveryTarget, autoApprovePlan, runProjectTests, visualEvidence, supplementalReview, roleAgents: Object.fromEntries(Object.entries(newTaskRoleAgents).filter(([, id]) => typeof id === "string" && agents.some((agent) => agent.id === id))) };
+      const memory: NewTaskMemory = { projectId, deliveryTarget, autoApprovePlan, startImmediately, runProjectTests, visualEvidence, supplementalReview, roleAgents: Object.fromEntries(Object.entries(newTaskRoleAgents).filter(([, id]) => typeof id === "string" && agents.some((agent) => agent.id === id))) };
       remembered.current = memory; writeNewTaskMemory(memory);
       const taskPath = withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId);
-      if (result.allowedCommands.includes("start_planning")) {
-        if (planningUnavailable) { navigate(taskPath); setError(planningUnavailable); return; }
-        try {
-          await readJson<ApiTask>(`/api/tasks/${encodeURIComponent(result.id)}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: result.revision, automatic: true }) });
-        } catch (reason) {
-          navigate(taskPath);
-          setError(reason instanceof Error ? reason.message : "Unable to start planning");
-          return;
-        }
-      }
+      if (startImmediately && result.allowedCommands.includes("start_planning")) { navigate(taskPath); setError(planningUnavailable || "Planning did not start. Use Start planning on the task."); return; }
       navigate(taskPath);
     } catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setCreateError(reason instanceof Error ? reason.message : "Unable to create task"); }
     finally { setBusy(false); }
@@ -502,7 +497,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     finally { setBusy(false); }
   };
 
-  const newTaskDialog = <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); else { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; resetNewTaskSettings(); } }} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setRoleAgentOverrides({}); }} sourceSummary={sourceSummary} onSourceSelect={selectSource} onSourceClear={() => { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => { const next = { ...current, [role]: agentId }; if (role === "reviewer" && !agentId) setSupplementalReview(false); return next; })} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} autoApprovePlan={autoApprovePlan} onAutoApprovePlanChange={setAutoApprovePlan} deliveryTarget={deliveryTarget} onDeliveryTargetChange={setDeliveryTarget} runProjectTests={runProjectTests} onRunProjectTestsChange={setRunProjectTests} visualEvidence={visualEvidence} onVisualEvidenceChange={setVisualEvidence} supplementalReview={supplementalReview} onSupplementalReviewChange={setSupplementalReview} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} onApplyTemplate={applyTemplate} />;
+  const newTaskDialog = <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); else { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; resetNewTaskSettings(); } }} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; setRoleAgentOverrides({}); }} sourceSummary={sourceSummary} onSourceSelect={selectSource} onSourceClear={() => { setSource(undefined); setSourceSummary(undefined); sourcePrefill.current = { title: "", description: "" }; }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => { const next = { ...current, [role]: agentId }; if (role === "reviewer" && !agentId) setSupplementalReview(false); return next; })} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} autoApprovePlan={autoApprovePlan} onAutoApprovePlanChange={setAutoApprovePlan} startImmediately={startImmediately} onStartImmediatelyChange={setStartImmediately} deliveryTarget={deliveryTarget} onDeliveryTargetChange={setDeliveryTarget} runProjectTests={runProjectTests} onRunProjectTestsChange={setRunProjectTests} visualEvidence={visualEvidence} onVisualEvidenceChange={setVisualEvidence} supplementalReview={supplementalReview} onSupplementalReviewChange={setSupplementalReview} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} onApplyTemplate={applyTemplate} />;
 
   if (routeTaskId && loading) return <TaskDetailsSkeleton />;
   if (routeTaskId && !companyId) return <TaskDetailsNotFound companyId="" returnTo={mode} />;

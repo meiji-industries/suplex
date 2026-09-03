@@ -118,6 +118,21 @@ async function waitForClose(closed: Promise<number | null>, timeout: number): Pr
   }
 }
 
+async function waitForOwnedGroupToStop(owned: OwnedProcess | undefined, timeout: number): Promise<boolean> {
+  if (
+    process.platform === "win32"
+    || !owned
+    || owned.processGroup !== owned.pid
+    || !defaultProcessController.isProcessGroupAlive
+  ) return true;
+  const deadline = Date.now() + timeout;
+  while (await defaultProcessController.isProcessGroupAlive(owned.processGroup)) {
+    if (Date.now() >= deadline) return false;
+    await delay(Math.min(25, deadline - Date.now()));
+  }
+  return true;
+}
+
 function record(input: RunCommandInput, result: CommandRunResult): void {
   if (!database || !input.taskId || !input.stepId) return;
   database.authQuery((db) => db.prepare(`INSERT INTO forge_task_command_activity
@@ -169,8 +184,8 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
     () => null,
   );
 
-  const terminate = async (): Promise<void> => {
-    if (!child.pid) return;
+  const terminate = async (): Promise<OwnedProcess | undefined> => {
+    if (!child.pid) return undefined;
     const fallback: OwnedProcess = {
       name: input.command,
       pid: child.pid,
@@ -216,6 +231,7 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
     await signalOwnedProcess(owned, "SIGTERM", controller);
     await delay(TERMINATION_GRACE_MS);
     await signalOwnedProcess(owned, "SIGKILL", controller);
+    return owned;
   };
 
   let exitCode: number | null;
@@ -225,8 +241,9 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
       const outcome = await waitForClose(closed, input.timeout);
       if (outcome === "timeout") {
         timedOut = true;
-        await terminate();
-        const terminated = await waitForClose(closed, POST_TERMINATION_CLOSE_MS);
+        const owned = await terminate();
+        const groupStopped = await waitForOwnedGroupToStop(owned, POST_TERMINATION_CLOSE_MS);
+        const terminated = groupStopped ? await waitForClose(closed, POST_TERMINATION_CLOSE_MS) : "timeout";
         if (terminated === "timeout") {
           cleanupUnproven = true;
           exitCode = null;

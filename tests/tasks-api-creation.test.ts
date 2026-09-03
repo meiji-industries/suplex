@@ -141,6 +141,22 @@ async function createTaskEnvironment(companyName: string) {
   return { app, config, company, project: active, cookie, close: async () => { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); } };
 }
 
+test("task creation starts planning only when requested", async () => {
+  const t = await createTaskEnvironment("Immediate start Company");
+  try {
+    const headers = { cookie: t.cookie, origin: t.config.reachableAddress };
+    const immediately = await t.app.inject({ method: "POST", url: `/api/companies/${t.company.id}/tasks`, headers, payload: { projectId: t.project.id, title: "Immediate task", description: "# Details", idempotencyKey: "immediate-start-0001", startImmediately: true } });
+    expect(immediately.statusCode).toBe(201);
+    expect(immediately.json().phase).not.toBe("backlog");
+    expect(immediately.json().allowedCommands).not.toContain("start_planning");
+
+    const backlog = await t.app.inject({ method: "POST", url: `/api/companies/${t.company.id}/tasks`, headers, payload: { projectId: t.project.id, title: "Backlog task", description: "# Details", idempotencyKey: "backlog-start-0001", startImmediately: false } });
+    expect(backlog.statusCode).toBe(201);
+    expect(backlog.json()).toMatchObject({ phase: "backlog" });
+    expect(backlog.json().allowedCommands).toContain("start_planning");
+  } finally { await t.close(); }
+});
+
 test("task creation accepts a multi-megabyte image attachment", async () => {
   const t = await createTaskEnvironment("Large Image Company");
   try {

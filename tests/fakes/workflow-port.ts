@@ -15,7 +15,7 @@ export function createWorkflowPortFake(options: WorkflowPortFakeOptions): IssueW
   const projectState = options.projectState ?? ((state: IssueWorkflowState): IssueWorkflowState => state);
   const nextState = (workflowId: string, input: StartPlanningInput | PlanCommandInput, update: Partial<IssueWorkflowState>): IssueWorkflowState => {
     const current = states.get(workflowId) ?? initialStateFixture();
-    const state = IssueWorkflowStateSchema.parse({ ...current, ...update, workflowId, companyId: options.companyId, projectId: options.projectId, projectRevisionId: options.projectRevisionId, revision: input.expectedRevision + 1, lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
+    const state = IssueWorkflowStateSchema.parse({ ...current, ...update, workflowId, companyId: options.companyId, projectId: options.projectId, projectRevisionId: current.projectRevisionId, revision: input.expectedRevision + 1, lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
     states.set(workflowId, state);
     return projectState(state);
   };

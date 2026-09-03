@@ -21,6 +21,10 @@ export function reconnectDelayMs(attempt: number): number {
   return [250, 500, 1_000, 2_000, 5_000][Math.min(attempt, 4)] ?? 5_000;
 }
 
+export function statusForClosedReason(reason: string): "taken_over" | "ended" {
+  return reason.includes("taken over") ? "taken_over" : "ended";
+}
+
 export function LivePaneTerminal({ taskId, role, paneId, attachCommand, onInput }: { taskId: string; role: string; paneId: string | null; attachCommand: string; onInput: (input: PaneInput) => Promise<void> }): JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -65,7 +69,7 @@ export function LivePaneTerminal({ taskId, role, paneId, attachCommand, onInput 
         const message = JSON.parse(event.data) as { type?: string; cols?: number; rows?: number; reason?: string; message?: string };
         if (message.type === "open") { attempt = 0; setTerminalStatus("live"); if (!document.hidden) terminal.focus(); }
         else if (message.type === "size" && typeof message.cols === "number" && typeof message.rows === "number" && (terminal.cols !== message.cols || terminal.rows !== message.rows)) terminal.resize(message.cols, message.rows);
-        else if (message.type === "closed") setTerminalStatus(message.reason === "detached" || message.reason === "taken_over" ? "taken_over" : "ended");
+        else if (message.type === "closed") setTerminalStatus(statusForClosedReason(message.reason ?? ""));
         else if (message.type === "error") console.warn("Herdr terminal bridge error", message.message);
       };
       socket.onclose = (event) => {

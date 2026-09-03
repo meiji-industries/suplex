@@ -29,6 +29,16 @@ const TaskPaneInputBodySchema = z.union([
   z.object({ keys: z.array(z.string()).max(16) }).strict(),
 ]);
 
+export function originAllowed(origin: string | undefined, host: string | undefined, reachableAddress: string | undefined): boolean {
+  if (!origin) return true;
+  try {
+    const requestOrigin = new URL(origin);
+    return requestOrigin.origin === (reachableAddress ? new URL(reachableAddress).origin : undefined) || requestOrigin.host === host;
+  } catch {
+    return false;
+  }
+}
+
 const taskPane: FastifyPluginAsync<TaskPaneRoutesOptions> = async (app, options) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const herdr = options.herdr ?? new CliHerdrClient();
@@ -44,7 +54,7 @@ const taskPane: FastifyPluginAsync<TaskPaneRoutesOptions> = async (app, options)
     schema: { params: TaskPaneInputParamsSchema, querystring: TaskPaneTerminalQuerySchema },
   }, (socket, request) => {
     const origin = Array.isArray(request.headers.origin) ? request.headers.origin[0] : request.headers.origin;
-    if (origin && options.config && origin !== new URL(options.config.reachableAddress).origin) return socket.close(4403, "origin");
+    if (!originAllowed(origin, request.headers.host, options.config?.reachableAddress)) return socket.close(4403, "origin");
     let task: ReturnType<TaskService["getTask"]>;
     try {
       task = options.tasks.getTask(request.forgeUser.id, request.params.taskId);

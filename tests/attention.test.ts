@@ -53,3 +53,16 @@ test("other repair blockers still show the no-progress card", () => {
     { actions: [{ command: "retry_development", label: "Resume the Builder turn" }] },
   )).toMatchObject({ kind: "no_progress", title: "Automatic repair does not make progress" });
 });
+
+test("verification blockers use a stable title and pending actions end on a word", () => {
+  expect(attentionCardFromBlocker(
+    { code: "verification_failed", summary: "pnpm test did not complete successfully.\nFailures:\nFAIL unit tests/company-clear.test.ts\nOutput tail:\nSqliteError" },
+    { pendingAction: "Review the verification result and decide whether the task can continue after the base branch fails." },
+  )).toMatchObject({
+    title: "Verification failed after the base merge",
+    evidence: expect.arrayContaining([{ kind: "text", ref: "Failures:\nFAIL unit tests/company-clear.test.ts" }]),
+  });
+  expect(attentionCardFromBlocker(undefined, {
+    pendingAction: "Review the verification result and decide whether the task can continue after the base branch fails.",
+  }).title).toBe("Review the verification result and decide whether the task can continue after");
+});

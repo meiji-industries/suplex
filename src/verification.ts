@@ -8,6 +8,7 @@ const logger = new StructuredLogger();
 const runtimeNodeBinEnvironmentVariable = "FORGE_PINNED_VERIFICATION_RUNTIME_NODE_BIN";
 const runtimeNodePathPrelude = `export PATH="$${runtimeNodeBinEnvironmentVariable}:$PATH"; `;
 const tail = (value: string): string => value.length > 64 * 1024 ? value.slice(-64 * 1024) : value;
+const stripAnsi = (value: string): string => value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "");
 const truncateBytes = (value: string, maxBytes: number): string => {
   const bytes = Buffer.from(value, "utf8");
   const marker = "…";
@@ -23,12 +24,14 @@ const truncateBytes = (value: string, maxBytes: number): string => {
   }
   return `${marker}${suffix}`;
 };
-const boundedEvidence = (commands: VerificationCommandEvidence[]): VerificationCommandEvidence[] => commands.map((command) => ({ ...command, stdout: truncateBytes(command.stdout, 8 * 1024), stderr: truncateBytes(command.stderr, 8 * 1024) }));
+const boundedEvidence = (commands: VerificationCommandEvidence[]): VerificationCommandEvidence[] => commands.map((command) => ({ ...command, stdout: truncateBytes(stripAnsi(command.stdout), 8 * 1024), stderr: truncateBytes(stripAnsi(command.stderr), 8 * 1024) }));
 const failureSummary = (display: string, stdout: string, stderr: string): string => {
-  const lines = `${stdout}\n${stderr}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const detail = [...lines].reverse().find((line) => /^(?:error(?::|\[)|fatal:|failures:|test result: FAILED|thread .+ panicked|command timed out)/i.test(line));
-  const outputTail = truncateBytes(lines.slice(-40).join("\n"), 3 * 1024);
-  return `${display} did not complete successfully${detail ? `: ${detail.slice(0, 240)}` : ""}. Check the project's verification command.${outputTail ? `\nOutput tail:\n${outputTail}` : ""}`;
+  const lines = stripAnsi(`${stdout}\n${stderr}`).split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !/^(?:\(node:\d+\).*?(?:warning|deprecation)|.*FastifyDeprecation.*|.*ExperimentalWarning.*|Use node --trace.*)$/i.test(line));
+  const details = lines.filter((line) => /^(?:FAIL\b|[✗×]\s|AssertionError\b|Error:|TypeError\b|SqliteError\b|Failed Tests\s+\d+|Tests\s+\d+\s+failed\b|error(?::|\[)|fatal:|failures:|test result: FAILED|thread .+ panicked|command timed out)/i.test(line)).slice(0, 12);
+  const failures = details.length ? `Failures:\n${details.join("\n")}` : "";
+  const tailBudget = Math.max(0, 3 * 1024 - Buffer.byteLength(failures, "utf8"));
+  const outputTail = truncateBytes(lines.slice(-20).join("\n"), tailBudget);
+  return `${display} did not complete successfully. Check the project's verification command.${failures ? `\n${failures}` : ""}${outputTail ? `\nOutput tail:\n${outputTail}` : ""}`;
 };
 
 export function commandArgv(command: string): readonly string[] | undefined {
@@ -124,11 +127,15 @@ export async function runPinnedVerification(input: PinnedVerificationInput, depe
       let signal: string | null = null;
       let timedOut = false;
       try {
+        const environment = withWorktreeMiseTrust(guard.env, input.worktreePath);
         const result = await execute(argv[0]!, [...argv.slice(1)], {
           cwd: input.worktreePath,
           env: {
-            ...withWorktreeMiseTrust(guard.env, input.worktreePath),
+            ...environment,
             [runtimeNodeBinEnvironmentVariable]: dirname(process.execPath),
+            NO_COLOR: environment.NO_COLOR ?? "1",
+            FORCE_COLOR: environment.FORCE_COLOR ?? "0",
+            CI: environment.CI ?? "1",
           },
           timeout,
           maxBuffer: 4 * 1024 * 1024,
@@ -144,7 +151,7 @@ export async function runPinnedVerification(input: PinnedVerificationInput, depe
         signal = typeof failure.signal === "string" ? failure.signal : null;
         timedOut = failure.killed === true || failure.code === "ETIMEDOUT";
       }
-      return { command: display, argv: [...argv], startedAt, finishedAt: now(), exitCode, signal, timedOut, stdout: truncateBytes(String(redact(tail(stdout))), 8 * 1024), stderr: truncateBytes(String(redact(tail(stderr))), 8 * 1024) };
+      return { command: display, argv: [...argv], startedAt, finishedAt: now(), exitCode, signal, timedOut, stdout: truncateBytes(stripAnsi(String(redact(tail(stdout)))), 8 * 1024), stderr: truncateBytes(stripAnsi(String(redact(tail(stderr)))), 8 * 1024) };
     };
     const failed = (command: VerificationCommandEvidence): boolean => command.timedOut || command.exitCode !== 0;
     const result = (command: VerificationCommandEvidence): VerificationResult => ({

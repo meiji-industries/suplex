@@ -11,6 +11,7 @@ export type AttentionCondition =
 
 export interface AttentionBlocker {
   category?: unknown;
+  code?: unknown;
   summary?: unknown;
   actions?: unknown;
 }
@@ -23,19 +24,36 @@ export interface AttentionCardContext {
   mergeDecision?: unknown;
 }
 
-function shortTitle(value: string): string {
-  return value.trim().replaceAll("_", " ").slice(0, 80) || "Needs attention";
+const blockerTitles: Record<string, string> = {
+  verification_failed: "Verification failed after the base merge",
+  verification_timed_out: "Verification did not finish in time",
+  verification_evidence_too_large: "Verification output was too large",
+};
+
+function pendingActionTitle(value: string | null | undefined): string {
+  const sentence = value?.trim().split(".", 1)[0]?.trim() ?? "";
+  if (!sentence) return "Needs attention";
+  if (sentence.length <= 80) return sentence;
+  const end = sentence.lastIndexOf(" ", 80);
+  return end > 0 ? sentence.slice(0, end) : "Needs attention";
+}
+
+function failureEvidence(summary: string): string | undefined {
+  const match = summary.match(/(?:^|\n)(Failures:\n[\s\S]*?)(?=\nOutput tail:|$)/);
+  return match?.[1];
 }
 
 function withRestartLabel(card: AttentionCard): AttentionCard {
   return { ...card, primaryAction: { ...card.primaryAction, label: RESTART_LABELS[card.primaryAction.command] ?? commandLabel(card.primaryAction.command) } };
 }
 
-function genericCard(summary: string | null | undefined, context: AttentionCardContext): AttentionCard {
+function genericCard(summary: string | null | undefined, context: AttentionCardContext, blockerCode?: string): AttentionCard {
   const primary = context.actions?.find((action) => !action.destructive);
   const cancel = context.actions?.find((action) => action.command === "cancel_issue");
   const explanation = summary || context.pendingAction || "This task needs your input.";
-  return { kind: "generic", title: shortTitle(context.pendingAction || "Needs attention"), explanation, evidence: [{ kind: "text", ref: explanation }], primaryAction: primary ? { command: primary.command, label: primary.label, ...(primary.requiresNote ? { requiresNote: true } : {}) } : { command: "continue_work", label: "Open the pane and answer" }, ...(cancel ? { secondaryAction: { command: cancel.command, label: cancel.label, destructive: true } } : {}) };
+  const code = blockerCode ?? context.step ?? "";
+  const failure = failureEvidence(explanation);
+  return { kind: "generic", title: blockerTitles[code] ?? pendingActionTitle(context.pendingAction), explanation, evidence: [{ kind: "text", ref: explanation }, ...(failure ? [{ kind: "text" as const, ref: failure }] : [])], primaryAction: primary ? { command: primary.command, label: primary.label, ...(primary.requiresNote ? { requiresNote: true } : {}) } : { command: "continue_work", label: "Open the pane and answer" }, ...(cancel ? { secondaryAction: { command: cancel.command, label: cancel.label, destructive: true } } : {}) };
 }
 
 function decision(value: unknown): AttentionCondition | undefined {
@@ -98,7 +116,7 @@ export function attentionCardFromBlocker(blocker: AttentionBlocker | undefined, 
   if (summary?.startsWith("Automatic repair is not making progress") || summary?.startsWith("Automatic continuation is not making progress") || category === "agent_exhausted" || category === "verification_unrecoverable") return attentionCardFor({ kind: "no_progress", failureClass: "code_failure", signature: summary || "Automatic repair needs your input." });
   const resume = context.actions?.find((action) => action.label === "Resume the Builder turn" || action.label === "Resume the Planner turn");
   if (resume) return attentionCardFor({ kind: "missing_turn_outcome", role: resume.label.includes("Planner") ? "lead" : "developer", dirty: false });
-  return genericCard(summary, context);
+  return genericCard(summary, context, typeof blocker?.code === "string" ? blocker.code : undefined);
 }
 
 export function attentionCardFor(condition: AttentionCondition, overrides?: Partial<AttentionCard>): AttentionCard {

@@ -35,6 +35,9 @@ test("runs setup before verification and returns bounded redacted evidence", asy
     execute: async (command, args, options) => {
       expect(options.env.MISE_TRUSTED_CONFIG_PATHS).toContain("/worktrees/task-1");
       expect(options.env[runtimeNodeBinEnvironmentVariable]).toBe(dirname(process.execPath));
+      expect(options.env.NO_COLOR).toBe("1");
+      expect(options.env.FORCE_COLOR).toBe("0");
+      expect(options.env.CI).toBe("1");
       expect(options.maxBuffer).toBe(4 * 1024 * 1024);
       calls.push(`${command} ${args.join(" ")}`);
       return { stdout: `Bearer gho_secret ${"x".repeat(70_000)}`, stderr: "" };
@@ -71,6 +74,20 @@ test("runs mise tasks as configured", async () => {
   expect(result.outcome).toBe("passed");
 });
 
+test("keeps caller display settings for every verification command", async () => {
+  const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "pnpm install", verificationCommand: "pnpm test" }, {
+    guard: { directory: "/tmp/forge-test-guard", env: { ...process.env, NO_COLOR: "caller-no-color", FORCE_COLOR: "caller-force-color", CI: "caller-ci" }, cleanup: async () => {} },
+    execute: async (_command, _args, options) => {
+      expect(options.env.NO_COLOR).toBe("caller-no-color");
+      expect(options.env.FORCE_COLOR).toBe("caller-force-color");
+      expect(options.env.CI).toBe("caller-ci");
+      return { stdout: "", stderr: "" };
+    },
+  });
+
+  expect(result.outcome).toBe("passed");
+});
+
 test("returns a typed failure without running verification after setup failure", async () => {
   const calls: string[] = [];
   const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "pnpm install", verificationCommand: "pnpm test" }, {
@@ -82,9 +99,30 @@ test("returns a typed failure without running verification after setup failure",
   });
   expect(calls).toEqual(["sh"]);
   expect(result).toMatchObject({ outcome: "failed", code: "verification_failed" });
-  expect(result.summary).toContain("pnpm install did not complete successfully: error: setup failed");
+  expect(result.summary).toContain("pnpm install did not complete successfully.");
+  expect(result.summary).toContain("Failures:\nerror: setup failed");
   expect(result.summary).toContain("Check the project's verification command.");
   expect(result.summary).toContain("Output tail:\nbuilding\nerror: setup failed");
+});
+
+test("keeps Vitest failures ahead of ANSI and Fastify warning noise", async () => {
+  const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "pnpm install", verificationCommand: "pnpm test" }, {
+    guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
+    execute: async (_command, args) => {
+      if (args[1] === `${runtimeNodePathPrelude}pnpm install`) return { stdout: "", stderr: "" };
+      throw Object.assign(new Error("tests failed"), {
+        code: 1,
+        stdout: "\u001B[31mFAIL unit tests/company-clear.test.ts\u001B[0m\n  SqliteError: no such table: probe_workflows",
+        stderr: "(node:123) [DEP0169] DeprecationWarning: FastifyDeprecation warning\nUse node --trace-deprecation ...\nFastifyDeprecation: disableRequestLogging",
+      });
+    },
+  });
+
+  expect(result.summary).toContain("FAIL unit tests/company-clear.test.ts");
+  expect(result.summary).toContain("SqliteError: no such table: probe_workflows");
+  expect(result.summary).not.toContain("\u001B");
+  expect(result.summary).not.toContain("FastifyDeprecation");
+  expect(result.commands[1]?.stdout).not.toContain("\u001B");
 });
 
 test("includes a redacted bounded output tail when final verification fails", async () => {

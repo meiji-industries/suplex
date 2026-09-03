@@ -16,6 +16,7 @@ import { evidencePointer, humanBlocker } from "./state-transitions.js";
 import * as stateTransitions from "./state-transitions.js";
 import { observeGithubPullRequest } from "./activity-proxies.js";
 import { TERMINAL_PHASES } from "../../issue-phases.js";
+import { ReleaseFailureCodeSchema, releaseFailureCopy, releaseFailureOwner, type ReleaseFailureCode } from "../../release-failures.js";
 import type { IssueWorkflowContext, StateRef } from "./context.js";
 
 export type RepairFailureClass = "transient_infrastructure" | "rate_limited" | "credential_missing" | "code_failure" | "ci_failure" | "merge_conflict_mechanical" | "product_ambiguity" | "no_progress";
@@ -299,6 +300,19 @@ function retryScope(ctx: IssueWorkflowContext, command: string): string | null {
   return ctx.state.acceptanceId ?? ctx.state.releaseId ?? null;
 }
 
+function releaseFailureCode(state: IssueWorkflowState): ReleaseFailureCode | null {
+  if (!("releaseFailureCode" in state)) return null;
+  const parsed = ReleaseFailureCodeSchema.safeParse(state.releaseFailureCode);
+  return parsed.success ? parsed.data : null;
+}
+
+function releaseFailureBlockerCategory(code: ReleaseFailureCode): "provider_authentication" | "provider_ambiguity" | "provider_connectivity_exhausted" | "unsafe_recovery" {
+  if (releaseFailureOwner[code] !== "GitHub") return "unsafe_recovery";
+  if (code === "authentication-required") return "provider_authentication";
+  if (code === "invalid-provider-response" || code === "ambiguous-provider-state") return "provider_ambiguity";
+  return "provider_connectivity_exhausted";
+}
+
 export function canAutoRetryDeliveryBlocker(ctx: IssueWorkflowContext): boolean {
   if (runExecution.current().autoActionsHalted()) return false;
   const command = retryOnlyBlockerCommand(ctx);
@@ -315,9 +329,11 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
     const command = retryOnlyBlockerCommand(ctx);
     if (command === "retry_target_base_reconciliation" && ctx.state.targetBaseBlockerRetryable === false) return false;
     if (command) {
+      const code = releaseFailureCode(ctx.state);
       const summary = command === "retry_target_base_reconciliation"
         ? "The base branch moved. The automatic update did not succeed. You can retry the update."
-        : ctx.state.deliveryRepairBlockerSummary ?? "The provider failure continued after the automatic retries.";
+        : code ? releaseFailureCopy[code] : ctx.state.deliveryRepairBlockerSummary ?? "The provider failure continued after the automatic retries.";
+      const category = code ? releaseFailureBlockerCategory(code) : "provider_connectivity_exhausted";
       // Record the exhausted blocker once; re-projecting it on every loop pass is a hot loop.
       // humanBlocker() returns null without evidence, so the projected blocker cannot be the guard.
       if (ctx.state.owner === "human" && ctx.state.pendingAction === summary && ctx.state.allowedCommands.includes(command)) return false;
@@ -327,7 +343,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
         owner: "human",
         allowedCommands: [command, "cancel_issue"],
         pendingAction: summary,
-        blocker: humanBlocker("provider_connectivity_exhausted", summary, [{ command, label: "Retry now", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(ctx.state.deliveryRepairBlockerEvidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? undefined, "attention-evidence")),
+        blocker: humanBlocker(category, summary, [{ command, label: "Retry now", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(ctx.state.deliveryRepairBlockerEvidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? undefined, "attention-evidence")),
         stateChangedAt: new Date().toISOString(),
         lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
       });

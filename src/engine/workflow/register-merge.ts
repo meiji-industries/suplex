@@ -116,7 +116,7 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
         (result) => result.leadExecutionId,
       );
       await ctx.withStateMutation(() => {
-        const productDecision = true && plan.disposition === "product_decision";
+        const productDecision = plan.disposition === "product_decision";
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: productDecision ? "human" : "lead", allowedCommands: productDecision ? ["send_planner_note", "resolve_merge_conflict", "cancel_issue"] : ["resolve_merge_conflict", "cancel_issue"], pendingAction: productDecision ? plan.question! : "Forge resolves the conflict", blocker: productDecision ? stateTransitions.humanBlocker("member_decision", plan.question!, [{ command: "send_planner_note", label: "Send a note to the Planner", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(plan.planArtifactId, "merge-conflict-plan")) : null, mergeDecision: productDecision ? { question: plan.question!, choices: plan.choices!, recommendedChoiceId: plan.recommendedChoiceId! } : null, mergeResolutionPlanId: productDecision ? null : plan.planId, mergeResolutionPlanArtifactId: productDecision ? null : plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       });
     } catch (error) {
@@ -198,13 +198,13 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
 export function registerMergeReconciliationHandler(ctx: IssueWorkflowContext): void {
   const validateReconcileMerge = (rawInput: contracts.StartPlanningInput): contracts.StartPlanningInput => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
-    const adoptedLiveHead = true && ctx.state.step === "delivery_ready" && ctx.state.mergeOutcome === "changed_head";
+    const adoptedLiveHead = ctx.state.step === "delivery_ready" && ctx.state.mergeOutcome === "changed_head";
     if (command.expectedRevision !== ctx.state.revision || (ctx.state.step !== "manual_merge" && !adoptedLiveHead)) throw new Error("Merge reconciliation is not available in the current phase");
     return command;
   };
   setHandler(issueUpdates.reconcile_merge, ctx.guarded(async (rawInput: any) => {
     validateReconcileMerge(rawInput);
-    if (true && ctx.state.step === "delivery_ready" && ctx.state.mergeOutcome === "changed_head") return ctx.state;
+    if (ctx.state.step === "delivery_ready" && ctx.state.mergeOutcome === "changed_head") return ctx.state;
     return ctx.reconcileMergeTurn();
   }, "reconcile_merge"), { validator(rawInput) { validateReconcileMerge(rawInput); } });
 }

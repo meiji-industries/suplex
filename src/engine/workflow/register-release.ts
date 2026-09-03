@@ -68,7 +68,7 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
       await ctx.project();
       return ctx.state;
     }
-    const adoptedHead = true ? { targetBaseSha: result.targetBaseSha ?? ctx.state.targetBaseSha, resultCommit: result.headSha, resultTree: result.headTree } : {};
+    const adoptedHead = { targetBaseSha: result.targetBaseSha ?? ctx.state.targetBaseSha, resultCommit: result.headSha, resultTree: result.headTree };
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...adoptedHead, revision: ctx.state.revision + 1, ...at("ci_waiting"), owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Forge waits for CI", releaseFailureSummary: null, releaseRetryAt: null, releaseOperationAttempt: result.attempt, releaseId: result.releaseId, releaseRepository: result.repository, baseBranch: result.baseBranch, pullRequestNumber: result.pullRequestNumber, pullRequestUrl: result.pullRequestUrl, expectedHeadSha: result.headSha, expectedHeadTree: result.headTree, ciAttempt: 0, ciNextPollAt: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     return ctx.state;

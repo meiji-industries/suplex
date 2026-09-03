@@ -202,7 +202,7 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
   };
   const executeLeadTurn = async (leadSessionRef?: string, revisionNote?: { artifactId: string }, memberResponse?: { artifactId: string }, operatorNotes?: string[], resumeDevelopment = false): Promise<IssueWorkflowState> => {
     const leadResult = await agentActivities(true).runLeadPlanning({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision, ...(leadSessionRef ? { leadSessionRef } : {}), ...(revisionNote ? { revisionNoteArtifactId: revisionNote.artifactId } : {}), ...(memberResponse ? { memberResponseArtifactId: memberResponse.artifactId } : {}), ...(operatorNotes?.length ? { operatorNotes } : {}) });
-    if (true && ctx.currentState().step === "cancelled") return ctx.currentState();
+    if (ctx.currentState().step === "cancelled") return ctx.currentState();
     const acceptedRevision = ctx.state.revision + 1;
     const route = routeLeadResult({ kind: leadResult.leadOutputKind }, { supplementalReview: ctx.input.supplementalReview, reviewerConfigured: Boolean(ctx.input.roleProfiles.reviewer) });
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...leadResult, revision: acceptedRevision, ...at(route.step), owner: route.owner, allowedCommands: route.allowedCommands, pendingAction: route.pendingAction, blocker: route.step === "planning" ? humanBlocker("member_decision", "Your decision is necessary", [{ command: "resolve_decision_blocker", label: "Resolve the decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(leadResult.leadOutputArtifactId, "decision-blocker")) : null, lastEventId: `${ctx.state.workflowId}:${acceptedRevision}`, planRevision: ctx.state.revision, supplementalReviewUsed: false, planBlockerSubject: leadResult.blockerSubject ?? null });
@@ -334,7 +334,7 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
     if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
     if (runExecution.current().acceptedInterrupt !== issueUpdates.send_planner_note) await recordNote(command);
     ctx.markCommandProcessed(command.commandId);
-    if (true && isBlocked(ctx.state) && ctx.state.mergeDecision) {
+    if (isBlocked(ctx.state) && ctx.state.mergeDecision) {
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Forge applies your decision", mergeResolutionPlanArtifactId: null, mergeDecision: null, pendingPlannerNotes: "note" in command ? [command.note] : [], blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return resolveMergeConflict(ctx, { expectedRevision: ctx.state.revision, actorUserId: command.actorUserId, commandId: `${ctx.state.workflowId}:decision-resolve:${ctx.state.revision}` });

@@ -395,7 +395,7 @@ describe("target-base reconciliation contracts", () => {
       database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET result_commit = ?, result_tree = ? WHERE id = 'developer-1'").run(repository.head, priorTree));
       await expect(activities.reconcileTargetBase(revalidatedInput)).resolves.toMatchObject({ outcome: "revalidated", developerExecutionId: "developer-1", headSha: mergedHead, headTree: mergedTree, deliveryArtifact: { id: delivery.id, kind: "forward-merge-delivery" } });
       expect(database.authQuery((db) => db.prepare("SELECT result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = 'developer-1'").get())).toEqual({ resultCommit: mergedHead, resultTree: mergedTree });
-      await expect(activities.pushDeliveryBranch({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", branchName: "issue/task-1", commitSha: repository.head })).rejects.toMatchObject({ type: "stale-reviewed-revision", message: "The reviewed revision does not match a completed The Builder works on the task" });
+      await expect(activities.pushDeliveryBranch({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", branchName: "issue/task-1", commitSha: repository.head })).rejects.toMatchObject({ type: "stale-reviewed-revision", message: "The reviewed revision does not match a completed build" });
       expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_developer_executions WHERE task_id = 'task-1'").get())).toEqual({ count: 1 });
     } finally {
       database.close();

@@ -147,7 +147,7 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
     ? await activityProxies.findRecoverableDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId })
     : null;
   if (reconcileOnly && !recovered) {
-    await ctx.recordHandlerNoop("retry_development", "No recoverable The Builder works on the task exists; Forge did not start a retry.");
+    await ctx.recordHandlerNoop("retry_development", "No recoverable build exists. Forge did not start a retry.");
     return ctx.state;
   }
   const planRevision = recovered?.planRevision ?? ctx.state.planRevision ?? ctx.state.revision;

@@ -156,7 +156,7 @@ async function main(): Promise<void> {
         };
         await writeFile(join(destination, "forge-backup", "restore-handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`, { mode: 0o600 });
         process.stdout.write(rebuild ? `Restored projection state (${rebuild.rebuilt} issue snapshots, ${companies} companies); ` : `Restored database; projection rebuild blocked (${rebuildFailure?.code}), ${companies} companies reconciled; `);
-        process.stdout.write(`reconciled ${reconciliation.developerExecutions.length} The Builder works on the tasks and ${reconciliation.providers.length} provider releases; `);
+        process.stdout.write(`reconciled ${reconciliation.developerExecutions.length} builds and ${reconciliation.providers.length} provider releases; `);
       } finally { restoredDatabase.close(); }
       process.stdout.write(`backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"} (${result.restoreDurationMs}ms); see forge-backup/restore-handoff.json\n`);
     }

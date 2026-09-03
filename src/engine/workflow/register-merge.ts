@@ -105,12 +105,12 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
     return ctx.state;
   };
   if (command.expectedRevision !== ctx.state.revision || ctx.state.step !== "merge_conflict_resolving") return block("Merge-conflict resolution is not available in the current phase");
-  if ((ctx.state.developerAttempt ?? 0) > 20) return block("Developer attempt count was corrupted; review the last real The Builder works on the task before retrying.", 3);
+  if ((ctx.state.developerAttempt ?? 0) > 20) return block("Developer attempt count was corrupted. Review the last real build before retrying.", 3);
   if ((!ctx.state.forwardMergeId || !ctx.state.mergeResolutionPlanArtifactId) && ctx.state.githubPullRequestMergeable === "CONFLICTING") {
     await ctx.runTargetBaseCheckpoint("pre_release");
     if (!isBlocked(ctx.state) || ctx.state.owner === "human" || !ctx.state.forwardMergeId) return ctx.state;
   }
-  if (!ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.leadSessionRef || !ctx.state.leadOutputArtifactId || !ctx.state.branchName || !ctx.state.forwardMergeId || !ctx.state.forwardMergePriorHead || !ctx.state.forwardMergePriorTree || !ctx.state.forwardMergeTargetBaseSha || !ctx.state.forwardMergeConflictArtifact || typeof ctx.state.forwardMergeConflictFileCount !== "number" || !ctx.state.targetBaseSha) return block("An owned The Builder works on the task and forward-merge evidence are required");
+  if (!ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.leadSessionRef || !ctx.state.leadOutputArtifactId || !ctx.state.branchName || !ctx.state.forwardMergeId || !ctx.state.forwardMergePriorHead || !ctx.state.forwardMergePriorTree || !ctx.state.forwardMergeTargetBaseSha || !ctx.state.forwardMergeConflictArtifact || typeof ctx.state.forwardMergeConflictFileCount !== "number" || !ctx.state.targetBaseSha) return block("An owned build and forward-merge evidence are required");
   const planRevision = ctx.state.planRevision ?? ctx.state.revision;
   if (!ctx.state.mergeResolutionPlanArtifactId) {
     await ctx.withStateMutation(() => {

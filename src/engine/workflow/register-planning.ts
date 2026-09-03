@@ -427,6 +427,6 @@ export function registerPlanningHandlersReject(ctx: IssueWorkflowContext): void 
     const command = PlanCommandInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (!["approval", "development", "delivery_ready", "delivery_reviewed", "repair_required"].includes(ctx.state.step)) throw new Error("Plan revision is not available in the current phase");
-    if (ctx.state.step === "development" && !ctx.state.developerExecutionId) throw new Error("Active The Builder works on the task is unavailable for cancellation");
+    if (ctx.state.step === "development" && !ctx.state.developerExecutionId) throw new Error("The active build is unavailable for cancellation");
   } });
 }

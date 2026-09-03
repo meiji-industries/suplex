@@ -875,7 +875,7 @@ export async function createGitCommandGuard(runtimeRoot: string, name = "develop
   const configuredGitBin = process.env.FORGE_GIT_BIN?.trim();
   const resolvedGitBin = configuredGitBin ? undefined : await runCommand({ taskId: null, stepId: null, command: "which", args: ["git"] });
   const gitBin = configuredGitBin || (resolvedGitBin?.exitCode === 0 ? resolvedGitBin.stdout.trim() : "");
-  if (!gitBin) throw new WorktreeFailure("git-unavailable", "Git is unavailable for guarded The Builder works on the task");
+  if (!gitBin) throw new WorktreeFailure("git-unavailable", "Git is unavailable for the guarded build");
   const gitGuard = `#!/bin/sh
 command=
 for arg in "$@"; do

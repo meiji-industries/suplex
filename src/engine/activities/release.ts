@@ -211,13 +211,13 @@ function resolveReleaseContext(db: Database.Database, input: ReleaseContextInput
 }
 
 export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities {
-  const { database, createHash, randomBytes, ApplicationFailure, GithubReleaseFailure, PublishReleaseActivityResultSchema, githubRelease, artifacts, release, pinnedProjectRevision } = ctx;
+  const { database, createHash, randomBytes, ApplicationFailure, GithubReleaseFailure, PublishReleaseActivityResultSchema, githubRelease, artifacts, release } = ctx;
   return {
     async pushDeliveryBranch(input) {
       try {
       const context = database.authQuery((db) => resolveReleaseContext(db, { kind: "push", taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, branchName: input.branchName, subjectCommit: input.commitSha }));
-      if (!context) throw new GithubReleaseFailure("stale-reviewed-revision", "The reviewed revision does not match a completed The Builder works on the task");
-      let pinned: ReturnType<typeof pinnedProjectRevision>;
+      if (!context) throw new GithubReleaseFailure("stale-reviewed-revision", "The reviewed revision does not match a completed build");
+      let pinned: ReturnType<ActivityContext["pinnedProjectRevision"]>;
       try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "The task project configuration is incomplete"); }
       await release.pushBranch({ repository: pinned.repository, worktreePath: context.worktreePath, branchName: input.branchName, commitSha: input.commitSha });
         return { repository: pinned.repository, branchName: input.branchName, commitSha: input.commitSha };

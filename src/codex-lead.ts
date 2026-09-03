@@ -337,7 +337,7 @@ export class AgentService {
       JOIN forge_companies c ON c.id = t.company_id
       LEFT JOIN forge_artifacts b ON b.id = t.brief_artifact_id AND b.kind = 'task-brief'
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId) as PlanningRow | undefined);
-    if (!row) throw new AgentFailure("scoped-input-missing", "The Planner writes the plan evidence is unavailable");
+    if (!row) throw new AgentFailure("scoped-input-missing", "Plan evidence is unavailable");
     const configuration = this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input));
     row.normalized_json = JSON.stringify(configuration);
     const completed = await this.completedPlanningResult(input);
@@ -387,7 +387,7 @@ export class AgentService {
       const placeholders = profileIds.map(() => "?").join(",");
       return db.prepare(`SELECT id, name, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority, capacity FROM forge_profiles WHERE id IN (${placeholders})`).all(...profileIds) as ProfileSettings[];
     });
-    if (!input.roleProfiles.planner) throw new AgentFailure("profile-unavailable", "The Planner writes the plan requires a configured Lead profile");
+    if (!input.roleProfiles.planner) throw new AgentFailure("profile-unavailable", "Planning requires a configured Lead profile");
     const resumeSessionRef = input.resume?.leadSessionRef ?? input.leadSessionRef ?? input.resumeLeadSessionRef;
     const pinned = resumeSessionRef ? this.database.authQuery((db) => db.prepare("SELECT e.profile_id AS profileId, COALESCE(e.provider, p.provider, 'codex') AS provider, e.resolved_model AS model, e.resolved_reasoning_level AS reasoningLevel, e.resolved_service_priority AS servicePriority FROM forge_agent_executions e LEFT JOIN forge_profiles p ON p.id = e.profile_id WHERE e.session_ref = ? AND e.company_id = ? AND e.role = 'planner' AND e.resolved_model IS NOT NULL ORDER BY e.started_at DESC LIMIT 1").get(resumeSessionRef, input.companyId) as { profileId: string | null; provider: string; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const persisted = pinned;
@@ -866,7 +866,7 @@ export class AgentService {
     } catch (error) {
       const cancelled = runtime.signal?.aborted === true;
       const expectedFailure = error instanceof AgentFailure && !cancelled;
-      const failure = cancelled ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("delivery-review-failed", "Codex The Planner reviews the delivery failed");
+      const failure = cancelled ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("delivery-review-failed", "The Codex delivery review failed");
       evidenceLines.push(JSON.stringify({ type: "forge.review-turn-failed", code: failure.code, message: redact(error instanceof Error ? error.message : String(error)) }));
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const code = failure.code === "cancelled" ? "cancelled" : failure.code === "correction-exhausted" ? "correction-exhausted" : deliveryBlockCode(failure);

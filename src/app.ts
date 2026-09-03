@@ -1,4 +1,5 @@
 import cookie from "@fastify/cookie";
+import websocket from "@fastify/websocket";
 import { serializerCompiler, validatorCompiler } from "@fastify/type-provider-zod";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { Logger } from "pino";
@@ -68,6 +69,7 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   void app.register(cookie);
+  void app.register(websocket, { options: { maxPayload: 1 << 20 } });
   installHttpErrorHandlers(app);
   app.addHook("onResponse", (request, reply) => {
     const statusCode = reply.statusCode;

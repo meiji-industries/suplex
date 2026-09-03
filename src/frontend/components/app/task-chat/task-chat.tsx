@@ -51,7 +51,7 @@ function persistLivePaneHeight(height: number): void {
   }
 }
 
-type LivePane = { role: string; text: string; agentName: string; status: string | null; attachCommand: string };
+type LivePane = { role: string; paneId: string | null; agentName: string; status: string | null; attachCommand: string };
 type LivePaneStatus = { label: string; dotClass: string };
 type LivePaneResponse = { panes?: LivePane[] };
 
@@ -138,7 +138,7 @@ export function LivePaneDock({ task, onRestart }: { task: ApiTask; onRestart: (c
   return selectedPane ? <section className="sticky bottom-0 z-10 flex flex-col bg-[#1e1e2e]" aria-label="Live agent output" style={{ height }}><div role="slider" tabIndex={0} aria-label="Resize live agent output" aria-orientation="vertical" aria-valuemin={minimumLivePaneHeight} aria-valuemax={maximumLivePaneHeight} aria-valuenow={height} aria-valuetext={`${height} pixels`} className="flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[#cdd6f4]" title="Drag to resize live output" onKeyDown={adjustResize} onPointerDown={startResize} onPointerMove={updateResize} onPointerUp={(event) => endResize(event, true)} onPointerCancel={(event) => endResize(event, false)}><span aria-hidden="true" className="h-px w-8 bg-[#6c7086]" /></div><Tabs className="min-h-0 flex-1 gap-0" value={selectedPane.role} onValueChange={setSelectedRole}><div className="flex shrink-0 items-center gap-1 overflow-x-auto bg-[#1e1e2e] px-1 pt-1" aria-label="Live pane tabs"><TabsList className="h-8 gap-1 rounded-none bg-transparent p-0">{panes.map((pane) => {
     const status = livePaneStatus(pane.status);
     return <TabsTrigger aria-label={`${pane.role}: ${status.label}`} className="group h-7 flex-none gap-1.5 rounded-md px-2 text-[13px] font-medium text-[#a6adc8] hover:bg-[#313244] hover:text-[#cdd6f4] data-active:bg-[#313244] data-active:text-[#cdd6f4] data-active:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.08)]" key={pane.role} title={status.label} value={pane.role}><span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${status.dotClass}`} />{pane.role}</TabsTrigger>;
-  })}</TabsList>{restartable ? <Button size="xs" variant="outline" onClick={() => void onRestart(retryCommand && task.allowedCommands.includes(retryCommand) ? retryCommand : undefined)}>Restart {selectedPane.role}</Button> : null}</div><TabsContent className="mt-0 min-h-0" value={selectedPane.role}><LivePaneTerminal role={selectedPane.role} text={selectedPane.text} attachCommand={selectedPane.attachCommand} onInput={(input) => sendPaneInput(selectedPane.role, input)} /></TabsContent></Tabs></section> : null;
+  })}</TabsList>{restartable ? <Button size="xs" variant="outline" onClick={() => void onRestart(retryCommand && task.allowedCommands.includes(retryCommand) ? retryCommand : undefined)}>Restart {selectedPane.role}</Button> : null}</div><TabsContent className="mt-0 min-h-0" value={selectedPane.role}><LivePaneTerminal taskId={task.id} role={selectedPane.role} paneId={selectedPane.paneId} attachCommand={selectedPane.attachCommand} onInput={(input) => sendPaneInput(selectedPane.role, input)} /></TabsContent></Tabs></section> : null;
 }
 
 

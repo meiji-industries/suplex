@@ -31,8 +31,8 @@ describe("live pane dock sizing", () => {
 
 describe("task chat UI", () => {
   it("keeps the selected live pane through refreshes and falls back to the first pane", () => {
-    const planner = { role: "planner", text: "plan", agentName: "task-planner", status: "working", attachCommand: "herdr agent attach task-planner" };
-    const builder = { role: "builder", text: "build", agentName: "task-builder", status: "idle", attachCommand: "herdr agent attach task-builder" };
+    const planner = { role: "planner", paneId: "pane-plan", agentName: "task-planner", status: "working", attachCommand: "herdr agent attach task-planner" };
+    const builder = { role: "builder", paneId: "pane-build", agentName: "task-builder", status: "idle", attachCommand: "herdr agent attach task-builder" };
     const panes = [planner, builder];
     expect(selectedLivePane(panes, undefined)).toBe(planner);
     expect(selectedLivePane([...panes], "builder")).toBe(builder);

@@ -16,8 +16,8 @@ async function fixture() {
   const now = new Date().toISOString();
   database.authQuery((db) => {
     db.pragma("foreign_keys = OFF");
-    db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, agent_name, status, created_at, updated_at) VALUES ('planner', 'task', 'planner', 1, 1, 'codex', 'task-planner', 'working', ?, ?)").run(now, now);
-    db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, agent_name, status, created_at, updated_at) VALUES ('builder', 'task', 'builder', 1, 1, 'codex', 'task-builder', 'ready', ?, ?)").run(now, now);
+    db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, pane_id, agent_name, status, created_at, updated_at) VALUES ('planner', 'task', 'planner', 1, 1, 'codex', 'pane-planner', 'task-planner', 'working', ?, ?)").run(now, now);
+    db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, pane_id, agent_name, status, created_at, updated_at) VALUES ('builder', 'task', 'builder', 1, 1, 'codex', 'pane-builder', 'task-builder', 'ready', ?, ?)").run(now, now);
   });
   const app = Fastify();
   app.decorateRequest("forgeUser", undefined as never);
@@ -30,7 +30,7 @@ async function fixture() {
   await app.register(taskPane, {
     tasks: { getTask: () => ({ companyId: "company" }) } as never,
     database,
-    herdr: { readAgent: vi.fn(async () => "pane text"), sendText, sendKeys, attachCommand: (name) => `herdr agent attach ${name}` },
+    herdr: { sendText, sendKeys, attachCommand: (name) => `herdr agent attach ${name}` },
   });
   await app.ready();
   return { root, database, app, sendText, sendKeys };
@@ -62,6 +62,19 @@ test("pane input rejects an unknown role and invalid input shapes", async () => 
     expect(unknownRole.statusCode).toBe(404);
     expect(both.statusCode).toBe(400);
     expect(neither.statusCode).toBe(400);
+  } finally {
+    await value.app.close();
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("pane reads come from SQLite without calling Herdr", async () => {
+  const value = await fixture();
+  try {
+    const response = await value.app.inject({ method: "GET", url: "/api/tasks/task/pane" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().panes).toEqual(expect.arrayContaining([expect.objectContaining({ role: "planner", paneId: "pane-planner" })]));
   } finally {
     await value.app.close();
     value.database.close();

@@ -102,12 +102,11 @@ test("terminal WebSocket streams frames and forwards client controls", async () 
     expect(messages[2]).toMatchObject({ data: Buffer.from("frame"), binary: true });
     client.send(Buffer.from("input"));
     client.send(JSON.stringify({ type: "resize", cols: 120, rows: 40 }));
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(input).toHaveBeenCalledWith(Buffer.from("input"));
-    expect(resize).toHaveBeenCalledWith(120, 40);
+    await vi.waitFor(() => expect(input).toHaveBeenCalledWith(Buffer.from("input")));
+    await vi.waitFor(() => expect(resize).toHaveBeenCalledWith(120, 40));
     client.close();
     await new Promise<void>((resolve) => client.once("close", resolve));
-    expect(release).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
     database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET pane_id = NULL WHERE id = 'builder'").run());
     const missing = new WebSocket(`${address.replace("http", "ws")}/api/tasks/task/pane/builder/terminal`);
     const closed = await new Promise<{ message: string; code: number }>((resolve, reject) => {

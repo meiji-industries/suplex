@@ -53,6 +53,17 @@ exec tsx src/engine/host.ts
 description = "Exit 0 when no engine activities are in flight"
 run = '''
 db=${FORGE_DATABASE_PATH:-.forge/data/forge.sqlite}
+port=${CONDUCTOR_PORT:-4111}
+cutoff=$(date -u -v-2M +%Y-%m-%dT%H:%M:%SZ)
+listening=$(lsof -ti:"$port" -sTCP:LISTEN 2>/dev/null || true)
+if [ -z "$listening" ]; then
+  stale=$(sqlite3 "$db" "select workflow_id||': '||activity from forge_engine_activities where heartbeat_at < '$cutoff'" 2>/dev/null || true)
+  if [ -n "$stale" ]; then
+    echo "STALE — removing activities from a stopped stack:"
+    echo "$stale"
+    sqlite3 "$db" "delete from forge_engine_activities where heartbeat_at < '$cutoff'"
+  fi
+fi
 busy=$(sqlite3 "$db" "select workflow_id||': '||activity from forge_engine_activities" 2>/dev/null || true)
 if [ -n "$busy" ]; then echo "BUSY — activities in flight:"; echo "$busy"; exit 1; fi
 echo "IDLE — safe to restart"

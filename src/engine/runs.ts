@@ -63,6 +63,17 @@ type CommandExecutionContext = RunExecutionContext & { deferredProjections?: Def
 
 const DUPLICATE_PROJECTION_WINDOW_MS = 10_000;
 const DUPLICATE_PROJECTION_LIMIT = 20;
+export const ENGINE_ACTIVITY_STALE_AFTER_MS = 120_000;
+
+export function isStaleEngineActivity(heartbeatAt: string, now = Date.now()): boolean {
+  const heartbeat = Date.parse(heartbeatAt);
+  return !Number.isFinite(heartbeat) || now - heartbeat > ENGINE_ACTIVITY_STALE_AFTER_MS;
+}
+
+export function deleteStaleEngineActivities(database: ForgeDatabase, now = Date.now()): number {
+  const cutoff = new Date(now - ENGINE_ACTIVITY_STALE_AFTER_MS).toISOString();
+  return database.authTransaction((db) => db.prepare("DELETE FROM forge_engine_activities WHERE heartbeat_at < ?").run(cutoff).changes);
+}
 
 export class ProjectionBurstGuard {
   private readonly timestampsByState = new Map<string, number[]>();

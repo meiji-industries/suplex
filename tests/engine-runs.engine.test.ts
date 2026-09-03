@@ -8,7 +8,7 @@ import { ActivityFailure, ApplicationFailure, CancelledFailure, isCancellation }
 import { durableCommand, executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/engine/service.js";
 import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema, type IssueProjectionEvent, type IssueWorkflowInput, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
 import type { LeadPlanningResult } from "../src/lead-contracts.js";
-import { ProjectionBurstGuard, Wakeable } from "../src/engine/runs.js";
+import { deleteStaleEngineActivities, isStaleEngineActivity, ProjectionBurstGuard, Wakeable } from "../src/engine/runs.js";
 import { createEngineHarness, engineFixture, ImmediateClock, type EngineHarness } from "./helpers/engine-harness.js";
 import { withWorktreeCommands } from "../src/engine/workflow/state-transitions.js";
 
@@ -34,6 +34,20 @@ test("projection burst guard skips duplicate shipping projections after twenty r
   expect(guard.shouldSkip(skipped, 1_000)).toBe(true);
   expect(guard.shouldLogSkip(skipped)).toBe(true);
   expect(guard.shouldLogSkip(skipped)).toBe(false);
+});
+
+test("stale engine activities are ignored after two minutes", async () => {
+  const harness = await createEngineHarness();
+  try {
+    const now = Date.parse("2026-09-03T22:00:00.000Z");
+    harness.database.authQuery((db) => db.prepare("INSERT INTO forge_engine_activities (id, workflow_id, activity, started_at, heartbeat_at) VALUES (?, ?, ?, ?, ?)").run("stale-activity", "workflow-stale", "runCiRepair", new Date(now - 180_000).toISOString(), new Date(now - 180_000).toISOString()));
+    expect(isStaleEngineActivity(new Date(now - 120_001).toISOString(), now)).toBe(true);
+    expect(isStaleEngineActivity(new Date(now - 120_000).toISOString(), now)).toBe(false);
+    expect(deleteStaleEngineActivities(harness.database, now)).toBe(1);
+    expect(harness.database.authQuery((db) => (db.prepare("SELECT count(*) AS count FROM forge_engine_activities").get() as { count: number }).count)).toBe(0);
+  } finally {
+    await harness.stop();
+  }
 });
 
 function workflowInput(issueId: string, continuationState?: IssueWorkflowInput["continuationState"]): Omit<IssueWorkflowInput, "workflowId"> {

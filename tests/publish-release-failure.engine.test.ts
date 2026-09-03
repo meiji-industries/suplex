@@ -72,6 +72,45 @@ test("repeated stale publication of the same reviewed commit stops the automatic
   } finally { await h.stop(); }
 });
 
+test("repeated blocked branch pushes stop the automatic chain", async () => {
+  let reviewAttempts = 0;
+  const h = await createEngineHarness({
+    reviewDelivery: async (input) => ({
+      outcome: "completed",
+      attemptId: `review-attempt-${reviewAttempts++}`,
+      correctionAttempts: 0,
+      subject: input.subject,
+      review: {
+        reviewId: `review-${reviewAttempts}`,
+        leadExecutionId: "lead-review",
+        leadSessionRef: "lead-session",
+        opinionArtifactId: "review-opinion",
+        evidenceArtifactId: "review-evidence",
+        opinion: "approved",
+        summary: "Matches plan",
+        repairPlan: null,
+        findings: [],
+        supersedesReviewId: null,
+        reviewArtifact: { artifactId: "review-artifact", companyId: engineFixture.companyId, kind: "delivery-review", sha256: engineFixture.sha256, byteSize: 1, mimeType: "application/json" },
+      },
+    }),
+    pushDeliveryBranch: async () => { throw ApplicationFailure.nonRetryable("GitHub CLI authentication is unavailable", "authentication-required", { code: "authentication-required", summary: "GitHub CLI authentication is unavailable" }); },
+  });
+  h.seedTask("blocked-push-auto-chain");
+  const workflowId = h.workflowId("blocked-push-auto-chain");
+  const continuationState = {
+    ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "blocked-push-auto-chain", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
+    ...at("delivery_ready"), revision: 5, owner: "lead" as const, allowedCommands: ["review_delivery" as const, "cancel_issue" as const], pendingAction: "Reviewing the latest changes", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/blocked-push-auto-chain", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "developer-evidence", releaseRepository: "acme/forge", lastEventId: `${workflowId}:5`,
+  };
+  try {
+    const started = await h.startContinuation("blocked-push-auto-chain", continuationState);
+    const state = await h.settle(started.workflowId, (value) => isBlocked(value) && value.owner === "human" && value.releaseFailureCode === "authentication-required");
+    expect(state).toMatchObject({ step: "delivery_ready", owner: "human", releaseFailureCode: "authentication-required", pendingAction: "GitHub CLI authentication is unavailable", blocker: expect.objectContaining({ category: "agent_exhausted" }) });
+    expect(h.calls.get("publishRelease") ?? 0).toBe(0);
+    expect(h.calls.get("pushDeliveryBranch") ?? 0).toBeLessThanOrEqual(3);
+  } finally { await h.stop(); }
+});
+
 test("a resumed interrupted publish returns to delivery review without pushing", async () => {
   const projected: unknown[] = [];
   const h = await createEngineHarness({

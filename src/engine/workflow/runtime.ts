@@ -155,12 +155,12 @@ const AUTO_CHAINED_COMMANDS: Partial<Record<IssueStep, IssueWorkflowState["allow
 // (plan conflict -> required -> resolve throws -> plan conflict ...) and each pass has a new revision.
 const haltedChains = new Set<string>();
 const chainKey = (workflowId: string, command: string) => `${workflowId}:${command}`;
-const stalePublishCycles = new Map<string, number>();
-const stalePublishCycleKey = (workflowId: string, resultCommit: string) => `${workflowId}:${resultCommit.toLowerCase()}`;
+const blockedPublishCycles = new Map<string, number>();
+const blockedPublishCycleKey = (workflowId: string, resultCommit: string) => `${workflowId}:${resultCommit.toLowerCase()}`;
 
 export function clearAutomaticChainHalt(workflowId: string): void {
   for (const key of haltedChains) if (key.startsWith(`${workflowId}:`)) haltedChains.delete(key);
-  for (const key of stalePublishCycles.keys()) if (key.startsWith(`${workflowId}:`)) stalePublishCycles.delete(key);
+  for (const key of blockedPublishCycles.keys()) if (key.startsWith(`${workflowId}:`)) blockedPublishCycles.delete(key);
 }
 const AUTO_RETRY_BLOCKER_DELAYS = [30_000, 120_000, 300_000] as const;
 const AUTO_RETRY_BLOCKER_COMMANDS = new Set(["review_delivery", "repair_delivery", "repair_ci", "final_review", "accept_delivery", "reconcile_acceptance", "reconcile_merge", "retry_target_base_reconciliation"]);
@@ -222,11 +222,11 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   if (chained.command === "publish_draft"
     && typeof resultCommit === "string"
     && ctx.state.step === "delivery_ready"
-    && ctx.state.releaseFailureCode === "stale-reviewed-revision"
+    && ctx.state.releaseStatus === "blocked"
     && ctx.state.resultCommit?.toLowerCase() === resultCommit.toLowerCase()) {
-    const cycleKey = stalePublishCycleKey(ctx.state.workflowId, resultCommit);
-    const cycles = (stalePublishCycles.get(cycleKey) ?? 0) + 1;
-    stalePublishCycles.set(cycleKey, cycles);
+    const cycleKey = blockedPublishCycleKey(ctx.state.workflowId, resultCommit);
+    const cycles = (blockedPublishCycles.get(cycleKey) ?? 0) + 1;
+    blockedPublishCycles.set(cycleKey, cycles);
     if (cycles >= 2) {
       const summary = ctx.state.releaseFailureSummary ?? "The exact approved Developer revision is unavailable";
       haltedChains.add(chainKey(ctx.state.workflowId, "review_delivery"));

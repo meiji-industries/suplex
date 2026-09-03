@@ -46,7 +46,7 @@ test("pull request cards offer Fix CI only for actionable failing checks", () =>
   const props = { busy: false, onRefresh: async () => undefined, onMarkReady: async () => undefined, onRepairCi: async () => undefined };
   expect(renderToStaticMarkup(createElement(PullRequestCard, { task, ...props }))).toContain("Fix CI");
   const busyHtml = renderToStaticMarkup(createElement(PullRequestCard, { task, ...props, busy: true }));
-  expect(busyHtml).toContain("Starting…");
+  expect(busyHtml).toContain("Forge starts");
   expect(busyHtml).toContain('disabled=""');
   expect(renderToStaticMarkup(createElement(PullRequestCard, { task: { ...task, githubPullRequest: { ...task.githubPullRequest!, checks: { ...task.githubPullRequest!.checks, failing: 0, successful: 1 } } }, ...props }))).not.toContain("Fix CI");
   expect(renderToStaticMarkup(createElement(PullRequestCard, { task: { ...task, allowedCommands: [] }, ...props }))).not.toContain("Fix CI");
@@ -111,7 +111,7 @@ test("properties show delivery and execution settings", () => {
   const enabledHtml = render({ executionControls: { runProjectTests: true, supplementalReview: true, visualEvidence: "off" } });
   expect(enabledHtml).toContain("Run project tests</dt><dd>Enabled</dd>");
   expect(enabledHtml).toContain("Second review</dt><dd>Enabled</dd>");
-  expect(render({ lastHandlerError: { command: "supplemental_review", reason: "Second review did not finish: The reviewer could not be started.", at: "2026-08-24T00:00:00.000Z" } })).toContain("Second review</dt><dd>Not completed — Second review did not finish: The reviewer could not be started.</dd>");
+  expect(render({ lastHandlerError: { command: "supplemental_review", reason: "Second review did not finish: The reviewer could not be started.", at: "2026-08-24T00:00:00.000Z" } })).toContain("Second review</dt><dd>Not complete. Second review did not finish: The reviewer could not be started.</dd>");
   expect(render({ deliveryTarget: undefined, executionControls: undefined })).toContain("Delivery</dt><dd>Not specified</dd>");
   for (const label of ["Status", "Project", "Approval", "Prompts", "Plan review", "Next action", "Sync", "Created"]) expect(enabledHtml).toContain(`<dt class=\"text-muted-foreground\">${label}</dt>`);
 });

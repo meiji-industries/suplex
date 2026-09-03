@@ -449,17 +449,39 @@ export class DeveloperService {
     // Workflow state may contain a deterministic turn ID from an interrupted
     // attempt. It is not proof that a matching execution was ever persisted.
     // The ledger is the source of truth for the worktree owner.
-    const prior = this.database.authQuery((db) => db.prepare(`SELECT id, status, session_ref, branch_name, worktree_path, delivery_artifact_id, evidence_artifact_id
+    const candidates = this.database.authQuery((db) => db.prepare(`SELECT id, branch_name AS branchName, worktree_path AS worktreePath, result_commit AS resultCommit, result_tree AS resultTree, delivery_artifact_id AS deliveryArtifactId, evidence_artifact_id AS evidenceArtifactId
       FROM forge_developer_executions
       WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND branch_name = ?
-        AND (status IN ('completed', 'blocked') OR (status = 'failed' AND (failure_code LIKE 'merge-%' OR failure_code LIKE 'merge_%')))
-      ORDER BY COALESCE(finished_at, started_at) DESC, rowid DESC LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.branchName) as { id: string; status: string; session_ref: string | null; branch_name: string; worktree_path: string; delivery_artifact_id: string | null; evidence_artifact_id: string | null } | undefined);
+      ORDER BY COALESCE(finished_at, started_at) DESC, rowid DESC`).all(input.taskId, input.companyId, input.workflowId, input.branchName) as Array<{ id: string; branchName: string; worktreePath: string; resultCommit: string | null; resultTree: string | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null }>);
     const planRow = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'merge-conflict-plan'").get(input.planArtifactId, input.companyId) as { storage_path: string; sha256: string } | undefined);
-    if (!prior || !planRow || !["completed", "blocked", "failed"].includes(prior.status) || prior.session_ref !== input.developerSessionRef || prior.branch_name !== input.branchName || (input.worktreePath && prior.worktree_path !== input.worktreePath)) {
-      throw new AgentFailure("merge-resolution-identity-mismatch", "Merge-conflict resolution coordinates do not match the owned Developer worktree");
+    if (!planRow) throw new AgentFailure("merge-resolution-identity-mismatch", "Merge-conflict resolution coordinates do not match the owned Developer worktree");
+    let prior: { id: string; worktreePath: string; deliveryArtifactId: string | null; evidenceArtifactId: string | null } | undefined;
+    for (const candidate of candidates) {
+      if (!candidate.resultCommit || (input.worktreePath && candidate.worktreePath !== input.worktreePath)) continue;
+      try {
+        const worktreePath = await scopedRepository(this.config.worktreeRoot, candidate.worktreePath);
+        const [commit, branch, commitTree, tree] = await Promise.all([
+          git(["rev-parse", "--verify", `${candidate.resultCommit}^{commit}`], worktreePath),
+          git(["symbolic-ref", "--short", "HEAD"], worktreePath),
+          git(["rev-parse", "--verify", `${candidate.resultCommit}^{tree}`], worktreePath),
+          candidate.resultTree ? git(["rev-parse", "--verify", `${candidate.resultTree}^{tree}`], worktreePath) : Promise.resolve(null),
+        ]);
+        if (commit.toLowerCase() !== candidate.resultCommit.toLowerCase() || branch !== input.branchName || (candidate.resultTree && (tree?.toLowerCase() !== candidate.resultTree.toLowerCase() || commitTree.toLowerCase() !== candidate.resultTree.toLowerCase()))) continue;
+        prior = { id: candidate.id, worktreePath, deliveryArtifactId: candidate.deliveryArtifactId, evidenceArtifactId: candidate.evidenceArtifactId };
+        break;
+      } catch {
+        // A ledger row is not delivery identity until its git objects resolve.
+      }
     }
-    input.developerExecutionId = prior.id;
-    input.worktreePath ||= prior.worktree_path;
+    if (prior) {
+      input.developerExecutionId = prior.id;
+      input.worktreePath = prior.worktreePath;
+    }
+    if (!input.worktreePath) {
+      const configuration = this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input));
+      const [repositoryPath, worktreeRoot] = await Promise.all([scopedRepository(this.config.repositoryRoot, configuration.repositoryPath), scopedRepository(this.config.worktreeRoot, configuration.worktreeRoot)]);
+      input.worktreePath = (await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha: input.targetBaseSha, branchName: input.branchName })).worktreePath;
+    }
     try {
       const inspected = await this.worktrees.inspectDelivery(input.worktreePath, input.branchName);
       if (inspected.branchName !== input.branchName) throw new AgentFailure("merge-resolution-identity-mismatch", "The owned Developer worktree branch does not match the recorded branch");
@@ -531,7 +553,7 @@ export class DeveloperService {
       if (afterVerification.branchName !== input.branchName || afterVerification.headSha.toLowerCase() !== gitState.headSha.toLowerCase() || afterVerification.treeSha.toLowerCase() !== gitState.treeSha.toLowerCase() || afterVerification.dirtyState !== "clean" || afterParents.length !== 3 || afterParents[1]?.toLowerCase() !== input.priorHead.toLowerCase() || afterParents[2]?.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new AgentFailure("merge_state_ownership_mismatch", "Pinned verification changed the forward-merge delivery");
       if (verification.outcome !== "passed") throw new AgentFailure(verification.code ?? "verification_failed", verification.summary);
       await this.artifacts.putArtifact(input.companyId, "merge-conflict-resolution", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(report, null, 2), "utf8") });
-      const deliveryArtifact = await this.artifacts.putArtifact(input.companyId, "forward-merge-delivery", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkId: input.forwardMergeId, priorHead: input.priorHead, priorTree: conflict.priorTree, targetBaseSha: input.targetBaseSha, resultCommit: gitState.headSha, resultTree: gitState.treeSha, developerExecutionId: executionId, supersedesDeveloperExecutionId: input.developerExecutionId, supersededDeliveryArtifactId: prior.delivery_artifact_id, supersededEvidenceArtifactId: prior.evidence_artifact_id, verificationArtifactId: verificationArtifactRecord.id, verification }, null, 2), "utf8") });
+      const deliveryArtifact = await this.artifacts.putArtifact(input.companyId, "forward-merge-delivery", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkId: input.forwardMergeId, priorHead: input.priorHead, priorTree: conflict.priorTree, targetBaseSha: input.targetBaseSha, resultCommit: gitState.headSha, resultTree: gitState.treeSha, developerExecutionId: executionId, supersedesDeveloperExecutionId: input.developerExecutionId, supersededDeliveryArtifactId: prior?.deliveryArtifactId ?? null, supersededEvidenceArtifactId: prior?.evidenceArtifactId ?? null, verificationArtifactId: verificationArtifactRecord.id, verification }, null, 2), "utf8") });
       const evidence = await this.artifacts.putArtifact(input.companyId, "agent-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
       const now = this.now().toISOString();
       const activityResult = { developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, resultCommit: gitState.headSha, resultTree: gitState.treeSha, deliveryArtifactId: deliveryArtifact.id, evidenceArtifactId: evidence.id, verificationArtifactId: verificationArtifactRecord.id, summary: report.summary };

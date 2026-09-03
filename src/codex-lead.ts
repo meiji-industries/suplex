@@ -99,16 +99,20 @@ export function repairCoveragePrompt(raw: string | null): string {
   return `Repair coverage: ${untouched.map((entry) => `${entry.findingId} names ${entry.path}; the repair commit did not touch it.`).join(" ")}`;
 }
 
-async function readDeliveryGitEvidence(worktreePath: string, targetBaseSha: string, subjectCommit: string, repositoryPath: string): Promise<{ targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }> {
+async function readDeliveryGitEvidence(worktreePath: string, targetBaseSha: string, subjectCommit: string, subjectTree: string, repositoryPath: string): Promise<{ targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }> {
   const run = async (args: string[], maxBuffer: number): Promise<string> => (await execFileAsync("git", args, { cwd: worktreePath, timeout: 20_000, maxBuffer })).stdout;
-  const [status, branch, head, tree, diff, commit] = await Promise.all([
+  const [status, branch, head, tree, resolvedCommit, resolvedTree, commitTree, diff, commit] = await Promise.all([
     run(["status", "--porcelain=v1", "--untracked-files=all"], 64 * 1024),
     run(["symbolic-ref", "--short", "HEAD"], 4 * 1024),
     run(["rev-parse", "HEAD"], 4 * 1024),
     run(["rev-parse", "HEAD^{tree}"], 4 * 1024),
+    run(["rev-parse", "--verify", `${subjectCommit}^{commit}`], 4 * 1024),
+    run(["rev-parse", "--verify", `${subjectTree}^{tree}`], 4 * 1024),
+    run(["rev-parse", "--verify", `${subjectCommit}^{tree}`], 4 * 1024),
     run(["diff", "--no-ext-diff", "--binary", `${targetBaseSha}..${subjectCommit}`], 2 * 1024 * 1024),
     run(["show", "--no-ext-diff", "--format=fuller", "--stat", "--summary", subjectCommit], 128 * 1024),
   ]);
+  if (resolvedCommit.trim().toLowerCase() !== subjectCommit.toLowerCase() || resolvedTree.trim().toLowerCase() !== subjectTree.toLowerCase() || commitTree.trim().toLowerCase() !== subjectTree.toLowerCase()) throw new Error("The recorded delivery commit and tree do not identify the same git revision");
   const instructionPaths = [
     join(repositoryPath, "AGENTS.md"),
     join(repositoryPath, "CLAUDE.md"),
@@ -774,7 +778,7 @@ export class AgentService {
         this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
         this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.deliveryStoragePath, sha256: context.deliverySha256 }).then((bytes) => bytes.toString("utf8")),
         this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.evidenceStoragePath, sha256: context.evidenceSha256 }).then((bytes) => bytes.toString("utf8")),
-        readDeliveryGitEvidence(worktreePath, targetBaseSha, subjectCommit, repositoryPath),
+        readDeliveryGitEvidence(worktreePath, targetBaseSha, subjectCommit, subjectTree, repositoryPath),
       ]);
     } catch (error) {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("delivery-revision-changed", "The exact Developer delivery evidence could not be verified");
@@ -792,7 +796,7 @@ export class AgentService {
           EXISTS (
             SELECT 1 FROM forge_delivery_repairs p
             WHERE p.review_id = r.id AND p.task_id = r.task_id AND p.company_id = r.company_id AND p.workflow_id = r.workflow_id
-              AND p.status = 'completed' AND p.result_commit = ? AND p.result_tree = ?
+              AND p.result_commit = ? AND p.result_tree = ?
               AND p.developer_execution_id = ? AND p.delivery_artifact_id = ? AND p.evidence_artifact_id = ?
           ) AS repaired
         FROM forge_delivery_reviews r

@@ -300,7 +300,7 @@ test("a thrown developer turn finalizes its execution and conflict claims are no
 });
 
 
-test("merge resolution adopts a resolved worktree owned by a failed merge attempt", async () => {
+test("merge resolution reuses a git-confirmed blocked delivery and skips an absent commit", async () => {
   const value = await fixture();
   const repository = join(value.root, "repo");
   const worktree = join(value.root, "worktrees", "task_1");
@@ -318,6 +318,8 @@ test("merge resolution adopts a resolved worktree owned by a failed merge attemp
     await command("git", ["commit", "-m", "base change"], repository);
     const targetBaseSha = await command("git", ["rev-parse", "HEAD"], repository);
     await command("git", ["merge", "--no-ff", targetBaseSha, "-m", "resolved merge"], worktree);
+    const resolvedCommit = await command("git", ["rev-parse", "HEAD"], worktree);
+    const resolvedTree = await command("git", ["rev-parse", "HEAD^{tree}"], worktree);
     const priorTree = await command("git", ["rev-parse", `${priorHead}^{tree}`], worktree);
     const plan = await artifacts.putArtifact("company_1", "merge-conflict-plan", { filename: "plan.md", mimeType: "text/markdown", bytes: Buffer.from("Resolve it.") });
     const conflict = await artifacts.putArtifact("company_1", "forward-merge-conflict", { filename: "conflict.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkpoint: "pre_release", expectedBaseSha: targetBaseSha, observedBaseSha: targetBaseSha, priorHead, priorTree, conflictFiles: ["MARKER.md"], combinedDiff: "", priorCommitSummary: "", baseCommitSummary: "", commandEvidence: { command: "git diff --cc --no-ext-diff", complete: true } })) });
@@ -326,10 +328,13 @@ test("merge resolution adopts a resolved worktree owned by a failed merge attemp
       for (const artifact of [plan, conflict]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
       db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, conflict_artifact_id, conflict_artifact_sha256, conflict_file_count, updated_at) VALUES ('merge_1', 'task_1', 'company_1', ?, ?, ?, NULL, NULL, 'conflict', '[\"MARKER.md\"]', ?, 'workflow_1', 'revision_1', 'pre_release', ?, ?, ?, 1, ?)").run(targetBaseSha, targetBaseSha, priorHead, now, priorTree, conflict.id, conflict.sha256, now);
       db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, status, created_at, updated_at) VALUES ('session_developer', 'task_1', 'builder', 1, 1, 'codex', 'ready', ?, ?)").run(now, now);
-      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, failure_code) VALUES ('developer_prior', 'task_1', 'company_1', 'workflow_1', 1, 1, 'failed', ?, ?, ?, 'session_developer', ?, ?, 'merge-resolution-incomplete')").run(branchName, worktree, targetBaseSha, now, now);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree) VALUES ('developer_prior', 'task_1', 'company_1', 'workflow_1', 1, 1, 'blocked', ?, ?, ?, 'session_developer', ?, ?, ?, ?)").run(branchName, worktree, targetBaseSha, now, now, resolvedCommit, resolvedTree);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree) VALUES ('developer_absent', 'task_1', 'company_1', 'workflow_1', 1, 2, 'completed', ?, ?, ?, 'session_developer', ?, ?, ?, ?)").run(branchName, worktree, targetBaseSha, now, "2026-12-31T00:00:00.000Z", "d".repeat(40), "e".repeat(40));
     });
     const fake = fakeTurnRunner(() => new Error("resolved worktree must be adopted"));
-    await expect(new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).runMergeConflictResolution({ taskId: "task_1", companyId: "company_1", workflowId: "workflow_1", planRevision: 1, forwardMergeId: "merge_1", developerExecutionId: "developer_prior", developerSessionRef: "session_developer", worktreePath: worktree, branchName, priorHead, targetBaseSha, conflictArtifact: { id: conflict.id, kind: "forward-merge-conflict" }, conflictFileCount: 1, planArtifactId: plan.id })).resolves.toMatchObject({ developerExecutionId: expect.any(String), developerSessionRef: "session_developer" });
+    const result = await new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).runMergeConflictResolution({ taskId: "task_1", companyId: "company_1", workflowId: "workflow_1", planRevision: 1, forwardMergeId: "merge_1", developerExecutionId: "developer_from_state", developerSessionRef: "session_developer", worktreePath: worktree, branchName, priorHead, targetBaseSha, conflictArtifact: { id: conflict.id, kind: "forward-merge-conflict" }, conflictFileCount: 1, planArtifactId: plan.id });
+    expect(result).toMatchObject({ developerExecutionId: expect.any(String), developerSessionRef: "session_developer" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT supersedes_execution_id AS supersedesExecutionId FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toEqual({ supersedesExecutionId: "developer_prior" });
     expect(fake.calls).toEqual([]);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

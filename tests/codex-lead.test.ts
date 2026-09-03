@@ -413,6 +413,41 @@ test("an approved delivery review leaves a blocked build with another commit alo
   }
 });
 
+test("review lineage accepts a git-confirmed blocked repair and refuses an absent repair commit", async () => {
+  const value = await fixture();
+  const fake = fakeTurnRunner({ "lead-plan": () => routinePlan(), "delivery-review": () => ({ kind: "delivery_review" as const, summary: "The repaired delivery is approved.", outcome: "approved" as const, findings: [], repairPlan: null }) });
+  try {
+    const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
+    const plan = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
+    const artifacts = new ArtifactStore(value.config.artifactRoot);
+    const delivery = await artifacts.putArtifact("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "delivery", summary: "Repaired.", steps: [] })) });
+    const evidence = await artifacts.putArtifact("company_1", "agent-evidence", { filename: "evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("\n") });
+    const worktreePath = join(value.root, "worktrees", "task_1");
+    const branchName = buildGitBranchName({ branchSlug: fallbackGitPresentation("Fixture task").branchSlug, taskId: "task_1" });
+    const originalTree = (await execFileAsync("git", ["rev-parse", `${value.targetSha}^{tree}`], { cwd: worktreePath })).stdout.trim();
+    await writeFile(join(worktreePath, "REPAIRED.md"), "repair\n");
+    await execFileAsync("git", ["add", "REPAIRED.md"], { cwd: worktreePath });
+    await execFileAsync("git", ["commit", "-m", "repair delivery"], { cwd: worktreePath });
+    const subjectCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).stdout.trim();
+    const subjectTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: worktreePath })).stdout.trim();
+    const now = new Date().toISOString();
+    value.database.authTransaction((db) => {
+      for (const artifact of [delivery, evidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_repair', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'blocked', ?, ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?, ?)").run(branchName, worktreePath, value.targetSha, now, now, subjectCommit, subjectTree, delivery.id, evidence.id);
+      db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES ('review_blocking', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, ?, ?, ?, ?, ?, 'blocking', 'Repair required.', ?, ?, 0, ?)").run(value.targetSha, value.targetSha, originalTree, plan.leadExecutionId, plan.leadSessionRef, plan.leadOutputArtifactId, plan.leadEvidenceArtifactId, now);
+      db.prepare("INSERT INTO forge_delivery_repairs (id, task_id, company_id, workflow_id, review_id, developer_execution_id, cycle, status, subject_commit, subject_tree, result_commit, result_tree, delivery_artifact_id, evidence_artifact_id, created_at, finished_at) VALUES ('repair_1', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'review_blocking', 'developer_repair', 1, 'blocked', ?, ?, ?, ?, ?, ?, ?, ?)").run(value.targetSha, originalTree, "d".repeat(40), "e".repeat(40), delivery.id, evidence.id, now, now);
+    });
+    const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, leadOutputArtifactId: plan.leadOutputArtifactId, roleProfiles: { planner: "profile_1" }, subject: { planRevision: 1, targetBaseSha: value.targetSha, subjectCommit, subjectTree, developerExecutionId: "developer_repair", deliveryArtifactId: delivery.id, developerEvidenceArtifactId: evidence.id, leadSessionRef: plan.leadSessionRef, developerSessionRef: "developer-session" }, worktreePath, branchName, supersedesReviewId: "review_blocking" };
+    await expect(service.reviewDelivery(input)).resolves.toMatchObject({ outcome: "blocked" });
+    value.database.authQuery((db) => db.prepare("UPDATE forge_delivery_repairs SET result_commit = ?, result_tree = ? WHERE id = 'repair_1'").run(subjectCommit, subjectTree));
+    await expect(service.reviewDelivery(input)).resolves.toMatchObject({ outcome: "completed", review: { supersedesReviewId: "review_blocking" } });
+    expect(fake.calls.filter((call) => call.promptKind === "delivery-review")).toHaveLength(1);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("delivery activity result schemas reject unsafe or incomplete branches", () => {
   const subject = { planRevision: 1, targetBaseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40), developerExecutionId: "developer_1", deliveryArtifactId: "artifact_delivery", developerEvidenceArtifactId: "artifact_evidence", leadSessionRef: "session_lead", developerSessionRef: "session_developer" };
   const review = { reviewId: "delivery_review_1", leadExecutionId: "agent_lead_1", leadSessionRef: "session_lead", opinionArtifactId: "artifact_opinion", evidenceArtifactId: "artifact_evidence", opinion: "approved" as const, summary: "Approved.", repairPlan: null, findings: [], supersedesReviewId: null };

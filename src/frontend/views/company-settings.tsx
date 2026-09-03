@@ -7,11 +7,11 @@ import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { SettingsLayout, SettingsSection, SettingRow } from ".././components/app/settings-layout.js";
 import { companySettingsPath, withCompany, type CompanyStatus } from ".././lib/api.js";
-import { Archive, RotateCcw, Save, Pause } from "lucide-react";
+import { Archive, RotateCcw, Save, Pause, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 
 export function CompanySettingsView(): ReactElement {
-  const { user, companies, currentCompany, loading, selectCompany, renameCompany, setCompanyIssueCode, setCompanyStatus } = useCompanyContext();
+  const { user, companies, currentCompany, loading, selectCompany, renameCompany, setCompanyIssueCode, setCompanyStatus, clearCompany } = useCompanyContext();
   const [name, setName] = useState("");
   const [issueCode, setIssueCode] = useState("");
   const [busy, setBusy] = useState("");
@@ -19,6 +19,7 @@ export function CompanySettingsView(): ReactElement {
   const [codeSaved, setCodeSaved] = useState(false);
   const [error, setError] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [clearOpen, setClearOpen] = useState(false);
   const pathId = useMemo(() => {
     const match = /^\/companies\/([^/]+)\/settings$/.exec(window.location.pathname);
     if (!match?.[1]) return "";
@@ -52,6 +53,12 @@ export function CompanySettingsView(): ReactElement {
     setBusy("rename"); setError(""); setSaved(false);
     try { await renameCompany(company.id, trimmed); setSaved(true); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to rename company"); }
+    finally { setBusy(""); }
+  };
+  const clearAccount = async (): Promise<void> => {
+    setBusy("clear"); setError("");
+    try { await clearCompany(company.id); setClearOpen(false); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to clear company"); }
     finally { setBusy(""); }
   };
   const saveIssueCode = async (): Promise<void> => {
@@ -94,8 +101,10 @@ export function CompanySettingsView(): ReactElement {
         {company.status === "paused" ? <SettingRow label="Reactivate company" description="Restore creation of new projects and tasks."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Reactivating…" : "Reactivate company"}</Button></SettingRow> : null}
         {company.status !== "archived" ? <SettingRow label="Archive company" description="Archive is reversible, retains history, and blocks new work." destructive><Button variant="outline" size="sm" className="text-rose-700" onClick={() => setArchiveOpen(true)} disabled={busy !== ""}><Archive className="size-3.5" />Archive company</Button></SettingRow> : null}
         {company.status === "archived" ? <SettingRow label="Restore company" description="Restore the company to active status."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Restoring…" : "Restore company"}</Button></SettingRow> : null}
+        <SettingRow label="Clear account" description="Permanently delete every project, task, and record for this workspace, then reset it to factory state." destructive><Button variant="outline" size="sm" className="text-rose-700" onClick={() => setClearOpen(true)} disabled={busy !== ""}><Trash2 className="size-3.5" />Clear account</Button></SettingRow>
       </SettingsSection>
       <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Archive {company.name}?</AlertDialogTitle><AlertDialogDescription>This is reversible. Project and task history remains readable, but new work is blocked.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void mutateStatus("archived")} disabled={busy !== ""}>{busy === "archived" ? "Archiving…" : "Archive"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+      <AlertDialog open={clearOpen} onOpenChange={setClearOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Clear {company.name}?</AlertDialogTitle><AlertDialogDescription>This permanently deletes every project, task, artifact, and execution record for this workspace and resets it to factory state. Memberships and audit history are kept. This cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void clearAccount()} disabled={busy !== ""}>{busy === "clear" ? "Clearing…" : "Clear account"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     </SettingsLayout>
   );
 }

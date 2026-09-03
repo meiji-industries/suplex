@@ -19,6 +19,7 @@ const companies: FastifyPluginAsync<CompanyRoutesOptions> = async (app, options)
   typed.patch("/api/admin/companies/:companyId", { schema: { params: CompanyIdParamsSchema, body: CompanyNameBodySchema, response: { 200: CompanyResponseSchema } } }, async (request, reply) => reply.send(auth.renameCompany(request.forgeUser.id, request.params.companyId, request.body.name)));
   typed.patch("/api/admin/companies/:companyId/issue-code", { schema: { params: CompanyIdParamsSchema, body: CompanyIssueCodeBodySchema, response: { 200: CompanyResponseSchema } } }, async (request, reply) => reply.send(auth.setCompanyIssueCode(request.forgeUser.id, request.params.companyId, request.body.issueCode)));
   typed.post("/api/admin/companies/:companyId/status/:status", { schema: { params: CompanyStatusParamsSchema, response: { 200: CompanyResponseSchema } } }, async (request, reply) => reply.send(auth.setCompanyStatus(request.forgeUser.id, request.params.companyId, request.params.status)));
+  typed.post("/api/admin/companies/:companyId/clear", { schema: { params: CompanyIdParamsSchema, response: { 200: CompanyResponseSchema } } }, async (request, reply) => reply.send(await auth.clearCompany(request.forgeUser.id, request.params.companyId)));
   typed.post("/api/admin/companies/:companyId/members", { schema: { params: CompanyIdParamsSchema, body: MembershipBodySchema } }, async (request, reply) => {
     auth.addMembership(request.forgeUser.id, request.body.userId, request.params.companyId);
     return reply.code(204).send();

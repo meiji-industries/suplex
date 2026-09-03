@@ -1,4 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   generateAuthenticationOptions,
@@ -25,6 +27,7 @@ import {
   newSessionToken,
 } from "./auth-identifiers.js";
 import { jsonRequired } from "./task-utils.js";
+import { wipeCompanyData } from "./company-clear.js";
 
 export type UserRole = "admin" | "member";
 export type UserStatus = "pending" | "active" | "revoked";
@@ -277,6 +280,7 @@ export class AuthService {
   private readonly origin: string;
   private readonly installationId: string;
   private readonly developmentAutoLogin: boolean;
+  private readonly artifactRoot: string;
 
   constructor(private readonly database: ForgeDatabase, config: ForgeConfig, options: AuthServiceOptions = {}) {
     this.repository = new AuthRepository(database.authOrm());
@@ -286,6 +290,7 @@ export class AuthService {
     this.webAuthn = options.webAuthn ?? defaultWebAuthn;
     this.installationId = config.installationId;
     this.developmentAutoLogin = config.developmentAutoLogin;
+    this.artifactRoot = config.artifactRoot;
     const reachable = new URL(config.reachableAddress);
     this.rpId = reachable.hostname;
     this.origin = reachable.origin;
@@ -646,6 +651,24 @@ export class AuthService {
       this.recordAuditEventInTransaction(undefined, actorUserId, "company_issue_code_updated", undefined, companyId, { previousIssueCode: company.issueCode ?? "", newIssueCode: issueCode ?? "" });
       return this.publicCompany({ ...company, issueCode });
     });
+  }
+
+  async clearCompany(actorUserId: string, companyId: string): Promise<Company> {
+    if (!idSchema.safeParse(companyId).success) throw new AuthFailure("Not found", 404);
+    const cleared = this.database.authTransaction(() => {
+      this.requireAdminById(actorUserId);
+      const company = this.repository.findCompany(companyId);
+      if (!company) throw new AuthFailure("Not found", 404);
+      wipeCompanyData(this.database, companyId);
+      this.recordAuditEventInTransaction(undefined, actorUserId, "company_cleared", undefined, companyId, {});
+      return this.publicCompany({ ...company, status: "active", issueCode: null });
+    });
+    try {
+      rmSync(join(this.artifactRoot, cleared.id), { recursive: true, force: true });
+    } catch {
+      // Artifact files may already be gone; the durable wipe already completed.
+    }
+    return cleared;
   }
 
   setCompanyStatus(actorUserId: string, companyId: string, status: "active" | "paused" | "archived"): Company {

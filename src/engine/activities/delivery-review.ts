@@ -1,5 +1,6 @@
 import {
   RecoverRevalidatedDeliveryReviewInputSchema,
+  ReviewArbitrationActivityInputSchema,
   type DeliveryReviewActivities,
   type WorkflowDeliveryReviewActivityInput,
 } from "../contracts/activities/delivery-review.js";
@@ -7,8 +8,15 @@ import type { ActivityContext } from "./context.js";
 import { recoverReviewedDelivery } from "./reviewed-delivery-recovery.js";
 
 export function createDeliveryReviewActivities(ctx: ActivityContext): DeliveryReviewActivities {
-  const { database, config, randomBytes, ArtifactStore, redact, DeliveryDecisionActivityInputSchema, DeliveryReviewActivityResultSchema, CompletedDeliveryReviewLookupInputSchema, SafeSummarySchema, normalizeSafeSummary, defaultAgent, githubRelease, artifacts, agent, invokeAgent, bindCapacityExecution, latestWorktree, agentRuntime, normalizeReviewResult, durableArtifactReference } = ctx;
+  const { database, config, randomBytes, ArtifactStore, redact, DeliveryDecisionActivityInputSchema, DeliveryReviewActivityResultSchema, CompletedDeliveryReviewLookupInputSchema, ReviewArbitrationActivityResultSchema, SafeSummarySchema, normalizeSafeSummary, defaultAgent, githubRelease, artifacts, agent, invokeAgent, bindCapacityExecution, latestWorktree, agentRuntime, normalizeReviewResult, durableArtifactReference } = ctx;
   return {
+    async arbitrateReview(rawInput) {
+      const input = ReviewArbitrationActivityInputSchema.parse(rawInput);
+      const runner = agent as (typeof agent & { arbitrateReview?: (value: typeof input) => Promise<unknown> });
+      const service = defaultAgent as unknown as { arbitrateReview: (value: typeof input, runtime: { signal?: AbortSignal }) => Promise<unknown> };
+      const result = ReviewArbitrationActivityResultSchema.parse(await invokeAgent(input, () => runner?.arbitrateReview ? runner.arbitrateReview(input) : service.arbitrateReview(input, agentRuntime())));
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef, worktreePath: input.worktreePath }, result);
+    },
     async recoverRevalidatedDeliveryReview(rawInput) {
       return recoverReviewedDelivery(database, artifacts, githubRelease, RecoverRevalidatedDeliveryReviewInputSchema.parse(rawInput));
     },

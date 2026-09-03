@@ -124,6 +124,10 @@ export const { reviewDelivery } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
+export const { arbitrateReview } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "20 minutes",
+  retry: EXTERNAL_AGENT_RETRY_POLICY,
+});
 
 export const { findCompletedDeliveryReview } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",

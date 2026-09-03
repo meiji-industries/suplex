@@ -196,6 +196,29 @@ export async function resumeReviewedDeliveryTarget(ctx: IssueWorkflowContext): P
   return ctx.state;
 }
 
+export async function arbitrateReview(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>, answerArtifactId?: string): Promise<contracts.IssueWorkflowState> {
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
+  const result = await ctx.acquireExternalTurn<contracts.ReviewArbitrationActivityResult>(
+    { operation: "review_arbitration", role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
+    (capacityRequestId) => activityProxies.arbitrateReview({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, briefArtifactId: ctx.input.briefArtifactId, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, leadSessionRef: ctx.state.leadSessionRef!, worktreePath: ctx.state.worktreePath!, repairExhausted: ctx.state.arbitrationRepairExhausted ?? false, ...(answerArtifactId ? { answerArtifactId } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) }),
+    (value) => value.leadExecutionId,
+  );
+  const base = { ...ctx.state, revision: ctx.state.revision + 1, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, leadExecutionId: result.leadExecutionId, leadSessionRef: result.leadSessionRef };
+  if (result.arbitration.decision === "repair") {
+    if (ctx.state.arbitrationRepairExhausted) throw ApplicationFailure.nonRetryable("The Planner cannot request another repair", "review_arbitration_repair_exhausted");
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...base, ...at("repair_required"), owner: "lead", allowedCommands: ["repair_delivery", "cancel_issue"], pendingAction: "The Builder fixes the review findings", repairCycle: 0, arbitrationRepairLimit: 1, deliveryRepairPlan: result.arbitration.repair!.instruction, deliveryBlockingFindings: [{ findingId: result.arbitration.repair!.findingId, severity: "blocking", rationale: result.arbitration.summary, evidenceRef: result.arbitration.repair!.files.join(", "), disposition: "open", repairInstruction: result.arbitration.repair!.instruction }], blocker: null });
+  } else if (result.arbitration.decision === "ask") {
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...base, ...at("review_arbitration"), owner: "human", allowedCommands: ["respond_plan_blocker", "cancel_issue"], pendingAction: "Your decision is necessary", planBlockerSubject: { companyId: ctx.input.companyId, issueId: ctx.input.issueId, workflowId: ctx.input.workflowId, artifactId: result.outputArtifactId, leadSessionRef: result.leadSessionRef, leadExecutionId: result.leadExecutionId, category: "human_decision", resumePhase: "review_arbitration" }, blocker: stateTransitions.humanBlocker("member_decision", "Your decision is necessary", [{ command: "respond_plan_blocker", label: "Answer the Planner", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.outputArtifactId, "decision-blocker")) });
+  } else if (result.arbitration.decision === "accept") {
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...base, ...at("delivery_reviewed"), owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "The Planner recommends that you accept the delivery as is", deliveryReviewSummary: result.arbitration.recommendation, blocker: stateTransitions.humanBlocker("member_authorization", result.arbitration.recommendation!, [{ command: "publish_draft", label: "Publish the pull request", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.outputArtifactId, "delivery-review")) });
+  } else {
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...base, ...at("development"), owner: "human", allowedCommands: ["cancel_issue", "respond_plan_blocker"], pendingAction: "The Planner recommends that you cancel the task", planBlockerSubject: { companyId: ctx.input.companyId, issueId: ctx.input.issueId, workflowId: ctx.input.workflowId, artifactId: result.outputArtifactId, leadSessionRef: result.leadSessionRef, leadExecutionId: result.leadExecutionId, category: "human_decision", resumePhase: "review_arbitration" }, blocker: stateTransitions.humanBlocker("member_decision", result.arbitration.recommendation!, [{ command: "respond_plan_blocker", label: "Answer the Planner", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.outputArtifactId, "decision-blocker")) });
+  }
+  await ctx.project();
+  void command;
+  return ctx.state;
+}
+
 export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   setHandler(issueUpdates.review_delivery, ctx.guarded(async (rawInput: any) => {
@@ -208,6 +231,15 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
     if (isBlocked(ctx.state) && !ctx.state.deliveryReviewBlockerCode) throw new Error("A review blocker is required before retrying delivery review");
     const completeSubject = ctx.state.developerExecutionId && ctx.state.developerSessionRef && ctx.state.branchName && ctx.state.targetBaseSha && ctx.state.resultCommit && ctx.state.resultTree && ctx.state.deliveryArtifactId && ctx.state.developerEvidenceArtifactId && ctx.state.leadSessionRef && ctx.state.leadOutputArtifactId;
     if (!completeSubject && !canRecoverRevalidatedReview(ctx.state)) throw new Error("An exact Developer delivery and Lead session are required before review");
+  } });
+  setHandler(issueUpdates.arbitrate_review, ctx.guarded(async (rawInput: any) => {
+    assertPayloadWithinLimit("review arbitration command", rawInput);
+    return arbitrateReview(ctx, contracts.StartPlanningInputSchema.parse(rawInput));
+  }), { validator(rawInput) {
+    const command = contracts.StartPlanningInputSchema.parse(rawInput);
+    if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
+    if (ctx.state.step !== "review_arbitration" || ctx.state.owner !== "lead" || isBlocked(ctx.state)) throw new Error("Review arbitration is not available in the current phase");
+    if ((ctx.state.arbitrationCount ?? 0) > 2) throw new Error("Review arbitration is exhausted");
   } });
   setHandler(issueUpdates.repair_delivery, ctx.guarded(async (rawInput: any) => {
     assertPayloadWithinLimit("delivery repair command", rawInput);
@@ -241,6 +273,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
 export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
     const noProgressEnabled = true;
+    const repairCycleLimit = ctx.state.arbitrationRepairLimit ?? ctx.repairCycleLimit;
     const cycle = ctx.state.targetBaseOutcome === "revalidated" ? 1 : (ctx.state.repairCycle ?? 0) + 1;
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
@@ -265,7 +298,7 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
       developerExecutionId: priorExecutionId,
       reviewId: priorDelivery.reviewId,
       cycle,
-      repairCycleLimit: ctx.repairCycleLimit,
+      repairCycleLimit,
       branchName: priorDelivery.branchName,
       targetBaseSha: priorDelivery.targetBaseSha,
       subjectCommit: priorDelivery.subjectCommit,
@@ -290,7 +323,7 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
       const failure = ctx.permanentActivityFailure(error, true);
       const failureClass = noProgressEnabled ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary, source: "local_check" }) : "code_failure";
       const evidence = stateTransitions.evidencePointer(evidenceArtifactId ?? failure?.evidenceArtifactId ?? undefined, "developer-repair");
-      ctx.state = failureClass === "credential_missing" ? stateTransitions.credentialBlockedState(ctx.state, "repair_delivery", evidence) : failureClass === "transient_infrastructure" || failureClass === "rate_limited" ? stateTransitions.transientRetryState(ctx.state, "repair_delivery", summary) : stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, ctx.repairCycleLimit, evidenceArtifactId, summary, noProgressEnabled);
+      ctx.state = failureClass === "credential_missing" ? stateTransitions.credentialBlockedState(ctx.state, "repair_delivery", evidence) : failureClass === "transient_infrastructure" || failureClass === "rate_limited" ? stateTransitions.transientRetryState(ctx.state, "repair_delivery", summary) : stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, repairCycleLimit, evidenceArtifactId, summary, noProgressEnabled);
       await ctx.project();
       void command;
       return ctx.state;
@@ -308,7 +341,7 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
     if ("repairAttemptId" in result) {
       ctx.state = result.outcome === "completed"
         ? stateTransitions.repairedDeliveryAwaitingFreshReviewState(ctx.state, result)
-        : stateTransitions.repairBlockedState(ctx.state, result, ctx.repairCycleLimit, noProgressEnabled);
+        : stateTransitions.repairBlockedState(ctx.state, result, repairCycleLimit, noProgressEnabled);
     } else {
       const nextStep = result.outcome === "completed" ? "delivery_ready" : "development";
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...stateTransitions.revisioned(ctx.state, nextStep, result.outcome === "completed" ? "lead" : "human", result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], result.outcome === "completed" ? "The Planner reviews the latest changes" : "Your decision is necessary"), ...(result.outcome === "completed" ? {} : stateTransitions.freshDeliveryLineage()), developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, worktreePath: result.worktreePath, branchName: result.branchName, targetBaseSha: result.targetBaseSha, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, repairCycle: result.cycle, deliveryReviewSupersedesId: result.outcome === "completed" ? ctx.state.deliveryReviewId : null, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, ...(result.outcome === "completed" ? { deliveryBlockingFindings: [], deliveryRepairPlan: null } : {}) });

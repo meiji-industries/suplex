@@ -9,7 +9,7 @@ import {
   type LeadPlanningResult,
   type StartPlanningInput,
 } from "../issue-contracts.js";
-import { repairDelivery, resumeReviewedDeliveryTarget, reviewDelivery } from "./register-delivery-review.js";
+import { arbitrateReview, repairDelivery, resumeReviewedDeliveryTarget, reviewDelivery } from "./register-delivery-review.js";
 import { startDevelopment } from "./register-development.js";
 import { resolveMergeConflict } from "./register-merge.js";
 import { evidencePointer, humanBlocker } from "./state-transitions.js";
@@ -147,6 +147,7 @@ const AUTO_CHAINED_COMMANDS: Partial<Record<IssueStep, IssueWorkflowState["allow
   delivery_ready: "review_delivery",
   delivery_reviewed: "publish_draft",
   repair_required: "repair_delivery",
+  review_arbitration: "arbitrate_review",
   merge_conflict_resolving: "resolve_merge_conflict",
   ready_for_development: "start_development",
 };
@@ -207,6 +208,7 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   let failure: unknown;
   try {
     if (chained.command === "review_delivery") await reviewDelivery(ctx, command);
+    else if (chained.command === "arbitrate_review") await arbitrateReview(ctx, command);
     else if (chained.command === "publish_draft") {
       if (ctx.state.step === "delivery_reviewed" && (ctx.input.deliveryTarget === "remote_branch" || ctx.input.deliveryTarget === "local_worktree")) await resumeReviewedDeliveryTarget(ctx);
       else await ctx.runPublishTurn();

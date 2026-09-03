@@ -28,6 +28,7 @@ import {
   CompletedDeliveryReviewLookupInputSchema,
   DeliveryReviewActivityInputSchema,
   DeliveryReviewActivityResultSchema,
+  ReviewArbitrationActivityResultSchema,
   DeliveryReviewSchema,
   DeliveryOperationBlockCodeSchema,
   DeveloperRepairActivityInputSchema,
@@ -75,7 +76,7 @@ async function cancelAgentExecution(database: ForgeDatabase, executionId: string
 }
 
 export interface ActivityOptions {
-  agent?: Omit<Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "planDeliveryRepair" | "planMergeConflict" | "planCiRepair">>, "reviewDelivery"> & { reviewDelivery?: (input: DeliveryReviewServiceInput) => Promise<unknown> };
+  agent?: Omit<Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "arbitrateReview" | "planDeliveryRepair" | "planMergeConflict" | "planCiRepair">>, "reviewDelivery"> & { reviewDelivery?: (input: DeliveryReviewServiceInput) => Promise<unknown> };
   developer?: Omit<Partial<Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">>, "runRepair"> & { runRepair?: (input: Parameters<DeveloperService["runRepair"]>[0]) => Promise<unknown> };
   githubRelease?: GithubReleaseAdapter;
   ciProvider?: CiProvider;
@@ -387,6 +388,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     CompletedDeliveryReviewLookupInputSchema,
     DeliveryReviewActivityInputSchema,
     DeliveryReviewActivityResultSchema,
+    ReviewArbitrationActivityResultSchema,
     DeliveryReviewSchema,
     DeliveryOperationBlockCodeSchema,
     DeveloperRepairActivityInputSchema,

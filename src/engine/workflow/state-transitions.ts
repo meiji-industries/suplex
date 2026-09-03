@@ -95,20 +95,28 @@ export function reviewBlockedState(state: IssueWorkflowState, result: { attemptI
   });
 }
 
+export function reviewArbitrationState(state: IssueWorkflowState): IssueWorkflowState {
+  return IssueWorkflowStateSchema.parse({
+    ...revisioned(state, "review_arbitration", "lead", ["cancel_issue"], "The Planner decides how to resolve the review"),
+    blocker: null,
+    arbitrationCount: (state.arbitrationCount ?? 0) + 1,
+    arbitrationRepairExhausted: (state.arbitrationCount ?? 0) >= 1,
+  });
+}
+
 export function repairRequiredState(state: IssueWorkflowState, result: CompletedReview, repairCycleLimit: number, noProgressEnabled = false): IssueWorkflowState {
   const openBlocking = result.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
   const firstFinding = openBlocking[0];
   const progress = withRepairProgress(state, { signature: repairSignature({ source: "review", code: firstFinding ? `${firstFinding.findingId}:${firstFinding.rationale}` : null }), commit: state.resultCommit ?? null, diagnosticHash: result.review.reviewArtifact?.artifactId ?? null });
   const exhausted = result.review.opinion !== "approved" && noProgressEnabled && noProgress(state.repairProgress, progress.repairProgress!);
   const canRepair = !exhausted && result.review.opinion === "blocking" && openBlocking.length > 0 && (state.repairCycle ?? 0) < repairCycleLimit;
-  const step = result.review.opinion === "approved" ? "delivery_reviewed" : canRepair ? "repair_required" : "development";
+  const step = result.review.opinion === "approved" ? "delivery_reviewed" : canRepair ? "repair_required" : "review_arbitration";
   const owner = step === "repair_required" ? "lead" : "human";
-  const allowedCommands: IssueWorkflowState["allowedCommands"] = step === "repair_required" ? ["record_delivery_decision", "repair_delivery", "cancel_issue"] : exhausted ? ["retry_development", "cancel_issue"] : step === "development" ? ["record_delivery_decision", "cancel_issue"] : ["publish_draft", "cancel_issue"];
-  const pendingAction = step === "repair_required" ? "The Builder fixes the review findings" : step === "development" && !exhausted ? "The review problems are not fixed" : step === "development" ? "Your decision is necessary" : "Forge opens the pull request";
-  const repairLimitSummary = `The review found ${openBlocking.length} blocking problem${openBlocking.length === 1 ? "" : "s"}. The Builder made ${state.repairCycle ?? 0} repair attempt${(state.repairCycle ?? 0) === 1 ? "" : "s"} and did not fix them. Read the review findings. Then accept the delivery as is, or cancel the task.`;
+  const allowedCommands: IssueWorkflowState["allowedCommands"] = step === "repair_required" ? ["repair_delivery", "cancel_issue"] : step === "review_arbitration" ? ["cancel_issue"] : ["publish_draft", "cancel_issue"];
+  const pendingAction = step === "repair_required" ? "The Builder fixes the review findings" : step === "review_arbitration" ? "The Planner decides how to resolve the review" : "Forge opens the pull request";
   return IssueWorkflowStateSchema.parse({
     ...revisioned(progress, step, owner, allowedCommands, pendingAction),
-    blocker: exhausted ? humanBlocker("agent_exhausted", `Automatic repair does not make progress: ${result.review.summary}`, [{ command: "retry_development", label: "Resume the Builder turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(result.review.reviewArtifact?.artifactId ?? result.review.evidenceArtifactId, "delivery-review")) : step === "development" ? humanBlocker("agent_exhausted", repairLimitSummary, [{ command: "record_delivery_decision", label: "Accept as is and publish", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(result.review.reviewArtifact?.artifactId ?? result.review.evidenceArtifactId, "delivery-review")) : null,
+    blocker: null,
     deliveryReviewId: result.review.reviewId,
     deliveryReviewAttemptId: result.attemptId,
     deliveryReviewOutcome: result.review.opinion,
@@ -120,6 +128,7 @@ export function repairRequiredState(state: IssueWorkflowState, result: Completed
     deliveryReviewSupersedesId: result.review.supersedesReviewId,
     deliveryReviewArtifact: result.review.reviewArtifact,
     repairCycle: state.repairCycle ?? 0,
+    ...(step === "review_arbitration" ? { arbitrationCount: (state.arbitrationCount ?? 0) + 1, arbitrationRepairExhausted: (state.arbitrationCount ?? 0) >= 1 } : {}),
   });
 }
 
@@ -138,6 +147,7 @@ export function repairBlockedState(state: IssueWorkflowState, result: BlockedRep
   }
   const progressState = withRepairProgress(state, { signature: repairSignature({ source: "local_check", code: result.code }), commit: state.resultCommit ?? null, diagnosticHash: result.evidenceArtifactId ?? null });
   const exhausted = noProgressEnabled ? (progressState.repairProgress?.repeats ?? 0) >= 1 : result.cycle > repairCycleLimit;
+  if (exhausted) return reviewArbitrationState(IssueWorkflowStateSchema.parse({ ...progressState, repairCycle: result.cycle, deliveryRepairAttemptId: result.repairAttemptId, deliveryRepairBlockerCode: result.code, deliveryRepairBlockerSummary: result.summary, deliveryRepairBlockerEvidenceArtifactId: result.evidenceArtifactId }));
   const retry = !exhausted;
   return IssueWorkflowStateSchema.parse({
     ...revisioned(progressState, "development", "human", retry ? ["record_delivery_decision", "repair_delivery", "retry_development", "cancel_issue"] : ["retry_development", "cancel_issue"], retry ? result.summary : "Your decision is necessary"),

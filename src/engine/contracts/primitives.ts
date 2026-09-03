@@ -259,6 +259,31 @@ export const DeliveryReviewSchema = z.object({
 export type DeliveryFinding = z.infer<typeof DeliveryFindingSchema>;
 export type DeliveryReview = z.infer<typeof DeliveryReviewSchema>;
 
+export const ReviewArbitrationQuestionSchema = z.object({
+  header: z.string().min(1),
+  id: z.string().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/),
+  question: z.string().min(1),
+  options: z.array(z.object({ label: z.string().min(1), description: z.string().min(1) }).strict()).length(3),
+  isOther: z.literal(true),
+  isSecret: z.literal(false),
+}).strict();
+
+export const ReviewArbitrationSchema = z.object({
+  kind: z.literal("review_arbitration"),
+  summary: z.string().min(1),
+  decision: z.enum(["ask", "repair", "accept", "cancel"]),
+  askUserQuestion: ReviewArbitrationQuestionSchema.nullable(),
+  repair: z.object({ findingId: durableId, files: z.array(z.string().min(1)).min(1), instruction: z.string().min(1), patch: z.string().nullable() }).strict().nullable(),
+  recommendation: z.string().min(1).nullable(),
+}).strict().superRefine((value, context) => {
+  const payloads = [value.askUserQuestion, value.repair, value.recommendation].filter((payload) => payload !== null).length;
+  if (payloads !== 1) context.addIssue({ code: "custom", message: "An arbitration result must contain one decision payload" });
+  if (value.decision === "ask" && !value.askUserQuestion) context.addIssue({ code: "custom", path: ["askUserQuestion"], message: "Ask requires a question" });
+  if (value.decision === "repair" && !value.repair) context.addIssue({ code: "custom", path: ["repair"], message: "Repair requires repair details" });
+  if ((value.decision === "accept" || value.decision === "cancel") && !value.recommendation) context.addIssue({ code: "custom", path: ["recommendation"], message: "A recommendation is required" });
+});
+export type ReviewArbitration = z.infer<typeof ReviewArbitrationSchema>;
+
 export const CiRepairPlanSchema = z.object({
   kind: z.literal("ci-repair-plan"),
   ciRunId: durableId,

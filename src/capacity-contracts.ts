@@ -9,6 +9,7 @@ const CapacityOperationSchema = z.enum([
   "lead_consolidation",
   "developer_execution",
   "delivery_review",
+  "review_arbitration",
   "delivery_repair_plan",
   "developer_repair",
   "final_review",

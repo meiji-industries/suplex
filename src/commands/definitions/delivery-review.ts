@@ -2,6 +2,18 @@ import { ExpectedRevisionBodySchema, ExpectedRevisionNoteBodySchema } from "../.
 import { defineIssueCommand } from "../kit.js";
 
 export const deliveryReviewCommands = {
+  arbitrate_review: defineIssueCommand({
+    name: "arbitrate_review",
+    slug: "arbitrate-review",
+    updateName: "arbitrateReview",
+    label: "Decide the review outcome",
+    family: "start",
+    durableCommandKind: "review arbitration command",
+    payloadLabel: "review arbitration command",
+    body: ExpectedRevisionBodySchema,
+    note: "none",
+    idempotency: "none",
+  }),
   review_delivery: defineIssueCommand({
     name: "review_delivery",
     slug: "review-delivery",

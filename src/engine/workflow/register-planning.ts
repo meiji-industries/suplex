@@ -28,6 +28,7 @@ import {
 } from "./activity-proxies.js";
 import { retryDevelopment, startDevelopment } from "./register-development.js";
 import { resolveMergeConflict } from "./register-merge.js";
+import { arbitrateReview } from "./register-delivery-review.js";
 import { evidencePointer, humanBlocker } from "./state-transitions.js";
 import type { IssueWorkflowContext } from "./context.js";
 
@@ -304,6 +305,11 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
     try {
       const response = await recordPlanBlockerResponse({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, actorUserId: command.actorUserId, blockerArtifactId: ctx.state.planBlockerSubject.artifactId, expectedWorkflowRevision: command.expectedWorkflowRevision, answerStagingRef: command.answerStagingRef, idempotencyKey: command.idempotencyKey });
       const primaryLeadSessionRef = ctx.state.planBlockerSubject.leadSessionRef;
+      if (ctx.state.step === "review_arbitration" || ctx.state.planBlockerSubject.resumePhase === "review_arbitration") {
+        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("review_arbitration"), owner: "lead", allowedCommands: ["arbitrate_review", "cancel_issue"], pendingAction: "The Planner decides how to resolve the review", repairCycle: 0, planBlockerSubject: null, planBlockerResponseReceipt: { idempotencyKey: command.idempotencyKey, responseId: response.responseId }, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+        await ctx.project();
+        return await arbitrateReview(ctx, { expectedRevision: ctx.state.revision, actorUserId: command.actorUserId, commandId: `${command.commandId}:arbitration` }, response.answerArtifactId);
+      }
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "The Planner revises the plan with your answer", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, planRevision: null, planBlockerSubject: null, planBlockerResponseReceipt: { idempotencyKey: command.idempotencyKey, responseId: response.responseId }, supplementalReviewUsed: false, supplementalReviewArtifactId: null });
       await ctx.project();
       const carryBlockerAnswer = true;

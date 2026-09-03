@@ -18,4 +18,7 @@ export const deliveryReviewStateFields = {
   deliveryRepairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
   deliveryRepairAuthority: RepairAuthoritySchema.nullable().optional(),
   repairCycle: z.number().int().nonnegative().optional(),
+  arbitrationCount: z.number().int().min(0).max(2).optional(),
+  arbitrationRepairExhausted: z.boolean().optional(),
+  arbitrationRepairLimit: z.number().int().min(1).max(5).nullable().optional(),
 };

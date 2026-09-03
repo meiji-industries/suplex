@@ -17,7 +17,7 @@ import { IssueTimelineEvents } from "./issue-timeline-events.js";
 import { HerdrSessionStore } from "./herdr-session-store.js";
 import { HerdrTurnRunner, type HerdrTurnInput, type HerdrTurnOutput } from "./herdr-turn-runner.js";
 import { redact } from "./logging.js";
-import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./engine/issue-contracts.js";
+import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, ReviewArbitrationActivityInputSchema, ReviewArbitrationActivityResultSchema, ReviewArbitrationSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type ReviewArbitrationActivityInput, type ReviewArbitrationActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./engine/issue-contracts.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { loadDefaultPrompts, renderPrompt } from "./prompts.js";
@@ -879,6 +879,26 @@ export class AgentService {
       if (code === "cancelled") throw failure;
       return DeliveryReviewActivityResultSchema.parse({ outcome: "blocked", attemptId, code, summary, evidenceArtifactId: evidence.id, executionId, sessionRef: leadSessionRef, correctionAttempts, subject: { ...subject, developerSessionRef: context.developerSessionRef ?? subject.developerSessionRef } });
     }
+  }
+
+  async arbitrateReview(rawInput: ReviewArbitrationActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<ReviewArbitrationActivityResult> {
+    const input = ReviewArbitrationActivityInputSchema.parse(rawInput);
+    const task = this.database.authQuery((db) => db.prepare("SELECT t.description, p.name AS projectSlug FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id WHERE t.id = ? AND t.company_id = ? AND t.project_id = ?").get(input.taskId, input.companyId, input.projectId) as { description: string | null; projectSlug: string } | undefined);
+    if (!task) throw new AgentFailure("scoped-input-missing", "Task details are unavailable");
+    const artifact = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(input.leadOutputArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined);
+    if (!artifact) throw new AgentFailure("scoped-input-missing", "The approved plan is unavailable");
+    const plan = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 })).toString("utf8");
+    const reviews = this.database.authQuery((db) => db.prepare("SELECT summary, outcome, repair_cycle AS repairCycle FROM forge_delivery_reviews WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at, id").all(input.taskId, input.companyId, input.workflowId));
+    const repairs = this.database.authQuery((db) => db.prepare("SELECT summary, status FROM forge_delivery_repairs WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at, id").all(input.taskId, input.companyId, input.workflowId));
+    const profile = await this.resolveTurnProfile(undefined, input.leadSessionRef, "Review arbitration");
+    const executionId = `agent_${randomBytes(12).toString("hex")}`;
+    const prompt = this.renderTaskPrompt(input, "lead/review-arbitration.md", { brief: task.description ?? "", plan: promptExcerpt(plan, 24_000), reviews: JSON.stringify(reviews), repairs: JSON.stringify(repairs), objections: "[]", repair_coverage: "[]", diff: "The current delivery diff is available in the worktree.", repair_exhausted: String(input.repairExhausted) });
+    const output = await this.turnRunner.run({ task: { taskId: input.taskId, projectId: input.projectId, projectSlug: task.projectSlug, worktreePath: input.worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "planner", ledger: "agent", executionId, promptKind: "review-arbitration", prompt, profile, resultSchema: ReviewArbitrationSchema, schemaPath: await this.ensureResultSchema("review-arbitration", ReviewArbitrationSchema), companyId: input.companyId, workflowId: input.workflowId, revision: 0, signal: runtime.signal });
+    const arbitration = ReviewArbitrationSchema.parse(output.result);
+    if (input.repairExhausted && arbitration.decision === "repair") throw new AgentFailure("invalid-output-schema", "The Planner requested a repair after the repair budget was spent", { nonRetryable: true });
+    const resultArtifact = await this.artifacts.putArtifact(input.companyId, "lead-output", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(arbitration, null, 2), "utf8") });
+    const evidenceArtifact = await this.persistEvidence(input.companyId, executionId, [JSON.stringify({ type: "forge.review-arbitration" })]);
+    return ReviewArbitrationActivityResultSchema.parse({ arbitration, leadExecutionId: executionId, leadSessionRef: output.roleSessionId, outputArtifactId: resultArtifact.id, evidenceArtifactId: evidenceArtifact.id });
   }
 
   async runSupplementalReview(rawInput: SupplementalReviewActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<SupplementalReviewResult> {

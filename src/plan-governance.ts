@@ -35,7 +35,7 @@ export const PlanBlockerSubjectSchema = z.object({
   leadSessionRef: GovernanceIdSchema,
   leadExecutionId: GovernanceIdSchema,
   category: z.literal("human_decision"),
-  resumePhase: z.literal("planning"),
+  resumePhase: z.enum(["planning", "review_arbitration"]),
 }).strip();
 
 export type PlanBlockerSubject = z.infer<typeof PlanBlockerSubjectSchema>;

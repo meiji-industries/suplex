@@ -7,7 +7,7 @@ export const ISSUE_STEPS = [
   "planning", "supplemental_review", "plan_consolidation",
   "approval",
   "ready_for_development", "development", "repair_required",
-  "delivery_ready", "reviewing_delivery", "delivery_reviewed", "final_review",
+  "delivery_ready", "reviewing_delivery", "review_arbitration", "delivery_reviewed", "final_review",
   "releasing", "merge_conflict_reviewing", "merge_conflict_resolving",
   "ci_waiting", "ci_repair_planning", "ci_repairing",
   "accepted", "ready_reconciliation", "manual_merge",
@@ -27,7 +27,7 @@ export function phaseOf(step: IssueStep): IssuePhase {
     case "planning": case "supplemental_review": case "plan_consolidation": return "planning";
     case "approval": return "approval";
     case "ready_for_development": case "development": case "repair_required": return "building";
-    case "delivery_ready": case "reviewing_delivery": case "delivery_reviewed": case "final_review": return "reviewing";
+    case "delivery_ready": case "reviewing_delivery": case "review_arbitration": case "delivery_reviewed": case "final_review": return "reviewing";
     case "releasing": case "merge_conflict_reviewing": case "merge_conflict_resolving":
     case "ci_waiting": case "ci_repair_planning": case "ci_repairing":
     case "accepted": case "ready_reconciliation": case "manual_merge": return "shipping";
@@ -63,6 +63,7 @@ export const STEP_RETRY_COMMAND: Partial<Record<IssueStep, IssueCommand>> = {
   repair_required: "retry_development",
   delivery_ready: "review_delivery",
   reviewing_delivery: "review_delivery",
+  review_arbitration: "arbitrate_review",
   delivery_reviewed: "review_delivery",
   final_review: "final_review",
   releasing: "publish_draft",

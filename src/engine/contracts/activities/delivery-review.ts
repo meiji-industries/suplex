@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   blockSummary, DeliveryFindingSchema, DeliveryOperationBlockCodeSchema, DeliveryReviewSubjectSchema,
   DurableArtifactReferenceSchema, durableId, exactSha,
+  ReviewArbitrationSchema,
 } from "../primitives.js";
 
 const DeliveryReviewActivityInputCoreSchema = z.object({
@@ -181,6 +182,30 @@ export type DeliveryRepairPlanResult = z.infer<typeof DeliveryRepairPlanResultSc
 
 export type WorkflowDeliveryReviewResult = DeliveryReviewActivityResult;
 
+export const ReviewArbitrationActivityInputSchema = z.object({
+  taskId: durableId,
+  companyId: durableId,
+  workflowId: durableId,
+  projectId: durableId,
+  briefArtifactId: durableId,
+  leadOutputArtifactId: durableId,
+  leadSessionRef: durableId,
+  worktreePath: z.string().min(1).max(1_000),
+  repairExhausted: z.boolean(),
+  answerArtifactId: durableId.optional(),
+  capacityRequestId: durableId.optional(),
+}).strict();
+export type ReviewArbitrationActivityInput = z.infer<typeof ReviewArbitrationActivityInputSchema>;
+
+export const ReviewArbitrationActivityResultSchema = z.object({
+  arbitration: ReviewArbitrationSchema,
+  leadExecutionId: durableId,
+  leadSessionRef: durableId,
+  outputArtifactId: durableId,
+  evidenceArtifactId: durableId,
+}).strict();
+export type ReviewArbitrationActivityResult = z.infer<typeof ReviewArbitrationActivityResultSchema>;
+
 export interface DeliveryDecisionActivityInput {
   taskId: string;
   companyId: string;
@@ -192,6 +217,7 @@ export interface DeliveryDecisionActivityInput {
 export interface DeliveryReviewActivities {
   planDeliveryRepair(input: DeliveryRepairPlanActivityInput): Promise<DeliveryRepairPlanResult>;
   reviewDelivery(input: WorkflowDeliveryReviewActivityInput): Promise<WorkflowDeliveryReviewResult>;
+  arbitrateReview(input: ReviewArbitrationActivityInput): Promise<ReviewArbitrationActivityResult>;
   findCompletedDeliveryReview(input: CompletedDeliveryReviewLookupInput): Promise<DeliveryReviewActivityResult | null>;
   recoverRevalidatedDeliveryReview(input: RecoverRevalidatedDeliveryReviewInput): Promise<RecoverRevalidatedDeliveryReviewResult>;
   recordDeliveryDecision(input: DeliveryDecisionActivityInput): Promise<{ artifactId: string }>;

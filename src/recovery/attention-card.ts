@@ -18,6 +18,7 @@ export interface AttentionBlocker {
 export interface AttentionCardContext {
   summary?: string | null;
   pendingAction?: string | null;
+  step?: string | null;
   actions?: Array<{ command: string; label: string; requiresNote?: boolean; destructive?: boolean }>;
   mergeDecision?: unknown;
 }
@@ -48,6 +49,16 @@ function decision(value: unknown): AttentionCondition | undefined {
 export function attentionCardFromBlocker(blocker: AttentionBlocker | undefined, context: AttentionCardContext = {}): AttentionCard {
   const summary = typeof blocker?.summary === "string" && blocker.summary.trim() ? blocker.summary.trim() : context.summary || context.pendingAction;
   const category = typeof blocker?.category === "string" ? blocker.category : "";
+  if (category === "member_authorization" && context.step === "delivery_reviewed") {
+    return {
+      kind: "generic",
+      title: "The Planner recommends that you accept the delivery as is",
+      explanation: summary || "The Planner recommends that you accept the delivery as is.",
+      evidence: [{ kind: "text", ref: summary || "The Planner recommends that you accept the delivery as is." }],
+      primaryAction: { command: "publish_draft", label: "Publish the pull request" },
+      secondaryAction: { command: "cancel_issue", label: "Cancel the task", destructive: true },
+    };
+  }
   if (category === "member_authorization" && /startup|trust the contents of this directory/i.test(summary || "")) {
     const primary = context.actions?.find((action) => !action.destructive);
     const cancel = context.actions?.find((action) => action.command === "cancel_issue");
@@ -84,19 +95,6 @@ export function attentionCardFromBlocker(blocker: AttentionBlocker | undefined, 
   }
   if (context.actions?.some((action) => action.label === "Recreate the worktree and resume")) return attentionCardFor({ kind: "worktree_missing", worktreePath: null, branchName: null });
   if (context.actions?.some((action) => action.label === "Discard the changes and delete the worktree")) return attentionCardFor({ kind: "dirty_worktree_cleanup", dirtyFileCount: 1, worktreePath: "Recorded worktree" });
-  const deliveryDecision = context.actions?.find((action) => action.command === "record_delivery_decision");
-  if (category === "agent_exhausted" && deliveryDecision) {
-    const cancel = context.actions?.find((action) => action.command === "cancel_issue");
-    const explanation = "The review found blocking problems. The Builder made repairs but did not fix them. Read the review findings. Then accept the delivery as is, or cancel the task.";
-    return {
-      kind: "generic",
-      title: "The review problems are not fixed",
-      explanation,
-      evidence: [{ kind: "text", ref: summary || explanation }],
-      primaryAction: { command: deliveryDecision.command, label: deliveryDecision.label, ...(deliveryDecision.requiresNote ? { requiresNote: true } : {}) },
-      ...(cancel ? { secondaryAction: { command: cancel.command, label: cancel.label, destructive: true } } : {}),
-    };
-  }
   if (summary?.startsWith("Automatic repair is not making progress") || summary?.startsWith("Automatic continuation is not making progress") || category === "agent_exhausted" || category === "verification_unrecoverable") return attentionCardFor({ kind: "no_progress", failureClass: "code_failure", signature: summary || "Automatic repair needs your input." });
   const resume = context.actions?.find((action) => action.label === "Resume the Builder turn" || action.label === "Resume the Planner turn");
   if (resume) return attentionCardFor({ kind: "missing_turn_outcome", role: resume.label.includes("Planner") ? "lead" : "developer", dirty: false });

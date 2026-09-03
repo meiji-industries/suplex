@@ -4,6 +4,7 @@ import { expect, test } from "vitest";
 
 import { DeveloperRecoveryActions } from "../src/frontend/components/app/developer-recovery-actions.js";
 import { DeveloperRecoveryStatus } from "../src/frontend/components/app/developer-recovery-status.js";
+import { PlanBlockerResponseForm } from "../src/frontend/components/app/plan-blocker-response-form.js";
 import { TaskAttentionCard } from "../src/frontend/components/app/task-attention-card.js";
 import { PlanDecisionForm } from "../src/frontend/components/app/plan-decision-form.js";
 import { SystemHealthProvider } from "../src/frontend/components/app/system-health.js";
@@ -143,6 +144,71 @@ test("shows an agent status card for planning", () => {
   }) }));
   expect(html).toContain("data-task-status-card");
   expect(html).toContain("The Planner writes the plan");
+});
+
+test("shows the arbitration status while the Planner decides", () => {
+  const task = {
+    phase: "reviewing",
+    step: "review_arbitration",
+    owner: "lead",
+    allowedCommands: ["cancel_issue"],
+    commands: [],
+    pendingAction: "The Planner decides how to resolve the review",
+    updatedAt: "2026-09-03T00:00:00.000Z",
+    projection: { status: "current" },
+  } as unknown as ApiTask;
+  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
+    task,
+    busy: false,
+    onStartPlanning: async () => undefined,
+    onPlanAction: async () => undefined,
+    onRevisePlan: async () => undefined,
+    onContinueWork: async () => undefined,
+  }) }));
+
+  expect(html).toContain("The Planner decides how to resolve the review");
+  expect(html).toContain("Waiting");
+});
+
+test("shows the arbitration question choices", () => {
+  const html = renderToStaticMarkup(createElement(PlanBlockerResponseForm, {
+    blocker: {
+      header: "Review path",
+      question: "Which path should Forge take?",
+      evidence: "The review found an advisory problem.",
+      nextAction: "Forge sends your answer to the Planner.",
+      options: [
+        { label: "Repair the finding", description: "The Builder repairs the problem." },
+        { label: "Accept the delivery", description: "Forge publishes the delivery." },
+        { label: "Cancel the task", description: "Forge stops the task." },
+      ],
+    },
+    expectedRevision: 1,
+    busy: false,
+    onSubmit: async () => undefined,
+  }));
+
+  expect(html).toContain("Review path");
+  expect(html).toContain("Repair the finding");
+  expect(html).toContain("Accept the delivery");
+  expect(html).toContain("Cancel the task");
+});
+
+test("shows the arbitration acceptance actions", () => {
+  const html = renderToStaticMarkup(createElement(TaskAttentionCard, {
+    card: {
+      kind: "generic",
+      title: "The Planner recommends that you accept the delivery as is",
+      explanation: "Accept the delivery because the finding is advisory.",
+      evidence: [],
+      primaryAction: { command: "publish_draft", label: "Publish the pull request" },
+      secondaryAction: { command: "cancel_issue", label: "Cancel the task", destructive: true },
+    },
+    onAction: async () => undefined,
+  }));
+
+  expect(html).toContain("Publish the pull request");
+  expect(html).toContain("Cancel the task");
 });
 
 test("keeps task-actions cards with an available command", () => {

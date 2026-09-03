@@ -35,19 +35,15 @@ test("branch checkout blockers explain the duplicate-task recovery choices", () 
   });
 });
 
-test("repair limit blockers show the delivery decision", () => {
-  const actions = [
-    { command: "record_delivery_decision", label: "Accept as is and publish", requiresNote: true },
-    { command: "cancel_issue", label: "Cancel the task", destructive: true },
-  ];
+test("delivery arbitration acceptance shows publication and cancellation", () => {
   expect(attentionCardFromBlocker(
-    { category: "agent_exhausted", summary: "The Lead review found one open problem." },
-    { actions },
+    { category: "member_authorization", summary: "Accept the delivery because the finding is advisory." },
+    { step: "delivery_reviewed", actions: [{ command: "publish_draft", label: "Publish the pull request" }, { command: "cancel_issue", label: "Cancel the task", destructive: true }] },
   )).toMatchObject({
     kind: "generic",
-    title: "The review problems are not fixed",
-    primaryAction: { command: "record_delivery_decision" },
-    secondaryAction: { command: "cancel_issue" },
+    title: "The Planner recommends that you accept the delivery as is",
+    primaryAction: { command: "publish_draft", label: "Publish the pull request" },
+    secondaryAction: { command: "cancel_issue", label: "Cancel the task", destructive: true },
   });
 });
 

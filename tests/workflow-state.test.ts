@@ -107,10 +107,10 @@ test("delivery workflow constructors keep blockers retryable and approvals exact
   const blocking = DeliveryReviewActivityResultSchema.parse({ outcome: "completed", attemptId: "review_attempt_2", correctionAttempts: 1, subject, review: { reviewId: "review_1", leadExecutionId: "agent_review_1", leadSessionRef: subject.leadSessionRef, opinionArtifactId: "artifact_opinion", evidenceArtifactId: "artifact_review_evidence", opinion: "blocking", summary: "A repair is required.", repairPlan: "Fix the controlled defect.", findings: [blockingFinding], supersedesReviewId: null } });
   if (blocking.outcome !== "completed") throw new Error("Expected a completed review fixture");
   const repairRequired = repairRequiredState(blocked, blocking, 2);
-  expect(repairRequired).toMatchObject({ ...at("repair_required"), owner: "lead", allowedCommands: ["record_delivery_decision", "repair_delivery", "cancel_issue"], deliveryReviewId: "review_1" });
+  expect(repairRequired).toMatchObject({ ...at("repair_required"), owner: "lead", allowedCommands: ["repair_delivery", "cancel_issue"], deliveryReviewId: "review_1" });
 
   const repairLimitReached = repairRequiredState(IssueWorkflowStateSchema.parse({ ...blocked, repairCycle: 2 }), blocking, 2);
-  expect(repairLimitReached).toMatchObject({ ...at("development"), pendingAction: "The review problems are not fixed", blocker: { summary: expect.stringMatching(/^The review found 1 blocking problem\./) } });
+  expect(repairLimitReached).toMatchObject({ ...at("review_arbitration"), owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "The Planner decides how to resolve the review", blocker: null });
 
   const repairBlocked = DeveloperRepairActivityResultSchema.parse({ outcome: "blocked", repairAttemptId: "repair_1", cycle: 1, reviewId: "review_1", subject, code: "worktree-unsafe", summary: "The worktree was not clean.", evidenceArtifactId: "artifact_repair_evidence", developerExecutionId: subject.developerExecutionId, developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", resultCommit: subject.subjectCommit, resultTree: subject.subjectTree, dirtyState: "dirty" });
   if (repairBlocked.outcome !== "blocked") throw new Error("Expected a blocked repair fixture");

@@ -111,7 +111,7 @@ export function repairRequiredState(state: IssueWorkflowState, result: Completed
   const exhausted = result.review.opinion !== "approved" && noProgressEnabled && noProgress(state.repairProgress, progress.repairProgress!);
   const canRepair = !exhausted && result.review.opinion === "blocking" && openBlocking.length > 0 && (state.repairCycle ?? 0) < repairCycleLimit;
   const step = result.review.opinion === "approved" ? "delivery_reviewed" : canRepair ? "repair_required" : "review_arbitration";
-  const owner = step === "repair_required" ? "lead" : "human";
+  const owner = step === "repair_required" || step === "review_arbitration" ? "lead" : "human";
   const allowedCommands: IssueWorkflowState["allowedCommands"] = step === "repair_required" ? ["repair_delivery", "cancel_issue"] : step === "review_arbitration" ? ["cancel_issue"] : ["publish_draft", "cancel_issue"];
   const pendingAction = step === "repair_required" ? "The Builder fixes the review findings" : step === "review_arbitration" ? "The Planner decides how to resolve the review" : "Forge opens the pull request";
   return IssueWorkflowStateSchema.parse({

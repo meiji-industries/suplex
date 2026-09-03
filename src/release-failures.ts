@@ -3,20 +3,6 @@ import { z } from "zod";
 export const ReleaseFailureCodeSchema = z.enum(["authentication-required", "invalid-provider-response", "wrong-remote", "stale-reviewed-revision", "pinned-configuration-incomplete", "target-base-drift", "remote-head-conflict", "ambiguous-provider-state", "provider-rate-limited", "provider-unavailable", "public-projection-unsafe"]);
 export type ReleaseFailureCode = z.infer<typeof ReleaseFailureCodeSchema>;
 
-export const releaseFailureOwner: Record<ReleaseFailureCode, "git" | "GitHub" | "Forge"> = {
-  "authentication-required": "GitHub",
-  "invalid-provider-response": "GitHub",
-  "wrong-remote": "git",
-  "stale-reviewed-revision": "Forge",
-  "pinned-configuration-incomplete": "Forge",
-  "target-base-drift": "git",
-  "remote-head-conflict": "git",
-  "ambiguous-provider-state": "GitHub",
-  "provider-rate-limited": "GitHub",
-  "provider-unavailable": "GitHub",
-  "public-projection-unsafe": "Forge",
-};
-
 export const releaseFailureCopy: Record<ReleaseFailureCode, string> = {
   "authentication-required": "GitHub could not authenticate this request.",
   "invalid-provider-response": "GitHub returned an invalid release response.",

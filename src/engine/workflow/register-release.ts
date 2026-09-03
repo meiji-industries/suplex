@@ -8,7 +8,7 @@ import { githubPullRequestObservationFields } from "../../github-pull-request-ob
 import type { IssueWorkflowContext } from "./context.js";
 import { GithubReleaseFailure } from "../../github-release.js";
 import { resumeReviewedDeliveryTarget } from "./register-delivery-review.js";
-import { ReleaseFailureCodeSchema } from "../../release-failures.js";
+import { ReleaseFailureCodeSchema, releaseFailureCopy } from "../../release-failures.js";
 
 function githubPullRequestLifecycleFields(
   observed: contracts.GithubPullRequestObservationResult,
@@ -23,7 +23,7 @@ function githubPullRequestLifecycleFields(
 export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   const blockDelivery = async (failure: GithubReleaseFailure): Promise<contracts.IssueWorkflowState> => {
-    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "human", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: failure.summary, releaseFailureSummary: failure.summary, releaseRetryAt: failure.retryAt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "human", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: releaseFailureCopy[failure.code], releaseFailureSummary: releaseFailureCopy[failure.code], releaseRetryAt: failure.retryAt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     return ctx.state;
   };

@@ -6,7 +6,7 @@ import { runExecution, type RunExecutionContext } from "../src/engine/registry.j
 import type { IssueWorkflowContext } from "../src/engine/workflow/context.js";
 import { autoRetryDeliveryBlocker } from "../src/engine/workflow/runtime.js";
 import { evidencePointer, humanBlocker } from "../src/engine/workflow/state-transitions.js";
-import { ReleaseFailureCodeSchema, releaseFailureCopy, releaseFailureOwner } from "../src/release-failures.js";
+import { ReleaseFailureCodeSchema, releaseFailureCopy } from "../src/release-failures.js";
 
 const genericProviderSummary = "The provider failure continued after the automatic retries.";
 
@@ -28,7 +28,7 @@ function automaticRetryExecution(): RunExecutionContext {
   };
 }
 
-function exhaustedReleaseState(code: string): IssueWorkflowState {
+function exhaustedReleaseState(releaseFailureSummary?: string): IssueWorkflowState {
   const resultCommit = "c".repeat(40);
   const state = {
     ...buildInitialIssueWorkflowState({
@@ -47,20 +47,20 @@ function exhaustedReleaseState(code: string): IssueWorkflowState {
     ...at("delivery_ready"),
     owner: "human" as const,
     allowedCommands: ["review_delivery" as const, "cancel_issue" as const],
-    pendingAction: genericProviderSummary,
+    pendingAction: "Forge retries the release.",
+    releaseFailureSummary,
     resultCommit,
     deliveryRepairBlockerEvidenceArtifactId: "release-failure-evidence",
     processedCommandIds: [1, 2, 3].map((attempt) => `workflow-release-failure-copy:auto-retry:review_delivery:${resultCommit}:${attempt}`),
     blocker: humanBlocker("provider_connectivity_exhausted", genericProviderSummary, [{ command: "review_delivery", label: "Retry now", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer("release-failure-evidence", "attention-evidence")),
   };
-  Object.defineProperty(state, "releaseFailureCode", { value: code, enumerable: true });
   return state;
 }
 
 test.each(ReleaseFailureCodeSchema.options)("an exhausted %s release failure keeps its owner summary", async (code) => {
   const context = {
     input: {},
-    state: exhaustedReleaseState(code),
+    state: exhaustedReleaseState(releaseFailureCopy[code]),
     async project() { return context.state; },
     commandAlreadyProcessed(commandId: string) { return context.state.processedCommandIds?.includes(commandId) ?? false; },
     markCommandProcessed() {},
@@ -72,8 +72,23 @@ test.each(ReleaseFailureCodeSchema.options)("an exhausted %s release failure kee
 
   expect(context.state.pendingAction).toBe(releaseFailureCopy[code]);
   expect(context.state.blocker?.summary).toBe(releaseFailureCopy[code]);
-  if (releaseFailureOwner[code] !== "GitHub") {
-    expect(context.state.pendingAction).not.toBe(genericProviderSummary);
-    expect(context.state.blocker?.category).not.toBe("provider_connectivity_exhausted");
-  }
+  expect(context.state.pendingAction).not.toBe(genericProviderSummary);
+  expect(context.state.blocker?.summary).not.toBe(genericProviderSummary);
+});
+
+test("an exhausted release failure without a persisted summary uses the generic provider summary", async () => {
+  const context = {
+    input: {},
+    state: exhaustedReleaseState(),
+    async project() { return context.state; },
+    commandAlreadyProcessed(commandId: string) { return context.state.processedCommandIds?.includes(commandId) ?? false; },
+    markCommandProcessed() {},
+  } as unknown as IssueWorkflowContext;
+
+  await runExecution.run(automaticRetryExecution(), async () => {
+    await expect(autoRetryDeliveryBlocker(context)).resolves.toBe(true);
+  });
+
+  expect(context.state.pendingAction).toBe(genericProviderSummary);
+  expect(context.state.blocker?.summary).toBe(genericProviderSummary);
 });

@@ -1367,7 +1367,7 @@ export class TaskService {
     }
     const state = IssueWorkflowStateSchema.parse(stored);
     if (state.revision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
-    const next = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("cancelled"), owner: "human", allowedCommands: [], pendingAction: "Issue cancelled", blocker: null, capacity: null, capacityBlocker: null, activeOperation: null, stateChangedAt: this.now().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    const next = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("cancelled"), owner: "human", allowedCommands: [], pendingAction: "Task cancelled", blocker: null, capacity: null, capacityBlocker: null, activeOperation: null, stateChangedAt: this.now().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
     this.database.projectIssueEvent({ schemaVersion: 1, runId: snapshot.runId ?? state.workflowId, eventId: next.lastEventId, state: next });
   }
 
@@ -1381,7 +1381,7 @@ export class TaskService {
     const retryingCancellation = command === "cancel_development" && task.developerRecovery?.status === "cancellation_requested";
     const canContinuePastReview = command === "record_delivery_decision" && task.step === "repair_required";
     const canDeleteTerminalWorktree = command === "delete_worktree" && TERMINAL_PHASES.has(task.phase);
-    const retryingLegacyConflictPlan = command === "resolve_merge_conflict" && task.step === "merge_conflict_resolving" && task.pendingAction === "Planner couldn't plan the fix — retry or take a look";
+    const retryingLegacyConflictPlan = command === "resolve_merge_conflict" && task.step === "merge_conflict_resolving" && task.pendingAction === "The Planner did not plan the fix. Retry, or inspect the task.";
     if (command !== "cancel_issue" && !allowedCommands.includes(command) && !retryingCancellation && !canContinuePastReview && !canDeleteTerminalWorktree && !retryingLegacyConflictPlan) {
       const message = command === "start_planning" ? "Planning cannot start from the current state" : command === "record_delivery_decision" ? "A delivery decision is not available" : descriptor.family === "start" ? "Plan action is not available" : "Task action is not available";
       throw new TaskFailure(message, [finding("illegal-command", "phase", message)], 409, task);
@@ -2107,7 +2107,7 @@ export class TaskService {
       lastHeartbeatAt: snapshotState.data.developerLastHeartbeatAt ?? null,
       currentOwner: "forge" as const,
       evidenceArtifactId: snapshotState.data.developerEvidenceArtifactId ?? developerExecution?.evidenceArtifactId ?? null,
-      nextAction: nextRecoveryCommand ? { command: nextRecoveryCommand, label: nextRecoveryCommand === "retry_development" ? "Retry development" : nextRecoveryCommand === "cancel_development" ? "Cancel development" : "Cancel issue", requiresConfirmation: true } : null,
+      nextAction: nextRecoveryCommand ? { command: nextRecoveryCommand, label: nextRecoveryCommand === "retry_development" ? "Retry development" : nextRecoveryCommand === "cancel_development" ? "Cancel development" : "Cancel the task", requiresConfirmation: true } : null,
     } : undefined;
     const planAuthorization = null as unknown as { id: string; plan_sha256: string } | undefined;
     const decision = this.database.authQuery((db) => db.prepare("SELECT artifact_id FROM forge_delivery_decisions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { artifact_id: string } | undefined);

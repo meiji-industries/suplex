@@ -39,7 +39,7 @@ export function AttentionView(): ReactElement {
       await readJson(`/api/tasks/${encodeURIComponent(item.taskId)}/${path}`, { method: "POST", body: JSON.stringify(attentionActionBody(action, actionNote, idempotencyKey)) });
       setStatus(""); await reload();
     } catch (reason) {
-      if (isApiError(reason, 409)) { setStatus("This issue changed. Refreshing the current attention state."); await reload(); }
+      if (isApiError(reason, 409)) { setStatus("This task changed. Forge refreshes the attention state."); await reload(); }
       else setError(reason instanceof Error ? reason.message : "Unable to apply attention action");
     } finally { setActionBusy(""); }
   }, [reload]);

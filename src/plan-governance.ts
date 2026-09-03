@@ -50,9 +50,9 @@ export const DecisionIdempotencyKeySchema = z.string().min(8).max(128).regex(/^[
 export function routeLeadResult(result: { kind: "plan" | "decision_blocker" }, options: { supplementalReview: boolean; reviewerConfigured: boolean }): { step: IssueStep; phase: IssuePhase; owner: "lead" | "human"; allowedCommands: string[]; pendingAction: string; blocker?: IssueBlocker } {
   if (result.kind === "decision_blocker") {
     return {
-      ...at("planning"), owner: "human", allowedCommands: ["respond_plan_blocker", "cancel_issue"], pendingAction: "Needs your call",
-      blocker: { category: "member_decision", summary: "Needs your call", unblockOwner: "human", actions: [{ command: "respond_plan_blocker", label: "Respond to blocker", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidence: { artifactId: "blocker", kind: "decision-blocker" }, createdAt: new Date().toISOString(), retry: null },
+      ...at("planning"), owner: "human", allowedCommands: ["respond_plan_blocker", "cancel_issue"], pendingAction: "Your decision is necessary",
+      blocker: { category: "member_decision", summary: "Your decision is necessary", unblockOwner: "human", actions: [{ command: "respond_plan_blocker", label: "Answer the Planner", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidence: { artifactId: "blocker", kind: "decision-blocker" }, createdAt: new Date().toISOString(), retry: null },
     };
   }
-  return { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue", ...(options.supplementalReview && options.reviewerConfigured ? ["request_supplemental_review"] : [])], pendingAction: "Approve final plan" };
+  return { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue", ...(options.supplementalReview && options.reviewerConfigured ? ["request_supplemental_review"] : [])], pendingAction: "Approve the final plan" };
 }

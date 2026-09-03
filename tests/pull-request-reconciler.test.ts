@@ -9,9 +9,9 @@ describe("pull request reconciler", () => {
     expect(result(target, { exists: false, state: null, isDraft: null })).toMatchObject({ phase: "Opening PR", actions: [{ kind: target === "draft" ? "push_open_draft" : "push_open_ready" }] });
   });
   test.each([["draft", "Done"], ["ready", "Blocked"], ["merged", "Blocked"]] as const)("reconciles draft PR for %s", (target, phase) => expect(result(target, { isDraft: true })).toMatchObject({ phase }));
-  test.each([["draft"], ["ready"]] as const)("adopts a ready PR for %s", (target) => expect(result(target)).toMatchObject({ phase: "Done", pendingAction: "Pull request ready" }));
-  test("waits for CI for a merged target", () => expect(result("merged", { checks: "pending" })).toMatchObject({ phase: "Waiting for CI", pendingAction: "Waiting for CI" }));
-  test("starts the CI repair path without a human gate", () => expect(result("merged", { checks: "failed" })).toMatchObject({ phase: "Waiting for CI", owner: "lead", actions: expect.arrayContaining([{ kind: "repair_ci" }]) }));
+  test.each([["draft"], ["ready"]] as const)("adopts a ready PR for %s", (target) => expect(result(target)).toMatchObject({ phase: "Done", pendingAction: "The pull request is ready" }));
+  test("waits for CI for a merged target", () => expect(result("merged", { checks: "pending" })).toMatchObject({ phase: "Forge waits for CI", pendingAction: "Forge waits for CI" }));
+  test("starts the CI repair path without a human gate", () => expect(result("merged", { checks: "failed" })).toMatchObject({ phase: "Forge waits for CI", owner: "lead", actions: expect.arrayContaining([{ kind: "repair_ci" }]) }));
   test.each([["ready"], ["merged"]] as const)("resolves GitHub merge conflicts for %s", (target) => {
     const reconciliation = result(target, { mergeable: "CONFLICTING" });
     expect(reconciliation).toMatchObject({ phase: "Resolving conflicts", owner: "lead", allowedCommands: ["cancel_issue"] });
@@ -20,7 +20,7 @@ describe("pull request reconciler", () => {
   test("does not resolve an unknown GitHub merge state", () => expect(result("merged", { mergeable: "UNKNOWN" })).not.toMatchObject({ phase: "Resolving conflicts" }));
   test("enables auto merge for green merged delivery", () => {
     const reconciliation = result("merged");
-    expect(reconciliation).toMatchObject({ phase: "Merging", owner: "lead", allowedCommands: [] });
+    expect(reconciliation).toMatchObject({ phase: "Forge merges the pull request", owner: "lead", allowedCommands: [] });
     expect(reconciliation.actions).toContainEqual(expect.objectContaining({ kind: "enable_auto_merge", number: 1484 }));
   });
   test("merges directly when auto-merge is unavailable", () => expect(reconcile({ observed: observed(), target: "merged", current: { autoMergeAvailable: false } }).actions).toContainEqual(expect.objectContaining({ kind: "merge" })));
@@ -36,5 +36,5 @@ test("retains a human CI decision until GitHub changes", () => {
   const current = { step: "ci_repairing", owner: "human" as const, pendingAction: "Required check failed: Test suite", adoptedObservationKey: `1484:open:false:${"a".repeat(40)}:none:failed` };
 
   expect(reconcile({ observed: failed, target: "merged", current })).toMatchObject({ unchanged: true, actions: [] });
-  expect(reconcile({ observed: { ...failed, checks: "pending" }, target: "merged", current })).toMatchObject({ phase: "Waiting for CI", owner: "lead" });
+  expect(reconcile({ observed: { ...failed, checks: "pending" }, target: "merged", current })).toMatchObject({ phase: "Forge waits for CI", owner: "lead" });
 });

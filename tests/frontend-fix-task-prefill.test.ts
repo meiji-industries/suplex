@@ -58,7 +58,7 @@ describe("fixTaskDraft", () => {
   });
 
   test("still produces an actionable draft when deeper diagnostics are unavailable", () => {
-    const draft = fixTaskDraft(task({ phase: "planning", lastHandlerError: null, agentInvocations: [], pendingAction: "Lead planning" }), undefined, "https://forge.test/tasks/task-1", "2026-08-30T15:00:00.000Z");
+    const draft = fixTaskDraft(task({ phase: "planning", lastHandlerError: null, agentInvocations: [], pendingAction: "The Planner writes the plan" }), undefined, "https://forge.test/tasks/task-1", "2026-08-30T15:00:00.000Z");
     expect(draft.title).toBe("Fix Forge behavior observed in Waiting for a codex agent slot");
     expect(draft.description).toContain("Diagnostics endpoint was unavailable");
   });

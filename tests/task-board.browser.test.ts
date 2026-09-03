@@ -104,7 +104,7 @@ test("the task board shows its workflow lanes on desktop and narrow viewports", 
       await page.getByRole("link", { name: "Board", exact: true }).click();
       expect(await page.evaluate(() => (window as Window & { forgeNavigationMarker?: string }).forgeNavigationMarker)).toBe("still-mounted");
       await page.getByRole("checkbox", { name: "Hide empty columns" }).click();
-      for (const phase of ["Backlog", "Planning", "In Development", "In Review", "Waiting for CI", "Final review", "Done"]) expect(await page.getByText(phase, { exact: true }).isVisible()).toBe(true);
+      for (const phase of ["Backlog", "Planning", "In Development", "In Review", "Forge waits for CI", "Final review", "Done"]) expect(await page.getByText(phase, { exact: true }).isVisible()).toBe(true);
       await page.goBack(); await page.locator("[data-task-list]").getByText("Browser board task", { exact: true }).waitFor();
       await page.getByRole("link", { name: /Browser board task/ }).first().click(); await page.waitForURL(new RegExp(`/tasks/${taskId}`));
       expect(await page.evaluate(() => (window as Window & { forgeNavigationMarker?: string }).forgeNavigationMarker)).toBe("still-mounted");

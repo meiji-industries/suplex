@@ -7,7 +7,7 @@ const observed = (overrides: Partial<PullRequestObservation> = {}): PullRequestO
 
 describe("live GitHub heads", () => {
   test("adopts an open changed head for delivery review", () => {
-    expect(reconcile({ observed: observed(), target: "merged", current: { headSha: sha("a") } })).toMatchObject({ pendingAction: "Reviewing the latest changes", actions: expect.arrayContaining([{ kind: "review_delivery", headSha: sha("b") }]) });
+    expect(reconcile({ observed: observed(), target: "merged", current: { headSha: sha("a") } })).toMatchObject({ pendingAction: "The Planner reviews the latest changes", actions: expect.arrayContaining([{ kind: "review_delivery", headSha: sha("b") }]) });
   });
   test("treats a merged changed head as done", () => expect(reconcile({ observed: observed({ state: "merged" }), target: "merged", current: { headSha: sha("a") } }).phase).toBe("Done"));
   test("keeps closed pull requests blocked", () => expect(reconcile({ observed: observed({ state: "closed" }), target: "merged", current: { headSha: sha("a") } }).phase).toBe("Blocked"));

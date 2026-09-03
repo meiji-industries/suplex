@@ -56,7 +56,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
   };
   const beginPlanning = (workflowId: string, expectedRevision: number): IssueWorkflowState => {
     const taskId = workflowId.split("-issue-")[1]!;
-    plannedState = { ...plannedState!, revision: expectedRevision + 1, ...at("planning"), owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: expectedRevision + 1, ...at("planning"), owner: "lead", allowedCommands: [], pendingAction: "The Planner writes the plan", lastEventId: `${workflowId}:${expectedRevision + 1}` };
     projectState(plannedState);
     database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, started_at) VALUES ('agent_browser', ?, ?, ?, 'planner', 'running', 1, 'planning', ?, ?, ?, ?, ?)").run(taskId, company.id, workflowId, profile.id, profile.model, profile.reasoningLevel, profile.servicePriority, new Date().toISOString()));
     return plannedState;
@@ -73,7 +73,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       db.prepare("UPDATE forge_agent_executions SET status = 'completed', session_ref = 'session_browser', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = 'agent_browser'").run(now, now, evidence.id);
       db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_browser', ?, ?, ?, 'agent_browser', ?, 'plan', ?, ?, 'session_browser', 'A focused browser plan', ?)").run(taskId, company.id, workflowId, input.expectedRevision + 1, output.id, evidence.id, now);
     });
-    plannedState = { workflowId, companyId: company.id, projectId: project.id, issueId: taskId, projectRevisionId: plannedState!.projectRevisionId, ...at("approval"), revision: input.expectedRevision + 2, owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "request_plan_revision"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 2}`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: output.id, leadOutputKind: "plan", leadSummary: "A focused browser plan", planRevision: 1, supplementalReviewUsed: false };
+    plannedState = { workflowId, companyId: company.id, projectId: project.id, issueId: taskId, projectRevisionId: plannedState!.projectRevisionId, ...at("approval"), revision: input.expectedRevision + 2, owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "request_plan_revision"], pendingAction: "Approve the final plan", lastEventId: `${workflowId}:${input.expectedRevision + 2}`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: output.id, leadOutputKind: "plan", leadSummary: "A focused browser plan", planRevision: 1, supplementalReviewUsed: false };
     projectState(plannedState);
     return plannedState;
   };
@@ -93,11 +93,11 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
     void completePlanning(workflowId, input);
     return state;
   }, async requestSupplementalReview(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, allowedCommands: ["approve_plan", "request_plan_revision"], pendingAction: "Approve final plan", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}`, supplementalReviewUsed: true };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, allowedCommands: ["approve_plan", "request_plan_revision"], pendingAction: "Approve the final plan", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}`, supplementalReviewUsed: true };
     projectState(plannedState);
     return plannedState;
   }, async approvePlan(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("ready_for_development"), owner: "lead", allowedCommands: ["start_development"], pendingAction: "Start development", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("ready_for_development"), owner: "lead", allowedCommands: ["start_development"], pendingAction: "Start the build", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
   }, async acceptDevelopment(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
@@ -109,7 +109,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(releaseBody.id, releaseBody.companyId, releaseBody.kind, releaseBody.filename, releaseBody.mimeType, releaseBody.byteSize, releaseBody.sha256, releaseBody.storagePath, releaseBody.createdAt);
       db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, body_artifact_id, reused, created_at, updated_at) VALUES ('release-browser', ?, ?, ?, 'release-browser-key', 'acme/forge', 'issue/browser-task', 'main', ?, ?, ?, 'draft', 21, 'https://github.com/acme/forge/pull/21', 'Browser task', ?, 1, ?, ?)").run(plannedState!.issueId, company.id, plannedState!.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), releaseBody.id, now, now);
     });
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("ci_waiting"), owner: "lead", allowedCommands: ["cancel_issue", "revise_plan"], pendingAction: "Waiting for CI", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("ci_waiting"), owner: "lead", allowedCommands: ["cancel_issue", "revise_plan"], pendingAction: "Forge waits for CI", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
   }, async startDevelopment(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
@@ -121,7 +121,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
     return plannedState!;
   }, async retryTargetBaseReconciliation(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET status = 'conflict', current_base_sha = ?, conflict_files_json = '[\"README.md\"]', conflict_file_count = 1, failure_code = NULL, failure_summary = NULL, updated_at = ? WHERE id = 'merge-browser'").run("b".repeat(40), new Date().toISOString()));
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("merge_conflict_resolving"), owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseOutcome: "conflict", targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null, forwardMergeId: "merge-browser", forwardMergePriorHead: "c".repeat(40), forwardMergePriorTree: "d".repeat(40), forwardMergeTargetBaseSha: "b".repeat(40), forwardMergeConflictArtifact: { id: "conflict-browser", kind: "forward-merge-conflict" }, forwardMergeConflictFileCount: 1 };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("merge_conflict_resolving"), owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "The Builder waits for the Planner conflict plan", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseOutcome: "conflict", targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null, forwardMergeId: "merge-browser", forwardMergePriorHead: "c".repeat(40), forwardMergePriorTree: "d".repeat(40), forwardMergeTargetBaseSha: "b".repeat(40), forwardMergeConflictArtifact: { id: "conflict-browser", kind: "forward-merge-conflict" }, forwardMergeConflictFileCount: 1 };
     projectState(plannedState!);
     return plannedState!;
   }, async resolveMergeConflict(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
@@ -134,16 +134,16 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
     projectState(plannedState);
     await forwardMergeVerificationGate;
     database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET status = 'no_drift', failure_code = NULL, failure_summary = NULL, updated_at = ? WHERE id = 'merge-browser'").run(new Date().toISOString()));
-    plannedState = { ...plannedState!, revision: plannedState!.revision + 1, ...at("delivery_reviewed"), owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish one exact draft pull request", lastEventId: `${workflowId}:${plannedState!.revision + 1}`, targetBaseOutcome: "no_drift", targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null };
+    plannedState = { ...plannedState!, revision: plannedState!.revision + 1, ...at("delivery_reviewed"), owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish the reviewed commit as a draft pull request", lastEventId: `${workflowId}:${plannedState!.revision + 1}`, targetBaseOutcome: "no_drift", targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null };
     projectState(plannedState);
     return plannedState;
   }, async rejectPlan(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "The Planner revises the plan", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
   }, async revisePlan(_workflowId: string, input: PlanRevisionCommand): Promise<IssueWorkflowState> {
     if (input.worktreeDisposition !== "new") throw new Error("The browser fixture only supports a new exact-base worktree");
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning", "cancel_issue", "revise_plan"], pendingAction: "Run revised Lead planning", revisionRequestId: `revision_browser_${input.expectedRevision}`, revisedExecutionCoordinates: { disposition: "new", revisionRequestId: `revision_browser_${input.expectedRevision}`, exactBaseSha: input.exactBaseSha! }, lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning", "cancel_issue", "revise_plan"], pendingAction: "Run revised The Planner writes the plan", revisionRequestId: `revision_browser_${input.expectedRevision}`, revisedExecutionCoordinates: { disposition: "new", revisionRequestId: `revision_browser_${input.expectedRevision}`, exactBaseSha: input.exactBaseSha! }, lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
   } } as unknown as IssueWorkflowPort;

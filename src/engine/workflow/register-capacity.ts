@@ -20,7 +20,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
         (capacityRequestId) => agent.runLeadPlanning({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision, ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (value) => value.leadExecutionId,
       );
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...result, planRevision: ctx.state.revision, supplementalReviewUsed: false, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue", ...(ctx.input.supplementalReview && ctx.input.roleProfiles.reviewer ? ["request_supplemental_review" as const] : [])], pendingAction: "Approve final plan", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, revision: ctx.state.revision + 1 });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...result, planRevision: ctx.state.revision, supplementalReviewUsed: false, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue", ...(ctx.input.supplementalReview && ctx.input.roleProfiles.reviewer ? ["request_supplemental_review" as const] : [])], pendingAction: "Approve the final plan", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, revision: ctx.state.revision + 1 });
       await ctx.project();
       return ctx.state;
     }
@@ -30,7 +30,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
         (capacityRequestId) => agent.runDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supersedesExecutionId: ctx.state.developerExecutionId ?? undefined, reuseWorktree: Boolean(ctx.state.worktreePath), ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (value) => value.developerExecutionId,
       );
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at(result.outcome === "completed" ? "delivery_ready" : "development"), owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], pendingAction: result.outcome === "completed" ? "Lead delivery review" : "Resolve Developer blocker", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at(result.outcome === "completed" ? "delivery_ready" : "development"), owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], pendingAction: result.outcome === "completed" ? "The Planner reviews the delivery" : "Resolve the Builder blocker", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome });
       await ctx.project();
       return ctx.state;
     }
@@ -46,18 +46,18 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
         (capacityRequestId) => agent.consolidateLeadPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision + 1, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supplementalReviewArtifactId: review.reviewArtifactId, ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (result) => result.leadExecutionId,
       );
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...consolidated, revision: ctx.state.revision + 1, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, supplementalReviewUsed: true, supplementalReviewArtifactId: review.reviewArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...consolidated, revision: ctx.state.revision + 1, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve the final plan", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, supplementalReviewUsed: true, supplementalReviewArtifactId: review.reviewArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision });
       await ctx.project();
       return ctx.state;
     }
     if (operation === "lead_consolidation") {
-      if (ctx.state.step !== "approval" || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef || !ctx.state.supplementalReviewArtifactId) throw new Error("Lead consolidation prerequisites changed; request supplemental review again");
+      if (ctx.state.step !== "approval" || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef || !ctx.state.supplementalReviewArtifactId) throw new Error("The Planner consolidates the plan prerequisites changed; request supplemental review again");
       const consolidated = await ctx.acquireExternalTurn<contracts.LeadPlanningResult>(
         { operation, role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: ctx.state.leadSessionRef },
         (capacityRequestId) => agent.consolidateLeadPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision + 1, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supplementalReviewArtifactId: ctx.state.supplementalReviewArtifactId!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (result) => result.leadExecutionId,
       );
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...consolidated, revision: ctx.state.revision + 1, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, supplementalReviewUsed: true, planRevision: ctx.state.planRevision ?? ctx.state.revision });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...consolidated, revision: ctx.state.revision + 1, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve the final plan", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, supplementalReviewUsed: true, planRevision: ctx.state.planRevision ?? ctx.state.revision });
       await ctx.project();
       return ctx.state;
     }
@@ -76,7 +76,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
       const noProgressEnabled = true;
       const cycle = (ctx.state.repairCycle ?? 0) + 1;
       if (ctx.state.step !== "repair_required" || (ctx.input.repairCycleLimit !== undefined && cycle > ctx.repairCycleLimit) || !ctx.state.deliveryReviewId || (!ctx.state.deliveryReviewArtifact && (!ctx.state.deliveryRepairPlan || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open"))) || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.leadSessionRef || !ctx.input.roleProfiles.builder) throw new Error("Developer repair prerequisites changed; start delivery repair again");
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: `Developer repair cycle ${cycle}`, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: `Builder repair cycle ${cycle}`, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       let result: contracts.WorkflowDeveloperRepairResult;
       try {
@@ -93,7 +93,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
         } catch (fallbackError) {
           if (isCancellation(fallbackError)) throw fallbackError;
         }
-        const summary = error instanceof Error ? error.message : "The repair infrastructure did not complete; retry the repair.";
+        const summary = error instanceof Error ? error.message : "The repair did not complete. Retry the repair.";
         const failure = ctx.permanentActivityFailure(error, true);
         const failureClass = noProgressEnabled ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary, source: "local_check" }) : "code_failure";
         const evidence = stateTransitions.evidencePointer(evidenceArtifactId ?? failure?.evidenceArtifactId ?? undefined, "developer-repair");
@@ -113,17 +113,17 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
           (capacityRequestId) => activityProxies.planMergeConflict({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, executionRole: stateTransitions.integratorTurn(ctx, "planner").role === "integrator" ? "integrator" : "planner", leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, worktreePath: ctx.state.worktreePath!, branchName: ctx.state.branchName!, forwardMergeId: ctx.state.forwardMergeId!, priorHead: ctx.state.forwardMergePriorHead!, targetBaseSha: ctx.state.forwardMergeTargetBaseSha!, conflictArtifact: ctx.state.forwardMergeConflictArtifact!, conflictFileCount: ctx.state.forwardMergeConflictFileCount!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
           (result) => result.leadExecutionId,
         );
-        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "The Builder waits for the Planner conflict plan", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       } catch (error) {
         if (isCancellation(error)) throw error;
-        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Forge could not prepare a conflict plan. Try resolving again.", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Forge did not prepare a conflict plan. Retry the resolution.", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       }
       await ctx.project();
       return ctx.state;
     }
     if (operation === "merge_conflict_resolution") {
       if (!isBlocked(ctx.state) || !ctx.state.mergeResolutionPlanArtifactId || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.worktreePath || !ctx.state.branchName || !ctx.state.forwardMergeId || !ctx.state.forwardMergePriorHead || !ctx.state.forwardMergeTargetBaseSha || !ctx.state.forwardMergeConflictArtifact || typeof ctx.state.forwardMergeConflictFileCount !== "number" || !stateTransitions.integratorTurn(ctx, "builder").profileId) throw new Error("Conflict-resolution prerequisites changed; revalidate the Lead plan and Developer worktree");
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "lead", allowedCommands: [], pendingAction: "Developer resolving forward-merge conflicts", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "lead", allowedCommands: [], pendingAction: "The Builder resolves the merge conflicts", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       try {
         const result = await ctx.acquireExternalTurn<Awaited<ReturnType<typeof activityProxies.resolveMergeConflict>>>(
@@ -140,7 +140,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
         }
       } catch (error) {
         if (isCancellation(error)) throw error;
-        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Builder didn't finish resolving conflicts — retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "The Builder did not resolve the conflicts. Retry.", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       }
       await ctx.project();
       return ctx.state;
@@ -170,7 +170,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
       ...ctx.state,
       revision: ctx.state.revision + 1,
       allowedCommands: ctx.continueAfter > 0 ? ["record_progress"] : [],
-      pendingAction: "Lead planning",
+      pendingAction: "The Planner writes the plan",
       lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
       continuationCount: ctx.state.continuationCount,
       lastSummaryHash: ctx.state.lastSummaryHash,

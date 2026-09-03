@@ -535,7 +535,7 @@ export function AdminView(): ReactElement {
         {isAgents ? (
           <div className="space-y-12">
             <section>
-              <SettingsToolbar searchLabel="Filter internal agents by name" searchPlaceholder="Filter by name…" filterLabel="All roles" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={openNewAgent}>New internal agent</SettingsToolbarAction>} />
+              <SettingsToolbar searchLabel="Filter internal agents by name" searchPlaceholder="Filter by name" filterLabel="All roles" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={openNewAgent}>New internal agent</SettingsToolbarAction>} />
               <SettingsDataTable label="Internal Agents" columns={AGENT_COLUMNS} className="mt-4">
                 <SettingsTableGroup label="Internal agents" count={agents.length} columnCount={AGENT_COLUMNS.length}>
                   {sortedAgents.map((agent) => (
@@ -803,7 +803,7 @@ export function AdminView(): ReactElement {
 
         {isCompanies ? (
           <section>
-            <SettingsToolbar searchLabel="Search companies" searchPlaceholder="Search companies…" filterLabel="All" searchWidth="compact" actions={null} />
+            <SettingsToolbar searchLabel="Search companies" searchPlaceholder="Search companies" filterLabel="All" searchWidth="compact" actions={null} />
             <SettingsDataTable label="Companies" columns={COMPANY_COLUMNS} className="mt-5">
               <SettingsTableGroup columnCount={COMPANY_COLUMNS.length} count={companies.length} label="Companies">
                 {companies.map((company) => (
@@ -825,7 +825,7 @@ export function AdminView(): ReactElement {
         {isInvitations ? (
           <>
             <section>
-              <SettingsToolbar searchLabel="Search invitations" searchPlaceholder="Search invitations…" filterLabel="All" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={() => { setInviteToken(""); setCopied(false); setInviteOpen(true); }}>Invite</SettingsToolbarAction>} />
+              <SettingsToolbar searchLabel="Search invitations" searchPlaceholder="Search invitations" filterLabel="All" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={() => { setInviteToken(""); setCopied(false); setInviteOpen(true); }}>Invite</SettingsToolbarAction>} />
               <SettingsDataTable label="Invitations" columns={INVITATION_COLUMNS} className="mt-5">
                 <SettingsTableGroup columnCount={INVITATION_COLUMNS.length} count={invitations.length} label="Invitations">
                   {invitations.map((invitation) => (
@@ -847,7 +847,7 @@ export function AdminView(): ReactElement {
 
         {isPasskeys ? (
           <section>
-            <SettingsToolbar searchLabel="Search passkeys" searchPlaceholder="Search passkeys…" filterLabel="All" searchWidth="compact" actions={null} />
+            <SettingsToolbar searchLabel="Search passkeys" searchPlaceholder="Search passkeys" filterLabel="All" searchWidth="compact" actions={null} />
             <SettingsDataTable label="Passkeys" columns={PASSKEY_COLUMNS} className="mt-5">
               <SettingsTableGroup columnCount={PASSKEY_COLUMNS.length} count={credentials.filter((credential) => !credential.revokedAt).length} label="Passkeys">
                 {credentials.map((credential) => {
@@ -874,7 +874,7 @@ export function AdminView(): ReactElement {
         {isModels ? (
           <>
             <section>
-              <SettingsToolbar searchLabel="Search models" searchPlaceholder="Search models…" filterLabel="All" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={() => setModelOpen(true)}>Add model</SettingsToolbarAction>} />
+              <SettingsToolbar searchLabel="Search models" searchPlaceholder="Search models" filterLabel="All" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={() => setModelOpen(true)}>Add model</SettingsToolbarAction>} />
               <SettingsDataTable label="Models" columns={MODEL_COLUMNS} className="mt-5">
                 <SettingsTableGroup columnCount={MODEL_COLUMNS.length} count={models.filter((model) => model.status === "active").length} label="Model catalog">
                   {models.map((model) => (

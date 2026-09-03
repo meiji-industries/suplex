@@ -34,7 +34,7 @@ test("plan rejection revises, a planner decision blocker resolves, and a done ta
     expect(revised).toMatchObject({ step: "approval", leadSummary: "Revised plan" });
     expect(await executeIssueCommand(h.config, governed.workflowId, "approve_plan", { expectedRevision: revised.revision, actorUserId: engineFixture.actorUserId })).toMatchObject({ step: "ready_for_development", planApproved: true });
 
-    const blocked = { ...baseState(h, "blocker", "planning", 7), owner: "human" as const, allowedCommands: ["resolve_decision_blocker" as const, "cancel_issue" as const], blockedCategory: "human_decision" as const, blockedResumePhase: "planning" as const, blockerArtifactId: "blocker-artifact", leadSessionRef: "lead-session", blocker: { category: "member_decision" as const, summary: "Needs your call", unblockOwner: "human" as const, actions: [{ command: "resolve_decision_blocker" as const, label: "Resolve decision", requiresNote: false, destructive: false }, { command: "cancel_issue" as const, label: "Cancel issue", requiresNote: false, destructive: true }], evidence: { artifactId: "blocker-artifact", kind: "decision-blocker" as const }, createdAt: new Date(h.clock.now()).toISOString(), retry: null } };
+    const blocked = { ...baseState(h, "blocker", "planning", 7), owner: "human" as const, allowedCommands: ["resolve_decision_blocker" as const, "cancel_issue" as const], blockedCategory: "human_decision" as const, blockedResumePhase: "planning" as const, blockerArtifactId: "blocker-artifact", leadSessionRef: "lead-session", blocker: { category: "member_decision" as const, summary: "Your decision is necessary", unblockOwner: "human" as const, actions: [{ command: "resolve_decision_blocker" as const, label: "Resolve decision", requiresNote: false, destructive: false }, { command: "cancel_issue" as const, label: "Cancel the task", requiresNote: false, destructive: true }], evidence: { artifactId: "blocker-artifact", kind: "decision-blocker" as const }, createdAt: new Date(h.clock.now()).toISOString(), retry: null } };
     const blocker = await h.startContinuation("blocker", blocked);
     expect(await resolveIssueDecisionBlocker(h.config, blocker.workflowId, { expectedRevision: (await queryIssueWorkflow(h.config, blocker.workflowId)).revision, actorUserId: engineFixture.actorUserId, answerArtifactId: "answer-artifact" })).toMatchObject({ step: "approval", blockerResolutionId: "resolution-1", leadSessionRef: "lead-session" });
 
@@ -77,7 +77,7 @@ test("target-base retry preserves the authoritative Lead-review state for a clea
       ...baseState(h, issueId, "development", 12),
       owner: "human" as const,
       allowedCommands: ["retry_development" as const, "cancel_issue" as const],
-      pendingAction: "Developer retry is available",
+      pendingAction: "The Builder can retry",
       developerExecutionId: "developer-clean",
       developerSessionRef: "developer-session",
       branchName: `forge/issue/${issueId}`,
@@ -93,7 +93,7 @@ test("target-base retry preserves the authoritative Lead-review state for a clea
     const initial = await queryIssueWorkflow(h.config, started.workflowId);
     const resumed = await executeIssueCommand(h.config, started.workflowId, "retry_target_base_reconciliation", { expectedRevision: initial.revision, actorUserId: engineFixture.actorUserId });
 
-    expect(resumed).toMatchObject({ step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue", "retry_target_base_reconciliation"], pendingAction: "Lead delivery review" });
+    expect(resumed).toMatchObject({ step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue", "retry_target_base_reconciliation"], pendingAction: "The Planner reviews the delivery" });
     expect(resumed.allowedCommands).not.toContain("retry_development");
     expect(h.calls.get("reconcileTargetBase")).toBe(1);
   } finally { await h.stop(); }
@@ -111,7 +111,7 @@ test("target-base retry self-heals persisted delivery readiness into Lead review
       ...baseState(h, issueId, "delivery_ready", 12),
       owner: "human" as const,
       allowedCommands: ["retry_development" as const, "retry_target_base_reconciliation" as const, "cancel_issue" as const],
-      pendingAction: "Developer retry is available",
+      pendingAction: "The Builder can retry",
       developerExecutionId: "developer-clean",
       developerSessionRef: "developer-session",
       branchName: `forge/issue/${issueId}`,
@@ -129,7 +129,7 @@ test("target-base retry self-heals persisted delivery readiness into Lead review
     const initial = await queryIssueWorkflow(h.config, started.workflowId);
     const resumed = await executeIssueCommand(h.config, started.workflowId, "retry_target_base_reconciliation", { expectedRevision: initial.revision, actorUserId: engineFixture.actorUserId });
 
-    expect(resumed).toMatchObject({ step: "delivery_ready", owner: "lead", pendingAction: "Lead delivery review" });
+    expect(resumed).toMatchObject({ step: "delivery_ready", owner: "lead", pendingAction: "The Planner reviews the delivery" });
     expect(resumed.allowedCommands).toContain("review_delivery");
     expect(resumed.allowedCommands).not.toContain("retry_development");
     expect(h.calls.get("reconcileTargetBase")).toBe(1);

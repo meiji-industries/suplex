@@ -40,7 +40,7 @@ test("a failed automatic merge-conflict resolver stops for a human retry", async
       revision: 7,
       owner: "lead" as const,
       allowedCommands: ["resolve_merge_conflict" as const, "cancel_issue" as const],
-      pendingAction: "Developer conflict resolution requires the Lead plan",
+      pendingAction: "The Builder waits for the Planner conflict plan",
       lastEventId: `${workflowId}:7`,
       leadSessionRef: "lead-session",
       leadOutputArtifactId: "lead-plan",

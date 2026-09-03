@@ -246,7 +246,7 @@ export class AcceptanceService {
     try { current = await this.currentPr(context.repository, context.prNumber); } catch {
       const next = retryAt(observedAt, this.nextObservationAttempt(context.acceptanceId));
       const observation = await this.recordMergeObservation(context, "provider_unavailable", "provider_unavailable", null, observedAt, next);
-      return { outcome: "provider_unavailable", pullRequest: null, observationId: observation.id, completionReceiptId: null, observedAt, mergedAt: null, retryAt: next, blocker: { code: "provider_unavailable", owner: "human", summary: "GitHub merge state is temporarily unavailable", retryAt: next, evidenceArtifactId: observation.evidenceArtifactId } };
+      return { outcome: "provider_unavailable", pullRequest: null, observationId: observation.id, completionReceiptId: null, observedAt, mergedAt: null, retryAt: next, blocker: { code: "provider_unavailable", owner: "human", summary: "The GitHub merge state is not available now", retryAt: next, evidenceArtifactId: observation.evidenceArtifactId } };
     }
     if (current.state === "merged" && !current.mergedAt) {
       const observation = await this.recordMergeObservation(context, "provider_invalid", "provider_unavailable", current, observedAt, null);

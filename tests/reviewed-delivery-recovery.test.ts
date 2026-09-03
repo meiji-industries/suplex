@@ -237,7 +237,7 @@ test("rejects a mismatched branch or registered worktree", async () => {
   await expect(recover(worktree, { worktreePath: join(worktree.worktreeRoot, "other") })).resolves.toMatchObject({ outcome: "blocked", code: "subject-changed" });
 });
 
-test("rejects a live Developer execution on the task worktree", async () => {
+test("rejects a live The Builder works on the task on the task worktree", async () => {
   const value = await fixture();
   value.database.authTransaction((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, execution_kind) VALUES ('developer-active-recovery', ?, ?, ?, 3, 4, 'running', ?, ?, ?, ?, 'agent')").run(taskId, companyId, workflowId, branchName, value.worktreePath, currentBase, now));
   await expect(recover(value)).resolves.toMatchObject({ outcome: "blocked", code: "worktree-unsafe" });

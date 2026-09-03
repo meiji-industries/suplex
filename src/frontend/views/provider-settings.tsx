@@ -67,9 +67,9 @@ export function ProviderSettingsView(): ReactElement {
       const check = checks.find((candidate) => candidate.id === provider.healthCheckId);
       const detail = lastTestDetail(provider.credential);
       return <SettingsTableRow key={provider.id}>
-        <SettingsTableCell>{provider.label}</SettingsTableCell><SettingsTableCell className="text-muted-foreground">{provider.harnessLabel}</SettingsTableCell><SettingsTableCell><StatusLight level={statusLevel(check)} label={`${provider.label}: ${check?.summary ?? "Health status is unavailable"}`} /></SettingsTableCell>
-        <SettingsTableCell className="text-muted-foreground"><span className="block truncate">{check?.summary ?? "Health status is unavailable"}</span>{provider.credential.maskedKey ? <span className="block truncate text-[11px]">{provider.credential.maskedKey}{detail ? ` · ${detail}` : ""}</span> : null}</SettingsTableCell>
-        <SettingsTableCell>{provider.id === "openrouter" ? provider.credential.configured ? <Button size="sm" variant="destructive" disabled={busy} onClick={() => void remove()}>{busy ? "Removing…" : "Remove"}</Button> : <Button size="sm" disabled={busy} onClick={() => setEnableOpen(true)}>Enable</Button> : "Local CLI login"}</SettingsTableCell>
+        <SettingsTableCell>{provider.label}</SettingsTableCell><SettingsTableCell className="text-muted-foreground">{provider.harnessLabel}</SettingsTableCell><SettingsTableCell><StatusLight level={statusLevel(check)} label={`${provider.label}: ${check?.summary ?? "Health status is not available"}`} /></SettingsTableCell>
+        <SettingsTableCell className="text-muted-foreground"><span className="block truncate">{check?.summary ?? "Health status is not available"}</span>{provider.credential.maskedKey ? <span className="block truncate text-[11px]">{provider.credential.maskedKey}{detail ? ` · ${detail}` : ""}</span> : null}</SettingsTableCell>
+        <SettingsTableCell>{provider.id === "openrouter" ? provider.credential.configured ? <Button size="sm" variant="destructive" disabled={busy} onClick={() => void remove()}>{busy ? "Forge removes" : "Remove"}</Button> : <Button size="sm" disabled={busy} onClick={() => setEnableOpen(true)}>Enable</Button> : "Local CLI login"}</SettingsTableCell>
       </SettingsTableRow>;
     })}</SettingsTableGroup></SettingsDataTable>
     {message ? <p className="pt-2 text-[12px] text-muted-foreground" role="status">{message}</p> : null}
@@ -79,7 +79,7 @@ export function ProviderSettingsView(): ReactElement {
         <form onSubmit={(event) => { event.preventDefault(); void enable(); }}>
           <FieldGroup>
             <Field><FieldLabel htmlFor="openrouter-api-key">API key</FieldLabel><Input id="openrouter-api-key" autoFocus type="password" autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)} /></Field>
-            <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={busy || !key.trim()}>{busy ? "Enabling…" : "Enable"}</Button></DialogFooter>
+            <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={busy || !key.trim()}>{busy ? "Forge enables" : "Enable"}</Button></DialogFooter>
           </FieldGroup>
         </form>
       </DialogContent>

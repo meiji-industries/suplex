@@ -27,8 +27,8 @@ export function PlanDecisionForm({ approveCommand, revisionCommand, busy, onSubm
 
   return <div className="space-y-3" aria-busy={busy || pendingAction !== null} data-plan-decision-form>
     <div className="flex flex-wrap gap-2">
-      {approveCommand ? <Button type="button" size="sm" disabled={disabled} onClick={() => void submitDecision("approve", { command: approveCommand, note: "Plan approved." })}>{pendingAction === "approve" ? "Approving…" : "Approve Plan"}</Button> : null}
-      {revisionCommand ? <Button type="button" size="sm" variant="destructive" disabled={disabled} onClick={() => void submitDecision("reject", { command: revisionCommand, note: "Plan rejected." })}>{pendingAction === "reject" ? "Rejecting…" : "Reject Plan"}</Button> : null}
+      {approveCommand ? <Button type="button" size="sm" disabled={disabled} onClick={() => void submitDecision("approve", { command: approveCommand, note: "Plan approved." })}>{pendingAction === "approve" ? "Forge approves" : "Approve Plan"}</Button> : null}
+      {revisionCommand ? <Button type="button" size="sm" variant="destructive" disabled={disabled} onClick={() => void submitDecision("reject", { command: revisionCommand, note: "Plan rejected." })}>{pendingAction === "reject" ? "Forge rejects" : "Reject Plan"}</Button> : null}
       {revisionCommand ? <Button type="button" size="sm" variant="outline" disabled={disabled} aria-expanded={changesOpen} onClick={() => setChangesOpen((open) => !open)}>Request Changes</Button> : null}
     </div>
     {status ? <p role="status" className="text-[11px] text-muted-foreground">{status}</p> : null}

@@ -66,10 +66,10 @@ export function applyLeadResult(state: IssueWorkflowState, result: LeadPlanningR
       ...at("planning"),
       owner: "human",
       allowedCommands: ["resolve_decision_blocker", "cancel_issue"],
-      pendingAction: "Needs your call",
+      pendingAction: "Your decision is necessary",
       blockedCategory: "human_decision",
       blockedResumePhase: "planning",
-      blocker: humanBlocker("member_decision", "Needs your call", [{ command: "resolve_decision_blocker", label: "Resolve decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.leadOutputArtifactId, "decision-blocker")),
+      blocker: humanBlocker("member_decision", "Your decision is necessary", [{ command: "resolve_decision_blocker", label: "Resolve the decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(result.leadOutputArtifactId, "decision-blocker")),
       blockerArtifactId: result.leadOutputArtifactId,
       planRevision: null,
     });
@@ -179,7 +179,7 @@ export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): 
   if (command === "resolve_merge_conflict") {
     const progress = stateTransitions.withRepairProgress(ctx.state, { signature: stateTransitions.repairSignature({ source: "merge", code: "merge_conflict" }), commit: ctx.state.resultCommit ?? null, diagnosticHash: null });
     if ((progress.repairProgress?.repeats ?? 0) >= (ctx.input.repairCycleLimit ?? 0)) {
-      ctx.state = IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Merge conflict needs your call", activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      ctx.state = IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "The merge conflict needs your decision", activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       return null;
     }
   }
@@ -238,7 +238,7 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
         owner: "human",
         allowedCommands: ["review_delivery", "publish_draft", "cancel_issue"],
         pendingAction: summary,
-        blocker: humanBlocker("agent_exhausted", summary, [{ command: "review_delivery", label: "Review delivery", requiresNote: false, destructive: false }, { command: "publish_draft", label: "Publish draft", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(ctx.state.deliveryReviewArtifact?.artifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence")),
+        blocker: humanBlocker("agent_exhausted", summary, [{ command: "review_delivery", label: "Approve the delivery", requiresNote: false, destructive: false }, { command: "publish_draft", label: "Publish the pull request", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(ctx.state.deliveryReviewArtifact?.artifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence")),
         stateChangedAt: new Date().toISOString(),
         lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
       });
@@ -303,8 +303,8 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
     if (command === "retry_target_base_reconciliation" && ctx.state.targetBaseBlockerRetryable === false) return false;
     if (command && true) {
       const summary = command === "retry_target_base_reconciliation"
-        ? "The target base moved. Automatic reconciliation did not succeed. You can retry the reconciliation."
-        : ctx.state.deliveryRepairBlockerSummary ?? "Temporary provider failure persisted after automatic retries.";
+        ? "The base branch moved. The automatic update did not succeed. You can retry the update."
+        : ctx.state.deliveryRepairBlockerSummary ?? "The provider failure continued after the automatic retries.";
       // Record the exhausted blocker once; re-projecting it on every loop pass is a hot loop.
       // humanBlocker() returns null without evidence, so the projected blocker cannot be the guard.
       if (ctx.state.owner === "human" && ctx.state.pendingAction === summary && ctx.state.allowedCommands.includes(command)) return false;
@@ -314,7 +314,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
         owner: "human",
         allowedCommands: [command, "cancel_issue"],
         pendingAction: summary,
-        blocker: humanBlocker("provider_connectivity_exhausted", summary, [{ command, label: "Retry now", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(ctx.state.deliveryRepairBlockerEvidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? undefined, "attention-evidence")),
+        blocker: humanBlocker("provider_connectivity_exhausted", summary, [{ command, label: "Retry now", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(ctx.state.deliveryRepairBlockerEvidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? undefined, "attention-evidence")),
         stateChangedAt: new Date().toISOString(),
         lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
       });
@@ -334,7 +334,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
   ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: claimRevision, lastEventId: `${ctx.state.workflowId}:${claimRevision}` });
   await ctx.project();
   if (command === "retry_target_base_reconciliation" && ctx.state.releaseFailureCode === "target-base-drift") {
-    const pendingAction = "Target base moved; reconciling automatically before publishing.";
+    const pendingAction = "The base branch moved. Forge updates it before the publish.";
     if (ctx.state.pendingAction !== pendingAction) {
       ctx.state = IssueWorkflowStateSchema.parse({
         ...ctx.state,
@@ -422,7 +422,7 @@ export function createGuarded(
           ...before,
           revision,
           pendingAction: summary,
-          blocker: failure?.category ? humanBlocker(failure.category, summary, [...retry, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : before.blocker,
+          blocker: failure?.category ? humanBlocker(failure.category, summary, [...retry, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : before.blocker,
           stateChangedAt: new Date().toISOString(),
           lastEventId: `${state.workflowId}:${revision}`,
         });
@@ -448,7 +448,7 @@ export function createGuarded(
           owner: "human",
           allowedCommands,
           pendingAction,
-          blocker: humanBlocker("capacity_exhausted", pendingAction, allowedCommands.map((command) => ({ command: command as IssueWorkflowState["allowedCommands"][number], label: command === "cancel_issue" ? "Cancel issue" : `Retry ${command.replace(/_/g, " ")}`, requiresNote: false, destructive: command === "cancel_issue" })), evidencePointer(failure.evidenceArtifactId, "attention-evidence")),
+          blocker: humanBlocker("capacity_exhausted", pendingAction, allowedCommands.map((command) => ({ command: command as IssueWorkflowState["allowedCommands"][number], label: command === "cancel_issue" ? "Cancel the task" : `Retry ${command.replace(/_/g, " ")}`, requiresNote: false, destructive: command === "cancel_issue" })), evidencePointer(failure.evidenceArtifactId, "attention-evidence")),
           stateChangedAt: new Date().toISOString(),
           lastEventId: `${state.workflowId}:${revision}`,
         });
@@ -473,7 +473,7 @@ export function createGuarded(
         owner: "human",
         allowedCommands,
         pendingAction: summary,
-        blocker: failure?.category ? humanBlocker(failure.category, summary, [...retryActions, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : null,
+        blocker: failure?.category ? humanBlocker(failure.category, summary, [...retryActions, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : null,
         stateChangedAt: new Date().toISOString(),
         lastEventId: `${state.workflowId}:${revision}`,
       });

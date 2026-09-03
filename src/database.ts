@@ -454,7 +454,7 @@ export class ForgeDatabase {
       `).run(
       parsed.issueId, parsed.companyId, parsed.projectId, parsed.workflowId, parsed.revision, parsed.phase, parsed.step, parsed.owner, JSON.stringify(parsed.allowedCommands), parsed.pendingAction, updatedAt, parsed.lastEventId, stateHash, updatedAt, parsed.blocker === undefined ? null : JSON.stringify(parsed.blocker), parsed.stateChangedAt ?? null, updatedAt, runId,
     );
-    if (parsed.phase === "done" && parsed.resultCommit && (parsed.pendingAction === "Done — kept in worktree" || parsed.pendingAction === "Done — branch pushed")) {
+    if (parsed.phase === "done" && parsed.resultCommit && (parsed.pendingAction === "Done. Kept in the worktree." || parsed.pendingAction === "Done. Branch pushed.")) {
       database.prepare("UPDATE forge_tasks SET delivery_worktree_path = ?, delivery_branch_name = ?, delivery_commit = ?, updated_at = ? WHERE id = ? AND company_id = ?").run(parsed.worktreePath ?? null, parsed.branchName ?? null, parsed.resultCommit, updatedAt, parsed.issueId, parsed.companyId);
     }
     return true;

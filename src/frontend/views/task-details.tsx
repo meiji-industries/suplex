@@ -102,7 +102,7 @@ export function BranchSyncCard({ taskId, updatedAt, baseBranch, allowedCommands,
     <CardHeader>
       <CardTitle><h3>Branch</h3></CardTitle>
       <CardDescription><code>{sync.branchName}</code></CardDescription>
-      <CardAction><Button size="sm" onClick={() => void push()} disabled={busy || pushing || (sync.ahead === 0 && sync.remoteExists)}>{pushing ? "Pushing…" : "Push"}</Button></CardAction>
+      <CardAction><Button size="sm" onClick={() => void push()} disabled={busy || pushing || (sync.ahead === 0 && sync.remoteExists)}>{pushing ? "Forge pushes" : "Push"}</Button></CardAction>
     </CardHeader>
     <CardContent>
       <p className="text-xs text-muted-foreground">{status}{pushStatus ? ` · ${pushStatus}` : ""}</p>
@@ -144,9 +144,9 @@ export function WorktreeControls({ task, busy, onAction }: { task: ApiTask; busy
 }
 
 export function NextAction({ value }: { value: string | null }): ReactElement {
-  if (value === "Lead delivery review" || value?.startsWith("Fresh Lead delivery review")) return <>Forge is checking the completed work against the approved plan.</>;
-  if (value === "Developer repair of blocking findings") return <>Developer needs to address required review feedback</>;
-  const match = value?.match(/^Required checks are (?:still )?missing: (.+)$/);
+  if (value === "The Planner reviews the delivery" || value?.startsWith("Fresh The Planner reviews the delivery")) return <>Forge is checking the completed work against the approved plan.</>;
+  if (value === "Developer repair of blocking findings") return <>The Builder must address the review feedback</>;
+  const match = value?.match(/^Necessary checks are (?:still )?missing: (.+)$/);
   if (!match) return <>{value ?? "None"}</>;
   return <ul className="list-disc space-y-0.5 pl-4 text-[11px]">{(match[1] ?? "").split(", ").map((check) => <li key={check}>{check}</li>)}</ul>;
 }
@@ -162,7 +162,7 @@ function visualEvidenceLabel(value: "off" | "capture" | "required" | undefined):
 }
 
 function supplementalReviewLabel(task: ApiTask): string {
-  if (task.lastHandlerError?.command === "supplemental_review") return `Not completed — ${task.lastHandlerError.reason}`;
+  if (task.lastHandlerError?.command === "supplemental_review") return `Not complete. ${task.lastHandlerError.reason}`;
   return executionControlLabel(task.executionControls?.supplementalReview);
 }
 
@@ -287,9 +287,9 @@ function CiDiagnostics({ ci }: { ci: ApiCi }): ReactElement {
 function CiPanel({ ci }: { ci: ApiCi }): ReactElement {
   const latestAttempt = ci.attempts[0];
   return <div className="space-y-4" data-task-ci>
-    <Card size="sm" aria-label="Required checks">
+    <Card size="sm" aria-label="Necessary checks">
       <CardHeader>
-        <CardTitle><h3>Required checks</h3></CardTitle>
+        <CardTitle><h3>Necessary checks</h3></CardTitle>
         <CardDescription>{ci.policy.requiredChecks.length} required check{ci.policy.requiredChecks.length === 1 ? "" : "s"}</CardDescription>
       </CardHeader>
       <CardContent>
@@ -326,7 +326,7 @@ function FinalGatePanel({ task }: { task: ApiTask }): ReactElement | null {
 function TaskConfigurationCard({ task }: { task: ApiTask }): ReactElement {
   return <Card size="sm" aria-label="Configuration used">
     <CardHeader><CardTitle><h3>Configuration used</h3></CardTitle></CardHeader>
-    <CardContent><dl className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><div><dt>Plan review</dt><dd className="text-foreground">{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div><div><dt>Second review</dt><dd className="text-foreground">{task.lastHandlerError?.command === "supplemental_review" ? `Not completed — ${task.lastHandlerError.reason}` : task.executionControls?.supplementalReview === undefined ? "Not specified" : task.executionControls.supplementalReview ? "Requested" : "Off"}</dd></div><div><dt>Visual proof</dt><dd className="text-foreground">{visualEvidenceLabel(task.executionControls?.visualEvidence)}</dd></div></dl></CardContent>
+    <CardContent><dl className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><div><dt>Plan review</dt><dd className="text-foreground">{task.autoApprovePlan ? "Auto-approved" : "Your approval is necessary"}</dd></div><div><dt>Second review</dt><dd className="text-foreground">{task.lastHandlerError?.command === "supplemental_review" ? `Not complete. ${task.lastHandlerError.reason}` : task.executionControls?.supplementalReview === undefined ? "Not specified" : task.executionControls.supplementalReview ? "Requested" : "Off"}</dd></div><div><dt>Visual proof</dt><dd className="text-foreground">{visualEvidenceLabel(task.executionControls?.visualEvidence)}</dd></div></dl></CardContent>
   </Card>;
 }
 
@@ -341,7 +341,7 @@ function TaskOptions({ canArchive, canCancel, archived, busy, onArchive, onCance
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Task options" title="Task options" />}><Ellipsis /></DropdownMenuTrigger>
-      <DropdownMenuContent align="start"><DropdownMenuItem disabled={busy} onClick={onSaveTemplate}>Save as template…</DropdownMenuItem><DropdownMenuItem disabled={busy} onClick={onDuplicate}>Duplicate…</DropdownMenuItem>{archived ? <DropdownMenuItem disabled={busy} onClick={onUnarchive}><ArchiveRestore />Unarchive</DropdownMenuItem> : <>{canArchive ? <DropdownMenuItem disabled={busy} onClick={onArchive}><Archive />Archive task</DropdownMenuItem> : null}{canCancel ? <DropdownMenuItem variant="destructive" disabled={busy} onClick={onCancel}>Cancel task</DropdownMenuItem> : null}</>}</DropdownMenuContent>
+      <DropdownMenuContent align="start"><DropdownMenuItem disabled={busy} onClick={onSaveTemplate}>Save as template</DropdownMenuItem><DropdownMenuItem disabled={busy} onClick={onDuplicate}>Duplicate</DropdownMenuItem>{archived ? <DropdownMenuItem disabled={busy} onClick={onUnarchive}><ArchiveRestore />Unarchive</DropdownMenuItem> : <>{canArchive ? <DropdownMenuItem disabled={busy} onClick={onArchive}><Archive />Archive task</DropdownMenuItem> : null}{canCancel ? <DropdownMenuItem variant="destructive" disabled={busy} onClick={onCancel}>Cancel task</DropdownMenuItem> : null}</>}</DropdownMenuContent>
     </DropdownMenu>
   );
 }
@@ -373,9 +373,9 @@ function PlanningRunCard({ task }: { task: ApiTask }): ReactElement | null {
       </CardHeader>
       <CardContent>
         <dl className="grid grid-cols-2 gap-3 text-xs lg:grid-cols-4">
-          <div><dt className="text-muted-foreground">Model</dt><dd>{invocation?.model ?? "Resolving…"}</dd></div>
-          <div><dt className="text-muted-foreground">Reasoning</dt><dd>{invocation?.reasoningLevel ?? "Resolving…"}</dd></div>
-          <div><dt className="text-muted-foreground">Priority</dt><dd>{invocation?.servicePriority ?? "Resolving…"}</dd></div>
+          <div><dt className="text-muted-foreground">Model</dt><dd>{invocation?.model ?? "Forge resolves"}</dd></div>
+          <div><dt className="text-muted-foreground">Reasoning</dt><dd>{invocation?.reasoningLevel ?? "Forge resolves"}</dd></div>
+          <div><dt className="text-muted-foreground">Priority</dt><dd>{invocation?.servicePriority ?? "Forge resolves"}</dd></div>
           <div><dt className="text-muted-foreground">Elapsed</dt><dd className="tabular-nums">{elapsed}</dd></div>
         </dl>
       </CardContent>
@@ -453,7 +453,7 @@ function TaskPromptProvenanceRow({ taskId, overrides }: { taskId: string; overri
   return <Collapsible.Root open={open} onOpenChange={setOpen}>
     <Collapsible.Trigger aria-label={`Show pinned prompt provenance (${summary})`}>{summary}</Collapsible.Trigger>
     <Collapsible.Panel>
-      {loadError ? <span role="alert">{loadError}</span> : loadedTaskId !== taskId ? <span>Loading pinned provenance…</span> : Object.entries(provenance).length ? <ul>{Object.entries(provenance).map(([templateId, prompt]) => <li key={templateId}><code>{templateId}</code>: {prompt.steps.map((step) => `${step.layer} ${step.mode}${step.revision === undefined ? "" : ` r${step.revision}`}`).join(" → ")} · <code title={prompt.sha256}>{prompt.sha256.slice(0, 12)}</code> · {prompt.staleReplace ? "stale replacement" : "current"}</li>)}</ul> : <span>No pinned provenance.</span>}
+      {loadError ? <span role="alert">{loadError}</span> : loadedTaskId !== taskId ? <span>Forge loads pinned provenance</span> : Object.entries(provenance).length ? <ul>{Object.entries(provenance).map(([templateId, prompt]) => <li key={templateId}><code>{templateId}</code>: {prompt.steps.map((step) => `${step.layer} ${step.mode}${step.revision === undefined ? "" : ` r${step.revision}`}`).join(" → ")} · <code title={prompt.sha256}>{prompt.sha256.slice(0, 12)}</code> · {prompt.staleReplace ? "stale replacement" : "current"}</li>)}</ul> : <span>No pinned provenance.</span>}
     </Collapsible.Panel>
   </Collapsible.Root>;
 }
@@ -625,7 +625,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
               <div className="space-y-1"><dt className="text-muted-foreground">Prompts</dt><dd title={task.prompts.overrides.join("\n") || undefined}><TaskPromptProvenanceRow taskId={task.id} overrides={task.prompts.overrides} /></dd></div>
               <WorktreeControls task={task} busy={busy} onAction={async (path) => onPlanAction(path)} />
               <div className="space-y-1"><dt className="text-muted-foreground">Delivery</dt><dd>{deliveryTargetLabel(task.deliveryTarget)}</dd></div>
-              <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approved" : "Your approval is necessary"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Run project tests</dt><dd>{executionControlLabel(task.executionControls?.runProjectTests)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Second review</dt><dd>{supplementalReviewLabel(task)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Screenshots</dt><dd>{visualEvidenceLabel(task.executionControls?.visualEvidence)}</dd></div>
@@ -647,7 +647,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={archiveBusy}>Cancel</AlertDialogCancel>
-            <AlertDialogAction disabled={archiveBusy} onClick={(event) => { event.preventDefault(); void archiveTask(typeof archiveDialog === "number"); }}>{archiveBusy ? "Archiving…" : "Archive task"}</AlertDialogAction>
+            <AlertDialogAction disabled={archiveBusy} onClick={(event) => { event.preventDefault(); void archiveTask(typeof archiveDialog === "number"); }}>{archiveBusy ? "Forge archives" : "Archive task"}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -10,7 +10,7 @@ const subject = { planRevision: 1, targetBaseSha: "a".repeat(40), subjectCommit:
 const blockingFinding = { findingId: "finding_blocking", severity: "blocking" as const, rationale: "The controlled defect remains.", evidenceRef: "fixture", disposition: "open" as const, repairInstruction: "Fix the controlled defect." };
 
 function state() {
-  return IssueWorkflowStateSchema.parse({ workflowId: "workflow_1", companyId: "company_1", projectId: "project_1", issueId: "task_1", projectRevisionId: "revision_1", ...at("delivery_ready"), revision: 10, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Lead delivery review", lastEventId: "workflow_1:10", continuationCount: 0, lastSummaryHash: null, leadSessionRef: subject.leadSessionRef, leadOutputArtifactId: "artifact_plan", developerExecutionId: subject.developerExecutionId, developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", targetBaseSha: subject.targetBaseSha, resultCommit: subject.subjectCommit, resultTree: subject.subjectTree, dirtyState: "clean", deliveryArtifactId: subject.deliveryArtifactId, developerEvidenceArtifactId: subject.developerEvidenceArtifactId, repairCycle: 0, releaseId: "release_1", expectedHeadSha: subject.subjectCommit, expectedHeadTree: subject.subjectTree, ciRunId: "ci_1", ciAttempt: 2, ciOutcome: "passed", finalReviewId: "final_review_1", finalReviewOutcome: "approved", acceptanceId: "acceptance_1", acceptedHeadSha: subject.subjectCommit, mergeOutcome: "open" });
+  return IssueWorkflowStateSchema.parse({ workflowId: "workflow_1", companyId: "company_1", projectId: "project_1", issueId: "task_1", projectRevisionId: "revision_1", ...at("delivery_ready"), revision: 10, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the delivery", lastEventId: "workflow_1:10", continuationCount: 0, lastSummaryHash: null, leadSessionRef: subject.leadSessionRef, leadOutputArtifactId: "artifact_plan", developerExecutionId: subject.developerExecutionId, developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", targetBaseSha: subject.targetBaseSha, resultCommit: subject.subjectCommit, resultTree: subject.subjectTree, dirtyState: "clean", deliveryArtifactId: subject.deliveryArtifactId, developerEvidenceArtifactId: subject.developerEvidenceArtifactId, repairCycle: 0, releaseId: "release_1", expectedHeadSha: subject.subjectCommit, expectedHeadTree: subject.subjectTree, ciRunId: "ci_1", ciAttempt: 2, ciOutcome: "passed", finalReviewId: "final_review_1", finalReviewOutcome: "approved", acceptanceId: "acceptance_1", acceptedHeadSha: subject.subjectCommit, mergeOutcome: "open" });
 }
 
 test("state parsing always offers cancellation outside terminal phases", () => {
@@ -41,7 +41,7 @@ test("accepts a sha-less plan blocker response receipt", () => {
     ...at("planning"),
     owner: "lead",
     allowedCommands: ["start_planning"],
-    pendingAction: "Lead plan revision after blocker response",
+    pendingAction: "The Planner revises the plan with your answer",
     revision: 11,
     lastEventId: "workflow_1:11",
     planBlockerSubject: null,
@@ -79,7 +79,7 @@ test("safe summaries are normalized before entering workflow state", () => {
 
 test("workflow summaries are truncated before state validation", () => {
   const longSummary = "blocked ".repeat(100);
-  const parsed = IssueWorkflowStateSchema.parse({ ...state(), ...at("delivery_ready"), owner: "human", pendingAction: longSummary, targetBaseBlockerSummary: longSummary, blocker: { category: "agent_exhausted", summary: longSummary, unblockOwner: "human", actions: [{ command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidence: { artifactId: "artifact_evidence", sha256: "d".repeat(64), kind: "attention-evidence" }, createdAt: "2026-01-01T00:00:00.000Z", retry: null } });
+  const parsed = IssueWorkflowStateSchema.parse({ ...state(), ...at("delivery_ready"), owner: "human", pendingAction: longSummary, targetBaseBlockerSummary: longSummary, blocker: { category: "agent_exhausted", summary: longSummary, unblockOwner: "human", actions: [{ command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidence: { artifactId: "artifact_evidence", sha256: "d".repeat(64), kind: "attention-evidence" }, createdAt: "2026-01-01T00:00:00.000Z", retry: null } });
 
   expect(normalizeSafeSummary(longSummary, 200).endsWith("…")).toBe(true);
   expect(parsed.pendingAction!.length).toBeLessThanOrEqual(200);
@@ -110,7 +110,7 @@ test("delivery workflow constructors keep blockers retryable and approvals exact
   expect(repairRequired).toMatchObject({ ...at("repair_required"), owner: "lead", allowedCommands: ["record_delivery_decision", "repair_delivery", "cancel_issue"], deliveryReviewId: "review_1" });
 
   const repairLimitReached = repairRequiredState(IssueWorkflowStateSchema.parse({ ...blocked, repairCycle: 2 }), blocking, 2);
-  expect(repairLimitReached).toMatchObject({ ...at("development"), pendingAction: "Review problems are not fixed", blocker: { summary: expect.stringMatching(/^Review found 1 blocking problem\./) } });
+  expect(repairLimitReached).toMatchObject({ ...at("development"), pendingAction: "The review problems are not fixed", blocker: { summary: expect.stringMatching(/^Review found 1 blocking problem\./) } });
 
   const repairBlocked = DeveloperRepairActivityResultSchema.parse({ outcome: "blocked", repairAttemptId: "repair_1", cycle: 1, reviewId: "review_1", subject, code: "worktree-unsafe", summary: "The worktree was not clean.", evidenceArtifactId: "artifact_repair_evidence", developerExecutionId: subject.developerExecutionId, developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", resultCommit: subject.subjectCommit, resultTree: subject.subjectTree, dirtyState: "dirty" });
   if (repairBlocked.outcome !== "blocked") throw new Error("Expected a blocked repair fixture");
@@ -124,7 +124,7 @@ test("delivery workflow constructors keep blockers retryable and approvals exact
 
   const incompleteVerification = DeveloperRepairActivityResultSchema.parse({ outcome: "blocked", repairAttemptId: "repair_incomplete", cycle: 1, reviewId: "review_1", subject, code: "repair-incomplete", summary: "A required check did not run.", evidenceArtifactId: "artifact_repair_evidence", developerExecutionId: subject.developerExecutionId, developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", resultCommit: subject.subjectCommit, resultTree: subject.subjectTree, dirtyState: "clean" });
   if (incompleteVerification.outcome !== "blocked") throw new Error("Expected an incomplete verification fixture");
-  expect(repairBlockedState(repairRequired, incompleteVerification, 2)).toMatchObject({ ...at("delivery_ready"), owner: "human", pendingAction: "Verification incomplete", allowedCommands: ["repair_delivery", "review_delivery", "cancel_issue"], blocker: null, deliveryRepairBlockerCode: "repair-incomplete" });
+  expect(repairBlockedState(repairRequired, incompleteVerification, 2)).toMatchObject({ ...at("delivery_ready"), owner: "human", pendingAction: "The verification is not complete", allowedCommands: ["repair_delivery", "review_delivery", "cancel_issue"], blocker: null, deliveryRepairBlockerCode: "repair-incomplete" });
 
   const repaired = DeveloperRepairActivityResultSchema.parse({ outcome: "completed", repairAttemptId: "repair_2", cycle: 2, reviewId: "review_1", subject, developerExecutionId: "developer_2", developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", resultCommit: "d".repeat(40), resultTree: "e".repeat(40), dirtyState: "clean", deliveryArtifactId: "artifact_repaired", evidenceArtifactId: "artifact_repair_evidence", summary: "The defect was repaired." });
   if (repaired.outcome !== "completed") throw new Error("Expected a completed repair fixture");
@@ -160,7 +160,7 @@ test("an approved recovered review outranks stale no-progress exhaustion", () =>
     ...at("delivery_ready"),
     owner: "human",
     allowedCommands: ["retry_development", "cancel_issue"],
-    pendingAction: "Needs your call",
+    pendingAction: "Your decision is necessary",
     repairProgress: {
       signature: "review|||",
       commit: subject.subjectCommit,
@@ -173,7 +173,7 @@ test("an approved recovered review outranks stale no-progress exhaustion", () =>
     ...at("delivery_reviewed"),
     owner: "human",
     allowedCommands: ["publish_draft", "cancel_issue"],
-    pendingAction: "Opening the pull request",
+    pendingAction: "Forge opens the pull request",
     blocker: null,
     deliveryReviewId: "review_recovered",
     deliveryReviewOutcome: "approved",

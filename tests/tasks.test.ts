@@ -77,7 +77,7 @@ async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listO
       if (input.expectedRevision !== current.revision) throw new Error("Stale workflow revision");
       if (command === "start_planning") planningInputsByTask.set(current.issueId, input as StartPlanningInput);
       if (command === "start_planning") {
-        const next = { ...current, ...at("planning"), revision: 1, owner: "lead" as const, allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:1` };
+        const next = { ...current, ...at("planning"), revision: 1, owner: "lead" as const, allowedCommands: [], pendingAction: "The Planner writes the plan", lastEventId: `${workflowId}:1` };
         stateByTask.set(next.issueId, next);
         database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run-1", eventId: next.lastEventId, state: next }));
         return next;
@@ -112,7 +112,7 @@ async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listO
         db.prepare("UPDATE forge_tasks SET successor_task_id = ? WHERE id = ?").run(successor.task.id, current.issueId);
         db.prepare("INSERT INTO forge_successor_intents (id, predecessor_task_id, predecessor_workflow_id, accepted_revision, successor_task_id, successor_workflow_id, company_id, project_id, project_revision_id, actor_user_id, reason_artifact_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'linked', ?, ?)").run(`intent_${workflowId}_7`, current.issueId, workflowId, 7, successor.task.id, successor.task.workflowId, company.id, current.projectId, successor.task.projectRevisionId, "admin-1", reasonArtifact.id, new Date().toISOString(), new Date().toISOString());
       });
-      const next = IssueWorkflowStateSchema.parse({ ...current, ...at(projection.step), revision: projection.revision + 1, allowedCommands: [], pendingAction: "Continued in a new task", successorTaskId: successor.task.id, successorReference: { successorTaskId: successor.task.id, successorWorkflowId: successorState.workflowId, predecessorTaskId: current.issueId, projectRevisionId: successor.task.projectRevisionId, creationRevision: projection.revision }, lastEventId: `${workflowId}:${projection.revision + 1}` });
+      const next = IssueWorkflowStateSchema.parse({ ...current, ...at(projection.step), revision: projection.revision + 1, allowedCommands: [], pendingAction: "Work continues in a new task", successorTaskId: successor.task.id, successorReference: { successorTaskId: successor.task.id, successorWorkflowId: successorState.workflowId, predecessorTaskId: current.issueId, projectRevisionId: successor.task.projectRevisionId, creationRevision: projection.revision }, lastEventId: `${workflowId}:${projection.revision + 1}` });
       stateByTask.set(current.issueId, next);
       database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run-1", eventId: next.lastEventId, state: next }));
       return next;
@@ -196,7 +196,7 @@ test("a stuck cancellation can be safely reissued", async () => {
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Cancel recovery", description: "body", idempotencyKey: "cancel-recovery-task", images: [] });
     const initial = value.stateByTask.get(created.task.id)!;
-    const stuck = IssueWorkflowStateSchema.parse({ ...initial, ...at("development"), revision: 1, owner: "human", allowedCommands: [], pendingAction: "Cancelling Developer turn", developerExecutionId: `developer_${"a".repeat(24)}`, developerRecoveryStatus: "cancellation_requested", developerRecoverySummary: "Cancellation requested", lastEventId: `${initial.workflowId}:1` });
+    const stuck = IssueWorkflowStateSchema.parse({ ...initial, ...at("development"), revision: 1, owner: "human", allowedCommands: [], pendingAction: "Forge cancels the Builder turn", developerExecutionId: `developer_${"a".repeat(24)}`, developerRecoveryStatus: "cancellation_requested", developerRecoverySummary: "Cancellation requested", lastEventId: `${initial.workflowId}:1` });
     value.stateByTask.set(created.task.id, stuck);
     projectState(value.database, stuck);
 
@@ -214,7 +214,7 @@ test("cancelling falls back to the projection when Engine rejects the update", a
     projectState(value.database, blocked);
     value.workflow.execute = async () => { throw new Error("Issue cancellation is not available in the current phase"); };
 
-    await expect(value.tasks.executeCommand(value.adminId, created.task.id, "cancel_issue", { expectedRevision: 1 })).resolves.toMatchObject({ step: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Issue cancelled", revision: 2 });
+    await expect(value.tasks.executeCommand(value.adminId, created.task.id, "cancel_issue", { expectedRevision: 1 })).resolves.toMatchObject({ step: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Task cancelled", revision: 2 });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -230,7 +230,7 @@ test("non-terminal projections always expose cancellation", async () => {
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("failed tasks with a plan expose and accept Developer retry", async () => {
+test("failed tasks with a plan expose and accept The Builder retries", async () => {
   const value = await fixture();
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Failed retry", description: "body", idempotencyKey: "failed-retry-task", images: [] });
@@ -243,7 +243,7 @@ test("failed tasks with a plan expose and accept Developer retry", async () => {
     value.workflow.acceptDevelopment = async (workflowId, input, command) => {
       acceptedCommand = command;
       acceptedCommandId = input.commandId;
-      const next = IssueWorkflowStateSchema.parse({ ...failed, revision: input.expectedRevision + 1, ...at("development"), owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer retry", blocker: null, lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
+      const next = IssueWorkflowStateSchema.parse({ ...failed, revision: input.expectedRevision + 1, ...at("development"), owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "The Builder retries", blocker: null, lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
       value.stateByTask.set(created.task.id, next);
       projectState(value.database, next);
       return next;
@@ -257,18 +257,18 @@ test("failed tasks with a plan expose and accept Developer retry", async () => {
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("a Developer retry returns after the retry update is accepted", async () => {
+test("a The Builder retries returns after the retry update is accepted", async () => {
   const value = await fixture();
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Retry recovery", description: "body", idempotencyKey: "retry-recovery-task", images: [] });
     const initial = value.stateByTask.get(created.task.id)!;
-    const interrupted = IssueWorkflowStateSchema.parse({ ...initial, ...at("development"), revision: 1, owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer retry is available", developerExecutionId: `developer_${"a".repeat(24)}`, developerRecoveryStatus: "interrupted", lastEventId: `${initial.workflowId}:1` });
+    const interrupted = IssueWorkflowStateSchema.parse({ ...initial, ...at("development"), revision: 1, owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "The Builder can retry", developerExecutionId: `developer_${"a".repeat(24)}`, developerRecoveryStatus: "interrupted", lastEventId: `${initial.workflowId}:1` });
     value.stateByTask.set(created.task.id, interrupted);
     projectState(value.database, interrupted);
     let acceptedCommand: string | undefined;
     value.workflow.acceptDevelopment = async (workflowId, input, command) => {
       acceptedCommand = command;
-      const next = IssueWorkflowStateSchema.parse({ ...interrupted, revision: input.expectedRevision + 1, ...at("development"), owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer retry", lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
+      const next = IssueWorkflowStateSchema.parse({ ...interrupted, revision: input.expectedRevision + 1, ...at("development"), owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "The Builder retries", lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
       value.stateByTask.set(created.task.id, next);
       projectState(value.database, next);
       return next;
@@ -297,7 +297,7 @@ test("planning returns after its accepted projection while a rejected update rem
 
     const command = value.tasks.executeCommand(value.adminId, created.task.id, "start_planning", { expectedRevision: 0 });
     await beganPending;
-    const planning = IssueWorkflowStateSchema.parse({ ...initial, ...at("planning"), revision: 1, owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${initial.workflowId}:1` });
+    const planning = IssueWorkflowStateSchema.parse({ ...initial, ...at("planning"), revision: 1, owner: "lead", allowedCommands: [], pendingAction: "The Planner writes the plan", lastEventId: `${initial.workflowId}:1` });
     value.stateByTask.set(created.task.id, planning);
     projectState(value.database, planning);
     await expect(command).resolves.toMatchObject({ step: "planning", revision: 1 });
@@ -364,7 +364,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     expect(duplicate.task.id).toBe(first.task.id);
     await expect(value.tasks.executeCommand(value.adminId, first.task.id, "start_planning", { expectedRevision: 9 })).rejects.toMatchObject({ statusCode: 409, findings: [expect.objectContaining({ code: "stale-revision" })] });
     const planning = await value.tasks.executeCommand(value.adminId, first.task.id, "start_planning", { expectedRevision: 0 });
-    expect(planning).toMatchObject({ step: "planning", revision: 1, owner: "lead", pendingAction: "Lead planning", allowedCommands: ["cancel_issue", "send_planner_note"] });
+    expect(planning).toMatchObject({ step: "planning", revision: 1, owner: "lead", pendingAction: "The Planner writes the plan", allowedCommands: ["cancel_issue", "send_planner_note"] });
     expect(planning.timeline.map((entry) => entry.eventType)).toEqual(["task_created", "planning_started"]);
     expect(planning.activity).toEqual([
       expect.objectContaining({ kind: "workflow", eventType: "task_created", actor: { id: "admin-1", displayName: "Admin", username: "user_v1_admin-1", avatarSeed: "user_v1_admin-1" } }),
@@ -528,7 +528,7 @@ test("surfaces the durable handler reason when a plan decision is rejected", asy
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Rejected approval", description: "Reviewed delivery", idempotencyKey: "rejected-approval-0001", images: [] });
     const initial = value.stateByTask.get(created.task.id)!;
-    const approval = IssueWorkflowStateSchema.parse({ ...initial, revision: 1, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${initial.workflowId}:1` });
+    const approval = IssueWorkflowStateSchema.parse({ ...initial, revision: 1, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve the final plan", lastEventId: `${initial.workflowId}:1` });
     value.stateByTask.set(created.task.id, approval);
     projectState(value.database, approval);
     value.workflow.execute = async () => {
@@ -563,8 +563,8 @@ test("does not rewind the latest projection when a legacy revision-zero seed rem
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Legacy seed", description: "body", idempotencyKey: "legacy-seed-0001", images: [] });
     const snapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(created.task.id) as { state_json: string });
     const canonical = jsonRequired(snapshot.state_json) as IssueWorkflowState;
-    const planning = IssueWorkflowStateSchema.parse({ ...canonical, revision: 1, ...at("planning"), owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${canonical.workflowId}:1` });
-    const approval = IssueWorkflowStateSchema.parse({ ...planning, revision: 2, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "reject_plan", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${canonical.workflowId}:2` });
+    const planning = IssueWorkflowStateSchema.parse({ ...canonical, revision: 1, ...at("planning"), owner: "lead", allowedCommands: [], pendingAction: "The Planner writes the plan", lastEventId: `${canonical.workflowId}:1` });
+    const approval = IssueWorkflowStateSchema.parse({ ...planning, revision: 2, ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "reject_plan", "cancel_issue"], pendingAction: "Approve the final plan", lastEventId: `${canonical.workflowId}:2` });
     projectState(value.database, planning);
     projectState(value.database, approval);
     const { issueId, repairCycle: _repairCycle, ...seed } = canonical;
@@ -606,7 +606,7 @@ test("streams projection changes written by the Engine worker process", async ()
     const unsubscribeDenied = value.tasks.subscribe("sync-member", (event) => deniedEvents.push(event));
     const workerDatabase = new ForgeDatabase(join(value.root, "forge.sqlite"));
     try {
-      projectState(workerDatabase, IssueWorkflowStateSchema.parse(jsonRequired(JSON.stringify({ ...created.task, issueId: created.task.id, projectRevisionId: created.task.projectRevisionId, revision: 1, ...at("planning"), owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${created.task.workflowId}:1`, continuationCount: 0, lastSummaryHash: null, repairCycle: 0 }))), "run-worker");
+      projectState(workerDatabase, IssueWorkflowStateSchema.parse(jsonRequired(JSON.stringify({ ...created.task, issueId: created.task.id, projectRevisionId: created.task.projectRevisionId, revision: 1, ...at("planning"), owner: "lead", allowedCommands: [], pendingAction: "The Planner writes the plan", lastEventId: `${created.task.workflowId}:1`, continuationCount: 0, lastSummaryHash: null, repairCycle: 0 }))), "run-worker");
       await expect.poll(() => events).toEqual([{ type: "invalidate", taskId: created.task.id, companyId: created.task.companyId, revision: 1, attentionChanged: false }]);
       expect(deniedEvents).toEqual([]);
     } finally {
@@ -632,7 +632,7 @@ test("projection writes are monotonic and corrupted or traversing artifacts fail
     await expect(value.tasks.getTaskImage(value.adminId, created.task.id, imageId)).rejects.toMatchObject({ code: "hash-mismatch" });
     await expect(value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Traversal", description: "body", idempotencyKey: "artifact-task-0002", images: [{ filename: "../secret.png", mimeType: "image/png", base64: Buffer.from("proof").toString("base64") }] })).rejects.toMatchObject({ findings: [expect.objectContaining({ code: "invalid-image-filename" })] });
     const initial = IssueWorkflowStateSchema.parse(jsonRequired(value.database.authQuery((db) => (db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(created.task.id) as { state_json: string }).state_json));
-    const newer = IssueWorkflowStateSchema.parse({ ...initial, revision: 4, step: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${created.task.workflowId}:4` });
+    const newer = IssueWorkflowStateSchema.parse({ ...initial, revision: 4, step: "planning", owner: "lead", allowedCommands: [], pendingAction: "The Planner writes the plan", lastEventId: `${created.task.workflowId}:4` });
     const stale = IssueWorkflowStateSchema.parse({ ...initial, revision: 2, lastEventId: `${created.task.workflowId}:2` });
     value.database.projectIssueEvent({ schemaVersion: 1, runId: "run-1", eventId: newer.lastEventId, state: newer });
     value.database.projectIssueEvent({ schemaVersion: 1, runId: "run-1", eventId: stale.lastEventId, state: stale });
@@ -670,7 +670,7 @@ test("continues terminal work as a new linked issue without rewriting the origin
     const initialSnapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(original.task.id) as { state_json: string });
     const initialState = jsonRequired(initialSnapshot.state_json) as IssueWorkflowState;
     for (let revision = 1; revision < 7; revision += 1) {
-      const state = IssueWorkflowStateSchema.parse({ ...initialState, ...at("planning"), revision, owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${original.task.workflowId}:${revision}` });
+      const state = IssueWorkflowStateSchema.parse({ ...initialState, ...at("planning"), revision, owner: "lead", allowedCommands: [], pendingAction: "The Planner writes the plan", lastEventId: `${original.task.workflowId}:${revision}` });
       value.database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state }));
     }
     const terminalState = IssueWorkflowStateSchema.parse({ ...initialState, ...at("done"), revision: 7, owner: "human", allowedCommands: [], pendingAction: null, lastEventId: `${original.task.workflowId}:7` });

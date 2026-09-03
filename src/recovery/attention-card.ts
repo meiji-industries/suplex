@@ -90,7 +90,7 @@ export function attentionCardFromBlocker(blocker: AttentionBlocker | undefined, 
     const explanation = "The review found blocking problems. The Builder made repairs but did not fix them. Read the review findings. Then accept the delivery as is, or cancel the task.";
     return {
       kind: "generic",
-      title: "Review problems are not fixed",
+      title: "The review problems are not fixed",
       explanation,
       evidence: [{ kind: "text", ref: summary || explanation }],
       primaryAction: { command: deliveryDecision.command, label: deliveryDecision.label, ...(deliveryDecision.requiresNote ? { requiresNote: true } : {}) },

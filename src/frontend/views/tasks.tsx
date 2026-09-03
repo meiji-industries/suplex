@@ -138,7 +138,7 @@ export function NewTaskDialog({ open, onOpenChange, companyStatus, projects, pro
               <TaskRoleSelectors agents={agents} assignments={roleAgents} deliveryTarget={deliveryTarget} supplementalReview={supplementalReview} busy={busy} onChange={onRoleAgentChange} />
               <Button type="button" variant="outline" size="icon-sm" className="rounded-full" aria-label="More task properties"><Ellipsis className="size-3.5" /></Button>
               <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">
-                <Button type="submit" size="sm" disabled={busy || !projectId || !title.trim() || !description.trim()} title="Create task (⌘Enter)">{busy ? "Saving…" : "Create task"}</Button>
+                <Button type="submit" size="sm" disabled={busy || !projectId || !title.trim() || !description.trim()} title="Create task (⌘Enter)">{busy ? "Forge saves" : "Create task"}</Button>
               </DialogFooter>
             </div>
             <fieldset className="border-t border-border/70 bg-muted/30 px-5 py-3">
@@ -155,7 +155,7 @@ export function NewTaskDialog({ open, onOpenChange, companyStatus, projects, pro
               </div>
             </fieldset>
           </form>
-        ) : <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New tasks are unavailable." : companyStatus === "archived" ? "Company archived. New tasks are unavailable." : "No active company is available."}</p>}
+        ) : <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "The company is paused. New tasks are not available." : companyStatus === "archived" ? "The company is archived. New tasks are not available." : "No active company is available."}</p>}
       </DialogContent>
     </Dialog>
   );
@@ -362,7 +362,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     if (!selected) return;
     if (planningUnavailable) { setError(planningUnavailable); return; }
     setBusy(true); setError("");
-    const optimistic: ApiTask = { ...selected, phase: "planning", step: "planning", blocked: false, revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Planner planning" };
+    const optimistic: ApiTask = { ...selected, phase: "planning", step: "planning", blocked: false, revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "The Planner writes the plan" };
     selectedRef.current = optimistic; setSelected(optimistic); setTasks((current) => current.map((task) => task.id === optimistic.id ? optimistic : task));
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); selectedRef.current = updated; setSelected(updated); setTasks((current) => current.map((task) => task.id === updated.id ? updated : task)); await reload(); }
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
@@ -444,7 +444,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
       if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
       const staleRevision = isApiError(reason, 409);
       if (staleRevision || retryPendingAction) { await reload(); if (staleRevision) throw reason; }
-      setError(staleRevision ? "Issue changed; the latest state was loaded." : reason instanceof Error ? reason.message : "Unable to update the plan");
+      setError(staleRevision ? "The task changed. Forge loaded the latest state." : reason instanceof Error ? reason.message : "Unable to update the plan");
     }
     finally { setBusy(false); }
   };

@@ -80,7 +80,7 @@ test("CI reconciliation rejects a changed PR head without replacing reviewed ide
 
     const changed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: (await queryIssueWorkflow(h.config, started.workflowId)).revision, actorUserId: engineFixture.actorUserId });
 
-    expect(changed).toMatchObject({ step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null });
+    expect(changed).toMatchObject({ step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null });
     expect(h.calls.get("reconcileCi") ?? 0).toBe(0);
   } finally { await h.stop(); }
 });
@@ -122,7 +122,7 @@ test.each([
 
     const changed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: (await queryIssueWorkflow(h.config, started.workflowId)).revision, actorUserId: engineFixture.actorUserId });
 
-    expect(changed).toMatchObject({ step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null });
+    expect(changed).toMatchObject({ step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null });
     expect(h.calls.get("adoptPullRequestRelease") ?? 0).toBe(0);
     expect(h.calls.get("reconcileCi") ?? 0).toBe(0);
   } finally { await h.stop(); }
@@ -186,7 +186,7 @@ test("missing-release CI recovery adopts an unpinned legacy pull request identit
       adoptionInput = input;
       return { releaseId: "release-adopted", repository: "acme/forge", branchName, baseBranch: "main", targetBaseSha: engineFixture.base, headSha: head, headTree: engineFixture.tree, pullRequestNumber: 42, pullRequestUrl: "https://github.test/42" };
     },
-    reconcileCi: async (input) => ({ runId: "ci-run", attemptId: "ci-attempt", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: null, outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Waiting for CI", retryAt: "2026-08-29T00:01:00.000Z", nextPollAt: "2026-08-29T00:01:00.000Z", propagationDeadline: null, overallDeadline: null }),
+    reconcileCi: async (input) => ({ runId: "ci-run", attemptId: "ci-attempt", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: null, outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Forge waits for CI", retryAt: "2026-08-29T00:01:00.000Z", nextPollAt: "2026-08-29T00:01:00.000Z", propagationDeadline: null, overallDeadline: null }),
   });
   h.seedTask(issueId);
   try {

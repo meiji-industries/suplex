@@ -246,10 +246,10 @@ test("restore drill preserves users, completed work, artifacts, draft releases, 
       db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('member-a', 'Member A', 'member-a@forge.local', 'member', 'active', ?, ?)").run(now, now);
       db.prepare("INSERT INTO forge_memberships (user_id, company_id, created_at) VALUES ('member-a', 'company-a', ?)").run(now);
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-completed', 'company-a', 'project-a', 'Completed task', 'brief-a', '[]', '{}', 0, 'workflow-completed', 'revision-a', 'task-completed-key', ?, ?)").run(now, now);
-      db.prepare("UPDATE forge_issue_projections SET phase = 'development', owner = 'human', allowed_commands_json = '[\"cancel_development\"]', pending_action = 'Developer execution' WHERE task_id = 'task-a'").run();
+      db.prepare("UPDATE forge_issue_projections SET phase = 'development', owner = 'human', allowed_commands_json = '[\"cancel_development\"]', pending_action = 'The Builder works on the task' WHERE task_id = 'task-a'").run();
       db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task-completed', 'company-a', 'project-a', 'workflow-completed', 4, 'done', 'system', '[]', NULL, ?, 'workflow-completed:4')").run(now);
       for (const [taskId, workflowId, revision, phase, owner, commands, pendingAction] of [
-        ["task-a", "workflow-a", 5, "development", "human", ["cancel_development"], "Developer execution"],
+        ["task-a", "workflow-a", 5, "development", "human", ["cancel_development"], "The Builder works on the task"],
         ["task-completed", "workflow-completed", 4, "done", "system", [], null],
       ] as const) {
         db.prepare("INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, 'company-a', ?, ?, ?, ?)").run(taskId, workflowId, revision, JSON.stringify({ taskId, companyId: "company-a", projectId: "project-a", workflowId, revision, phase, owner, allowedCommands: commands, pendingAction, lastEventId: `${workflowId}:${revision}` }), now);
@@ -344,7 +344,7 @@ test("forward merge updates an issue branch only through a normal non-rewriting 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("forward merge leaves a guarded conflict for Lead planning instead of rewriting the issue branch", async () => {
+test("forward merge leaves a guarded conflict for The Planner writes the plan instead of rewriting the issue branch", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-forward-merge-conflict-"));
   try {
     await exec("git", ["init", "-b", "main"], { cwd: root });

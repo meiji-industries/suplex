@@ -44,7 +44,7 @@ function persistContinuation(harness: EngineHarness, issueId: string, continuati
   for (let revision = 0; revision <= continuation.revision; revision += 1) {
     const state = revision === continuation.revision
       ? continuation
-      : IssueWorkflowStateSchema.parse({ ...initial, ...at(revision === 0 ? "backlog" : "planning"), revision, owner: revision === 0 ? "human" : "lead", allowedCommands: revision === 0 ? ["start_planning"] : [], pendingAction: revision === 0 ? "Start planning" : "Lead planning", lastEventId: `${workflowId}:${revision}` });
+      : IssueWorkflowStateSchema.parse({ ...initial, ...at(revision === 0 ? "backlog" : "planning"), revision, owner: revision === 0 ? "human" : "lead", allowedCommands: revision === 0 ? ["start_planning"] : [], pendingAction: revision === 0 ? "Start planning" : "The Planner writes the plan", lastEventId: `${workflowId}:${revision}` });
     harness.database.projectIssueEvent({ schemaVersion: 1, runId: `seed-${issueId}`, eventId: state.lastEventId, state });
   }
 }
@@ -57,7 +57,7 @@ function reviewedState(harness: EngineHarness, issueId: string, overrides: Parti
     revision: 12,
     owner: "human",
     allowedCommands: ["publish_draft", "cancel_issue"],
-    pendingAction: "Opening the pull request",
+    pendingAction: "Forge opens the pull request",
     lastEventId: `${workflowId}:12`,
     planRevision: 3,
     leadSessionRef: "lead-session",
@@ -95,7 +95,7 @@ function corruptState(harness: EngineHarness, issueId: string): IssueWorkflowSta
     revision: 126,
     owner: "human",
     allowedCommands: ["review_delivery", "cancel_issue"],
-    pendingAction: "Temporary provider failure persisted after automatic retries.",
+    pendingAction: "The provider failure continued after the automatic retries.",
     lastEventId: `${workflowId}:126`,
     targetBaseSha: staleBase,
     resultCommit: staleHead,
@@ -108,7 +108,7 @@ function corruptState(harness: EngineHarness, issueId: string): IssueWorkflowSta
     deliveryReviewSummary: null,
     deliveryReviewBlockerCode: "review-infrastructure-failure",
     deliveryReviewBlockerSummary: "The review infrastructure did not complete.",
-    blocker: humanBlocker("provider_connectivity_exhausted", "The review infrastructure did not complete.", [{ command: "review_delivery", label: "Retry delivery review", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], undefined),
+    blocker: humanBlocker("provider_connectivity_exhausted", "The review infrastructure did not complete.", [{ command: "review_delivery", label: "Retry the delivery review", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], undefined),
     targetBaseOutcome: "revalidated",
     targetBaseCheckId: "merge-reviewed",
     targetBaseCheckpoint: "pre_release",
@@ -307,7 +307,7 @@ test.each([
     persistContinuation(harness, issueId, continuation);
     const started = await startIssueWorkflow(harness.config, workflowInput(issueId, continuation, deliveryTarget));
     const done = await harness.settle(started.workflowId, (state) => state.step === "done");
-    expect(done.pendingAction).toBe(pushes ? "Done — branch pushed" : "Done — kept in worktree");
+    expect(done.pendingAction).toBe(pushes ? "Done. Branch pushed." : "Done. Kept in the worktree.");
     expect(publishCalls).toBe(0);
     expect(harness.calls.get("pushDeliveryBranch") ?? 0).toBe(pushes ? 1 : 0);
   } finally { await harness.stop(); }

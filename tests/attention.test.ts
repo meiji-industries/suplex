@@ -26,7 +26,7 @@ test("provider authentication blockers use the GitHub sign-in card", () => {
 test("branch checkout blockers explain the duplicate-task recovery choices", () => {
   expect(attentionCardFromBlocker(
     { category: "unsafe_recovery", summary: "feat/time-clock is already checked out by /worktrees/task-owner" },
-    { actions: [{ command: "cancel_issue", label: "Cancel issue", destructive: true }, { command: "retry_development", label: "Retry Developer" }] },
+    { actions: [{ command: "cancel_issue", label: "Cancel the task", destructive: true }, { command: "retry_development", label: "Retry Developer" }] },
   )).toMatchObject({
     title: "Another task owns this branch",
     explanation: expect.stringContaining("/worktrees/task-owner"),
@@ -45,7 +45,7 @@ test("repair limit blockers show the delivery decision", () => {
     { actions },
   )).toMatchObject({
     kind: "generic",
-    title: "Review problems are not fixed",
+    title: "The review problems are not fixed",
     primaryAction: { command: "record_delivery_decision" },
     secondaryAction: { command: "cancel_issue" },
   });
@@ -54,6 +54,6 @@ test("repair limit blockers show the delivery decision", () => {
 test("other repair blockers still show the no-progress card", () => {
   expect(attentionCardFromBlocker(
     { category: "agent_exhausted", summary: "Automatic repair is not making progress." },
-    { actions: [{ command: "retry_development", label: "Resume Developer turn" }] },
+    { actions: [{ command: "retry_development", label: "Resume the Builder turn" }] },
   )).toMatchObject({ kind: "no_progress", title: "Automatic repair does not make progress" });
 });

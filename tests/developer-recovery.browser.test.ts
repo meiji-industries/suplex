@@ -62,7 +62,7 @@ function taskState(companyId: string, status: RecoveryStatus, revision = 3, over
     allowedCommands: commands,
     commands: [],
     governance: {},
-    pendingAction: cancelled ? "Developer turn cancelled; retry or continue" : failed ? "The Developer turn failed" : "Developer execution",
+    pendingAction: cancelled ? "Developer turn cancelled; retry or continue" : failed ? "The Developer turn failed" : "The Builder works on the task",
     createdAt: "2026-08-12T00:00:00.000Z",
     updatedAt: "2026-08-12T00:00:00.000Z",
     projection: { authoritativeRevision: revision, projectedRevision: revision, projectedAt: "2026-08-12T00:00:00.000Z", status: "current", message: null },
@@ -183,7 +183,7 @@ test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at
       current = taskState(company.id, "reconnecting", 4);
       await reloadTask();
       await recovery.getByText("Reconnecting", { exact: true }).waitFor();
-      current = taskState(company.id, "active", 5, { phase: "delivery_ready", pendingAction: "Lead delivery review" });
+      current = taskState(company.id, "active", 5, { phase: "delivery_ready", pendingAction: "The Planner reviews the delivery" });
       await reloadTask();
       expect(await page.getByText("Ready for review", { exact: true }).count()).toBeGreaterThan(0);
 

@@ -53,7 +53,7 @@ function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               <Input id="create-company-name" autoFocus value={name} onChange={(event) => setName(event.target.value)} />
             </Field>
             {error ? <Alert variant="destructive" className="mt-2"><AlertDescription>{error}</AlertDescription></Alert> : null}
-            <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || !name.trim()}>{busy ? "Creating…" : "Create"}</Button></DialogFooter>
+            <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || !name.trim()}>{busy ? "Forge creates" : "Create"}</Button></DialogFooter>
           </form>
       </DialogContent>
     </DialogRoot>

@@ -79,7 +79,7 @@ export function SystemHealthProvider({ initialSnapshot, children }: { initialSna
 
 export function useSystemHealth(): SystemHealthContextValue {
   const value = useContext(SystemHealthContext);
-  if (!value) throw new Error("System health is unavailable outside SystemHealthProvider");
+  if (!value) throw new Error("System health is not available outside SystemHealthProvider");
   return value;
 }
 

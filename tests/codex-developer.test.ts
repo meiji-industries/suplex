@@ -89,7 +89,7 @@ test("Developer delivery uses the fake turn role session and preserves delivery 
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("a Developer retry uses current project prompts and records prompt repinning", async () => {
+test("a The Builder retries uses current project prompts and records prompt repinning", async () => {
   const value = await fixture();
   const worktree = join(value.root, "worktrees", "task_1");
   const artifacts = new ArtifactStore(value.config.artifactRoot);
@@ -120,7 +120,7 @@ test("a Developer retry uses current project prompts and records prompt repinnin
 test.each([
   { commits: ["a".repeat(40), "a".repeat(40)], retired: 1 },
   { commits: ["a".repeat(40), "b".repeat(40)], retired: 0 },
-])("Developer retry retires a no-progress session only for matching commits", async ({ commits, retired }) => {
+])("The Builder retries retires a no-progress session only for matching commits", async ({ commits, retired }) => {
   const value = await fixture();
   const retire = vi.spyOn(HerdrSessionStore.prototype, "retireRoleSession").mockResolvedValue(true);
   const fake = fakeTurnRunner(() => ({ kind: "delivery", summary: "Blocked", steps: [{ number: 1, status: "blocked", filesChanged: [], notes: "blocked" }], authorizedStepsNotCompleted: [1], resultCommit: commits[0], resultTree: "c".repeat(40), dirtyState: "clean", blocker: "blocked" }));

@@ -7,11 +7,11 @@ export function applyTargetBaseNoDrift(state: IssueWorkflowState, result: Extrac
     ? {}
     : result.checkpoint === "pre_release"
       ? state.deliveryReviewId
-        ? { ...at("delivery_reviewed"), owner: "lead" as const, allowedCommands: ["publish_draft", "cancel_issue"] as const, pendingAction: "Publish one exact draft pull request" }
-        : { ...at("delivery_ready"), owner: "lead" as const, allowedCommands: ["review_delivery", "cancel_issue"] as const, pendingAction: "Lead delivery review" }
+        ? { ...at("delivery_reviewed"), owner: "lead" as const, allowedCommands: ["publish_draft", "cancel_issue"] as const, pendingAction: "Publish the reviewed commit as a draft pull request" }
+        : { ...at("delivery_ready"), owner: "lead" as const, allowedCommands: ["review_delivery", "cancel_issue"] as const, pendingAction: "The Planner reviews the delivery" }
       : result.checkpoint === "pre_final_review"
-        ? { ...at("final_review"), owner: "lead" as const, allowedCommands: ["final_review", "cancel_issue"] as const, pendingAction: "Final Lead review" }
-        : { ...at("accepted"), owner: "human" as const, allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"] as const, pendingAction: "Member acceptance required" };
+        ? { ...at("final_review"), owner: "lead" as const, allowedCommands: ["final_review", "cancel_issue"] as const, pendingAction: "The final review is in progress" }
+        : { ...at("accepted"), owner: "human" as const, allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"] as const, pendingAction: "Your acceptance is necessary" };
   const changed = requiresResume
     || state.targetBaseCheckId !== result.checkId
     || state.targetBaseCheckpoint !== result.checkpoint
@@ -30,7 +30,7 @@ export function applyTargetBaseRevalidation(
     ...at("delivery_ready"),
     owner: "lead",
     allowedCommands: ["review_delivery", "cancel_issue"],
-    pendingAction: "Fresh Lead review required after target-base revalidation",
+    pendingAction: "A new review is necessary after the base update",
     revision: state.revision + 1,
     lastEventId: `${state.workflowId}:${state.revision + 1}`,
     targetBaseSha: result.observedBaseSha,

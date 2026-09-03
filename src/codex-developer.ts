@@ -261,7 +261,7 @@ export class DeveloperService {
 
   private developerProfile(): DeveloperProfile {
     const profile = this.database.authQuery((db) => db.prepare("SELECT id, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE provider = 'codex' ORDER BY id LIMIT 1").get() as DeveloperProfile | undefined);
-    if (!profile) throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
+    if (!profile) throw new AgentFailure("developer-profile-unavailable", "The Builder works on the task requires an allowed Codex profile");
     return profile;
   }
 
@@ -312,7 +312,7 @@ export class DeveloperService {
     if (prior && ["starting", "running", "reconnecting", "cancelling", "result_pending_claim"].includes(prior.status)) throw new AgentFailure("retry-not-available", "The previous Developer attempt is still running");
     const revisionAuthorization = input.revisionRequestId ? this.database.authQuery((db) => db.prepare(`SELECT id, disposition, status, authorized_plan_revision AS authorizedPlanRevision, worktree_path AS worktreePath, branch_name AS branchName, base_sha AS baseSha, head_sha AS headSha, tree_sha AS treeSha, exact_base_sha AS exactBaseSha
       FROM forge_plan_revision_requests WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { id: string; disposition: "reuse" | "new"; status: "accepted" | "authorized"; authorizedPlanRevision: number | null; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null } | undefined) : undefined;
-    if (input.revisionRequestId && (!revisionAuthorization || revisionAuthorization.status !== "authorized" || revisionAuthorization.authorizedPlanRevision !== input.planRevision)) throw new AgentFailure("revision-not-authorized", "Developer execution is not authorized for this plan revision");
+    if (input.revisionRequestId && (!revisionAuthorization || revisionAuthorization.status !== "authorized" || revisionAuthorization.authorizedPlanRevision !== input.planRevision)) throw new AgentFailure("revision-not-authorized", "The Builder works on the task is not authorized for this plan revision");
     const executionId = input.developerTurnExecutionId ?? input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
     const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, failure_code AS failureCode, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as DeveloperExecutionIdentity | undefined);
     const sourceBranch = taskConfiguration.source?.kind === "pull_request" ? taskConfiguration.source.headBranch : taskConfiguration.source?.kind === "branch" ? taskConfiguration.source.branch : undefined;
@@ -327,7 +327,7 @@ export class DeveloperService {
     const supersedesExecutionId = prior?.id === executionId ? null : prior?.id ?? null;
     const startedAt = this.now().toISOString();
     const reopened = existing ? this.reAdoptOrphanExecution(executionId, existing, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, planRevision: input.planRevision, attempt, branchName, targetBaseSha, supersedesExecutionId }, startedAt) : false;
-    if (existing && !reopened && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== branchName || existing.targetBaseSha !== targetBaseSha || existing.supersedesExecutionId !== supersedesExecutionId || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic Developer execution ID is already bound to different coordinates", { nonRetryable: true });
+    if (existing && !reopened && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== branchName || existing.targetBaseSha !== targetBaseSha || existing.supersedesExecutionId !== supersedesExecutionId || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic The Builder works on the task ID is already bound to different coordinates", { nonRetryable: true });
     let worktree;
     try {
       if (existing && !reopened) {
@@ -375,7 +375,7 @@ export class DeveloperService {
         const turn = await this.turnRunner.run({ task: { ...task, worktreePath: worktree.worktreePath, runtimeRoot: this.config.runtimeRoot }, executionRole: "builder", ledger: "developer", executionId, promptKind: "implementation", prompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperDeliveryReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-delivery", DeveloperDeliveryReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: input.planRevision });
         sessionRef = turn.roleSessionId;
         const execution = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined);
-        if (!execution || !["starting", "running"].includes(execution.status)) throw new AgentFailure(execution?.status === "cancelled" ? "developer-cancelled" : "developer-superseded", "Developer execution was cancelled before completion");
+        if (!execution || !["starting", "running"].includes(execution.status)) throw new AgentFailure(execution?.status === "cancelled" ? "developer-cancelled" : "developer-superseded", "The Builder works on the task was cancelled before completion");
         const parsedReport = turn.result;
         let durableProof: DurableBrowserProof | undefined, proofBlocker: string | null = null;
         let reportedPaths: string[] = [];
@@ -395,8 +395,8 @@ export class DeveloperService {
           const updated = db.prepare("UPDATE forge_developer_executions SET status = ?, session_ref = ?, finished_at = ?, heartbeat_at = ?, current_step = NULL, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ? AND status IN ('starting', 'running')").run(blocked ? "blocked" : "completed", sessionRef, this.now().toISOString(), this.now().toISOString(), gitState.headSha, gitState.treeSha, gitState.dirtyState, deliveryArtifact.id, evidence.id, executionId);
           return updated.changes === 1 ? blocked ? "blocked" : "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
         });
-        if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "Developer execution was cancelled before completion");
-        if (terminalStatus !== (blocked ? "blocked" : "completed")) throw new AgentFailure("developer-superseded", "Developer execution was superseded before completion");
+        if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "The Builder works on the task was cancelled before completion");
+        if (terminalStatus !== (blocked ? "blocked" : "completed")) throw new AgentFailure("developer-superseded", "The Builder works on the task was superseded before completion");
         return activityResult;
     } catch (error) {
       // Keep the real cause: a swallowed message made launch-path bugs look like Builder failures.
@@ -512,8 +512,8 @@ export class DeveloperService {
         }
         return updated.changes === 1 ? "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
       });
-      if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "Developer execution was cancelled before completion");
-      if (terminalStatus !== "completed") throw new AgentFailure("developer-superseded", "Developer execution was superseded before completion");
+      if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "The Builder works on the task was cancelled before completion");
+      if (terminalStatus !== "completed") throw new AgentFailure("developer-superseded", "The Builder works on the task was superseded before completion");
       return activityResult;
     } catch (error) {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("merge-resolution-failed", `Codex Developer merge-conflict resolution failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -609,8 +609,8 @@ export class DeveloperService {
         if (updated.changes === 1) db.prepare("UPDATE forge_delivery_repairs SET status = ?, result_commit = ?, result_tree = ?, delivery_artifact_id = ?, evidence_artifact_id = ?, failure_code = ?, failure_summary = ?, finished_at = ? WHERE id = ?").run(blocked ? "blocked" : "completed", gitState.headSha, gitState.treeSha, repairArtifact.id, evidence.id, failureCode, failureSummary, this.now().toISOString(), row?.id);
         return updated.changes === 1 ? blocked ? "blocked" : "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
       });
-      if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "Developer execution was cancelled before completion");
-      if (terminalStatus !== (blocked ? "blocked" : "completed")) throw new AgentFailure("developer-superseded", "Developer execution was superseded before completion");
+      if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "The Builder works on the task was cancelled before completion");
+      if (terminalStatus !== (blocked ? "blocked" : "completed")) throw new AgentFailure("developer-superseded", "The Builder works on the task was superseded before completion");
       return activityResult;
     } catch (error) {
       const expectedFailure = error instanceof AgentFailure;
@@ -708,8 +708,8 @@ export class DeveloperService {
         }
         return updated.changes === 1 ? "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
       });
-      if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "Developer execution was cancelled before completion");
-      if (terminalStatus !== "completed") throw new AgentFailure("developer-superseded", "Developer execution was superseded before completion");
+      if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "The Builder works on the task was cancelled before completion");
+      if (terminalStatus !== "completed") throw new AgentFailure("developer-superseded", "The Builder works on the task was superseded before completion");
       return activityResult;
     } catch (error) {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("ci-repair-failed", `CI repair failed: ${error instanceof Error ? error.message : String(error)}`);

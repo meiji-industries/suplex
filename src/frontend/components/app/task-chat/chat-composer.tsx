@@ -68,6 +68,6 @@ export function ChatComposer({ taskId, phase, disabled, plannerAvailable, onSubm
       <SelectContent><SelectItem value="planner" disabled={!plannerAvailable}>Planner (plan note)</SelectItem>{panes.map((pane) => <SelectItem key={pane.role} value={pane.role}>{pane.role.slice(0, 1).toUpperCase() + pane.role.slice(1)} session</SelectItem>)}</SelectContent>
     </Select>
     <Textarea aria-label="Message" value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={onKeyDown} placeholder={selectedPane ? `Send to ${selectedPane.role}…` : "Add a plan note"} disabled={disabled || submitting} />
-    <div className="flex items-center justify-between gap-3"><p className="text-[11px] text-muted-foreground">Cmd/Ctrl+Enter to send</p><Button size="sm" type="submit" disabled={!canSubmit}>{submitting ? "Sending…" : "Send"}</Button></div>
+    <div className="flex items-center justify-between gap-3"><p className="text-[11px] text-muted-foreground">Cmd/Ctrl+Enter to send</p><Button size="sm" type="submit" disabled={!canSubmit}>{submitting ? "Forge sends" : "Send"}</Button></div>
   </form>;
 }

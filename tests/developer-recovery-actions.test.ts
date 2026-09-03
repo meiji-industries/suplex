@@ -21,7 +21,7 @@ test("only Developer cancellation remains available while another task command i
   const developmentButton = html.match(/<button[^>]*>Cancel development<\/button>/)?.[0];
   expect(developmentButton).toBeDefined();
   expect(developmentButton).not.toMatch(/\sdisabled(?:=|\s|>)/);
-  expect(html).not.toContain("Cancel issue");
+  expect(html).not.toContain("Cancel the task");
 });
 
 test("recovery actions render in the shared card footer", () => {
@@ -54,7 +54,7 @@ test("attention cards left-align content and omit repeated status text", () => {
       explanation: repeated,
       evidence: [{ kind: "text", ref: repeated }],
       primaryAction: { command: "cancel_development", label: "Cancel development" },
-      secondaryAction: { command: "cancel_issue", label: "Cancel issue", destructive: true },
+      secondaryAction: { command: "cancel_issue", label: "Cancel the task", destructive: true },
     },
     onAction: async () => undefined,
   }));
@@ -103,7 +103,7 @@ test("labels a blocked delivery as awaiting a decision while keeping retry avail
   expect(html).not.toContain("Failed");
 });
 
-test("keeps failed and cancelled Developer executions distinct", () => {
+test("keeps failed and cancelled The Builder works on the tasks distinct", () => {
   const render = (status: "failed" | "cancelled", executionStatus: string): string => renderToStaticMarkup(createElement(DeveloperRecoveryStatus, {
     recovery: { status, reasonCode: null, summary: null, lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: null, nextAction: null },
     executionStatus,
@@ -130,7 +130,7 @@ test("shows an agent status card for planning", () => {
     phase: "planning",
     allowedCommands: [],
     commands: [],
-    pendingAction: "Lead planning",
+    pendingAction: "The Planner writes the plan",
     projection: { status: "current" },
   } as unknown as ApiTask;
   const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
@@ -142,7 +142,7 @@ test("shows an agent status card for planning", () => {
     onContinueWork: async () => undefined,
   }) }));
   expect(html).toContain("data-task-status-card");
-  expect(html).toContain("Lead planning");
+  expect(html).toContain("The Planner writes the plan");
 });
 
 test("keeps task-actions cards with an available command", () => {
@@ -171,7 +171,7 @@ test("keeps incomplete verification actionable without a blocker card", () => {
     owner: "human",
     allowedCommands: ["repair_delivery", "review_delivery", "cancel_issue"],
     commands: [{ name: "repair_delivery", endpoint: "repair-delivery" }, { name: "review_delivery", endpoint: "review-delivery" }],
-    pendingAction: "Verification incomplete",
+    pendingAction: "The verification is not complete",
     projection: { status: "current" },
   } as unknown as ApiTask;
   const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
@@ -183,7 +183,7 @@ test("keeps incomplete verification actionable without a blocker card", () => {
     onContinueWork: async () => undefined,
   }) }));
 
-  expect(html).toContain("Verification incomplete");
+  expect(html).toContain("The verification is not complete");
   expect(html).toContain("Run the missing check");
   expect(html).toContain("Continue to the review");
   expect(html).not.toContain("data-task-blocked-card");
@@ -219,12 +219,12 @@ test("explains delivery review without internal role language", () => {
     phase: "reviewing_delivery",
     allowedCommands: [],
     commands: [],
-    pendingAction: "Lead delivery review",
+    pendingAction: "The Planner reviews the delivery",
     projection: { status: "current" },
   } as unknown as ApiTask;
   const html = renderToStaticMarkup(createElement(NextAction, { value: task.pendingAction }));
   expect(html).toContain("Forge is checking the completed work against the approved plan.");
-  expect(html).not.toContain("Lead delivery review");
+  expect(html).not.toContain("The Planner reviews the delivery");
 });
 
 test("renders blocked attention-card actions despite a stale active Developer recovery", () => {
@@ -235,14 +235,14 @@ test("renders blocked attention-card actions despite a stale active Developer re
     owner: "human",
     allowedCommands: ["record_delivery_decision", "cancel_issue"],
     commands: [{ name: "record_delivery_decision", endpoint: "record-delivery-decision", idempotency: "required" }, { name: "cancel_issue", endpoint: "cancel-issue" }],
-    pendingAction: "Review problems are not fixed",
+    pendingAction: "The review problems are not fixed",
     attentionCard: {
       kind: "generic",
-      title: "Review problems are not fixed",
+      title: "The review problems are not fixed",
       explanation: "Record a delivery decision or cancel the issue.",
       evidence: [],
-      primaryAction: { command: "record_delivery_decision", label: "Record delivery decision", requiresNote: true },
-      secondaryAction: { command: "cancel_issue", label: "Cancel issue", destructive: true },
+      primaryAction: { command: "record_delivery_decision", label: "Accept as is and publish", requiresNote: true },
+      secondaryAction: { command: "cancel_issue", label: "Cancel the task", destructive: true },
     },
     developerRecovery: { status: "active" },
     projection: { status: "current" },
@@ -257,8 +257,8 @@ test("renders blocked attention-card actions despite a stale active Developer re
   }) }));
   expect(html).toContain('data-task-blocked-card="true"');
   expect(html).toContain("data-task-attention-card");
-  expect(html).toContain(">Record delivery decision<");
-  expect(html).toContain(">Cancel issue<");
+  expect(html).toContain(">Accept as is and publish<");
+  expect(html).toContain(">Cancel the task<");
 });
 
 test("claimed Developer recovery does not remain an active Development card", () => {

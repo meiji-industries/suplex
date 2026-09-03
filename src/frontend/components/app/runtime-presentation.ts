@@ -1,6 +1,6 @@
 import type { ApiAgentRuntime } from "../../lib/view-shared.js";
 
-const runtimeDiagnosisLabel: Record<ApiAgentRuntime["diagnosis"], string> = { working: "Working", resting: "Resting", blocked: "Needs input", result_missing: "Result missing", recovering_runtime: "Reconnecting", runtime_unavailable: "Runtime unavailable", identity_conflict: "Identity conflict", unknown: "Runtime unknown" };
+const runtimeDiagnosisLabel: Record<ApiAgentRuntime["diagnosis"], string> = { working: "Working", resting: "Resting", blocked: "Needs input", result_missing: "Result missing", recovering_runtime: "Reconnecting", runtime_unavailable: "Runtime not available", identity_conflict: "Identity conflict", unknown: "Runtime unknown" };
 
 const livePaneRoleOrder: Record<ApiAgentRuntime["role"], number> = { planner: 0, builder: 1, reviewer: 2, integrator: 3 };
 

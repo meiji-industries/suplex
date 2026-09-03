@@ -395,7 +395,7 @@ describe("target-base reconciliation contracts", () => {
       database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET result_commit = ?, result_tree = ? WHERE id = 'developer-1'").run(repository.head, priorTree));
       await expect(activities.reconcileTargetBase(revalidatedInput)).resolves.toMatchObject({ outcome: "revalidated", developerExecutionId: "developer-1", headSha: mergedHead, headTree: mergedTree, deliveryArtifact: { id: delivery.id, kind: "forward-merge-delivery" } });
       expect(database.authQuery((db) => db.prepare("SELECT result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = 'developer-1'").get())).toEqual({ resultCommit: mergedHead, resultTree: mergedTree });
-      await expect(activities.pushDeliveryBranch({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", branchName: "issue/task-1", commitSha: repository.head })).rejects.toMatchObject({ type: "stale-reviewed-revision", message: "The reviewed revision does not match a completed Developer execution" });
+      await expect(activities.pushDeliveryBranch({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", branchName: "issue/task-1", commitSha: repository.head })).rejects.toMatchObject({ type: "stale-reviewed-revision", message: "The reviewed revision does not match a completed The Builder works on the task" });
       expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_developer_executions WHERE task_id = 'task-1'").get())).toEqual({ count: 1 });
     } finally {
       database.close();
@@ -669,7 +669,7 @@ describe("target-base reconciliation contracts", () => {
     });
 
     expect(resumed).toMatchObject({
-      step: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish one exact draft pull request", deliveryReviewId: "review-exact", targetBaseBlockerCode: null,
+      step: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish the reviewed commit as a draft pull request", deliveryReviewId: "review-exact", targetBaseBlockerCode: null,
     });
     expect(resumed.allowedCommands).not.toContain("review_delivery");
   });
@@ -685,7 +685,7 @@ describe("target-base reconciliation contracts", () => {
     });
 
     expect(resumed).toMatchObject({
-      step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Lead delivery review", deliveryReviewId: null, targetBaseBlockerCode: null,
+      step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the delivery", deliveryReviewId: null, targetBaseBlockerCode: null,
     });
     expect(resumed.allowedCommands).not.toContain("publish_draft");
     expect(resumed.phase).not.toBe("delivery_reviewed");
@@ -786,8 +786,8 @@ describe("target-base reconciliation contracts", () => {
   test("drops an accepted human blocker when reconciliation replaces its commands", () => {
     const accepted = IssueWorkflowStateSchema.parse({
       workflowId: "workflow-1", companyId: "company-1", projectId: "project-1", issueId: "task-1", projectRevisionId: "revision-1",
-      phase: "accepted", revision: 4, owner: "human", allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"], pendingAction: "Member acceptance required", lastEventId: "workflow-1:4", continuationCount: 0, lastSummaryHash: null,
-      blocker: { category: "member_authorization", summary: "Member acceptance required", unblockOwner: "human", actions: [{ command: "accept_delivery", label: "Accept", requiresNote: false, destructive: false }], retry: null, evidence: { artifactId: "evidence-1", kind: "lead-plan" }, createdAt: "2026-08-22T00:00:00.000Z" },
+      phase: "accepted", revision: 4, owner: "human", allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"], pendingAction: "Your acceptance is necessary", lastEventId: "workflow-1:4", continuationCount: 0, lastSummaryHash: null,
+      blocker: { category: "member_authorization", summary: "Your acceptance is necessary", unblockOwner: "human", actions: [{ command: "accept_delivery", label: "Accept", requiresNote: false, destructive: false }], retry: null, evidence: { artifactId: "evidence-1", kind: "lead-plan" }, createdAt: "2026-08-22T00:00:00.000Z" },
     });
     const blocked = IssueWorkflowStateSchema.parse({ ...accepted, revision: 5, ...at("accepted"), owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Configuration unavailable", lastEventId: "workflow-1:5" });
     expect(blocked).toMatchObject({ step: "accepted", blocker: null });

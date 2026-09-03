@@ -25,7 +25,7 @@ async function runDelivery(summary: string, mutate?: (worktree: string) => Promi
   return { value, fake, service };
 }
 
-test("Developer execution keeps a Builder delivery commit and summary", async () => {
+test("The Builder works on the task keeps a Builder delivery commit and summary", async () => {
   const { value, service } = await runDelivery("Builder delivery", async (worktree) => {
     await writeFile(join(worktree, "MARKER.md"), "done\n");
     await command("git", ["add", "MARKER.md"], worktree);
@@ -36,7 +36,7 @@ test("Developer execution keeps a Builder delivery commit and summary", async ()
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("Developer execution forbids every test suite when project tests are disabled", async () => {
+test("The Builder works on the task forbids every test suite when project tests are disabled", async () => {
   const { value, fake, service } = await runDelivery("No-suite delivery", async (worktree) => {
     await writeFile(join(worktree, "MARKER.md"), "done\n");
     await command("git", ["add", "MARKER.md"], worktree);
@@ -75,7 +75,7 @@ test("Builder dirty worktree is committed before completion", async () => {
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("Developer execution safely resumes an owned worktree after its result was lost", async () => {
+test("The Builder works on the task safely resumes an owned worktree after its result was lost", async () => {
   const value = await fixture();
   let worktree = "";
   const first = fakeTurnRunner(async (input) => { worktree = input.task.worktreePath; await writeFile(join(worktree, "MARKER.md"), "partial\n"); return new Error("lost result"); });

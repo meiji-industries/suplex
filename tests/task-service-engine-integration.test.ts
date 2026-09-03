@@ -55,8 +55,8 @@ test("TaskService consumes atomic engine projections for decision, revise-plan, 
   harness.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET byte_size = ?, sha256 = ?, storage_path = ? WHERE id = ?").run(brief.byteLength, briefSha256, storagePath, engineFixture.briefArtifactId));
   try {
     const decisionIssueId = "task-service-decision";
-    const approval = seedContinuation(harness, decisionIssueId, { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan", planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" });
-    const revision = seedContinuation(harness, "task-service-revision", { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "revise_plan", "cancel_issue"], pendingAction: "Approve final plan", planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" });
+    const approval = seedContinuation(harness, decisionIssueId, { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve the final plan", planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" });
+    const revision = seedContinuation(harness, "task-service-revision", { ...at("approval"), owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "revise_plan", "cancel_issue"], pendingAction: "Approve the final plan", planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" });
     const done = seedContinuation(harness, "task-service-continue", { ...at("done"), owner: "human", allowedCommands: ["continue_work"], pendingAction: "Done" });
     await Promise.all([startIssueWorkflow(harness.config, workflowInput(approval)), startIssueWorkflow(harness.config, workflowInput(revision)), startIssueWorkflow(harness.config, workflowInput(done))]);
     for (const workflowId of [approval.workflowId, revision.workflowId, done.workflowId]) harness.engine.run(workflowId);
@@ -75,7 +75,7 @@ test("TaskService consumes atomic engine projections for decision, revise-plan, 
 
     const revisionCurrent = tasks.getTask(engineFixture.actorUserId, revision.issueId);
     const revised = await tasks.revisePlan(engineFixture.actorUserId, revision.issueId, { expectedRevision: revisionCurrent.revision, actorUserId: engineFixture.actorUserId, reason: "Rework the plan", worktreeDisposition: "reuse" });
-    expect(revised).toMatchObject({ phase: "building", step: "development", blocked: true, pendingAction: "Plan revision is blocked" });
+    expect(revised).toMatchObject({ phase: "building", step: "development", blocked: true, pendingAction: "The plan revision is blocked" });
     expect(revised.revision).toBeGreaterThan(revisionCurrent.revision);
 
     const doneCurrent = tasks.getTask(engineFixture.actorUserId, done.issueId);

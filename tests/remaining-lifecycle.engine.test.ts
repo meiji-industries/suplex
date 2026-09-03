@@ -39,7 +39,7 @@ class FifteenSecondWindowClock extends ImmediateClock {
 }
 
 function ciState(h: EngineHarness, issueId: string) {
-  return { ...at("ci_waiting"), revision: 20, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Waiting for CI", lastEventId: `${issueId}:20`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: new Date(h.clock.now()).toISOString(), leadSessionRef: "lead-session", leadExecutionId: "lead-execution", leadOutputArtifactId: "plan", planRevision: 1, developerExecutionId: "developer", developerSessionRef: "developer-session", worktreePath: join(h.root, "worktrees", issueId), branchName: `forge/issue/${issueId}`, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: tree, dirtyState: "clean" as const, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "evidence", deliveryReviewId: "review", releaseId: `release-${issueId}`, releaseRepository: "acme/forge", pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", expectedHeadSha: head, expectedHeadTree: tree, ciAttempt: 0, ciOutcome: "waiting" as const, ciNextPollAt: null };
+  return { ...at("ci_waiting"), revision: 20, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Forge waits for CI", lastEventId: `${issueId}:20`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: new Date(h.clock.now()).toISOString(), leadSessionRef: "lead-session", leadExecutionId: "lead-execution", leadOutputArtifactId: "plan", planRevision: 1, developerExecutionId: "developer", developerSessionRef: "developer-session", worktreePath: join(h.root, "worktrees", issueId), branchName: `forge/issue/${issueId}`, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: tree, dirtyState: "clean" as const, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "evidence", deliveryReviewId: "review", releaseId: `release-${issueId}`, releaseRepository: "acme/forge", pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", expectedHeadSha: head, expectedHeadTree: tree, ciAttempt: 0, ciOutcome: "waiting" as const, ciNextPollAt: null };
 }
 
 test.each(["ci_waiting", "manual_merge", "releasing"] as const)("an unchanged %s shipping state does not re-project while it waits", async (step) => {
@@ -55,7 +55,7 @@ test.each(["ci_waiting", "manual_merge", "releasing"] as const)("an unchanged %s
     },
     loadTaskSourcePullRequest: async () => null,
     observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.test/42", state: "open", isDraft: false, headSha: head, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
-    reconcileCi: async (input) => ({ runId: "ci", attemptId: "pending", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: "ci-evidence", outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Waiting for CI", retryAt: new Date(Date.now() + 60_000).toISOString(), nextPollAt: null, policyHash: engineFixture.sha256, propagationDeadline: null, overallDeadline: null }),
+    reconcileCi: async (input) => ({ runId: "ci", attemptId: "pending", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: "ci-evidence", outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Forge waits for CI", retryAt: new Date(Date.now() + 60_000).toISOString(), nextPollAt: null, policyHash: engineFixture.sha256, propagationDeadline: null, overallDeadline: null }),
   }, clock);
   h.seedTask(`unchanged-${step}`);
   try {
@@ -83,7 +83,7 @@ test("unchanged CI shipping observes GitHub once in a fifteen-second window", as
       if (observations > 1) observedTwice();
       return { exists: true, number: 42, url: "https://github.test/42", state: "open", isDraft: false, headSha: head, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null };
     },
-    reconcileCi: async (input) => ({ runId: "ci", attemptId: "pending", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: "ci-evidence", outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Waiting for CI", retryAt: null, nextPollAt: null, policyHash: engineFixture.sha256, propagationDeadline: null, overallDeadline: null }),
+    reconcileCi: async (input) => ({ runId: "ci", attemptId: "pending", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: "ci-evidence", outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Forge waits for CI", retryAt: null, nextPollAt: null, policyHash: engineFixture.sha256, propagationDeadline: null, overallDeadline: null }),
   }, clock);
   h.seedTask("unchanged-ci-observation");
   try {
@@ -108,7 +108,7 @@ test("a GitHub authentication failure blocks CI after one observation", async ()
     const blocked = await h.settle(started.workflowId, (state) => state.step === "ci_waiting" && state.owner === "human" && state.blocker?.category === "provider_authentication");
     expect(observations).toBe(1);
     expect(Date.parse(blocked.ciNextPollAt!)-h.clock.now()).toBe(60_000);
-    expect(blocked).toMatchObject({ allowedCommands: expect.arrayContaining(["reconcile_ci", "cancel_issue"]), pendingAction: "GitHub sign-in is required to continue.", blocker: { category: "provider_authentication" } });
+    expect(blocked).toMatchObject({ allowedCommands: expect.arrayContaining(["reconcile_ci", "cancel_issue"]), pendingAction: "GitHub sign-in is necessary to continue.", blocker: { category: "provider_authentication" } });
   } finally { await h.stop(); }
 });
 
@@ -119,7 +119,7 @@ test("foreign PR head changes return reviewed work to delivery review", async ()
     const started = await h.startContinuation("foreign-head", { ...ciState(h, "foreign-head"), ...at("manual_merge"), allowedCommands: ["reconcile_merge"], pendingAction: "Waiting for merge", acceptanceId: "acceptance" });
     const initial = await queryIssueWorkflow(h.config, started.workflowId);
     const changed = await executeIssueCommand(h.config, started.workflowId, "reconcile_merge", { expectedRevision: initial.revision, actorUserId: engineFixture.actorUserId });
-    expect(changed).toMatchObject({ step: "delivery_ready", pendingAction: "Reviewing the latest changes", expectedHeadSha: remoteHead, resultCommit: remoteHead, blocker: null });
+    expect(changed).toMatchObject({ step: "delivery_ready", pendingAction: "The Planner reviews the latest changes", expectedHeadSha: remoteHead, resultCommit: remoteHead, blocker: null });
     expect(await executeIssueCommand(h.config, started.workflowId, "reconcile_merge", { expectedRevision: changed.revision, actorUserId: engineFixture.actorUserId })).toEqual(changed);
   } finally { await h.stop(); }
 });
@@ -143,7 +143,7 @@ test("a throwing guarded handler is projected and a later command still works", 
   const h = await createEngineHarness({ projectIssueState: async (event) => { projections.push(structuredClone(event.state)); return event.state; }, reconcileTargetBase: async (input) => ({ outcome: "no_drift", checkId: `base-${input.checkpoint}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: input.expectedBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree }), acceptDelivery: async () => { throw ApplicationFailure.nonRetryable("Merge commits are disabled", "github-merge-method-rejected"); } });
   h.seedTask("guarded");
   try {
-    const accepted = { ...ciState(h, "guarded"), ...at("accepted"), revision: 30, owner: "human" as const, allowedCommands: ["accept_delivery" as const, "request_delivery_changes" as const, "cancel_issue" as const], pendingAction: "Member acceptance required", finalReviewId: "final", finalReviewOutcome: "approved" as const };
+    const accepted = { ...ciState(h, "guarded"), ...at("accepted"), revision: 30, owner: "human" as const, allowedCommands: ["accept_delivery" as const, "request_delivery_changes" as const, "cancel_issue" as const], pendingAction: "Your acceptance is necessary", finalReviewId: "final", finalReviewOutcome: "approved" as const };
     const started = await h.startContinuation("guarded", accepted, { pullRequestMode: "auto_merge", autoMergeActorUserId: engineFixture.actorUserId });
     const guarded = await executeIssueCommand(h.config, started.workflowId, "accept_delivery", { expectedRevision: (await queryIssueWorkflow(h.config, started.workflowId)).revision, actorUserId: engineFixture.actorUserId });
     expect(guarded).toMatchObject({ step: "accepted", lastHandlerError: { command: "accept_delivery" } });

@@ -165,7 +165,7 @@ function fakeTurnRunner(handlers: Partial<Record<string, (input: HerdrTurnInput<
   };
 }
 
-test("Lead planning persists a fake turn result and reuses the Lead role session", async () => {
+test("The Planner writes the plan persists a fake turn result and reuses the Lead role session", async () => {
   const value = await fixture();
   const fake = fakeTurnRunner({ "lead-plan": () => routinePlan(), "lead-plan-revision": () => routinePlan("A revised fixture plan") });
   try {
@@ -209,7 +209,7 @@ test("Lead planning persists a fake turn result and reuses the Lead role session
     await rm(value.root, { recursive: true, force: true });
   }
 });
-test("Lead planning persists a legacy task description and ignores a stale brief input", async () => {
+test("The Planner writes the plan persists a legacy task description and ignores a stale brief input", async () => {
   const value = await fixture("gpt-5-codex", "Legacy task text");
   const fake = fakeTurnRunner({ "lead-plan": () => routinePlan() });
   try {
@@ -233,7 +233,7 @@ test("a description edit after planning admission cannot change its sent prompt"
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("Lead planning omits test-suite commands when project tests are disabled", async () => {
+test("The Planner writes the plan omits test-suite commands when project tests are disabled", async () => {
   const value = await fixture();
   const fake = fakeTurnRunner({ "lead-plan": () => routinePlan() });
   try {
@@ -245,7 +245,7 @@ test("Lead planning omits test-suite commands when project tests are disabled", 
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("Lead delivery review prompt honors Screenshots off", async () => {
+test("The Planner reviews the delivery prompt honors Screenshots off", async () => {
   const value = await fixture();
   try {
     const service = new AgentService(value.database, value.config);
@@ -278,7 +278,7 @@ test("Lead decision blockers retain the output artifact", async () => {
   }
 });
 
-test("Lead planning carries a member blocker answer in a revision prompt", async () => {
+test("The Planner writes the plan carries a member blocker answer in a revision prompt", async () => {
   const value = await fixture("gpt-5-codex", "Initial brief that must not be repeated.");
   const answerStore = new ArtifactStore(value.config.artifactRoot);
   const answer = await answerStore.putArtifact("company_1", "plan-blocker-response", { filename: "answer.md", mimeType: "text/markdown", bytes: Buffer.from("Use the 30-day retention policy.") });
@@ -473,7 +473,7 @@ test("permanent agent failures become non-retryable Engine application failures"
   expect(actual).toBeInstanceOf(ApplicationFailure);
   expect(actual).toMatchObject({ type: "model-unavailable", nonRetryable: true, message: "Choose a supported model", details: [{ code: "model-unavailable", summary: "Choose a supported model" }] });
 });
-test("supplemental review uses a fresh session and primary Lead consolidation resumes its session", async () => {
+test("supplemental review uses a fresh session and primary The Planner consolidates the plan resumes its session", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
   const draft = await artifactStore.putArtifact("company_1", "lead-plan", { filename: "draft.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Draft plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], affectedPaths: ["README.md"] })) });

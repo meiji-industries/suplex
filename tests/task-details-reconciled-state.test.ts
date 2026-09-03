@@ -81,7 +81,7 @@ test("a GitHub-merged, green pull request does not render the retired acceptance
   expect(html).toContain("Done");
   expect(html).toContain("Merged");
   expect(html).not.toContain("Accepted");
-  expect(html).not.toContain("Needs your call");
+  expect(html).not.toContain("Your decision is necessary");
 });
 
 test("properties show the approval policy", () => {

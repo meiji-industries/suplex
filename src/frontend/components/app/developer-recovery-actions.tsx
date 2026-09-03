@@ -21,7 +21,7 @@ export function DeveloperRecoveryActions({ allowedCommands, busy, isAdmin, onAct
   return <>
     <div className="flex flex-wrap gap-2">
       {allowedCommands.includes("retry_development") ? <Button size="sm" onClick={() => openConfirmation("retry-development")} disabled={busy || pendingAction !== undefined}>Retry development</Button> : null}
-      {allowedCommands.includes("cancel_development") ? <Button size="sm" variant="outline" onClick={() => openConfirmation("cancel-development")} disabled={pendingAction !== undefined}>{pendingAction === "cancel-development" ? "Cancelling development…" : "Cancel development"}</Button> : null}
+      {allowedCommands.includes("cancel_development") ? <Button size="sm" variant="outline" onClick={() => openConfirmation("cancel-development")} disabled={pendingAction !== undefined}>{pendingAction === "cancel-development" ? "Forge cancels the build" : "Cancel development"}</Button> : null}
     </div>
     <AlertDialog open={confirmAction !== undefined} onOpenChange={(open) => { if (!open) setConfirmAction(undefined); }}>
       <AlertDialogContent>

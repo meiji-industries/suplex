@@ -13,7 +13,7 @@ test("task status uses the shared phase icons", () => {
   expect(PHASE_LABELS.shipping).toBe("Shipping");
   expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "done" }))).toContain("lucide-circle-check");
   expect(taskStatusLabel("done", "pull_request_draft")).toBe("Done");
-  expect(taskStatusLabel("shipping", "Waiting for CI")).toBe("Shipping · Waiting for CI");
+  expect(taskStatusLabel("shipping", "Forge waits for CI")).toBe("Shipping · Forge waits for CI");
   const merged = renderToStaticMarkup(createElement(TaskStatus, { phase: "done", deliveryTarget: "pull_request_ready", pullRequestState: "merged" }));
   expect(merged).toContain("Done");
   expect(merged).toContain('data-task-status-icon="merged"');
@@ -22,10 +22,10 @@ test("task status uses the shared phase icons", () => {
   expect(merged).toContain("lucide-check");
   expect(merged).not.toContain("lucide-circle-check");
   expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "done", deliveryTarget: "pull_request_ready", pullRequestState: "open" }))).toContain("lucide-circle-check");
-  expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "shipping", pendingAction: "Waiting for CI" }))).toContain("Shipping · Waiting for CI");
+  expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "shipping", pendingAction: "Forge waits for CI" }))).toContain("Shipping · Forge waits for CI");
   expect(taskStatusAppearance("cancelled")).toMatchObject({ iconClass: "text-foreground/70", badge: "secondary" });
   expect(taskStatusAppearance("shipping", true)).toMatchObject({ iconClass: "text-rose-500", badge: "destructive-light" });
-  expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "reviewing", pendingAction: "Review delivery" }))).toContain("Reviewing · Review delivery");
+  expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "reviewing", pendingAction: "Approve the delivery" }))).toContain("Reviewing · Approve the delivery");
 });
 
 test("live status dots show the current role state", () => {

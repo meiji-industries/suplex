@@ -54,7 +54,7 @@ export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" |
       let dirtyFileCount = 0;
       if (isSafe && present) dirtyFileCount = (await worktrees.inspectDelivery(row.worktreePath, row.branchName)).dirtyState === "dirty" ? 1 : 0;
       const artifact = !present && row
-        ? await new ArtifactStore(config.artifactRoot, database).putArtifact(input.companyId, "attention-evidence", { taskId: input.taskId, filename: input.workflowId + "-worktree-missing.txt", mimeType: "text/plain", bytes: Buffer.from("Local worktree is missing: " + row.worktreePath, "utf8") })
+        ? await new ArtifactStore(config.artifactRoot, database).putArtifact(input.companyId, "attention-evidence", { taskId: input.taskId, filename: input.workflowId + "-worktree-missing.txt", mimeType: "text/plain", bytes: Buffer.from("The local worktree is missing: " + row.worktreePath, "utf8") })
         : undefined;
       return { present, owned: isSafe, dirtyFileCount, branch: row?.branchName ?? null, activeExecution: active(input), ...(artifact ? { evidenceArtifactId: artifact.id } : {}) };
     },

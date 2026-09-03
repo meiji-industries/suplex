@@ -76,13 +76,13 @@ export function freshDeliveryLineage(): Pick<IssueWorkflowState, "deliveryReview
 }
 
 export function reviewingDeliveryState(state: IssueWorkflowState): IssueWorkflowState {
-  return revisioned(state, "reviewing_delivery", "lead", [], "Lead delivery review");
+  return revisioned(state, "reviewing_delivery", "lead", [], "The Planner reviews the delivery");
 }
 
 export function reviewBlockedState(state: IssueWorkflowState, result: { attemptId: string | null; code: DeliveryWorkflowBlockCode; summary: string; evidenceArtifactId: string | null }, _infrastructure = false): IssueWorkflowState {
   return IssueWorkflowStateSchema.parse({
     ...revisioned(state, "delivery_ready", "human", ["review_delivery", "cancel_issue"], result.summary),
-    blocker: humanBlocker("agent_exhausted", result.summary, [{ command: "review_delivery", label: "Retry delivery review", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.evidenceArtifactId ?? undefined, "delivery-review")),
+    blocker: humanBlocker("agent_exhausted", result.summary, [{ command: "review_delivery", label: "Retry the delivery review", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(result.evidenceArtifactId ?? undefined, "delivery-review")),
     deliveryReviewAttemptId: result.attemptId,
     deliveryReviewId: null,
     deliveryReviewOutcome: null,
@@ -104,11 +104,11 @@ export function repairRequiredState(state: IssueWorkflowState, result: Completed
   const step = result.review.opinion === "approved" ? "delivery_reviewed" : canRepair ? "repair_required" : "development";
   const owner = step === "repair_required" ? "lead" : "human";
   const allowedCommands: IssueWorkflowState["allowedCommands"] = step === "repair_required" ? ["record_delivery_decision", "repair_delivery", "cancel_issue"] : exhausted ? ["retry_development", "cancel_issue"] : step === "development" ? ["record_delivery_decision", "cancel_issue"] : ["publish_draft", "cancel_issue"];
-  const pendingAction = step === "repair_required" ? "Fixing review findings" : step === "development" && !exhausted ? "Review problems are not fixed" : step === "development" ? "Needs your call" : "Opening the pull request";
-  const repairLimitSummary = `Review found ${openBlocking.length} blocking problem${openBlocking.length === 1 ? "" : "s"}. The Developer made ${state.repairCycle ?? 0} repair attempt${(state.repairCycle ?? 0) === 1 ? "" : "s"} and did not fix them. Read the review findings. Then continue to review or cancel the issue.`;
+  const pendingAction = step === "repair_required" ? "The Builder fixes the review findings" : step === "development" && !exhausted ? "The review problems are not fixed" : step === "development" ? "Your decision is necessary" : "Forge opens the pull request";
+  const repairLimitSummary = `The review found ${openBlocking.length} blocking problem${openBlocking.length === 1 ? "" : "s"}. The Builder made ${state.repairCycle ?? 0} repair attempt${(state.repairCycle ?? 0) === 1 ? "" : "s"} and did not fix them. Read the review findings. Then accept the delivery as is, or cancel the task.`;
   return IssueWorkflowStateSchema.parse({
     ...revisioned(progress, step, owner, allowedCommands, pendingAction),
-    blocker: exhausted ? humanBlocker("agent_exhausted", `Automatic repair is not making progress: ${result.review.summary}`, [{ command: "retry_development", label: "Resume Developer turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.review.reviewArtifact?.artifactId ?? result.review.evidenceArtifactId, "delivery-review")) : step === "development" ? humanBlocker("agent_exhausted", repairLimitSummary, [{ command: "record_delivery_decision", label: "Continue to review", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.review.reviewArtifact?.artifactId ?? result.review.evidenceArtifactId, "delivery-review")) : null,
+    blocker: exhausted ? humanBlocker("agent_exhausted", `Automatic repair does not make progress: ${result.review.summary}`, [{ command: "retry_development", label: "Resume the Builder turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(result.review.reviewArtifact?.artifactId ?? result.review.evidenceArtifactId, "delivery-review")) : step === "development" ? humanBlocker("agent_exhausted", repairLimitSummary, [{ command: "record_delivery_decision", label: "Accept as is and publish", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(result.review.reviewArtifact?.artifactId ?? result.review.evidenceArtifactId, "delivery-review")) : null,
     deliveryReviewId: result.review.reviewId,
     deliveryReviewAttemptId: result.attemptId,
     deliveryReviewOutcome: result.review.opinion,
@@ -127,7 +127,7 @@ export function repairBlockedState(state: IssueWorkflowState, result: BlockedRep
   const verificationIncomplete = result.code === "repair-incomplete" || result.code === "repair-scope";
   if (verificationIncomplete) {
     return IssueWorkflowStateSchema.parse({
-      ...revisioned(state, "delivery_ready", "human", ["repair_delivery", "review_delivery", "cancel_issue"], "Verification incomplete"),
+      ...revisioned(state, "delivery_ready", "human", ["repair_delivery", "review_delivery", "cancel_issue"], "The verification is not complete"),
       blocker: null,
       repairCycle: result.cycle,
       deliveryRepairAttemptId: result.repairAttemptId,
@@ -140,8 +140,8 @@ export function repairBlockedState(state: IssueWorkflowState, result: BlockedRep
   const exhausted = noProgressEnabled ? (progressState.repairProgress?.repeats ?? 0) >= 1 : result.cycle > repairCycleLimit;
   const retry = !exhausted;
   return IssueWorkflowStateSchema.parse({
-    ...revisioned(progressState, "development", "human", retry ? ["record_delivery_decision", "repair_delivery", "retry_development", "cancel_issue"] : ["retry_development", "cancel_issue"], retry ? result.summary : "Needs your call"),
-    blocker: humanBlocker(retry ? "unsafe_recovery" : "agent_exhausted", retry ? result.summary : `Automatic repair is not making progress: ${result.summary}`, retry ? [{ command: "record_delivery_decision", label: "Record delivery decision", requiresNote: true, destructive: false }, { command: "repair_delivery", label: "Repair delivery", requiresNote: false, destructive: false }, { command: "retry_development", label: "Retry development", requiresNote: false, destructive: false }] : [{ command: "retry_development", label: "Resume Developer turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.evidenceArtifactId, "developer-repair")),
+    ...revisioned(progressState, "development", "human", retry ? ["record_delivery_decision", "repair_delivery", "retry_development", "cancel_issue"] : ["retry_development", "cancel_issue"], retry ? result.summary : "Your decision is necessary"),
+    blocker: humanBlocker(retry ? "unsafe_recovery" : "agent_exhausted", retry ? result.summary : `Automatic repair does not make progress: ${result.summary}`, retry ? [{ command: "record_delivery_decision", label: "Accept as is and publish", requiresNote: true, destructive: false }, { command: "repair_delivery", label: "Send back to the Builder", requiresNote: false, destructive: false }, { command: "retry_development", label: "Retry the build", requiresNote: false, destructive: false }] : [{ command: "retry_development", label: "Resume the Builder turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(result.evidenceArtifactId, "developer-repair")),
     repairCycle: result.cycle,
     deliveryRepairAttemptId: result.repairAttemptId,
     deliveryRepairBlockerCode: result.code,
@@ -150,12 +150,12 @@ export function repairBlockedState(state: IssueWorkflowState, result: BlockedRep
   });
 }
 
-export function repairInfrastructureBlockedState(state: IssueWorkflowState, cycle: number, repairCycleLimit: number, evidenceArtifactId: string | null, summary = "The repair infrastructure did not complete; retry the repair.", noProgressEnabled = false): IssueWorkflowState {
+export function repairInfrastructureBlockedState(state: IssueWorkflowState, cycle: number, repairCycleLimit: number, evidenceArtifactId: string | null, summary = "The repair did not complete. Retry the repair.", noProgressEnabled = false): IssueWorkflowState {
   const progressState = withRepairProgress(state, { signature: repairSignature({ source: "local_check", code: "repair-infrastructure-failure" }), commit: state.resultCommit ?? null, diagnosticHash: evidenceArtifactId });
   const retry = noProgressEnabled ? (progressState.repairProgress?.repeats ?? 0) < 1 : cycle < repairCycleLimit;
   return IssueWorkflowStateSchema.parse({
-    ...revisioned(progressState, "development", "human", retry ? ["repair_delivery", "cancel_issue"] : ["retry_development", "cancel_issue"], retry ? summary : "Needs your call"),
-    blocker: humanBlocker(retry ? "provider_connectivity_exhausted" : "agent_exhausted", retry ? summary : `Automatic repair is not making progress: ${summary}`, retry ? [{ command: "repair_delivery", label: "Repair delivery", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }] : [{ command: "retry_development", label: "Resume Developer turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(evidenceArtifactId ?? undefined, "developer-repair")),
+    ...revisioned(progressState, "development", "human", retry ? ["repair_delivery", "cancel_issue"] : ["retry_development", "cancel_issue"], retry ? summary : "Your decision is necessary"),
+    blocker: humanBlocker(retry ? "provider_connectivity_exhausted" : "agent_exhausted", retry ? summary : `Automatic repair does not make progress: ${summary}`, retry ? [{ command: "repair_delivery", label: "Send back to the Builder", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }] : [{ command: "retry_development", label: "Resume the Builder turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(evidenceArtifactId ?? undefined, "developer-repair")),
     repairCycle: cycle,
     deliveryRepairBlockerCode: "repair-infrastructure-failure",
     deliveryRepairBlockerSummary: summary,
@@ -172,16 +172,16 @@ export function transientRetryState(state: IssueWorkflowState, command: IssueWor
 }
 
 export function credentialBlockedState(state: IssueWorkflowState, command: IssueWorkflowState["allowedCommands"][number], evidence: ArtifactPointer | undefined): IssueWorkflowState {
-  const summary = "GitHub sign-in is required to continue.";
+  const summary = "GitHub sign-in is necessary to continue.";
   return IssueWorkflowStateSchema.parse({
     ...revisioned(state, state.step, "human", [command, "cancel_issue"], summary),
-    blocker: humanBlocker("provider_authentication", summary, [{ command, label: "Sign in to GitHub and retry", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidence),
+    blocker: humanBlocker("provider_authentication", summary, [{ command, label: "Sign in to GitHub and retry", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidence),
   });
 }
 
 export function repairedDeliveryAwaitingFreshReviewState(state: IssueWorkflowState, result: CompletedRepair): IssueWorkflowState {
   return IssueWorkflowStateSchema.parse({
-    ...revisioned(state, "delivery_ready", "lead", ["review_delivery", "cancel_issue"], "Fresh Lead delivery review required"),
+    ...revisioned(state, "delivery_ready", "lead", ["review_delivery", "cancel_issue"], "A new delivery review is necessary"),
     developerExecutionId: result.developerExecutionId,
     developerSessionRef: result.developerSessionRef,
     worktreePath: result.worktreePath ?? state.worktreePath,

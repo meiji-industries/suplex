@@ -25,7 +25,7 @@ test("simple capacity admission preserves the current pending action", async () 
     }),
     ...at("planning"),
     owner: "lead",
-    pendingAction: "Lead planning",
+    pendingAction: "The Planner writes the plan",
   };
   const projected: IssueWorkflowState[] = [];
   const acquireExternalTurn = createAcquireExternalTurn(
@@ -52,7 +52,7 @@ test("simple capacity admission preserves the current pending action", async () 
   expect(state).toMatchObject({
     revision: 1,
     lastEventId: "workflow-simple-capacity:1",
-    pendingAction: "Lead planning",
+    pendingAction: "The Planner writes the plan",
   });
   expect(projected).toEqual([state]);
 });
@@ -138,7 +138,7 @@ function targetBaseRetryContext(
     },
     async retryTargetBaseReconciliation(command: { commandId: string }) {
       retries.push(command.commandId);
-      expect(context.state.pendingAction).toBe("Target base moved; reconciling automatically before publishing.");
+      expect(context.state.pendingAction).toBe("The base branch moved. Forge updates it before the publish.");
       return context.state;
     },
   };
@@ -190,9 +190,9 @@ test("target-base reconciliation precedes delivery review and retains capped bac
   expect(projections).toHaveLength(4);
   expect(projections.map(({ revision, pendingAction, processedCommandIds }) => ({ revision, pendingAction, attempts: processedCommandIds?.length }))).toEqual([
     { revision: 1, pendingAction: "Target base moved after delivery review", attempts: 1 },
-    { revision: 2, pendingAction: "Target base moved; reconciling automatically before publishing.", attempts: 1 },
-    { revision: 3, pendingAction: "Target base moved; reconciling automatically before publishing.", attempts: 2 },
-    { revision: 4, pendingAction: "Target base moved; reconciling automatically before publishing.", attempts: 3 },
+    { revision: 2, pendingAction: "The base branch moved. Forge updates it before the publish.", attempts: 1 },
+    { revision: 3, pendingAction: "The base branch moved. Forge updates it before the publish.", attempts: 2 },
+    { revision: 4, pendingAction: "The base branch moved. Forge updates it before the publish.", attempts: 3 },
   ]);
   expect(projections.every(({ blocker }) => blocker?.unblockOwner === "human")).toBe(true);
 });
@@ -238,7 +238,7 @@ test("exhausted target-base retries report reconciliation failure once", async (
   expect(context.state).toMatchObject({
     owner: "human",
     allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"],
-    pendingAction: "The target base moved. Automatic reconciliation did not succeed. You can retry the reconciliation.",
+    pendingAction: "The base branch moved. The automatic update did not succeed. You can retry the update.",
   });
 });
 
@@ -276,7 +276,7 @@ test("recorded human blocker actions prevent unrelated automatic retries", async
       unblockOwner: "human",
       actions: [
         { command: "retry_development", label: "Retry development", requiresNote: false, destructive: false },
-        { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true },
+        { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true },
       ],
       evidence: { artifactId: "artifact-agent-exhausted", kind: "developer-repair" },
       createdAt: "2026-08-30T00:00:00.000Z",

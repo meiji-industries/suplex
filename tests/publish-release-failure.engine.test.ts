@@ -16,7 +16,7 @@ test("a stale reviewed revision blocks publication for human review", async () =
   const workflowId = h.workflowId("stale-publish");
   const continuationState = {
     ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "stale-publish", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-    ...at("delivery_reviewed"), revision: 5, owner: "lead" as const, allowedCommands: ["publish_draft" as const, "cancel_issue" as const], pendingAction: "Opening the pull request", deliveryReviewId: "review", developerExecutionId: "developer", branchName: "forge/issue/stale", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, releaseRepository: "acme/forge", lastEventId: `${workflowId}:5`,
+    ...at("delivery_reviewed"), revision: 5, owner: "lead" as const, allowedCommands: ["publish_draft" as const, "cancel_issue" as const], pendingAction: "Forge opens the pull request", deliveryReviewId: "review", developerExecutionId: "developer", branchName: "forge/issue/stale", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, releaseRepository: "acme/forge", lastEventId: `${workflowId}:5`,
   };
   try {
     const started = await h.startContinuation("stale-publish", continuationState);
@@ -58,7 +58,7 @@ test("repeated stale publication of the same reviewed commit stops the automatic
   const workflowId = h.workflowId("stale-auto-chain");
   const continuationState = {
     ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "stale-auto-chain", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-    ...at("delivery_ready"), revision: 5, owner: "lead" as const, allowedCommands: ["review_delivery" as const, "cancel_issue" as const], pendingAction: "Reviewing the latest changes", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/stale-auto-chain", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "developer-evidence", releaseRepository: "acme/forge", lastEventId: `${workflowId}:5`,
+    ...at("delivery_ready"), revision: 5, owner: "lead" as const, allowedCommands: ["review_delivery" as const, "cancel_issue" as const], pendingAction: "The Planner reviews the latest changes", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/stale-auto-chain", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "developer-evidence", releaseRepository: "acme/forge", lastEventId: `${workflowId}:5`,
   };
   try {
     const started = await h.startContinuation("stale-auto-chain", continuationState);
@@ -100,7 +100,7 @@ test("repeated blocked branch pushes stop the automatic chain", async () => {
   const workflowId = h.workflowId("blocked-push-auto-chain");
   const continuationState = {
     ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "blocked-push-auto-chain", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-    ...at("delivery_ready"), revision: 5, owner: "lead" as const, allowedCommands: ["review_delivery" as const, "cancel_issue" as const], pendingAction: "Reviewing the latest changes", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/blocked-push-auto-chain", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "developer-evidence", releaseRepository: "acme/forge", lastEventId: `${workflowId}:5`,
+    ...at("delivery_ready"), revision: 5, owner: "lead" as const, allowedCommands: ["review_delivery" as const, "cancel_issue" as const], pendingAction: "The Planner reviews the latest changes", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/blocked-push-auto-chain", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "developer-evidence", releaseRepository: "acme/forge", lastEventId: `${workflowId}:5`,
   };
   try {
     const started = await h.startContinuation("blocked-push-auto-chain", continuationState);
@@ -120,12 +120,12 @@ test("a resumed interrupted publish returns to delivery review without pushing",
   const workflowId = h.workflowId("interrupted-publish");
   const continuationState = {
     ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "interrupted-publish", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-    ...at("releasing"), revision: 5, owner: "lead" as const, allowedCommands: [], pendingAction: "Opening the pull request", deliveryReviewId: "review", developerExecutionId: "developer", branchName: "forge/issue/interrupted", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, releaseRepository: "acme/forge", activeOperation: null, releaseRetryAt: null, lastEventId: `${workflowId}:5`,
+    ...at("releasing"), revision: 5, owner: "lead" as const, allowedCommands: [], pendingAction: "Forge opens the pull request", deliveryReviewId: "review", developerExecutionId: "developer", branchName: "forge/issue/interrupted", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, releaseRepository: "acme/forge", activeOperation: null, releaseRetryAt: null, lastEventId: `${workflowId}:5`,
   };
   try {
     const started = await h.startContinuation("interrupted-publish", continuationState);
     await h.settle(started.workflowId, (value) => value.step === "delivery_ready");
-    expect(projected).toContainEqual(expect.objectContaining({ step: "delivery_ready", owner: "lead", allowedCommands: expect.arrayContaining(["review_delivery", "cancel_issue"]), pendingAction: "Publish was interrupted — re-review before publishing" }));
+    expect(projected).toContainEqual(expect.objectContaining({ step: "delivery_ready", owner: "lead", allowedCommands: expect.arrayContaining(["review_delivery", "cancel_issue"]), pendingAction: "The publish stopped. Review again before you publish." }));
     expect(h.calls.get("pushDeliveryBranch") ?? 0).toBe(0);
   } finally { await h.stop(); }
 });

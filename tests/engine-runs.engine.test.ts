@@ -28,9 +28,9 @@ test("projection burst guard skips duplicate shipping projections after twenty r
   const state = IssueWorkflowStateSchema.parse(buildInitialIssueWorkflowState({ workflowId: "guarded-projection", ...workflowInput("guarded-projection") }));
   const guard = new ProjectionBurstGuard();
   for (let revision = 1; revision <= 20; revision += 1) {
-    expect(guard.shouldSkip(IssueWorkflowStateSchema.parse({ ...state, revision, ...at("ci_waiting"), owner: "lead", pendingAction: "Waiting for CI", lastEventId: `guarded-projection:${revision}` }), 1_000)).toBe(false);
+    expect(guard.shouldSkip(IssueWorkflowStateSchema.parse({ ...state, revision, ...at("ci_waiting"), owner: "lead", pendingAction: "Forge waits for CI", lastEventId: `guarded-projection:${revision}` }), 1_000)).toBe(false);
   }
-  const skipped = IssueWorkflowStateSchema.parse({ ...state, revision: 21, ...at("ci_waiting"), owner: "lead", pendingAction: "Waiting for CI", lastEventId: "guarded-projection:21" });
+  const skipped = IssueWorkflowStateSchema.parse({ ...state, revision: 21, ...at("ci_waiting"), owner: "lead", pendingAction: "Forge waits for CI", lastEventId: "guarded-projection:21" });
   expect(guard.shouldSkip(skipped, 1_000)).toBe(true);
   expect(guard.shouldLogSkip(skipped)).toBe(true);
   expect(guard.shouldLogSkip(skipped)).toBe(false);
@@ -57,7 +57,7 @@ function persistContinuation(harness: EngineHarness, issueId: string, continuati
   for (let revision = 0; revision <= (continuation.revision ?? 0); revision += 1) {
     const state = revision === continuation.revision
       ? IssueWorkflowStateSchema.parse({ ...initial, ...continuation })
-      : IssueWorkflowStateSchema.parse({ ...initial, revision, ...at(revision === 0 ? "backlog" : "planning"), owner: revision === 0 ? "human" : "lead", allowedCommands: revision === 0 ? ["start_planning"] : [], pendingAction: revision === 0 ? "Start planning" : "Lead planning", lastEventId: `${workflowId}:${revision}` });
+      : IssueWorkflowStateSchema.parse({ ...initial, revision, ...at(revision === 0 ? "backlog" : "planning"), owner: revision === 0 ? "human" : "lead", allowedCommands: revision === 0 ? ["start_planning"] : [], pendingAction: revision === 0 ? "Start planning" : "The Planner writes the plan", lastEventId: `${workflowId}:${revision}` });
     harness.database.projectIssueEvent({ schemaVersion: 1, runId: `seed-${issueId}`, eventId: state.lastEventId, state });
   }
 }
@@ -367,7 +367,7 @@ test("issue cancellation interrupts held planning and late completion cannot res
     const cancelled = await executeIssueCommand(harness.config, started.workflowId, "cancel_issue", command);
     await planningAborted.promise;
     await planningRejected;
-    expect(cancelled).toMatchObject({ step: "cancelled", activeOperation: null, pendingAction: "Issue cancelled" });
+    expect(cancelled).toMatchObject({ step: "cancelled", activeOperation: null, pendingAction: "Task cancelled" });
 
     planning.resolve(leadPlan());
     await Promise.resolve();
@@ -399,7 +399,7 @@ test("Developer progress is durable before the held effect and terminal receipt 
     let liveState = run.state;
     run.queries.set("issueState", (() => liveState) as never);
     const commandId = "held-development-atomic-receipt";
-    const progress = IssueWorkflowStateSchema.parse({ ...run.state, revision: 1, ...at("development"), owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer execution", lastEventId: `${started.workflowId}:1`, developerExecutionId: "developer-held-exact", developerAttempt: 1, developerTurnKind: "implementation", developerRecoveryStatus: "starting", activeOperation: { commandId, kind: "development", startedRevision: 1 } });
+    const progress = IssueWorkflowStateSchema.parse({ ...run.state, revision: 1, ...at("development"), owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "The Builder works on the task", lastEventId: `${started.workflowId}:1`, developerExecutionId: "developer-held-exact", developerAttempt: 1, developerTurnKind: "implementation", developerRecoveryStatus: "starting", activeOperation: { commandId, kind: "development", startedRevision: 1 } });
     const terminal = IssueWorkflowStateSchema.parse({ ...progress, revision: 2, ...at("development"), owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer failed", lastEventId: `${started.workflowId}:2`, developerRecoveryStatus: "failed", activeOperation: null });
     run.commands.set("heldDeveloperCommand", (async () => {
       liveState = progress;
@@ -443,7 +443,7 @@ test("Developer progress is durable before the held effect and terminal receipt 
       developerExecutionId: "developer-held-exact",
       developerRecoveryStatus: "interrupted",
       developerRecoveryReasonCode: "execution_not_live",
-      pendingAction: "Developer execution was interrupted — retry is available",
+      pendingAction: "The build stopped. You can retry.",
     });
   } finally {
     developer.resolve(undefined);
@@ -457,7 +457,7 @@ test("worker restart makes an orphaned autonomous CI repair actionable", async (
   harness.seedTask(issueId);
   const continuation = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }),
-    ...at("ci_repair_planning"), revision: 1, owner: "lead", allowedCommands: [], pendingAction: "Looking into the CI failure", lastEventId: `${workflowId}:1`, activeOperation: null,
+    ...at("ci_repair_planning"), revision: 1, owner: "lead", allowedCommands: [], pendingAction: "Forge inspects the CI failure", lastEventId: `${workflowId}:1`, activeOperation: null,
   });
   try {
     persistContinuation(harness, issueId, continuation);
@@ -467,7 +467,7 @@ test("worker restart makes an orphaned autonomous CI repair actionable", async (
       owner: "human",
       allowedCommands: ["repair_ci", "reconcile_ci", "cancel_issue"],
       activeOperation: null,
-      pendingAction: "CI repair was interrupted — retry is available",
+      pendingAction: "The CI repair stopped. You can retry.",
     });
   } finally {
     await harness.stop();
@@ -535,7 +535,7 @@ test("cancelling a held production Developer turn prevents late resurrection", a
   });
   const issueId = "cancel-held-developer", workflowId = harness.workflowId(issueId);
   harness.seedTask(issueId);
-  const ready = { ...at("ready_for_development"), revision: 1, owner: "lead" as const, allowedCommands: ["start_development" as const, "cancel_issue" as const], pendingAction: "Start development", lastEventId: `${workflowId}:1`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: "2026-08-29T00:00:00.000Z", planRevision: 1, planApproved: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" };
+  const ready = { ...at("ready_for_development"), revision: 1, owner: "lead" as const, allowedCommands: ["start_development" as const, "cancel_issue" as const], pendingAction: "Start the build", lastEventId: `${workflowId}:1`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: "2026-08-29T00:00:00.000Z", planRevision: 1, planApproved: true, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact" };
   try {
     persistContinuation(harness, issueId, ready);
     await startIssueWorkflow(harness.config, workflowInput(issueId, ready));
@@ -622,17 +622,17 @@ test("reviewed delivery authority is durable before remote branch push", async (
   });
   const issueId = "held-reviewed-push", workflowId = harness.workflowId(issueId);
   harness.seedTask(issueId, { deliveryTarget: "remote_branch" });
-  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), ...at("delivery_ready"), revision: 1, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Review delivery", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/held-reviewed-push", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery-artifact", developerEvidenceArtifactId: "developer-evidence" });
+  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), ...at("delivery_ready"), revision: 1, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Approve the delivery", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/held-reviewed-push", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery-artifact", developerEvidenceArtifactId: "developer-evidence" });
   try {
     persistContinuation(harness, issueId, continuation);
     await startIssueWorkflow(harness.config, { ...workflowInput(issueId, continuation), deliveryTarget: "remote_branch" });
     harness.engine.run(workflowId).wakeable.wake();
     await pushStarted.promise;
     expect(pushCalls).toBe(1);
-    expect(pushedAuthority).toMatchObject({ step: "delivery_reviewed", deliveryReviewId: "held-review", deliveryReviewOutcome: "approved", resultCommit: reviewedCommit, resultTree: reviewedTree, pendingAction: "Opening the pull request" });
+    expect(pushedAuthority).toMatchObject({ step: "delivery_reviewed", deliveryReviewId: "held-review", deliveryReviewOutcome: "approved", resultCommit: reviewedCommit, resultTree: reviewedTree, pendingAction: "Forge opens the pull request" });
     expect(harness.database.authQuery((db) => db.prepare("SELECT step, revision FROM forge_issue_projections WHERE workflow_id = ?").get(workflowId))).toEqual({ step: "delivery_reviewed", revision: pushedAuthority!.revision });
     releasePush.resolve(undefined);
-    await expect(harness.settle(workflowId, (state) => state.step === "done")).resolves.toMatchObject({ step: "done", pendingAction: "Done — branch pushed", resultCommit: reviewedCommit });
+    await expect(harness.settle(workflowId, (state) => state.step === "done")).resolves.toMatchObject({ step: "done", pendingAction: "Done. Branch pushed.", resultCommit: reviewedCommit });
   } finally {
     releasePush.resolve(undefined);
     await harness.stop();
@@ -657,7 +657,7 @@ test("cancelling a held production review prevents late review resurrection", as
   });
   const issueId = "cancel-held-review", workflowId = harness.workflowId(issueId);
   harness.seedTask(issueId, { deliveryTarget: "remote_branch" });
-  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), ...at("delivery_ready"), revision: 1, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Review delivery", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/cancel-held-review", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery-artifact", developerEvidenceArtifactId: "developer-evidence" });
+  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), ...at("delivery_ready"), revision: 1, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Approve the delivery", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "plan-artifact", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/cancel-held-review", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery-artifact", developerEvidenceArtifactId: "developer-evidence" });
   try {
     persistContinuation(harness, issueId, continuation);
     await startIssueWorkflow(harness.config, { ...workflowInput(issueId, continuation), deliveryTarget: "remote_branch" });
@@ -699,7 +699,7 @@ test("target-base no-drift authority is durable before acceptance activity", asy
   });
   const issueId = "held-acceptance-authority", workflowId = harness.workflowId(issueId);
   harness.seedTask(issueId, { deliveryTarget: "merged" });
-  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), ...at("accepted"), revision: 1, owner: "human", allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"], pendingAction: "Member acceptance required", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/held-acceptance", baseBranch: "main", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "developer-evidence", deliveryReviewId: "delivery-review", finalReviewId: "final-review", finalReviewOutcome: "approved", releaseId: "release", releaseRepository: "acme/forge", pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", expectedHeadSha: engineFixture.commit, expectedHeadTree: engineFixture.tree, ciRunId: "ci-run" });
+  const continuation = IssueWorkflowStateSchema.parse({ ...buildInitialIssueWorkflowState({ workflowId, companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId, projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], requestHash: engineFixture.sha256, roleProfiles: engineFixture.roleProfiles, supplementalReview: false, repairCycleLimit: 2 }), ...at("accepted"), revision: 1, owner: "human", allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"], pendingAction: "Your acceptance is necessary", lastEventId: `${workflowId}:1`, planRevision: 1, leadSessionRef: "lead-session", developerExecutionId: "developer", developerSessionRef: "developer-session", branchName: "forge/issue/held-acceptance", baseBranch: "main", targetBaseSha: engineFixture.base, resultCommit: engineFixture.commit, resultTree: engineFixture.tree, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "developer-evidence", deliveryReviewId: "delivery-review", finalReviewId: "final-review", finalReviewOutcome: "approved", releaseId: "release", releaseRepository: "acme/forge", pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", expectedHeadSha: engineFixture.commit, expectedHeadTree: engineFixture.tree, ciRunId: "ci-run" });
   try {
     persistContinuation(harness, issueId, continuation);
     const started = await startIssueWorkflow(harness.config, { ...workflowInput(issueId, continuation), pullRequestMode: "auto_merge", deliveryTarget: "merged" });
@@ -750,7 +750,7 @@ test("development cancellation checks authority before interrupting held work", 
     let liveState = run.state;
     run.queries.set("issueState", (() => liveState) as never);
     const activeCommandId = "active-held-development", cancelCommandId = "cancel-held-development", retryCancelCommandId = "cancel-held-development-retry";
-    const progress = IssueWorkflowStateSchema.parse({ ...liveState, revision: 1, ...at("development"), owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer execution", lastEventId: `${started.workflowId}:1`, developerExecutionId: "interrupt-execution", developerRecoveryStatus: "starting", activeOperation: { commandId: activeCommandId, kind: "development", startedRevision: 1 } });
+    const progress = IssueWorkflowStateSchema.parse({ ...liveState, revision: 1, ...at("development"), owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "The Builder works on the task", lastEventId: `${started.workflowId}:1`, developerExecutionId: "interrupt-execution", developerRecoveryStatus: "starting", activeOperation: { commandId: activeCommandId, kind: "development", startedRevision: 1 } });
     const cancelled = IssueWorkflowStateSchema.parse({ ...progress, revision: 2, ...at("development"), owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer turn cancelled", lastEventId: `${started.workflowId}:2`, developerRecoveryStatus: "cancelled", activeOperation: null });
     run.commands.set("activeHeldDevelopment", (async () => {
       liveState = progress;
@@ -810,7 +810,7 @@ test("cancellation interrupts coalesce by target across command IDs and types", 
       revision: 3,
       owner: "lead" as const,
       allowedCommands: ["cancel_development" as const, "cancel_issue" as const],
-      pendingAction: "Developer execution",
+      pendingAction: "The Builder works on the task",
       lastEventId: `${workflowId}:3`,
       planRevision: 1,
       planApproved: true,

@@ -85,7 +85,7 @@ function seedDeveloperExecution(database: ForgeDatabase, root: string): void {
   });
 }
 
-test("Developer execution receipts are append-only", async () => {
+test("The Builder works on the task receipts are append-only", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-db-developer-events-test-"));
   try {
     const database = new ForgeDatabase(join(root, "forge.sqlite"));

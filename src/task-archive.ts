@@ -73,6 +73,6 @@ export class TaskArchiveService {
 }
 
 function dirtyCount(pendingAction: string | null): number | null {
-  const match = pendingAction?.match(/Worktree has (\d+) uncommitted changes/);
+  const match = pendingAction?.match(/worktree has (\d+) uncommitted changes/i);
   return match ? Number(match[1]) : null;
 }

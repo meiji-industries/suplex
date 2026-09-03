@@ -7,6 +7,15 @@ import { runtimeStatusLabel } from "./runtime-presentation.js";
 
 type RowPosition = { index: number; top: number };
 
+export const AGENT_RECENCY_WINDOW_MS = 6 * 60 * 60 * 1_000;
+
+export function filterRecentAgents(agents: readonly ApiAgent[], now = Date.now()): ApiAgent[] {
+  return agents.filter((agent) => {
+    const lastSeenAt = Date.parse(agent.lastSeenAt);
+    return Number.isFinite(lastSeenAt) && now - lastSeenAt <= AGENT_RECENCY_WINDOW_MS;
+  });
+}
+
 export function animateReorderedAgentRow(row: Element | null, previous: RowPosition | undefined, next: RowPosition): void {
   const offset = previous === undefined ? 0 : previous.top - next.top;
   if (previous === undefined || previous.index === next.index || offset === 0 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -41,6 +50,7 @@ function AgentRow({ agent, runtime, index }: { agent: ApiAgent; runtime: ApiAgen
 }
 
 export function AgentsLeaderboard({ agents, runtime }: { agents: ApiAgent[]; runtime: ApiAgentRuntime[] }): ReactElement | null {
-  if (agents.length === 0) return null;
-  return <SidebarGroup><SidebarGroupLabel>Agents</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{agents.map((agent, index) => <AgentRow key={agent.id} agent={agent} runtime={runtime.filter((entry) => entry.agentId === agent.id)} index={index} />)}</SidebarMenu></SidebarGroupContent></SidebarGroup>;
+  const recentAgents = filterRecentAgents(agents);
+  if (recentAgents.length === 0) return null;
+  return <SidebarGroup><SidebarGroupLabel>Agents</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{recentAgents.map((agent, index) => <AgentRow key={agent.id} agent={agent} runtime={runtime.filter((entry) => entry.agentId === agent.id)} index={index} />)}</SidebarMenu></SidebarGroupContent></SidebarGroup>;
 }

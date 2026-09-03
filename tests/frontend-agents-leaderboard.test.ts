@@ -1,14 +1,40 @@
 import { afterEach, expect, test, vi } from "vitest";
 
-import { agentRuntimeDetail, agentRuntimeSummary, animateReorderedAgentRow } from "../src/frontend/components/app/agents-leaderboard.js";
-import type { ApiAgentRuntime } from "../src/frontend/lib/view-shared.js";
+import { AGENT_RECENCY_WINDOW_MS, agentRuntimeDetail, agentRuntimeSummary, animateReorderedAgentRow, filterRecentAgents } from "../src/frontend/components/app/agents-leaderboard.js";
+import type { ApiAgent, ApiAgentRuntime } from "../src/frontend/lib/view-shared.js";
 
 const originalWindow = globalThis.window;
 const originalElement = globalThis.Element;
 
+function agent(id: string, lastSeenAt: string): ApiAgent {
+  return { id, name: id, role: "planner", avatarSeed: id, profileId: `${id}-profile`, provider: "codex", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: null, effectiveCapacity: 2, archivedAt: null, activeCount: 0, lastSeenAt, createdAt: lastSeenAt, updatedAt: lastSeenAt };
+}
+
 afterEach(() => {
   Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow });
   Object.defineProperty(globalThis, "Element", { configurable: true, value: originalElement });
+});
+
+test("keeps sidebar agents seen within the inclusive six-hour window", () => {
+  const now = Date.parse("2026-09-03T12:00:00.000Z");
+  const recent = agent("recent", "2026-09-03T06:00:00.001Z");
+  const cutoff = agent("cutoff", "2026-09-03T06:00:00.000Z");
+  const stale = agent("stale", "2026-09-03T05:59:59.999Z");
+
+  expect(filterRecentAgents([recent], now)).toEqual([recent]);
+  expect(filterRecentAgents([cutoff], now)).toEqual([cutoff]);
+  expect(filterRecentAgents([stale], now)).toEqual([]);
+});
+
+test("filters stale agents from mixed and all-stale sidebar lists", () => {
+  const now = Date.parse("2026-09-03T12:00:00.000Z");
+  const recent = agent("recent", "2026-09-03T06:00:00.001Z");
+  const cutoff = agent("cutoff", "2026-09-03T06:00:00.000Z");
+  const stale = agent("stale", "2026-09-03T05:59:59.999Z");
+
+  expect(filterRecentAgents([recent, stale, cutoff], now)).toEqual([recent, cutoff]);
+  expect(filterRecentAgents([stale], now)).toEqual([]);
+  expect(AGENT_RECENCY_WINDOW_MS).toBe(6 * 60 * 60 * 1_000);
 });
 
 test("only animates rows whose rendered order changes", () => {

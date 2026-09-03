@@ -126,13 +126,9 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
       }
     }
     }
-    const artifactBackedReview = true;
-    // Deprecated: histories created before the minimum repair loop recorded this
-    // marker here. Keep the call forever so those histories retain command order.
-    void true;
     if (!("attemptId" in result)) {
       const legacyResult = result as LegacyReviewResult;
-      if (artifactBackedReview && !legacyResult.reviewArtifact) throw ApplicationFailure.nonRetryable("Delivery review artifact is missing", "delivery_review_artifact_missing");
+      if (!legacyResult.reviewArtifact) throw ApplicationFailure.nonRetryable("Delivery review artifact is missing", "delivery_review_artifact_missing");
       const openBlocking = (legacyResult.findings ?? []).filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
       const canRepair = legacyResult.outcome === "blocking" && (ctx.state.repairCycle ?? 0) < ctx.repairCycleLimit;
       const nextStep = legacyResult.outcome === "approved" ? "delivery_reviewed" : canRepair ? "repair_required" : "development";
@@ -142,34 +138,25 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
       // A review observes the branch while it runs.  That observation is the
       // authoritative delivery subject; the state snapshot that started the turn
       // is only a hint.  Keep old histories byte-for-byte replayable.
-      if (true) {
-        ctx.state = contracts.IssueWorkflowStateSchema.parse({
-          ...ctx.state,
-          developerExecutionId: exactResult.subject.developerExecutionId,
-          developerSessionRef: exactResult.subject.developerSessionRef,
-          targetBaseSha: exactResult.subject.targetBaseSha,
-          resultCommit: exactResult.subject.subjectCommit,
-          resultTree: exactResult.subject.subjectTree,
-          deliveryArtifactId: exactResult.subject.deliveryArtifactId,
-          developerEvidenceArtifactId: exactResult.subject.developerEvidenceArtifactId,
-        });
-      }
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({
+        ...ctx.state,
+        developerExecutionId: exactResult.subject.developerExecutionId,
+        developerSessionRef: exactResult.subject.developerSessionRef,
+        targetBaseSha: exactResult.subject.targetBaseSha,
+        resultCommit: exactResult.subject.subjectCommit,
+        resultTree: exactResult.subject.subjectTree,
+        deliveryArtifactId: exactResult.subject.deliveryArtifactId,
+        developerEvidenceArtifactId: exactResult.subject.developerEvidenceArtifactId,
+      });
       ctx.state = exactResult.outcome === "blocked"
         ? stateTransitions.reviewBlockedState(ctx.state, exactResult)
         : stateTransitions.repairRequiredState(ctx.state, exactResult, ctx.repairCycleLimit, true);
     }
-    const pushReviewedHead = true;
-    const shouldPushReviewedHead = ctx.state.step === "delivery_reviewed"
-      && (ctx.input.deliveryTarget === "remote_branch"
-        || Boolean(pushReviewedHead && ctx.input.deliveryTarget && ["pull_request_draft", "pull_request_ready", "merged"].includes(ctx.input.deliveryTarget) && ctx.state.pullRequestNumber && ctx.state.resultCommit && ctx.state.resultCommit.toLowerCase() !== ctx.state.expectedHeadSha?.toLowerCase()));
-    if (shouldPushReviewedHead) await ctx.project();
+    if (ctx.state.step === "delivery_reviewed" && (ctx.input.deliveryTarget === "remote_branch" || ctx.input.deliveryTarget === "local_worktree")) await ctx.project();
     if (ctx.state.step === "delivery_reviewed" && ctx.input.deliveryTarget === "remote_branch") {
       await resumeReviewedDeliveryTarget(ctx);
     } else if (ctx.state.step === "delivery_reviewed" && ctx.input.deliveryTarget === "local_worktree") {
       await resumeReviewedDeliveryTarget(ctx);
-    } else if (ctx.state.step === "delivery_reviewed" && pushReviewedHead && ctx.input.deliveryTarget && ["pull_request_draft", "pull_request_ready", "merged"].includes(ctx.input.deliveryTarget) && ctx.state.pullRequestNumber && ctx.state.resultCommit && ctx.state.resultCommit.toLowerCase() !== ctx.state.expectedHeadSha?.toLowerCase()) {
-      await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName!, commitSha: ctx.state.resultCommit! });
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_reviewed"), expectedHeadSha: ctx.state.resultCommit, expectedHeadTree: ctx.state.resultTree, allowedCommands: ctx.addRevisionCommand(ctx.state.allowedCommands), pendingAction: "Forge pushed the reviewed commit to the pull request", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     } else {
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, allowedCommands: ctx.addRevisionCommand(ctx.state.allowedCommands) });
     }
@@ -280,7 +267,6 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
 
 export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
-    const noProgressEnabled = true;
     const repairCycleLimit = ctx.state.arbitrationRepairLimit ?? ctx.repairCycleLimit;
     const cycle = ctx.state.targetBaseOutcome === "revalidated" ? 1 : (ctx.state.repairCycle ?? 0) + 1;
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
@@ -329,9 +315,9 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
       try { evidenceArtifactId = (await activityProxies.recordDeliveryBlocker({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, operation: "repair" })).artifactId; } catch { /* Keep the fixed state transition if blocker recording itself is unavailable. */ }
       const summary = error instanceof Error ? error.message : "The repair did not complete. Retry the repair.";
       const failure = ctx.permanentActivityFailure(error, true);
-      const failureClass = noProgressEnabled ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary, source: "local_check" }) : "code_failure";
+      const failureClass = classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary, source: "local_check" });
       const evidence = stateTransitions.evidencePointer(evidenceArtifactId ?? failure?.evidenceArtifactId ?? undefined, "developer-repair");
-      ctx.state = failureClass === "credential_missing" ? stateTransitions.credentialBlockedState(ctx.state, "repair_delivery", evidence) : failureClass === "transient_infrastructure" || failureClass === "rate_limited" ? stateTransitions.transientRetryState(ctx.state, "repair_delivery", summary) : stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, repairCycleLimit, evidenceArtifactId, summary, noProgressEnabled);
+      ctx.state = failureClass === "credential_missing" ? stateTransitions.credentialBlockedState(ctx.state, "repair_delivery", evidence) : failureClass === "transient_infrastructure" || failureClass === "rate_limited" ? stateTransitions.transientRetryState(ctx.state, "repair_delivery", summary) : stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, repairCycleLimit, evidenceArtifactId, summary, true);
       await ctx.project();
       void command;
       return ctx.state;
@@ -349,7 +335,7 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
     if ("repairAttemptId" in result) {
       ctx.state = result.outcome === "completed"
         ? stateTransitions.repairedDeliveryAwaitingFreshReviewState(ctx.state, result)
-        : stateTransitions.repairBlockedState(ctx.state, result, repairCycleLimit, noProgressEnabled);
+        : stateTransitions.repairBlockedState(ctx.state, result, repairCycleLimit, true);
     } else {
       const nextStep = result.outcome === "completed" ? "delivery_ready" : "development";
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...stateTransitions.revisioned(ctx.state, nextStep, result.outcome === "completed" ? "lead" : "human", result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], result.outcome === "completed" ? "The Planner reviews the latest changes" : "Your decision is necessary"), ...(result.outcome === "completed" ? {} : stateTransitions.freshDeliveryLineage()), developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, worktreePath: result.worktreePath, branchName: result.branchName, targetBaseSha: result.targetBaseSha, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, repairCycle: result.cycle, deliveryReviewSupersedesId: result.outcome === "completed" ? ctx.state.deliveryReviewId : null, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, ...(result.outcome === "completed" ? { deliveryBlockingFindings: [], deliveryRepairPlan: null } : {}) });

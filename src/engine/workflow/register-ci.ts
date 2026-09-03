@@ -212,7 +212,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
         // The Lead can conclude the failure is not caused by this delivery. Re-run the
         // failed provider jobs instead of forcing a code repair, then wait on CI again.
         const rerunCount = ctx.state.ciRerunCount ?? 0;
-        if (plan.disposition === "rerun" && true && rerunCount < CI_RERUN_LIMIT) {
+        if (plan.disposition === "rerun" && rerunCount < CI_RERUN_LIMIT) {
           const rerun = await activityProxies.rerunCi({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, ciRunId: result.runId, ciAttemptId }).catch((error) => {
             if (isCancellation(error)) throw error;
             return null;

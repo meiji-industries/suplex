@@ -72,28 +72,11 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
   setHandler(issueUpdates.cancel_issue, ctx.guarded(async (rawInput: any) => {
     await ctx.initialProjection;
     const command = PlanCommandInputSchema.parse(rawInput);
-    const unconditionalCancellation = true;
-    if ((!unconditionalCancellation && command.expectedRevision !== ctx.state.revision) || TERMINAL_PHASES.has(ctx.state.phase)) throw new Error("Issue cancellation is not available in the current phase");
+    if (TERMINAL_PHASES.has(ctx.state.phase)) throw new Error("Issue cancellation is not available in the current phase");
     const executionId = ctx.state.developerExecutionId;
     const interruptedCancellation = executionId ? acceptedDeveloperCancellation(issueUpdates.cancel_issue, executionId) : undefined;
     if (executionId && ["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling"].includes(ctx.state.developerRecoveryStatus ?? "")) {
-      const cancellation = interruptedCancellation ?? await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId });
-      if (cancellation.status === "completed_before_cancellation") {
-        if (!unconditionalCancellation && ctx.applyCompletedDeveloperResult(cancellation.result, "Developer result claimed before issue cancellation.")) {
-          await ctx.project();
-          return ctx.state;
-        }
-        const result = cancellation.result as { developerExecutionId?: unknown; outcome?: unknown } | undefined;
-        if (!unconditionalCancellation && (result?.outcome !== "blocked" || result.developerExecutionId !== executionId || !true)) throw new Error("Completed Developer result is invalid");
-      }
-      if (cancellation.status !== "completed_before_cancellation" && !["cancelled", "cancelled_confirmed", "interrupted"].includes(cancellation.status)) {
-        const summary = "summary" in cancellation ? cancellation.summary : "Forge could not confirm Developer termination.";
-        if (!unconditionalCancellation) {
-          ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("development"), owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: summary, ...ctx.recoveryFields("interrupted", "reasonCode" in cancellation ? cancellation.reasonCode : "developer-termination-unconfirmed", summary, ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
-          await ctx.project();
-          return ctx.state;
-        }
-      }
+      await (interruptedCancellation ?? cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId }));
       if (ctx.state.capacity) await settleCancelledCapacity(executionId);
     } else {
       const cancellation = await cancelCurrentCapacity();
@@ -109,7 +92,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       const decision = await recordDeliveryDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, actorUserId: command.actorUserId, note: command.note });
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, deliveryDecisionArtifactId: decision.artifactId });
     }
-    const resume = true && ctx.state.branchName ? ["resume_preserved_work" as const] : [];
+    const resume = ctx.state.branchName ? ["resume_preserved_work" as const] : [];
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("cancelled"), owner: "human", allowedCommands: ["continue_work", ...resume], pendingAction: "Task cancelled", acceptanceStatus, acceptanceReasonArtifactId, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     return ctx.state;
@@ -129,41 +112,6 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
   setHandler(issueUpdates.cancel_development, ctx.guarded(async (rawInput: any) => {
     assertPayloadWithinLimit("cancel development command", rawInput);
     const command = StartPlanningInputSchema.parse(rawInput);
-    if (!true) {
-      if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
-      if (!ctx.state.developerExecutionId) {
-        await ctx.withStateMutation(() => {
-          if (ctx.state.revision !== command.expectedRevision || !developerCancellationAvailable()) throw new Error("Developer cancellation was superseded by another command");
-          ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ready_for_development"), owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start the build", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, activeOperation: null });
-          ctx.markCommandProcessed(command.commandId);
-          if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
-        });
-        await ctx.project();
-        return ctx.state;
-      }
-      const executionId = ctx.state.developerExecutionId;
-      const interruptedCancellation = acceptedDeveloperCancellation(issueUpdates.cancel_development, executionId);
-      await ctx.withStateMutation(() => {
-        if (ctx.state.revision !== command.expectedRevision || !developerCancellationAvailable()) throw new Error("Developer cancellation was superseded by another command");
-        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("development"), owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: "Forge cancels the Builder turn", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("cancellation_requested", null, "Cancellation was sent to the recorded Developer supervisor.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
-        ctx.markCommandProcessed(command.commandId);
-      });
-      await ctx.project();
-      const result = interruptedCancellation ?? await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId });
-      await ctx.withStateMutation(() => {
-        if (result.status === "completed_before_cancellation") {
-          if (!ctx.applyCompletedDeveloperResult(result.result, "Developer result won the cancellation race and was claimed.")) throw new Error("Completed Developer result is invalid");
-          return;
-        }
-        const cancelled = result.status === "cancelled" || result.status === "cancelled_confirmed";
-        const terminal = result.status === "termination_failed" ? "interrupted" : result.status;
-        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("development"), owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: cancelled ? "The Builder turn was cancelled. The saved work is available for retry." : "summary" in result ? result.summary : "The Builder process is ready for retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerOutcome: null, ...ctx.recoveryFields(cancelled ? "cancelled" : terminal === "interrupted" ? "interrupted" : "result_pending_claim", "reasonCode" in result ? result.reasonCode : null, cancelled ? "Developer termination was confirmed; the worktree was preserved." : "summary" in result ? result.summary : "The Developer result won the cancellation race.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
-        if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
-      });
-      await ctx.project();
-      void command;
-      return ctx.state;
-    }
     if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
     const executionId = ctx.state.developerExecutionId;
     const interruptedCancellation = executionId ? acceptedDeveloperCancellation(issueUpdates.cancel_development, executionId) : undefined;

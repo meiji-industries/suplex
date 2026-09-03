@@ -48,14 +48,11 @@ async function autoApprovePlan(ctx: IssueWorkflowContext, autoStart = true): Pro
 async function runPlanReview(ctx: IssueWorkflowContext, plan: LeadPlanningResult): Promise<LeadPlanningResult> {
   // Keep completed histories on their recorded sequence. New tasks place the
   // trusted Reviewer immediately after every Planner turn.
-  const reviewEnabled = true;
-  const reviewVisibilityEnabled = true;
   const reviewFailure = (reason: string): LeadPlanningResult => {
-    if (reviewVisibilityEnabled) ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, lastHandlerError: { command: "supplemental_review", reason, at: new Date().toISOString() } });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, lastHandlerError: { command: "supplemental_review", reason, at: new Date().toISOString() } });
     return plan;
   };
   if (!ctx.input.supplementalReview || plan.leadOutputKind !== "plan") return plan;
-  if (!reviewEnabled) return reviewFailure("Second review was not scheduled by this workflow version.");
   if (!ctx.input.roleProfiles.reviewer) return reviewFailure("Second review was requested, but no Reviewer profile is assigned.");
   if (!ctx.state.leadOutputArtifactId || !ctx.state.leadEvidenceArtifactId) return reviewFailure("Second review could not start because the Planner output or evidence is unavailable.");
   try {
@@ -107,7 +104,6 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
     if (ctx.state.step !== "planning" || ctx.state.revision !== next.revision) return ctx.state;
     {
       let leadResult;
-      const durablePlanningCapacity = true;
       try {
         const runPlanningTurn = () => ctx.acquireExternalTurn<LeadPlanningResult>(
           { operation: "lead_planning", role: "planner", profileId: ctx.input.roleProfiles.planner },
@@ -126,31 +122,23 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
             ...(capacityRequestId ? { capacityRequestId } : {}),
           }),
           (result) => result.leadExecutionId,
-          durablePlanningCapacity,
+          true,
         );
-        if (durablePlanningCapacity) {
-          leadResult = await runPlanningTurn();
-        } else {          ctx.planningPromise = runPlanningTurn();
-          try {
-            leadResult = await ctx.planningPromise;
-          } finally {
-            ctx.planningPromise = undefined;
-          }
-        }
+        leadResult = await runPlanningTurn();
       } catch (error) {
         if (ctx.currentState().step === "cancelled") return ctx.currentState();
         if (ctx.state.capacityBlocker) return ctx.state;
         // A cancel (e.g. archive) that lands while the Lead turn is running must not be overwritten by the turn's failure.
-        if (true && ["cancelled", "done"].includes(ctx.state.phase as string)) return ctx.state;
+        if (["cancelled", "done"].includes(ctx.state.phase as string)) return ctx.state;
         const failure = ctx.permanentActivityFailure(error, true);
         if (!failure) throw error;
         const unreadablePlannerResult = failure.code === "invalid-output-schema" || failure.code === "awaiting_human";
         const summary = unreadablePlannerResult ? "Planner's result was not readable" : failure.code === "activity-failed" ? "Planning failed; retry is available" : failure.summary;
-        const failureBase = durablePlanningCapacity ? ctx.state : next;
+        const failureBase = ctx.state;
         const failureRevision = failureBase.revision + 1;
         const capacityFailure = ["not-found", "not-owner", "duplicate", "conflict", "stale-revision", "profile-unavailable", "invalid-status", "deadline-exhausted"].includes(failure.code);
-        const resumeTurn = ["turn_outcome_missing", "turn_stalled"].includes(failure.code) && true;
-        const startupBlocked = failure.code === "agent_startup_blocked" && true;
+        const resumeTurn = ["turn_outcome_missing", "turn_stalled"].includes(failure.code);
+        const startupBlocked = failure.code === "agent_startup_blocked";
         ctx.state = IssueWorkflowStateSchema.parse({
           ...failureBase,
           capacity: null,
@@ -170,8 +158,8 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
       }
       // A Lead result that lands after cancel_issue must not resurrect the issue: simple capacity
       // (forge-simple-capacity-v1) runs the turn without the durable stale-turn check.
-      if (true && ctx.currentState().step === "cancelled") return ctx.currentState();
-      let planningBase = durablePlanningCapacity ? ctx.state : next;
+      if (ctx.currentState().step === "cancelled") return ctx.currentState();
+      let planningBase = ctx.state;
       const queuedNotes = ctx.state.pendingPlannerNotes ?? [];
       if (queuedNotes.length && leadResult.leadSessionRef) {
         planningBase = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("planning"), owner: "lead", allowedCommands: [], pendingAction: "The Planner applies your note", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, pendingPlannerNotes: [] });
@@ -189,11 +177,9 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
       }
       if (ctx.state.revisionRequestId) await authorizePlanRevision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, revisionRequestId: ctx.state.revisionRequestId, planRevision: ctx.state.planRevision ?? ctx.state.revision });
       leadResult = await runPlanReview(ctx, leadResult);
-      if (true) {
-        const route = routeLeadResult({ kind: leadResult.leadOutputKind }, { supplementalReview: ctx.input.supplementalReview, reviewerConfigured: Boolean(ctx.input.roleProfiles.reviewer) });
-        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...at(route.step), owner: route.owner, allowedCommands: route.allowedCommands, pendingAction: route.pendingAction, blocker: route.step === "planning" ? humanBlocker("member_decision", "Your decision is necessary", [{ command: "resolve_decision_blocker", label: "Resolve the decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(leadResult.leadOutputArtifactId, "decision-blocker")) : null, stateChangedAt: new Date().toISOString() });
-        await autoApprovePlan(ctx);
-      }
+      const route = routeLeadResult({ kind: leadResult.leadOutputKind }, { supplementalReview: ctx.input.supplementalReview, reviewerConfigured: Boolean(ctx.input.roleProfiles.reviewer) });
+      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...at(route.step), owner: route.owner, allowedCommands: route.allowedCommands, pendingAction: route.pendingAction, blocker: route.step === "planning" ? humanBlocker("member_decision", "Your decision is necessary", [{ command: "resolve_decision_blocker", label: "Resolve the decision", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(leadResult.leadOutputArtifactId, "decision-blocker")) : null, stateChangedAt: new Date().toISOString() });
+      await autoApprovePlan(ctx);
       assertPayloadWithinLimit("Issue Workflow result", ctx.state);
       await ctx.project();
     }
@@ -312,9 +298,8 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
       }
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("planning"), owner: "lead", allowedCommands: ["start_planning"], pendingAction: "The Planner revises the plan with your answer", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, planRevision: null, planBlockerSubject: null, planBlockerResponseReceipt: { idempotencyKey: command.idempotencyKey, responseId: response.responseId }, supplementalReviewUsed: false, supplementalReviewArtifactId: null });
       await ctx.project();
-      const carryBlockerAnswer = true;
       if (!response.answerArtifactId) log.warn("Plan blocker response has no answer artifact", { workflowId: ctx.input.workflowId, responseId: response.responseId });
-      return await executeLeadTurn(primaryLeadSessionRef, undefined, carryBlockerAnswer && response.answerArtifactId ? { artifactId: response.answerArtifactId } : undefined);
+      return await executeLeadTurn(primaryLeadSessionRef, undefined, response.answerArtifactId ? { artifactId: response.answerArtifactId } : undefined);
     } finally { ctx.decisionInFlight = false; }
   }), { validator(rawInput) {
     const command = PlanCommandInputSchema.parse(rawInput);

@@ -17,7 +17,6 @@ export function registerGovernanceHandlers(ctx: IssueWorkflowContext): void {
     if (!isBlocked(ctx.state) || ctx.state.step !== "planning" || ctx.state.revision !== blockedRevision) return ctx.state;
     const next = IssueWorkflowStateSchema.parse({ ...ctx.state, ...at("planning"), revision: blockedRevision + 1, owner: "lead", allowedCommands: [], pendingAction: "The Planner resolves the decision", blocker: null, lastEventId: `${ctx.state.workflowId}:${blockedRevision + 1}`, blockerResolutionId: resolution.resolutionId, leadResumeInstructionArtifactId: command.answerArtifactId });
     ctx.state = next;
-    if (!true) await ctx.project();
     if (ctx.state.step !== "planning" || ctx.state.revision !== next.revision) return ctx.state;
     let leadResult: LeadPlanningResult;
     try {      ctx.planningPromise = runLeadPlanning({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: next.revision, resume: { leadSessionRef: next.leadSessionRef!, reason: "decision_resolution", instructionArtifactId: command.answerArtifactId } });

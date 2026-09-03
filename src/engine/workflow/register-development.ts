@@ -9,7 +9,7 @@ import { issueUpdates } from "../issue-updates.js";
 import type { IssueWorkflowContext } from "./context.js";
 import { classifyDelivery } from "../../developer-contracts.js";
 export async function blockFailedDeveloperStart(ctx: IssueWorkflowContext, command: contracts.StartPlanningInput, executionId: string, error: unknown): Promise<boolean> {
-  if (!ctx.supervisedDeveloperTurns || !true || ctx.state.developerExecutionId !== executionId || ctx.state.developerOutcome) return false;
+  if (!ctx.supervisedDeveloperTurns || ctx.state.developerExecutionId !== executionId || ctx.state.developerOutcome) return false;
   const failure = typeof ctx.permanentActivityFailure === "function" ? ctx.permanentActivityFailure(error) : undefined;
   const summary = `Developer could not start: ${failure?.summary ?? (error instanceof Error ? error.message : String(error))}`;
   const branchCheckedOut = failure?.code === "branch_checked_out" || /already checked out/i.test(summary);
@@ -32,7 +32,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
     const priorCommit = ctx.state.resultCommit ?? ctx.state.targetBaseSha ?? null;
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
-    const executionId = ctx.supervisedDeveloperTurns ? developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "implementation", true ? command.commandId : undefined) : `developer_${ctx.state.workflowId}_${command.commandId}`.slice(0, 256);
+    const executionId = ctx.supervisedDeveloperTurns ? developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "implementation", command.commandId) : `developer_${ctx.state.workflowId}_${command.commandId}`.slice(0, 256);
     await ctx.withStateMutation(() => {
       if (ctx.state.revision !== command.expectedRevision || ctx.state.step !== "ready_for_development") throw new Error("Development start was superseded by another command");
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...stateTransitions.freshDeliveryLineage(), revision: ctx.state.revision + 1, ...at("development"), owner: "lead", allowedCommands: ctx.addRevisionCommand(["cancel_development", "reject_plan", "cancel_issue"]), pendingAction: "The Builder works on the task", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: executionId, developerAttempt, developerTurnKind: "implementation", ...ctx.recoveryFields("starting", null, null, null), activeOperation: { commandId: command.commandId, kind: "development", startedRevision: ctx.state.revision + 1 }, blocker: null, stateChangedAt: new Date().toISOString() });
@@ -55,9 +55,9 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
         await ctx.recordHandlerNoop("start_development", "Development was superseded before the Developer result could be applied.");
         return ctx.state;
       }
-      const failedToStart = ctx.supervisedDeveloperTurns && true && ctx.state.developerExecutionId === executionId && !ctx.state.developerOutcome;
+      const failedToStart = ctx.supervisedDeveloperTurns && ctx.state.developerExecutionId === executionId && !ctx.state.developerOutcome;
       if (failedToStart) {
-        const autoRetryStartFailure = developerAttempt === 1 && true && ctx.permanentActivityFailure(error)?.code !== "branch_checked_out" && !/already checked out/i.test(error instanceof Error ? error.message : String(error));
+        const autoRetryStartFailure = developerAttempt === 1 && ctx.permanentActivityFailure(error)?.code !== "branch_checked_out" && !/already checked out/i.test(error instanceof Error ? error.message : String(error));
         if (autoRetryStartFailure) {
           const retried = await ctx.withStateMutation(() => {
             if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.step !== "development") return false;
@@ -90,8 +90,8 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
       if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.step !== "development") return false;
       if (outcome.status === "completed") {
         const result = outcome.result;
-        const disposition = result.outcome === "blocked" && true ? classifyDelivery({ steps: result.steps ?? [], authorizedStepsNotCompleted: result.authorizedStepsNotCompleted ?? [], dirtyState: result.dirtyState, resultCommit: result.resultCommit ?? null, blocker: result.blocker ?? null }, priorCommit) : "blocked";
-        const repeatedContinuation = result.outcome === "blocked" && true
+        const disposition = result.outcome === "blocked" ? classifyDelivery({ steps: result.steps ?? [], authorizedStepsNotCompleted: result.authorizedStepsNotCompleted ?? [], dirtyState: result.dirtyState, resultCommit: result.resultCommit ?? null, blocker: result.blocker ?? null }, priorCommit) : "blocked";
+        const repeatedContinuation = result.outcome === "blocked"
           && ctx.state.developerContinuation
           && result.dirtyState === "clean"
           && (result.authorizedStepsNotCompleted ?? []).join(",") === ctx.state.developerContinuation.remainingSteps.join(",");
@@ -111,12 +111,12 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
           if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
           return true;
         }
-        const typedBlockedState = result.outcome === "blocked" && true;
+        const typedBlockedState = result.outcome === "blocked";
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...(result.outcome === "completed" ? {} : stateTransitions.freshDeliveryLineage()), revision: ctx.state.revision + 1, ...at(result.outcome === "completed" ? "delivery_ready" : "development"), owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ctx.addRevisionCommand(["review_delivery", "cancel_issue"]) : ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: result.outcome === "completed" ? "The Planner reviews the delivery" : "The Builder can retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, developerContinuation: result.outcome === "completed" ? null : ctx.state.developerContinuation, ...ctx.recoveryFields(typedBlockedState ? "failed" : "active", typedBlockedState ? result.failureCode ?? null : null, typedBlockedState ? result.deliverySummary : "Developer result claimed.", null), activeOperation: null, blocker: result.outcome === "blocked" ? stateTransitions.humanBlocker(result.failureCode === "delivery-reconciliation-failed" ? "unsafe_recovery" : "agent_exhausted", result.deliverySummary, [{ command: "retry_development", label: "Retry the build", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.attentionEvidenceArtifactId, "attention-evidence")) : null, stateChangedAt: new Date().toISOString() });
       } else {
-        autoRetry = outcome.status === "interrupted" && developerAttempt === 1 && true;
-        const resumeTurn = outcome.status === "failed" && ["turn_outcome_missing", "turn_stalled"].includes(outcome.reasonCode ?? "") && true;
-        const startupBlocked = outcome.status === "failed" && outcome.reasonCode === "agent_startup_blocked" && true;
+        autoRetry = outcome.status === "interrupted" && developerAttempt === 1;
+        const resumeTurn = outcome.status === "failed" && ["turn_outcome_missing", "turn_stalled"].includes(outcome.reasonCode ?? "");
+        const startupBlocked = outcome.status === "failed" && outcome.reasonCode === "agent_startup_blocked";
         const allowedCommands = autoRetry ? ctx.addRevisionCommand(["start_development", "cancel_issue"]) : ctx.addRevisionCommand(["retry_development", "cancel_issue"]);
         const attentionEvidence = outcome.status === "failed" ? outcome.evidenceArtifactId ?? undefined : undefined;
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at(autoRetry ? "ready_for_development" : "development"), owner: autoRetry ? "lead" : "human", allowedCommands, pendingAction: resumeTurn ? "Resume the Builder turn" : autoRetry ? "The Builder process ended. Forge makes one automatic retry." : outcome.summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: outcome.developerExecutionId, developerOutcome: null, ...ctx.recoveryFields(outcome.status, outcome.reasonCode, outcome.summary, "lastHeartbeatAt" in outcome ? outcome.lastHeartbeatAt : null), developerEvidenceArtifactId: outcome.status === "failed" ? outcome.evidenceArtifactId : ctx.state.developerEvidenceArtifactId, activeOperation: null, blocker: startupBlocked ? stateTransitions.humanBlocker("member_authorization", outcome.summary, [{ command: "retry_development", label: "Retry the build", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(attentionEvidence, "attention-evidence")) : resumeTurn ? stateTransitions.humanBlocker("agent_exhausted", outcome.summary, [{ command: "retry_development", label: "Resume the Builder turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(attentionEvidence, "attention-evidence")) : null });
@@ -141,9 +141,8 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
   }
   // Retain this marker for retries recorded before retry_development always started
   // a fresh turn. Those histories invoked the patch regardless of reconcileOnly.
-  const reconciliationEnabled = true;
   const reconcileOnly = command.reconcileOnly === true;
-  const recovered = reconcileOnly && reconciliationEnabled
+  const recovered = reconcileOnly
     ? await activityProxies.findRecoverableDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId })
     : null;
   if (reconcileOnly && !recovered) {
@@ -155,15 +154,14 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
   const supersedesExecutionId = ctx.state.developerExecutionId!;
   // A human Resume after automatic continuation stopped is still the same
   // Developer job. Keep its committed progress and send only the remaining work.
-  const continuation = true
-    && ctx.state.developerContinuation
+  const continuation = ctx.state.developerContinuation
     && ["blocked", "completed"].includes(ctx.state.developerOutcome ?? "")
     && ctx.state.dirtyState === "clean"
     && ctx.state.resultCommit
     && ctx.state.resultCommit !== ctx.state.targetBaseSha
     ? { ...ctx.state.developerContinuation, previousDeliverySummary: ctx.state.deliverySummary ?? "Prior delivery" }
     : undefined;
-  const executionId = recovered?.executionId ?? (ctx.supervisedDeveloperTurns ? developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "implementation", true ? command.commandId : undefined) : `developer_${ctx.state.workflowId}_${command.commandId}`.slice(0, 256));
+  const executionId = recovered?.executionId ?? (ctx.supervisedDeveloperTurns ? developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "implementation", command.commandId) : `developer_${ctx.state.workflowId}_${command.commandId}`.slice(0, 256));
   await ctx.withStateMutation(() => {
     if (ctx.state.revision !== command.expectedRevision || (reconcileOnly ? !["development"].includes(ctx.state.step) : !["ready_for_development", "development"].includes(ctx.state.step))) throw new Error("The Builder retries was superseded by another command");
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...(reconcileOnly ? {} : stateTransitions.freshDeliveryLineage()), revision: ctx.state.revision + 1, ...at("development"), owner: "lead", allowedCommands: ctx.addRevisionCommand(["cancel_development", "reject_plan", "cancel_issue"]), pendingAction: reconcileOnly ? "The Builder resumes the task" : "The Builder retries", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: executionId, developerSessionRef: recovered?.sessionRef ?? ctx.state.developerSessionRef, developerAttempt, developerTurnKind: "implementation", ...ctx.recoveryFields(reconcileOnly ? "reconnecting" : "starting", null, reconcileOnly ? "The Builder resumes the task." : "Starting a linked The Builder retries.", null), activeOperation: { commandId: command.commandId, kind: "development", startedRevision: ctx.state.revision + 1 }, blocker: null, stateChangedAt: new Date().toISOString() });
@@ -189,9 +187,9 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
       await ctx.recordHandlerNoop("retry_development", "The Builder retries was superseded before the result could be applied.");
       return ctx.state;
     }
-    const failedToStart = ctx.supervisedDeveloperTurns && true && ctx.state.developerExecutionId === executionId && !ctx.state.developerOutcome;
+    const failedToStart = ctx.supervisedDeveloperTurns && ctx.state.developerExecutionId === executionId && !ctx.state.developerOutcome;
     if (failedToStart) {
-      const autoRetryStartFailure = developerAttempt === 1 && true && ctx.permanentActivityFailure(error)?.code !== "branch_checked_out" && !/already checked out/i.test(error instanceof Error ? error.message : String(error));
+      const autoRetryStartFailure = developerAttempt === 1 && ctx.permanentActivityFailure(error)?.code !== "branch_checked_out" && !/already checked out/i.test(error instanceof Error ? error.message : String(error));
       if (autoRetryStartFailure) {
         const retried = await ctx.withStateMutation(() => {
           if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.step !== "development") return false;
@@ -214,11 +212,11 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
     if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.step !== "development") return false;
     if (outcome.status === "completed") {
       const result = outcome.result;
-      const typedBlockedState = result.outcome === "blocked" && true;
+      const typedBlockedState = result.outcome === "blocked";
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...(result.outcome === "completed" ? {} : stateTransitions.freshDeliveryLineage()), revision: ctx.state.revision + 1, ...at(result.outcome === "completed" ? "delivery_ready" : "development"), owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ctx.addRevisionCommand(["review_delivery", "cancel_issue"]) : ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: result.outcome === "completed" ? "The Planner reviews the delivery" : "The Builder can retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, activeOperation: null, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, developerContinuation: result.outcome === "completed" ? null : ctx.state.developerContinuation, ...ctx.recoveryFields(typedBlockedState ? "failed" : "active", typedBlockedState ? result.failureCode ?? null : null, typedBlockedState ? result.deliverySummary : "Developer result claimed.", null), blocker: result.outcome === "blocked" ? stateTransitions.humanBlocker(result.failureCode === "delivery-reconciliation-failed" ? "unsafe_recovery" : "agent_exhausted", result.deliverySummary, [{ command: "retry_development", label: "Retry the build", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.attentionEvidenceArtifactId, "attention-evidence")) : null, stateChangedAt: new Date().toISOString() });
     } else {
-      const resumeTurn = outcome.status === "failed" && ["turn_outcome_missing", "turn_stalled"].includes(outcome.reasonCode ?? "") && true;
-      const startupBlocked = outcome.status === "failed" && outcome.reasonCode === "agent_startup_blocked" && true;
+      const resumeTurn = outcome.status === "failed" && ["turn_outcome_missing", "turn_stalled"].includes(outcome.reasonCode ?? "");
+      const startupBlocked = outcome.status === "failed" && outcome.reasonCode === "agent_startup_blocked";
       const allowedCommands = ctx.addRevisionCommand(["retry_development", "cancel_issue"]);
       const attentionEvidence = outcome.status === "failed" ? outcome.evidenceArtifactId ?? undefined : undefined;
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("development"), owner: "human", allowedCommands, pendingAction: resumeTurn ? "Resume the Builder turn" : outcome.summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: reconcileOnly ? supersedesExecutionId : outcome.developerExecutionId, developerOutcome: null, ...ctx.recoveryFields(outcome.status, outcome.reasonCode, outcome.summary, "lastHeartbeatAt" in outcome ? outcome.lastHeartbeatAt : null), developerEvidenceArtifactId: outcome.status === "failed" ? outcome.evidenceArtifactId : ctx.state.developerEvidenceArtifactId, activeOperation: null, blocker: startupBlocked ? stateTransitions.humanBlocker("member_authorization", outcome.summary, [{ command: "retry_development", label: "Retry the build", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(attentionEvidence, "attention-evidence")) : resumeTurn ? stateTransitions.humanBlocker("agent_exhausted", outcome.summary, [{ command: "retry_development", label: "Resume the Builder turn", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(attentionEvidence, "attention-evidence")) : null });

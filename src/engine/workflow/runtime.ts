@@ -301,7 +301,6 @@ function retryScope(ctx: IssueWorkflowContext, command: string): string | null {
 
 export function canAutoRetryDeliveryBlocker(ctx: IssueWorkflowContext): boolean {
   if (runExecution.current().autoActionsHalted()) return false;
-  if (!true) return false;
   const command = retryOnlyBlockerCommand(ctx);
   if (command === "retry_target_base_reconciliation" && ctx.state.targetBaseBlockerRetryable === false) return false;
   const scope = command ? retryScope(ctx, command) : null;
@@ -315,7 +314,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
   if (!canAutoRetryDeliveryBlocker(ctx)) {
     const command = retryOnlyBlockerCommand(ctx);
     if (command === "retry_target_base_reconciliation" && ctx.state.targetBaseBlockerRetryable === false) return false;
-    if (command && true) {
+    if (command) {
       const summary = command === "retry_target_base_reconciliation"
         ? "The base branch moved. The automatic update did not succeed. You can retry the update."
         : ctx.state.deliveryRepairBlockerSummary ?? "The provider failure continued after the automatic retries.";

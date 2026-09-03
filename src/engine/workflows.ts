@@ -84,10 +84,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await projectIssueState(state);
   };
   const applyTargetBaseBlocked = (result: Extract<ReconcileTargetBaseActivityResult, { outcome: "blocked" }>): void => {
-    const reviewVerificationFailure = true;
     const verification = result.code === "verification_failed" || result.code === "verification_timed_out" || result.code === "verification_evidence_too_large";
     const summary = normalizeSafeSummary(result.summary, 200);
-    if (reviewVerificationFailure && result.code === "verification_failed" && result.owner === "lead" && result.resultHead && result.resultTree && state.developerExecutionId) {
+    if (result.code === "verification_failed" && result.owner === "lead" && result.resultHead && result.resultTree && state.developerExecutionId) {
       const published = Boolean(state.releaseId && state.pullRequestNumber && state.pullRequestUrl);
       state = IssueWorkflowStateSchema.parse({ ...state, blocker: null, revision: state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The project verification failed after the merge. The Planner reviews the merged changes.", lastEventId: `${state.workflowId}:${state.revision + 1}`,
         targetBaseSha: result.observedBaseSha ?? state.targetBaseSha, targetBaseCheckId: result.checkId, targetBaseCheckpoint: result.checkpoint, targetBaseOutcome: result.outcome, targetBaseBlockerCode: result.code, targetBaseBlockerOwner: result.owner, targetBaseBlockerRetryable: result.retryable, targetBaseBlockerSummary: summary,
@@ -146,7 +145,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await projectIssueState(state);
     return false;
   };
-  const supervisedDeveloperTurns = true;
   const recoveryFields = (status: "starting" | "active" | "reconnecting" | "result_pending_claim" | "cancellation_requested" | "cancelling" | "interrupted" | "cancelled" | "failed" | null, reasonCode: string | null, summary: string | null, heartbeatAt: string | null) => ({ developerRecoveryStatus: status, developerRecoveryReasonCode: reasonCode, developerRecoverySummary: summary, developerLastHeartbeatAt: heartbeatAt });
   const applyCompletedDeveloperResult = (rawResult: unknown, summary: string): boolean => {
     if (!rawResult || typeof rawResult !== "object") return false;
@@ -186,7 +184,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const syncGithubPullRequest = async (): Promise<GithubPullRequestObservationResult | null> => {
     if (runExecution.current().autoActionsHalted()) return null;
     const repository = state.releaseRepository ?? validatedInput.repository;
-    if (!repository && !sourcePullRequest && true) {
+    if (!repository && !sourcePullRequest) {
       sourcePullRequest = await loadTaskSourcePullRequest({ taskId: state.issueId, companyId: state.companyId }).then(
         (source) => sourcePullRequestState(source, true),
         (error) => {
@@ -200,8 +198,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     // GitHub reconciliation only runs while Forge is waiting on GitHub. While an agent turn or a
     // publish is in flight, an observation must not rewrite the phase under it. delivery_ready holds an
     // unreleased local head (after a repair the PR still points at the failed commit), so it is skipped too.
-    const syncSkipsAgentPhases = true;
-    if (syncSkipsAgentPhases && !isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "releasing", "merge_conflict_reviewing", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review"].includes(state.step))) return null;
+    if (!isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "releasing", "merge_conflict_reviewing", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review"].includes(state.step))) return null;
     githubObservationFailure = undefined;
     const observed = await observeGithubPullRequest({ repository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch((error) => {
       if (isCancellation(error)) throw error;
@@ -232,11 +229,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         return observed;
       }
     }
-    if (true) {
+    {
       const target: PullRequestTarget = validatedInput.deliveryTarget === "merged" ? "merged" : validatedInput.deliveryTarget === "pull_request_ready" ? "ready" : "draft";
       const checks: PullRequestObservation["checks"] = observed.checks.failing > 0 ? "failed" : observed.checks.pending > 0 ? "pending" : observed.checks.total > 0 && observed.checks.successful === observed.checks.total ? "success" : "none";
-      const conflictResolutionEnabled = true;
-      const pullRequestObservation = { exists: observed.exists, number: observed.number, state: observed.state, isDraft: observed.isDraft, headSha: observed.headSha, mergeable: conflictResolutionEnabled ? observed.mergeable : null, checks, reviewDecision: observed.reviewDecision, autoMergeEnabled: observed.autoMergeEnabled };
+      const pullRequestObservation = { exists: observed.exists, number: observed.number, state: observed.state, isDraft: observed.isDraft, headSha: observed.headSha, mergeable: observed.mergeable, checks, reviewDecision: observed.reviewDecision, autoMergeEnabled: observed.autoMergeEnabled };
       const observationKey = pullRequestObservationKey(pullRequestObservation);
       if (state.owner === "human" && state.githubPullRequestObservationKey === observationKey) {
         const allowedCommands = observed.mergeable === "CONFLICTING" && !state.allowedCommands.includes("resolve_merge_conflict") ? [...state.allowedCommands, "resolve_merge_conflict" as const] : state.allowedCommands;
@@ -282,7 +278,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     }
     return observed;
   };
-  const captureInitialProjectionState = true;
   const initialProjectionState = state;
   const projectCapacityState = async (capacity: IssueWorkflowState["capacity"], pendingAction?: string): Promise<number> => {
     const changed = JSON.stringify(state.capacity) !== JSON.stringify(capacity) || (pendingAction !== undefined && state.pendingAction !== pendingAction);
@@ -311,7 +306,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     projectInitialPlanningState: async (next) => { await projectIssueState(next); },
     planningProjectionFlags: () => ({ distinctPlanningStates: true, shouldProject: true }),
     continueAfter: 0,
-    guarded, captureInitialProjectionState, initialProjectionState, initialProjection,
+    guarded, captureInitialProjectionState: true, initialProjectionState, initialProjection,
     get stateMutationLocked() { return stateMutationLocked; },
     set stateMutationLocked(value: boolean) { stateMutationLocked = value; },
     get continuationRequested() { return continuationRequested; },
@@ -322,7 +317,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     set decisionInFlight(value: boolean) { decisionInFlight = value; },
     get planningPromise() { return planningPromise; },
     set planningPromise(value: Promise<LeadPlanningResult> | undefined) { planningPromise = value; },
-    supervisedDeveloperTurns, shouldContinueAsNew, currentState, addRevisionCommand, approvalCommands, approvalBlocker,
+    supervisedDeveloperTurns: true, shouldContinueAsNew, currentState, addRevisionCommand, approvalCommands, approvalBlocker,
     withStateMutation, commandAlreadyProcessed, markCommandProcessed, recordHandlerNoop,
     applyTargetBaseBlocked, runTargetBaseCheckpoint, recoveryFields, applyCompletedDeveloperResult, projectCapacityState, acquireExternalTurn,
     cancelCurrentCapacity: async () => { throw new Error("Capacity cancellation is not initialized"); },

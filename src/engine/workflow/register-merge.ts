@@ -11,7 +11,6 @@ import type { IssueWorkflowContext } from "./context.js";
 export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   const reconcileMergeTurn = async (): Promise<contracts.IssueWorkflowState> => {
-    const exactAcceptanceReceipts = true;
     if (!ctx.state.releaseId || !ctx.state.expectedHeadSha || !ctx.state.acceptanceId) throw new Error("Exact accepted release head is required for merge reconciliation");
     const attempt = (ctx.state.mergeAttempt ?? 0) + 1;
     if (attempt > ctx.maxReconciliationAttempts) {
@@ -21,12 +20,12 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
     }
     let result;
     try {
-      if (true && ctx.state.releaseRepository && ctx.state.branchName) await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
+      if (ctx.state.releaseRepository && ctx.state.branchName) await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
       result = await activityProxies.reconcileMerge({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, acceptanceId: ctx.state.acceptanceId });
     } catch (error) {
       if (isCancellation(error)) throw error;
       const failure = ctx.permanentActivityFailure(error, true);
-      if (true && failure && ["login-expired", "unauthenticated"].includes(failure.code)) {
+      if (failure && ["login-expired", "unauthenticated"].includes(failure.code)) {
         ctx.state = stateTransitions.credentialBlockedState(ctx.state, "reconcile_merge", stateTransitions.evidencePointer(failure.evidenceArtifactId, "attention-evidence"));
         await ctx.project();
         return ctx.state;
@@ -35,19 +34,13 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
       await ctx.project();
       return ctx.state;
     }
-    if (exactAcceptanceReceipts && result.outcome === "merged" && (!result.mergeObservationId || !result.completionReceiptId || !result.mergedAt)) throw new Error("Merged reconciliation requires an immutable observation and completion receipt");
-    const liveHead = true;
-    if (liveHead && result.outcome === "changed_head" && result.observedHeadSha) {
+    if (result.outcome === "merged" && (!result.mergeObservationId || !result.completionReceiptId || !result.mergedAt)) throw new Error("Merged reconciliation requires an immutable observation and completion receipt");
+    if (result.outcome === "changed_head" && result.observedHeadSha) {
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", expectedHeadSha: result.observedHeadSha, expectedHeadTree: null, resultCommit: result.observedHeadSha, resultTree: null, deliveryReviewId: null, finalReviewId: null, ciRunId: null, acceptanceId: null, mergeOutcome: result.outcome, mergeAttempt: attempt, mergeObservationId: result.mergeObservationId, completionReceiptId: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.state;
     }
     const nextStep = result.outcome === "merged" ? "done" : "manual_merge";
-    if (!exactAcceptanceReceipts) {
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at(nextStep), owner: "human", allowedCommands: nextStep === "manual_merge" ? ["reconcile_merge", "cancel_issue"] : [], pendingAction: nextStep === "manual_merge" ? "Your merge is necessary" : nextStep === "done" ? "Merged" : "Pull request changed or closed without merge", mergeOutcome: result.outcome, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
-      await ctx.project();
-      return ctx.state;
-    }
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at(nextStep), owner: "human", allowedCommands: nextStep === "manual_merge" ? ["reconcile_merge", "cancel_issue"] : [], pendingAction: nextStep === "manual_merge" ? "Your merge is necessary" : nextStep === "done" ? "Merged" : "Pull request changed or closed without merge", mergeAttempt: attempt, mergeOutcome: result.outcome, mergeObservationId: result.mergeObservationId, completionReceiptId: result.completionReceiptId, mergeRetryAt: result.retryAt, mergeBlockerCode: result.blockerCode ?? null, mergeBlockerEvidenceArtifactId: result.evidenceArtifactId ?? null, pullRequestNumber: result.pullRequestNumber || ctx.state.pullRequestNumber, pullRequestUrl: result.pullRequestUrl || ctx.state.pullRequestUrl, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     return ctx.state;
@@ -66,7 +59,6 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
     const rawCommand = mergeCommands.integrate_remote_conflict.body!.extend({ actorUserId: contracts.durableId, commandId: contracts.durableId }).parse(rawInput);
     const command = rawCommand;
     if (ctx.commandAlreadyProcessed(rawCommand.commandId)) return ctx.state;
-    if (!true) return ctx.state;
     ctx.markCommandProcessed(rawCommand.commandId);
     ctx.state = contracts.IssueWorkflowStateSchema.parse({
       ...ctx.state,

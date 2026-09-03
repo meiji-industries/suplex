@@ -74,7 +74,6 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (operation === "developer_repair") {
-      const noProgressEnabled = true;
       const cycle = (ctx.state.repairCycle ?? 0) + 1;
       if (ctx.state.step !== "repair_required" || (ctx.input.repairCycleLimit !== undefined && cycle > ctx.repairCycleLimit) || !ctx.state.deliveryReviewId || (!ctx.state.deliveryReviewArtifact && (!ctx.state.deliveryRepairPlan || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open"))) || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.leadSessionRef || !ctx.input.roleProfiles.builder) throw new Error("Developer repair prerequisites changed; start delivery repair again");
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: `Builder repair cycle ${cycle}`, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
@@ -96,13 +95,13 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
         }
         const summary = error instanceof Error ? error.message : "The repair did not complete. Retry the repair.";
         const failure = ctx.permanentActivityFailure(error, true);
-        const failureClass = noProgressEnabled ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary, source: "local_check" }) : "code_failure";
+        const failureClass = classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary, source: "local_check" });
         const evidence = stateTransitions.evidencePointer(evidenceArtifactId ?? failure?.evidenceArtifactId ?? undefined, "developer-repair");
-        ctx.state = failureClass === "credential_missing" ? stateTransitions.credentialBlockedState(ctx.state, "repair_delivery", evidence) : failureClass === "transient_infrastructure" || failureClass === "rate_limited" ? stateTransitions.transientRetryState(ctx.state, "repair_delivery", summary) : stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, ctx.repairCycleLimit, evidenceArtifactId, summary, noProgressEnabled);
+        ctx.state = failureClass === "credential_missing" ? stateTransitions.credentialBlockedState(ctx.state, "repair_delivery", evidence) : failureClass === "transient_infrastructure" || failureClass === "rate_limited" ? stateTransitions.transientRetryState(ctx.state, "repair_delivery", summary) : stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, ctx.repairCycleLimit, evidenceArtifactId, summary, true);
         await ctx.project();
         return ctx.state;
       }
-      ctx.state = result.outcome === "completed" ? stateTransitions.repairedDeliveryAwaitingFreshReviewState(ctx.state, result) : stateTransitions.repairBlockedState(ctx.state, result, ctx.repairCycleLimit, noProgressEnabled);
+      ctx.state = result.outcome === "completed" ? stateTransitions.repairedDeliveryAwaitingFreshReviewState(ctx.state, result) : stateTransitions.repairBlockedState(ctx.state, result, ctx.repairCycleLimit, true);
       await ctx.project();
       return ctx.state;
     }

@@ -78,13 +78,7 @@ export const CodexRolloutLineSchema = z
   .object({
     timestamp: TimestampSchema,
     ordinal: NonnegativeInteger.optional(),
-    type: z.enum([
-      "session_meta",
-      "turn_context",
-      "event_msg",
-      "response_item",
-      "world_state",
-    ]),
+    type: z.string().min(1),
     payload: z.unknown(),
   })
   .passthrough()
@@ -219,7 +213,7 @@ export function parseRolloutChunk(
       line = CodexRolloutLineSchema.parse(json(row, undefined));
     } catch {
       events.push(
-        event(input, offset, new Date(0).toISOString(), "message", {
+        event(input, offset, new Date().toISOString(), "message", {
           role: "system",
           level: "error",
           text: "Malformed Codex rollout line",

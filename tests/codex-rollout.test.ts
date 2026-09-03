@@ -49,6 +49,31 @@ test("parser frames partial lines and emits allowlisted events only", () => {
   expect(timelineEventId("session", second.offset)).toMatch(/^timeline_[a-f0-9]{64}$/);
 });
 
+test("unknown Codex rollout row types are counted without timeline events", () => {
+  const input = { sessionId: "session", forgeTurnId: "turn", executionId: "execution", executionRole: "planner" as const, offset: 0 };
+  const rows = [
+    { timestamp: "2026-08-23T18:55:47.196Z", type: "compacted", payload: {} },
+    { timestamp: "2026-08-23T18:55:48.196Z", type: "token_usage_record", payload: {} },
+  ];
+
+  const parsed = parseRolloutChunk(input, `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`);
+
+  expect(parsed.events).toEqual([]);
+  expect(parsed.unknown).toBe(2);
+});
+
+test("non-JSON Codex rollout rows show a current malformed event", () => {
+  const input = { sessionId: "session", forgeTurnId: "turn", executionId: "execution", executionRole: "planner" as const, offset: 0 };
+  const before = Date.now();
+
+  const parsed = parseRolloutChunk(input, "not json\n");
+
+  const timestamp = Date.parse(parsed.events[0]!.timestamp);
+  expect(parsed.events).toMatchObject([{ kind: "message", data: { role: "system", level: "error", text: "Malformed Codex rollout line" } }]);
+  expect(timestamp).toBeGreaterThanOrEqual(before - 60_000);
+  expect(timestamp).toBeLessThanOrEqual(Date.now());
+});
+
 test("response_item user prompts bind a completion-chain turn", () => {
   const input = {
     sessionId: "session",

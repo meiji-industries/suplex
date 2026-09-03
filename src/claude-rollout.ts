@@ -36,7 +36,7 @@ export function parseClaudeChunk(input: RolloutParserInput, chunk: string, remai
     const emit = (timestamp: string, kind: NeutralTimelineEvent["kind"], data: Record<string, unknown>) =>
       events.push(event(input, lineOffset + emitted++, timestamp, kind, data));
     let line: Record<string, unknown>;
-    try { line = jsonRequired(row) as Record<string, unknown>; } catch { emit(new Date(0).toISOString(), "message", { role: "system", level: "error", text: "Malformed Claude transcript line" }); continue; }
+    try { line = jsonRequired(row) as Record<string, unknown>; } catch { emit(new Date().toISOString(), "message", { role: "system", level: "error", text: "Malformed Claude transcript line" }); continue; }
     if (line.isSidechain === true || line.isMeta === true) continue;
     const when = stamp(line), message = record(line.message), content = message.content;
     if (line.type === "user") {

@@ -75,7 +75,7 @@ export function ProviderSettingsView(): ReactElement {
     {message ? <p className="pt-2 text-[12px] text-muted-foreground" role="status">{message}</p> : null}
     <Dialog open={enableOpen} onOpenChange={(open) => { setEnableOpen(open); if (!open) setKey(""); }}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Enable OpenRouter</DialogTitle><DialogDescription>Add an OpenRouter API key for agent model access.</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>Enable OpenRouter</DialogTitle><DialogDescription>Add an OpenRouter API key to give the agents access to models.</DialogDescription></DialogHeader>
         <form onSubmit={(event) => { event.preventDefault(); void enable(); }}>
           <FieldGroup>
             <Field><FieldLabel htmlFor="openrouter-api-key">API key</FieldLabel><Input id="openrouter-api-key" autoFocus type="password" autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)} /></Field>

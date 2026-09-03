@@ -568,7 +568,7 @@ export function AdminView(): ReactElement {
                 <AlertDialogContent>
                   <AlertDialogHeader>
                     <AlertDialogTitle>Archive {archiveTarget?.name}?</AlertDialogTitle>
-                    <AlertDialogDescription>Archived agents disappear from task and project pickers. Tasks already assigned to this agent keep running, and you can unarchive it later.</AlertDialogDescription>
+                    <AlertDialogDescription>Forge removes archived agents from the task and project lists. Tasks that use this agent continue. You can unarchive the agent later.</AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -670,7 +670,7 @@ export function AdminView(): ReactElement {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>New Hermes agent</DialogTitle>
-                  <DialogDescription>Create a scoped external agent for autonomous task creation and tracking.</DialogDescription>
+                  <DialogDescription>Create an external agent that can create and track tasks.</DialogDescription>
                 </DialogHeader>
                 <form onSubmit={(event) => { event.preventDefault(); void createHermesAgent(); }}>
                   <FieldGroup>
@@ -707,7 +707,7 @@ export function AdminView(): ReactElement {
                         })}
                         {companyProjects.length === 0 ? <span className="text-xs text-muted-foreground">No projects found in this workspace.</span> : null}
                       </div>
-                      <FieldDescription>The agent will only be permitted to create and inspect tasks within selected projects.</FieldDescription>
+                      <FieldDescription>The agent can create and read tasks only in the selected projects.</FieldDescription>
                     </Field>
                     <DialogFooter>
                       <DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose>
@@ -792,7 +792,7 @@ export function AdminView(): ReactElement {
                     </Field>
                     <DialogFooter>
                       <DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose>
-                      <Button type="submit" size="sm">Save project grants</Button>
+                      <Button type="submit" size="sm">Save the project access</Button>
                     </DialogFooter>
                   </FieldGroup>
                 </form>

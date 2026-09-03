@@ -184,8 +184,8 @@ test("keeps incomplete verification actionable without a blocker card", () => {
   }) }));
 
   expect(html).toContain("Verification incomplete");
-  expect(html).toContain("Run missing check");
-  expect(html).toContain("Continue to review");
+  expect(html).toContain("Run the missing check");
+  expect(html).toContain("Continue to the review");
   expect(html).not.toContain("data-task-blocked-card");
 });
 

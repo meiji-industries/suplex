@@ -6,7 +6,7 @@ export const capacityCommands = {
     name: "retry_capacity",
     slug: "retry-capacity",
     updateName: "retryCapacity",
-    label: "Retry capacity",
+    label: "Retry when capacity is free",
     family: "start",
     durableCommandKind: "capacity retry command",
     payloadLabel: "capacity retry command",

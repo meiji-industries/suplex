@@ -22,7 +22,7 @@ test("compacts live heartbeats, duplicate activity, and command labels", () => {
 
 test("labels and compacts repeated human CI decisions", () => {
   const entry = { eventType: "phase_ci_repair_required", metadata: { pendingAction: "Required check failed: Test suite" } };
-  expect(activitySentence(entry, activityRole(entry))).toBe("CI failed — needs a decision: Required check failed: Test suite");
+  expect(activitySentence(entry, activityRole(entry))).toBe("CI failed. A decision is necessary: Required check failed: Test suite");
   expect(compactActivityRows([
     { id: "ci-1", at: "2026-08-29T12:00:00.000Z", role: "builder", eventType: entry.eventType, pendingAction: entry.metadata.pendingAction, text: activitySentence(entry, "builder") },
     { id: "ci-2", at: "2026-08-29T12:00:59.000Z", role: "builder", eventType: entry.eventType, pendingAction: entry.metadata.pendingAction, text: activitySentence(entry, "builder") },

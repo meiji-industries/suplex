@@ -283,7 +283,7 @@ function ProjectSettingsDialog({
                 <FieldLegend variant="label">Required GitHub checks</FieldLegend>
                 {checksLoading ? <FieldDescription>Loading checks from {project.targetBranch}…</FieldDescription> : availableChecks.length ? <FieldGroup data-slot="checkbox-group">{availableChecks.map((check, index) => <Field orientation="horizontal" key={check.name}><Checkbox id={`project-check-${index}`} checked={selectedChecks.includes(check.name)} onCheckedChange={() => toggleCheck(check.name)} /><FieldLabel htmlFor={`project-check-${index}`}>{check.name}{check.conclusion ? ` · ${check.conclusion}` : ""}</FieldLabel></Field>)}</FieldGroup> : <FieldDescription>No check runs were found on {project.targetBranch}. Run the repository workflows once, then reopen settings.</FieldDescription>}
                 <div className="flex gap-2"><Input aria-label="Add required check" placeholder="Exact check name" value={manualCheck} onChange={(event) => setManualCheck(event.target.value)} /><Button type="button" size="sm" variant="outline" disabled={!manualCheck.trim()} onClick={addManualCheck}>Add</Button></div>
-                <FieldDescription>Exact check names fetched from GitHub for the target branch.</FieldDescription>
+                <FieldDescription>The exact check names from GitHub for the target branch.</FieldDescription>
               </FieldSet>
               <FieldSet>
                 <FieldLegend variant="label">Default agents</FieldLegend>

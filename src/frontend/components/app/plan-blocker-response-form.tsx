@@ -30,7 +30,7 @@ export function PlanBlockerResponseForm({ blocker, expectedRevision, busy, onSub
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || !canSubmit) return;
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
-  }} maxLength={1_000} required placeholder="Type your answer" className="pb-10" disabled={busy} /><div className="absolute right-2 bottom-2">{sendButton}</div></div>;
+  }} maxLength={1_000} required placeholder="Write your answer" className="pb-10" disabled={busy} /><div className="absolute right-2 bottom-2">{sendButton}</div></div>;
 
   return (
     <form onSubmit={(event) => void submit(event)} aria-busy={busy} data-plan-blocker-response-form>

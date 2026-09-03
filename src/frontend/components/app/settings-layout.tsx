@@ -69,7 +69,7 @@ function SettingsSidebar({ companyId, backHref, activeHref }: { companyId: strin
       <SidebarHeader>
         <div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div>
         <SidebarMenu><SidebarMenuItem><SidebarMenuButton render={<a href={backHref} onClick={close}><ArrowLeft />Back to app</a>} tooltip="Back to app" /></SidebarMenuItem></SidebarMenu>
-        <SidebarInput id={searchId} aria-label="Search settings" aria-keyshortcuts="/" placeholder="Search settings…" value={search} onChange={(event) => setSearch(event.target.value)} />
+        <SidebarInput id={searchId} aria-label="Search settings" aria-keyshortcuts="/" placeholder="Search the settings" value={search} onChange={(event) => setSearch(event.target.value)} />
       </SidebarHeader>
       <SidebarContent>
         {filtered.map((group) => (

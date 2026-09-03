@@ -6,7 +6,7 @@ export const ciCommands = {
     name: "reconcile_ci",
     slug: "reconcile-ci",
     updateName: "reconcileCI",
-    label: "Reconcile CI",
+    label: "Check CI",
     family: "start",
     durableCommandKind: "CI reconciliation command",
     payloadLabel: "CI reconciliation command",

@@ -12,6 +12,7 @@ design should take cues from Linear and Paperclip, not from marketing sites.
 Before implementing or modifying UI, read:
 
 - `docs/interface-principles.md`
+- `docs/ui-copy.md` All user-facing text follows the Simplified Technical English rules there.
 
 Canonical UI stack:
 

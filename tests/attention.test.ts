@@ -28,17 +28,17 @@ test("branch checkout blockers explain the duplicate-task recovery choices", () 
     { category: "unsafe_recovery", summary: "feat/time-clock is already checked out by /worktrees/task-owner" },
     { actions: [{ command: "cancel_issue", label: "Cancel issue", destructive: true }, { command: "retry_development", label: "Retry Developer" }] },
   )).toMatchObject({
-    title: "Branch is owned by another task",
+    title: "Another task owns this branch",
     explanation: expect.stringContaining("/worktrees/task-owner"),
     primaryAction: { command: "cancel_issue", label: "Cancel this duplicate task", destructive: true },
-    secondaryAction: { command: "retry_development", label: "Retry after the other task finishes" },
+    secondaryAction: { command: "retry_development", label: "Retry when the other task is complete" },
   });
 });
 
 test("repair limit blockers show the delivery decision", () => {
   const actions = [
-    { command: "record_delivery_decision", label: "Continue to review", requiresNote: true },
-    { command: "cancel_issue", label: "Cancel issue", destructive: true },
+    { command: "record_delivery_decision", label: "Accept as is and publish", requiresNote: true },
+    { command: "cancel_issue", label: "Cancel the task", destructive: true },
   ];
   expect(attentionCardFromBlocker(
     { category: "agent_exhausted", summary: "The Lead review found one open problem." },
@@ -55,5 +55,5 @@ test("other repair blockers still show the no-progress card", () => {
   expect(attentionCardFromBlocker(
     { category: "agent_exhausted", summary: "Automatic repair is not making progress." },
     { actions: [{ command: "retry_development", label: "Resume Developer turn" }] },
-  )).toMatchObject({ kind: "no_progress", title: "Automatic repair is not making progress" });
+  )).toMatchObject({ kind: "no_progress", title: "Automatic repair does not make progress" });
 });

@@ -6,7 +6,7 @@ export const releaseCommands = {
     name: "publish_draft",
     slug: "publish-draft",
     updateName: "publishDraft",
-    label: "Publish draft",
+    label: "Publish the pull request",
     family: "start",
     durableCommandKind: "draft publication command",
     payloadLabel: "draft publication command",

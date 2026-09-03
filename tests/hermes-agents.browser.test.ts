@@ -331,7 +331,7 @@ test("Hermes external agent full browser lifecycle at desktop and narrow viewpor
     const scopeDialog = page.getByRole("dialog", { name: "Edit allowed projects" });
     await scopeDialog.waitFor();
     await scopeDialog.getByText("Proof Project").click();
-    await scopeDialog.getByRole("button", { name: "Save project grants" }).click();
+    await scopeDialog.getByRole("button", { name: "Save the project access" }).click();
     await page.reload();
     await page.waitForLoadState("networkidle");
     const unscopedRow = page.getByRole("row", { name: /Hermes agent SRE Hermes Bot/i });
@@ -350,7 +350,7 @@ test("Hermes external agent full browser lifecycle at desktop and narrow viewpor
     await page.getByRole("button", { name: "SRE Hermes Bot actions" }).click();
     await page.getByRole("menuitem", { name: "Edit project scope" }).click();
     await scopeDialog.getByText("Proof Project").click();
-    await scopeDialog.getByRole("button", { name: "Save project grants" }).click();
+    await scopeDialog.getByRole("button", { name: "Save the project access" }).click();
     await page.reload();
     await page.waitForLoadState("networkidle");
     expect(await page.getByRole("row", { name: /Hermes agent SRE Hermes Bot/i }).getByText("Proof Project").isVisible()).toBe(true);

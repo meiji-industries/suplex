@@ -122,7 +122,7 @@ export function activitySentence(entry: ActivityEntry, role: ActivityRole): stri
   }
   if (entry.eventType === "phase_development") return "Builder started work";
   if (entry.eventType === "phase_ci_waiting") return "Integrator is waiting for CI";
-  if (entry.eventType === "phase_ci_repair_required") return typeof entry.metadata.pendingAction === "string" && entry.metadata.pendingAction ? `CI failed — needs a decision: ${entry.metadata.pendingAction}` : "CI failed — needs a decision";
+  if (entry.eventType === "phase_ci_repair_required") return typeof entry.metadata.pendingAction === "string" && entry.metadata.pendingAction ? `CI failed. A decision is necessary: ${entry.metadata.pendingAction}` : "CI failed. A decision is necessary.";
   if (entry.eventType === "phase_delivery_reviewed") return "Reviewer approved the delivery";
   if (entry.eventType === "phase_repair_required") return "Reviewer asked for fixes";
   if (entry.eventType === "phase_done" && entry.metadata.deliveryTarget === "pull_request_draft") return "Integrator completed the task · Draft PR";

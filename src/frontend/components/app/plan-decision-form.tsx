@@ -23,7 +23,7 @@ export function PlanDecisionForm({ approveCommand, revisionCommand, busy, onSubm
   const disabled = busy || pendingAction !== null;
   const canRequestChanges = Boolean(revisionCommand) && !disabled && Boolean(changes.trim());
   const sendButton = <Button type="submit" size="icon-sm" disabled={!canRequestChanges} aria-label="Send requested changes" title="Send requested changes"><Send /></Button>;
-  const status = pendingAction === "approve" ? "Approval submitted · Updating task…" : pendingAction === "reject" ? "Rejection submitted · Updating task…" : pendingAction === "changes" ? "Change request submitted · Updating task…" : null;
+  const status = pendingAction === "approve" ? "Approval sent. Forge updates the task." : pendingAction === "reject" ? "Rejection sent. Forge updates the task." : pendingAction === "changes" ? "Change request sent. Forge updates the task." : null;
 
   return <div className="space-y-3" aria-busy={busy || pendingAction !== null} data-plan-decision-form>
     <div className="flex flex-wrap gap-2">
@@ -32,7 +32,7 @@ export function PlanDecisionForm({ approveCommand, revisionCommand, busy, onSubm
       {revisionCommand ? <Button type="button" size="sm" variant="outline" disabled={disabled} aria-expanded={changesOpen} onClick={() => setChangesOpen((open) => !open)}>Request Changes</Button> : null}
     </div>
     {status ? <p role="status" className="text-[11px] text-muted-foreground">{status}</p> : null}
-    {changesOpen ? <form className="max-w-xl" onSubmit={(event) => void submit(event)}><Field><FieldLabel htmlFor="plan-requested-changes">Requested changes</FieldLabel><div className="relative"><Textarea id="plan-requested-changes" value={changes} onChange={(event) => setChanges(event.target.value)} onKeyDown={(event) => { if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || !canRequestChanges) return; event.preventDefault(); event.currentTarget.form?.requestSubmit(); }} maxLength={1_000} required placeholder="Describe the changes you want" className="pb-10" disabled={busy} /><div className="absolute right-2 bottom-2">{sendButton}</div></div></Field></form> : null}
+    {changesOpen ? <form className="max-w-xl" onSubmit={(event) => void submit(event)}><Field><FieldLabel htmlFor="plan-requested-changes">Requested changes</FieldLabel><div className="relative"><Textarea id="plan-requested-changes" value={changes} onChange={(event) => setChanges(event.target.value)} onKeyDown={(event) => { if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || !canRequestChanges) return; event.preventDefault(); event.currentTarget.form?.requestSubmit(); }} maxLength={1_000} required placeholder="Describe the changes that you want" className="pb-10" disabled={busy} /><div className="absolute right-2 bottom-2">{sendButton}</div></div></Field></form> : null}
     {error ? <FieldError ref={errorRef} tabIndex={-1}>{error}</FieldError> : null}
   </div>;
 }

@@ -227,15 +227,24 @@ test("explains delivery review without internal role language", () => {
   expect(html).not.toContain("Lead delivery review");
 });
 
-test("marks blocked action cards with the destructive status badge", () => {
+test("renders blocked attention-card actions despite a stale active Developer recovery", () => {
   const task = {
     phase: "reviewing",
     step: "delivery_reviewed",
     blocked: true,
-    blocker: { summary: "Retry the delivery check", actions: [{ command: "retry_forward_merge_verification", label: "Retry verification" }, { command: "cancel_issue", label: "Cancel task", destructive: true }] },
-    allowedCommands: ["retry_forward_merge_verification"],
-    commands: [],
-    pendingAction: "mise run test did not complete successfully",
+    owner: "human",
+    allowedCommands: ["record_delivery_decision", "cancel_issue"],
+    commands: [{ name: "record_delivery_decision", endpoint: "record-delivery-decision", idempotency: "required" }, { name: "cancel_issue", endpoint: "cancel-issue" }],
+    pendingAction: "Review problems are not fixed",
+    attentionCard: {
+      kind: "generic",
+      title: "Review problems are not fixed",
+      explanation: "Record a delivery decision or cancel the issue.",
+      evidence: [],
+      primaryAction: { command: "record_delivery_decision", label: "Record delivery decision", requiresNote: true },
+      secondaryAction: { command: "cancel_issue", label: "Cancel issue", destructive: true },
+    },
+    developerRecovery: { status: "active" },
     projection: { status: "current" },
   } as unknown as ApiTask;
   const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
@@ -247,9 +256,9 @@ test("marks blocked action cards with the destructive status badge", () => {
     onContinueWork: async () => undefined,
   }) }));
   expect(html).toContain('data-task-blocked-card="true"');
-  expect(html).toContain('data-variant="destructive"');
-  expect(html).toContain("Retry the delivery check");
-  expect(html).toContain(">Cancel task<");
+  expect(html).toContain("data-task-attention-card");
+  expect(html).toContain(">Record delivery decision<");
+  expect(html).toContain(">Cancel issue<");
 });
 
 test("claimed Developer recovery does not remain an active Development card", () => {

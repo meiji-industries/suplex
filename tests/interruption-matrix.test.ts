@@ -125,7 +125,7 @@ test("herdr is unavailable, then becomes available", () => {
 
 test("pane is terminal while forge was awaiting output", () => {
   const outcome = twice(facts(), live());
-  expect(outcome).toMatchObject({ action: "attention", attention: { title: "Developer turn ended without an outcome", primaryAction: { label: "Restart builder" } } });
+  expect(outcome).toMatchObject({ action: "attention", attention: { title: "Builder turn ended without an outcome", primaryAction: { label: "Restart the Builder" } } });
 });
 
 test("another user pushes a clean head change to an imported pr", () => {

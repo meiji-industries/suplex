@@ -6,13 +6,13 @@ import type { DeveloperCancellationResult } from "./engine/issue-contracts.js";
 
 export interface DeveloperRecoveryOutcome {
   executionId: string;
-  status: "active" | "recoverable" | "failed";
+  status: "active" | "recoverable" | "unverifiable" | "failed";
   reason?: "herdr-runtime-missing" | "herdr-binding-conflict";
 }
 
 export interface RestoredDeveloperRecoveryReport {
   executionId: string;
-  status: "active" | "recoverable" | "failed";
+  status: "active" | "recoverable" | "unverifiable" | "failed";
   reason: "session-active" | "runtime-missing" | "identity-conflict";
 }
 
@@ -34,6 +34,7 @@ export async function reconcileDeveloperExecutions(database: ForgeDatabase, herd
     if (observation?.classification === "active") {
       return { executionId: execution.id, status: "active" as const };
     }
+    if (observation?.classification === "unverifiable") return { executionId: execution.id, status: "unverifiable" as const };
     if (observation?.classification !== "failed") {
       return { executionId: execution.id, status: "recoverable" as const, reason: "herdr-runtime-missing" as const };
     }
@@ -48,7 +49,7 @@ export async function reconcileRestoredDeveloperExecutions(database: ForgeDataba
   return (await reconcileDeveloperExecutions(database)).map((outcome) => ({
     executionId: outcome.executionId,
     status: outcome.status,
-    reason: outcome.status === "active" ? "session-active" : outcome.status === "recoverable" ? "runtime-missing" : "identity-conflict",
+    reason: outcome.status === "active" ? "session-active" : outcome.status === "recoverable" ? "runtime-missing" : outcome.status === "unverifiable" ? "runtime-missing" : "identity-conflict",
   }));
 }
 

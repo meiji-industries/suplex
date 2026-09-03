@@ -36,6 +36,7 @@ import { COMMAND_LABELS, RESTART_LABELS } from "../lib/command-labels.js";
 import { adminDate, relativeTime, type ApiAgent, type ApiCi, type ApiProject, type ApiTask, type ApiTaskBranchSync } from "../lib/view-shared.js";
 import { isApiError, readJson, withCompany } from "../lib/api.js";
 import { requestTaskArchive } from "../lib/archive-task.js";
+import { useHerdrReachable } from "../lib/use-herdr-reachable.js";
 import { invalidateTaskList } from "../lib/task-list.js";
 import { navigate } from "../lib/navigation.js";
 import type { IssueCommand, IssueCommandSlug } from "../../commands/registry.js";
@@ -463,6 +464,7 @@ function TaskPromptProvenanceRow({ taskId, overrides }: { taskId: string; overri
 }
 
 export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onMerge: _onMerge, onDuplicate, onFixInNewTask, onSaveTemplate = async () => {}, onUpdateDetails, onRefresh, onRescue, returnTo = "tasks" }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onMerge: () => Promise<void>; onDuplicate: () => Promise<void>; onFixInNewTask?: () => Promise<void>; onSaveTemplate?: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport>; returnTo?: "tasks" | "board" }): ReactElement {
+  const herdrReachable = useHerdrReachable();
   const [syncing, setSyncing] = useState(false);
   const observedAtRef = useRef(task.githubPullRequest?.observedAt ?? null);
   observedAtRef.current = task.githubPullRequest?.observedAt ?? null;
@@ -560,6 +562,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
             </header>
             <div data-task-content className="min-w-0 px-4 pt-4 pb-6 sm:px-6 lg:px-10">
               <div data-task-content-inner className="mx-auto max-w-4xl space-y-7">
+                {herdrReachable === false ? <Alert><AlertDescription>Herdr is not running on the Forge host</AlertDescription></Alert> : null}
                 <InlineTaskEditor field="description" value={task.description} onSave={async (description) => onUpdateDetails({ description })} imageSources={Object.fromEntries(task.images.map((image) => [image.filename, `/api/tasks/${task.id}/images/${image.artifactId}`]))} />
                 {task.images.length ? <TaskMediaRow taskId={task.id} images={task.images} /> : null}
                 <div data-task-current className="-mx-4 border-y border-border/70 bg-background px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10">

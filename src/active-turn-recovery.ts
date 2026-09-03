@@ -107,6 +107,7 @@ async function resultAt(runtimeRoot: string, turn: Pick<Turn, "ledger" | "prompt
 
 function sessionObservation(observation: HerdrSessionObservation | undefined, unavailable = false): LiveObservations["herdr"] {
   if (unavailable) return { session: "unavailable", stalledBeyondPolicy: false };
+  if (observation?.classification === "unverifiable") return { session: "unverifiable", stalledBeyondPolicy: false };
   if (!observation || observation.classification === "missing" || observation.classification === "unbound") return { session: "missing", stalledBeyondPolicy: false };
   if (observation.identityFailure) return { session: "identity_conflict", stalledBeyondPolicy: false };
   const status = observation.lifecycleStatus ?? undefined;

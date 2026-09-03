@@ -34,6 +34,7 @@ export function Dashboard(): ReactElement {
           <Button aria-label="Refresh" title="Refresh" variant="ghost" size="icon-xs" onClick={() => void refresh()} disabled={refreshing}><RefreshCw aria-hidden="true" className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /></Button>
         </div>
       </div>
+      {snapshot?.herdr ? <div className="flex items-center justify-between border-b px-4 py-2 text-xs"><span>Herdr</span><span>{snapshot.herdr.reachable ? "Running" : "Not running"}</span></div> : null}
       <HealthCheckSections snapshot={snapshot} />
     </SettingsLayout>
   );

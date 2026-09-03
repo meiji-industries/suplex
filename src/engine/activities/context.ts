@@ -60,10 +60,10 @@ import { startIssueWorkflow } from "../service.js";
 import { jsonRequired } from "../../task-utils.js";
 type OperationExecution = { signal?: AbortSignal | undefined };
 
-async function reconcileAgentExecutions(database: ForgeDatabase, herdr = new CliHerdrClient()): Promise<Array<{ roleSessionId: string; status: "active" | "recoverable" | "failed" }>> {
+async function reconcileAgentExecutions(database: ForgeDatabase, herdr = new CliHerdrClient()): Promise<Array<{ roleSessionId: string; status: "active" | "recoverable" | "unverifiable" | "failed" }>> {
   return (await observeHerdrSessions(database, herdr)).map((observation) => ({
     roleSessionId: observation.sessionId,
-    status: observation.classification === "failed" ? "failed" : observation.classification === "active" ? "active" : "recoverable",
+    status: observation.classification === "failed" ? "failed" : observation.classification === "active" ? "active" : observation.classification === "unverifiable" ? "unverifiable" : "recoverable",
   }));
 }
 

@@ -52,6 +52,7 @@ function cachedRuntimeSnapshot(herdr: HerdrClient, agentIds: readonly string[], 
 
 function live(observation: HerdrSessionObservation | undefined, unavailable: boolean) {
   if (unavailable) return { session: "unavailable" as const, stalledBeyondPolicy: false };
+  if (observation?.classification === "unverifiable") return { session: "unverifiable" as const, stalledBeyondPolicy: false };
   if (!observation || observation.classification === "missing" || observation.classification === "unbound") return { session: "missing" as const, stalledBeyondPolicy: false };
   if (observation.identityFailure) return { session: "identity_conflict" as const, stalledBeyondPolicy: false };
   if (observation.lifecycleStatus === "blocked") return { session: "live_blocked" as const, stalledBeyondPolicy: false };
@@ -62,6 +63,7 @@ function live(observation: HerdrSessionObservation | undefined, unavailable: boo
 
 function paneLiveStatus(observation: HerdrSessionObservation | undefined, unavailable: boolean): AgentRuntimeLiveStatus {
   if (unavailable) return "unavailable";
+  if (observation?.classification === "unverifiable") return "unavailable";
   if (observation?.lifecycleStatus === "done" || observation?.lifecycleStatus === "cancelled") return "terminal";
   if (!observation || observation.classification === "missing" || observation.classification === "unbound") return "missing";
   return "active";

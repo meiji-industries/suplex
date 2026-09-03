@@ -38,9 +38,8 @@ export function startHerdrEventSubscriber(database: ForgeDatabase, options: { so
   let timer: NodeJS.Timeout | undefined;
   const run = async (): Promise<void> => {
     try {
-      const paneIds = database.authQuery((db) => db.prepare("SELECT pane_id AS paneId FROM forge_herdr_role_sessions WHERE is_current = 1 AND pane_id IS NOT NULL").all() as Array<{ paneId: string }>).map((row) => row.paneId);
       socket = await connect(options.socketPath);
-      const unsubscribe = await socket.subscribe(paneIds.flatMap((paneId) => eventTypes.map((type) => ({ type, pane_id: paneId }))), (event) => {
+      const unsubscribe = await socket.subscribe(eventTypes.map((type) => ({ type })), (event) => {
         if (event.event === "socket_closed") { live = false; socket = undefined; if (!stopped) schedule(); return; }
         apply(database, event);
       });

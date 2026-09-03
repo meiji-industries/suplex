@@ -19,8 +19,10 @@ export async function createDevelopmentApp(dependencies: AppDependencies): Promi
       configLoader: "native",
       server: {
         allowedHosts: [reachableHost],
-        middlewareMode: { server: app.server },
-        ws: { server: app.server },
+        // @fastify/websocket owns every upgrade on app.server, so Vite's HMR socket gets its own port.
+        // ponytail: HMR is loopback-only in dev; proxy 24678 through Tailscale serve if remote HMR matters.
+        middlewareMode: true,
+        hmr: { port: 24678 },
       },
     });
     await app.register(middie);

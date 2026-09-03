@@ -1,4 +1,5 @@
 import { at, isBlocked } from "../../issue-phases.js";
+import { shouldUpdateFromBaseBeforeCiRepair } from "../../ci.js";
 import { isCancellation, runExecution, setHandler } from "../registry.js";
 import * as contracts from "../issue-contracts.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
@@ -17,7 +18,6 @@ const CI_RERUN_POLL_DELAY_MS = 60_000;
 const CI_PENDING_POLL_DELAY_MS = 15_000;
 const CI_OBSERVATION_FAILURE_POLL_DELAY_MS = 60_000;
 const CI_COMMAND_STEPS = new Set(["ci_waiting", "ci_repair_planning", "ci_repairing"]);
-const shouldUpdateFromBaseBeforeCiRepair = (result: { outcome: string; repairable: boolean; owner: string | null }, baseUpdateCount: number): boolean => result.outcome === "failed" && result.repairable && result.owner === "lead" && baseUpdateCount < 2;
 
 export function deferCiReconciliation(state: contracts.IssueWorkflowState, now: string): contracts.IssueWorkflowState {
   const summary = "Forge waits for CI — release evidence is unavailable";
@@ -76,7 +76,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     } catch (error) {
       if (isCancellation(error)) throw error;
       const failure = ctx.permanentActivityFailure(error);
-      const failureClass = true ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary: failure?.summary ?? "The CI repair failed. Retry.", source: "ci" }) : "ci_failure";
+      const failureClass = classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : {}), summary: failure?.summary ?? "The CI repair failed. Retry.", source: "ci" });
       const evidence = stateTransitions.evidencePointer(failure?.evidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? undefined, "attention-evidence");
       if (failureClass === "credential_missing") ctx.state = stateTransitions.credentialBlockedState(ctx.state, "repair_ci", evidence);
       else if (failureClass === "transient_infrastructure" || failureClass === "rate_limited") ctx.state = stateTransitions.transientRetryState(ctx.state, "repair_ci", failure?.summary ?? "The CI repair failed. Retry.");
@@ -152,7 +152,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       if (isCancellation(error)) throw error;
       if (ctx.state.step !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId) return ctx.state;
       const failure = ctx.permanentActivityFailure(error);
-      const failureClass = true ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : failure?.code === "authentication-required" ? { category: "provider_authentication" } : {}), summary: failure?.summary ?? "Forge could not check CI. Retry.", source: "ci" }) : null;
+      const failureClass = classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : failure?.code === "authentication-required" ? { category: "provider_authentication" } : {}), summary: failure?.summary ?? "Forge could not check CI. Retry.", source: "ci" });
       if (failureClass === "credential_missing") {
         const evidence = stateTransitions.evidencePointer(failure?.evidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence");
         ctx.state = stateTransitions.credentialBlockedState(ctx.state, "reconcile_ci", evidence);
@@ -182,7 +182,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
         return ctx.state;
       }
       const baseUpdateCount = ctx.state.ciBaseUpdateCount ?? 0;
-      if (true && baseUpdateCount < 5 && ctx.state.developerExecutionId && ctx.state.branchName && ctx.state.targetBaseSha && ctx.state.resultCommit && ctx.state.resultTree && ctx.state.ciRunId) {
+      if (baseUpdateCount < 5 && ctx.state.developerExecutionId && ctx.state.branchName && ctx.state.targetBaseSha && ctx.state.resultCommit && ctx.state.resultTree && ctx.state.ciRunId) {
         const update = await activityProxies.updateCiFromBase({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, releaseId: ctx.state.releaseId!, developerExecutionId: ctx.state.developerExecutionId, branchName: ctx.state.branchName, expectedBaseSha: ctx.state.targetBaseSha, expectedHeadSha: ctx.state.resultCommit, expectedHeadTree: ctx.state.resultTree, ciRunId: ctx.state.ciRunId });
         if (update.outcome === "updated") {
           ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ci_waiting"), owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: update.summary, targetBaseSha: update.baseSha, expectedHeadSha: update.headSha, resultCommit: update.headSha, resultTree: update.headTree, ciRunId: null, ciAttemptId: null, ciReason: null, ciEvidenceArtifactId: null, ciNextPollAt: null, ciBaseUpdateCount: baseUpdateCount + 1, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
@@ -200,7 +200,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       return ctx.runFinalReviewTurn();
     }
     const baseUpdateCount = ctx.state.ciBaseUpdateCount ?? 0;
-    if (true && shouldUpdateFromBaseBeforeCiRepair(result, baseUpdateCount) && ctx.state.releaseId && ctx.state.developerExecutionId && ctx.state.branchName && ctx.state.targetBaseSha && ctx.state.resultCommit && ctx.state.resultTree && ctx.state.ciRunId) {
+    if (shouldUpdateFromBaseBeforeCiRepair({ outcome: result.outcome, repairable: result.repairable, owner: result.owner, baseUpdateCount }) && ctx.state.releaseId && ctx.state.developerExecutionId && ctx.state.branchName && ctx.state.targetBaseSha && ctx.state.resultCommit && ctx.state.resultTree && ctx.state.ciRunId) {
       const update = await activityProxies.updateCiFromBase({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, releaseId: ctx.state.releaseId, developerExecutionId: ctx.state.developerExecutionId, branchName: ctx.state.branchName, expectedBaseSha: ctx.state.targetBaseSha, expectedHeadSha: ctx.state.resultCommit, expectedHeadTree: ctx.state.resultTree, ciRunId: ctx.state.ciRunId });
       if (update.outcome === "updated") {
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ci_waiting"), owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: update.summary, targetBaseSha: update.baseSha, expectedHeadSha: update.headSha, resultCommit: update.headSha, resultTree: update.headTree, ciRunId: null, ciAttemptId: null, ciReason: null, ciEvidenceArtifactId: null, ciNextPollAt: null, ciBaseUpdateCount: baseUpdateCount + 1, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });

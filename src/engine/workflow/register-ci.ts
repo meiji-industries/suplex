@@ -40,15 +40,15 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     return command;
   };
   const runExactCiRepairTurn = async (): Promise<contracts.IssueWorkflowState> => {
-    if (!ctx.state.ciRepairPlanId || !ctx.state.ciRepairPlanArtifactId || !ctx.state.ciRepairPlanEvidenceArtifactId || !ctx.state.ciAttemptId || !ctx.state.ciRunId || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName) throw new Error("The exact CI repair plan and prior Developer delivery are required");
+    if (!ctx.state.ciRepairPlanId || !ctx.state.ciRepairPlanArtifactId || !ctx.state.ciRepairPlanEvidenceArtifactId || !ctx.state.ciAttemptId || !ctx.state.ciRunId || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.branchName) throw new Error("The exact CI repair plan and prior Developer delivery are required");
     const ciRunId = ctx.state.ciRunId;
     const ciAttemptId = ctx.state.ciAttemptId;
     const repairPlanId = ctx.state.ciRepairPlanId;
     const repairPlanArtifactId = ctx.state.ciRepairPlanArtifactId;
     const repairPlanEvidenceArtifactId = ctx.state.ciRepairPlanEvidenceArtifactId;
     const failedHeadSha = ctx.state.resultCommit;
-    const priorDeveloperExecutionId = ctx.state.developerExecutionId;
-    const priorDeveloperSessionRef = ctx.state.developerSessionRef;
+    const priorDeveloperExecutionId = ctx.state.developerExecutionId ?? "";
+    const priorDeveloperSessionRef = ctx.state.developerSessionRef ?? "";
     const branchName = ctx.state.branchName;
     const priorCommit = ctx.state.resultCommit;
     const priorTree = ctx.state.resultTree;
@@ -60,7 +60,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     await ctx.project();
     try {
       const result = await ctx.acquireExternalTurn<contracts.WorkflowCiRepairActivityResult>(
-        { operation: "ci_repair_execution", ...stateTransitions.integratorTurn(ctx, "builder"), sessionRef: priorDeveloperSessionRef, worktreePath: ctx.state.worktreePath },
+        { operation: "ci_repair_execution", ...stateTransitions.integratorTurn(ctx, "builder"), worktreePath: ctx.state.worktreePath },
         (capacityRequestId) => agent.runCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, ...(releaseId ? { releaseId } : {}), projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, ciRunId, ciAttemptId, repairPlanId, repairPlanArtifactId, repairPlanEvidenceArtifactId, failedHeadSha, priorDeveloperExecutionId, priorDeveloperSessionRef, branchName, priorCommit, priorTree, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "repair", ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (repair) => repair.developerExecutionId,
       );

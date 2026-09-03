@@ -89,6 +89,50 @@ test("Developer delivery uses the fake turn role session and preserves delivery 
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("CI repair starts from a blocked delivery receipt when git preserves its delivery commit", async () => {
+  const value = await fixture();
+  const repositoryPath = join(value.root, "repo");
+  const worktreePath = join(value.root, "worktrees", "task_1");
+  const branchName = buildGitBranchName({ branchSlug: fallbackGitPresentation("Fixture").branchSlug, taskId: "task_1" });
+  const priorCommit = await command("git", ["rev-parse", "HEAD"], repositoryPath);
+  const priorTree = await command("git", ["rev-parse", "HEAD^{tree}"], repositoryPath);
+  const artifacts = new ArtifactStore(value.config.artifactRoot);
+  try {
+    await new WorktreeManager().reuse({ repositoryPath, worktreeRoot: join(value.root, "worktrees"), taskId: "task_1", targetBaseSha: priorCommit, branchName });
+    await writeFile(join(repositoryPath, "RECONCILIATION.md"), "base changed\n");
+    await command("git", ["add", "RECONCILIATION.md"], repositoryPath);
+    await command("git", ["commit", "-m", "reconciliation base"], repositoryPath);
+    const reconciliationCommit = await command("git", ["rev-parse", "HEAD"], repositoryPath);
+    await command("git", ["merge", "--no-ff", reconciliationCommit, "-m", "reconcile delivery"], worktreePath);
+    const [repairPlan, repairEvidence, ciEvidence] = await Promise.all([
+      artifacts.putArtifact("company_1", "ci-repair-plan", { filename: "repair.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
+      artifacts.putArtifact("company_1", "agent-evidence", { filename: "repair.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") }),
+      artifacts.putArtifact("company_1", "agent-evidence", { filename: "ci.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") }),
+    ]);
+    const now = new Date().toISOString();
+    value.database.authTransaction((db) => {
+      for (const artifact of [repairPlan, repairEvidence, ciEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+      db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, provider_kind, status, created_at, updated_at) VALUES ('session_prior', 'task_1', 'builder', 0, 'codex', 'ready', ?, ?)").run(now, now);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer_blocked', 'task_1', 'company_1', 'workflow_1', 1, 1, 'blocked', ?, ?, ?, 'session_prior', ?, ?, ?, ?, 'clean')").run(branchName, worktreePath, priorCommit, now, now, priorCommit, priorTree);
+      db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, pr_number, pr_url, title, created_at, updated_at) VALUES ('release_1', 'task_1', 'company_1', 'workflow_1', 'release-key', 'acme/forge', ?, 'main', ?, ?, ?, 7, 'https://github.test/acme/forge/pull/7', 'Fixture', ?, ?)").run(branchName, priorCommit, priorCommit, priorTree, now, now);
+      db.prepare("INSERT INTO forge_ci_runs (id, task_id, company_id, release_id, expected_head_sha, status, attempt, summary, created_at, updated_at, expected_head_tree) VALUES ('ci_run_1', 'task_1', 'company_1', 'release_1', ?, 'failed', 1, 'Test suite failed', ?, ?, ?)").run(priorCommit, now, now, priorTree);
+      db.prepare("INSERT INTO forge_ci_attempts (id, run_id, attempt_number, observed_head_sha, outcome, reason, summary, evidence_artifact_id, created_at) VALUES ('ci_attempt_1', 'ci_run_1', 1, ?, 'failed', 'checks_failed', 'Test suite failed', ?, ?)").run(priorCommit, ciEvidence.id, now);
+      db.prepare("INSERT INTO forge_ci_repair_plans (id, task_id, company_id, workflow_id, ci_run_id, ci_attempt_id, failed_head_sha, lead_execution_id, lead_session_ref, plan_artifact_id, evidence_artifact_id, status, summary, created_at, updated_at) VALUES ('repair_plan_1', 'task_1', 'company_1', 'workflow_1', 'ci_run_1', 'ci_attempt_1', ?, 'lead_1', 'session_lead', ?, ?, 'planned', 'Repair Test suite', ?, ?)").run(priorCommit, repairPlan.id, repairEvidence.id, now, now);
+    });
+    const fake = fakeTurnRunner(() => ({ summary: "Test suite repaired", blocker: null }));
+    const result = await new DeveloperService(value.database, value.config, {
+      turnRunner: fake.turnRunner,
+      github: { async getPullRequest() { return { number: 7, url: "https://github.test/acme/forge/pull/7", repository: "acme/forge", headBranch: branchName, baseBranch: "main", headSha: priorCommit, baseSha: priorCommit, isDraft: false, state: "open", mergedAt: null }; } },
+    }).runCiRepair({ taskId: "task_1", companyId: "company_1", workflowId: "workflow_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, ciRunId: "ci_run_1", ciAttemptId: "ci_attempt_1", repairPlanId: "repair_plan_1", repairPlanArtifactId: repairPlan.id, repairPlanEvidenceArtifactId: repairEvidence.id, failedHeadSha: priorCommit, priorDeveloperExecutionId: "developer_blocked", priorDeveloperSessionRef: "stale-session", worktreePath, branchName, priorCommit, priorTree });
+    expect(result.outcome).toBe("completed");
+    expect(fake.calls).toHaveLength(1);
+    expect(await command("git", ["rev-parse", "HEAD^2"], worktreePath)).toBe(await command("git", ["rev-parse", "HEAD"], repositoryPath));
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("a The Builder retries uses current project prompts and records prompt repinning", async () => {
   const value = await fixture();
   const worktree = join(value.root, "worktrees", "task_1");

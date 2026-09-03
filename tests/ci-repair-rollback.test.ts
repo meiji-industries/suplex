@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 
 import { afterEach, expect, test } from "vitest";
 
-import { rollbackUnpushedRepairCommits } from "../src/codex-developer.js";
+import { rollbackUnpushedRepairCommits, verifyCiRepairDelivery } from "../src/codex-developer.js";
 
 const execFileAsync = promisify(execFile);
 const git = async (args: string[], cwd: string): Promise<string> => (await execFileAsync("git", args, { cwd })).stdout.trim();
@@ -68,4 +68,9 @@ test("refuses when the checked-out branch is not the repair branch", async () =>
   const head = await git(["rev-parse", "HEAD"], worktree);
   expect(await rollbackUnpushedRepairCommits(worktree, "work", priorCommit)).toBe(false);
   expect(await git(["rev-parse", "HEAD"], worktree)).toBe(head);
+});
+
+test("refuses a CI repair when the prior delivery commit is absent from git", async () => {
+  const { worktree } = await fixture();
+  await expect(verifyCiRepairDelivery(worktree, "work", "0".repeat(40), "0".repeat(40))).rejects.toMatchObject({ code: "ci-repair-identity-mismatch" });
 });

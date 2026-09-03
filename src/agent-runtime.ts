@@ -77,7 +77,7 @@ export async function projectAgentRuntime(database: ForgeDatabase, herdr: HerdrC
     FROM forge_herdr_role_sessions session
     JOIN forge_tasks task ON task.id = session.task_id
     JOIN forge_issue_projections projection ON projection.task_id = task.id
-    LEFT JOIN forge_herdr_turns turn ON turn.role_session_id = session.id AND turn.turn_id = (SELECT latest.turn_id FROM forge_herdr_turns latest WHERE latest.role_session_id = session.id ORDER BY latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1)
+    LEFT JOIN forge_herdr_turns turn ON turn.role_session_id = session.id AND turn.turn_id = (SELECT latest.turn_id FROM forge_herdr_turns latest WHERE latest.role_session_id = session.id ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1)
     LEFT JOIN forge_agent_executions agentExecution ON agentExecution.id = turn.execution_id AND turn.ledger = 'agent'
     LEFT JOIN forge_developer_executions developerExecution ON developerExecution.id = turn.execution_id AND turn.ledger = 'developer'
     WHERE session.is_current = 1 AND task.archived_at IS NULL AND projection.phase NOT IN ('done', 'cancelled', 'failed')

@@ -121,7 +121,7 @@ function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
   return database.authQuery((db) => db.prepare(`SELECT turn.turn_id AS turnId, turn.task_id AS taskId, session.id AS roleSessionId, session.session_role AS role, turn.status, turn.result_relative_path AS resultRelativePath, turn.execution_id AS executionId, turn.execution_role AS executionRole, COALESCE(agent.status, developer.status) AS executionStatus, COALESCE(agent.finished_at, developer.finished_at) AS executionFinishedAt, turn.prompt_sent_at AS promptSentAt, turn.recovery_prompt_sent_at AS recoveryPromptSentAt, CASE WHEN turn.turn_id = (
       SELECT latest.turn_id FROM forge_herdr_turns latest
       WHERE latest.role_session_id = turn.role_session_id
-      ORDER BY latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1
+      ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1
     ) THEN 1 ELSE 0 END AS isLatestSessionTurn, turn.ledger, turn.prompt_kind AS promptKind, projection.revision, projection.phase, projection.workflow_id AS workflowId, session.pane_id AS paneId, worktree.branch_name AS branchName, worktree.worktree_path AS worktreePath, review.subject_commit AS lastReviewedCommit
     FROM forge_herdr_turns turn
     JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.is_current = 1
@@ -160,7 +160,7 @@ function persistAttention(database: ForgeDatabase, turn: Turn, reason: string, t
     SET status = 'awaiting_human', attention_excerpt = ?, updated_at = ?
     WHERE current.turn_id = ? AND current.task_id = ? AND current.role_session_id = ?
       AND current.execution_id = ? AND current.execution_role = ? AND current.status IN ('created', 'dispatching', 'waiting', 'blocked', 'validating', 'correction_required')
-      AND current.turn_id = (SELECT latest.turn_id FROM forge_herdr_turns latest WHERE latest.role_session_id = current.role_session_id ORDER BY latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1)
+      AND current.turn_id = (SELECT latest.turn_id FROM forge_herdr_turns latest WHERE latest.role_session_id = current.role_session_id ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1)
       AND EXISTS (SELECT 1 FROM forge_herdr_role_sessions session WHERE session.id = current.role_session_id AND session.task_id = current.task_id AND session.is_current = 1)
       AND EXISTS (SELECT 1 FROM forge_issue_projections projection WHERE projection.task_id = current.task_id AND projection.workflow_id = ? AND projection.revision = ? AND projection.phase NOT IN ('done', 'cancelled', 'failed'))
       AND ((current.ledger = 'agent' AND EXISTS (SELECT 1 FROM forge_agent_executions execution WHERE execution.id = current.execution_id AND execution.task_id = current.task_id AND execution.workflow_id = ? AND execution.role = current.execution_role AND execution.status IN ('starting', 'running')))
@@ -189,7 +189,7 @@ function completeTurn(database: ForgeDatabase, turn: Turn, bytes: Buffer, timest
         AND current.turn_id = (
           SELECT latest.turn_id FROM forge_herdr_turns latest
           WHERE latest.role_session_id = current.role_session_id
-          ORDER BY latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1
+          ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1
         )
         AND EXISTS (
           SELECT 1 FROM forge_herdr_role_sessions session

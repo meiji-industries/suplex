@@ -47,6 +47,10 @@ test("runtime projection excludes stale history and keeps in-flight turns and ob
       addTask("active-missing", "builder", { executionStatus: "running", turnStatus: "waiting" });
       addTask("archived", "reviewer", { archived: true, executionStatus: "running", turnStatus: "waiting" });
       addTask("idle-live", "reviewer");
+      addTask("retry", "planner", { executionStatus: "running", turnStatus: "waiting" });
+      db.prepare("UPDATE forge_herdr_turns SET turn_id = 'turn-z-retry' WHERE turn_id = 'turn-retry'").run();
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at) VALUES ('execution-retry-completed', 'task-retry', 'company-a', 'workflow-retry', 'planner', 'completed', 2, ?, ?)").run(now, "2026-09-01T00:00:00.000Z");
+      db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, prompt_sent_at, result_sha256, created_at, updated_at) VALUES ('turn-a-retry', 'task-retry', 'session-retry', 'planner', 'agent', 'execution-retry-completed', 'fixture', ?, 'results/retry-completed.json', 0, 'completed', ?, ?, ?, ?)").run("b".repeat(64), now, "c".repeat(64), now, "2026-09-01T00:00:00.000Z");
       addTask("other-company", "integrator", { companyId: "company-b", executionStatus: "running", turnStatus: "waiting" });
     });
 
@@ -55,21 +59,24 @@ test("runtime projection excludes stale history and keeps in-flight turns and ob
         { name: "planner", paneId: "pane-active-live", status: "working" },
         { name: "reviewer", paneId: "pane-archived", status: "working" },
         { name: "reviewer", paneId: "pane-idle-live", status: "idle" },
+        { name: "planner", paneId: "pane-retry", status: "idle" },
         { name: "integrator", paneId: "pane-other-company", status: "working" },
       ],
       panes: [
         { paneId: "pane-active-live", agent: "planner", agentStatus: "working" },
         { paneId: "pane-archived", agent: "reviewer", agentStatus: "working" },
         { paneId: "pane-idle-live", agent: "reviewer", agentStatus: "idle" },
+        { paneId: "pane-retry", agent: "planner", agentStatus: "idle" },
         { paneId: "pane-other-company", agent: "integrator", agentStatus: "working" },
       ],
     }) } as never, ["shared-agent"], ["company-a"]);
 
-    expect(runtime).toHaveLength(3);
+    expect(runtime).toHaveLength(4);
     expect(runtime).toMatchObject([
       { taskId: "task-active-live", role: "planner", paneId: "pane-active-live", liveStatus: "active", diagnosis: "working" },
       { taskId: "task-active-missing", role: "builder", paneId: "pane-active-missing", liveStatus: "missing", diagnosis: "recovering_runtime" },
       { taskId: "task-idle-live", role: "reviewer", paneId: "pane-idle-live", liveStatus: "active", diagnosis: "resting" },
+      { taskId: "task-retry", role: "planner", paneId: "pane-retry", liveStatus: "active", diagnosis: "resting" },
     ]);
   } finally {
     database.close();

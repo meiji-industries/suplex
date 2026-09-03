@@ -411,10 +411,10 @@ export class CiService {
   async reconcile(input: CiReconcileInput): Promise<CiReconcileResult> {
     const now = this.now().toISOString();
     const requestedAttempt = input.attemptNumber;
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.project_id AS projectId, t.project_configuration_artifact_id AS projectRevisionId, r.repository, r.head_sha AS expectedHeadSha, r.head_tree AS expectedHeadTree, r.base_branch AS baseBranch, r.head_branch AS headBranch, r.pr_number AS pullRequestNumber, r.status AS releaseStatus, r.superseded_at AS releaseSupersededAt
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.project_id AS projectId, t.project_configuration_artifact_id AS projectRevisionId, r.repository, r.head_sha AS expectedHeadSha, r.head_tree AS expectedHeadTree, r.base_branch AS baseBranch, r.head_branch AS headBranch, r.pr_number AS pullRequestNumber, r.superseded_at AS releaseSupersededAt
       FROM forge_tasks t JOIN forge_releases r ON r.id = ? AND r.task_id = t.id AND r.company_id = ?
-      WHERE t.id = ? AND t.company_id = ?`).get(input.releaseId, input.companyId, input.taskId, input.companyId) as { projectId: string; projectRevisionId: string; repository: string; expectedHeadSha: string; expectedHeadTree: string; baseBranch: string; headBranch: string; pullRequestNumber: number | null; releaseStatus: string; releaseSupersededAt: string | null; normalizedJson: string; revisionState: string } | undefined);
-    if (!context || context.releaseSupersededAt || !["draft", "ready", "releasing", "ci_waiting"].includes(context.releaseStatus) || context.pullRequestNumber === null || !this.artifacts) throw new CiFailure("stale-input");
+      WHERE t.id = ? AND t.company_id = ?`).get(input.releaseId, input.companyId, input.taskId, input.companyId) as { projectId: string; projectRevisionId: string; repository: string; expectedHeadSha: string; expectedHeadTree: string; baseBranch: string; headBranch: string; pullRequestNumber: number | null; releaseSupersededAt: string | null } | undefined);
+    if (!context || context.releaseSupersededAt || context.pullRequestNumber === null || !this.artifacts) throw new CiFailure("stale-input");
     const revision = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input);
     if (context.repository.toLowerCase() !== revision.repository.toLowerCase() || context.expectedHeadSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) throw new CiFailure("stale-input");
     const { policy, policyJson, policyHash } = buildCiPolicy(context.projectRevisionId, revision.requiredChecks);
@@ -430,8 +430,6 @@ export class CiService {
     run = this.database.authQuery((db) => db.prepare("SELECT id, attempt, first_observed_at AS firstObservedAt, propagation_deadline AS propagationDeadline, overall_deadline AS overallDeadline, consecutive_provider_failures AS consecutiveProviderFailures FROM forge_ci_runs WHERE release_id = ? AND expected_head_sha = ? AND policy_hash = ? LIMIT 1").get(input.releaseId, input.expectedHeadSha, policyHash) as typeof run);
     if (!run) throw new CiFailure("scope");
     const attemptNumber = requestedAttempt;
-    const cached = this.database.authQuery((db) => db.prepare("SELECT id, observed_head_sha AS observedHeadSha, evidence_artifact_id AS evidenceArtifactId, outcome, reason, owner, repairable, retry_at AS retryAt, summary, attempt_number AS attemptNumber FROM forge_ci_attempts WHERE run_id = ? AND attempt_number = ?").get(run.id, attemptNumber) as { id: string; observedHeadSha: string | null; evidenceArtifactId: string | null; outcome: CiOutcome; reason: string; owner: CiOwner; repairable: number; retryAt: string | null; summary: string; attemptNumber: number } | undefined);
-    if (cached) return { runId: run.id, attemptId: cached.id, attemptNumber: cached.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: cached.observedHeadSha, evidenceArtifactId: cached.evidenceArtifactId, policyHash, policy, propagationDeadline, overallDeadline, outcome: cached.outcome, reason: cached.reason, owner: cached.owner, repairable: cached.repairable === 1, retryAt: cached.retryAt, nextPollAt: cached.retryAt, selectedChecks: this.readAttemptChecks(cached.id), summary: cached.summary };
     let observed: PullRequestObservation;
     try {
       observed = await this.provider.getPullRequest({ repository: revision.repository, pullRequestNumber: context.pullRequestNumber });
@@ -443,8 +441,6 @@ export class CiService {
       headBranch: context.headBranch,
       headSha: input.expectedHeadSha,
     };
-    const existing = this.database.authQuery((db) => db.prepare("SELECT id, observed_head_sha AS observedHeadSha, evidence_artifact_id AS evidenceArtifactId, outcome, reason, owner, repairable, retry_at AS retryAt, summary, attempt_number AS attemptNumber FROM forge_ci_attempts WHERE run_id = ? AND attempt_number = ?").get(run.id, attemptNumber) as { id: string; observedHeadSha: string | null; evidenceArtifactId: string | null; outcome: CiOutcome; reason: string; owner: CiOwner; repairable: number; retryAt: string | null; summary: string; attemptNumber: number } | undefined);
-    if (existing) return { runId: run.id, attemptId: existing.id, attemptNumber: existing.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: existing.observedHeadSha, evidenceArtifactId: existing.evidenceArtifactId, policyHash, policy, propagationDeadline, overallDeadline, outcome: existing.outcome, reason: existing.reason, owner: existing.owner, repairable: existing.repairable === 1, retryAt: existing.retryAt, nextPollAt: existing.retryAt, selectedChecks: this.readAttemptChecks(existing.id), summary: existing.summary };
     let checks: CheckObservation[] = [];
     if (hasExactPullRequestIdentity(expectedPullRequest, observed)) {
       try {
@@ -452,6 +448,8 @@ export class CiService {
         checks = rawChecks.map((check) => CheckObservationSchema.parse(check));
       } catch (error) { return this.persistProviderFailure({ ...input, attemptNumber }, run, policy, policyHash, firstObservedAt, propagationDeadline, overallDeadline, error); }
     }
+    const cached = this.database.authQuery((db) => db.prepare("SELECT id, observed_head_sha AS observedHeadSha, evidence_artifact_id AS evidenceArtifactId, outcome, reason, owner, repairable, retry_at AS retryAt, summary, attempt_number AS attemptNumber FROM forge_ci_attempts WHERE run_id = ? AND attempt_number = ?").get(run.id, attemptNumber) as { id: string; observedHeadSha: string | null; evidenceArtifactId: string | null; outcome: CiOutcome; reason: string; owner: CiOwner; repairable: number; retryAt: string | null; summary: string; attemptNumber: number } | undefined);
+    if (cached) return { runId: run.id, attemptId: cached.id, attemptNumber: cached.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: cached.observedHeadSha, evidenceArtifactId: cached.evidenceArtifactId, policyHash, policy, propagationDeadline, overallDeadline, outcome: cached.outcome, reason: cached.reason, owner: cached.owner, repairable: cached.repairable === 1, retryAt: cached.retryAt, nextPollAt: cached.retryAt, selectedChecks: this.readAttemptChecks(cached.id), summary: cached.summary };
     let result = evaluateExactHead({ expectedRepository: expectedPullRequest.repository, expectedPullRequestNumber: expectedPullRequest.number, expectedHeadSha: expectedPullRequest.headSha, expectedBaseBranch: expectedPullRequest.baseBranch, expectedHeadBranch: expectedPullRequest.headBranch, requiredChecks: policy.requiredChecks, observedPullRequest: observed, checks, now, propagationDeadline, overallDeadline });
     const nextRunFailures = 0;
     result = { ...result, retryAt: result.retryAt ?? null };

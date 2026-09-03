@@ -111,7 +111,7 @@ test.each([
 
   expect(first).toMatchObject({ outcome: "stale_head", reason: "pull_request_identity_changed", expectedHeadSha: headSha });
   expect(replay).toMatchObject({ attemptId: first.attemptId, outcome: "stale_head", expectedHeadSha: headSha });
-  expect(value.calls()).toEqual({ pullRequests: 1, checkLists: 0 });
+  expect(value.calls()).toEqual({ pullRequests: 2, checkLists: 0 });
   expect(value.database.authQuery((db) => db.prepare("SELECT repository, base_branch AS baseBranch, head_branch AS headBranch, head_sha AS headSha, head_tree AS headTree FROM forge_releases WHERE id = 'release-a'").get())).toEqual({ repository: "acme/forge", baseBranch: "main", headBranch: "feature/task", headSha, headTree: treeSha });
   expect(value.database.authQuery((db) => db.prepare("SELECT expected_head_sha AS expectedHeadSha FROM forge_ci_runs WHERE release_id = 'release-a'").get())).toEqual({ expectedHeadSha: headSha });
 });
@@ -123,6 +123,6 @@ test("CI exact identity passes once and replays the persisted attempt", async ()
 
   expect(first).toMatchObject({ outcome: "passed", reason: "checks_passed", expectedHeadSha: headSha, policy: { acceptedConclusions: ["success"] } });
   expect(replay).toMatchObject({ attemptId: first.attemptId, outcome: "passed", expectedHeadSha: headSha });
-  expect(value.calls()).toEqual({ pullRequests: 1, checkLists: 1 });
+  expect(value.calls()).toEqual({ pullRequests: 2, checkLists: 2 });
   expect(value.database.authQuery((db) => db.prepare("SELECT head_sha AS headSha, head_tree AS headTree FROM forge_releases WHERE id = 'release-a'").get())).toEqual({ headSha, headTree: treeSha });
 });

@@ -77,8 +77,8 @@ test("uses supported gh commands and parses branch and pull observations", async
     ["git", "status", "--porcelain=v1", "--untracked-files=all"],
     ["git", "push", "--set-upstream", "origin", "HEAD:refs/heads/issue/7"],
     ["gh", "api", "repos/acme/forge/branches/main"],
-    ["gh", "pr", "list", "--repo", "acme/forge", "--head", "issue/7", "--state", "open", "--limit", "100", "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid"],
-    ["gh", "pr", "list", "--repo", "acme/forge", "--head", "issue/7", "--state", "open", "--limit", "100", "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid"],
+    ["gh", "pr", "list", "--repo", "acme/forge", "--head", "issue/7", "--state", "all", "--limit", "100", "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid"],
+    ["gh", "pr", "list", "--repo", "acme/forge", "--head", "issue/7", "--state", "all", "--limit", "100", "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid"],
     ["gh", "api", "--method", "PATCH", "repos/acme/forge/pulls/7", "-f", "title=Improve releases", "-f", "body=Useful description"],
     ["gh", "api", "repos/acme/forge/pulls/8"],
   ]);

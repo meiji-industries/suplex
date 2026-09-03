@@ -167,9 +167,6 @@ export class AcceptanceService {
     if (!acceptanceId) throw new AcceptanceFailure("scope");
     const row = this.database.authQuery((db) => db.prepare("SELECT id, task_id, company_id, workflow_id, project_revision_id, release_id, review_id, final_review_id, ci_run_id, pr_number, repository, base_branch, base_sha, head_sha, head_tree, lead_session_ref, actor_user_id, decision, status, ready_at, failure_code, retry_at, reason_artifact_id, created_at FROM forge_acceptances WHERE id = ? AND task_id = ? AND company_id = ?").get(acceptanceId, input.taskId, input.companyId) as AcceptanceRow | undefined);
     if (!row || row.decision !== "accept" || row.pr_number === null || row.workflow_id === null) throw new AcceptanceFailure("scope");
-    if (row.status === "accepted") return { acceptanceId, status: "accepted", outcome: "ready", retryAt: null, pullRequest: null, readyAt: row.ready_at, acceptedAt: row.created_at };
-    if (row.status === "blocked") return { acceptanceId, status: "blocked", outcome: "changed", retryAt: row.retry_at, pullRequest: null, blocker: this.rowBlocker(row), readyAt: row.ready_at, acceptedAt: row.created_at };
-
     let current: GithubPullRequest;
     try {
       current = await this.currentPr(row.repository, row.pr_number);
@@ -345,10 +342,6 @@ export class AcceptanceService {
   private findAcceptanceId(input: AcceptanceInput): string | undefined {
     const row = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_acceptances WHERE task_id = ? AND company_id = ? AND head_sha = ? AND decision = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.companyId, input.expectedHeadSha, input.decision) as { id: string } | undefined);
     return row?.id;
-  }
-
-  private rowBlocker(row: AcceptanceRow): AcceptanceBlocker {
-    return { code: row.failure_code ?? "acceptance_blocked", owner: "human", summary: "Acceptance reconciliation is blocked", retryAt: row.retry_at, evidenceArtifactId: null };
   }
 
   private nextObservationAttempt(acceptanceId: string): number {

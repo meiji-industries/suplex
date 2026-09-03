@@ -9,7 +9,7 @@ import { advanceSourcePullRequestState, isSourcePullRequestPreDelivery, sourcePu
 import { githubPullRequestObservationFields } from "../github-pull-request-observation.js";
 import { pullRequestObservationKey, reconcile, type PullRequestObservation, type PullRequestTarget } from "../pull-request-reconciler.js";
 import type { GithubPullRequestObservationResult } from "./contracts/activities/github-sync.js";
-import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, loadTaskSourcePullRequest, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
+import { adoptPullRequestRelease, planMergeConflict, projectIssueStateActivity, reconcileTargetBase, loadTaskSourcePullRequest, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
 import { syncGithubPullRequestSignal } from "./issue-updates.js";
 import { credentialBlockedState, evidencePointer, humanBlocker, withWorktreeCommands } from "./workflow/state-transitions.js";
 import { createIssueWorkflowContext } from "./workflow/context.js";
@@ -184,7 +184,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(syncGithubPullRequestSignal, () => { githubSyncRequested = true; });
   const syncGithubPullRequest = async (): Promise<GithubPullRequestObservationResult | null> => {
     if (runExecution.current().autoActionsHalted()) return null;
-    if (!state.releaseRepository && !sourcePullRequest && true) {
+    const repository = state.releaseRepository ?? validatedInput.repository;
+    if (!repository && !sourcePullRequest && true) {
       sourcePullRequest = await loadTaskSourcePullRequest({ taskId: state.issueId, companyId: state.companyId }).then(
         (source) => sourcePullRequestState(source, true),
         (error) => {
@@ -193,15 +194,15 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         },
       );
     }
-    if (!state.releaseRepository && sourcePullRequest) { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, sourcePullRequest)); await projectIssueState(state); }
-    if (!state.releaseRepository || !state.branchName) return null;
+    if (!repository && sourcePullRequest) { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, sourcePullRequest)); await projectIssueState(state); }
+    if (!repository || !state.branchName) return null;
     // GitHub reconciliation only runs while Forge is waiting on GitHub. While an agent turn or a
     // publish is in flight, an observation must not rewrite the phase under it. delivery_ready holds an
     // unreleased local head (after a repair the PR still points at the failed commit), so it is skipped too.
     const syncSkipsAgentPhases = true;
-    if (syncSkipsAgentPhases && !isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "releasing", "merge_conflict_reviewing", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review", ...(true ? ["delivery_ready"] : [])].includes(state.step))) return null;
+    if (syncSkipsAgentPhases && !isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "releasing", "merge_conflict_reviewing", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review"].includes(state.step))) return null;
     githubObservationFailure = undefined;
-    const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch((error) => {
+    const observed = await observeGithubPullRequest({ repository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch((error) => {
       if (isCancellation(error)) throw error;
       githubObservationFailure = error;
       return null;
@@ -210,6 +211,26 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     githubObservationFailure = undefined;
     const common = githubPullRequestObservationFields(observed, new Date().toISOString());
     if (isSourcePullRequestPreDelivery(state, sourcePullRequest) && observed.state !== "merged") { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, common)); await projectIssueState(state); return observed; }
+    const reviewedCommit = state.resultCommit;
+    if (["delivery_ready", "delivery_reviewed"].includes(state.step) && reviewedCommit && observed.exists && observed.number && observed.url && observed.headSha) {
+      if (observed.headSha.toLowerCase() !== reviewedCommit.toLowerCase()) {
+        state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        await projectIssueState(state);
+        return observed;
+      }
+      if (observed.state === "merged") {
+        state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at("done"), owner: "human", allowedCommands: [], pendingAction: `Done. Pull request #${observed.number} was merged outside Forge.`, mergeOutcome: "merged", pullRequestNumber: observed.number, pullRequestUrl: observed.url, releaseRepository: repository, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        await projectIssueState(state);
+        return observed;
+      }
+      if (observed.state === "open" && state.baseBranch) {
+        const adopted = await adoptPullRequestRelease({ taskId: state.issueId, companyId: state.companyId, workflowId: state.workflowId, projectRevisionId: state.projectRevisionId, repository, branchName: state.branchName, baseBranch: state.baseBranch, ...(state.targetBaseSha ? { expectedBaseSha: state.targetBaseSha } : {}), pullRequestNumber: observed.number, headSha: reviewedCommit });
+        const nextStep = validatedInput.deliveryTarget === "merged" ? "ci_waiting" : "manual_merge";
+        state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at(nextStep), owner: nextStep === "ci_waiting" ? "lead" : "human", allowedCommands: nextStep === "ci_waiting" ? ["cancel_issue"] : ["reconcile_merge", "cancel_issue"], pendingAction: nextStep === "ci_waiting" ? "Forge waits for CI" : "Your merge is necessary", releaseId: adopted.releaseId, releaseRepository: adopted.repository, baseBranch: adopted.baseBranch, targetBaseSha: adopted.targetBaseSha, pullRequestNumber: adopted.pullRequestNumber, pullRequestUrl: adopted.pullRequestUrl, expectedHeadSha: adopted.headSha, expectedHeadTree: adopted.headTree, resultCommit: adopted.headSha, resultTree: adopted.headTree, releaseStatus: "ready", releaseFailureCode: null, releaseFailureSummary: null, releaseRetryAt: null, ciAttempt: 0, ciOutcome: nextStep === "ci_waiting" ? "waiting" : null, ciNextPollAt: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        await projectIssueState(state);
+        return observed;
+      }
+    }
     if (true) {
       const target: PullRequestTarget = validatedInput.deliveryTarget === "merged" ? "merged" : validatedInput.deliveryTarget === "pull_request_ready" ? "ready" : "draft";
       const checks: PullRequestObservation["checks"] = observed.checks.failing > 0 ? "failed" : observed.checks.pending > 0 ? "pending" : observed.checks.total > 0 && observed.checks.successful === observed.checks.total ? "success" : "none";

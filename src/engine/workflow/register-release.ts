@@ -56,6 +56,12 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
       result = { ...legacy, outcome: legacy.baseDriftConflict ? "base-drift-conflict" : legacy.baseDriftMerged ? "base-drift-merged" : "completed", attempt: 0 } as contracts.PublishReleaseActivityResult;
     }
     if (result.outcome === "blocked") {
+      if (result.code === "target-base-drift") {
+        const summary = "The base branch moved. Forge updates it before the publish.";
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("development"), owner: "lead", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: summary, blocker: stateTransitions.humanBlocker("provider_connectivity_exhausted", summary, [{ command: "retry_target_base_reconciliation", label: "Retry the base update", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(ctx.state.deliveryReviewArtifact?.artifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence")), targetBaseCheckpoint: "pre_release", targetBaseOutcome: "blocked", targetBaseBlockerCode: "base_advanced_again", targetBaseBlockerOwner: "lead", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: result.summary, releaseFailureSummary: result.summary, releaseRetryAt: null, releaseOperationAttempt: result.attempt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+        await ctx.project();
+        return ctx.state;
+      }
       if (result.code === "stale-reviewed-revision") {
         const reviewedCommitChanged = result.headSha.toLowerCase() !== ctx.state.resultCommit?.toLowerCase();
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: reviewedCommitChanged ? "The Planner reviews the latest changes" : result.summary, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, releaseFailureSummary: result.summary, releaseRetryAt: null, releaseOperationAttempt: result.attempt, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });

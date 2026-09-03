@@ -1,4 +1,4 @@
-import { at } from "../issue-phases.js";
+import { at, isBlocked } from "../issue-phases.js";
 import { condition, isCancellation, log, runExecution, setHandler, sleep } from "./registry.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, normalizeSafeSummary, type IssueBlocker, type IssueBlockerAction, type IssueWorkflowInput, type IssueWorkflowState, type ReconcileTargetBaseActivityResult, type TargetBaseCheckpoint } from "./issue-contracts.js";
 import type { IssueCommand } from "../commands/registry.js";
@@ -373,7 +373,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         await syncGithubPullRequest();
         continue;
       }
-      if (workflowContext.state.step === "releasing" && workflowContext.state.owner === "lead" && workflowContext.state.activeOperation === null && !workflowContext.state.releaseRetryAt) {
+      if (workflowContext.state.step === "releasing" && workflowContext.state.owner === "lead" && !isBlocked(workflowContext.state) && workflowContext.state.activeOperation === null && !workflowContext.state.releaseRetryAt) {
         workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision: workflowContext.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: workflowContext.addRevisionCommand(["review_delivery", "cancel_issue"]), pendingAction: "The publish stopped. Review again before you publish.", lastEventId: `${workflowContext.state.workflowId}:${workflowContext.state.revision + 1}` });
         await workflowContext.project();
         continue;

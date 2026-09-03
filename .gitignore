@@ -4,6 +4,8 @@ dist/
 logs/
 playwright-report/
 test-results/
+desktop/dist/
+desktop/release/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

@@ -1,0 +1,17 @@
+{
+  "name": "forge-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && cp src/connect.html dist/",
+    "dev": "pnpm build && electron .",
+    "dist": "pnpm build && electron-builder --mac --arm64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "44.1.1",
+    "electron-builder": "26.15.3",
+    "typescript": "^5.9.3",
+    "@types/node": "^24.10.1"
+  }
+}

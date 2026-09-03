@@ -1,7 +1,9 @@
 packages:
   - "."
+  - "desktop"
 allowBuilds:
   '@swc/core': true
   better-sqlite3: true
+  electron-winstaller: true
   esbuild: true
   protobufjs: true

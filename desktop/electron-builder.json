@@ -1,0 +1,1 @@
+{"appId":"dev.forge.desktop","productName":"Forge","directories":{"output":"release"},"files":["dist/**"],"mac":{"target":[{"target":"dmg","arch":["arm64"]},{"target":"zip","arch":["arm64"]}],"identity":null,"notarize":false,"hardenedRuntime":false,"category":"public.app-category.developer-tools"}}

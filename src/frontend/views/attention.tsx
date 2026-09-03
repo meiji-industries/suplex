@@ -17,6 +17,7 @@ function isIssuePhase(phase: string): phase is IssuePhase {
 export function attentionActionBody(action: ApiAttentionAction, actionNote: string | undefined, idempotencyKey: string): Record<string, unknown> {
   return { expectedRevision: action.expectedRevision, ...(actionNote ? { note: actionNote } : {}), ...(action.idempotency === "required" ? { idempotencyKey } : {}) };
 }
+export function documentTitle(count: number): string { return count > 0 ? `(${count}) Forge` : "Forge"; }
 
 export function AttentionView(): ReactElement {
   const { currentCompany } = useCompanyContext();
@@ -46,6 +47,8 @@ export function AttentionView(): ReactElement {
   const cardAction = (item: ApiAttentionItem, cardAction: ApiAttentionItem["card"]["primaryAction"]): ApiAttentionAction => item.actions.find((action) => action.command === cardAction.command) ?? { command: cardAction.command as ApiAttentionAction["command"], label: cardAction.label, expectedRevision: item.sourceRevision, requiresNote: Boolean(cardAction.requiresNote), destructive: Boolean(cardAction.destructive), idempotency: "none" };
 
   const visibleCompanies = currentCompany ? companies.filter((company) => company.companyId === currentCompany.id) : companies;
+  const attentionCount = visibleCompanies.reduce((total, company) => total + company.attentionCount, 0);
+  useEffect(() => { document.title = documentTitle(attentionCount); }, [attentionCount]);
   const companyId = currentCompany?.id ?? "";
   return (
     <SettingsLayout title="Tasks that need you" companyId={companyId} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/attention", companyId)} contentClassName="">

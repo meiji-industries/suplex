@@ -15,6 +15,11 @@ FORGE_TAILSCALE_EXPOSURE = "serve"
 FORGE_BIND_ADDRESS = "127.0.0.1"
 _.path = "./node_modules/.bin"
 
+[tasks.setup]
+description = "Install pinned tools and dependencies for development"
+alias = "worktree"
+run = "mise install && pnpm exec playwright install chromium"
+
 [tasks.dev]
 description = "Run the Forge API, worker host, and Vite HMR in one process"
 env = { FORGE_PRETTY_LOGS = "1", FORGE_FRONTEND_DEV_SERVER = "1", FORGE_DEVELOPMENT_AUTO_LOGIN = "1" }

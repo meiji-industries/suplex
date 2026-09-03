@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import type { ForgeDatabase } from "./database.js";
+import type Database from "better-sqlite3";
 
 export interface ArtifactInput { filename: string; mimeType: string; bytes: Buffer; taskId?: string }
 export interface StoredArtifact { id: string; companyId: string; kind: string; filename: string; mimeType: string; byteSize: number; sha256: string; storagePath: string; createdAt: string }
@@ -31,6 +32,15 @@ export class ArtifactStore {
     const artifact = { id, companyId, kind, filename: value.filename, mimeType: value.mimeType, byteSize: value.bytes.length, sha256, storagePath, createdAt };
     try { this.database?.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, companyId, value.taskId ?? "", kind, value.filename, value.mimeType, value.bytes.length, sha256, storagePath, createdAt)); }
     catch (error) { await rm(path, { force: true }); throw error; }
+    return artifact;
+  }
+  putArtifactSync(database: Database.Database, companyId: string, kind: string, value: ArtifactInput, id = `artifact_${randomUUID().replaceAll("-", "")}`): StoredArtifact {
+    validate(companyId, kind, value);
+    const sha256 = createHash("sha256").update(value.bytes).digest("hex"), storagePath = `${companyId}/objects/${sha256.slice(0, 2)}/${id}.bin`, path = checked(this.root, companyId, storagePath), createdAt = new Date().toISOString();
+    mkdirSync(resolve(path, ".."), { recursive: true, mode: 0o700 }); writeFileSync(path, value.bytes, { flag: "wx", mode: 0o600 });
+    const artifact = { id, companyId, kind, filename: value.filename, mimeType: value.mimeType, byteSize: value.bytes.length, sha256, storagePath, createdAt };
+    try { database.prepare("INSERT INTO forge_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, companyId, value.taskId ?? "", kind, value.filename, value.mimeType, value.bytes.length, sha256, storagePath, createdAt); }
+    catch (error) { rmSync(path, { force: true }); throw error; }
     return artifact;
   }
   async getArtifact(artifact: Pick<StoredArtifact, "companyId" | "storagePath"> & Partial<Pick<StoredArtifact, "sha256">>): Promise<Buffer> { return readFile(checked(this.root, artifact.companyId, artifact.storagePath)); }

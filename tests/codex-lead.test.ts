@@ -254,11 +254,12 @@ test("The Planner reviews the delivery prompt honors Screenshots off", async () 
         input: { taskId: string; companyId: string; visualEvidence: "off" },
         title: string, brief: string, plan: string, delivery: string, developerEvidence: string,
         gitEvidence: { targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string },
-        forwardMerge: null, hasDeveloperSession: boolean,
+        forwardMerge: null, hasDeveloperSession: boolean, repairCoverage?: string,
       ) => string;
     };
     const prompt = promptRenderer.deliveryReviewPrompt({ taskId: "task_1", companyId: "company_1", visualEvidence: "off" }, "Fixture task", "brief", "plan", "delivery", "evidence", { targetBaseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40), status: "", branch: "forge/task", head: "b".repeat(40), tree: "c".repeat(40), diff: "", commit: "", instructions: "Capture browser proof." }, null, true);
     expect(prompt).toContain("Browser proof (screenshots, Playwright/browser inspection) is turned OFF for this task by the member. Do not require, plan, or request it, and never block on its absence, even if repository instructions such as AGENTS.md ask for it. At most mention it as advisory.");
+    expect(prompt).not.toContain("Repair coverage:");
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

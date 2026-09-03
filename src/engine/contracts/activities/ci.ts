@@ -126,10 +126,24 @@ export interface CiRepairActivityResult {
 export type WorkflowCiRepairActivityInput = Omit<CiRepairActivityInput, "worktreePath"> & import("./development.js").DeveloperSupervisorActivityIdentity & { worktreePath?: string };
 export type WorkflowCiRepairActivityResult = Omit<CiRepairActivityResult, "worktreePath">;
 
+export interface CiRepairPriorDeliveryInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  resultCommit: string;
+}
+
+export interface CiRepairPriorDelivery {
+  developerExecutionId: string;
+  developerSessionRef: string;
+  worktreePath: string;
+}
+
 export interface CiActivities {
   reconcileCi(input: ReconcileCiActivityInput): Promise<ReconcileCiActivityResult>;
   planCiRepair(input: CiRepairPlanActivityInput): Promise<CiRepairPlanActivityResult>;
   rerunCi(input: RerunCiActivityInput): Promise<RerunCiActivityResult>;
   updateCiFromBase(input: UpdateCiFromBaseActivityInput): Promise<UpdateCiFromBaseActivityResult>;
+  findCiRepairPriorDelivery(input: CiRepairPriorDeliveryInput): Promise<CiRepairPriorDelivery | null>;
   runCiRepair(input: WorkflowCiRepairActivityInput): Promise<WorkflowCiRepairActivityResult>;
 }

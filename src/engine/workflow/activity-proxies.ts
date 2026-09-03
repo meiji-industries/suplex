@@ -40,10 +40,10 @@ const EXTERNAL_AGENT_RETRY_POLICY: RetryPolicy = {
   nonRetryableErrorTypes: ["rate-limited"],
 };
 const SUPERVISED_DEVELOPER_RETRY_POLICY: RetryPolicy = {
-  maximumAttempts: 100,
+  maximumAttempts: 3,
   initialInterval: "1 second",
   maximumInterval: "30 seconds",
-  nonRetryableErrorTypes: ["developer-ownership-ambiguous", "developer-result-claim-conflict"],
+  nonRetryableErrorTypes: ["developer-ownership-ambiguous", "developer-result-claim-conflict", "developer-scope-mismatch"],
 };
 export const { runLeadPlanning } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
@@ -214,6 +214,11 @@ export const { rerunCi } = proxyActivities<IssueActivities>({
   retry: { maximumAttempts: 1 },
 });
 
+export const { findCiRepairPriorDelivery } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "1 minute",
+  retry: { maximumAttempts: 3, initialInterval: "1 second", maximumInterval: "5 seconds" },
+});
+
 export const { planCiRepair } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
   retry: { maximumAttempts: 1 },
@@ -223,7 +228,7 @@ export const { planCiRepair: planHerdrCiRepair } = proxyActivities<IssueActiviti
 
 export const { runCiRepair } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
-  retry: { maximumAttempts: 100, initialInterval: "1 second", maximumInterval: "30 seconds", nonRetryableErrorTypes: ["developer-ownership-ambiguous", "developer-result-claim-conflict"] },
+  retry: SUPERVISED_DEVELOPER_RETRY_POLICY,
 });
 
 export const { runCiRepair: runHerdrCiRepair } = proxyActivities<IssueActivities>(herdrSupervisedDeveloperActivityCallOptions);

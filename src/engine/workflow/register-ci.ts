@@ -2,6 +2,7 @@ import { at, isBlocked } from "../../issue-phases.js";
 import { isCancellation, runExecution, setHandler } from "../registry.js";
 import * as contracts from "../issue-contracts.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
+import { findCiRepairPriorDelivery } from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
 import { issueUpdates } from "../issue-updates.js";
 import { developerExecutionId } from "../deterministic-id.js";
@@ -47,8 +48,15 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     const repairPlanArtifactId = ctx.state.ciRepairPlanArtifactId;
     const repairPlanEvidenceArtifactId = ctx.state.ciRepairPlanEvidenceArtifactId;
     const failedHeadSha = ctx.state.resultCommit;
-    const priorDeveloperExecutionId = ctx.state.developerExecutionId ?? "";
-    const priorDeveloperSessionRef = ctx.state.developerSessionRef ?? "";
+    const prior = await findCiRepairPriorDelivery({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, resultCommit: failedHeadSha });
+    if (!prior) {
+      const summary = "Forge cannot find the delivery that CI tested. Retry the CI check or cancel the task.";
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ci_waiting"), owner: "human", allowedCommands: ctx.addRevisionCommand(["reconcile_ci", "cancel_issue"]), pendingAction: summary, blocker: stateTransitions.humanBlocker("unsafe_recovery", summary, [{ command: "reconcile_ci", label: "Check CI", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(ctx.state.ciEvidenceArtifactId ?? undefined, "attention-evidence")), stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      await ctx.project();
+      return ctx.state;
+    }
+    const priorDeveloperExecutionId = prior.developerExecutionId;
+    const priorDeveloperSessionRef = prior.developerSessionRef;
     const branchName = ctx.state.branchName;
     const priorCommit = ctx.state.resultCommit;
     const priorTree = ctx.state.resultTree;
@@ -61,7 +69,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     try {
       const result = await ctx.acquireExternalTurn<contracts.WorkflowCiRepairActivityResult>(
         { operation: "ci_repair_execution", ...stateTransitions.integratorTurn(ctx, "builder"), worktreePath: ctx.state.worktreePath },
-        (capacityRequestId) => agent.runCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, ...(releaseId ? { releaseId } : {}), projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, ciRunId, ciAttemptId, repairPlanId, repairPlanArtifactId, repairPlanEvidenceArtifactId, failedHeadSha, priorDeveloperExecutionId, priorDeveloperSessionRef, branchName, priorCommit, priorTree, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "repair", ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (capacityRequestId) => agent.runCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, ...(releaseId ? { releaseId } : {}), projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, ciRunId, ciAttemptId, repairPlanId, repairPlanArtifactId, repairPlanEvidenceArtifactId, failedHeadSha, priorDeveloperExecutionId, priorDeveloperSessionRef, worktreePath: prior.worktreePath, branchName, priorCommit, priorTree, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "repair", ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (repair) => repair.developerExecutionId,
       );
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at(result.outcome === "completed" ? "delivery_ready" : ctx.state.step), owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ctx.addRevisionCommand(["review_delivery", "cancel_issue"]) : ctx.addRevisionCommand(["request_delivery_changes", "cancel_issue"]), pendingAction: result.outcome === "completed" ? "The Planner reviews the latest changes" : "CI repair is blocked", developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.outcome === "completed" ? "clean" : "dirty", deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.summary, developerOutcome: result.outcome === "completed" ? "completed" : "blocked", deliveryReviewId: result.outcome === "completed" ? null : ctx.state.deliveryReviewId, ...(result.outcome === "completed" ? { deliveryRepairAttemptId: null, deliveryReviewSupersedesId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null } : {}), releaseId: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, ciRepairDeveloperExecutionId: result.developerExecutionId, ciRepairDeveloperSessionRef: result.developerSessionRef, blocker: result.outcome === "blocked" ? stateTransitions.humanBlocker("verification_unrecoverable", result.summary, [{ command: "request_delivery_changes", label: "Request changes", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.evidenceArtifactId, "attention-evidence")) : null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
@@ -72,7 +80,10 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       const evidence = stateTransitions.evidencePointer(failure?.evidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? undefined, "attention-evidence");
       if (failureClass === "credential_missing") ctx.state = stateTransitions.credentialBlockedState(ctx.state, "repair_ci", evidence);
       else if (failureClass === "transient_infrastructure" || failureClass === "rate_limited") ctx.state = stateTransitions.transientRetryState(ctx.state, "repair_ci", failure?.summary ?? "The CI repair failed. Retry.");
-      else ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ci_waiting"), owner: "human", allowedCommands: ctx.addRevisionCommand(["repair_ci", "cancel_issue"]), pendingAction: failure?.summary ?? "The CI repair failed. Retry.", blocker: failure?.category ? stateTransitions.humanBlocker(failure.category, failure.summary, [{ command: "repair_ci", label: "Repair CI", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidence) : null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      else {
+        const summary = `The CI repair could not start: ${failure?.summary ?? "The CI repair failed."}`;
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ci_waiting"), owner: "human", allowedCommands: ctx.addRevisionCommand(["repair_ci", "cancel_issue"]), pendingAction: summary, blocker: stateTransitions.humanBlocker(failure?.category ?? "verification_unrecoverable", summary, [{ command: "repair_ci", label: "Repair CI", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidence), stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      }
     }
     await ctx.project();
     return ctx.state;

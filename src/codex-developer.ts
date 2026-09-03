@@ -769,7 +769,11 @@ export class DeveloperService {
       if (terminalStatus !== "completed") throw new AgentFailure("developer-superseded", "The build was superseded before completion");
       return activityResult;
     } catch (error) {
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("ci-repair-failed", `CI repair failed: ${error instanceof Error ? error.message : String(error)}`);
+      const failure = error instanceof AgentFailure
+        ? error
+        : error instanceof Error && error.message.includes("scope mismatch")
+          ? new AgentFailure("developer-scope-mismatch", error.message, { nonRetryable: true })
+          : new AgentFailure("ci-repair-failed", `CI repair failed: ${error instanceof Error ? error.message : String(error)}`);
       // Leave the worktree on the recorded failed head so the retry starts clean.
       await rollbackUnpushedRepairCommits(worktreePath, input.branchName, input.priorCommit);
       const evidence = await this.persistEvidence(input.companyId, evidenceLines);

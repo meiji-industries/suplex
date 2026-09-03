@@ -1,10 +1,11 @@
 import type { CiActivities, ReconcileCiActivityInput, WorkflowCiRepairActivityInput, WorkflowCiRepairActivityResult } from "../contracts/activities/ci.js";
 import type { AttentionCategory } from "../contracts/primitives.js";
 import type { ActivityContext } from "./context.js";
+import type { DeveloperService } from "../../codex-developer.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
 
 export function createCiActivities(ctx: ActivityContext): CiActivities {
-  const { database, config, ApplicationFailure, ArtifactStore, DeveloperService, CiFailure, CiProviderFailure, ForwardMergeService, defaultAgent, githubRelease, artifacts, ci, activityWorktrees, activityWorktreesByBranch, agent, attentionFailure, invokeAgent, bindCapacityExecution, runSupervised, latestWorktree } = ctx;
+  const { database, config, ApplicationFailure, ArtifactStore, CiFailure, CiProviderFailure, ForwardMergeService, defaultAgent, githubRelease, artifacts, ci, activityWorktrees, activityWorktreesByBranch, agent, attentionFailure, invokeAgent, bindCapacityExecution, runSupervised, latestWorktree } = ctx;
   return {
     async reconcileCi(input: ReconcileCiActivityInput) {
       try { database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); }
@@ -80,10 +81,20 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
       if (observedHead?.toLowerCase() !== merge.mergeCommit.toLowerCase()) throw new Error("The updated CI branch was not confirmed on the provider");
       return adopt(merge.targetBaseSha, merge.mergeCommit, merge.tree);
     },
+    async findCiRepairPriorDelivery(input) {
+      return database.authQuery((db) => db.prepare(`SELECT id AS developerExecutionId, session_ref AS developerSessionRef, worktree_path AS worktreePath
+        FROM forge_developer_executions
+        WHERE task_id = ? AND company_id = ? AND workflow_id = ?
+          AND status IN ('completed', 'blocked')
+          AND lower(result_commit) = lower(?)
+          AND session_ref IS NOT NULL
+        ORDER BY finished_at DESC, started_at DESC
+        LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.resultCommit) as { developerExecutionId: string; developerSessionRef: string; worktreePath: string } | undefined) ?? null;
+    },
     async runCiRepair(input: WorkflowCiRepairActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);
       const workflowResult = (raw: unknown): WorkflowCiRepairActivityResult => {
-        const { worktreePath: _worktreePath, ...result } = raw as Awaited<ReturnType<InstanceType<typeof DeveloperService>["runCiRepair"]>>;
+        const { worktreePath: _worktreePath, ...result } = raw as Awaited<ReturnType<DeveloperService["runCiRepair"]>>;
         void _worktreePath;
         return result;
       };

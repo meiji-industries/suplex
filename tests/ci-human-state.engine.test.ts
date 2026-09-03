@@ -81,7 +81,7 @@ test("CI reconciliation rejects a changed PR head without replacing reviewed ide
 
     const changed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: (await queryIssueWorkflow(h.config, started.workflowId)).revision, actorUserId: engineFixture.actorUserId });
 
-    expect(changed).toMatchObject({ step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null });
+    expect(changed).toMatchObject({ step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, acceptanceId: null, blocker: null });
     expect(h.calls.get("reconcileCi") ?? 0).toBe(0);
   } finally { await h.stop(); }
 });
@@ -123,7 +123,7 @@ test.each([
 
     const changed = await executeIssueCommand(h.config, started.workflowId, "reconcile_ci", { expectedRevision: (await queryIssueWorkflow(h.config, started.workflowId)).revision, actorUserId: engineFixture.actorUserId });
 
-    expect(changed).toMatchObject({ step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null });
+    expect(changed).toMatchObject({ step: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", expectedHeadSha: head, expectedHeadTree: engineFixture.tree, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: engineFixture.tree, deliveryReviewId: null, finalReviewId: null, ciRunId: null, acceptanceId: null, blocker: null });
     expect(h.calls.get("adoptPullRequestRelease") ?? 0).toBe(0);
     expect(h.calls.get("reconcileCi") ?? 0).toBe(0);
   } finally { await h.stop(); }

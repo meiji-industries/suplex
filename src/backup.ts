@@ -320,7 +320,7 @@ export async function reconcileRestoredState(database: ForgeDatabase, github: Gi
       observation = { releaseId: release.id, repository: release.repository, branch: release.branch, pullRequestNumber: release.pullRequestNumber, status: "provider_unavailable", summary: "Provider state could not be read; no release mutation was attempted." };
     }
     const now = new Date().toISOString();
-    database.authTransaction((db) => db.prepare("INSERT INTO forge_provider_operations (id, operation_key, task_id, company_id, kind, status, result_json, created_at, updated_at) SELECT ?, ?, task_id, company_id, 'restore-reconcile', ?, ?, ?, ? FROM forge_releases WHERE id = ? ON CONFLICT(operation_key) DO UPDATE SET status = excluded.status, result_json = excluded.result_json, updated_at = excluded.updated_at").run(`provider_restore_${randomBytes(12).toString("hex")}`, operationKey, observation.status, JSON.stringify(observation), now, now, release.id));
+    database.authTransaction((db) => db.prepare("INSERT INTO forge_provider_operations (id, operation_key, task_id, company_id, kind, result_json, observed_at, created_at, updated_at) SELECT ?, ?, task_id, company_id, 'restore-reconcile', ?, ?, ?, ? FROM forge_releases WHERE id = ? ON CONFLICT(operation_key) DO UPDATE SET result_json = excluded.result_json, observed_at = excluded.observed_at, updated_at = excluded.updated_at").run(`provider_restore_${randomBytes(12).toString("hex")}`, operationKey, JSON.stringify({ ...observation, derivedFrom: "GitHub", observedAt: now }), now, now, now, release.id));
     providers.push(observation);
   }
   return { developerExecutions, providers };

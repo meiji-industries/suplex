@@ -68,7 +68,6 @@ export function applyTargetBaseRevalidation(
     pullRequestUrl: published ? state.pullRequestUrl : null,
     ciRunId: null,
     ciAttempt: 0,
-    ciOutcome: null,
     ciNextPollAt: null,
     finalReviewId: null,
     finalReviewOutcome: null,

@@ -334,7 +334,7 @@ test("compatible clean Git handoff writes and validates exact delivery bytes bef
   for (const valid of [true, false]) {
     const value = await fixture();
     const turn = value.addTurn(`handoff-${valid ? "valid" : "invalid"}`, { role: "builder", ledger: "developer" });
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES (?, ?, 'company', 'project', ?, '/repo', '/worktrees', '/missing', ?, ?, 'lease', 'active', ?)").run(`worktree-handoff-${valid}`, turn.taskId, `workflow-handoff-${valid ? "valid" : "invalid"}`, `work/handoff-${valid ? "valid" : "invalid"}`, "d".repeat(40), stamp));
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, reserved_at) VALUES (?, ?, 'company', 'project', ?, '/repo', '/worktrees', '/missing', ?, ?, 'lease', ?)").run(`worktree-handoff-${valid}`, turn.taskId, `workflow-handoff-${valid ? "valid" : "invalid"}`, `work/handoff-${valid ? "valid" : "invalid"}`, "d".repeat(40), stamp));
     const headSha = valid ? "e".repeat(40) : "invalid";
     const detectHandoff = async () => ({ kind: "clean_commit" as const, headSha, treeSha: "f".repeat(40) });
     const herdr = { runtimeSnapshot: async () => ({ agents: [], panes: [] }) };
@@ -366,7 +366,7 @@ test("Git handoff is disabled for incompatible ledgers and prompt kinds", async 
   for (const item of cases) {
     const value = await fixture();
     const turn = value.addTurn(`incompatible-${item.name}`, item);
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES (?, ?, 'company', 'project', ?, '/repo', '/worktrees', '/missing', ?, ?, 'lease', 'active', ?)").run(`worktree-incompatible-${item.name}`, turn.taskId, `workflow-incompatible-${item.name}`, `work/incompatible-${item.name}`, "d".repeat(40), stamp));
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, reserved_at) VALUES (?, ?, 'company', 'project', ?, '/repo', '/worktrees', '/missing', ?, ?, 'lease', ?)").run(`worktree-incompatible-${item.name}`, turn.taskId, `workflow-incompatible-${item.name}`, `work/incompatible-${item.name}`, "d".repeat(40), stamp));
     let detections = 0;
     const detectHandoff = async () => { detections += 1; return { kind: "clean_commit" as const, headSha: "e".repeat(40), treeSha: "f".repeat(40) }; };
     const herdr = { runtimeSnapshot: async () => ({ agents: [], panes: [] }) };
@@ -382,7 +382,7 @@ test("result and clean-handoff completion lose their exact CAS after session sup
   for (const kind of ["result", "handoff"] as const) {
     const value = await fixture();
     const turn = value.addTurn(`race-${kind}`, { role: "builder", ledger: "developer" });
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES (?, ?, 'company', 'project', ?, '/repo', '/worktrees', '/missing', ?, ?, 'lease', 'active', ?)").run(`worktree-${kind}`, turn.taskId, `workflow-race-${kind}`, `work/race-${kind}`, "d".repeat(40), stamp));
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, reserved_at) VALUES (?, ?, 'company', 'project', ?, '/repo', '/worktrees', '/missing', ?, ?, 'lease', ?)").run(`worktree-${kind}`, turn.taskId, `workflow-race-${kind}`, `work/race-${kind}`, "d".repeat(40), stamp));
     if (kind === "result") await value.writeResult(turn, validDeveloperDelivery);
     const detectHandoff = async () => kind === "result"
       ? { kind: "no_new_commit" as const, headSha: null }

@@ -166,10 +166,8 @@ test("task details use the current unreleased worktree lease", async () => {
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Worktree details", description: "body", idempotencyKey: "worktree-details-task", images: [] });
     const path = "/Users/x/forge/worktrees/acme/forge/task_11faa20d50cfa686e5bb197e";
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, status, reserved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?)").run("worktree-details-lease", created.task.id, value.companyId, value.projectId, created.task.workflowId, "/Users/x/forge/repositories/acme/forge", "/Users/x/forge/worktrees/acme/forge", path, "work/worktree-details", "a".repeat(40), "b".repeat(64), new Date().toISOString()));
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, reserved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)").run("worktree-details-lease", created.task.id, value.companyId, value.projectId, created.task.workflowId, "/Users/x/forge/repositories/acme/forge", "/Users/x/forge/worktrees/acme/forge", path, "work/worktree-details", "a".repeat(40), "b".repeat(64), new Date().toISOString()));
     expect(value.tasks.getTask(value.adminId, created.task.id).worktreePath).toBe(path);
-    value.database.authQuery((db) => db.prepare("UPDATE forge_issue_worktrees SET status = 'released' WHERE id = ?").run("worktree-details-lease"));
-    expect(value.tasks.getTask(value.adminId, created.task.id).worktreePath).toBeNull();
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -777,7 +775,7 @@ test("Developer diff follows current release coordinates after a branch rebase",
     const now = new Date().toISOString();
     value.database.authTransaction((db) => {
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-rebased-diff', ?, ?, ?, 1, 1, 'completed', ?, ?, ?, ?, ?, ?, ?, 'clean')").run(created.task.id, value.companyId, created.task.workflowId, worktree.branchName, worktree.worktreePath, staleBaseSha, now, now, recordedHeadSha, recordedTreeSha);
-      db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, created_at, updated_at) VALUES ('release-rebased-diff', ?, ?, ?, 'release-rebased-diff-key', 'acme/forge', ?, 'main', ?, ?, ?, 'ready', 86, 'https://github.com/acme/forge/pull/86', 'Rebased diff', ?, ?)").run(created.task.id, value.companyId, created.task.workflowId, worktree.branchName, currentBaseSha, currentHeadSha, currentTreeSha, now, now);
+      db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, pr_number, pr_url, title, created_at, updated_at) VALUES ('release-rebased-diff', ?, ?, ?, 'release-rebased-diff-key', 'acme/forge', ?, 'main', ?, ?, ?, 86, 'https://github.com/acme/forge/pull/86', 'Rebased diff', ?, ?)").run(created.task.id, value.companyId, created.task.workflowId, worktree.branchName, currentBaseSha, currentHeadSha, currentTreeSha, now, now);
     });
 
     const live = await value.tasks.getDeveloperDiff(value.adminId, created.task.id);

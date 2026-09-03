@@ -21,7 +21,7 @@ test("a stale reviewed revision blocks publication for human review", async () =
   try {
     const started = await h.startContinuation("stale-publish", continuationState);
     const state = await h.settle(started.workflowId, (value) => isBlocked(value) && value.step === "delivery_ready");
-    expect(state).toMatchObject({ step: "delivery_ready", owner: "human", allowedCommands: expect.arrayContaining(["review_delivery", "cancel_issue"]), releaseFailureCode: "stale-reviewed-revision" });
+    expect(state).toMatchObject({ step: "delivery_ready", owner: "human", allowedCommands: expect.arrayContaining(["review_delivery", "cancel_issue"]) });
     expect(state.blocker?.actions.map((action) => action.command)).toEqual(["review_delivery", "cancel_issue"]);
   } finally { await h.stop(); }
 });
@@ -63,7 +63,7 @@ test("repeated stale publication of the same reviewed commit stops the automatic
   };
   try {
     const started = await h.startContinuation("stale-auto-chain", continuationState);
-    const state = await h.settle(started.workflowId, (value) => isBlocked(value) && value.owner === "human" && value.releaseFailureCode === "stale-reviewed-revision");
+    const state = await h.settle(started.workflowId, (value) => isBlocked(value) && value.owner === "human");
     expect(state).toMatchObject({ step: "delivery_ready", pendingAction: "The exact approved Developer revision is unavailable", allowedCommands: expect.arrayContaining(["review_delivery", "publish_draft", "cancel_issue"]), blocker: expect.objectContaining({ category: "agent_exhausted" }) });
     expect(state.blocker?.actions.map((action) => action.command)).toEqual(["review_delivery", "publish_draft", "cancel_issue"]);
     expect(publishAttempts).toBeLessThanOrEqual(3);
@@ -106,8 +106,8 @@ test("blocked branch pushes stop before a release records its repository", async
   };
   try {
     const started = await h.startContinuation("blocked-push-auto-chain", continuationState, { repository: "acme/forge" });
-    const state = await h.settle(started.workflowId, (value) => isBlocked(value) && value.owner === "human" && value.releaseFailureCode === "authentication-required");
-    expect(state).toMatchObject({ step: "delivery_ready", owner: "human", releaseFailureCode: "authentication-required", pendingAction: "GitHub CLI authentication is unavailable", blocker: expect.objectContaining({ category: "agent_exhausted" }) });
+    const state = await h.settle(started.workflowId, (value) => isBlocked(value) && value.owner === "human");
+    expect(state).toMatchObject({ step: "delivery_ready", owner: "human", pendingAction: "GitHub CLI authentication is unavailable", blocker: expect.objectContaining({ category: "agent_exhausted" }) });
     expect(h.calls.get("publishRelease") ?? 0).toBe(0);
     expect(h.calls.get("pushDeliveryBranch") ?? 0).toBeLessThanOrEqual(3);
   } finally { await h.stop(); }

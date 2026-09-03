@@ -96,7 +96,6 @@ function targetBaseDriftState(overrides: Partial<IssueWorkflowState> = {}): Issu
     pendingAction: "Target base moved after delivery review",
     targetBaseCheckId: "check-target-base-retry",
     targetBaseCheckpoint: "pre_release",
-    releaseFailureCode: "target-base-drift",
     ...overrides,
   };
   return {

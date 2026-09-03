@@ -48,8 +48,8 @@ export function revisioned(state: IssueWorkflowState, step: IssueWorkflowState["
 export function withWorktreeCommands(state: IssueWorkflowState): IssueWorkflowState {
   const terminal = state.phase === "done" || state.phase === "cancelled";
   const noActiveOperation = state.activeOperation === null || state.activeOperation === undefined;
-  const canDelete = noActiveOperation && state.worktreeState !== "cleaned" && (Boolean(state.worktreePath) || (terminal && Boolean(state.branchName)));
-  const canRecreate = !terminal && (state.worktreeState === "cleaned" || state.worktreeState === "removed_externally");
+  const canDelete = noActiveOperation && (Boolean(state.worktreePath) || (terminal && Boolean(state.branchName)));
+  const canRecreate = !terminal && state.allowedCommands.includes("recreate_worktree");
   const canSyncBase = noActiveOperation && Boolean(state.branchName && state.developerExecutionId && state.targetBaseSha && state.resultCommit && state.resultTree);
   const allowedCommands = [
     ...state.allowedCommands,
@@ -233,7 +233,6 @@ export function repairedDeliveryAwaitingFreshReviewState(state: IssueWorkflowSta
     expectedHeadTree: null,
     ciRunId: null,
     ciAttempt: 0,
-    ciOutcome: null,
     ciNextPollAt: null,
     finalReviewId: null,
     finalReviewOutcome: null,

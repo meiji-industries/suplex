@@ -16,7 +16,7 @@ import type { ActivityContext } from "./context.js";
 
 export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" | "config" | "worktrees" | "createHash">) {
   const { database, config, worktrees, createHash } = ctx;
-  const owned = (input: { taskId: string; companyId: string; workflowId: string }) => database.authQuery((db) => db.prepare("SELECT repository_path AS repositoryPath, worktree_path AS worktreePath, worktree_root AS worktreeRoot, branch_name AS branchName, starting_sha AS targetBaseSha FROM forge_issue_worktrees WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status <> 'released'").get(input.taskId, input.companyId, input.workflowId) as { repositoryPath: string; worktreePath: string; worktreeRoot: string; branchName: string; targetBaseSha: string } | undefined);
+  const owned = (input: { taskId: string; companyId: string; workflowId: string }) => database.authQuery((db) => db.prepare("SELECT repository_path AS repositoryPath, worktree_path AS worktreePath, worktree_root AS worktreeRoot, branch_name AS branchName, starting_sha AS targetBaseSha FROM forge_issue_worktrees WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY reserved_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId) as { repositoryPath: string; worktreePath: string; worktreeRoot: string; branchName: string; targetBaseSha: string } | undefined);
   const resolved = (input: { taskId: string; companyId: string; workflowId: string }) => {
     const lease = owned(input);
     if (lease) return { ...lease, leased: true };
@@ -87,7 +87,6 @@ export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" |
         return { outcome: "dirty_confirmation_required" as const, dirtyFileCount: dirty, evidenceArtifactId: artifact.id };
       }
       await worktrees.remove(row.repositoryPath, row.worktreePath);
-      if (row.leased) database.authTransaction((db) => db.prepare("UPDATE forge_issue_worktrees SET status = 'released', cleaned_at = ? WHERE task_id = ?").run(new Date().toISOString(), input.taskId));
       recordTimeline(input, "worktree_cleaned", { path: row.worktreePath, dirtyFileCount: dirty, confirmed: !!input.confirmDiscardDirty });
       return { outcome: "cleaned" as const, dirtyFileCount: dirty };
     },
@@ -96,7 +95,7 @@ export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" |
       if (!row) throw new Error("Recorded worktree is unavailable");
       const result = await worktrees.create({ repositoryPath: row.repositoryPath, worktreeRoot: row.worktreeRoot, taskId: input.taskId, branchName: input.branchName, targetBaseSha: input.targetBaseSha });
       await invalidateBranchSync(result.worktreePath, input.branchName);
-      database.authTransaction((db) => db.prepare("UPDATE forge_issue_worktrees SET worktree_path = ?, status = 'active', removed_externally_at = NULL, cleaned_at = NULL WHERE task_id = ?").run(result.worktreePath, input.taskId));
+      database.authTransaction((db) => db.prepare("UPDATE forge_issue_worktrees SET worktree_path = ?, activated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ?").run(result.worktreePath, new Date().toISOString(), input.taskId, input.companyId, input.workflowId));
       recordTimeline(input, "worktree_recreated", { path: result.worktreePath, branchName: input.branchName, targetBaseSha: input.targetBaseSha });
       return { worktreePath: result.worktreePath };
     },

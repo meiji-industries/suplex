@@ -283,7 +283,7 @@ test("a foreign remote head fails closed without publication, observation, or ad
     persistContinuation(harness, issueId, continuation);
     const started = await startIssueWorkflow(harness.config, workflowInput(issueId, continuation));
     const blocked = await harness.settle(started.workflowId, (state) => isBlocked(state) && state.step === "delivery_ready");
-    expect(blocked).toMatchObject({ releaseFailureCode: "remote-head-conflict", targetBaseSha: reviewedBase, resultCommit: reviewedHead, resultTree: reviewedTree, deliveryReviewId: null, deliveryReviewOutcome: null });
+    expect(blocked).toMatchObject({ targetBaseSha: reviewedBase, resultCommit: reviewedHead, resultTree: reviewedTree, deliveryReviewId: null, deliveryReviewOutcome: null });
     expect(harness.calls.get("pushDeliveryBranch")).toBe(1);
     expect(blocked.blocker?.actions.map((action) => action.command)).toEqual(["review_delivery", "cancel_issue"]);
     expect(publishCalls).toBe(0);

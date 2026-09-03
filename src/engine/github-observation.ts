@@ -12,5 +12,5 @@ export function applyLegacyGithubObservation(state: IssueWorkflowState, observed
     const summary = observed.state === "closed" ? `Pull request #${number} was closed on GitHub` : "Branch no longer on GitHub";
     return IssueWorkflowStateSchema.parse({ ...state, ...common, revision, ...at(state.step), owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: summary, blocker: humanBlocker("target_drift", summary, [{ command: "publish_draft", label: "Publish the pull request", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], undefined), stateChangedAt: changedAt, lastEventId: event });
   }
-  return IssueWorkflowStateSchema.parse({ ...state, ...common, revision, ...(observed.exists && observed.isDraft === false && wasDraft === true ? { releaseStatus: "ready" as const, pendingAction: `Pull request #${observed.number} is ready on GitHub` } : {}), stateChangedAt: changedAt, lastEventId: event });
+  return IssueWorkflowStateSchema.parse({ ...state, ...common, revision, ...(observed.exists && observed.isDraft === false && wasDraft === true ? { pendingAction: `Pull request #${observed.number} is ready on GitHub` } : {}), stateChangedAt: changedAt, lastEventId: event });
 }

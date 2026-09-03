@@ -126,7 +126,7 @@ function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
     FROM forge_herdr_turns turn
     JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.is_current = 1
     JOIN forge_issue_projections projection ON projection.task_id = turn.task_id
-    LEFT JOIN forge_issue_worktrees worktree ON worktree.task_id = turn.task_id AND worktree.status <> 'released'
+    LEFT JOIN forge_issue_worktrees worktree ON worktree.task_id = turn.task_id
     LEFT JOIN forge_agent_executions agent ON agent.id = turn.execution_id AND turn.ledger = 'agent'
     LEFT JOIN forge_developer_executions developer ON developer.id = turn.execution_id AND turn.ledger = 'developer'
     LEFT JOIN forge_delivery_reviews review ON review.id = (SELECT id FROM forge_delivery_reviews WHERE workflow_id = projection.workflow_id ORDER BY created_at DESC, id DESC LIMIT 1)
@@ -144,7 +144,7 @@ async function recreateMissingRuntime(database: ForgeDatabase, config: ForgeConf
     JOIN forge_herdr_role_sessions session ON session.id = ? AND session.task_id = task.id AND session.session_role = ? AND session.is_current = 1
     JOIN forge_agents agent ON agent.id = json_extract(task.role_agents_json, '$.' || session.session_role)
     JOIN forge_profiles profile ON profile.id = agent.profile_id
-    LEFT JOIN forge_issue_worktrees worktree ON worktree.task_id = task.id AND worktree.status <> 'released'
+    LEFT JOIN forge_issue_worktrees worktree ON worktree.task_id = task.id
     WHERE task.id = ?`).get(turn.roleSessionId, turn.role, turn.taskId) as {
       projectId: string; projectSlug: string; issueNumber: number | null; worktreePath: string | null;
       provider: LaunchSettings["provider"]; model: string; reasoningLevel: string; servicePriority: LaunchSettings["serviceTier"];

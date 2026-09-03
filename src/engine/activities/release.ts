@@ -234,9 +234,9 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
       const now = new Date().toISOString();
       const releaseId = `release_${randomBytes(12).toString("hex")}`;
       database.authTransaction((db) => {
-        db.prepare(`INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, reused, title, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, 1, ?, ?, ?)
-          ON CONFLICT(release_key) DO UPDATE SET repository = excluded.repository, head_branch = excluded.head_branch, base_branch = excluded.base_branch, base_sha = excluded.base_sha, head_sha = excluded.head_sha, head_tree = excluded.head_tree, status = 'ready', pr_number = excluded.pr_number, pr_url = excluded.pr_url, reused = 1, title = excluded.title, updated_at = excluded.updated_at`)
+        db.prepare(`INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, pr_number, pr_url, reused, title, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+          ON CONFLICT(release_key) DO UPDATE SET repository = excluded.repository, head_branch = excluded.head_branch, base_branch = excluded.base_branch, base_sha = excluded.base_sha, head_sha = excluded.head_sha, head_tree = excluded.head_tree, pr_number = excluded.pr_number, pr_url = excluded.pr_url, reused = 1, title = excluded.title, updated_at = excluded.updated_at`)
           .run(releaseId, input.taskId, input.companyId, input.workflowId, releaseKey, input.repository, input.branchName, input.baseBranch, pullRequest.baseSha, input.headSha, headTree, pullRequest.number, pullRequest.url, pullRequest.title || `Pull request #${pullRequest.number}`, now, now);
       });
       const release = database.authQuery((db) => db.prepare("SELECT id FROM forge_releases WHERE release_key = ?").get(releaseKey) as { id: string });

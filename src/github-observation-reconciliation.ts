@@ -52,7 +52,7 @@ function candidates(database: ForgeDatabase, taskId?: string): Candidate[] {
     FROM forge_issue_projections p JOIN forge_workflow_snapshots s ON s.task_id = p.task_id AND s.revision = p.revision
     JOIN forge_tasks t ON t.id = p.task_id AND t.company_id = p.company_id AND t.archived_at IS NULL
     JOIN forge_releases r ON r.task_id = p.task_id AND r.superseded_at IS NULL
-    LEFT JOIN forge_issue_worktrees w ON w.task_id = p.task_id AND w.company_id = p.company_id AND w.workflow_id = p.workflow_id AND w.status <> 'released'
+    LEFT JOIN forge_issue_worktrees w ON w.task_id = p.task_id AND w.company_id = p.company_id AND w.workflow_id = p.workflow_id
     WHERE (? IS NULL OR p.task_id = ?) AND r.repository IS NOT NULL AND r.head_branch IS NOT NULL ORDER BY p.task_id`).all(taskId ?? null, taskId ?? null) as Array<Omit<Candidate, "state"> & { stateJson: string }>);
   return rows.flatMap((row) => {
     if (IGNORED_PHASES.has(row.phase)) return [];

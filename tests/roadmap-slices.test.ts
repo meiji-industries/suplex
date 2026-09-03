@@ -72,12 +72,12 @@ async function rewriteArchive(source: string, destination: string, mutate: (root
   }
 }
 
-function addReleaseFixtures(database: ForgeDatabase, status = "draft"): void {
+function addReleaseFixtures(database: ForgeDatabase): void {
   database.authTransaction((db) => {
     for (const [id, kind] of [["opinion-a", "agent-opinion"], ["evidence-a", "agent-evidence"]] as const) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company-a', ?, ?, 'text/markdown', 1, ?, ?, ?)").run(id, kind, `${id}.md`, "e".repeat(64), `company-a/${id}`, now);
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES ('lead-a', 'task-a', 'company-a', 'workflow-a', 'planner', 'completed', 1, 'lead-session', ?)").run(now);
     db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES ('review-a', 'task-a', 'company-a', 'workflow-a', 1, ?, ?, ?, 'lead-a', 'lead-session', 'approved', 'Approved exact delivery', 'opinion-a', 'evidence-a', 0, ?)").run(baseSha, headSha, treeSha, now);
-    db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, created_at, updated_at) VALUES ('release-a', 'task-a', 'company-a', 'workflow-a', 'workflow-a:main:bbbb', 'acme/forge', 'issue/task-a', 'main', ?, ?, ?, ?, 12, 'https://github.com/acme/forge/pull/12', 'Forge task', ?, ?)").run(baseSha, headSha, treeSha, status, now, now);
+    db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, pr_number, pr_url, title, created_at, updated_at) VALUES ('release-a', 'task-a', 'company-a', 'workflow-a', 'workflow-a:main:bbbb', 'acme/forge', 'issue/task-a', 'main', ?, ?, ?, 12, 'https://github.com/acme/forge/pull/12', 'Forge task', ?, ?)").run(baseSha, headSha, treeSha, now, now);
   });
 }
 
@@ -172,9 +172,9 @@ test("release reconciles push and create timeouts after success without duplicat
     const input = { taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", coordinates: { projectRevisionId: "revision-a", repositoryPath: value.root, worktreePath: value.root, repository: "acme/forge", owner: "acme", headBranch: "issue/task-a", baseBranch: "main", expectedBaseSha: baseSha }, reviewedRevision: { reviewId: "review-a", developerExecutionId: "developer-a", commitSha: headSha, treeSha }, taskTitle: "Task A", delivery: {} };
     const first = await service.publish(input);
     const second = await service.publish(input);
-    expect(second).toMatchObject({ releaseId: first.releaseId, reused: true, attempt: 1, pullRequest: { number: first.pullRequest.number } });
+    expect(second).toMatchObject({ releaseId: first.releaseId, reused: true, attempt: 2, pullRequest: { number: first.pullRequest.number } });
     expect({ pushes, creates, updates }).toEqual({ pushes: 1, creates: 1, updates: 0 });
-    expect(value.database.authQuery((db) => db.prepare("SELECT kind, status, attempt FROM forge_provider_operations WHERE release_key = (SELECT release_key FROM forge_releases WHERE id = ?) ORDER BY kind").all(first.releaseId))).toEqual([{ kind: "create-draft-pr", status: "completed", attempt: 1 }, { kind: "push", status: "completed", attempt: 1 }]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT kind, result_json AS resultJson, attempt FROM forge_provider_operations WHERE release_key = (SELECT release_key FROM forge_releases WHERE id = ?) ORDER BY kind").all(first.releaseId))).toEqual([expect.objectContaining({ kind: "create-draft-pr", attempt: 1, resultJson: expect.stringContaining("completed") }), expect.objectContaining({ kind: "push", attempt: 2, resultJson: expect.stringContaining("completed") })]);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -256,7 +256,7 @@ test("restore drill preserves users, completed work, artifacts, draft releases, 
       }
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-completed', 'task-completed', 'company-a', 'workflow-completed', 1, 1, 'completed', 'issue/task-completed', '/worktrees/task-completed', ?, 'completed-session', ?, ?, ?, ?, 'clean', 'completed-delivery', 'completed-evidence')").run(baseSha, now, now, headSha, treeSha);
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, heartbeat_at) VALUES ('developer-in-flight', 'task-a', 'company-a', 'workflow-a', 1, 1, 'running', 'issue/task-a', '/worktrees/task-a', ?, 'in-flight-session', ?, ?)").run(baseSha, now, now);
-      db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, body_artifact_id, created_at, updated_at) VALUES ('release-drill', 'task-a', 'company-a', 'workflow-a', 'workflow-a:release-drill', 'acme/forge', 'issue/task-a', 'main', ?, ?, ?, 'draft', 42, 'https://github.com/acme/forge/pull/42', 'Restore drill draft', 'draft-body', ?, ?)").run(baseSha, headSha, treeSha, now, now);
+      db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, pr_number, pr_url, title, body_artifact_id, created_at, updated_at) VALUES ('release-drill', 'task-a', 'company-a', 'workflow-a', 'workflow-a:release-drill', 'acme/forge', 'issue/task-a', 'main', ?, ?, ?, 42, 'https://github.com/acme/forge/pull/42', 'Restore drill draft', 'draft-body', ?, ?)").run(baseSha, headSha, treeSha, now, now);
       db.prepare("INSERT INTO forge_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at) VALUES ('invite-a', 'invitation-hash', 'user', 'Member A', 'member-a', '2099-01-01T00:00:00.000Z', ?)").run(now);
       db.prepare("INSERT INTO forge_challenges (id, challenge, kind, invitation_id, user_id, expires_at, created_at) VALUES ('challenge-a', 'challenge', 'user', 'invite-a', 'member-a', '2099-01-01T00:00:00.000Z', ?)").run(now);
       db.prepare("INSERT INTO forge_credentials (id, user_id, credential_id, public_key, counter, transports, created_at) VALUES ('credential-a', 'member-a', 'credential-id', ?, 0, '[]', ?)").run(Buffer.from("public-key"), now);
@@ -318,7 +318,7 @@ test("restored provider reconciliation observes existing pull requests without m
     addReleaseFixtures(value.database);
     const report = await reconcileRestoredState(value.database, fakeGithub());
     expect(report.providers).toEqual([expect.objectContaining({ releaseId: "release-a", status: "matched", pullRequestNumber: 12 })]);
-    expect(value.database.authQuery((db) => db.prepare("SELECT kind, status FROM forge_provider_operations WHERE task_id = 'task-a' AND kind = 'restore-reconcile'").get())).toEqual({ kind: "restore-reconcile", status: "matched" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT kind, result_json AS resultJson FROM forge_provider_operations WHERE task_id = 'task-a' AND kind = 'restore-reconcile'").get())).toEqual({ kind: "restore-reconcile", resultJson: expect.stringContaining("matched") });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

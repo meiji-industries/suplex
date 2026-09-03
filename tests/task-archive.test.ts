@@ -82,7 +82,7 @@ test("unarchive restores visibility without recreating the worktree", async () =
   await value.archive.archiveTask("user", "task", 1);
   const first = value.archive.unarchiveTask("user", "task");
   const second = value.archive.unarchiveTask("user", "task");
-  expect(first).toMatchObject({ archivedAt: null, worktreeState: "cleaned" });
+  expect(first).toMatchObject({ archivedAt: null });
   expect(second).toEqual(first);
   expect(value.commands).toEqual(["delete_worktree"]);
 });
@@ -94,8 +94,8 @@ test("cleans the worktree locally when the workflow rejects the update, then arc
   expect(result).toMatchObject({ status: "archived", task: { archivedAt: "2026-08-28T00:00:00.000Z" } });
   expect(value.commands).toEqual(["delete_worktree"]);
   expect(fake.calls).toEqual([{ input: { taskId: "task", companyId: "company", workflowId: "workflow_1" } }]);
-  const event = value.projected[0] as { eventId: string; state: { revision: number; worktreeState: string; allowedCommands: string[] } };
-  expect(event.state).toMatchObject({ revision: 2, worktreeState: "cleaned", allowedCommands: [] });
+  const event = value.projected[0] as { eventId: string; state: { revision: number; allowedCommands: string[] } };
+  expect(event.state).toMatchObject({ revision: 2, allowedCommands: [] });
   expect(event.state.allowedCommands).not.toContain("delete_worktree");
   expect(event.eventId).toBe("workflow_1:2");
 });

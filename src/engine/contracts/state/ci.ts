@@ -4,8 +4,6 @@ import { durableId } from "../primitives.js";
 export const ciStateFields = {
   ciRunId: durableId.nullable().optional(),
   ciAttempt: z.number().int().nonnegative().optional(),
-  // Display receipt derived from GitHub at the CI observation time.
-  ciOutcome: z.enum(["waiting", "passed", "failed", "missing_required", "cancelled", "timed_out", "non_success", "stale_head", "rate_limited", "provider_unavailable", "invalid_provider_response"]).nullable().optional(),
   ciReason: z.string().max(128).nullable().optional(),
   // "lead" was written by workflows before the Integrator role owned CI
   // follow-up. Keep it readable so existing workflow histories can replay.

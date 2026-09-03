@@ -770,7 +770,7 @@ export class WorktreeManager {
 }
 
 export function reserveOwnedWorktree(database: ForgeDatabase, input: OwnedWorktreeCoordinates): OwnedWorktree {
-  const existing = database.authQuery((db) => db.prepare("SELECT id AS leaseId, lease_token_hash AS leaseTokenHash, task_id AS taskId, company_id AS companyId, project_id AS projectId, workflow_id AS workflowId, repository_path AS repositoryRoot, worktree_root AS worktreeRoot, worktree_path AS worktreePath, branch_name AS branchName, starting_sha AS startingSha, legacy, status FROM forge_issue_worktrees WHERE task_id = ? AND status <> 'released'").get(input.taskId) as (Omit<OwnedWorktree, "legacy"> & { legacy: number }) | undefined);
+  const existing = database.authQuery((db) => db.prepare("SELECT id AS leaseId, lease_token_hash AS leaseTokenHash, task_id AS taskId, company_id AS companyId, project_id AS projectId, workflow_id AS workflowId, repository_path AS repositoryRoot, worktree_root AS worktreeRoot, worktree_path AS worktreePath, branch_name AS branchName, starting_sha AS startingSha, legacy FROM forge_issue_worktrees WHERE task_id = ? ORDER BY reserved_at DESC LIMIT 1").get(input.taskId) as (Omit<OwnedWorktree, "legacy"> & { legacy: number }) | undefined);
   if (existing) {
     const stored = OwnedWorktreeSchema.parse({ ...existing, legacy: existing.legacy === 1 });
     const checkedOutBranch = existsSync(stored.worktreePath)
@@ -790,7 +790,7 @@ export function reserveOwnedWorktree(database: ForgeDatabase, input: OwnedWorktr
   }
   const owned = OwnedWorktreeSchema.parse({ ...input, leaseId: `worktree_${randomBytes(12).toString("hex")}`, leaseTokenHash: createHash("sha256").update(randomBytes(32)).digest("hex"), legacy: input.legacy ?? false, status: "reserved" });
   try {
-    database.authTransaction((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, status, reserved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?)").run(owned.leaseId, owned.taskId, owned.companyId, owned.projectId, owned.workflowId, owned.repositoryRoot, owned.worktreeRoot, owned.worktreePath, owned.branchName, owned.startingSha, owned.leaseTokenHash, owned.legacy ? 1 : 0, new Date().toISOString()));
+    database.authTransaction((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, reserved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(owned.leaseId, owned.taskId, owned.companyId, owned.projectId, owned.workflowId, owned.repositoryRoot, owned.worktreeRoot, owned.worktreePath, owned.branchName, owned.startingSha, owned.leaseTokenHash, owned.legacy ? 1 : 0, new Date().toISOString()));
   } catch (error) {
     if (error instanceof Error && /UNIQUE|active/i.test(error.message)) throw new WorktreeFailure("worktree-lease-conflict", "The issue, branch, or path already has an active worktree lease");
     throw error;
@@ -809,7 +809,7 @@ function hasUnpushedWork(owned: OwnedWorktree): boolean {
 export function activateOwnedWorktree(database: ForgeDatabase, inspection: OwnedWorktreeInspection): OwnedWorktree {
   if (!inspection.repositoryRegistered || inspection.dirtyState !== "clean" || !inspection.head || inspection.branch !== inspection.owned.branchName || inspection.pathIsSymlink) throw new WorktreeFailure("worktree-verification", "Owned worktree did not match the task branch");
   database.authTransaction((db) => {
-    const result = db.prepare("UPDATE forge_issue_worktrees SET status = 'active', activated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND project_id = ? AND workflow_id = ? AND worktree_path = ? AND branch_name = ? AND starting_sha = ? AND status = 'reserved'").run(new Date().toISOString(), inspection.owned.leaseId, inspection.owned.taskId, inspection.owned.companyId, inspection.owned.projectId, inspection.owned.workflowId, inspection.owned.worktreePath, inspection.owned.branchName, inspection.owned.startingSha);
+    const result = db.prepare("UPDATE forge_issue_worktrees SET activated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND project_id = ? AND workflow_id = ? AND worktree_path = ? AND branch_name = ? AND starting_sha = ?").run(new Date().toISOString(), inspection.owned.leaseId, inspection.owned.taskId, inspection.owned.companyId, inspection.owned.projectId, inspection.owned.workflowId, inspection.owned.worktreePath, inspection.owned.branchName, inspection.owned.startingSha);
     if (result.changes !== 1) throw new WorktreeFailure("worktree-lease-conflict", "Owned worktree activation lost its compare-and-set lease");
   });
   return { ...inspection.owned, status: "active" };

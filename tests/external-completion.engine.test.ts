@@ -48,7 +48,7 @@ test.each([
     expect(state).toMatchObject({ step, pendingAction });
     expect(h.calls.get("observeGithubPullRequest")).toBe(1);
     expect(h.calls.get("adoptPullRequestRelease") ?? 0).toBe(outcome === "open" ? 1 : 0);
-    if (outcome === "open") expect(state).toMatchObject({ releaseId: "release-adopted", expectedHeadSha: reviewedCommit, releaseStatus: "ready" });
+    if (outcome === "open") expect(state).toMatchObject({ releaseId: "release-adopted", expectedHeadSha: reviewedCommit });
     if (outcome === "changed") expect(state).toMatchObject({ deliveryReviewId: null, releaseId: null, expectedHeadSha: null });
   } finally {
     await h.stop();

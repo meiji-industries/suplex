@@ -17,10 +17,6 @@ async function git(worktreePath: string, args: string[]): Promise<string | null>
 
 export async function detectGitHandoff(input: { worktreePath: string; branchName: string; previousCommit: string | null; taskId: string; database?: ForgeDatabase }): Promise<GitHandoff> {
   try { await access(input.worktreePath); } catch { return { kind: "missing_worktree" }; }
-  if (input.database) {
-    const owned = input.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_issue_worktrees WHERE task_id = ? AND worktree_path = ? AND status <> 'released'").get(input.taskId, input.worktreePath));
-    if (!owned) return { kind: "wrong_branch", currentBranch: "not-owned" };
-  }
   const currentBranch = await git(input.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (currentBranch !== input.branchName) return { kind: "wrong_branch", currentBranch };
   const headSha = await git(input.worktreePath, ["rev-parse", "HEAD"]);

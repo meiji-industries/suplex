@@ -36,7 +36,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);
   const continuation = validatedInput.continuationState;
   let sourcePullRequest = sourcePullRequestState(validatedInput, true);
-  const projectionStamps: number[] = [];
+  const projectionStamps: Array<{ at: number; step: IssueWorkflowState["step"] }> = [];
+  let automaticActionsHalted = false;
   const addRevisionCommand = (commands: IssueCommand[]): IssueCommand[] => !commands.includes("revise_plan") ? [...commands, "revise_plan"] : commands;
   let state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState(validatedInput),
@@ -92,7 +93,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         targetBaseSha: result.observedBaseSha ?? state.targetBaseSha, targetBaseCheckId: result.checkId, targetBaseCheckpoint: result.checkpoint, targetBaseOutcome: result.outcome, targetBaseBlockerCode: result.code, targetBaseBlockerOwner: result.owner, targetBaseBlockerRetryable: result.retryable, targetBaseBlockerSummary: summary,
         forwardMergeId: result.checkId, forwardMergePriorHead: result.priorHead ?? state.forwardMergePriorHead, forwardMergePriorTree: result.priorTree ?? state.forwardMergePriorTree, forwardMergeTargetBaseSha: result.observedBaseSha ?? state.forwardMergeTargetBaseSha, forwardMergeConflictArtifact: null, forwardMergeConflictFileCount: null,
         resultCommit: result.resultHead, resultTree: result.resultTree, dirtyState: "clean", deliverySummary: normalizeSafeSummary(`Project verification failed: ${summary}`, 200), developerOutcome: "completed", deliveryReviewSupersedesId: null, repairCycle: 0, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null,
-        releaseId: published ? state.releaseId : null, pullRequestNumber: published ? state.pullRequestNumber : null, pullRequestUrl: published ? state.pullRequestUrl : null, deliveryDecisionArtifactId: null, ciRunId: null, ciAttempt: 0, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, acceptedHeadSha: null, mergeOutcome: null, expectedHeadSha: result.resultHead, expectedHeadTree: result.resultTree, ...recoveryFields(null, null, null, null) });
+        releaseId: published ? state.releaseId : null, pullRequestNumber: published ? state.pullRequestNumber : null, pullRequestUrl: published ? state.pullRequestUrl : null, deliveryDecisionArtifactId: null, ciRunId: null, ciAttempt: 0, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, acceptedHeadSha: null, mergeOutcome: null, expectedHeadSha: result.resultHead, expectedHeadTree: result.resultTree, ...recoveryFields(null, null, null, null) });
       return;
     }
     const allowedCommands = (result.retryable ? [verification ? "retry_forward_merge_verification" : "retry_target_base_reconciliation", "cancel_issue"] : ["cancel_issue"]) as IssueCommand[];
@@ -175,7 +176,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       return true;
     }
     if (state.developerTurnKind === "merge_conflict_resolution") {
-      state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", targetBaseSha: state.forwardMergeTargetBaseSha ?? state.targetBaseSha, dirtyState: "clean", deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, acceptanceId: null, mergeResolutionDeveloperExecutionId: result.developerExecutionId as string, mergeResolutionDeveloperSessionRef: result.developerSessionRef as string, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", targetBaseSha: state.forwardMergeTargetBaseSha ?? state.targetBaseSha, dirtyState: "clean", deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciNextPollAt: null, finalReviewId: null, acceptanceId: null, mergeResolutionDeveloperExecutionId: result.developerExecutionId as string, mergeResolutionDeveloperSessionRef: result.developerSessionRef as string, lastEventId: `${state.workflowId}:${state.revision + 1}` });
       return true;
     }
     return false;
@@ -226,7 +227,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       if (observed.state === "open" && state.baseBranch) {
         const adopted = await adoptPullRequestRelease({ taskId: state.issueId, companyId: state.companyId, workflowId: state.workflowId, projectRevisionId: state.projectRevisionId, repository, branchName: state.branchName, baseBranch: state.baseBranch, ...(state.targetBaseSha ? { expectedBaseSha: state.targetBaseSha } : {}), pullRequestNumber: observed.number, headSha: reviewedCommit });
         const nextStep = validatedInput.deliveryTarget === "merged" ? "ci_waiting" : "manual_merge";
-        state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at(nextStep), owner: nextStep === "ci_waiting" ? "lead" : "human", allowedCommands: nextStep === "ci_waiting" ? ["cancel_issue"] : ["reconcile_merge", "cancel_issue"], pendingAction: nextStep === "ci_waiting" ? "Forge waits for CI" : "Your merge is necessary", releaseId: adopted.releaseId, releaseRepository: adopted.repository, baseBranch: adopted.baseBranch, targetBaseSha: adopted.targetBaseSha, pullRequestNumber: adopted.pullRequestNumber, pullRequestUrl: adopted.pullRequestUrl, expectedHeadSha: adopted.headSha, expectedHeadTree: adopted.headTree, resultCommit: adopted.headSha, resultTree: adopted.headTree, releaseStatus: "ready", releaseFailureCode: null, releaseFailureSummary: null, releaseRetryAt: null, ciAttempt: 0, ciOutcome: nextStep === "ci_waiting" ? "waiting" : null, ciNextPollAt: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at(nextStep), owner: nextStep === "ci_waiting" ? "lead" : "human", allowedCommands: nextStep === "ci_waiting" ? ["cancel_issue"] : ["reconcile_merge", "cancel_issue"], pendingAction: nextStep === "ci_waiting" ? "Forge waits for CI" : "Your merge is necessary", releaseId: adopted.releaseId, releaseRepository: adopted.repository, baseBranch: adopted.baseBranch, targetBaseSha: adopted.targetBaseSha, pullRequestNumber: adopted.pullRequestNumber, pullRequestUrl: adopted.pullRequestUrl, expectedHeadSha: adopted.headSha, expectedHeadTree: adopted.headTree, resultCommit: adopted.headSha, resultTree: adopted.headTree, releaseFailureSummary: null, releaseRetryAt: null, ciAttempt: 0, ciNextPollAt: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
         await projectIssueState(state);
         return observed;
       }
@@ -294,14 +295,16 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const guarded = createGuarded({ get: () => state, set: (next) => { state = next; } }, { project: projectIssueState });
   const workflowContext = createIssueWorkflowContext(validatedInput, state, {
     project: () => {
-      // A run projecting more than 100 revisions in a wall-clock second is a hot loop, not progress:
-      // log it and pause for real time so HTTP and timers keep running. Otherwise stay synchronous so
-      // command/auto-chain ordering is unchanged.
       const now = Date.now();
-      projectionStamps.push(now);
-      while (projectionStamps.length && now - projectionStamps[0]! > 1_000) projectionStamps.shift();
+      projectionStamps.push({ at: now, step: state.step });
+      while (projectionStamps.length && now - projectionStamps[0]!.at > 60_000) projectionStamps.shift();
       state = withWorktreeCommands(state);
-      if (projectionStamps.length > 100) { log.error("Issue run is projecting in a hot loop; throttling", { workflowId: state.workflowId, phase: state.phase, revision: state.revision }); return new Promise<void>((resolve) => setTimeout(resolve, 1_000)).then(() => projectIssueState(state)); }
+      // safety bound, not a mirror gate
+      if (!automaticActionsHalted && projectionStamps.length >= 40) {
+        automaticActionsHalted = true;
+        log.warn("Issue run stopped an automatic loop", { workflowId: state.workflowId, repeatingSteps: projectionStamps.map((stamp) => stamp.step) });
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("delivery_ready"), owner: "human", allowedCommands: ["review_delivery", "publish_draft", "cancel_issue"], pendingAction: "Forge stopped an automatic loop. Review the task, then retry.", blocker: humanBlocker("agent_exhausted", "Forge stopped an automatic loop. Review the task, then retry.", [{ command: "review_delivery", label: "Approve the delivery", requiresNote: false, destructive: false }, { command: "publish_draft", label: "Publish the pull request", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(state.deliveryReviewArtifact?.artifactId ?? state.developerEvidenceArtifactId ?? undefined, "attention-evidence")), stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      }
       return projectIssueState(state);
     },
     projectState: (value) => { state = withWorktreeCommands(value); return projectIssueState(state); },
@@ -370,7 +373,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         await syncGithubPullRequest();
         continue;
       }
-      if (workflowContext.state.step === "releasing" && workflowContext.state.activeOperation === null && !workflowContext.state.releaseRetryAt) {
+      if (workflowContext.state.step === "releasing" && workflowContext.state.owner === "lead" && workflowContext.state.activeOperation === null && !workflowContext.state.releaseRetryAt) {
         workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision: workflowContext.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: workflowContext.addRevisionCommand(["review_delivery", "cancel_issue"]), pendingAction: "The publish stopped. Review again before you publish.", lastEventId: `${workflowContext.state.workflowId}:${workflowContext.state.revision + 1}` });
         await workflowContext.project();
         continue;

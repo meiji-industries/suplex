@@ -17,7 +17,7 @@ export class TaskArchiveService {
     if (task.archivedAt) return { status: "archived", task };
     if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [{ code: "stale-revision", field: "expectedRevision", message: "Refresh the issue before this action" }], 409, task);
     if (!["done", "cancelled"].includes(task.phase)) throw new TaskFailure("Task action is not available", [{ code: "illegal-command", field: "phase", message: "Only a terminal task can be archived" }], 409, task);
-    if (task.worktreeState !== "cleaned") {
+    {
       let cleanedLocally = false;
       try {
         task = await this.tasks.executeCommand(actorUserId, taskId, "delete_worktree", { expectedRevision: task.revision, ...(options.confirmDiscardDirty !== undefined ? { confirmDiscardDirty: options.confirmDiscardDirty } : {}) });
@@ -67,7 +67,7 @@ export class TaskArchiveService {
     try { stored = jsonRequired(snapshot.state_json); } catch { return; }
     const state = IssueWorkflowStateSchema.parse(stored);
     if (state.revision !== task.revision) return;
-    const next = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, worktreeState: "cleaned", allowedCommands: state.allowedCommands.filter((entry) => entry !== "delete_worktree"), lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    const next = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, allowedCommands: state.allowedCommands.filter((entry) => entry !== "delete_worktree"), lastEventId: `${state.workflowId}:${state.revision + 1}` });
     this.database.projectIssueEvent({ schemaVersion: 1, runId: snapshot.runId ?? state.workflowId, eventId: next.lastEventId, state: next });
   }
 }

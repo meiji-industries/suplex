@@ -45,7 +45,7 @@ async function remoteFixture() {
   const config = createTestConfig(root, { worktreeRoot: join(root, "worktrees") });
   const database = new ForgeDatabase(config.databasePath);
   database.authQuery((db) => db.pragma("foreign_keys = OFF"));
-  database.authTransaction((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES ('worktree', 'task', 'company', 'project', 'workflow', ?, ?, ?, 'forge/task', ?, 'lease', 'active', ?)").run(source, config.worktreeRoot, worktreePath, "a".repeat(40), new Date().toISOString()));
+  database.authTransaction((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, reserved_at) VALUES ('worktree', 'task', 'company', 'project', 'workflow', ?, ?, ?, 'forge/task', ?, 'lease', ?)").run(source, config.worktreeRoot, worktreePath, "a".repeat(40), new Date().toISOString()));
   return { config, database, peer, worktreePath };
 }
 

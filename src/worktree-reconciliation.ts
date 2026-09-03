@@ -1,10 +1,10 @@
 import { access } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { resolve } from "node:path";
 
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
-import { connectEngine, durableCommand, executeIssueCommand } from "./engine/service.js";
-import { issueUpdates } from "./engine/issue-updates.js";
+import { runCommand } from "./command-runner.js";
 
 export interface WorktreeReconciliationResult {
   inspected: number;
@@ -13,44 +13,29 @@ export interface WorktreeReconciliationResult {
   outcomes: Array<{ taskId: string; phase: string; status: "present" | "removed_externally_terminal" | "removed_externally_active" | "already_recorded" }>;
 }
 
-type Candidate = { taskId: string; companyId: string; workflowId: string; worktreePath: string; phase: string; revision: number };
+type Candidate = { taskId: string; companyId: string; workflowId: string; repositoryPath: string; worktreePath: string; branchName: string; phase: string; revision: number };
 
-async function reportWorktreeMissing(config: ForgeConfig, workflowId: string, input: { expectedRevision: number; actorUserId: string; commandId: string; worktreePath: string }): Promise<void> {
-  const engine = await connectEngine(config);
-  try {
-    const handle = engine.client.workflow.getHandle(workflowId);
-    await handle.executeUpdate(issueUpdates.report_worktree_missing, { args: [input], updateId: input.commandId });
-  } finally {
-    await engine.connection.close();
-  }
-}
-
-export async function reconcileWorktrees(database: ForgeDatabase, config: ForgeConfig, options: { taskId?: string; exists?: (path: string) => Promise<boolean>; execute?: typeof executeIssueCommand } = {}): Promise<WorktreeReconciliationResult> {
-  const rows = database.authQuery((db) => db.prepare(`SELECT w.task_id AS taskId, w.company_id AS companyId, w.workflow_id AS workflowId, w.worktree_path AS worktreePath, p.phase, p.revision
+export async function reconcileWorktrees(database: ForgeDatabase, _config: ForgeConfig, options: { taskId?: string; exists?: (path: string) => Promise<boolean>; listed?: (row: Pick<Candidate, "repositoryPath" | "worktreePath" | "branchName">) => Promise<boolean> } = {}): Promise<WorktreeReconciliationResult> {
+  const rows = database.authQuery((db) => db.prepare(`SELECT w.task_id AS taskId, w.company_id AS companyId, w.workflow_id AS workflowId, w.repository_path AS repositoryPath, w.worktree_path AS worktreePath, w.branch_name AS branchName, p.phase, p.revision
     FROM forge_issue_worktrees w JOIN forge_issue_projections p ON p.task_id = w.task_id AND p.company_id = w.company_id
     JOIN forge_tasks t ON t.id = w.task_id AND t.company_id = w.company_id AND t.archived_at IS NULL
-    WHERE w.status <> 'released' AND w.cleaned_at IS NULL AND p.phase NOT IN ('done', 'cancelled', 'failed') AND (? IS NULL OR w.task_id = ?) ORDER BY w.task_id`).all(options.taskId ?? null, options.taskId ?? null) as Candidate[]);
+  WHERE p.phase NOT IN ('done', 'cancelled', 'failed') AND (? IS NULL OR w.task_id = ?) ORDER BY w.task_id`).all(options.taskId ?? null, options.taskId ?? null) as Candidate[]);
   const exists = options.exists ?? (async (path: string) => access(path).then(() => true).catch(() => false));
-  const execute = options.execute ?? executeIssueCommand;
+  const listed = options.listed ?? (async (row: Pick<Candidate, "repositoryPath" | "worktreePath" | "branchName">) => {
+    const result = await runCommand({ taskId: null, stepId: null, command: "git", args: ["worktree", "list", "--porcelain"], cwd: row.repositoryPath, timeout: 30_000 });
+    if (result.exitCode !== 0) throw new Error("Git could not list task worktrees");
+    const worktreePath = resolve(row.worktreePath);
+    return result.stdout.split(/\r?\n\r?\n/).some((entry) => entry.split(/\r?\n/).some((line) => line === `worktree ${worktreePath}`));
+  });
   const outcomes: WorktreeReconciliationResult["outcomes"] = [];
   let removedExternally = 0;
   let reported = 0;
   for (const row of rows) {
-    if (await exists(row.worktreePath)) { outcomes.push({ taskId: row.taskId, phase: row.phase, status: "present" }); continue; }
-    const marked = database.authTransaction((db) => db.prepare("UPDATE forge_issue_worktrees SET removed_externally_at = ? WHERE task_id = ? AND status <> 'released' AND cleaned_at IS NULL AND removed_externally_at IS NULL").run(new Date().toISOString(), row.taskId));
-    if (!marked.changes) { outcomes.push({ taskId: row.taskId, phase: row.phase, status: "already_recorded" }); continue; }
+    if (await exists(row.worktreePath) && await listed(row)) { outcomes.push({ taskId: row.taskId, phase: row.phase, status: "present" }); continue; }
     removedExternally += 1;
-    if (["done", "cancelled"].includes(row.phase)) {
-      const metadataJson = JSON.stringify({ path: row.worktreePath });
-      const eventHash = createHash("sha256").update(metadataJson).digest("hex");
-      database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, source, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, ?, 'workflow', 'worktree_removed_externally', ?, ?, ?)").run(row.workflowId + ":worktree_removed_externally", row.taskId, row.companyId, row.workflowId, row.revision, metadataJson, new Date().toISOString(), eventHash));
-      outcomes.push({ taskId: row.taskId, phase: row.phase, status: "removed_externally_terminal" });
-      continue;
-    }
-    const input = durableCommand(row.workflowId, "report-worktree-missing", { expectedRevision: row.revision, actorUserId: "worktree-reconciler", commandId: undefined, worktreePath: row.worktreePath });
-    if (options.execute) await execute(config, row.workflowId, "report_worktree_missing" as never, input as never);
-    else await reportWorktreeMissing(config, row.workflowId, input);
-    reported += 1;
+    const metadataJson = JSON.stringify({ path: row.worktreePath, branch: row.branchName });
+    const eventHash = createHash("sha256").update(metadataJson).digest("hex");
+    database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, source, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, ?, 'workflow', 'worktree_observed_missing', ?, ?, ?)").run(row.workflowId + ":worktree_observed_missing:" + row.revision, row.taskId, row.companyId, row.workflowId, row.revision, metadataJson, new Date().toISOString(), eventHash));
     outcomes.push({ taskId: row.taskId, phase: row.phase, status: "removed_externally_active" });
   }
   return { inspected: rows.length, removedExternally, reported, outcomes };

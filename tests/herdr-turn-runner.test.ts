@@ -136,7 +136,7 @@ async function developerTurnFixture(dirty = false) {
   setup.database.authQuery((db) => {
     db.prepare("UPDATE forge_agent_executions SET status = 'completed' WHERE id = 'execution'").run();
     db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('developer', 'task', 'company', 'workflow', 1, 1, 'running', 'forge/issue/task', ?, ?, ?)").run(worktreePath, base, now);
-    db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES ('worktree', 'task', 'company', 'project', 'workflow', ?, ?, ?, 'forge/issue/task', ?, 'lease', 'active', ?)").run(worktreePath, setup.root, worktreePath, base, now);
+    db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, reserved_at) VALUES ('worktree', 'task', 'company', 'project', 'workflow', ?, ?, ?, 'forge/issue/task', ?, 'lease', ?)").run(worktreePath, setup.root, worktreePath, base, now);
   });
   const input = { ...setup.input, executionId: "developer", executionRole: "builder" as const, ledger: "developer" as const, promptKind: "implementation", resultSchema: DeveloperDeliverySchema };
   setup.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET session_role = 'builder' WHERE id = 'session'").run());

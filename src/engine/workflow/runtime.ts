@@ -232,10 +232,7 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
     failure = error;
   }
   const reviewedCommit = before.resultCommit;
-  if (chained.command === "publish_draft"
-    && typeof reviewedCommit === "string"
-    && ctx.state.step === "delivery_ready"
-    && ctx.state.resultCommit?.toLowerCase() === reviewedCommit.toLowerCase()) {
+  if (chained.command === "publish_draft" && typeof reviewedCommit === "string" && ctx.state.step === "delivery_ready" && ctx.state.resultCommit?.toLowerCase() === reviewedCommit.toLowerCase()) {
     const key = blockedPublishObservationKey(ctx.state.workflowId, reviewedCommit);
     const passes = (blockedPublishPasses.get(key) ?? 0) + 1;
     blockedPublishPasses.set(key, passes);
@@ -244,36 +241,21 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
     let observationSummary: string | null = null;
     if (repository && ctx.state.branchName) {
       try {
-        const observed = await observeGithubPullRequest({
-          repository,
-          branch: ctx.state.branchName,
-          pullRequestNumber: ctx.state.pullRequestNumber,
-        });
+        const observed = await observeGithubPullRequest({ repository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
         observation = JSON.stringify({ exists: observed.exists, state: observed.state, headSha: observed.headSha, number: observed.number });
       } catch (error) {
-        const failure = githubObservationFailure(error);
-        observation = failure.observation;
-        observationSummary = failure.summary;
+        const failed = githubObservationFailure(error);
+        observation = failed.observation;
+        observationSummary = failed.summary;
       }
     }
     const repeatedObservation = observation !== null && blockedPublishObservations.get(key) === observation;
     if (observation !== null) blockedPublishObservations.set(key, observation);
-    // safety bound, not a mirror gate: stop after three blocked publish passes for one reviewed commit.
     if (repeatedObservation || passes >= 3) {
       const summary = observationSummary ?? ctx.state.pendingAction ?? "Forge could not publish the reviewed delivery.";
       haltedChains.add(chainKey(ctx.state.workflowId, "review_delivery"));
       haltedChains.add(chainKey(ctx.state.workflowId, "publish_draft"));
-      ctx.state = IssueWorkflowStateSchema.parse({
-        ...ctx.state,
-        revision: ctx.state.revision + 1,
-        ...at("delivery_ready"),
-        owner: "human",
-        allowedCommands: ["review_delivery", "publish_draft", "cancel_issue"],
-        pendingAction: summary,
-        blocker: humanBlocker("agent_exhausted", summary, [{ command: "review_delivery", label: "Approve the delivery", requiresNote: false, destructive: false }, { command: "publish_draft", label: "Publish the pull request", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(ctx.state.deliveryReviewArtifact?.artifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence")),
-        stateChangedAt: new Date().toISOString(),
-        lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
-      });
+      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "human", allowedCommands: ["review_delivery", "publish_draft", "cancel_issue"], pendingAction: summary, blocker: humanBlocker("agent_exhausted", summary, [{ command: "review_delivery", label: "Approve the delivery", requiresNote: false, destructive: false }, { command: "publish_draft", label: "Publish the pull request", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(ctx.state.deliveryReviewArtifact?.artifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence")), stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return;
     }

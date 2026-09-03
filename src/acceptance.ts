@@ -182,7 +182,7 @@ export class AcceptanceService {
       const observedAt = this.now().toISOString();
       await this.recordAttempt(row, "observe", "ready", current.state, false, undefined, null, { pullRequest: current });
       this.updateAcceptance(row.id, "accepted", null, null, observedAt);
-      this.database.authTransaction((db) => db.prepare("UPDATE forge_releases SET status = 'ready', updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(observedAt, row.release_id, row.task_id, row.company_id));
+      this.database.authTransaction((db) => db.prepare("UPDATE forge_releases SET updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(observedAt, row.release_id, row.task_id, row.company_id));
       return { acceptanceId: row.id, status: "accepted", outcome: "ready", retryAt: null, pullRequest: current, readyAt: observedAt, acceptedAt: row.created_at };
     }
 
@@ -211,7 +211,7 @@ export class AcceptanceService {
         const readyAt = this.now().toISOString();
         await this.recordAttempt(row, "observe", "mutation_timeout_reconciled", observed.current.state, false, "mutation_timeout_reconciled", null, { pullRequest: observed.current });
         this.updateAcceptance(row.id, "accepted", null, null, readyAt);
-        this.database.authTransaction((db) => db.prepare("UPDATE forge_releases SET status = 'ready', updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(readyAt, row.release_id, row.task_id, row.company_id));
+        this.database.authTransaction((db) => db.prepare("UPDATE forge_releases SET updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(readyAt, row.release_id, row.task_id, row.company_id));
         return { acceptanceId: row.id, status: "accepted", outcome: "ready", retryAt: null, pullRequest: observed.current, readyAt, acceptedAt: row.created_at };
       }
       const next = retryAt(now, attempt);
@@ -224,7 +224,7 @@ export class AcceptanceService {
       const readyAt = this.now().toISOString();
       await this.recordAttempt(row, "observe", "ready", confirmed.current.state, false, undefined, null, { pullRequest: confirmed.current });
       this.updateAcceptance(row.id, "accepted", null, null, readyAt);
-      this.database.authTransaction((db) => db.prepare("UPDATE forge_releases SET status = 'ready', updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(readyAt, row.release_id, row.task_id, row.company_id));
+      this.database.authTransaction((db) => db.prepare("UPDATE forge_releases SET updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(readyAt, row.release_id, row.task_id, row.company_id));
       return { acceptanceId: row.id, status: "accepted", outcome: "ready", retryAt: null, pullRequest: confirmed.current, readyAt, acceptedAt: row.created_at };
     }
     const next = retryAt(now, attempt);

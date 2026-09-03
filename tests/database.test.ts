@@ -99,7 +99,7 @@ test("The Builder works on the task receipts are append-only", async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("Developer truth constraints reject invalid authorization, duplicate leases, and duplicate receipts", async () => {
+test("Developer truth constraints reject invalid authorization and duplicate receipts while retaining worktree observations", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-db-developer-constraints-test-"));
   try {
     const database = new ForgeDatabase(join(root, "forge.sqlite"));
@@ -111,11 +111,11 @@ test("Developer truth constraints reject invalid authorization, duplicate leases
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-developer-2', 'company-developer', 'project-developer', 'Developer task 2', 'brief-developer-2', '[]', '{}', 0, 'workflow-developer-2', 'revision-developer', 'developer-key-2', ?, ?)").run(now, now);
     });
 
-    database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, status, reserved_at) VALUES ('lease-1', 'task-developer', 'company-developer', 'project-developer', 'workflow-developer', ?, ?, ?, 'work/issue/task-developer', ?, ?, 0, 'active', ?)").run(join(root, "repo"), join(root, "worktrees"), join(root, "worktrees", "task-developer"), "a".repeat(40), "b".repeat(64), now));
-    const insertLease = (id: string, taskId: string, workflowId: string, path: string, branch: string) => database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, status, reserved_at) VALUES (?, ?, 'company-developer', 'project-developer', ?, ?, ?, ?, ?, ?, ?, 0, 'reserved', ?)").run(id, taskId, workflowId, join(root, "repo"), join(root, "worktrees"), path, branch, "a".repeat(40), "c".repeat(64), now));
-    expect(() => insertLease("lease-task-duplicate", "task-developer", "workflow-developer", join(root, "worktrees", "other"), "work/issue/other")).toThrow();
-    expect(() => insertLease("lease-branch-duplicate", "task-developer-2", "workflow-developer-2", join(root, "worktrees", "other"), "work/issue/task-developer")).toThrow();
-    expect(() => insertLease("lease-path-duplicate", "task-developer-2", "workflow-developer-2", join(root, "worktrees", "task-developer"), "work/issue/other")).toThrow();
+    database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, reserved_at) VALUES ('lease-1', 'task-developer', 'company-developer', 'project-developer', 'workflow-developer', ?, ?, ?, 'work/issue/task-developer', ?, ?, 0, ?)").run(join(root, "repo"), join(root, "worktrees"), join(root, "worktrees", "task-developer"), "a".repeat(40), "b".repeat(64), now));
+    const insertLease = (id: string, taskId: string, workflowId: string, path: string, branch: string) => database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, reserved_at) VALUES (?, ?, 'company-developer', 'project-developer', ?, ?, ?, ?, ?, ?, ?, 0, ?)").run(id, taskId, workflowId, join(root, "repo"), join(root, "worktrees"), path, branch, "a".repeat(40), "c".repeat(64), now));
+    expect(() => insertLease("lease-task-duplicate", "task-developer", "workflow-developer", join(root, "worktrees", "other"), "work/issue/other")).not.toThrow();
+    expect(() => insertLease("lease-branch-duplicate", "task-developer-2", "workflow-developer-2", join(root, "worktrees", "other"), "work/issue/task-developer")).not.toThrow();
+    expect(() => insertLease("lease-path-duplicate", "task-developer-2", "workflow-developer-2", join(root, "worktrees", "task-developer"), "work/issue/other")).not.toThrow();
 
     database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, occurred_at, summary, idempotency_key) VALUES ('event-1', 'execution-developer', 1, 1, 'turn_started', ?, 'started', 'turn-started')").run(now));
     expect(() => database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, occurred_at, summary, idempotency_key) VALUES ('event-2', 'execution-developer', 1, 2, 'turn_started', ?, 'duplicate', 'turn-started')").run(now))).toThrow();

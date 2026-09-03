@@ -15,7 +15,7 @@ async function fixture(withWorktree = true) {
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   if (withWorktree) database.authQuery((db) => {
     db.pragma("foreign_keys = OFF");
-    db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, status, reserved_at) VALUES ('worktree', 'task', 'company', 'project', 'workflow', '/repo', '/worktrees', '/worktrees/task', 'forge/task', 'a', 'lease', 'active', ?)").run(new Date().toISOString());
+    db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, reserved_at) VALUES ('worktree', 'task', 'company', 'project', 'workflow', '/repo', '/worktrees', '/worktrees/task', 'forge/task', 'a', 'lease', ?)").run(new Date().toISOString());
   });
   const app = Fastify();
   app.decorateRequest("forgeUser", undefined as never);

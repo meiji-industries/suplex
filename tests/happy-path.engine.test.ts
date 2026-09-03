@@ -27,7 +27,7 @@ test("plan, build, review, publish, CI, merge reaches done", async () => {
   try {
     const started = await startIssueWorkflow(h.config, { companyId: engineFixture.companyId, projectId: engineFixture.projectId, issueId: "happy", projectRevisionId: engineFixture.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, briefSha256: engineFixture.sha256, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false, autoApprovePlan: true, autoApprovePlanActorUserId: engineFixture.actorUserId, pullRequestMode: "auto_merge", deliveryTarget: "merged", autoMergeActorUserId: engineFixture.actorUserId });
     await executeIssueCommand(h.config, started.workflowId, "start_planning", { expectedRevision: 0, actorUserId: engineFixture.actorUserId });
-    await h.settle(started.workflowId, (state) => state.ciOutcome === "passed");
+    await h.settle(started.workflowId, (state) => state.step === "manual_merge" && merged);
     await signalIssueGithubPullRequestSync(h.config, started.workflowId);
     await h.settle(started.workflowId, (state) => state.step === "manual_merge" && merged);
     await signalIssueGithubPullRequestSync(h.config, started.workflowId);

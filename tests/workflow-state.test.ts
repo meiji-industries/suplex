@@ -10,7 +10,7 @@ const subject = { planRevision: 1, targetBaseSha: "a".repeat(40), subjectCommit:
 const blockingFinding = { findingId: "finding_blocking", severity: "blocking" as const, rationale: "The controlled defect remains.", evidenceRef: "fixture", disposition: "open" as const, repairInstruction: "Fix the controlled defect." };
 
 function state() {
-  return IssueWorkflowStateSchema.parse({ workflowId: "workflow_1", companyId: "company_1", projectId: "project_1", issueId: "task_1", projectRevisionId: "revision_1", ...at("delivery_ready"), revision: 10, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the delivery", lastEventId: "workflow_1:10", continuationCount: 0, lastSummaryHash: null, leadSessionRef: subject.leadSessionRef, leadOutputArtifactId: "artifact_plan", developerExecutionId: subject.developerExecutionId, developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", targetBaseSha: subject.targetBaseSha, resultCommit: subject.subjectCommit, resultTree: subject.subjectTree, dirtyState: "clean", deliveryArtifactId: subject.deliveryArtifactId, developerEvidenceArtifactId: subject.developerEvidenceArtifactId, repairCycle: 0, releaseId: "release_1", expectedHeadSha: subject.subjectCommit, expectedHeadTree: subject.subjectTree, ciRunId: "ci_1", ciAttempt: 2, ciOutcome: "passed", finalReviewId: "final_review_1", finalReviewOutcome: "approved", acceptanceId: "acceptance_1", acceptedHeadSha: subject.subjectCommit, mergeOutcome: "open" });
+  return IssueWorkflowStateSchema.parse({ workflowId: "workflow_1", companyId: "company_1", projectId: "project_1", issueId: "task_1", projectRevisionId: "revision_1", ...at("delivery_ready"), revision: 10, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the delivery", lastEventId: "workflow_1:10", continuationCount: 0, lastSummaryHash: null, leadSessionRef: subject.leadSessionRef, leadOutputArtifactId: "artifact_plan", developerExecutionId: subject.developerExecutionId, developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", targetBaseSha: subject.targetBaseSha, resultCommit: subject.subjectCommit, resultTree: subject.subjectTree, dirtyState: "clean", deliveryArtifactId: subject.deliveryArtifactId, developerEvidenceArtifactId: subject.developerEvidenceArtifactId, repairCycle: 0, releaseId: "release_1", expectedHeadSha: subject.subjectCommit, expectedHeadTree: subject.subjectTree, ciRunId: "ci_1", ciAttempt: 2, finalReviewId: "final_review_1", finalReviewOutcome: "approved", acceptanceId: "acceptance_1", acceptedHeadSha: subject.subjectCommit, mergeOutcome: "open" });
 }
 
 test("state parsing always offers cancellation outside terminal phases", () => {
@@ -29,10 +29,18 @@ test("withWorktreeCommands offers safe worktree lifecycle commands", () => {
   expect(withWorktreeCommands({ ...initial, activeOperation: { commandId: "command_1", kind: "development", startedRevision: 10 } }).allowedCommands).not.toContain("delete_worktree");
   expect(withWorktreeCommands({ ...initial, activeOperation: { commandId: "command_1", kind: "development", startedRevision: 10 } }).allowedCommands).not.toContain("retry_target_base_reconciliation");
   expect(withWorktreeCommands(initial).allowedCommands).toContain("retry_target_base_reconciliation");
-  expect(withWorktreeCommands({ ...initial, worktreeState: "cleaned" }).allowedCommands).toEqual(expect.arrayContaining(["recreate_worktree"]));
-  expect(withWorktreeCommands({ ...initial, worktreeState: "cleaned" }).allowedCommands).not.toContain("delete_worktree");
-  expect(withWorktreeCommands({ ...initial, ...at("done"), worktreeState: "cleaned" }).allowedCommands).not.toContain("recreate_worktree");
-  expect(withWorktreeCommands({ ...initial, ...at("cancelled"), worktreeState: "present", activeOperation: null }).allowedCommands).toContain("delete_worktree");
+  expect(withWorktreeCommands({ ...initial, allowedCommands: ["recreate_worktree"] }).allowedCommands).toContain("recreate_worktree");
+  expect(withWorktreeCommands({ ...initial, ...at("done") }).allowedCommands).not.toContain("recreate_worktree");
+  expect(withWorktreeCommands({ ...initial, ...at("cancelled"), activeOperation: null }).allowedCommands).toContain("delete_worktree");
+});
+
+test("ignores removed external-state fields in saved snapshots", () => {
+  const parsed = IssueWorkflowStateSchema.parse({ ...state(), worktreeState: "present", releaseStatus: "ready", releaseFailureCode: "provider-unavailable", ciOutcome: "passed" });
+
+  expect(parsed).not.toHaveProperty("worktreeState");
+  expect(parsed).not.toHaveProperty("releaseStatus");
+  expect(parsed).not.toHaveProperty("releaseFailureCode");
+  expect(parsed).not.toHaveProperty("ciOutcome");
 });
 
 test("accepts a sha-less plan blocker response receipt", () => {

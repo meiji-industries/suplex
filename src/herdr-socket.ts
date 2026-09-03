@@ -48,7 +48,9 @@ export async function connectHerdrSocket(path = herdrSocketPath()): Promise<Herd
       if (!parsed || typeof parsed !== "object") continue;
       message = parsed;
       if (typeof message.event === "string") { subscription?.({ event: message.event, data: (message.data ?? {}) as Record<string, unknown> }); continue; }
-      const id = typeof message.id === "string" ? message.id : undefined;
+      // Herdr answers some invalid requests with an empty or derived id (for example
+      // "<id>:sub:1:probe" for an unknown pane), so an unmatched error settles the oldest request.
+      const id = typeof message.id === "string" && pending.has(message.id) ? message.id : message.error ? pending.keys().next().value : undefined;
       const entry = id ? pending.get(id) : undefined;
       if (!entry || !id) continue;
       pending.delete(id);

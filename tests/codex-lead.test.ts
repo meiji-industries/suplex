@@ -361,6 +361,57 @@ test("delivery review schema separates advisory approval from blocking repair", 
   expect(DeliveryReviewSchema.safeParse({ ...advisory, findings: [advisory.findings[0], advisory.findings[0]] }).success).toBe(false);
 });
 
+test("an approved delivery review promotes a blocked clean build with the reviewed commit", async () => {
+  const value = await fixture();
+  const fake = fakeTurnRunner({ "lead-plan": () => routinePlan(), "delivery-review": () => ({ kind: "delivery_review" as const, summary: "The build is approved.", outcome: "approved" as const, findings: [], repairPlan: null }) });
+  try {
+    const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
+    const plan = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
+    const artifacts = new ArtifactStore(value.config.artifactRoot);
+    const delivery = await artifacts.putArtifact("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "delivery", summary: "Build complete.", steps: [] })) });
+    const evidence = await artifacts.putArtifact("company_1", "agent-evidence", { filename: "evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("\n") });
+    const worktreePath = join(value.root, "worktrees", "task_1");
+    const subjectCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).stdout.trim();
+    const subjectTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: worktreePath })).stdout.trim();
+    const now = new Date().toISOString();
+    value.database.authTransaction((db) => {
+      for (const artifact of [delivery, evidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id, failure_code, failure_summary) VALUES ('developer_blocked', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'blocked', ?, ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?, ?, 'tests-incomplete', 'The full suite is blocked.')").run(buildGitBranchName({ branchSlug: fallbackGitPresentation("Fixture task").branchSlug, taskId: "task_1" }), worktreePath, value.targetSha, now, now, subjectCommit, subjectTree, delivery.id, evidence.id);
+    });
+    await service.reviewDelivery({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, leadOutputArtifactId: plan.leadOutputArtifactId, roleProfiles: { planner: "profile_1" }, subject: { planRevision: 1, targetBaseSha: value.targetSha, subjectCommit, subjectTree, developerExecutionId: "developer_blocked", deliveryArtifactId: delivery.id, developerEvidenceArtifactId: evidence.id, leadSessionRef: plan.leadSessionRef, developerSessionRef: "developer-session" }, worktreePath, branchName: buildGitBranchName({ branchSlug: fallbackGitPresentation("Fixture task").branchSlug, taskId: "task_1" }), supersedesReviewId: null });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, failure_summary FROM forge_developer_executions WHERE id = 'developer_blocked'").get())).toEqual({ status: "completed", failure_code: null, failure_summary: null });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("an approved delivery review leaves a blocked build with another commit alone", async () => {
+  const value = await fixture();
+  const fake = fakeTurnRunner({ "lead-plan": () => routinePlan(), "delivery-review": () => ({ kind: "delivery_review" as const, summary: "The build is approved.", outcome: "approved" as const, findings: [], repairPlan: null }) });
+  try {
+    const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
+    const plan = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
+    const artifacts = new ArtifactStore(value.config.artifactRoot);
+    const delivery = await artifacts.putArtifact("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "delivery", summary: "Build complete.", steps: [] })) });
+    const evidence = await artifacts.putArtifact("company_1", "agent-evidence", { filename: "evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("\n") });
+    const worktreePath = join(value.root, "worktrees", "task_1");
+    const subjectCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).stdout.trim();
+    const subjectTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: worktreePath })).stdout.trim();
+    const now = new Date().toISOString();
+    value.database.authTransaction((db) => {
+      for (const artifact of [delivery, evidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id, failure_code, failure_summary) VALUES ('developer_other_commit', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'blocked', ?, ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?, ?, 'tests-incomplete', 'The full suite is blocked.')").run(buildGitBranchName({ branchSlug: fallbackGitPresentation("Fixture task").branchSlug, taskId: "task_1" }), worktreePath, value.targetSha, now, now, "d".repeat(40), subjectTree, delivery.id, evidence.id);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_reviewed_commit', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 2, 'completed', ?, ?, ?, 'developer-session', ?, ?, ?, ?, 'clean', ?, ?)").run(buildGitBranchName({ branchSlug: fallbackGitPresentation("Fixture task").branchSlug, taskId: "task_1" }), worktreePath, value.targetSha, now, "2026-12-31T00:00:00.000Z", subjectCommit, subjectTree, delivery.id, evidence.id);
+    });
+    await service.reviewDelivery({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, leadOutputArtifactId: plan.leadOutputArtifactId, roleProfiles: { planner: "profile_1" }, subject: { planRevision: 1, targetBaseSha: value.targetSha, subjectCommit, subjectTree, developerExecutionId: "developer_other_commit", deliveryArtifactId: delivery.id, developerEvidenceArtifactId: evidence.id, leadSessionRef: plan.leadSessionRef, developerSessionRef: "developer-session" }, worktreePath, branchName: buildGitBranchName({ branchSlug: fallbackGitPresentation("Fixture task").branchSlug, taskId: "task_1" }), supersedesReviewId: null });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, failure_summary FROM forge_developer_executions WHERE id = 'developer_other_commit'").get())).toEqual({ status: "blocked", failure_code: "tests-incomplete", failure_summary: "The full suite is blocked." });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("delivery activity result schemas reject unsafe or incomplete branches", () => {
   const subject = { planRevision: 1, targetBaseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40), developerExecutionId: "developer_1", deliveryArtifactId: "artifact_delivery", developerEvidenceArtifactId: "artifact_evidence", leadSessionRef: "session_lead", developerSessionRef: "session_developer" };
   const review = { reviewId: "delivery_review_1", leadExecutionId: "agent_lead_1", leadSessionRef: "session_lead", opinionArtifactId: "artifact_opinion", evidenceArtifactId: "artifact_evidence", opinion: "approved" as const, summary: "Approved.", repairPlan: null, findings: [], supersedesReviewId: null };

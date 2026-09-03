@@ -18,7 +18,7 @@ export function createDeliveryReviewActivities(ctx: ActivityContext): DeliveryRe
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef, worktreePath: input.worktreePath }, result);
     },
     async recoverRevalidatedDeliveryReview(rawInput) {
-      return recoverReviewedDelivery(database, artifacts, githubRelease, RecoverRevalidatedDeliveryReviewInputSchema.parse(rawInput));
+      return recoverReviewedDelivery(database, artifacts, githubRelease, config, RecoverRevalidatedDeliveryReviewInputSchema.parse(rawInput));
     },
     async reviewDelivery(input: WorkflowDeliveryReviewActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.subject.developerExecutionId);

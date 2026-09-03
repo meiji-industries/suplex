@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { isAbsolute, relative } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 
 import type { ArtifactStore } from "../../artifacts.js";
+import { DeveloperDeliveryReportSchema } from "../../codex-developer.js";
+import type { ForgeConfig } from "../../config.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { GithubReleaseAdapter } from "../../github-release.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
+import { json } from "../../task-utils.js";
 import {
   RecoverRevalidatedDeliveryReviewResultSchema,
   type RecoverRevalidatedDeliveryReviewInput,
@@ -15,7 +18,7 @@ import { proveForwardMergeLineage } from "./forward-merge-lineage.js";
 
 const SUBJECT_SUMMARY = "The approved delivery history no longer matches this task. Restore the task records, then retry the review.";
 const WORKTREE_SUMMARY = "The task worktree changed or is busy. Restore the reviewed branch, then retry the review.";
-const ACTIVE_TURN_STATUSES = ["created", "dispatching", "waiting", "blocked", "awaiting_human", "validating", "correction_required"];
+const ACTIVE_TURN_STATUSES = ["dispatching", "waiting", "blocked", "awaiting_human", "validating"];
 
 type ArtifactRow = {
   id: string;
@@ -127,10 +130,37 @@ async function verifiedArtifact(
   return row;
 }
 
+async function hasLiveTaskWorktreeTurn(
+  database: ForgeDatabase,
+  runtimeRoot: string,
+  input: Pick<RecoverRevalidatedDeliveryReviewInput, "taskId" | "companyId" | "workflowId" | "worktreePath">,
+): Promise<boolean> {
+  const turn = database.authQuery((db) => db.prepare(`SELECT turn.result_relative_path AS resultRelativePath FROM forge_herdr_turns turn
+    JOIN forge_herdr_role_sessions session
+      ON session.id = turn.role_session_id AND session.task_id = turn.task_id AND session.is_current = 1
+    JOIN forge_developer_executions execution
+      ON turn.ledger = 'developer' AND execution.id = turn.execution_id AND execution.task_id = turn.task_id
+    WHERE turn.task_id = ? AND execution.company_id = ? AND execution.workflow_id = ?
+      AND execution.worktree_path = ? AND turn.execution_role IN ('builder', 'integrator')
+      AND turn.turn_id = (SELECT latest.turn_id FROM forge_herdr_turns latest WHERE latest.role_session_id = turn.role_session_id ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1)
+      AND turn.status IN (${ACTIVE_TURN_STATUSES.map(() => "?").join(", ")}) LIMIT 1`).get(
+    input.taskId, input.companyId, input.workflowId, input.worktreePath, ...ACTIVE_TURN_STATUSES,
+  ) as { resultRelativePath: string } | undefined);
+  if (!turn) return false;
+  const resultPath = resolve(runtimeRoot, turn.resultRelativePath);
+  if (!resultPath.startsWith(`${resolve(runtimeRoot)}/`)) return true;
+  try {
+    return !DeveloperDeliveryReportSchema.safeParse(json(await readFile(resultPath, "utf8"), null)).success;
+  } catch {
+    return true;
+  }
+}
+
 export async function recoverReviewedDelivery(
   database: ForgeDatabase,
   artifacts: ArtifactStore,
   githubRelease: GithubReleaseAdapter,
+  config: Pick<ForgeConfig, "runtimeRoot">,
   input: RecoverRevalidatedDeliveryReviewInput,
 ): Promise<RecoverRevalidatedDeliveryReviewResult> {
   let merge: MergeRow;
@@ -200,17 +230,7 @@ export async function recoverReviewedDelivery(
       || !same(developer.targetBaseSha, merge.currentBaseSha)
       || !same(developer.resultCommit, merge.resultHead) || !same(developer.resultTree, merge.resultTree)) throw new Error("Developer record does not match");
 
-    const activeTurn = database.authQuery((db) => db.prepare(`SELECT turn.turn_id FROM forge_herdr_turns turn
-      JOIN forge_herdr_role_sessions session
-        ON session.id = turn.role_session_id AND session.task_id = turn.task_id AND session.is_current = 1
-      JOIN forge_developer_executions execution
-        ON turn.ledger = 'developer' AND execution.id = turn.execution_id AND execution.task_id = turn.task_id
-      WHERE turn.task_id = ? AND execution.company_id = ? AND execution.workflow_id = ?
-        AND execution.worktree_path = ? AND turn.execution_role IN ('builder', 'integrator')
-        AND turn.status IN (${ACTIVE_TURN_STATUSES.map(() => "?").join(", ")}) LIMIT 1`).get(
-      input.taskId, input.companyId, input.workflowId, input.worktreePath, ...ACTIVE_TURN_STATUSES,
-    ));
-    if (activeTurn) return blocked("worktree-unsafe", WORKTREE_SUMMARY);
+    if (await hasLiveTaskWorktreeTurn(database, config.runtimeRoot, input)) return blocked("worktree-unsafe", WORKTREE_SUMMARY);
 
     const reviews = database.authQuery((db) => db.prepare(`SELECT
         attempt.id AS attemptId, attempt.correction_attempts AS correctionAttempts,

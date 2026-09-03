@@ -68,7 +68,7 @@ export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" |
     async inspectTaskWorktree(input: { taskId: string; companyId: string; workflowId: string }) {
       const row = resolved(input);
       const isSafe = !!row && safe(row);
-      const present = !!row && await listed(row) && existsSync(row.worktreePath);
+      const present = !!row && existsSync(row.worktreePath) && await listed(row);
       let dirtyFileCount = 0;
       if (isSafe && present) dirtyFileCount = (await worktrees.inspectDelivery(row.worktreePath, row.branchName)).dirtyState === "dirty" ? 1 : 0;
       const artifact = !present && row
@@ -79,7 +79,7 @@ export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" |
     async cleanupTaskWorktree(input: { taskId: string; companyId: string; workflowId: string; confirmDiscardDirty?: boolean }) {
       const row = resolved(input);
       if (!row || !safe(row) || await active(input)) return { outcome: "not_owned" as const, dirtyFileCount: 0 };
-      if (!await listed(row) || !existsSync(row.worktreePath)) return { outcome: "already_absent" as const, dirtyFileCount: 0 };
+      if (!existsSync(row.worktreePath) || !await listed(row)) return { outcome: "already_absent" as const, dirtyFileCount: 0 };
       const files = await dirtyFiles(row.worktreePath);
       const dirty = files.length;
       if (dirty && !input.confirmDiscardDirty) {

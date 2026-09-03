@@ -31,8 +31,8 @@ test("logs failed commands with stderr detail", async () => {
   })]);
 });
 
-test("logs expected non-zero commands at debug", async () => {
-  await runCommand({ taskId: null, stepId: null, expectNonZero: true, command: "sh", args: ["-c", "exit 3"] });
+test("logs configured probe exit codes at debug", async () => {
+  await runCommand({ taskId: null, stepId: null, expectedExitCodes: [1], command: "sh", args: ["-c", "exit 1"] });
 
   expect(records()).not.toContainEqual(expect.objectContaining({ level: 50 }));
 });

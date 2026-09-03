@@ -150,7 +150,7 @@ export interface OwnedWorktreeInspection {
 }
 
 interface GitAdapter {
-  run(args: string[], cwd: string, activity?: { taskId: string; stepId: string }, options?: { expectNonZero?: boolean | ((result: CommandRunResult) => boolean) }): Promise<string>;
+  run(args: string[], cwd: string, activity?: { taskId: string; stepId: string }, options?: { expectNonZero?: boolean | ((result: CommandRunResult) => boolean); expectedExitCodes?: readonly number[] }): Promise<string>;
 }
 
 const taskIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -319,7 +319,7 @@ export class WorktreeManager {
       try { resolvedBase = await this.git.run(["rev-parse", "--verify", `${input.targetBaseSha}^{commit}`], repositoryPath, activity); } catch { throw new WorktreeFailure("base-commit-mismatch", "Target-base revision does not resolve to a commit in the repository"); }
       if (resolvedBase.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new WorktreeFailure("base-commit-mismatch", "Target-base revision does not resolve to the recorded commit");
       try {
-        await this.git.run(["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repositoryPath, activity);
+        await this.git.run(["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repositoryPath, activity, { expectedExitCodes: [1] });
         throw new WorktreeFailure("branch-exists", "The deterministic issue branch already exists and cannot be reused implicitly");
       } catch (error) {
         if (error instanceof WorktreeFailure) throw error;
@@ -361,7 +361,7 @@ export class WorktreeManager {
     await this.git.run(["fetch", "--no-tags", "origin", `+refs/heads/${input.baseBranch}:refs/remotes/origin/${input.baseBranch}`], repositoryPath, activity).catch(() => { throw new WorktreeFailure("source-base-unavailable", "The source base branch is unavailable"); });
     const mergeBase = await this.git.run(["merge-base", `refs/remotes/origin/${input.baseBranch}`, remoteRef], repositoryPath, activity);
     let localExists = true;
-    try { await this.git.run(["show-ref", "--verify", "--quiet", `refs/heads/${input.branchName}`], repositoryPath, activity); } catch { localExists = false; }
+    try { await this.git.run(["show-ref", "--verify", "--quiet", `refs/heads/${input.branchName}`], repositoryPath, activity, { expectedExitCodes: [1] }); } catch { localExists = false; }
     const registrations = await this.git.run(["worktree", "list", "--porcelain"], repositoryPath, activity);
     const registered = registrations.split("\n\n").find((entry) => entry.includes(`branch refs/heads/${input.branchName}`));
     const registeredPath = registered?.match(/^worktree (.+)$/m)?.[1];
@@ -674,7 +674,7 @@ export class WorktreeManager {
       if (!(error instanceof WorktreeFailure) || error.code !== "worktree-unavailable") throw error;
       await assertWorktreeDiskHeadroom(worktreeRoot, statfs, this.minFreeDiskGb());
       try {
-        await this.git.run(["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repositoryPath);
+        await this.git.run(["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repositoryPath, undefined, { expectedExitCodes: [1] });
         await this.git.run(["worktree", "add", worktreePath, branchName], repositoryPath);
       } catch {
         try { await this.git.run(["worktree", "add", "-b", branchName, worktreePath, input.targetBaseSha], repositoryPath); }

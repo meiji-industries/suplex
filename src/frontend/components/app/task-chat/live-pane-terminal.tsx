@@ -6,11 +6,8 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { type JSX, useEffect, useRef, useState } from "react";
 import { Button } from "../../ui/button.js";
-import { Input } from "../../ui/input.js";
-import { CopyButton } from "../copy-button.js";
 
 export type TerminalStatus = "connecting" | "live" | "reconnecting" | "taken_over" | "ended";
-type PaneInput = { text: string } | { keys: string[] };
 
 export function wheelToScroll(deltaY: number, rowHeightPx: number): { direction: "up" | "down"; lines: number } | null {
   if (Math.abs(deltaY) < 1) return null;
@@ -25,9 +22,8 @@ export function statusForClosedReason(reason: string): "taken_over" | "ended" {
   return reason.includes("taken over") ? "taken_over" : "ended";
 }
 
-export function LivePaneTerminal({ taskId, role, paneId, attachCommand, onInput }: { taskId: string; role: string; paneId: string | null; attachCommand: string; onInput: (input: PaneInput) => Promise<void> }): JSX.Element {
+export function LivePaneTerminal({ taskId, role, paneId }: { taskId: string; role: string; paneId: string | null }): JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const statusRef = useRef<TerminalStatus>(paneId ? "connecting" : "ended");
   const [status, setStatus] = useState<TerminalStatus>(paneId ? "connecting" : "ended");
@@ -96,11 +92,6 @@ export function LivePaneTerminal({ taskId, role, paneId, attachCommand, onInput 
     connect();
     return () => { disposed = true; window.clearTimeout(retry); window.clearTimeout(resizeTimer); observer.disconnect(); data.dispose(); binary.dispose(); socketRef.current?.close(1000); socketRef.current = null; terminal.dispose(); };
   }, [connection, paneId, role, taskId]);
-  const sendInput = (text: string, fallback: PaneInput): void => {
-    const socket = socketRef.current;
-    if (statusRef.current === "live" && socket?.readyState === WebSocket.OPEN) socket.send(new TextEncoder().encode(text)); else void onInput(fallback);
-  };
-  const sendText = (): void => { const input = inputRef.current; if (!input?.value) return; const text = input.value; input.value = ""; sendInput(`${text}\r`, { text }); };
   const overlay = status === "connecting" ? "Connecting…" : status === "reconnecting" ? "Reconnecting…" : status === "taken_over" ? "Another viewer took control" : status === "ended" ? (paneId ? "Pane ended" : "No live pane") : null;
-  return <div className="flex h-full min-h-0 flex-col"><div className="relative mt-1 min-h-0 flex-1 overflow-hidden bg-[#1e1e2e] p-2"><div aria-label={`Live pane output for ${role}`} className="h-full" ref={hostRef} />{overlay ? <div className="absolute inset-0 flex items-center justify-center gap-2 bg-[#1e1e2e]/85 text-sm text-[#cdd6f4]">{overlay}{status === "taken_over" ? <Button size="xs" onClick={() => { setConnection((value) => value + 1); statusRef.current = "connecting"; setStatus("connecting"); }}>Take control</Button> : null}</div> : null}{showJump ? <Button className="absolute bottom-2 right-2" size="xs" onClick={() => { if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: "scroll", direction: "down", lines: 65_535 })); setShowJump(false); }}>Jump to bottom</Button> : null}</div><form className="flex shrink-0 items-center gap-1 border-t bg-background p-1" data-pane-input onSubmit={(event) => { event.preventDefault(); sendText(); }}><Input aria-label={`Send to ${role}`} placeholder={`Send to ${role}…`} ref={inputRef} /><Button size="xs" type="button" onClick={() => sendInput("\r", { keys: ["enter"] })}>Enter</Button><Button size="xs" type="button" onClick={() => sendInput("\x1b", { keys: ["esc"] })}>Esc</Button><Button size="xs" type="button" onClick={() => sendInput("\x03", { keys: ["ctrl+c"] })}>Ctrl+C</Button><Button size="xs" type="button" onClick={() => sendInput("y", { keys: ["y"] })}>y</Button><CopyButton value={attachCommand} label="Copy attach command" /></form></div>;
+  return <div className="flex h-full min-h-0 flex-col"><div className="relative mt-1 min-h-0 flex-1 overflow-hidden bg-[#1e1e2e] p-2"><div aria-label={`Live pane output for ${role}`} className="h-full" ref={hostRef} />{overlay ? <div className="absolute inset-0 flex items-center justify-center gap-2 bg-[#1e1e2e]/85 text-sm text-[#cdd6f4]">{overlay}{status === "taken_over" ? <Button size="xs" onClick={() => { setConnection((value) => value + 1); statusRef.current = "connecting"; setStatus("connecting"); }}>Take control</Button> : null}</div> : null}{showJump ? <Button className="absolute bottom-2 right-2" size="xs" onClick={() => { if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: "scroll", direction: "down", lines: 65_535 })); setShowJump(false); }}>Jump to bottom</Button> : null}</div></div>;
 }

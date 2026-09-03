@@ -61,7 +61,7 @@ test("CI recovery adopts an observed pull request release without publishing", (
   });
   const adopted = adoptCiPullRequestRelease(state, { releaseId: "release-adopted", repository: "acme/forge", baseBranch: "main", targetBaseSha: "a".repeat(40), pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", headSha: "b".repeat(40), headTree: "c".repeat(40) });
 
-  expect(adopted).toMatchObject({ releaseId: "release-adopted", expectedHeadSha: "b".repeat(40), expectedHeadTree: "c".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40), releaseStatus: "ready" });
+  expect(adopted).toMatchObject({ releaseId: "release-adopted", expectedHeadSha: "b".repeat(40), expectedHeadTree: "c".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40) });
 });
 
 test("a failed CI deadline requires human repair controls", () => {

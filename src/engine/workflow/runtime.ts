@@ -158,11 +158,21 @@ const AUTO_CHAINED_COMMANDS: Partial<Record<IssueStep, IssueWorkflowState["allow
 const haltedChains = new Set<string>();
 const chainKey = (workflowId: string, command: string) => `${workflowId}:${command}`;
 const blockedPublishObservations = new Map<string, string>();
+const blockedPublishPasses = new Map<string, number>();
 const blockedPublishObservationKey = (workflowId: string, reviewedCommit: string) => `${workflowId}:${reviewedCommit.toLowerCase()}`;
 
 export function clearAutomaticChainHalt(workflowId: string): void {
   for (const key of haltedChains) if (key.startsWith(`${workflowId}:`)) haltedChains.delete(key);
   for (const key of blockedPublishObservations.keys()) if (key.startsWith(`${workflowId}:`)) blockedPublishObservations.delete(key);
+  for (const key of blockedPublishPasses.keys()) if (key.startsWith(`${workflowId}:`)) blockedPublishPasses.delete(key);
+}
+
+function githubObservationFailure(error: unknown): { observation: string; summary: string } {
+  const cause = error instanceof ActivityFailure ? error.cause : error;
+  const failureClass = cause instanceof ApplicationFailure ? cause.type : cause instanceof Error ? cause.name : typeof cause;
+  const message = cause instanceof Error ? cause.message.trim() : String(cause).trim();
+  const summary = `${(message || "GitHub did not respond.").replace(/[. ]+$/, "")}. Retry when ready.`;
+  return { observation: JSON.stringify({ error: failureClass || "github-observation-failed" }), summary };
 }
 const AUTO_RETRY_BLOCKER_DELAYS = [30_000, 120_000, 300_000] as const;
 const AUTO_RETRY_BLOCKER_COMMANDS = new Set(["review_delivery", "repair_delivery", "repair_ci", "final_review", "accept_delivery", "reconcile_acceptance", "reconcile_merge", "retry_target_base_reconciliation"]);
@@ -225,18 +235,32 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   if (chained.command === "publish_draft"
     && typeof reviewedCommit === "string"
     && ctx.state.step === "delivery_ready"
-    && ctx.state.resultCommit?.toLowerCase() === reviewedCommit.toLowerCase()
-    && ctx.state.releaseRepository
-    && ctx.state.branchName) {
-    const observed = await observeGithubPullRequest({
-      repository: ctx.state.releaseRepository,
-      branch: ctx.state.branchName,
-      pullRequestNumber: ctx.state.pullRequestNumber,
-    }).catch(() => null);
-    const observation = observed && JSON.stringify({ exists: observed.exists, state: observed.state, headSha: observed.headSha, number: observed.number });
+    && ctx.state.resultCommit?.toLowerCase() === reviewedCommit.toLowerCase()) {
     const key = blockedPublishObservationKey(ctx.state.workflowId, reviewedCommit);
-    if (observation && blockedPublishObservations.get(key) === observation) {
-      const summary = ctx.state.pendingAction ?? "Forge could not publish the reviewed delivery.";
+    const passes = (blockedPublishPasses.get(key) ?? 0) + 1;
+    blockedPublishPasses.set(key, passes);
+    const repository = ctx.state.releaseRepository ?? ctx.input.repository;
+    let observation: string | null = null;
+    let observationSummary: string | null = null;
+    if (repository && ctx.state.branchName) {
+      try {
+        const observed = await observeGithubPullRequest({
+          repository,
+          branch: ctx.state.branchName,
+          pullRequestNumber: ctx.state.pullRequestNumber,
+        });
+        observation = JSON.stringify({ exists: observed.exists, state: observed.state, headSha: observed.headSha, number: observed.number });
+      } catch (error) {
+        const failure = githubObservationFailure(error);
+        observation = failure.observation;
+        observationSummary = failure.summary;
+      }
+    }
+    const repeatedObservation = observation !== null && blockedPublishObservations.get(key) === observation;
+    if (observation !== null) blockedPublishObservations.set(key, observation);
+    // safety bound, not a mirror gate: stop after three blocked publish passes for one reviewed commit.
+    if (repeatedObservation || passes >= 3) {
+      const summary = observationSummary ?? ctx.state.pendingAction ?? "Forge could not publish the reviewed delivery.";
       haltedChains.add(chainKey(ctx.state.workflowId, "review_delivery"));
       haltedChains.add(chainKey(ctx.state.workflowId, "publish_draft"));
       ctx.state = IssueWorkflowStateSchema.parse({
@@ -253,7 +277,6 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
       await ctx.project();
       return;
     }
-    if (observation) blockedPublishObservations.set(key, observation);
   }
   const unchanged = ctx.state.step === before.step && ctx.state.owner === before.owner && ctx.state.pendingAction === before.pendingAction && isBlocked(ctx.state) === before.blocked;
   if (!failure && !unchanged) return;

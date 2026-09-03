@@ -17,7 +17,7 @@ const bounds = async (): Promise<Bounds> => {
   return { width: Math.max(900, Math.min(saved?.width ?? 1200, area.width)), height: Math.max(600, Math.min(saved?.height ?? 800, area.height)), ...(saved?.x !== undefined ? { x: Math.max(area.x, Math.min(saved.x, area.x + area.width - 100)) } : {}), ...(saved?.y !== undefined ? { y: Math.max(area.y, Math.min(saved.y, area.y + area.height - 100)) } : {}) };
 };
 const persistBounds = (): void => { if (window) void save(stateFile(), window.getBounds()); };
-const retryPage = (): string => `data:text/html,${encodeURIComponent("<h1>Cannot reach Forge</h1><p><a href='#' onclick='location.reload()'>Retry</a></p>")}`;
+const retryPage = (target: string): string => `data:text/html,${encodeURIComponent(`<h1>Cannot reach ${new URL(target).origin}</h1><p><a href="${target}">Retry</a></p><script>setTimeout(() => { location.href = ${JSON.stringify(target)}; }, 5000);</script>`)}`;
 
 async function createWindow(): Promise<void> {
   configuredUrl = process.env.FORGE_DESKTOP_URL ?? (await readJson<{ url?: string }>(dataFile()))?.url ?? null;
@@ -31,7 +31,7 @@ async function createWindow(): Promise<void> {
     if (!sameOrigin(url)) { event.preventDefault(); void shell.openExternal(url); }
   });
   win.webContents.on("page-title-updated", (_event, title) => app.dock?.setBadge(/^\((\d+)\)/.exec(title)?.[1] ?? ""));
-  win.webContents.on("did-fail-load", (_event, _code, _description, validatedUrl, mainFrame) => { if (mainFrame && !validatedUrl.startsWith("data:")) void win.loadURL(retryPage()); });
+  win.webContents.on("did-fail-load", (_event, _code, _description, validatedUrl, mainFrame) => { if (mainFrame && !validatedUrl.startsWith("data:") && configuredUrl) void win.loadURL(retryPage(configuredUrl)); });
   if (configuredUrl) await win.loadURL(configuredUrl); else await win.loadFile(join(__dirname, "connect.html"));
   if (process.env.FORGE_DESKTOP_SPIKE === "1") { const result = await win.webContents.executeJavaScript("Promise.all([Boolean(navigator.credentials), PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()])"); console.log("FORGE_DESKTOP_SPIKE", JSON.stringify(result)); app.quit(); }
 }

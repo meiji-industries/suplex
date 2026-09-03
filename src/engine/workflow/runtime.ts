@@ -14,6 +14,7 @@ import { startDevelopment } from "./register-development.js";
 import { resolveMergeConflict } from "./register-merge.js";
 import { evidencePointer, humanBlocker } from "./state-transitions.js";
 import * as stateTransitions from "./state-transitions.js";
+import { observeGithubPullRequest } from "./activity-proxies.js";
 import { TERMINAL_PHASES } from "../../issue-phases.js";
 import type { IssueWorkflowContext, StateRef } from "./context.js";
 
@@ -156,12 +157,12 @@ const AUTO_CHAINED_COMMANDS: Partial<Record<IssueStep, IssueWorkflowState["allow
 // (plan conflict -> required -> resolve throws -> plan conflict ...) and each pass has a new revision.
 const haltedChains = new Set<string>();
 const chainKey = (workflowId: string, command: string) => `${workflowId}:${command}`;
-const blockedPublishCycles = new Map<string, number>();
-const blockedPublishCycleKey = (workflowId: string, resultCommit: string) => `${workflowId}:${resultCommit.toLowerCase()}`;
+const blockedPublishObservations = new Map<string, string>();
+const blockedPublishObservationKey = (workflowId: string, reviewedCommit: string) => `${workflowId}:${reviewedCommit.toLowerCase()}`;
 
 export function clearAutomaticChainHalt(workflowId: string): void {
   for (const key of haltedChains) if (key.startsWith(`${workflowId}:`)) haltedChains.delete(key);
-  for (const key of blockedPublishCycles.keys()) if (key.startsWith(`${workflowId}:`)) blockedPublishCycles.delete(key);
+  for (const key of blockedPublishObservations.keys()) if (key.startsWith(`${workflowId}:`)) blockedPublishObservations.delete(key);
 }
 const AUTO_RETRY_BLOCKER_DELAYS = [30_000, 120_000, 300_000] as const;
 const AUTO_RETRY_BLOCKER_COMMANDS = new Set(["review_delivery", "repair_delivery", "repair_ci", "final_review", "accept_delivery", "reconcile_acceptance", "reconcile_merge", "retry_target_base_reconciliation"]);
@@ -220,17 +221,22 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
     if (isCancellation(error)) return;
     failure = error;
   }
-  const resultCommit = before.resultCommit;
+  const reviewedCommit = before.resultCommit;
   if (chained.command === "publish_draft"
-    && typeof resultCommit === "string"
+    && typeof reviewedCommit === "string"
     && ctx.state.step === "delivery_ready"
-    && ctx.state.releaseStatus === "blocked"
-    && ctx.state.resultCommit?.toLowerCase() === resultCommit.toLowerCase()) {
-    const cycleKey = blockedPublishCycleKey(ctx.state.workflowId, resultCommit);
-    const cycles = (blockedPublishCycles.get(cycleKey) ?? 0) + 1;
-    blockedPublishCycles.set(cycleKey, cycles);
-    if (cycles >= 2) {
-      const summary = ctx.state.releaseFailureSummary ?? "The exact approved Developer revision is unavailable";
+    && ctx.state.resultCommit?.toLowerCase() === reviewedCommit.toLowerCase()
+    && ctx.state.releaseRepository
+    && ctx.state.branchName) {
+    const observed = await observeGithubPullRequest({
+      repository: ctx.state.releaseRepository,
+      branch: ctx.state.branchName,
+      pullRequestNumber: ctx.state.pullRequestNumber,
+    }).catch(() => null);
+    const observation = observed && JSON.stringify({ exists: observed.exists, state: observed.state, headSha: observed.headSha, number: observed.number });
+    const key = blockedPublishObservationKey(ctx.state.workflowId, reviewedCommit);
+    if (observation && blockedPublishObservations.get(key) === observation) {
+      const summary = ctx.state.pendingAction ?? "Forge could not publish the reviewed delivery.";
       haltedChains.add(chainKey(ctx.state.workflowId, "review_delivery"));
       haltedChains.add(chainKey(ctx.state.workflowId, "publish_draft"));
       ctx.state = IssueWorkflowStateSchema.parse({
@@ -247,6 +253,7 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
       await ctx.project();
       return;
     }
+    if (observation) blockedPublishObservations.set(key, observation);
   }
   const unchanged = ctx.state.step === before.step && ctx.state.owner === before.owner && ctx.state.pendingAction === before.pendingAction && isBlocked(ctx.state) === before.blocked;
   if (!failure && !unchanged) return;
@@ -335,7 +342,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
   const claimRevision = ctx.state.revision + 1;
   ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: claimRevision, lastEventId: `${ctx.state.workflowId}:${claimRevision}` });
   await ctx.project();
-  if (command === "retry_target_base_reconciliation" && ctx.state.releaseFailureCode === "target-base-drift") {
+  if (command === "retry_target_base_reconciliation" && ctx.state.targetBaseCheckpoint === "pre_release") {
     const pendingAction = "The base branch moved. Forge updates it before the publish.";
     if (ctx.state.pendingAction !== pendingAction) {
       ctx.state = IssueWorkflowStateSchema.parse({

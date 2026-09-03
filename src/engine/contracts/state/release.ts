@@ -13,6 +13,7 @@ export const releaseStateFields = {
 };
 
 export const releaseStateFields2 = {
+  // Display receipts derived from GitHub at the release observation time.
   releaseStatus: z.enum(["reconciling", "draft", "blocked", "ready"]).nullable().optional(),
   releaseFailureCode: ReleaseFailureCodeSchema.nullable().optional(),
   releaseFailureSummary: z.string().max(500).nullable().optional(),

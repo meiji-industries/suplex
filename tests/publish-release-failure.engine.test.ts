@@ -48,6 +48,7 @@ test("repeated stale publication of the same reviewed commit stops the automatic
         reviewArtifact: { artifactId: "review-artifact", companyId: engineFixture.companyId, kind: "delivery-review", sha256: engineFixture.sha256, byteSize: 1, mimeType: "application/json" },
       },
     }),
+    observeGithubPullRequest: async () => ({ exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: "UNKNOWN", checks: { total: 0, pending: 0, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
     pushDeliveryBranch: async (input) => ({ repository: "acme/forge", branchName: input.branchName, commitSha: input.commitSha }),
     publishRelease: async (input) => {
       publishAttempts += 1;
@@ -94,6 +95,7 @@ test("repeated blocked branch pushes stop the automatic chain", async () => {
         reviewArtifact: { artifactId: "review-artifact", companyId: engineFixture.companyId, kind: "delivery-review", sha256: engineFixture.sha256, byteSize: 1, mimeType: "application/json" },
       },
     }),
+    observeGithubPullRequest: async () => ({ exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: "UNKNOWN", checks: { total: 0, pending: 0, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
     pushDeliveryBranch: async () => { throw ApplicationFailure.nonRetryable("GitHub CLI authentication is unavailable", "authentication-required", { code: "authentication-required", summary: "GitHub CLI authentication is unavailable" }); },
   });
   h.seedTask("blocked-push-auto-chain");

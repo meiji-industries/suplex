@@ -70,6 +70,7 @@ test("CI reconciliation rejects a changed PR head without replacing reviewed ide
       pullRequestNumber: 42,
       expectedHeadSha: head,
       expectedHeadTree: engineFixture.tree,
+      ciOutcome: "passed" as const,
       resultCommit: head,
       resultTree: engineFixture.tree,
       deliveryReviewId: "review-a",

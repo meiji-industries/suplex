@@ -287,7 +287,7 @@ test("a foreign remote head fails closed without publication, observation, or ad
     expect(harness.calls.get("pushDeliveryBranch")).toBe(1);
     expect(blocked.blocker?.actions.map((action) => action.command)).toEqual(["review_delivery", "cancel_issue"]);
     expect(publishCalls).toBe(0);
-    expect(observeCalls).toBe(0);
+    expect(observeCalls).toBe(1);
   } finally { await harness.stop(); }
 });
 

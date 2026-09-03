@@ -28,7 +28,7 @@ export function ciDeadlineBlockedState(state: contracts.IssueWorkflowState, summ
 }
 
 export function adoptCiPullRequestRelease(state: contracts.IssueWorkflowState, release: { releaseId: string; repository: string; baseBranch: string; targetBaseSha: string; pullRequestNumber: number; pullRequestUrl: string; headSha: string; headTree: string }): contracts.IssueWorkflowState {
-  return contracts.IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, releaseId: release.releaseId, releaseRepository: release.repository, baseBranch: release.baseBranch, targetBaseSha: release.targetBaseSha, pullRequestNumber: release.pullRequestNumber, pullRequestUrl: release.pullRequestUrl, expectedHeadSha: release.headSha, expectedHeadTree: release.headTree, resultCommit: release.headSha, resultTree: release.headTree, releaseStatus: "ready", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+  return contracts.IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, releaseId: release.releaseId, releaseRepository: release.repository, baseBranch: release.baseBranch, targetBaseSha: release.targetBaseSha, pullRequestNumber: release.pullRequestNumber, pullRequestUrl: release.pullRequestUrl, expectedHeadSha: release.headSha, expectedHeadTree: release.headTree, resultCommit: release.headSha, resultTree: release.headTree, lastEventId: `${state.workflowId}:${state.revision + 1}` });
 }
 
 export function registerCiHandlers(ctx: IssueWorkflowContext): void {
@@ -40,13 +40,13 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     return command;
   };
   const runExactCiRepairTurn = async (): Promise<contracts.IssueWorkflowState> => {
-    if (!ctx.state.ciRepairPlanId || !ctx.state.ciRepairPlanArtifactId || !ctx.state.ciRepairPlanEvidenceArtifactId || !ctx.state.ciAttemptId || !ctx.state.ciRunId || !ctx.state.expectedHeadSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName) throw new Error("The exact CI repair plan and prior Developer delivery are required");
+    if (!ctx.state.ciRepairPlanId || !ctx.state.ciRepairPlanArtifactId || !ctx.state.ciRepairPlanEvidenceArtifactId || !ctx.state.ciAttemptId || !ctx.state.ciRunId || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName) throw new Error("The exact CI repair plan and prior Developer delivery are required");
     const ciRunId = ctx.state.ciRunId;
     const ciAttemptId = ctx.state.ciAttemptId;
     const repairPlanId = ctx.state.ciRepairPlanId;
     const repairPlanArtifactId = ctx.state.ciRepairPlanArtifactId;
     const repairPlanEvidenceArtifactId = ctx.state.ciRepairPlanEvidenceArtifactId;
-    const failedHeadSha = ctx.state.expectedHeadSha;
+    const failedHeadSha = ctx.state.resultCommit;
     const priorDeveloperExecutionId = ctx.state.developerExecutionId;
     const priorDeveloperSessionRef = ctx.state.developerSessionRef;
     const branchName = ctx.state.branchName;
@@ -101,14 +101,14 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       }
     }
     observed ??= null;
-    if (!ctx.state.expectedHeadSha && observed?.exists && observed.state === "open" && observed.headSha) ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, expectedHeadSha: observed.headSha });
-    if (!ctx.state.expectedHeadSha) {
+    let reviewedCommit = ctx.state.resultCommit;
+    if (!reviewedCommit && ctx.state.releaseId) {
       ctx.state = deferCiReconciliation(ctx.state, new Date().toISOString());
       await ctx.project();
       return ctx.state;
     }
     if (!ctx.state.releaseId) {
-      if (observed?.exists && observed.state === "open" && ((ctx.state.expectedHeadSha && observed.headSha?.toLowerCase() !== ctx.state.expectedHeadSha.toLowerCase()) || (expectedBaseSha && observed.baseSha?.toLowerCase() !== expectedBaseSha.toLowerCase()))) {
+      if (reviewedCommit && observed?.exists && observed.state === "open" && (observed.headSha?.toLowerCase() !== reviewedCommit.toLowerCase() || (expectedBaseSha && observed.baseSha?.toLowerCase() !== expectedBaseSha.toLowerCase()))) {
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
         await ctx.project();
         return ctx.state;
@@ -122,19 +122,16 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       ctx.state = adoptCiPullRequestRelease(ctx.state, adopted);
       await ctx.project();
       observed = null;
+      reviewedCommit = ctx.state.resultCommit;
     }
     const attempt = (ctx.state.ciAttempt ?? 0) + 1;
     const expectedReleaseId = ctx.state.releaseId!;
-    const expectedHeadSha = ctx.state.expectedHeadSha!;
     const expectedRevision = ctx.state.revision;
     let result;
     try {
-      const observed = initialObservation ?? (ctx.state.releaseRepository && ctx.state.branchName
-        ? await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
-        : true && ctx.state.releaseRepository && ctx.state.branchName
-          ? await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
-          : null);
-      if (true && observed?.exists && observed.state === "open" && observed.headSha && observed.headSha.toLowerCase() !== expectedHeadSha.toLowerCase()) {
+      const currentObservation = initialObservation ?? observed;
+      const expectedHeadSha = currentObservation?.headSha ?? reviewedCommit!;
+      if (currentObservation?.headSha && expectedHeadSha.toLowerCase() !== reviewedCommit!.toLowerCase()) {
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
         await ctx.project();
         return ctx.state;
@@ -142,7 +139,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       result = await activityProxies.reconcileCi({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, releaseId: expectedReleaseId, expectedHeadSha, attemptNumber: attempt });
     } catch (error) {
       if (isCancellation(error)) throw error;
-      if (ctx.state.step !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId || ctx.state.expectedHeadSha !== expectedHeadSha) return ctx.state;
+      if (ctx.state.step !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId) return ctx.state;
       const failure = ctx.permanentActivityFailure(error);
       const failureClass = true ? classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : failure?.code === "authentication-required" ? { category: "provider_authentication" } : {}), summary: failure?.summary ?? "Forge could not check CI. Retry.", source: "ci" }) : null;
       if (failureClass === "credential_missing") {
@@ -155,7 +152,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       await ctx.project();
       return ctx.state;
     }
-    if (ctx.state.step !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId || ctx.state.expectedHeadSha !== expectedHeadSha) return ctx.state;
+    if (ctx.state.step !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId) return ctx.state;
     const ciOwner = (result.owner as "system" | "integrator" | "human" | "lead" | null) === "lead" ? "integrator" : result.owner;
     const pending = result.outcome === "waiting" || result.outcome === "rate_limited";
     const minimumPollAt = new Date(runExecution.current().now() + CI_PENDING_POLL_DELAY_MS).toISOString();
@@ -174,8 +171,8 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
         return ctx.state;
       }
       const baseUpdateCount = ctx.state.ciBaseUpdateCount ?? 0;
-      if (true && baseUpdateCount < 5 && ctx.state.developerExecutionId && ctx.state.branchName && ctx.state.targetBaseSha && ctx.state.expectedHeadTree && ctx.state.resultCommit && ctx.state.ciRunId) {
-        const update = await activityProxies.updateCiFromBase({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, releaseId: ctx.state.releaseId!, developerExecutionId: ctx.state.developerExecutionId, branchName: ctx.state.branchName, expectedBaseSha: ctx.state.targetBaseSha, expectedHeadSha: ctx.state.resultCommit, expectedHeadTree: ctx.state.expectedHeadTree, ciRunId: ctx.state.ciRunId });
+      if (true && baseUpdateCount < 5 && ctx.state.developerExecutionId && ctx.state.branchName && ctx.state.targetBaseSha && ctx.state.resultCommit && ctx.state.resultTree && ctx.state.ciRunId) {
+        const update = await activityProxies.updateCiFromBase({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, releaseId: ctx.state.releaseId!, developerExecutionId: ctx.state.developerExecutionId, branchName: ctx.state.branchName, expectedBaseSha: ctx.state.targetBaseSha, expectedHeadSha: ctx.state.resultCommit, expectedHeadTree: ctx.state.resultTree, ciRunId: ctx.state.ciRunId });
         if (update.outcome === "updated") {
           ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ci_waiting"), owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: update.summary, targetBaseSha: update.baseSha, expectedHeadSha: update.headSha, resultCommit: update.headSha, resultTree: update.headTree, ciRunId: null, ciAttemptId: null, ciOutcome: "waiting", ciReason: null, ciEvidenceArtifactId: null, ciNextPollAt: null, ciBaseUpdateCount: baseUpdateCount + 1, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
           await ctx.project();
@@ -192,8 +189,8 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       return ctx.runFinalReviewTurn();
     }
     const baseUpdateCount = ctx.state.ciBaseUpdateCount ?? 0;
-    if (true && shouldUpdateFromBaseBeforeCiRepair(result, baseUpdateCount) && ctx.state.releaseId && ctx.state.developerExecutionId && ctx.state.branchName && ctx.state.targetBaseSha && ctx.state.expectedHeadTree && ctx.state.resultCommit && ctx.state.ciRunId) {
-      const update = await activityProxies.updateCiFromBase({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, releaseId: ctx.state.releaseId, developerExecutionId: ctx.state.developerExecutionId, branchName: ctx.state.branchName, expectedBaseSha: ctx.state.targetBaseSha, expectedHeadSha: ctx.state.resultCommit, expectedHeadTree: ctx.state.expectedHeadTree, ciRunId: ctx.state.ciRunId });
+    if (true && shouldUpdateFromBaseBeforeCiRepair(result, baseUpdateCount) && ctx.state.releaseId && ctx.state.developerExecutionId && ctx.state.branchName && ctx.state.targetBaseSha && ctx.state.resultCommit && ctx.state.resultTree && ctx.state.ciRunId) {
+      const update = await activityProxies.updateCiFromBase({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, releaseId: ctx.state.releaseId, developerExecutionId: ctx.state.developerExecutionId, branchName: ctx.state.branchName, expectedBaseSha: ctx.state.targetBaseSha, expectedHeadSha: ctx.state.resultCommit, expectedHeadTree: ctx.state.resultTree, ciRunId: ctx.state.ciRunId });
       if (update.outcome === "updated") {
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ci_waiting"), owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: update.summary, targetBaseSha: update.baseSha, expectedHeadSha: update.headSha, resultCommit: update.headSha, resultTree: update.headTree, ciRunId: null, ciAttemptId: null, ciOutcome: "waiting", ciReason: null, ciEvidenceArtifactId: null, ciNextPollAt: null, ciBaseUpdateCount: baseUpdateCount + 1, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
         await ctx.project();
@@ -209,7 +206,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       try {
         const plan = await ctx.acquireExternalTurn<contracts.CiRepairPlanActivityResult>(
           { operation: "ci_repair_plan", ...stateTransitions.integratorTurn(ctx, "planner"), sessionRef: leadSessionRef },
-          (capacityRequestId) => agent.planCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, leadSessionRef, ciRunId: result.runId, ciAttemptId, failedHeadSha: expectedHeadSha, evidenceArtifactId, requiredChecks: [], localVerification: [], roleProfiles: ctx.input.roleProfiles, executionRole: stateTransitions.integratorTurn(ctx, "planner").role === "integrator" ? "integrator" : "planner", ...(capacityRequestId ? { capacityRequestId } : {}) }),
+          (capacityRequestId) => agent.planCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, leadSessionRef, ciRunId: result.runId, ciAttemptId, failedHeadSha: result.expectedHeadSha, evidenceArtifactId, requiredChecks: [], localVerification: [], roleProfiles: ctx.input.roleProfiles, executionRole: stateTransitions.integratorTurn(ctx, "planner").role === "integrator" ? "integrator" : "planner", ...(capacityRequestId ? { capacityRequestId } : {}) }),
           (repairPlan) => repairPlan.leadExecutionId,
         );
         // The Lead can conclude the failure is not caused by this delivery. Re-run the
@@ -252,15 +249,15 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
   setHandler(issueUpdates.repair_ci, ctx.guarded(async (rawInput: any) => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision || !CI_COMMAND_STEPS.has(ctx.state.step) || !ctx.state.allowedCommands.includes("repair_ci")) throw new Error("CI repair is not available in the current phase");
-    if (ctx.state.ciRepairPlanId && ctx.state.ciRepairPlanArtifactId && ctx.state.ciRepairPlanEvidenceArtifactId && ctx.state.ciAttemptId && ctx.state.ciRunId && ctx.state.expectedHeadSha && ctx.state.resultCommit && ctx.state.resultTree && ctx.state.developerExecutionId && ctx.state.developerSessionRef && ctx.state.branchName) return runExactCiRepairTurn();
+    if (ctx.state.ciRepairPlanId && ctx.state.ciRepairPlanArtifactId && ctx.state.ciRepairPlanEvidenceArtifactId && ctx.state.ciAttemptId && ctx.state.ciRunId && ctx.state.resultCommit && ctx.state.resultTree && ctx.state.developerExecutionId && ctx.state.developerSessionRef && ctx.state.branchName) return runExactCiRepairTurn();
     if (!ctx.state.deliveryReviewId || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.leadSessionRef) throw new Error("The exact prior Developer delivery is required for CI repair");
     const cycle = (ctx.state.repairCycle ?? 0) + 1;
     if (ctx.input.repairCycleLimit !== undefined && cycle > ctx.repairCycleLimit) throw new Error("CI repair limit is exhausted");
-    const priorDelivery = { leadSessionRef: ctx.state.leadSessionRef!, developerSessionRef: ctx.state.developerSessionRef!, developerExecutionId: ctx.state.developerExecutionId!, reviewId: ctx.state.deliveryReviewId!, worktreePath: ctx.state.worktreePath!, branchName: ctx.state.branchName!, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, ciOutcome: ctx.state.ciOutcome };
+    const priorDelivery = { leadSessionRef: ctx.state.leadSessionRef!, developerSessionRef: ctx.state.developerSessionRef!, developerExecutionId: ctx.state.developerExecutionId!, reviewId: ctx.state.deliveryReviewId!, worktreePath: ctx.state.worktreePath!, branchName: ctx.state.branchName!, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree! };
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: `Builder CI repair cycle ${cycle}`, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     const ciFindings = (ctx.state.deliveryBlockingFindings ?? []).filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
-    const repairFindings = ciFindings.length ? ciFindings : [{ findingId: `ci_failure_${ctx.state.revision}`, severity: "blocking" as const, rationale: `Required CI did not pass: ${priorDelivery.ciOutcome ?? "failed"}`, evidenceRef: ctx.state.ciRunId ?? "CI reconciliation", disposition: "open" as const, repairInstruction: "Resolve the exact-head CI failure and rerun the required checks." }];
+    const repairFindings = ciFindings.length ? ciFindings : [{ findingId: `ci_failure_${ctx.state.revision}`, severity: "blocking" as const, rationale: "Required CI did not pass", evidenceRef: ctx.state.ciRunId ?? "CI reconciliation", disposition: "open" as const, repairInstruction: "Resolve the exact-head CI failure and rerun the required checks." }];
     const repairPlan = await ctx.acquireExternalTurn<contracts.DeliveryRepairPlanResult>(
       { operation: "delivery_repair_plan", role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: priorDelivery.leadSessionRef, worktreePath: priorDelivery.worktreePath },
       (capacityRequestId) => activityProxies.planDeliveryRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, source: "ci_failure", leadSessionRef: priorDelivery.leadSessionRef, planRevision: ctx.state.planRevision ?? ctx.state.revision, releaseId: ctx.state.releaseId, deliveryReviewId: ctx.state.deliveryReviewId, ciRunId: ctx.state.ciRunId, evidenceArtifactIds: [ctx.state.developerEvidenceArtifactId, ctx.state.finalReviewEvidenceArtifactId].filter((id): id is string => Boolean(id)), branchName: priorDelivery.branchName, worktreePath: priorDelivery.worktreePath, targetBaseSha: priorDelivery.targetBaseSha, subjectCommit: priorDelivery.subjectCommit, subjectTree: priorDelivery.subjectTree, findings: repairFindings, ...(capacityRequestId ? { capacityRequestId } : {}) }),

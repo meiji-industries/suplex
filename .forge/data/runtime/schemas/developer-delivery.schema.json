@@ -96,17 +96,26 @@
       ]
     },
     "objections": {
+      "default": [],
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "findingId": { "type": "string", "minLength": 1 },
-          "reason": { "type": "string", "minLength": 1 }
+          "findingId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "required": ["findingId", "reason"],
+        "required": [
+          "findingId",
+          "reason"
+        ],
         "additionalProperties": false
-      },
-      "default": []
+      }
     },
     "visualEvidence": {
       "type": "object",
@@ -189,7 +198,8 @@
     "resultCommit",
     "resultTree",
     "dirtyState",
-    "blocker"
+    "blocker",
+    "objections"
   ],
   "additionalProperties": false
 }

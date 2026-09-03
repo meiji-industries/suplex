@@ -1,0 +1,2 @@
+-- No columns are dropped in this migration. Every Phase 4 candidate still has
+-- a reader or writer outside the permitted file list.

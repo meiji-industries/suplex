@@ -109,12 +109,13 @@ async function fixture(shape: FixtureShape) {
 
   let remoteHead: string | null = null;
   let pullRequest: GithubPullRequest | null = null;
+  let localRevision = { branch: branchName, headSha: resultHead, treeSha: resultTree, clean: true };
   const calls = { authentication: 0, pushes: 0, creates: 0, inspectedCwds: [] as string[], pushedCwds: [] as string[] };
   const github: GithubReleaseAdapter = {
     async checkAuthentication() { calls.authentication += 1; },
     async getRemoteRepository({ cwd }) { calls.inspectedCwds.push(cwd); return "acme/forge"; },
     async getBranchHead({ branch }) { return branch === "main" ? currentBase : remoteHead; },
-    async inspectLocalRevision({ cwd }) { calls.inspectedCwds.push(cwd); return { branch: branchName, headSha: resultHead, treeSha: resultTree, clean: true }; },
+    async inspectLocalRevision({ cwd }) { calls.inspectedCwds.push(cwd); return localRevision; },
     async pushNormal({ cwd }) { calls.pushes += 1; calls.pushedCwds.push(cwd); remoteHead = resultHead; },
     async listPullRequests() { return pullRequest ? [pullRequest] : []; },
     async createDraftPullRequest(input) {
@@ -139,6 +140,7 @@ async function fixture(shape: FixtureShape) {
     developerEvidenceArtifactId: developerEvidence.id,
     ancestorExecutionId,
     ambiguousAncestorExecutionId,
+    disagreeWithGit() { localRevision = { ...localRevision, clean: false }; },
     calls,
     pushInput: { taskId, companyId, workflowId, branchName, commitSha: resultHead },
     publishInput: { taskId, companyId, workflowId, reviewId, developerExecutionId: linkedExecutionId, branchName, targetBaseSha: currentBase, subjectCommit: resultHead, subjectTree: resultTree },
@@ -268,7 +270,7 @@ test.each([
 
 test.each([
   ["wrong review tree", "completed-prior", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_delivery_reviews SET subject_tree = ? WHERE id = ?").run(wrongSha, reviewId))],
-  ["wrong verification artifact kind", "completed-prior", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET kind = 'agent-evidence' WHERE id = ?").run(value.verificationArtifactId))],
+  ["wrong verification artifact kind", "transitive", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET kind = 'agent-evidence' WHERE id = ?").run(value.ancestorVerificationArtifactId))],
   ["broken supersedes lineage", "blocked-chain", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET supersedes_execution_id = 'developer-missing' WHERE id = ?").run(value.linkedExecutionId))],
   ["mismatched merge tree identity", "completed-prior", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET tree = ? WHERE id = 'merge-release-lineage'").run(wrongSha))],
   ["broken transitive head/tree link", "transitive", (value: Fixture) => value.database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET prior_tree = ? WHERE id = 'merge-release-lineage'").run(wrongSha))],
@@ -288,12 +290,21 @@ test.each([
 ] as const)("fails closed for %s", async (_label, shape, mutate) => {
   const value = await fixture(shape);
   mutate(value);
+  value.disagreeWithGit();
   const before = historicalRows(value);
 
   await expect(value.activities.pushDeliveryBranch(value.pushInput)).rejects.toMatchObject({ type: "stale-reviewed-revision" });
   await expect(value.activities.publishRelease(value.publishInput)).resolves.toMatchObject({ outcome: "blocked", code: "stale-reviewed-revision" });
 
   expect(historicalRows(value)).toEqual(before);
-  expect(value.calls).toMatchObject({ authentication: 0, pushes: 0, creates: 0, inspectedCwds: [], pushedCwds: [] });
+  expect(value.calls).toMatchObject({ authentication: 0, pushes: 0, creates: 0, pushedCwds: [] });
   expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_provider_operations WHERE task_id = ?").get(taskId))).toEqual({ count: 0 });
+});
+
+test("uses a matching local revision when the verification row has the wrong kind", async () => {
+  const value = await fixture("transitive");
+  value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET kind = 'agent-evidence' WHERE id = ?").run(value.ancestorVerificationArtifactId));
+
+  await expect(value.activities.pushDeliveryBranch(value.pushInput)).resolves.toEqual({ repository: "acme/forge", branchName, commitSha: resultHead });
+  expect(value.calls.inspectedCwds).toContain(value.linkedWorktree);
 });

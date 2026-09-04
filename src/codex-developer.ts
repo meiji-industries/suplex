@@ -37,9 +37,9 @@ type OperationAware = OperationExecution;
 
 const IDENTITY_FAILURE_CODES = new Set(["developer-scope-mismatch", "developer-execution-identity-conflict", "stale-reviewed-revision"]);
 
-function developerFailure(error: unknown, fallbackCode: string, fallbackMessage: string): AgentFailure {
+function developerFailure(error: unknown, fallbackCode: string, fallbackMessage: string, messagePrefix = ""): AgentFailure {
   const code = error instanceof AgentFailure ? error.code : fallbackCode;
-  const message = error instanceof Error ? error.message : fallbackMessage;
+  const message = error instanceof AgentFailure ? error.message : `${messagePrefix}${error instanceof Error ? error.message : fallbackMessage}`;
   const nonRetryable = error instanceof AgentFailure && error.nonRetryable
     || IDENTITY_FAILURE_CODES.has(code)
     || /scope mismatch|does not match/i.test(message);
@@ -442,7 +442,7 @@ export class DeveloperService {
         return activityResult;
     } catch (error) {
       // Keep the real cause: a swallowed message made launch-path bugs look like Builder failures.
-      const failure = developerFailure(error, "developer-failed", `Builder could not start: ${error instanceof Error ? error.message : String(error)}`);
+      const failure = developerFailure(error, "developer-failed", String(error), "Builder could not start: ");
       if (!(error instanceof AgentFailure)) console.error("Builder launch failed", executionId, error);
       const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
       this.database.authTransaction((db) => {

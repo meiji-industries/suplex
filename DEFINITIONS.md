@@ -60,3 +60,30 @@ keys as intent rather than proof. The name is ours. The pathology is common.
 
 **Where the rule lives.** `docs/plans/2026-09-03-no-mirror-gates.md` holds the truth table, the
 ranked deletion list, and the rules for implementers.
+
+## Silent projection
+
+**Definition.** A silent projection is a write of a new workflow revision that changes nothing a
+member or an agent could act on: the same step, the same owner, the same pending action, the same
+blocker, only a higher revision and a new event id. It usually comes from an evaluation that ran,
+decided nothing, and projected anyway.
+
+**Why it is a defect.** Revisions are the optimistic-concurrency token for every command. Each
+silent projection invalidates the revision a person or an API client just read, so their command
+fails with a stale-revision conflict. A loop that projects silently on every wake makes the task
+uncommandable, and at speed it becomes a hot loop that only the projection breaker stops.
+
+**The rule.** No projection without a change. An evaluation compares the state it would write to
+the state it read and returns without projecting when they are equal. A command refused by a
+handler guard rolls back its provisional claim: no revision bump, no processed command id. A
+receipt refresh such as an observation time is not by itself a reason to project.
+
+**How to recognise one.** The timeline shows no entry, but the revision climbs. A snapshot diff
+shows only `revision`, `lastEventId`, `processedCommandIds`, or `lastHandlerError`. Commands sent
+from the UI or the API return 409 with `stale-revision` while nothing visible changed.
+
+**Seen so far.** A stale pull-request head observation rewritten every loop pass (about 27
+revisions a minute, just under the breaker); a declined re-observation that appended its reason to
+the pending action and ping-ponged with the auto-retry (14,000 revisions in twelve minutes); a
+driver command refused by its handler guard that still projected on every wake, blocking every
+human command with a 409.

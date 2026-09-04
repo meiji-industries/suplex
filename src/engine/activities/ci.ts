@@ -2,6 +2,7 @@ import type { CiActivities, ReconcileCiActivityInput, WorkflowCiRepairActivityIn
 import type { AttentionCategory } from "../contracts/primitives.js";
 import type { ActivityContext } from "./context.js";
 import type { DeveloperService } from "../../codex-developer.js";
+import { runCommand } from "../../command-runner.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
 import { proveRevisionInGit } from "./git-proof.js";
 
@@ -83,19 +84,54 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
       return adopt(merge.targetBaseSha, merge.mergeCommit, merge.tree);
     },
     async findCiRepairPriorDelivery(input) {
+      type PriorDeliveryCandidate = { developerExecutionId: string; developerSessionRef: string; worktreePath: string; branchName: string; resultTree: string | null };
+      const proveCandidate = async (candidate: PriorDeliveryCandidate) => {
+        if (!candidate.resultTree) return null;
+        const proof = await proveRevisionInGit(githubRelease, { worktreePath: candidate.worktreePath, branchName: candidate.branchName, commit: input.resultCommit, tree: candidate.resultTree });
+        return proof.proven ? { developerExecutionId: candidate.developerExecutionId, developerSessionRef: candidate.developerSessionRef, worktreePath: candidate.worktreePath } : null;
+      };
       const candidates = database.authQuery((db) => db.prepare(`SELECT id AS developerExecutionId, session_ref AS developerSessionRef, worktree_path AS worktreePath,
         branch_name AS branchName, result_tree AS resultTree
         FROM forge_developer_executions
         WHERE task_id = ? AND company_id = ? AND workflow_id = ?
           AND lower(result_commit) = lower(?)
           AND session_ref IS NOT NULL
-        ORDER BY finished_at DESC, started_at DESC`).all(input.taskId, input.companyId, input.workflowId, input.resultCommit) as Array<{ developerExecutionId: string; developerSessionRef: string; worktreePath: string; branchName: string; resultTree: string | null }>);
+        ORDER BY finished_at DESC, started_at DESC`).all(input.taskId, input.companyId, input.workflowId, input.resultCommit) as PriorDeliveryCandidate[]);
       for (const candidate of candidates) {
-        if (!candidate.resultTree) continue;
-        const proof = await proveRevisionInGit(githubRelease, { worktreePath: candidate.worktreePath, branchName: candidate.branchName, commit: input.resultCommit, tree: candidate.resultTree });
-        if (proof.proven) return { developerExecutionId: candidate.developerExecutionId, developerSessionRef: candidate.developerSessionRef, worktreePath: candidate.worktreePath };
+        const delivery = await proveCandidate(candidate);
+        if (delivery) return delivery;
       }
-      return null;
+      const forwardMerges = database.authQuery((db) => db.prepare(`SELECT m.developer_execution_id AS developerExecutionId, m.result_tree AS resultTree,
+        d.session_ref AS developerSessionRef, d.worktree_path AS worktreePath, d.branch_name AS branchName
+        FROM forge_forward_merges m
+        JOIN forge_developer_executions d ON d.id = m.developer_execution_id
+        WHERE m.task_id = ? AND m.company_id = ? AND m.workflow_id = ?
+          AND lower(m.result_head) = lower(?) AND m.status = 'merged'
+        ORDER BY COALESCE(m.updated_at, m.created_at) DESC`).all(input.taskId, input.companyId, input.workflowId, input.resultCommit) as PriorDeliveryCandidate[]);
+      for (const candidate of forwardMerges) {
+        const delivery = await proveCandidate(candidate);
+        if (delivery) return delivery;
+      }
+      const latest = database.authQuery((db) => db.prepare(`SELECT id AS developerExecutionId, session_ref AS developerSessionRef, branch_name AS branchName
+        FROM forge_developer_executions
+        WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND session_ref IS NOT NULL
+        ORDER BY finished_at DESC, started_at DESC LIMIT 1`).get(input.taskId, input.companyId, input.workflowId) as { developerExecutionId: string; developerSessionRef: string; branchName: string } | undefined);
+      if (!latest) return null;
+      let pinned: ReturnType<ActivityContext["pinnedProjectRevision"]>;
+      try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); }
+      catch { return null; }
+      const worktrees = await runCommand({ taskId: null, stepId: null, command: "git", args: ["worktree", "list", "--porcelain"], cwd: pinned.repositoryPath, timeout: 30_000 });
+      if (worktrees.exitCode !== 0) return null;
+      const entry = worktrees.stdout.split(/\r?\n\r?\n/).map((value) => value.split(/\r?\n/)).find((lines) => lines.includes(`branch refs/heads/${latest.branchName}`));
+      const worktreePath = entry?.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+      if (!worktreePath) return null;
+      try {
+        const revision = await githubRelease.inspectLocalRevision({ cwd: worktreePath });
+        const proof = await proveRevisionInGit(githubRelease, { worktreePath, branchName: latest.branchName, commit: input.resultCommit, tree: revision.treeSha });
+        return proof.proven ? { developerExecutionId: latest.developerExecutionId, developerSessionRef: latest.developerSessionRef, worktreePath } : null;
+      } catch {
+        return null;
+      }
     },
     async runCiRepair(input: WorkflowCiRepairActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);

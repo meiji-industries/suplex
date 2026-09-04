@@ -164,7 +164,7 @@ export const { recordDeliveryDecision } = proxyActivities<IssueActivities>({
 
 export const { pushDeliveryBranch } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "2 minutes",
-  retry: EXTERNAL_AGENT_RETRY_POLICY,
+  retry: { maximumAttempts: 1 },
 });
 
 export const { publishRelease } = proxyActivities<IssueActivities>({

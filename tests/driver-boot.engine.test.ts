@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import { at } from "../src/issue-phases.js";
 import { IssueContinuationStateSchema, type IssueActivities, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
 import { executeIssueCommand } from "../src/engine/service.js";
+import { ApplicationFailure } from "../src/engine/failures.js";
 import { STEP_TABLE } from "../src/engine/workflow/step-table.js";
 import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
 
@@ -204,6 +205,25 @@ test("a guard-refused driver command leaves its revision available to the next A
     await expect(executeIssueCommand(harness.config, workflowId, "cancel_issue", { expectedRevision: before.revision, actorUserId: engineFixture.actorUserId, commandId: "cancel-after-driver-refusal" })).resolves.toMatchObject({ phase: "cancelled" });
   } finally {
     STEP_TABLE.delivery_ready.on.done = original;
+    await harness.stop();
+  }
+});
+
+test("repeated wakes do not retry an unchanged stale delivery push", async () => {
+  const harness = await createEngineHarness({
+    inspectTaskWorktree: async () => provenWorktree(),
+    pushDeliveryBranch: async () => { throw ApplicationFailure.nonRetryable("The reviewed revision does not match a completed build", "stale-reviewed-revision", { code: "stale-reviewed-revision", summary: "The reviewed revision does not match a completed build" }); },
+  });
+  const issueId = "driver-boot-stale-push";
+  harness.seedTask(issueId, { deliveryTarget: "remote_branch" });
+  try {
+    await harness.startContinuation(issueId, { ...deliveryReviewState(harness.workflowId(issueId)), ...at("delivery_reviewed"), owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Forge opens the pull request" });
+    const state = await harness.settle(harness.workflowId(issueId), (value) => value.step === "delivery_ready" && value.owner === "human");
+    await harness.restart();
+    await harness.restart();
+    expect(harness.calls.get("pushDeliveryBranch") ?? 0).toBe(1);
+    expect(state.allowedCommands).toContain("review_delivery");
+  } finally {
     await harness.stop();
   }
 });

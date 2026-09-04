@@ -6,6 +6,7 @@ import { loadTaskConfiguration } from "../../task-project-configuration.js";
 import { jsonRequired } from "../../task-utils.js";
 import { proveForwardMergeLineage } from "./forward-merge-lineage.js";
 import { proveRevisionInGit } from "./git-proof.js";
+import { runCommand } from "../../command-runner.js";
 
 const LegacyReleaseDeliverySchema = z.object({
   summary: z.string().optional(),
@@ -209,6 +210,36 @@ function resolveReleaseContext(db: Database.Database, input: ReleaseContextInput
 
 type GitReleaseCandidate = Omit<ReleaseContext, "delivery" | "reviewId"> & { deliveryArtifactId: string; deliveryStoragePath: string; deliverySha: string };
 
+async function resolveGitPushContext(db: Database.Database, githubRelease: ActivityContext["githubRelease"], artifacts: ActivityContext["artifacts"], input: Extract<ReleaseContextInput, { kind: "push" }>): Promise<ReleaseContext | undefined> {
+  const candidate = db.prepare(`SELECT t.title, d.id AS developerExecutionId, d.target_base_sha AS targetBaseSha
+    FROM forge_tasks t JOIN forge_developer_executions d
+      ON d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
+    WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND d.branch_name = ? AND lower(d.result_commit) = lower(?)
+    UNION ALL
+    SELECT t.title, m.developer_execution_id AS developerExecutionId, m.current_base_sha AS targetBaseSha
+    FROM forge_tasks t JOIN forge_forward_merges m
+      ON m.task_id = t.id AND m.company_id = t.company_id AND m.workflow_id = t.workflow_id
+    JOIN forge_developer_executions d
+      ON d.id = m.developer_execution_id AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
+    WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND d.branch_name = ? AND lower(m.result_head) = lower(?)
+    LIMIT 1`).get(
+    input.taskId, input.companyId, input.workflowId, input.branchName, input.subjectCommit,
+    input.taskId, input.companyId, input.workflowId, input.branchName, input.subjectCommit,
+  ) as { title: string; developerExecutionId: string; targetBaseSha: string } | undefined;
+  if (!candidate) return undefined;
+  let pinned: ReturnType<typeof loadTaskConfiguration>;
+  try { pinned = loadTaskConfiguration(db, artifacts, input); } catch { return undefined; }
+  const listed = await runCommand({ taskId: null, stepId: null, command: "git", args: ["worktree", "list", "--porcelain"], cwd: pinned.repositoryPath, timeout: 30_000 });
+  if (listed.exitCode !== 0) return undefined;
+  const entry = listed.stdout.split(/\r?\n\r?\n/).map((value) => value.split(/\r?\n/)).find((lines) => lines.includes(`branch refs/heads/${input.branchName}`));
+  const worktreePath = entry?.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+  if (!worktreePath) return undefined;
+  const observed = await githubRelease.inspectLocalRevision({ cwd: worktreePath });
+  const proof = await proveRevisionInGit(githubRelease, { worktreePath, branchName: input.branchName, commit: input.subjectCommit, tree: observed.treeSha });
+  if (!proof.proven || !proof.branch || !proof.head || !proof.headTree) return undefined;
+  return { developerExecutionId: candidate.developerExecutionId, worktreePath, branchName: proof.branch, targetBaseSha: candidate.targetBaseSha, subjectCommit: proof.head, subjectTree: proof.headTree, reviewId: null, title: candidate.title, delivery: null };
+}
+
 async function resolveGitReleaseContext(db: Database.Database, githubRelease: ActivityContext["githubRelease"], input: ReleaseContextInput): Promise<ReleaseContext | undefined> {
   const review = input.kind === "publish" ? db.prepare(`SELECT id FROM forge_delivery_reviews r
     WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?
@@ -248,7 +279,7 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
     async pushDeliveryBranch(input) {
       try {
       const releaseInput = { kind: "push" as const, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, branchName: input.branchName, subjectCommit: input.commitSha };
-      const context = database.authQuery((db) => resolveReleaseContext(db, releaseInput)) ?? await database.authQuery((db) => resolveGitReleaseContext(db, githubRelease, releaseInput));
+      const context = database.authQuery((db) => resolveReleaseContext(db, releaseInput)) ?? await database.authQuery((db) => resolveGitPushContext(db, githubRelease, artifacts, releaseInput)) ?? await database.authQuery((db) => resolveGitReleaseContext(db, githubRelease, releaseInput));
       if (!context) throw new GithubReleaseFailure("stale-reviewed-revision", "The reviewed revision does not match a completed build");
       let pinned: ReturnType<ActivityContext["pinnedProjectRevision"]>;
       try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "The task project configuration is incomplete"); }

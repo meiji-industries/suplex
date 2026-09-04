@@ -84,3 +84,33 @@ test("release and CI repair use a git-proven row when receipts are stale", async
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("push accepts a git-proven forward merge without a delivery artifact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-release-push-proof-"));
+  const config = createTestConfig(root, { artifactRoot: join(root, "artifacts") });
+  const database = new ForgeDatabase(config.databasePath);
+  try {
+    const repo = await repository(root);
+    const artifacts = new ArtifactStore(config.artifactRoot, database);
+    const now = new Date().toISOString();
+    database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(now);
+      db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'main', 'main', 'true', 'true', '[]', '{}', 'active', ?, ?)").run(repo.path, root, now, now);
+    });
+    const brief = await artifacts.putArtifact("company", "task-brief", { taskId: "task", filename: "brief.md", mimeType: "text/markdown", bytes: Buffer.from("brief") });
+    const configuration = await artifacts.putArtifact("company", "task-project-configuration", { taskId: "task", filename: "configuration.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ projectId: "project", projectName: "Project", repositoryPath: repo.path, worktreeRoot: root, repository: "acme/forge", baseBranch: "main", targetBranch: "main", baseSha: repo.base, targetSha: repo.commit, setupCommand: "true", verificationCommand: "true", requiredChecks: [], roleAgents: { builder: "builder" }, roleProfiles: { builder: "builder" }, capturedAt: now })) });
+    database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, project_configuration_artifact_id, idempotency_key, created_at, updated_at) VALUES ('task', 'company', 'project', 'Task', ?, '[]', '{}', 0, 'workflow', 'revision', ?, 'key', ?, ?)").run(brief.id, configuration.id, now, now);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id) VALUES ('execution', 'task', 'company', 'workflow', 1, 1, 'completed', 'task/git-proof', ?, ?, 'session', ?, ?, ?, ?, 'clean', NULL)").run(repo.path, repo.base, now, now, "f".repeat(40), "f".repeat(40));
+      db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, result_head, result_tree, developer_execution_id, delivery_artifact_id, updated_at) VALUES ('forward-merge', 'task', 'company', ?, ?, ?, ?, ?, 'merged', '[]', ?, 'workflow', ?, ?, 'execution', NULL, ?)").run(repo.base, repo.base, repo.base, repo.commit, repo.tree, now, repo.commit, repo.tree, now);
+    });
+    const context = createActivityContext(database, config, { githubRelease: createGithubReleasePort() });
+    let pushed: { worktreePath: string; branchName: string; commitSha: string } | null = null;
+    context.release = { pushBranch: async (input: { repository: string; worktreePath: string; branchName: string; commitSha: string }) => { pushed = input; } } as never;
+    await expect(createReleaseActivities(context).pushDeliveryBranch({ taskId: "task", companyId: "company", workflowId: "workflow", branchName: "task/git-proof", commitSha: repo.commit })).resolves.toMatchObject({ commitSha: repo.commit });
+    expect(pushed).toMatchObject({ repository: "acme/forge", branchName: "task/git-proof", commitSha: repo.commit });
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

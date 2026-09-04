@@ -111,6 +111,7 @@ describe("target-base reconciliation contracts", () => {
       await writeFile(join(fixture.repositoryPath, "live-dirty.txt"), "live turn owns this edit\n");
       fixture.database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, agent_name, pane_id, status, created_at, updated_at) VALUES ('session-live', 'task-1', 'builder', 1, 1, 'codex', 'builder-live', NULL, 'ready', ?, ?)").run(fixture.now, fixture.now);
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES ('developer-live', 'task-1', 'company-1', 'workflow-1', 1, 3, 'running', 'issue/task-1', ?, ?, ?, ?)").run(fixture.repositoryPath, fixture.repository.base, fixture.now, fixture.now);
         db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES ('turn-live', 'task-1', 'session-live', 'builder', 'developer', 'developer-live', 'implementation', ?, 'herdr-results/task-1/developer/result-turn-live.json', 0, 'waiting', ?, ?)").run("c".repeat(64), fixture.now, fixture.now);
       });
       const activities = createActivities(fixture.database, fixture.config, { githubRelease: {} as never });

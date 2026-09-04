@@ -9,6 +9,7 @@ import { reconcileActiveTurns } from "../src/active-turn-recovery.js";
 import { DeveloperDeliveryReportSchema } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
+import { isTaskTurnLive } from "../src/engine/activities/herdr-liveness.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { await Promise.all(cleanup.splice(0).map((remove) => remove())); });
@@ -106,6 +107,21 @@ test("terminal planner and reviewer runtime produces STE100 attention without pr
   expect(value.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt, updated_at FROM forge_herdr_turns WHERE turn_id = ?").get(planner.turnId))).toEqual(persisted);
   expect(persisted).toEqual({ status: "awaiting_human", attention_excerpt: expect.stringContaining("STE100"), updated_at: "2026-08-27T00:00:01.000Z" });
   expect(prompts).toEqual([]);
+});
+
+test("a just-dispatched Developer turn remains live only through the bounded grace", async () => {
+  const value = await fixture();
+  const fresh = value.addTurn("liveness-fresh", { role: "builder", ledger: "developer", promptKind: "implementation", status: "dispatching", executionStatus: "starting" });
+  const stale = value.addTurn("liveness-stale", { role: "builder", ledger: "developer", promptKind: "implementation", status: "waiting", executionStatus: "running" });
+  const now = Date.now();
+  value.database.authTransaction((db) => {
+    db.prepare("UPDATE forge_herdr_turns SET updated_at = ? WHERE turn_id = ?").run(new Date(now - 30_000).toISOString(), fresh.turnId);
+    db.prepare("UPDATE forge_herdr_turns SET updated_at = ? WHERE turn_id = ?").run(new Date(now - 10 * 60_000).toISOString(), stale.turnId);
+  });
+  const herdr = { runtimeSnapshot: async () => ({ agents: [], panes: [] }) };
+
+  await expect(isTaskTurnLive(value.database, value.config, fresh.taskId, herdr as never)).resolves.toMatchObject({ live: true, role: "builder" });
+  await expect(isTaskTurnLive(value.database, value.config, stale.taskId, herdr as never)).resolves.toEqual({ live: false });
 });
 
 test.each([

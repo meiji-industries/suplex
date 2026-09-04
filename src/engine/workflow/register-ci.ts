@@ -18,6 +18,22 @@ const CI_RERUN_POLL_DELAY_MS = 60_000;
 const CI_PENDING_POLL_DELAY_MS = 15_000;
 const CI_OBSERVATION_FAILURE_POLL_DELAY_MS = 60_000;
 const CI_COMMAND_STEPS = new Set(["ci_waiting", "ci_repair_planning", "ci_repairing"]);
+export const adoptCiRepairResultUpdate = "adopt_ci_repair_result";
+
+export type AdoptedCiRepair = {
+  developerExecutionId: string;
+  developerSessionRef: string | null;
+  branchName: string;
+  resultCommit: string;
+  resultTree: string;
+  deliveryArtifactId: string | null;
+  evidenceArtifactId: string | null;
+  summary: string;
+};
+
+export function adoptCiRepairResult(state: contracts.IssueWorkflowState, result: AdoptedCiRepair): contracts.IssueWorkflowState {
+  return contracts.IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: "clean", deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.summary, developerOutcome: "completed", deliveryRepairAttemptId: null, deliveryReviewSupersedesId: null, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, releaseId: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, ciRepairDeveloperExecutionId: result.developerExecutionId, ciRepairDeveloperSessionRef: result.developerSessionRef, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
+}
 
 export function deferCiReconciliation(state: contracts.IssueWorkflowState, now: string): contracts.IssueWorkflowState {
   const summary = "Forge waits for CI — release evidence is unavailable";
@@ -40,6 +56,13 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     if (command.expectedRevision !== ctx.state.revision || !CI_COMMAND_STEPS.has(ctx.state.step) || !ctx.state.allowedCommands.includes("reconcile_ci")) throw new Error("CI reconciliation is not available in the current phase");
     return command;
   };
+  setHandler(adoptCiRepairResultUpdate, ctx.guarded(async (rawInput: any) => {
+    const result = rawInput as AdoptedCiRepair & { expectedRevision: number; executionId: string };
+    if (result.expectedRevision !== ctx.state.revision || !["ci_repairing", "development"].includes(ctx.state.step) || ctx.state.developerTurnKind !== "repair" || !ctx.state.ciRunId || !ctx.state.ciAttemptId || (ctx.state.ciRepairDeveloperExecutionId && ctx.state.ciRepairDeveloperExecutionId !== result.executionId)) return ctx.state;
+    ctx.state = adoptCiRepairResult(ctx.state, result);
+    await ctx.project();
+    return ctx.state;
+  }));
   const runExactCiRepairTurn = async (): Promise<contracts.IssueWorkflowState> => {
     if (!ctx.state.ciRepairPlanId || !ctx.state.ciRepairPlanArtifactId || !ctx.state.ciRepairPlanEvidenceArtifactId || !ctx.state.ciAttemptId || !ctx.state.ciRunId || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.branchName) throw new Error("The exact CI repair plan and prior Developer delivery are required");
     const ciRunId = ctx.state.ciRunId;

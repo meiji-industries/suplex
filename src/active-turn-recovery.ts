@@ -17,6 +17,11 @@ import { CiRepairPlanSchema, DeliveryReviewSchema, MergeConflictPlanSchema } fro
 import { reconcileIssueDeveloperDelivery } from "./engine/service.js";
 import { json } from "./task-utils.js";
 import { HerdrSessionStore, type LaunchSettings, type RoleSessionTask } from "./herdr-session-store.js";
+import { createGithubReleasePort } from "./github-release.js";
+import { proveRevisionInGit } from "./engine/activities/git-proof.js";
+import { runCommand } from "./command-runner.js";
+import { getIssueEngine } from "./engine/index.js";
+import { adoptCiRepairResultUpdate, type AdoptedCiRepair } from "./engine/workflow/register-ci.js";
 
 export interface ActiveTurnOutcome {
   taskId: string;
@@ -52,6 +57,9 @@ type Turn = {
   branchName: string | null;
   worktreePath: string | null;
   lastReviewedCommit: string | null;
+  executionSessionRef: string | null;
+  deliveryArtifactId: string | null;
+  evidenceArtifactId: string | null;
 };
 
 type ResultObservation = { path: string; bytes: Buffer | null; valid: boolean; promptable: boolean; evidence: string };
@@ -123,7 +131,7 @@ function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
       SELECT latest.turn_id FROM forge_herdr_turns latest
       WHERE latest.role_session_id = turn.role_session_id
       ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1
-    ) THEN 1 ELSE 0 END AS isLatestSessionTurn, turn.ledger, turn.prompt_kind AS promptKind, projection.revision, projection.phase, projection.workflow_id AS workflowId, session.pane_id AS paneId, worktree.branch_name AS branchName, worktree.worktree_path AS worktreePath, review.subject_commit AS lastReviewedCommit
+    ) THEN 1 ELSE 0 END AS isLatestSessionTurn, turn.ledger, turn.prompt_kind AS promptKind, projection.revision, projection.phase, projection.workflow_id AS workflowId, session.pane_id AS paneId, worktree.branch_name AS branchName, worktree.worktree_path AS worktreePath, review.subject_commit AS lastReviewedCommit, developer.session_ref AS executionSessionRef, developer.delivery_artifact_id AS deliveryArtifactId, developer.evidence_artifact_id AS evidenceArtifactId
     FROM forge_herdr_turns turn
     JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.is_current = 1
     JOIN forge_issue_projections projection ON projection.task_id = turn.task_id
@@ -264,6 +272,44 @@ async function writeResultAtomically(path: string, bytes: Buffer): Promise<void>
   }
 }
 
+async function adoptLateCiRepair(database: ForgeDatabase, config: ForgeConfig, turn: Turn, bytes: Buffer, timestamp: string): Promise<"adopted" | "superseded" | "not_current" | "unproven"> {
+  if (turn.promptKind !== "ci-repair" || turn.role !== "integrator" || !turn.worktreePath || !turn.branchName) return "not_current";
+  const workflow = getIssueEngine(config).run(turn.workflowId).state;
+  const expectsRepair = (workflow.step === "ci_repairing" || workflow.step === "development")
+    && workflow.developerTurnKind === "repair"
+    && workflow.ciRunId !== null
+    && workflow.ciAttemptId !== null
+    && (!workflow.ciRepairDeveloperExecutionId || workflow.ciRepairDeveloperExecutionId === turn.executionId);
+  if (!expectsRepair) return "superseded";
+  const report = DeveloperRepairReportSchema.parse(json(bytes.toString("utf8"), null));
+  if (report.blocker !== null) return "unproven";
+  const github = createGithubReleasePort();
+  const local = await github.inspectLocalRevision({ cwd: turn.worktreePath });
+  const proof = await proveRevisionInGit(github, { worktreePath: turn.worktreePath, branchName: turn.branchName, commit: local.headSha, tree: local.treeSha });
+  const descendant = await runCommand({ taskId: turn.taskId, stepId: null, command: "git", args: ["merge-base", "--is-ancestor", local.headSha, local.headSha], cwd: turn.worktreePath, timeout: 8_000, expectedExitCodes: [1] });
+  if (!proof.proven || descendant.exitCode !== 0) return "unproven";
+  const completed = database.authTransaction((db) => {
+    const execution = db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = 'clean', failure_code = NULL, failure_summary = NULL WHERE id = ? AND task_id = ? AND workflow_id = ? AND status IN ('failed', 'cancelled')").run(timestamp, timestamp, local.headSha, local.treeSha, turn.executionId, turn.taskId, turn.workflowId);
+    if (execution.changes !== 1) return false;
+    return db.prepare("UPDATE forge_herdr_turns SET result_sha256 = ?, task_complete_seen_at = COALESCE(task_complete_seen_at, ?), status = 'completed', attention_excerpt = NULL, finished_at = COALESCE(finished_at, ?), updated_at = ? WHERE turn_id = ? AND task_id = ? AND status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating')").run(sha256(bytes), timestamp, timestamp, timestamp, turn.turnId, turn.taskId).changes === 1;
+  });
+  if (!completed) return "not_current";
+  const result: AdoptedCiRepair & { expectedRevision: number; executionId: string } = {
+    expectedRevision: workflow.revision,
+    executionId: turn.executionId,
+    developerExecutionId: turn.executionId,
+    developerSessionRef: turn.executionSessionRef,
+    branchName: turn.branchName,
+    resultCommit: local.headSha,
+    resultTree: local.treeSha,
+    deliveryArtifactId: turn.deliveryArtifactId,
+    evidenceArtifactId: turn.evidenceArtifactId,
+    summary: report.summary,
+  };
+  await getIssueEngine(config).run(turn.workflowId).execute(adoptCiRepairResultUpdate, result, `late-ci-repair-${turn.turnId}`);
+  return "adopted";
+}
+
 export async function reconcileActiveTurns(database: ForgeDatabase, config: ForgeConfig, deps: {
   herdr?: HerdrClient;
   detectHandoff?: typeof detectGitHandoff;
@@ -365,6 +411,21 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
         }
       }
       if (lateDeveloperResult) {
+        if (turn.promptKind === "ci-repair" && (turn.executionStatus === "failed" || turn.executionStatus === "cancelled")) {
+          const adopted = await adoptLateCiRepair(database, config, turn, result.bytes!, now());
+          if (adopted === "adopted") {
+            action = "advance";
+            evidence.push("late-result:CI repair adopted from git");
+          } else if (adopted === "superseded") {
+            if (supersedeLateResult(database, turn, now())) evidence.push("late-result:superseded");
+            action = "no_change";
+          } else {
+            action = "no_change";
+            evidence.push(`late-result:CI repair ${adopted}`);
+          }
+          outcomes.push({ taskId: turn.taskId, turnId: turn.turnId, role: turn.role, action, idempotencyKey: classified.idempotencyKey, evidence });
+          continue;
+        }
         const workflow = currentWorkflow(database, turn.taskId);
         if (turn.role === "builder" && workflow?.phase === "building") {
           if (supersedeLateResult(database, turn, now())) {

@@ -325,7 +325,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
       const category = "provider_connectivity_exhausted";
       // Record the exhausted blocker once; re-projecting it on every loop pass is a hot loop.
       // humanBlocker() returns null without evidence, so the projected blocker cannot be the guard.
-      if (ctx.state.owner === "human" && ctx.state.pendingAction === summary && ctx.state.blocker?.actions.some((action) => action.command === command)) return false;
+      if (ctx.state.owner === "human" && ctx.state.blocker?.summary === summary && ctx.state.allowedCommands.includes(command)) return false;
       ctx.state = IssueWorkflowStateSchema.parse({
         ...ctx.state,
         revision: ctx.state.revision + 1,

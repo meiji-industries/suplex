@@ -37,11 +37,6 @@ export async function reobserveParkedTask(ctx: IssueWorkflowContext, input: Issu
     if ((ctx.state.pullRequestNumber != null && !github?.exists) || (github?.exists && (!github.headSha || github.headSha.toLowerCase() !== ctx.state.resultCommit.toLowerCase()))) throw new Error(ownerConfirmation);
   } catch (error) {
     if (isCancellation(error)) throw error;
-    const pendingAction = `${ctx.state.blocker?.summary ?? "The earlier automatic action stopped."} ${ownerConfirmation}`;
-    if (ctx.state.pendingAction?.includes(ownerConfirmation)) return false;
-    const revision = ctx.state.revision + 1;
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision, pendingAction, stateChangedAt: observedAt, lastEventId: `${ctx.state.workflowId}:${revision}` });
-    await ctx.project();
     return false;
   }
   const commandId = command ? `${ctx.state.workflowId}:auto-reobserve:${command}:${ctx.state.resultCommit}` : null;

@@ -45,7 +45,7 @@ test("a parked reviewed delivery re-observes owners and publishes once", async (
   } finally { await h.stop(); }
 });
 
-test("a missing git proof records one parked reason across two wakes", async () => {
+test("a missing git proof leaves the parked state unchanged across two wakes", async () => {
   const activities: Partial<IssueActivities> = {
     inspectTaskWorktree: async () => ({ present: true, owned: true, dirtyFileCount: 0, branch: "forge/issue/reobserve", activeExecution: false, revision: null }),
     observeGithubPullRequest: async () => github,
@@ -55,13 +55,15 @@ test("a missing git proof records one parked reason across two wakes", async () 
   try {
     const before = parkedState(h.workflowId("reobserve-git"), "reobserve-git");
     const started = await h.startContinuation("reobserve-git", before, { deliveryTarget: "remote_branch" });
-    const state = await h.settle(started.workflowId, (next) => next.pendingAction?.includes("git does not have the reviewed commit at HEAD.") ?? false);
+    const state = await h.settle(started.workflowId, () => (h.calls.get("inspectTaskWorktree") ?? 0) === 1);
     expect(state.owner).toBe("human");
     expect(state.blocker?.category).toBe("agent_exhausted");
-    expect(state.pendingAction).toBe("The previous automatic action stopped. git does not have the reviewed commit at HEAD.");
+    expect(state.revision).toBe(before.revision + 1);
+    expect(state.pendingAction).toBe(before.pendingAction);
     await h.restart();
     const afterSecondWake = await h.settle(started.workflowId, () => (h.calls.get("inspectTaskWorktree") ?? 0) === 2);
-    expect(afterSecondWake.pendingAction).toBe(state.pendingAction);
+    expect(afterSecondWake.revision).toBe(state.revision + 1);
+    expect(afterSecondWake.pendingAction).toBe(before.pendingAction);
     expect(h.calls.get("inspectTaskWorktree")).toBe(2);
   } finally { await h.stop(); }
 });
@@ -76,8 +78,9 @@ test("a parked delivery with a changed pull request head remains parked", async 
   try {
     const before = { ...parkedState(h.workflowId("reobserve-head"), "reobserve-head"), pullRequestNumber: 1, pullRequestUrl: "https://github.com/acme/forge/pull/1" };
     const started = await h.startContinuation("reobserve-head", before, { deliveryTarget: "remote_branch" });
-    const state = await h.settle(started.workflowId, (next) => next.stateChangedAt !== before.stateChangedAt);
+    const state = await h.settle(started.workflowId, () => (h.calls.get("inspectTaskWorktree") ?? 0) === 1);
     expect(state.owner).toBe("human");
+    expect(state.revision).toBe(before.revision + 1);
     expect(state.processedCommandIds).not.toContain(`${started.workflowId}:auto-reobserve:publish_draft:${engineFixture.commit}`);
   } finally { await h.stop(); }
 });

@@ -359,12 +359,12 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       return githubSyncRequested // GitHub changed.
         || (!workflowContext.state.allowedCommands.includes("delete_worktree") && (workflowContext.state.step === "done" || (workflowContext.state.step === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) // A terminal state needs completion.
         || workflowContext.continuationRequested // A continuation was requested.
-        || autoChainedCommand(workflowContext, "") !== null // A phase can advance automatically.
-        || canAutoRetryDeliveryBlocker(workflowContext); // A delivery blocker can retry.
+        || (!automaticActionsHalted && (autoChainedCommand(workflowContext, "") !== null // A phase can advance automatically.
+          || canAutoRetryDeliveryBlocker(workflowContext))); // A delivery blocker can retry.
     }
     while (true) {
       if ((workflowContext.state.step === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.step === "cancelled" && !(workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree")))) { return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
-      if (await reobserveParkedTask(workflowContext, validatedInput)) continue;
+      if (!automaticActionsHalted && await reobserveParkedTask(workflowContext, validatedInput)) continue;
       if (githubSyncRequested) {
         githubSyncRequested = false;
         await syncGithubPullRequest();
@@ -423,11 +423,13 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         if (workflowContext.state.step === "ready_reconciliation") await workflowContext.reconcileAcceptanceTurn();
         continue;
       }
-      if (await autoRetryDeliveryBlocker(workflowContext)) continue;
-      const chained = autoChainedCommand(workflowContext, "");
-      if (chained) {
-        await runAutoChainedCommand(workflowContext, chained);
-        continue;
+      if (!automaticActionsHalted) {
+        if (await autoRetryDeliveryBlocker(workflowContext)) continue;
+        const chained = autoChainedCommand(workflowContext, "");
+        if (chained) {
+          await runAutoChainedCommand(workflowContext, chained);
+          continue;
+        }
       }
       await condition(shouldWake);
     }

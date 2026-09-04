@@ -15,6 +15,7 @@ import { createDevelopmentActivities } from "../src/engine/activities/developmen
 import { createFinalReviewActivities } from "../src/engine/activities/final-review.js";
 import { createGovernanceActivities } from "../src/engine/activities/governance.js";
 import { createGithubSyncActivities } from "../src/engine/activities/github-sync.js";
+import { createHerdrTurnReadActivities } from "../src/engine/activities/herdr-turn-read.js";
 import { createMergeConflictActivities } from "../src/engine/activities/merge-conflict.js";
 import { createPlanningActivities } from "../src/engine/activities/planning.js";
 import { createProjectionActivities } from "../src/engine/activities/projection.js";
@@ -70,6 +71,7 @@ const expectedActivityKeys = [
   "runLeadPlanning",
   "runSupplementalReview",
   "inspectTaskWorktree",
+  "readHerdrTurn",
   "updateCiFromBase",
 ].sort();
 
@@ -85,6 +87,7 @@ test("activity factories compose the frozen activity key set without overlap", a
       createPlanningActivities(context),
       createGovernanceActivities(context),
       createGithubSyncActivities(context),
+      createHerdrTurnReadActivities(context),
       createDevelopmentActivities(context),
       createDeliveryReviewActivities(context),
       createReleaseActivities(context),

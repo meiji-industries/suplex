@@ -24,7 +24,7 @@ import { registerDevelopmentHandlers } from "./workflow/register-development.js"
 import { registerMergeHandlers, registerMergeReconciliationHandler } from "./workflow/register-merge.js";
 import { registerReleaseHandlers } from "./workflow/register-release.js";
 import { registerTargetBaseHandlers } from "./workflow/register-target-base.js";
-import { reobserveParkedTask } from "./workflow/reobserve.js";
+import { evaluateStep } from "./workflow/driver.js"; import { reobserveParkedTask } from "./workflow/reobserve.js";
 import { applyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, classifyRepairFailure, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, resumeLeadTurn, runAutoChainedCommand } from "./workflow/runtime.js";
 export * from "./issue-updates.js"; export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
 async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { const projected = withWorktreeCommands(state); return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: runExecution.current().runId, eventId: projected.lastEventId, state: projected })); }
@@ -369,6 +369,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     }
     for (;;) {
       if ((workflowContext.state.step === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.step === "cancelled" && !(workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree")))) { return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
+      if (await evaluateStep(workflowContext)) continue;
       if (continuation && await resumeLeadTurn(workflowContext)) continue;
       if (automaticActionsAllowed() && await reobserveParkedTask(workflowContext, validatedInput)) continue;
       if (githubSyncPending()) {
@@ -447,6 +448,5 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("cancelled"), owner: "human", allowedCommands: [], pendingAction: "The task was cancelled outside Forge", blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
     });
-    throw error;
-  }
+    throw error; }
 }

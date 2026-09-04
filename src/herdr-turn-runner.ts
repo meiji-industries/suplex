@@ -7,8 +7,8 @@ import type { z } from "zod";
 
 import { AgentFailure } from "./agent-failure.js";
 import { detectGitHandoff } from "./git-handoff.js";
-import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
-import { type NeutralTimelineEvent, type RolloutParseResult } from "./codex-rollout.js";
+import type { ArtifactStore, StoredArtifact } from "./artifacts.js";
+import type { NeutralTimelineEvent, RolloutParseResult } from "./codex-rollout.js";
 import type { ForgeDatabase } from "./database.js";
 import { HerdrFailure, snapshotAgents, type HerdrAgent, type HerdrClient } from "./herdr-client.js";
 import type { IssueTimelineEvents } from "./issue-timeline-events.js";

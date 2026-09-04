@@ -1,7 +1,7 @@
 import { at, isBlocked } from "../../issue-phases.js";
 import { isCancellation, setHandler } from "../registry.js";
 import * as contracts from "../issue-contracts.js";
-import * as capacityContracts from "../../capacity-contracts.js";
+import type * as capacityContracts from "../../capacity-contracts.js";
 import { assertPayloadWithinLimit } from "../policy.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";

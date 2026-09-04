@@ -176,20 +176,6 @@ async function runDriverCommand(ctx: IssueWorkflowContext, command: IssueCommand
   if (ctx.commandAlreadyProcessed(commandId)) return false;
   if (command === "publish_draft" && step === "releasing") {
     ctx.markCommandProcessed(commandId);
-    if (!ctx.state.releaseRetryAt) {
-      const releaseRevision = ctx.state.revision + 1;
-      ctx.state = IssueWorkflowStateSchema.parse({
-        ...ctx.state,
-        revision: releaseRevision,
-        ...at("delivery_ready"),
-        owner: "lead",
-        allowedCommands: ctx.addRevisionCommand(["review_delivery", "cancel_issue"]),
-        pendingAction: "The publish stopped. Review again before you publish.",
-        lastEventId: `${ctx.state.workflowId}:${releaseRevision}`,
-      });
-      await ctx.project();
-      return true;
-    }
     await ctx.runPublishTurn();
     return true;
   }

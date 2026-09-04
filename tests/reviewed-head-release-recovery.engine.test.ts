@@ -211,11 +211,11 @@ test("ordinary review action restores the approved subject once, then publishes 
     const active = await queryIssueWorkflow(harness.config, started.workflowId);
     expect(active.revision).toBe(continuation.revision + 1);
     const reviewed = await executeIssueCommand(harness.config, started.workflowId, "review_delivery", { expectedRevision: active.revision, actorUserId: engineFixture.actorUserId });
-    const done = reviewed.step === "done" ? reviewed : await harness.settle(started.workflowId, (state) => state.step === "done");
-    expect(order).toEqual(["recover", "push", "publish", "observe"]);
+    expect(reviewed).toMatchObject({ step: "delivery_reviewed", deliveryReviewId: "review-approved" });
+    expect(order).toEqual(["recover"]);
     expect(recoveryCalls).toBe(1);
     expect(agentReviewCalls).toBe(0);
-    expect(done).toMatchObject({ targetBaseSha: reviewedBase, resultCommit: reviewedHead, resultTree: reviewedTree, expectedHeadSha: reviewedHead, expectedHeadTree: reviewedTree, deliveryReviewId: "review-approved", deliveryReviewOutcome: "approved" });
+    expect(reviewed).toMatchObject({ targetBaseSha: reviewedBase, resultCommit: reviewedHead, resultTree: reviewedTree, expectedHeadSha: reviewedHead, expectedHeadTree: reviewedTree, deliveryReviewId: "review-approved", deliveryReviewOutcome: "approved" });
 
     const counts = { recoveryCalls, push: harness.calls.get("pushDeliveryBranch") ?? 0, publish: harness.calls.get("publishRelease") ?? 0 };
     await expect(executeIssueCommand(harness.config, started.workflowId, "review_delivery", { expectedRevision: continuation.revision, actorUserId: engineFixture.actorUserId })).rejects.toThrow();
@@ -253,9 +253,10 @@ test("a complete delivery uses the normal review path and bypasses recovery", as
   const harness = await createEngineHarness({
     recoverRevalidatedDeliveryReview: async () => { recoveryCalls += 1; return recoveredReview(); },
     reviewDelivery: async (input) => { reviewCalls += 1; return { ...recoveredReview().review, subject: input.subject }; },
+    readHerdrTurn: async () => ({ type: "owner.done", outcome: "approved" }),
   });
   harness.seedTask(issueId, { deliveryTarget: "local_worktree" });
-  const continuation = reviewedState(harness, issueId, { ...at("delivery_ready"), allowedCommands: ["review_delivery", "cancel_issue"], deliveryReviewId: null, deliveryReviewAttemptId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null });
+  const continuation = reviewedState(harness, issueId, { ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], deliveryReviewId: null, deliveryReviewAttemptId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null });
   try {
     persistContinuation(harness, issueId, continuation);
     const started = await startIssueWorkflow(harness.config, workflowInput(issueId, continuation, "local_worktree"));
@@ -279,7 +280,7 @@ test("a foreign remote head fails closed without publication, observation, or ad
     persistContinuation(harness, issueId, continuation);
     const started = await startIssueWorkflow(harness.config, workflowInput(issueId, continuation));
     const blocked = await harness.settle(started.workflowId, (state) => isBlocked(state) && state.step === "delivery_ready");
-    expect(blocked).toMatchObject({ targetBaseSha: reviewedBase, resultCommit: reviewedHead, resultTree: reviewedTree, deliveryReviewId: null, deliveryReviewOutcome: null });
+    expect(blocked).toMatchObject({ targetBaseSha: reviewedBase, resultCommit: reviewedHead, resultTree: reviewedTree, deliveryReviewId: "review-approved", deliveryReviewOutcome: "approved" });
     expect(harness.calls.get("pushDeliveryBranch")).toBe(1);
     expect(blocked.blocker?.actions.map((action) => action.command)).toEqual(["review_delivery", "cancel_issue"]);
     expect(publishCalls).toBe(0);

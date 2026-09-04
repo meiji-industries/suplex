@@ -95,6 +95,7 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
       }
       ctx.state = contracts.IssueWorkflowStateSchema.parse({
         ...ctx.state,
+        blocker: null,
         developerExecutionId: recovered.developerExecutionId,
         targetBaseSha: recovered.targetBaseSha,
         resultCommit: recovered.subjectCommit,

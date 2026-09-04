@@ -1,5 +1,5 @@
 import { at, isBlocked } from "../../issue-phases.js";
-import { isCancellation, setHandler } from "../registry.js";
+import { isCancellation, runExecution, setHandler } from "../registry.js";
 import * as contracts from "../issue-contracts.js";
 import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
@@ -22,8 +22,14 @@ function githubPullRequestLifecycleFields(
 
 export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
+  const retryAt = (value: string | null): string => value ?? new Date(runExecution.current().now() + 60_000).toISOString();
   const blockDelivery = async (failure: GithubReleaseFailure): Promise<contracts.IssueWorkflowState> => {
-    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "human", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: releaseFailureCopy[failure.code], releaseFailureSummary: releaseFailureCopy[failure.code], releaseRetryAt: failure.retryAt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    if (failure.code === "provider-unavailable" || failure.code === "provider-rate-limited") {
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("releasing"), owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Forge waits for GitHub", blocker: null, releaseFailureSummary: releaseFailureCopy[failure.code], releaseRetryAt: retryAt(failure.retryAt), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      await ctx.project();
+      return ctx.state;
+    }
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "human", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: releaseFailureCopy[failure.code], blocker: stateTransitions.humanBlocker("provider_connectivity_exhausted", releaseFailureCopy[failure.code], [{ command: "review_delivery", label: "Review the delivery", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(ctx.state.deliveryReviewArtifact?.artifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence")), releaseFailureSummary: releaseFailureCopy[failure.code], releaseRetryAt: failure.retryAt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     return ctx.state;
   };
@@ -57,8 +63,8 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
         await ctx.project();
         return ctx.state;
       }
-      const waitingForRateLimit = result.code === "provider-rate-limited" && result.retryAt !== null;
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("releasing"), owner: waitingForRateLimit ? "lead" : "human", allowedCommands: waitingForRateLimit ? ["cancel_issue"] : ["publish_draft", "cancel_issue"], pendingAction: waitingForRateLimit ? "Forge waits for GitHub" : releaseFailureSummary, releaseFailureSummary, releaseRetryAt: result.retryAt, releaseOperationAttempt: result.attempt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      const waitingForProvider = result.code === "provider-rate-limited" || result.code === "provider-unavailable";
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("releasing"), owner: waitingForProvider ? "lead" : "human", allowedCommands: waitingForProvider ? ["cancel_issue"] : ["publish_draft", "cancel_issue"], pendingAction: waitingForProvider ? "Forge waits for GitHub" : releaseFailureSummary, releaseFailureSummary, releaseRetryAt: waitingForProvider ? retryAt(result.retryAt) : result.retryAt, releaseOperationAttempt: result.attempt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.state;
     }

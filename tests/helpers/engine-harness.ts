@@ -42,7 +42,24 @@ function seedFoundation(database: ForgeDatabase, root: string): void {
 }
 
 export async function createEngineHarness(overrides: Partial<IssueActivities> = {}, suppliedClock?: ImmediateClock): Promise<EngineHarness> {
-  const root = await mkdtemp(join(tmpdir(), "forge-engine-")); const config = createTestConfig(root); const clock = suppliedClock ?? new ImmediateClock(); const calls = new Map<string, number>(); const activities: Partial<IssueActivities> = { readHerdrTurn: async () => ({ type: "owner.live" }), ...overrides };
+  const root = await mkdtemp(join(tmpdir(), "forge-engine-")); const config = createTestConfig(root); const clock = suppliedClock ?? new ImmediateClock(); const calls = new Map<string, number>(); const activities: Partial<IssueActivities> = {
+    readHerdrTurn: async () => ({ type: "owner.live" }),
+    inspectTaskWorktree: async (input) => ({
+      present: true,
+      owned: true,
+      dirtyFileCount: 0,
+      branch: input.expectedBranch ?? null,
+      activeExecution: false,
+      revision: {
+        proven: true,
+        head: input.expectedCommit ?? null,
+        headTree: input.expectedTree ?? null,
+        branch: input.expectedBranch ?? null,
+        clean: true,
+      },
+    }),
+    ...overrides,
+  };
   let database = new ForgeDatabase(config.databasePath); seedFoundation(database, root);
   const activityProxy = new Proxy({}, { get: (_target, property) => async (...args: unknown[]) => {
     const name = String(property);

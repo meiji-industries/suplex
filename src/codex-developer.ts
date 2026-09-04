@@ -740,11 +740,20 @@ export class DeveloperService {
     const planText = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: plan.planStoragePath, sha256: plan.planSha256 })).toString("utf8");
     const evidenceText = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: plan.ciEvidenceStoragePath, sha256: plan.ciEvidenceSha256 })).toString("utf8");
     const existingExecution = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, status, branch_name AS branchName, worktree_path AS worktreePath, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; status: string; branchName: string | null; worktreePath: string | null; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
-    if (existingExecution && (existingExecution.taskId !== input.taskId || existingExecution.companyId !== input.companyId || existingExecution.workflowId !== input.workflowId || existingExecution.branchName !== input.branchName || existingExecution.worktreePath !== worktreePath || existingExecution.supersedesExecutionId !== input.priorDeveloperExecutionId || existingExecution.sessionRef !== priorSessionRef || !["starting", "running"].includes(existingExecution.status))) {
+    const existingCoordinatesMatch = existingExecution
+      && existingExecution.taskId === input.taskId
+      && existingExecution.companyId === input.companyId
+      && existingExecution.workflowId === input.workflowId
+      && existingExecution.branchName === input.branchName
+      && existingExecution.worktreePath === worktreePath
+      && existingExecution.supersedesExecutionId === input.priorDeveloperExecutionId
+      && existingExecution.sessionRef === priorSessionRef;
+    if (existingExecution && (!existingCoordinatesMatch || !["starting", "running", "failed", "cancelled"].includes(existingExecution.status))) {
       throw new AgentFailure("developer-execution-identity-conflict", "The deterministic CI repair execution is bound to different coordinates", { nonRetryable: true });
     }
     const startedAt = this.now().toISOString();
     this.database.authTransaction((db) => {
+        if (existingExecution?.status === "failed" || existingExecution?.status === "cancelled") db.prepare("UPDATE forge_developer_executions SET status = 'starting', failure_code = NULL, failure_summary = NULL, finished_at = NULL, started_at = ?, heartbeat_at = ? WHERE id = ? AND status IN ('failed', 'cancelled')").run(startedAt, startedAt, executionId);
         // Attempt must climb: (workflow_id, plan_revision, attempt) is unique, so a
         // hardcoded attempt 1 made every CI repair after the first fail on insert.
         db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at) VALUES (?, ?, ?, ?, 0, (SELECT COALESCE(MAX(attempt), 0) + 1 FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = 0), 'starting', ?, ?, ?, NULL, NULL, ?, ?, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.workflowId, input.branchName, worktreePath, plan.baseSha, prior?.id ?? null, priorSessionRef, startedAt, startedAt);

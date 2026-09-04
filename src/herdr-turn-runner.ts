@@ -10,7 +10,7 @@ import { detectGitHandoff } from "./git-handoff.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { type NeutralTimelineEvent, type RolloutParseResult } from "./codex-rollout.js";
 import type { ForgeDatabase } from "./database.js";
-import { HerdrFailure, snapshotAgents, type HerdrClient } from "./herdr-client.js";
+import { HerdrFailure, snapshotAgents, type HerdrAgent, type HerdrClient } from "./herdr-client.js";
 import type { IssueTimelineEvents } from "./issue-timeline-events.js";
 import type { EnsuredRoleSession, HerdrSessionStore } from "./herdr-session-store.js";
 import { herdrRuntime, type HerdrProviderRuntime } from "./agent-providers/herdr-runtime.js";
@@ -58,6 +58,7 @@ export class HerdrTurnRunner {
   async run<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T>> {
     let session: EnsuredRoleSession | undefined;
     let turnId: string | undefined;
+    let promptNotStarted = false;
     try {
       let correction = 0;
       let validationIssues: string | undefined;
@@ -67,8 +68,13 @@ export class HerdrTurnRunner {
         const marker = `[forge-turn:${turnId}]`;
         let resultPath = initialResultPath;
         let prompt = this.dispatchPrompt(marker, resultPath, input.schemaPath, input.prompt, validationIssues);
-        const existingBeforeLaunch = this.existingTurn(input, correction, prompt);
-        if (!existingBeforeLaunch && this.turnExists(turnId)) {
+        let existingBeforeLaunch = this.existingTurn(input, correction, prompt);
+        const retryingUndeliveredPrompt = existingBeforeLaunch?.status === "failed";
+        if (retryingUndeliveredPrompt) {
+          this.reopenUndeliveredPrompt(turnId);
+          existingBeforeLaunch = undefined;
+        }
+        if (!existingBeforeLaunch && !retryingUndeliveredPrompt && this.turnExists(turnId)) {
           throw new AgentFailure("recovery-identity-conflict", "The durable turn identity does not match this dispatch", { nonRetryable: true });
         }
         if (existingBeforeLaunch?.status === "correction_required" && !this.correctionTurnExists(input, correction + 1)) {
@@ -94,7 +100,7 @@ export class HerdrTurnRunner {
           existing = this.existingTurn(input, correction, prompt);
         }
         if (!existing) throw new AgentFailure("recovery-identity-conflict", "The durable turn identity changed during dispatch setup", { nonRetryable: true });
-        const resumed = existing && !dispatchIntentCreated ? existing : undefined;
+        const resumed = existing && !dispatchIntentCreated && !retryingUndeliveredPrompt ? existing : undefined;
         resultPath = existing
           ? this.existingResultPath(input, existing.resultRelativePath)
           : initialResultPath;
@@ -115,7 +121,11 @@ export class HerdrTurnRunner {
           this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', prompt_sent_at = COALESCE(prompt_sent_at, ?), updated_at = ? WHERE turn_id = ?", start, start, promptSentAt, promptSentAt, turnId);
           input.dispatchFence?.();
           if (!promptInArgv) {
-            const dispatched = await this.herdr.prompt(session.agentName, prompt, { waitForWorking: true });
+            const dispatched = await this.promptOrObserveDelivery(session.agentName, prompt, marker, resultPath);
+            if (!dispatched) {
+              promptNotStarted = true;
+              throw new HerdrFailure("prompt-not-delivered", true, "Herdr did not deliver the interactive prompt");
+            }
             if (dispatched && ["done", "failed", "cancelled"].includes(dispatched.status ?? ""))
               throw new AgentFailure("agent-terminal-after-dispatch", "Herdr accepted the prompt, but the interactive agent is terminal.");
           }
@@ -156,7 +166,8 @@ export class HerdrTurnRunner {
         correction += 1;
       }
     } catch (error) {
-      if (turnId) this.update("UPDATE forge_herdr_turns SET status = 'failed', finished_at = ?, updated_at = ? WHERE turn_id = ? AND prompt_sent_at IS NULL AND status IN ('created', 'dispatching')", iso(), iso(), turnId);
+      if (turnId && promptNotStarted) this.failUndeliveredPrompt(input, turnId);
+      else if (turnId) this.update("UPDATE forge_herdr_turns SET status = 'failed', finished_at = ?, updated_at = ? WHERE turn_id = ? AND prompt_sent_at IS NULL AND status IN ('created', 'dispatching')", iso(), iso(), turnId);
       if (error instanceof HerdrFailure) throw new AgentFailure(error.code, error.message, { nonRetryable: !error.retryable });
       throw error;
     } finally {
@@ -347,6 +358,35 @@ export class HerdrTurnRunner {
   }
 
   private turnId(input: HerdrTurnInput<unknown>, correction: number): string { return `turn_${hash(`${input.executionId}\0${input.promptKind}\0${correction}`).slice(0, 32)}`; }
+  private async promptOrObserveDelivery(name: string, prompt: string, marker: string, resultPath: string): Promise<HerdrAgent | null> {
+    try {
+      return await this.herdr.prompt(name, prompt, { waitForWorking: true });
+    } catch (error) {
+      if (!(error instanceof HerdrFailure) || error.code !== "timeout") throw error;
+      let live: HerdrAgent | null;
+      try { live = await this.herdr.getAgent(name); }
+      catch { throw error; }
+      if (!live) throw error;
+      if (["working", "running", "starting", "blocked"].includes(live.status ?? "")) return live;
+      if (!["idle", "done"].includes(live.status ?? "")) throw error;
+      const [result, recent] = await Promise.all([
+        readFile(resultPath).catch(() => undefined),
+        this.herdr.readAgent(name, "recent-unwrapped").catch(() => undefined),
+      ]);
+      return result || recent?.includes(marker) ? live : null;
+    }
+  }
+  private reopenUndeliveredPrompt(turnId: string): void {
+    this.update("UPDATE forge_herdr_turns SET status = 'created', prompt_sent_at = NULL, finished_at = NULL, updated_at = ? WHERE turn_id = ? AND status = 'failed'", iso(), turnId);
+  }
+  private failUndeliveredPrompt(input: HerdrTurnInput<unknown>, turnId: string): void {
+    const now = iso();
+    const table = input.ledger === "agent" ? "forge_agent_executions" : "forge_developer_executions";
+    this.database.authTransaction((db) => {
+      db.prepare("UPDATE forge_herdr_turns SET status = 'failed', finished_at = ?, updated_at = ? WHERE turn_id = ? AND status IN ('created', 'dispatching')").run(now, now, turnId);
+      db.prepare(`UPDATE ${table} SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = 'prompt-not-delivered', failure_summary = 'Herdr did not deliver the interactive prompt' WHERE id = ? AND status IN ('starting', 'running')`).run(now, now, input.executionId);
+    });
+  }
   private resultPath(input: HerdrTurnInput<unknown>, turnId: string): string { return join(input.task.runtimeRoot, "herdr-results", input.task.taskId, input.executionRole, `result-${turnId}.json`); }
   private dispatchPrompt(marker: string, path: string, schema: string, taskPrompt: string, validationIssues?: string): string {
     return `${this.completionBlock(marker, path, schema)}${validationIssues ? `\n\nYour previous result file failed schema validation. Correct these issues:\n${validationIssues}` : ""}\n\n${responseStyleBlock}\n\n${taskPrompt}`;

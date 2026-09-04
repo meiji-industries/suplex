@@ -31,8 +31,13 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
     }
     const priorCommit = ctx.state.resultCommit ?? ctx.state.targetBaseSha ?? null;
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
+    // A workflow is one task lifecycle. Projection and plan revisions are
+    // optimistic-concurrency values, never delivery-owner generations.
+    const deliveryGeneration = 0;
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
     const executionId = ctx.supervisedDeveloperTurns ? developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "implementation", command.commandId) : `developer_${ctx.state.workflowId}_${command.commandId}`.slice(0, 256);
+    const deliveryOwner = await activityProxies.claimDeliveryOwner({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, generation: deliveryGeneration, token: executionId, ...(ctx.state.leadSummary ? { objective: ctx.state.leadSummary } : {}) });
+    if (deliveryOwner.outcome === "owned_elsewhere" || deliveryOwner.outcome === "cancelled") return ctx.state;
     await ctx.withStateMutation(() => {
       if (ctx.state.revision !== command.expectedRevision || ctx.state.step !== "ready_for_development") throw new Error("Development start was superseded by another command");
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...stateTransitions.freshDeliveryLineage(), revision: ctx.state.revision + 1, ...at("development"), owner: "lead", allowedCommands: ctx.addRevisionCommand(["cancel_development", "reject_plan", "cancel_issue"]), pendingAction: "The Builder works on the task", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: executionId, developerAttempt, developerTurnKind: "implementation", ...ctx.recoveryFields("starting", null, null, null), activeOperation: { commandId: command.commandId, kind: "development", startedRevision: ctx.state.revision + 1 }, blocker: null, stateChangedAt: new Date().toISOString() });
@@ -84,6 +89,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
       if (recovered) await ctx.project();
       return ctx.state;
     }
+    if (outcome.status === "completed") await activityProxies.completeDeliveryOwner({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, generation: deliveryGeneration, token: executionId, receipt: outcome.result });
     let autoRetry = false;
     let autoContinue = false;
     const automaticRestartRequested = (): boolean => autoRetry || autoContinue;
@@ -152,6 +158,7 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
     return ctx.state;
   }
   const planRevision = recovered?.planRevision ?? ctx.state.planRevision ?? ctx.state.revision;
+  const deliveryGeneration = 0;
   const developerAttempt = recovered?.attempt ?? (ctx.state.developerAttempt ?? 0) + 1;
   const supersedesExecutionId = ctx.state.developerExecutionId!;
   // A human Resume after automatic continuation stopped is still the same
@@ -164,6 +171,8 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
     ? { ...ctx.state.developerContinuation, previousDeliverySummary: ctx.state.deliverySummary ?? "Prior delivery" }
     : undefined;
   const executionId = recovered?.executionId ?? (ctx.supervisedDeveloperTurns ? developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "implementation", command.commandId) : `developer_${ctx.state.workflowId}_${command.commandId}`.slice(0, 256));
+  const deliveryOwner = await activityProxies.claimDeliveryOwner({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, generation: deliveryGeneration, token: executionId, ...(ctx.state.deliverySummary ? { objective: ctx.state.deliverySummary } : {}) });
+  if (deliveryOwner.outcome === "owned_elsewhere" || deliveryOwner.outcome === "cancelled") return ctx.state;
   await ctx.withStateMutation(() => {
     if (ctx.state.revision !== command.expectedRevision || (reconcileOnly ? !["development"].includes(ctx.state.step) : !["ready_for_development", "development"].includes(ctx.state.step))) throw new Error("The Builder retries was superseded by another command");
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...(reconcileOnly ? {} : stateTransitions.freshDeliveryLineage()), revision: ctx.state.revision + 1, ...at("development"), owner: "lead", allowedCommands: ctx.addRevisionCommand(["cancel_development", "reject_plan", "cancel_issue"]), pendingAction: reconcileOnly ? "The Builder resumes the task" : "The Builder retries", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: executionId, developerSessionRef: recovered?.sessionRef ?? ctx.state.developerSessionRef, developerAttempt, developerTurnKind: "implementation", ...ctx.recoveryFields(reconcileOnly ? "reconnecting" : "starting", null, reconcileOnly ? "The Builder resumes the task." : "Starting a linked The Builder retries.", null), activeOperation: { commandId: command.commandId, kind: "development", startedRevision: ctx.state.revision + 1 }, blocker: null, stateChangedAt: new Date().toISOString() });
@@ -210,6 +219,7 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
     }
     throw error;
   }
+  if (outcome.status === "completed") await activityProxies.completeDeliveryOwner({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, generation: deliveryGeneration, token: executionId, receipt: outcome.result });
   const applied = await ctx.withStateMutation(() => {
     if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.step !== "development") return false;
     if (outcome.status === "completed") {

@@ -43,6 +43,9 @@ function seedFoundation(database: ForgeDatabase, root: string): void {
 
 export async function createEngineHarness(overrides: Partial<IssueActivities> = {}, suppliedClock?: ImmediateClock): Promise<EngineHarness> {
   const root = await mkdtemp(join(tmpdir(), "forge-engine-")); const config = createTestConfig(root); const clock = suppliedClock ?? new ImmediateClock(); const calls = new Map<string, number>(); const activities: Partial<IssueActivities> = {
+    claimDeliveryOwner: async () => ({ outcome: "owned", wakeAt: new Date(clock.now() + 60_000).toISOString() }),
+    completeDeliveryOwner: async () => "owned",
+    cancelDeliveryOwner: async () => true,
     readHerdrTurn: async () => ({ type: "owner.live" }),
     inspectTaskWorktree: async (input) => ({
       present: true,

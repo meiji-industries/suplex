@@ -60,6 +60,9 @@ export interface AdoptPullRequestReleaseActivityResult {
 }
 
 export interface ReleaseActivities {
+  claimDeliveryOwner(input: { taskId: string; companyId: string; workflowId: string; projectRevisionId: string; generation: number; token: string; objective?: string }): Promise<{ outcome: "owned" | "recovered" | "owned_elsewhere" | "cancelled"; wakeAt?: string | null }>;
+  completeDeliveryOwner(input: { taskId: string; companyId: string; workflowId: string; projectRevisionId: string; generation: number; token: string; receipt: unknown }): Promise<"owned" | "owned_elsewhere" | "cancelled">;
+  cancelDeliveryOwner(input: { taskId: string; companyId: string; workflowId: string; projectRevisionId: string; generation: number }): Promise<boolean>;
   publishRelease(input: PublishReleaseActivityInput): Promise<PublishReleaseActivityResult>;
   pushDeliveryBranch(input: { taskId: string; companyId: string; workflowId: string; branchName: string; commitSha: string }): Promise<{ repository: string; branchName: string; commitSha: string }>;
   adoptPullRequestRelease(input: AdoptPullRequestReleaseActivityInput): Promise<AdoptPullRequestReleaseActivityResult>;

@@ -8,7 +8,7 @@ import { assertPayloadWithinLimit } from "../policy.js";
 import { IssueWorkflowStateSchema, type DeveloperCancellationResult } from "../issue-contracts.js";
 import { ContinueWorkCommandSchema, PlanCommandInputSchema, StartPlanningInputSchema } from "../../commands/inputs.js";
 import { issueUpdates } from "../issue-updates.js";
-import { acceptDelivery, cancelCapacity, cancelCapacityExecution, cancelDeveloperExecution, cleanupTaskWorktree, createSuccessor, finalizeCapacity, inspectCapacity, recreateTaskWorktree, recordDeliveryDecision } from "./activity-proxies.js";
+import { acceptDelivery, cancelCapacity, cancelCapacityExecution, cancelDeliveryOwner, cancelDeveloperExecution, cleanupTaskWorktree, createSuccessor, finalizeCapacity, inspectCapacity, recreateTaskWorktree, recordDeliveryDecision } from "./activity-proxies.js";
 import type { IssueWorkflowContext } from "./context.js";
 import * as stateTransitions from "./state-transitions.js";
 
@@ -73,6 +73,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     await ctx.initialProjection;
     const command = PlanCommandInputSchema.parse(rawInput);
     if (TERMINAL_PHASES.has(ctx.state.phase)) throw new Error("Issue cancellation is not available in the current phase");
+    await cancelDeliveryOwner({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, generation: 0 });
     const executionId = ctx.state.developerExecutionId;
     const interruptedCancellation = executionId ? acceptedDeveloperCancellation(issueUpdates.cancel_issue, executionId) : undefined;
     if (executionId && ["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling"].includes(ctx.state.developerRecoveryStatus ?? "")) {

@@ -165,6 +165,11 @@ function isGuardRefusal(error: unknown): boolean {
   return error instanceof Error && /not available in the current phase/i.test(error.message);
 }
 
+function hasPublishedDelivery(state: IssueWorkflowState): boolean {
+  return state.releaseId !== null && state.releaseId !== undefined
+    || state.pullRequestNumber !== null && state.pullRequestNumber !== undefined;
+}
+
 async function runDriverCommand(ctx: IssueWorkflowContext, command: IssueCommand, step: IssueWorkflowState["step"], event: OwnerEvent): Promise<boolean> {
   const revision = ctx.state.revision;
   const commandId = `${ctx.state.workflowId}:driver:${step}:${revision}:${event.type}`;
@@ -226,6 +231,7 @@ const DIRECT_STEP_DETAILS: Partial<Record<IssueWorkflowState["step"], Pick<Issue
   delivery_ready: { allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the delivery" },
   development: { allowedCommands: ["request_delivery_changes", "cancel_issue"], pendingAction: "Your delivery decision is necessary" },
   merge_conflict_reviewing: { allowedCommands: ["cancel_issue"], pendingAction: "Forge prepares a conflict plan" },
+  ci_waiting: { allowedCommands: ["cancel_issue"], pendingAction: "Forge waits for CI" },
 };
 
 function directStepDetails(step: IssueWorkflowState["step"]): Pick<IssueWorkflowState, "allowedCommands" | "pendingAction"> {
@@ -255,6 +261,10 @@ async function applyDirectStep(ctx: IssueWorkflowContext, target: Extract<Transi
 export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: DriverDependencies = {}): Promise<boolean> {
   const step = ctx.state.step;
   if (step === "delivery_ready" && ctx.state.owner === "human") return false;
+  if (step === "delivery_ready" && ctx.state.owner === "lead" && hasPublishedDelivery(ctx.state)) {
+    await applyDirectStep(ctx, { step: "ci_waiting", owner: "lead" }, step, parsed({ type: "owner.done" }));
+    return true;
+  }
   const rule = STEP_TABLE[step];
   if (step === "delivery_reviewed" && !ctx.state.deliveryReviewId && ctx.state.owner === "lead" && !isBlocked(ctx.state)) {
     return runDriverCommand(ctx, "review_delivery", step, parsed({ type: "owner.done" }));

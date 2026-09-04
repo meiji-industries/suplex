@@ -42,7 +42,15 @@ describe("stepMachine", () => {
         continue;
       }
       for (const answer of ANSWERS) expect(config?.on?.[`owner.${answer}`], `${step}.${answer}`).toBeDefined();
+      expect(config?.on?.["owner.unavailable"], `${step}.unavailable`).toBeDefined();
     }
+  });
+
+  it("keeps an unavailable owner read in the current step with a short poll", () => {
+    expect(nextStep("reviewing_delivery", { type: "owner.unavailable", owner: "herdr", reason: "Herdr is unavailable" })).toEqual({
+      step: "reviewing_delivery",
+      actions: [{ type: "wait", params: { on: "poll", pollMs: 15_000 } }],
+    });
   });
 
   it("keeps direct step transitions in the XState graph", () => {

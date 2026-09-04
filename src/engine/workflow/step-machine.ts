@@ -16,10 +16,11 @@ import {
 export { ANSWERS, OWNERS };
 
 export type OwnerEvent =
-  | { type: "owner.done"; outcome?: "approved" | "findings" | "disagreement" }
+  | { type: "owner.done"; outcome?: "approved" | "findings" | "disagreement" | undefined }
   | { type: "owner.live" }
   | { type: "owner.absent" }
   | { type: "owner.failed" }
+  | { type: "owner.unavailable"; owner: OwnerRead["owner"]; reason: string }
   | { type: "owner.cancel" };
 
 export type DriverAction =
@@ -30,7 +31,7 @@ export type DriverAction =
 type StepMeta = { waitsOn: StepRule["waitsOn"]; humanAction?: IssueCommand };
 type ActiveState = {
   meta: StepMeta;
-  on: Record<`owner.${Answer}`, { target?: IssueStep }> & { "owner.cancel": { target: "cancelled" } };
+  on: Record<`owner.${Answer}`, { target?: IssueStep }> & { "owner.cancel": { target: "cancelled" }; "owner.unavailable": {} };
 };
 type FinalState = { type: "final"; meta: StepMeta };
 type StepState = ActiveState | FinalState;
@@ -80,6 +81,7 @@ function stateFor(rule: StepRule): StepState {
         }),
       ),
       "owner.cancel": { target: "cancelled" },
+      "owner.unavailable": {},
     } as ActiveState["on"],
   };
 }
@@ -108,10 +110,11 @@ export function nextStep(step: IssueStep, event: OwnerEvent): { step: IssueStep;
   const value = next.value;
   if (typeof value !== "string") throw new Error("Issue steps must be atomic states");
   if (event.type === "owner.cancel") return { step: value, actions: [] };
+  if (event.type === "owner.unavailable") return { step: value, actions: [{ type: "wait", params: { on: "poll", pollMs: 15_000 } }] };
   return { step: value, actions: actionsFor(STEP_TABLE[step].on[answerFor(event)]) };
 }
 
-function answerFor(event: Exclude<OwnerEvent, { type: "owner.cancel" }>): Answer {
+function answerFor(event: Exclude<OwnerEvent, { type: "owner.cancel" | "owner.unavailable" }>): Answer {
   switch (event.type) {
     case "owner.done": return "done";
     case "owner.live": return "live";

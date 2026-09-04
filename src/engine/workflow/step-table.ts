@@ -76,11 +76,11 @@ export const STEP_TABLE: Record<IssueStep, StepRule> = {
     on: { done: { command: "review_delivery" }, live: signal, absent: { command: "repair_delivery" }, failed: { command: "repair_delivery" } },
   },
   delivery_ready: {
-    waitsOn: { owner: "herdr", role: "reviewer", promptKind: "delivery-review" },
+    waitsOn: { owner: "herdr", role: "planner", promptKind: "delivery-review" },
     on: { done: { command: "publish_draft" }, live: signal, absent: { command: "review_delivery" }, failed: { command: "review_delivery" } },
   },
   reviewing_delivery: {
-    waitsOn: { owner: "herdr", role: "reviewer", promptKind: "delivery-review" },
+    waitsOn: { owner: "herdr", role: "planner", promptKind: "delivery-review" },
     on: { done: { step: "delivery_reviewed", owner: "lead" }, live: signal, absent: { command: "review_delivery" }, failed: { step: "repair_required", owner: "lead" } },
   },
   review_arbitration: {
@@ -100,11 +100,11 @@ export const STEP_TABLE: Record<IssueStep, StepRule> = {
     on: { done: { step: "done", owner: "human" }, live: poll(60_000), absent: { command: "publish_draft" }, failed: { step: "merge_conflict_reviewing", owner: "lead" } },
   },
   merge_conflict_reviewing: {
-    waitsOn: { owner: "herdr", role: "planner", promptKind: "merge-conflict-plan" },
+    waitsOn: { owner: "herdr", role: "integrator", promptKind: "merge-conflict-plan" },
     on: { done: { command: "resolve_merge_conflict" }, live: signal, absent: { command: "resolve_merge_conflict" }, failed: { step: "delivery_ready", owner: "lead" } },
   },
   merge_conflict_resolving: {
-    waitsOn: { owner: "herdr", role: "builder", promptKind: "merge-conflict-resolution" },
+    waitsOn: { owner: "herdr", role: "integrator", promptKind: "merge-conflict-resolution" },
     on: { done: { step: "delivery_ready", owner: "lead" }, live: signal, absent: { command: "resolve_merge_conflict" }, failed: { command: "resolve_merge_conflict" } },
   },
   ci_waiting: {
@@ -116,7 +116,7 @@ export const STEP_TABLE: Record<IssueStep, StepRule> = {
     on: { done: { command: "repair_ci" }, live: signal, absent: { command: "repair_ci" }, failed: { step: "development", owner: "human" } },
   },
   ci_repairing: {
-    waitsOn: { owner: "herdr", role: "builder", promptKind: "ci-repair" },
+    waitsOn: { owner: "herdr", role: "integrator", promptKind: "ci-repair" },
     on: { done: { step: "delivery_ready", owner: "lead" }, live: signal, absent: { command: "repair_ci" }, failed: { step: "development", owner: "human" } },
   },
   accepted: {

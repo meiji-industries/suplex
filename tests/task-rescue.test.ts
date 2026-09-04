@@ -35,8 +35,8 @@ test("retry reconciles before it issues one current retry command", async () => 
   expect(audit).toHaveBeenCalledOnce();
 });
 
-test("retry waits without dispatch when the driver has not reconciled", async () => {
-  const run = { reconcileOwnerRead: vi.fn(async () => "waiting" as const), state: { activeOperation: null } };
+test("retry waits without dispatch when an active operation is running", async () => {
+  const run = { reconcileOwnerRead: vi.fn(async () => "waiting" as const), state: { activeOperation: { commandId: "workflow:publish", kind: "publish", startedRevision: 7 } } };
   getIssueEngine.mockReturnValue({ run: vi.fn(() => run) });
   const database = {
     authQuery: (operation: (db: { prepare: (sql: string) => { get: (...args: string[]) => unknown; run: (...args: unknown[]) => unknown } }) => unknown) => operation({ prepare: (sql) => ({ get: () => sql.includes("forge_users") ? { id: "admin" } : undefined, run: vi.fn() }) }),
@@ -49,6 +49,24 @@ test("retry waits without dispatch when the driver has not reconciled", async ()
 
   expect(executeCommand).not.toHaveBeenCalled();
   expect(result).toEqual({ status: "waiting", detail: "Forge is checking the current workflow state.", revision: 7 });
+});
+
+test("retry issues the current command after an idle owner-read timeout", async () => {
+  const run = { reconcileOwnerRead: vi.fn(async () => "waiting" as const), state: { activeOperation: null } };
+  getIssueEngine.mockReturnValue({ run: vi.fn(() => run) });
+  const database = {
+    authQuery: (operation: (db: { prepare: (sql: string) => { get: (...args: string[]) => unknown; run: (...args: unknown[]) => unknown } }) => unknown) => operation({ prepare: (sql) => ({ get: () => sql.includes("forge_users") ? { id: "admin" } : undefined, run: vi.fn() }) }),
+  };
+  const current = { id: "task", companyId: "company", workflowId: "workflow", phase: "releasing", revision: 7, allowedCommands: ["publish_draft", "cancel_issue"] };
+  const updated = { ...current, revision: 8, allowedCommands: [] };
+  const executeCommand = vi.fn(async () => updated);
+  const tasks = { getTask: vi.fn(() => current), executeCommand };
+
+  const result = await new TaskRescueService(tasks as never, database as never, {} as never).rescue("admin", "task");
+
+  expect(executeCommand).toHaveBeenCalledOnce();
+  expect(executeCommand).toHaveBeenCalledWith("admin", "task", "publish_draft", { expectedRevision: 7, commandId: "workflow:task-retry:7:publish_draft" });
+  expect(result).toEqual({ status: "command_issued", command: "publish_draft", detail: "Forge issued publish_draft.", revision: 8 });
 });
 
 test("retry coalesces repeated clicks for one workflow", async () => {

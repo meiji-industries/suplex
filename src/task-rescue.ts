@@ -72,10 +72,11 @@ export class TaskRescueService {
       const reconciliation = await run.reconcileOwnerRead();
       const current = this.tasks.getTask(actorUserId, task.id);
       if (TERMINAL_PHASES.has(current.phase)) return this.record(actorUserId, current, { status: "reconciled", detail: "Forge reconciled the task to a terminal state.", revision: current.revision });
-      if (reconciliation === "waiting") return this.record(actorUserId, current, { status: "waiting", detail: "Forge is checking the current workflow state.", revision: current.revision });
+      const operationRunning = run.state.activeOperation !== null && run.state.activeOperation !== undefined;
+      if (reconciliation === "waiting" && operationRunning) return this.record(actorUserId, current, { status: "waiting", detail: "Forge is checking the current workflow state.", revision: current.revision });
       const command = selectRetryCommand(current.allowedCommands);
       if (!command) {
-        const status = run.state.activeOperation === null ? "cannot_proceed" : "waiting";
+        const status = operationRunning ? "waiting" : "cannot_proceed";
         return this.record(actorUserId, current, { status, detail: status === "waiting" ? "Forge is waiting for the current workflow action." : "No retry action is available for the current task state.", revision: current.revision });
       }
       const updated = await this.tasks.executeCommand(actorUserId, current.id, command, { expectedRevision: current.revision, commandId: `${current.workflowId}:task-retry:${current.revision}:${command}` });

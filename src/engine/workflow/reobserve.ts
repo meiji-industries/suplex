@@ -6,7 +6,11 @@ import type { IssueWorkflowContext } from "./context.js";
 import { clearAutomaticChainHalt } from "./runtime.js";
 
 function parkedCommand(ctx: IssueWorkflowContext): { command: IssueCommand | null; eligible: boolean } {
-  if (ctx.state.owner !== "human") return { command: null, eligible: false };
+  const reviewPreflightFailure = ctx.state.deliveryReviewBlockerCode === "subject-changed"
+    || (ctx.state.step === "delivery_ready" && ctx.state.blocker?.category === "agent_exhausted" && ctx.state.blocker.actions.some((action) => action.command === "review_delivery"));
+  const leadWithoutReviewCommand = ctx.state.owner === "lead" && !ctx.state.allowedCommands.includes("review_delivery");
+  if (ctx.state.owner !== "human" && !leadWithoutReviewCommand) return { command: null, eligible: false };
+  if (reviewPreflightFailure && ["delivery_ready", "delivery_reviewed"].includes(ctx.state.step)) return { command: "review_delivery", eligible: true };
   const blockerCategory = ctx.state.blocker?.category;
   const targetBaseFailure = ctx.state.step === "development" && Boolean(ctx.state.targetBaseBlockerCode);
   const retriesPublishOrCi = blockerCategory === "agent_exhausted" && ctx.state.blocker?.actions.some((action) => action.command === "publish_draft" || action.command === "reconcile_ci");
@@ -21,7 +25,7 @@ function parkedCommand(ctx: IssueWorkflowContext): { command: IssueCommand | nul
 
 export async function reobserveParkedTask(ctx: IssueWorkflowContext, input: IssueWorkflowInput): Promise<boolean> {
   const { command, eligible } = parkedCommand(ctx);
-  const parked = ctx.state.owner === "human" && ["delivery_ready", "delivery_reviewed", "releasing", "ci_waiting", "development"].includes(ctx.state.step);
+  const parked = (ctx.state.owner === "human" || (ctx.state.owner === "lead" && !ctx.state.allowedCommands.includes("review_delivery"))) && ["delivery_ready", "delivery_reviewed", "releasing", "ci_waiting", "development"].includes(ctx.state.step);
   if (!eligible || !parked || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.branchName) return false;
   const observedAt = new Date().toISOString();
   let ownerConfirmation = "git does not have the reviewed commit at HEAD.";

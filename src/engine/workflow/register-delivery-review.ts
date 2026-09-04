@@ -19,6 +19,19 @@ type LegacyReviewResult = {
   reviewArtifact?: contracts.IssueWorkflowState["deliveryReviewArtifact"];
 };
 
+function subjectChangeRetryState(ctx: IssueWorkflowContext, result: Extract<contracts.DeliveryReviewActivityResult, { outcome: "blocked" }>): contracts.IssueWorkflowState {
+  const blocked = stateTransitions.reviewBlockedState(ctx.state, result);
+  const automaticAttempts = (blocked.processedCommandIds ?? []).filter((commandId) => commandId.startsWith(`${blocked.workflowId}:auto-review_delivery:`)).length;
+  if (automaticAttempts >= ctx.repairCycleLimit) return blocked;
+  return contracts.IssueWorkflowStateSchema.parse({
+    ...blocked,
+    owner: "lead",
+    blocker: null,
+    allowedCommands: ["review_delivery", "cancel_issue"],
+    pendingAction: "Forge re-reads the delivery before review.",
+  });
+}
+
 function canRecoverRevalidatedReview(state: contracts.IssueWorkflowState): boolean {
   const recoveryBlocker = state.deliveryReviewBlockerCode === "review-infrastructure-failure"
     || state.deliveryReviewBlockerCode === "subject-changed"
@@ -149,7 +162,9 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
         developerEvidenceArtifactId: exactResult.subject.developerEvidenceArtifactId,
       });
       ctx.state = exactResult.outcome === "blocked"
-        ? stateTransitions.reviewBlockedState(ctx.state, exactResult)
+        ? exactResult.code === "subject-changed"
+          ? subjectChangeRetryState(ctx, exactResult)
+          : stateTransitions.reviewBlockedState(ctx.state, exactResult)
         : stateTransitions.repairRequiredState(ctx.state, exactResult, ctx.repairCycleLimit, true);
     }
     if (ctx.state.step === "delivery_reviewed" && (ctx.input.deliveryTarget === "remote_branch" || ctx.input.deliveryTarget === "local_worktree")) await ctx.project();

@@ -29,6 +29,7 @@ import { readEnvironmentSettings } from "./environment-settings.js";
 import { BrowserProofService } from "./browser-proof.js";
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
+import { isTaskTurnLive, type TaskTurnLiveness } from "./engine/activities/herdr-liveness.js";
 
 const execFileAsync = promisify(execFile);
 const PROJECT_VERIFICATION_FAILURE_PREFIX = "Project verification failed:";
@@ -137,6 +138,15 @@ async function readDeliveryGitEvidence(worktreePath: string, targetBaseSha: stri
   };
 }
 
+type DeliveryGitEvidence = Awaited<ReturnType<typeof readDeliveryGitEvidence>>;
+
+function matchesDeliverySubject(evidence: DeliveryGitEvidence, branchName: string, subjectCommit: string, subjectTree: string): boolean {
+  return evidence.status.length === 0
+    && evidence.branch === branchName
+    && evidence.head.toLowerCase() === subjectCommit.toLowerCase()
+    && evidence.tree.toLowerCase() === subjectTree.toLowerCase();
+}
+
 export function deliveryBlockCode(failure: AgentFailure): import("./engine/issue-contracts.js").DeliveryOperationBlockCode {
   if (failure.code === "login-expired" || failure.code === "authentication-required") return "authentication-required";
   if (failure.code === "rate-limited") return "rate-limited";
@@ -232,6 +242,9 @@ export interface AgentServiceOptions {
   now?: () => Date;
   turnRunner?: { run<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T>> };
   worktrees?: WorktreeManager;
+  readDeliveryGitEvidence?: typeof readDeliveryGitEvidence;
+  isTaskTurnLive?: (taskId: string) => Promise<TaskTurnLiveness>;
+  wait?: (milliseconds: number) => Promise<void>;
 }
 
 export class AgentService {
@@ -240,6 +253,9 @@ export class AgentService {
   private readonly now: () => Date;
   private readonly turnRunner: { run<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T>> };
   private readonly worktrees: WorktreeManager;
+  private readonly readDeliveryGitEvidence: typeof readDeliveryGitEvidence;
+  private readonly isTaskTurnLive: (taskId: string) => Promise<TaskTurnLiveness>;
+  private readonly wait: (milliseconds: number) => Promise<void>;
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: AgentServiceOptions = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot, database);
@@ -248,6 +264,9 @@ export class AgentService {
     const herdr = new CliHerdrClient();
     this.turnRunner = options.turnRunner ?? new HerdrTurnRunner(database, herdr, new HerdrSessionStore(database, herdr), new IssueTimelineEvents(database), this.artifacts);
     this.worktrees = options.worktrees ?? new WorktreeManager(undefined, () => readEnvironmentSettings(database).minFreeDiskGb);
+    this.readDeliveryGitEvidence = options.readDeliveryGitEvidence ?? readDeliveryGitEvidence;
+    this.isTaskTurnLive = options.isTaskTurnLive ?? ((taskId) => isTaskTurnLive(database, config, taskId));
+    this.wait = options.wait ?? ((milliseconds) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds)));
   }
 
   private renderTaskPrompt(input: { taskId: string; companyId: string }, path: string, values: Record<string, string>): string {
@@ -737,19 +756,6 @@ export class AgentService {
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
       throw failure;
     }
-    try {
-      [subjectCommit, subjectTree] = await Promise.all([
-        execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath, timeout: 20_000, maxBuffer: 4 * 1024 }).then((result) => result.stdout.trim()),
-        execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: worktreePath, timeout: 20_000, maxBuffer: 4 * 1024 }).then((result) => result.stdout.trim()),
-      ]);
-    } catch {
-      if (context.developerResultCommit && context.developerResultTree) {
-        subjectCommit = context.developerResultCommit;
-        subjectTree = context.developerResultTree;
-      }
-    }
-    subject = { ...subject, subjectCommit, subjectTree };
-    input.subject = subject;
     const finalContext = isFinalReview ? this.database.authQuery((db) => db.prepare("SELECT r.id, r.base_sha AS baseSha, r.head_sha AS headSha, r.head_tree AS headTree, c.status FROM forge_releases r JOIN forge_ci_runs c ON c.id = ? AND c.release_id = r.id WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ? AND r.superseded_at IS NULL AND c.superseded_at IS NULL AND c.policy_hash IS NOT NULL AND EXISTS (SELECT 1 FROM forge_ci_attempts ca WHERE ca.run_id = c.id AND ca.attempt_number = (SELECT MAX(latest.attempt_number) FROM forge_ci_attempts latest WHERE latest.run_id = c.id) AND ca.outcome = 'passed' AND ca.observed_head_sha = r.head_sha)").get(input.ciRunId, input.releaseId, input.taskId, input.companyId, input.workflowId) as { id: string; baseSha: string; headSha: string; headTree: string; status: string } | undefined) : undefined;
     if (isFinalReview && (!finalContext || finalContext.status !== "passed" || finalContext.headSha.toLowerCase() !== subjectCommit.toLowerCase() || finalContext.headTree.toLowerCase() !== subjectTree.toLowerCase() || finalContext.baseSha.toLowerCase() !== targetBaseSha.toLowerCase())) {
       throw new AgentFailure("ci-not-authoritative", "Final review requires passed CI for the exact reviewed release head");
@@ -772,21 +778,37 @@ export class AgentService {
     let plan: string;
     let delivery: string;
     let developerEvidence: string;
-    let gitEvidence: Awaited<ReturnType<typeof readDeliveryGitEvidence>>;
+    let gitEvidence: DeliveryGitEvidence;
     try {
       [plan, delivery, developerEvidence, gitEvidence] = await Promise.all([
         this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
         this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.deliveryStoragePath, sha256: context.deliverySha256 }).then((bytes) => bytes.toString("utf8")),
         this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.evidenceStoragePath, sha256: context.evidenceSha256 }).then((bytes) => bytes.toString("utf8")),
-        readDeliveryGitEvidence(worktreePath, targetBaseSha, subjectCommit, subjectTree, repositoryPath),
+        this.readDeliveryGitEvidence(worktreePath, targetBaseSha, subjectCommit, subjectTree, repositoryPath),
       ]);
     } catch (error) {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("delivery-revision-changed", "The exact Developer delivery evidence could not be verified");
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
       throw failure;
     }
-    if (gitEvidence.branch !== input.branchName) {
-      const failure = new AgentFailure("delivery-revision-changed", "The Developer worktree is on another branch");
+    if (!matchesDeliverySubject(gitEvidence, input.branchName, subjectCommit, subjectTree)) {
+      const liveTurn = await this.isTaskTurnLive(input.taskId);
+      if (liveTurn.live) {
+        const failure = new AgentFailure("delivery-revision-changed", "The Developer turn is still live. Wait for it to finish before reviewing the delivery.");
+        if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
+        throw failure;
+      }
+      await this.wait(250);
+      try {
+        gitEvidence = await this.readDeliveryGitEvidence(worktreePath, targetBaseSha, subjectCommit, subjectTree, repositoryPath);
+      } catch (error) {
+        const failure = error instanceof AgentFailure ? error : new AgentFailure("delivery-revision-changed", "The exact Developer delivery evidence could not be verified");
+        if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
+        throw failure;
+      }
+    }
+    if (!matchesDeliverySubject(gitEvidence, input.branchName, subjectCommit, subjectTree)) {
+      const failure = new AgentFailure("delivery-revision-changed", "The Developer worktree does not match the reviewed delivery");
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
       throw failure;
     }

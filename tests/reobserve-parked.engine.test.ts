@@ -45,6 +45,30 @@ test("a parked reviewed delivery re-observes owners and publishes once", async (
   } finally { await h.stop(); }
 });
 
+test("a subject-changed delivery park with matching git retries its review once", async () => {
+  const activities: Partial<IssueActivities> = {
+    inspectTaskWorktree: async () => ({ present: true, owned: true, dirtyFileCount: 0, branch: "forge/issue/reobserve", activeExecution: false, revision: { proven: true, head: engineFixture.commit, headTree: engineFixture.tree, branch: "forge/issue/reobserve", clean: true } }),
+    observeGithubPullRequest: async () => github,
+    reviewDelivery: async () => { throw new Error("review activity reached"); },
+  };
+  const h = await createEngineHarness(activities);
+  h.seedTask("reobserve-subject-change", { deliveryTarget: "remote_branch" });
+  try {
+    const before = {
+      ...parkedState(h.workflowId("reobserve-subject-change"), "reobserve-subject-change", "delivery_ready"),
+      deliveryReviewBlockerCode: "subject-changed" as const,
+      deliveryArtifactId: "delivery-artifact",
+      developerEvidenceArtifactId: "developer-evidence",
+      leadSessionRef: "lead-session",
+      leadOutputArtifactId: "lead-output",
+    };
+    const started = await h.startContinuation("reobserve-subject-change", before, { deliveryTarget: "remote_branch" });
+    const state = await h.settle(started.workflowId, () => (h.calls.get("reviewDelivery") ?? 0) === 1);
+    expect(state.processedCommandIds).toContain(`${started.workflowId}:auto-reobserve:review_delivery:${engineFixture.commit}`);
+    expect(h.calls.get("reviewDelivery")).toBe(1);
+  } finally { await h.stop(); }
+});
+
 test("a missing git proof leaves the parked state unchanged across two wakes", async () => {
   const activities: Partial<IssueActivities> = {
     inspectTaskWorktree: async () => ({ present: true, owned: true, dirtyFileCount: 0, branch: "forge/issue/reobserve", activeExecution: false, revision: null }),

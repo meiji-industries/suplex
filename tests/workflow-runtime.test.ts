@@ -5,7 +5,7 @@ import { at } from "../src/issue-phases.js";
 import { buildInitialIssueWorkflowState, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
 import { runExecution, type RunExecutionContext } from "../src/engine/registry.js";
 import type { IssueWorkflowContext } from "../src/engine/workflow/context.js";
-import { autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, createAcquireExternalTurn } from "../src/engine/workflow/runtime.js";
+import { autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, createAcquireExternalTurn, runAutoChainedCommand } from "../src/engine/workflow/runtime.js";
 import { evidencePointer, humanBlocker } from "../src/engine/workflow/state-transitions.js";
 
 test("simple capacity admission preserves the current pending action", async () => {
@@ -290,4 +290,55 @@ test("recorded human blocker actions prevent unrelated automatic retries", async
 
   expect(waits).toEqual([]);
   expect(retries).toEqual([]);
+});
+
+test("a halt for one delivery revision does not stop the next automatic review", async () => {
+  let state: IssueWorkflowState = {
+    ...buildInitialIssueWorkflowState({
+      workflowId: "workflow-delivery-halt-revision",
+      companyId: "company-delivery-halt-revision",
+      projectId: "project-delivery-halt-revision",
+      issueId: "task-delivery-halt-revision",
+      projectRevisionId: "revision-delivery-halt-revision",
+      briefArtifactId: "brief-delivery-halt-revision",
+      briefSha256: "a".repeat(64),
+      imageArtifactIds: [],
+      requestHash: "b".repeat(64),
+      roleProfiles: {},
+      supplementalReview: false,
+    }),
+    ...at("delivery_reviewed"),
+    owner: "lead",
+    allowedCommands: ["publish_draft", "cancel_issue"],
+    pendingAction: "Forge opens the pull request",
+    resultCommit: "a".repeat(40),
+  };
+  const context = {
+    input: {},
+    get state() { return state; },
+    set state(next: IssueWorkflowState) { state = next; },
+    commandAlreadyProcessed: () => false,
+    markCommandProcessed(commandId: string) { state = { ...state, processedCommandIds: [...(state.processedCommandIds ?? []), commandId] }; },
+    project: async () => state,
+    runPublishTurn: async () => { throw new Error("publish failed"); },
+  } as unknown as IssueWorkflowContext;
+
+  await runExecution.run(automaticRetryExecution([]), async () => {
+    const publish = autoChainedCommand(context, "");
+    expect(publish?.command).toBe("publish_draft");
+    await runAutoChainedCommand(context, publish!);
+    expect(autoChainedCommand(context, "")).toBeNull();
+
+    state = {
+      ...state,
+      ...at("delivery_ready"),
+      owner: "lead",
+      allowedCommands: ["review_delivery", "cancel_issue"],
+      pendingAction: "The Planner reviews the latest changes",
+      resultCommit: "b".repeat(40),
+      blocker: null,
+    };
+
+    expect(autoChainedCommand(context, "")).toMatchObject({ command: "review_delivery" });
+  });
 });

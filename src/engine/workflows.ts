@@ -31,6 +31,7 @@ export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshR
 async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { const projected = withWorktreeCommands(state); return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: runExecution.current().runId, eventId: projected.lastEventId, state: projected })); }
 const MAX_RECONCILIATION_ATTEMPTS = 20;
 function sleepUntil(retryAt: string | null | undefined): Promise<void> { return retryAt ? sleep(Math.max(1, Date.parse(retryAt) - Date.now())) : sleep("1 second"); }
+function sameTransition(state: IssueWorkflowState, next: Partial<IssueWorkflowState>): boolean { return Object.entries(next).every(([field, value]) => JSON.stringify(state[field as keyof IssueWorkflowState]) === JSON.stringify(value)); }
 export const issueStateQuery = "issueState" as const;
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
@@ -213,7 +214,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const reviewedCommit = state.resultCommit;
     if (["delivery_ready", "delivery_reviewed"].includes(state.step) && reviewedCommit && observed.exists && observed.number && observed.url && observed.headSha) {
       if (observed.headSha.toLowerCase() !== reviewedCommit.toLowerCase()) {
-        state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        const transition = { ...at("delivery_ready"), owner: "lead" as const, allowedCommands: ["review_delivery", "cancel_issue"] as IssueCommand[], pendingAction: "The Planner reviews the latest changes", deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciNextPollAt: null, finalReviewId: null, acceptanceId: null };
+        if (sameTransition(state, transition)) return observed;
+        state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...transition, lastEventId: `${state.workflowId}:${state.revision + 1}` });
         await projectIssueState(state);
         return observed;
       }

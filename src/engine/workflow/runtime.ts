@@ -156,7 +156,7 @@ const AUTO_CHAINED_COMMANDS: Partial<Record<IssueStep, IssueWorkflowState["allow
 // A chained step that threw is never chained again in this run: the phase may re-enter itself
 // (plan conflict -> required -> resolve throws -> plan conflict ...) and each pass has a new revision.
 const haltedChains = new Set<string>();
-const chainKey = (workflowId: string, command: string) => `${workflowId}:${command}`;
+const chainKey = (workflowId: string, command: string, resultCommit: string | null | undefined) => `${workflowId}:${command}:${resultCommit?.toLowerCase() ?? "none"}`;
 const blockedPublishObservations = new Map<string, string>();
 const blockedPublishPasses = new Map<string, number>();
 const blockedPublishObservationKey = (workflowId: string, reviewedCommit: string) => `${workflowId}:${reviewedCommit.toLowerCase()}`;
@@ -198,7 +198,7 @@ export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): 
   }
   // Routine (non-material) plans land in ready_for_development without going through autoApprovePlan's
   // auto-start, so this table entry needs its own gate to keep old histories that parked here replayable.
-  if (haltedChains.has(chainKey(ctx.state.workflowId, command))) return null;
+  if (haltedChains.has(chainKey(ctx.state.workflowId, command, ctx.state.resultCommit))) return null;
   if (runExecution.current().autoActionsHalted()) return null;
   const commandId = `${ctx.state.workflowId}:auto-${command}:${ctx.state.revision}`;
   return ctx.commandAlreadyProcessed(commandId) ? null : { command, commandId };
@@ -254,8 +254,8 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
     if (observation !== null) blockedPublishObservations.set(key, observation);
     if (repeatedObservation || passes >= 3) {
       const summary = observationSummary ?? ctx.state.pendingAction ?? "Forge could not publish the reviewed delivery.";
-      haltedChains.add(chainKey(ctx.state.workflowId, "review_delivery"));
-      haltedChains.add(chainKey(ctx.state.workflowId, "publish_draft"));
+      haltedChains.add(chainKey(ctx.state.workflowId, "review_delivery", ctx.state.resultCommit));
+      haltedChains.add(chainKey(ctx.state.workflowId, "publish_draft", ctx.state.resultCommit));
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "human", allowedCommands: ["review_delivery", "publish_draft", "cancel_issue"], pendingAction: summary, blocker: humanBlocker("agent_exhausted", summary, [{ command: "review_delivery", label: "Approve the delivery", requiresNote: false, destructive: false }, { command: "publish_draft", label: "Publish the pull request", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(ctx.state.deliveryReviewArtifact?.artifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence")), stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return;
@@ -266,7 +266,7 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   const reason = failure instanceof Error ? failure.message : failure ? String(failure) : `Automatic ${chained.command.replaceAll("_", " ")} made no progress`;
   const retryCommand = (ctx.state.allowedCommands.find((command) => command !== "cancel_issue") ?? chained.command) as IssueWorkflowState["allowedCommands"][number];
   const allowedCommands = [...new Set([...ctx.state.allowedCommands.filter((command) => command !== "cancel_issue"), retryCommand, "cancel_issue"])] as IssueWorkflowState["allowedCommands"];
-  haltedChains.add(chainKey(ctx.state.workflowId, chained.command));
+  haltedChains.add(chainKey(ctx.state.workflowId, chained.command, ctx.state.resultCommit));
   ctx.state = IssueWorkflowStateSchema.parse({
     ...ctx.state,
     revision: ctx.state.revision + 1,

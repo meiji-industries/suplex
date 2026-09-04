@@ -108,7 +108,7 @@ test("blocked branch pushes stop before a release records its repository", async
   try {
     const started = await h.startContinuation("blocked-push-auto-chain", continuationState, { repository: "acme/forge" });
     const state = await h.settle(started.workflowId, (value) => isBlocked(value) && value.owner === "human");
-    expect(state).toMatchObject({ step: "delivery_ready", owner: "human", pendingAction: "GitHub CLI authentication is unavailable", blocker: expect.objectContaining({ category: "agent_exhausted" }) });
+    expect(state).toMatchObject({ step: "delivery_ready", owner: "human", pendingAction: releaseFailureCopy["authentication-required"], blocker: expect.objectContaining({ category: "agent_exhausted" }) });
     expect(h.calls.get("publishRelease") ?? 0).toBe(0);
     expect(h.calls.get("pushDeliveryBranch") ?? 0).toBeLessThanOrEqual(3);
   } finally { await h.stop(); }

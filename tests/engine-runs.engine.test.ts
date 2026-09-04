@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import { at } from "../src/issue-phases.js";
 import { activityContext } from "../src/engine/activity-context.js";
 import { runExecution } from "../src/engine/registry.js";
+import { startEngineHost } from "../src/engine/host.js";
 import { createActivityCaller } from "../src/engine/activities.js";
 import { ActivityFailure, ApplicationFailure, CancelledFailure, isCancellation } from "../src/engine/failures.js";
 import { durableCommand, executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/engine/service.js";
@@ -45,6 +46,23 @@ test("stale engine activities are ignored after two minutes", async () => {
     expect(isStaleEngineActivity(new Date(now - 120_000).toISOString(), now)).toBe(false);
     expect(deleteStaleEngineActivities(harness.database, now)).toBe(1);
     expect(harness.database.authQuery((db) => (db.prepare("SELECT count(*) AS count FROM forge_engine_activities").get() as { count: number }).count)).toBe(0);
+  } finally {
+    await harness.stop();
+  }
+});
+
+test("engine startup removes activity rows left by a stopped worker", async () => {
+  const harness = await createEngineHarness();
+  try {
+    const startedAt = new Date(Date.now() - 1_000).toISOString();
+    harness.database.authQuery((db) => db.prepare("INSERT INTO forge_engine_activities (id, workflow_id, activity, started_at, heartbeat_at) VALUES (?, ?, ?, ?, ?)").run("recent-orphan", "workflow-recent", "runCiRepair", startedAt, startedAt));
+    const engine = await startEngineHost(harness.config, harness.database, {
+      herdr: { runtimeSnapshot: async () => { throw new Error("Herdr is unavailable in this unit test"); } } as never,
+      loadRuns: async () => 0,
+      schedule: () => undefined,
+    });
+    expect(harness.database.authQuery((db) => (db.prepare("SELECT count(*) AS count FROM forge_engine_activities").get() as { count: number }).count)).toBe(0);
+    engine.dispose();
   } finally {
     await harness.stop();
   }

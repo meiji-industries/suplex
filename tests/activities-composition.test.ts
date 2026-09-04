@@ -34,6 +34,7 @@ const expectedActivityKeys = [
   "createSuccessor",
   "finalReview",
   "findActiveDeveloperExecution",
+  "findCiRepairPriorDelivery",
   "findCompletedDeliveryReview",
   "findRecoverableDeveloperExecution",
   "loadTaskSourcePullRequest",

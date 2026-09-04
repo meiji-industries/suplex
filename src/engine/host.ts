@@ -4,7 +4,7 @@ import { ForgeDatabase } from "../database.js";
 import { StructuredLogger } from "../logging.js";
 import { runtimeIdentifiers } from "../runtime-identifiers.js";
 import { installIssueEngine } from "./index.js";
-import { createRunFromLatestSnapshot, deleteStaleEngineActivities, IssueEngine } from "./runs.js";
+import { createRunFromLatestSnapshot, deleteEngineActivities, IssueEngine } from "./runs.js";
 import { reconcile } from "../reconcile.js";
 import { CliHerdrClient, snapshotHerdrRuntime, type HerdrClient } from "../herdr-client.js";
 import { observeHerdrSessions, type HerdrSessionObservation } from "../herdr-recovery.js";
@@ -100,8 +100,8 @@ export interface EngineHostOptions {
 
 export async function startEngineHost(config: ForgeConfig, database = new ForgeDatabase(config.databasePath), options: EngineHostOptions = {}): Promise<IssueEngine> {
   const logger = options.logger ?? new StructuredLogger();
-  const staleActivityCount = deleteStaleEngineActivities(database);
-  if (staleActivityCount) logger.info("Removed stale engine activities from the stopped worker", { staleActivityCount } as never);
+  const orphanedActivityCount = deleteEngineActivities(database);
+  if (orphanedActivityCount) logger.info("Removed orphaned engine activities from the stopped worker", { orphanedActivityCount } as never);
   const errorLogger = logger instanceof StructuredLogger ? logger : new StructuredLogger();
   const rebuiltProjections = await rebuildDriftedIssueProjections(database, config);
   logger.info(`Rebuilt ${rebuiltProjections} drifted issue projections`);

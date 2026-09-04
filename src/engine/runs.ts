@@ -75,6 +75,10 @@ export function deleteStaleEngineActivities(database: ForgeDatabase, now = Date.
   return database.authTransaction((db) => db.prepare("DELETE FROM forge_engine_activities WHERE heartbeat_at < ?").run(cutoff).changes);
 }
 
+export function deleteEngineActivities(database: ForgeDatabase): number {
+  return database.authTransaction((db) => db.prepare("DELETE FROM forge_engine_activities").run().changes);
+}
+
 export class ProjectionBurstGuard {
   private readonly timestampsByState = new Map<string, number[]>();
   private readonly loggedSkips = new Set<string>();

@@ -31,6 +31,22 @@ type NoDriftMergedDelivery = {
   failureSummary: string | null;
 };
 
+type DeveloperDeliveryContext = {
+  developerExecutionId: string;
+  developerStatus: string;
+  developerSessionRef: string | null;
+  branchName: string;
+  worktreePath: string;
+  targetBaseSha: string;
+  resultCommit: string | null;
+  resultTree: string | null;
+  planRevision: number;
+  deliveryArtifactId: string | null;
+  deliveryArtifactKind: string | null;
+  deliveryArtifactSha256: string | null;
+  evidenceArtifactId: string | null;
+};
+
 function sameRevision(left: string | null | undefined, right: string | null | undefined): boolean {
   return !!left && !!right && left.toLowerCase() === right.toLowerCase();
 }
@@ -48,16 +64,23 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
               AND result_head = ? AND result_tree = ?`).get(requestedForwardMergeId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId, input.checkpoint, input.expectedHeadSha, input.expectedHeadTree) as { developerExecutionId: string | null } | undefined)?.developerExecutionId)
         : undefined;
       const developerExecutionId = recordedExecutionId ?? input.developerExecutionId;
-      const context = database.authQuery((db) => db.prepare(`SELECT
+      const contextQuery = `SELECT
           d.id AS developerExecutionId, d.status AS developerStatus, d.session_ref AS developerSessionRef,
           d.branch_name AS branchName, d.worktree_path AS worktreePath, d.target_base_sha AS targetBaseSha,
           d.result_commit AS resultCommit, d.result_tree AS resultTree, d.plan_revision AS planRevision,
           d.delivery_artifact_id AS deliveryArtifactId, da.kind AS deliveryArtifactKind, da.sha256 AS deliveryArtifactSha256,
           d.evidence_artifact_id AS evidenceArtifactId
         FROM forge_tasks t
-        JOIN forge_developer_executions d ON d.id = ? AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
+        JOIN forge_developer_executions d ON d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
         LEFT JOIN forge_artifacts da ON da.id = d.delivery_artifact_id AND da.company_id = d.company_id AND da.kind IN ('developer-delivery', 'forward-merge-delivery')
-        WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(developerExecutionId, input.taskId, input.companyId, input.workflowId) as { developerExecutionId: string; developerStatus: string; developerSessionRef: string | null; branchName: string; worktreePath: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null; planRevision: number; deliveryArtifactId: string | null; deliveryArtifactKind: string | null; deliveryArtifactSha256: string | null; evidenceArtifactId: string | null } | undefined);
+        WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`;
+      const recordedContext = database.authQuery((db) => db.prepare(`${contextQuery} AND d.id = ?`).get(input.taskId, input.companyId, input.workflowId, developerExecutionId) as DeveloperDeliveryContext | undefined);
+      const context = recordedContext && ["completed", "blocked"].includes(recordedContext.developerStatus)
+        ? recordedContext
+        : database.authQuery((db) => db.prepare(`${contextQuery}
+            AND d.status IN ('completed', 'blocked') AND d.session_ref IS NOT NULL
+            ORDER BY CASE WHEN lower(d.result_commit) = lower(?) THEN 0 ELSE 1 END, d.finished_at DESC
+            LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.expectedHeadSha) as DeveloperDeliveryContext | undefined);
       const blocked = (code: TargetBaseBlockerCode, owner: "human" | "provider" | "lead", retryable: boolean, summary: string, evidenceArtifact?: ReturnType<typeof artifactReference>, coordinates?: { observedBaseSha?: string; priorHead?: string; priorTree?: string; resultHead?: string; resultTree?: string }, operationId = requestedForwardMergeId ?? checkId): ReconcileTargetBaseActivityResult => ({ outcome: "blocked", checkId: operationId, checkpoint: input.checkpoint, code, owner, retryable, summary: normalizeSafeSummary(summary, 200), ...(evidenceArtifact ? { evidenceArtifact } : {}), ...(coordinates ?? {}) });
       const adoptStoredDelivery = (delivery: { developerExecutionId: string; priorHead: string; priorTree: string; resultHead: string; resultTree: string }): boolean => database.authTransaction((db) => {
         const updated = db.prepare(`UPDATE forge_developer_executions SET result_commit = ?, result_tree = ?
@@ -69,7 +92,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
             AND lower(result_commit) = lower(?) AND lower(result_tree) = lower(?)`).get(delivery.developerExecutionId, input.taskId, input.companyId, input.workflowId, delivery.resultHead, delivery.resultTree) !== undefined;
       });
       if (!context || !["completed", "blocked"].includes(context.developerStatus) || !context.resultCommit || !context.resultTree) {
-        return blocked("merge_state_ownership_mismatch", "human", false, "The current Developer delivery is unavailable for reconciliation");
+        return blocked("merge_state_ownership_mismatch", "human", true, "Forge cannot find a completed Builder delivery for this task. Retry the reconciliation or cancel the task.");
       }
       const artifacts = new ArtifactStore(config.artifactRoot, database);
       let pinned: ReturnType<typeof loadTaskConfiguration>;

@@ -196,9 +196,11 @@ async function runDriverCommand(ctx: IssueWorkflowContext, command: IssueCommand
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: revision + 1, allowedCommands: ctx.state.allowedCommands.includes(command) ? ctx.state.allowedCommands : [...ctx.state.allowedCommands, command], lastEventId: `${ctx.state.workflowId}:${revision + 1}` });
   }
   const claimed = ctx.state;
+  ctx.beginDeferredProjection();
   try {
     await Reflect.apply(handler, undefined, [{ expectedRevision: claimed.revision, actorUserId: "forge-driver", commandId }]);
   } catch (error) {
+    ctx.discardDeferredProjection();
     ctx.state = before;
     if (!isGuardRefusal(error)) throw error;
     if (!refusedDriverCommands.has(commandId)) {
@@ -208,9 +210,11 @@ async function runDriverCommand(ctx: IssueWorkflowContext, command: IssueCommand
     return false;
   }
   if (sameState(ctx.state, claimed)) {
+    ctx.discardDeferredProjection();
     ctx.state = before;
     return false;
   }
+  await ctx.flushDeferredProjection();
   return true;
 }
 

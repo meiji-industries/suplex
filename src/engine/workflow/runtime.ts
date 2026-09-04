@@ -253,6 +253,11 @@ export function createGuarded(
     } catch (error) {
       const state = store.get();
       if (isCancellation(error)) throw error;
+      const actorUserId = (args[0] as { actorUserId?: unknown } | undefined)?.actorUserId;
+      if (actorUserId === "forge-driver" && error instanceof Error && /not available in the current phase/i.test(error.message)) {
+        store.set(before);
+        throw error;
+      }
       // Update handlers run while replaying every accepted update in history.
       // A plain Error is a programming/precondition failure, not an update
       // rejection; letting it escape fails the Workflow Task and wedges the

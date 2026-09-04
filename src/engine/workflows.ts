@@ -57,7 +57,30 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     return humanBlocker("member_authorization", "Your approval is necessary for this plan.", actions, evidencePointer(result.leadOutputArtifactId, "lead-plan"));
   };
   state = withWorktreeCommands(state);
-  const initialProjection = continuation ? Promise.resolve(state) : projectIssueState(state);
+  let projectionDeferral: IssueWorkflowState | null = null;
+  const project = async (next = state): Promise<IssueWorkflowState> => {
+    state = withWorktreeCommands(next);
+    if (projectionDeferral && JSON.stringify(state) === JSON.stringify(projectionDeferral)) return state;
+    const now = Date.now();
+    projectionStamps.push({ at: now, step: state.step });
+    while (projectionStamps.length && now - projectionStamps[0]!.at > 60_000) projectionStamps.shift();
+    if (!automaticActionsHalted && projectionStamps.length >= 40) {
+      automaticActionsHalted = true;
+      log.warn("Issue run stopped an automatic loop", { workflowId: state.workflowId, repeatingSteps: projectionStamps.map((stamp) => stamp.step) });
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("delivery_ready"), owner: "human", allowedCommands: ["review_delivery", "publish_draft", "cancel_issue"], pendingAction: "Forge stopped an automatic loop. Review the task, then retry.", blocker: humanBlocker("agent_exhausted", "Forge stopped an automatic loop. Review the task, then retry.", [{ command: "review_delivery", label: "Approve the delivery", requiresNote: false, destructive: false }, { command: "publish_draft", label: "Publish the pull request", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(state.deliveryReviewArtifact?.artifactId ?? state.developerEvidenceArtifactId ?? undefined, "attention-evidence")), stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    }
+    return projectIssueState(state);
+  };
+  const beginDeferredProjection = (): void => {
+    if (projectionDeferral) throw new Error("Projection deferral is already active");
+    projectionDeferral = state;
+  };
+  const flushDeferredProjection = async (): Promise<IssueWorkflowState> => {
+    projectionDeferral = null;
+    return state;
+  };
+  const discardDeferredProjection = (): void => { projectionDeferral = null; };
+  const initialProjection = continuation ? Promise.resolve(state) : project();
   let continuationRequested = false;
   let initialProjectionComplete = Boolean(continuation);
   let decisionInFlight = false;
@@ -78,7 +101,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   };
   const recordHandlerNoop = async (command: string, reason: string): Promise<void> => {
     state = IssueWorkflowStateSchema.parse({ ...state, lastHandlerError: { command, reason: reason.slice(0, 256), at: new Date().toISOString() } });
-    await projectIssueState(state);
+    await project();
   };
   const applyTargetBaseBlocked = (result: Extract<ReconcileTargetBaseActivityResult, { outcome: "blocked" }>): void => {
     const verification = result.code === "verification_failed" || result.code === "verification_timed_out" || result.code === "verification_evidence_too_large";
@@ -123,14 +146,14 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       const priorRevision = state.revision;
       state = IssueWorkflowStateSchema.parse({ ...state, targetBaseSha: result.observedBaseSha, resultCommit: result.headSha, resultTree: result.headTree });
       state = applyTargetBaseNoDrift(state, result);
-      if (state.revision !== priorRevision) await projectIssueState(state);
+      if (state.revision !== priorRevision) await project();
       return true;
     }
     if (result.outcome === "revalidated") state = applyTargetBaseRevalidation(state, result);
     else if (result.outcome === "blocked") applyTargetBaseBlocked(result);
     else {
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("merge_conflict_reviewing"), owner: "lead", allowedCommands: [], pendingAction: "The Planner plans the conflict resolution", targetBaseCheckId: result.checkId, targetBaseCheckpoint: result.checkpoint, targetBaseOutcome: result.outcome, targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null, forwardMergePriorHead: result.priorHead, forwardMergePriorTree: result.priorTree, forwardMergeTargetBaseSha: result.observedBaseSha, forwardMergeConflictArtifact: result.conflictArtifact, forwardMergeConflictFileCount: result.conflictFileCount, forwardMergeId: result.checkId, lastEventId: `${state.workflowId}:${state.revision + 1}` });
-      await projectIssueState(state);
+      await project();
       try {
         const plan = await planMergeConflict({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, worktreePath: state.worktreePath!, branchName: state.branchName!, priorHead: result.priorHead, targetBaseSha: result.observedBaseSha, conflictArtifact: result.conflictArtifact, conflictFileCount: result.conflictFileCount, forwardMergeId: result.checkId });
         state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("merge_conflict_resolving"), owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "The Builder waits for the Planner conflict plan", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, lastEventId: `${state.workflowId}:${state.revision + 1}` });
@@ -139,7 +162,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Forge did not prepare a conflict plan. Retry the resolution.", lastEventId: `${state.workflowId}:${state.revision + 1}` });
       }
     }
-    await projectIssueState(state);
+    await project();
     return false;
   };
   const recoveryFields = (status: "starting" | "active" | "reconnecting" | "result_pending_claim" | "cancellation_requested" | "cancelling" | "interrupted" | "cancelled" | "failed" | null, reasonCode: string | null, summary: string | null, heartbeatAt: string | null) => ({ developerRecoveryStatus: status, developerRecoveryReasonCode: reasonCode, developerRecoverySummary: summary, developerLastHeartbeatAt: heartbeatAt });
@@ -190,7 +213,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         },
       );
     }
-    if (!repository && sourcePullRequest) { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, sourcePullRequest)); await projectIssueState(state); }
+    if (!repository && sourcePullRequest) { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, sourcePullRequest)); await project(); }
     if (!repository || !state.branchName) return null;
     // GitHub reconciliation only runs while Forge is waiting on GitHub. While an agent turn or a
     // publish is in flight, an observation must not rewrite the phase under it. delivery_ready holds an
@@ -207,7 +230,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       ...githubPullRequestObservationFields(observed, new Date().toISOString()),
       ...(state.step === "ci_waiting" && state.owner === "human" ? { ciNextPollAt: new Date(runExecution.current().now() + 60_000).toISOString() } : {}),
     };
-    if (isSourcePullRequestPreDelivery(state, sourcePullRequest) && observed.state !== "merged") { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, common)); await projectIssueState(state); return observed; }
+    if (isSourcePullRequestPreDelivery(state, sourcePullRequest) && observed.state !== "merged") { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, common)); await project(); return observed; }
     if (state.step === "ci_waiting" && state.owner === "lead") return observed;
     const reviewedCommit = state.resultCommit;
     if (["delivery_ready", "delivery_reviewed"].includes(state.step) && reviewedCommit && observed.exists && observed.number && observed.url && observed.headSha) {
@@ -215,19 +238,19 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         const transition = { ...at("delivery_ready"), owner: "lead" as const, allowedCommands: ["review_delivery", "cancel_issue"] as IssueCommand[], pendingAction: "The Planner reviews the latest changes", deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciNextPollAt: null, finalReviewId: null, acceptanceId: null };
         if (sameTransition(state, transition)) return observed;
         state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...transition, lastEventId: `${state.workflowId}:${state.revision + 1}` });
-        await projectIssueState(state);
+        await project();
         return observed;
       }
       if (observed.state === "merged") {
         state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at("done"), owner: "human", allowedCommands: [], pendingAction: `Done. Pull request #${observed.number} was merged outside Forge.`, mergeOutcome: "merged", pullRequestNumber: observed.number, pullRequestUrl: observed.url, releaseRepository: repository, lastEventId: `${state.workflowId}:${state.revision + 1}` });
-        await projectIssueState(state);
+        await project();
         return observed;
       }
       if (observed.state === "open" && state.baseBranch) {
         const adopted = await adoptPullRequestRelease({ taskId: state.issueId, companyId: state.companyId, workflowId: state.workflowId, projectRevisionId: state.projectRevisionId, repository, branchName: state.branchName, baseBranch: state.baseBranch, ...(state.targetBaseSha ? { expectedBaseSha: state.targetBaseSha } : {}), pullRequestNumber: observed.number, headSha: reviewedCommit });
         const nextStep = validatedInput.deliveryTarget === "merged" ? "ci_waiting" : "manual_merge";
         state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, ...at(nextStep), owner: nextStep === "ci_waiting" ? "lead" : "human", allowedCommands: nextStep === "ci_waiting" ? ["cancel_issue"] : ["reconcile_merge", "cancel_issue"], pendingAction: nextStep === "ci_waiting" ? "Forge waits for CI" : "Your merge is necessary", releaseId: adopted.releaseId, releaseRepository: adopted.repository, baseBranch: adopted.baseBranch, targetBaseSha: adopted.targetBaseSha, pullRequestNumber: adopted.pullRequestNumber, pullRequestUrl: adopted.pullRequestUrl, expectedHeadSha: adopted.headSha, expectedHeadTree: adopted.headTree, resultCommit: adopted.headSha, resultTree: adopted.headTree, releaseFailureSummary: null, releaseRetryAt: null, ciAttempt: 0, ciNextPollAt: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
-        await projectIssueState(state);
+        await project();
         return observed;
       }
     }
@@ -239,7 +262,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       if (state.owner === "human" && state.githubPullRequestObservationKey === observationKey) {
         const allowedCommands = observed.mergeable === "CONFLICTING" && !state.allowedCommands.includes("resolve_merge_conflict") ? [...state.allowedCommands, "resolve_merge_conflict" as const] : state.allowedCommands;
         state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision: state.revision + 1, allowedCommands, lastEventId: `${state.workflowId}:${state.revision + 1}` });
-        await projectIssueState(state);
+        await project();
         return observed;
       }
       const reconciliation = reconcile({ observed: pullRequestObservation, target, current: { step: state.step, owner: state.owner, pendingAction: state.pendingAction, ...(state.pullRequestNumber !== undefined ? { pullRequestNumber: state.pullRequestNumber } : {}), ...(state.expectedHeadSha !== undefined ? { observedHeadSha: state.expectedHeadSha } : {}), ...(state.autoMergeAvailable !== undefined ? { autoMergeAvailable: state.autoMergeAvailable } : {}), ...(state.githubPullRequestObservationKey !== undefined ? { adoptedObservationKey: state.githubPullRequestObservationKey } : {}) } });
@@ -247,7 +270,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       const revision = state.revision + 1;
       const step = reconciliation.phase === "Done" ? "done" : reconciliation.phase === "Forge merges the pull request" ? "manual_merge" : reconciliation.phase === "Resolving conflicts" ? "merge_conflict_reviewing" : reconciliation.phase === "Forge waits for CI" ? "ci_waiting" : reconciliation.phase === "Opening PR" ? "releasing" : state.step;
       state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, ...at(step), owner: reconciliation.owner === "human" ? "human" : "lead", allowedCommands: reconciliation.allowedCommands.filter((command): command is IssueCommand => command === "publish_draft" || command === "cancel_issue" || command === "send_planner_note"), pendingAction: reconciliation.pendingAction, githubPullRequestObservationKey: observationKey, mergeOutcome: observed.state === "merged" ? "merged" : state.mergeOutcome, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${revision}` });
-      await projectIssueState(state);
+      await project();
       for (const action of reconciliation.actions) {
         if ((action.kind === "enable_auto_merge" || action.kind === "merge" || action.kind === "mark_ready") && state.releaseRepository) {
           const failure = await applyGithubPullRequestAction({ repository: state.releaseRepository, number: action.number, headSha: "headSha" in action ? action.headSha : observed.headSha ?? "", action: action.kind }).then(
@@ -260,17 +283,17 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
           if (failure !== null) {
             if (action.kind === "enable_auto_merge" && /auto.?merge is not allowed|not enabled for this repository/i.test(failure)) {
               state = IssueWorkflowStateSchema.parse({ ...state, autoMergeAvailable: false, revision: state.revision + 1, pendingAction: "Auto-merge is not available. Forge merges the branch directly.", lastEventId: `${state.workflowId}:${state.revision + 1}` });
-              await projectIssueState(state);
+              await project();
               continue;
             }
             state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, pendingAction: `GitHub ${action.kind.replaceAll("_", " ")} failed: ${failure}. Forge retries.`, lastEventId: `${state.workflowId}:${state.revision + 1}` });
-            await projectIssueState(state);
+            await project();
           }
         }
         else if (action.kind === "resolve_conflicts") {
           if (await runTargetBaseCheckpoint("pre_release")) {
             state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("ci_waiting"), owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "GitHub reports merge conflicts, but the branch contains the base branch. Forge waits for GitHub to check again.", ciNextPollAt: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
-            await projectIssueState(state);
+            await project();
           }
         }
         else if ((action.kind === "push_open_draft" || action.kind === "push_open_ready") && state.step === "releasing") await workflowContext.runPublishTurn();
@@ -285,27 +308,18 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const changed = JSON.stringify(state.capacity) !== JSON.stringify(capacity) || (pendingAction !== undefined && state.pendingAction !== pendingAction);
     if (!changed) return state.revision;
     state = IssueWorkflowStateSchema.parse({ ...state, capacity, ...(capacity === null ? { capacityBlocker: null } : {}), ...(pendingAction !== undefined ? { pendingAction } : {}), revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
-    await projectIssueState(state);
+    await project();
     return state.revision;
   };
-  const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: projectIssueState });
-  const guarded = createGuarded({ get: () => state, set: (next) => { state = next; } }, { project: projectIssueState });
+  const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: project });
+  const guarded = createGuarded({ get: () => state, set: (next) => { state = next; } }, { project });
   const workflowContext = createIssueWorkflowContext(validatedInput, state, {
-    project: () => {
-      const now = Date.now();
-      projectionStamps.push({ at: now, step: state.step });
-      while (projectionStamps.length && now - projectionStamps[0]!.at > 60_000) projectionStamps.shift();
-      state = withWorktreeCommands(state);
-      // safety bound, not a mirror gate
-      if (!automaticActionsHalted && projectionStamps.length >= 40) {
-        automaticActionsHalted = true;
-        log.warn("Issue run stopped an automatic loop", { workflowId: state.workflowId, repeatingSteps: projectionStamps.map((stamp) => stamp.step) });
-        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("delivery_ready"), owner: "human", allowedCommands: ["review_delivery", "publish_draft", "cancel_issue"], pendingAction: "Forge stopped an automatic loop. Review the task, then retry.", blocker: humanBlocker("agent_exhausted", "Forge stopped an automatic loop. Review the task, then retry.", [{ command: "review_delivery", label: "Approve the delivery", requiresNote: false, destructive: false }, { command: "publish_draft", label: "Publish the pull request", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(state.deliveryReviewArtifact?.artifactId ?? state.developerEvidenceArtifactId ?? undefined, "attention-evidence")), stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
-      }
-      return projectIssueState(state);
-    },
-    projectState: (value) => { state = withWorktreeCommands(value); return projectIssueState(state); },
-    projectInitialPlanningState: async (next) => { await projectIssueState(next); },
+    project: () => project(),
+    projectState: project,
+    beginDeferredProjection,
+    flushDeferredProjection,
+    discardDeferredProjection,
+    projectInitialPlanningState: async (next) => { await project(next); },
     planningProjectionFlags: () => ({ distinctPlanningStates: true, shouldProject: true }),
     continueAfter: 0,
     guarded, captureInitialProjectionState: true, initialProjectionState, initialProjection,
@@ -401,7 +415,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await (async () => {
       if (state.step === "cancelled" || state.step === "done") return;
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ...at("cancelled"), owner: "human", allowedCommands: [], pendingAction: "The task was cancelled outside Forge", blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
-      await projectIssueState(state);
+      await project();
     });
     throw error; }
 }

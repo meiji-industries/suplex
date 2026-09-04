@@ -25,6 +25,9 @@ export interface IssueWorkflowContext {
   state: IssueWorkflowState;
   readonly project: () => Promise<IssueWorkflowState>;
   readonly projectState: (state: IssueWorkflowState) => Promise<IssueWorkflowState>;
+  readonly beginDeferredProjection: () => void;
+  readonly flushDeferredProjection: () => Promise<IssueWorkflowState>;
+  readonly discardDeferredProjection: () => void;
   readonly projectInitialPlanningState: (next: IssueWorkflowState) => Promise<void>;
   readonly planningProjectionFlags: () => { distinctPlanningStates: boolean; shouldProject: boolean };
   readonly continueAfter: number;

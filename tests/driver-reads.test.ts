@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { executionId, turnId } from "../src/ids.js";
-import { driverPollDelay, readOwner, type DriverDependencies } from "../src/engine/workflow/driver.js";
+import { at } from "../src/issue-phases.js";
+import { issueUpdates } from "../src/engine/issue-updates.js";
+import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
+import { runExecution } from "../src/engine/registry.js";
+import { driverPollDelay, evaluateStep, readOwner, type DriverDependencies } from "../src/engine/workflow/driver.js";
 import { STEP_TABLE } from "../src/engine/workflow/step-table.js";
 import type { IssueWorkflowContext } from "../src/engine/workflow/context.js";
 
@@ -91,5 +95,74 @@ describe("readOwner", () => {
     await expect(readOwner(context(), waitsOn, dependencies({ readLatestHerdrTurn: async () => ({ ...turn, promptKind: "delivery-review", result: null, terminalFailure: "Execution failed" }) }))).resolves.toEqual({ type: "owner.failed", reason: "Execution failed" });
     await expect(readOwner(context(), waitsOn, dependencies({ isTaskTurnLive: async () => ({ live: true }) }))).resolves.toEqual({ type: "owner.live" });
     await expect(readOwner(context(), waitsOn, dependencies({ readLatestHerdrTurn: async () => { throw new Error("Herdr down"); } }))).resolves.toEqual({ type: "owner.unavailable", owner: "herdr", reason: "Herdr down" });
+  });
+});
+
+describe("evaluateStep", () => {
+  it("does not project a driver claim when its handler makes no workflow change", async () => {
+    const initial = IssueWorkflowStateSchema.parse({
+      ...buildInitialIssueWorkflowState({
+        workflowId: "workflow",
+        companyId: "company",
+        projectId: "project",
+        issueId: "task",
+        projectRevisionId: "project-revision",
+        briefArtifactId: "brief",
+        briefSha256: "a".repeat(64),
+        imageArtifactIds: [],
+        requestHash: "a".repeat(64),
+        roleProfiles: { planner: "planner", builder: "builder" },
+        supplementalReview: false,
+        repairCycleLimit: 2,
+      }),
+      ...at("ready_reconciliation"),
+      revision: 7,
+      owner: "lead",
+      allowedCommands: ["reconcile_acceptance", "cancel_issue"],
+      pendingAction: "Forge reconciles the acceptance decision",
+      acceptanceRetryAt: "2026-09-04T11:59:59.000Z",
+      lastEventId: "workflow:7",
+    });
+    let state = initial;
+    let projections = 0;
+    let deferred: IssueWorkflowState | null = null;
+    const ctx = {
+      input: initial,
+      get state() { return state; },
+      set state(next: IssueWorkflowState) { state = next; },
+      commandAlreadyProcessed: () => false,
+      markCommandProcessed: (commandId: string) => {
+        state = IssueWorkflowStateSchema.parse({ ...state, processedCommandIds: [...(state.processedCommandIds ?? []), commandId] });
+      },
+      beginDeferredProjection: () => { deferred = state; },
+      flushDeferredProjection: async () => {
+        deferred = null;
+      },
+      discardDeferredProjection: () => { deferred = null; },
+      project: async () => {
+        if (!deferred || JSON.stringify(deferred) !== JSON.stringify(state)) projections += 1;
+        return state;
+      },
+    } as unknown as IssueWorkflowContext;
+    const execution = {
+      workflowId: "workflow",
+      runId: "run",
+      signal: new AbortController().signal,
+      commands: new Map([[issueUpdates.reconcile_acceptance, async () => ctx.project()]]),
+      queries: new Map(),
+      interrupts: new Map(),
+      acceptedInterrupt: undefined,
+      interruptResult: undefined,
+      activity: async () => undefined,
+      wait: async () => undefined,
+      now: () => Date.parse("2026-09-04T12:00:00.000Z"),
+      wake: () => undefined,
+      autoActionsHalted: () => false,
+    };
+
+    await expect(runExecution.run(execution, () => evaluateStep(ctx, dependencies()))).resolves.toBe(false);
+
+    expect(projections).toBe(0);
+    expect(state).toEqual(initial);
   });
 });

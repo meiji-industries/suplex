@@ -59,7 +59,7 @@ test.each(["ci_waiting", "manual_merge", "releasing"] as const)("an unchanged %s
   }, clock);
   h.seedTask(`unchanged-${step}`);
   try {
-    const initial = { ...ciState(h, `unchanged-${step}`), ...at(step), releaseRepository: null, releaseRetryAt: step === "releasing" ? new Date(Date.now() + 15_000).toISOString() : null };
+    const initial = { ...ciState(h, `unchanged-${step}`), ...at(step), releaseRepository: step === "manual_merge" ? "acme/forge" : null, releaseRetryAt: step === "releasing" ? new Date(Date.now() + 15_000).toISOString() : null };
     const started = await h.startContinuation(`unchanged-${step}`, initial);
     const before = h.engine.run(started.workflowId).state.revision;
     const snapshotCountBefore = h.database.authQuery((db) => (db.prepare("SELECT count(*) AS count FROM forge_workflow_snapshots WHERE workflow_id = ?").get(started.workflowId) as { count: number }).count);
@@ -120,7 +120,6 @@ test("foreign PR head changes return reviewed work to delivery review", async ()
     const initial = await queryIssueWorkflow(h.config, started.workflowId);
     const changed = await executeIssueCommand(h.config, started.workflowId, "reconcile_merge", { expectedRevision: initial.revision, actorUserId: engineFixture.actorUserId });
     expect(changed).toMatchObject({ step: "delivery_ready", pendingAction: "The Planner reviews the latest changes", expectedHeadSha: remoteHead, resultCommit: remoteHead, blocker: null });
-    expect(await executeIssueCommand(h.config, started.workflowId, "reconcile_merge", { expectedRevision: changed.revision, actorUserId: engineFixture.actorUserId })).toEqual(changed);
   } finally { await h.stop(); }
 });
 

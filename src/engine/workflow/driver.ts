@@ -108,7 +108,7 @@ function releaseTargetComplete(ctx: IssueWorkflowContext, observation: GithubRea
 function githubAnswer(ctx: IssueWorkflowContext, waitsOn: Extract<OwnerRead, { owner: "github" }>, observation: GithubRead | GithubPullRequestObservationResult | null): OwnerAnswer {
   if (!observation) return parsed({ type: "owner.absent" });
   if (!observation.exists) return parsed({ type: "owner.absent" });
-  if (waitsOn.what === "pull_request" && releaseTargetComplete(ctx, observation)) return parsed({ type: "owner.done" });
+  if (waitsOn.what === "pull_request" && ctx.state.step !== "manual_merge" && releaseTargetComplete(ctx, observation)) return parsed({ type: "owner.done" });
   if (observation.state === "merged") return parsed({ type: "owner.done" });
   if (observation.state === "closed") return parsed({ type: "owner.failed", reason: "Pull request closed without merge" });
   if (["CONFLICTING", "DIRTY"].includes(observation.mergeable ?? "")) return parsed({ type: "owner.failed", reason: "Pull request has merge conflicts" });
@@ -251,7 +251,7 @@ async function applyDirectStep(ctx: IssueWorkflowContext, target: Extract<Transi
 export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: DriverDependencies = {}): Promise<boolean> {
   const step = ctx.state.step;
   const rule = STEP_TABLE[step];
-  const githubWaiting = step === "releasing" || step === "ci_waiting";
+  const githubWaiting = step === "releasing" || step === "ci_waiting" || step === "manual_merge";
   const ciWaiting = step === "ci_waiting" && rule.waitsOn.owner === "github" && rule.waitsOn.what === "checks";
   if (step === "releasing" && ctx.state.releaseRetryAt && Date.parse(ctx.state.releaseRetryAt) > (dependencies.now?.().getTime() ?? runExecution.current().now())) return false;
   if (rule.terminal || (!rule.adoptFirst && rule.waitsOn.owner !== "herdr" && !githubWaiting) || ctx.state.activeOperation !== null) return false;

@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 
 import { at } from "../src/issue-phases.js";
 import { IssueContinuationStateSchema, type IssueActivities, type IssueWorkflowState } from "../src/engine/issue-contracts.js";
-import { executeIssueCommand } from "../src/engine/service.js";
+import { executeIssueCommand, signalIssueGithubPullRequestSync } from "../src/engine/service.js";
 import { ApplicationFailure } from "../src/engine/failures.js";
 import { STEP_TABLE } from "../src/engine/workflow/step-table.js";
 import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
@@ -128,6 +128,46 @@ test("the driver completes a merged release through the GitHub synchronizer", as
     expect(done.owner).toBe("human");
     expect(observations).toBe(1);
     expect(done.processedCommandIds).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(`^${workflowId}:driver:releasing:\\d+:owner\\.done$`))]));
+  } finally {
+    await harness.stop();
+  }
+});
+
+test("the driver reconciles manual merge through a GitHub sync signal", async () => {
+  let merged = false;
+  let observations = 0;
+  let observedOpen!: () => void;
+  const firstOpenObservation = new Promise<void>((resolve) => { observedOpen = resolve; });
+  const harness = await createEngineHarness({
+    observeGithubPullRequest: async () => {
+      observations += 1;
+      const state = merged ? "merged" : "open";
+      if (observations === 1) observedOpen();
+      return { exists: true, number: 42, url: "https://github.test/42", state, isDraft: false, headSha: engineFixture.commit, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, autoMergeEnabled: false, reviewDecision: null };
+    },
+  });
+  const issueId = "driver-boot-manual-merge";
+  harness.seedTask(issueId, { deliveryTarget: "merged" });
+  try {
+    const workflowId = harness.workflowId(issueId);
+    await harness.startContinuation(issueId, {
+      ...deliveryReviewState(workflowId),
+      ...at("manual_merge"),
+      owner: "human",
+      allowedCommands: ["reconcile_merge", "cancel_issue"],
+      pendingAction: "Your merge is necessary",
+      releaseId: "release",
+      releaseRepository: "acme/forge",
+      pullRequestNumber: 42,
+      pullRequestUrl: "https://github.test/42",
+    }, { deliveryTarget: "merged" });
+    await firstOpenObservation;
+    for (let attempt = 0; attempt < 20; attempt += 1) await Promise.resolve();
+    merged = true;
+    await signalIssueGithubPullRequestSync(harness.config, workflowId);
+    const done = await harness.settle(workflowId, (state) => state.step === "done");
+    expect(observations).toBe(2);
+    expect(done.processedCommandIds).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(`^${workflowId}:driver:manual_merge:\\d+:owner\\.done$`))]));
   } finally {
     await harness.stop();
   }

@@ -202,7 +202,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       return null;
     });
     if (!observed) return null;
-    if (state.step === "releasing") return observed;
+    if (state.step === "releasing" || state.step === "manual_merge") return observed;
     const common = {
       ...githubPullRequestObservationFields(observed, new Date().toISOString()),
       ...(state.step === "ci_waiting" && state.owner === "human" ? { ciNextPollAt: new Date(runExecution.current().now() + 60_000).toISOString() } : {}),
@@ -388,11 +388,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       if (githubSyncPending()) {
         githubSyncRequested = false;
         await syncGithubPullRequest();
-        continue;
-      }
-      if (workflowContext.state.step === "manual_merge") {
-        await condition(() => githubSyncRequested, "60 seconds"); githubSyncRequested = false; // a sync signal (webhook, operator) wakes the poll
-        if (currentStep() === "manual_merge") await syncGithubPullRequest();
         continue;
       }
       if (workflowContext.state.step === "ready_reconciliation") {

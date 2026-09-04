@@ -19,7 +19,7 @@ test("a known merged pull request completes while the local worktree is dirty or
   ]) {
     const h = await createEngineHarness({
       inspectTaskWorktree: async () => worktree,
-      observeGithubPullRequest: async () => ({ exists: true, number: 127, url: "https://github.test/127", state: "merged", isDraft: false, headSha: engineFixture.commit, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, autoMergeEnabled: false, reviewDecision: null }),
+      observeGithubPullRequest: async () => ({ exists: true, number: 127, url: "https://github.test/127", state: "merged", isDraft: false, headSha: engineFixture.commit, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 1, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
     });
     h.seedTask(`merged-${worktree.present}`);
     try {
@@ -29,6 +29,35 @@ test("a known merged pull request completes while the local worktree is dirty or
       expect(h.calls.get("inspectTaskWorktree") ?? 0).toBe(0);
     } finally { await h.stop(); }
   }
+});
+
+test.each([
+  ["pull_request_draft", true],
+  ["pull_request_ready", false],
+] as const)("a %s target completes before an old failed check is repaired", async (deliveryTarget, isDraft) => {
+  const h = await createEngineHarness({
+    observeGithubPullRequest: async () => ({ exists: true, number: 127, url: "https://github.test/127", state: "open", isDraft, headSha: engineFixture.commit, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 1, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
+  });
+  h.seedTask(`target-${deliveryTarget}`, { deliveryTarget });
+  try {
+    const started = await h.startContinuation(`target-${deliveryTarget}`, releasing(h, `target-${deliveryTarget}`), { deliveryTarget });
+    expect((await h.settle(started.workflowId, (state) => state.step === "done")).step).toBe("done");
+  } finally { await h.stop(); }
+});
+
+test.each([
+  ["CONFLICTING", "open"],
+  ["MERGEABLE", "closed"],
+] as const)("a %s PR routes to the conflict path, never CI repair", async (mergeable, state) => {
+  const h = await createEngineHarness({
+    observeGithubPullRequest: async () => ({ exists: true, number: 127, url: "https://github.test/127", state, isDraft: false, headSha: engineFixture.commit, baseSha: engineFixture.base, mergeable, checks: { total: 1, pending: 0, failing: 1, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
+  });
+  h.seedTask(`non-ci-${state}`);
+  try {
+    const started = await h.startContinuation(`non-ci-${state}`, releasing(h, `non-ci-${state}`));
+    const result = await h.settle(started.workflowId, (value) => value.step === "merge_conflict_reviewing");
+    expect(result.step).not.toBe("ci_repair_planning");
+  } finally { await h.stop(); }
 });
 
 test("a failed required check starts CI repair without another publication or review", async () => {

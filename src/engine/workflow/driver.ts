@@ -108,11 +108,11 @@ function releaseTargetComplete(ctx: IssueWorkflowContext, observation: GithubRea
 function githubAnswer(ctx: IssueWorkflowContext, waitsOn: Extract<OwnerRead, { owner: "github" }>, observation: GithubRead | GithubPullRequestObservationResult | null): OwnerAnswer {
   if (!observation) return parsed({ type: "owner.absent" });
   if (!observation.exists) return parsed({ type: "owner.absent" });
-  if (waitsOn.what === "pull_request" && observation.checks.failing > 0) return parsed({ type: "owner.failed", reason: "Required checks failed" });
   if (waitsOn.what === "pull_request" && ctx.state.step !== "manual_merge" && releaseTargetComplete(ctx, observation)) return parsed({ type: "owner.done" });
   if (observation.state === "merged") return parsed({ type: "owner.done" });
   if (observation.state === "closed") return parsed({ type: "owner.failed", reason: "Pull request closed without merge" });
   if (["CONFLICTING", "DIRTY"].includes(observation.mergeable ?? "")) return parsed({ type: "owner.failed", reason: "Pull request has merge conflicts" });
+  if (waitsOn.what === "pull_request" && observation.checks.failing > 0) return parsed({ type: "owner.failed", reason: "Required checks failed" });
   if (waitsOn.what === "checks") return parsed(observation.checks.failing > 0 ? { type: "owner.failed", reason: "Required checks failed" } : observation.checks.pending > 0 || observation.checks.total === 0 || observation.checks.successful !== observation.checks.total ? { type: "owner.live" } : { type: "owner.done" });
   return parsed({ type: "owner.live" });
 }
@@ -285,6 +285,10 @@ export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: Driv
   const event = await readOwner(ctx, rule.waitsOn, dependencies);
   if (githubWaiting && (ctx.state.step !== step || ctx.state.revision !== revision)) return true;
   const { actions } = nextStep(step, event);
+  if (step === "releasing" && event.type === "owner.failed" && event.reason === "Required checks failed") {
+    await applyDirectStep(ctx, { step: "ci_repair_planning", owner: "lead" }, step, event);
+    return true;
+  }
   for (const action of actions) {
     switch (action.type) {
       case "runCommand": if (!await runDriverCommand(ctx, action.params.command, step, event)) return false; break;

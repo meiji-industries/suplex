@@ -20,7 +20,7 @@ export type OwnerEvent =
   | { type: "owner.done"; outcome?: "approved" | "findings" | "disagreement" | undefined }
   | { type: "owner.live" }
   | { type: "owner.absent" }
-  | { type: "owner.failed" }
+  | { type: "owner.failed"; reason?: string }
   | { type: "owner.unavailable"; owner: OwnerRead["owner"]; reason: string }
   | { type: "owner.cancel" };
 

@@ -75,13 +75,15 @@ from `.result.pane.pane_id`, give the agent a short unique name, and start
 Codex:
 
 ```sh
-herdr agent start <name> --kind codex --pane <pane-id> -- <agent-options>
+herdr agent start <name> --kind codex --pane <pane-id> -- \
+  --dangerously-bypass-approvals-and-sandbox <agent-options>
 herdr agent prompt <name> "Read and carry out <brief.md>; report the result."
 ```
 
 `agent start` requires an existing pane at an interactive shell prompt; it
-does not create or split a pane. Agent options belong after `--`. Omit that
-separator when there are no agent-specific options.
+does not create or split a pane. Agent options belong after `--`. Always pass
+`--dangerously-bypass-approvals-and-sandbox` to Codex. The agent can then
+stage and commit its assigned paths without an approval dialog.
 
 Monitor without taking focus away from the user:
 

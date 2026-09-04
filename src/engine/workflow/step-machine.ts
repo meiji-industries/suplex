@@ -8,6 +8,7 @@ import {
   OWNERS,
   STEP_TABLE,
   type Answer,
+  type AdoptFirstTransition,
   type OwnerRead,
   type StepRule,
   type Transition,
@@ -67,6 +68,10 @@ function actionsFor(transitionRule: Transition): DriverAction[] {
   return [{ type: "wait", params: { on: "poll", pollMs: transitionRule.wait.pollMs } }];
 }
 
+function actionsForAdoptFirst(transitionRule: AdoptFirstTransition): DriverAction[] {
+  return "continue" in transitionRule ? [] : actionsFor(transitionRule);
+}
+
 function stateFor(rule: StepRule): StepState {
   const meta = { waitsOn: rule.waitsOn, ...(rule.humanAction ? { humanAction: rule.humanAction } : {}) };
   if (rule.terminal) return { type: "final", meta };
@@ -114,6 +119,13 @@ export function nextStep(step: IssueStep, event: OwnerEvent): { step: IssueStep;
   return { step: value, actions: actionsFor(STEP_TABLE[step].on[answerFor(event)]) };
 }
 
+export function nextAdoptFirst(step: IssueStep, event: Exclude<OwnerEvent, { type: "owner.cancel" | "owner.unavailable" }>): { continue: boolean; actions: DriverAction[] } {
+  const rule = STEP_TABLE[step];
+  if (rule.terminal || !rule.adoptFirst || !rule.onAdoptFirst) return { continue: true, actions: [] };
+  const transitionRule = rule.onAdoptFirst[answerFor(event)];
+  return { continue: "continue" in transitionRule, actions: actionsForAdoptFirst(transitionRule) };
+}
+
 function answerFor(event: Exclude<OwnerEvent, { type: "owner.cancel" | "owner.unavailable" }>): Answer {
   switch (event.type) {
     case "owner.done": return "done";
@@ -124,4 +136,4 @@ function answerFor(event: Exclude<OwnerEvent, { type: "owner.cancel" | "owner.un
   }
 }
 
-export type { Answer, OwnerRead, Transition };
+export type { Answer, AdoptFirstTransition, OwnerRead, Transition };

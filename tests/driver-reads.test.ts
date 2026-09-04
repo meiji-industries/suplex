@@ -52,7 +52,7 @@ describe("readOwner", () => {
 
   it("classifies git, member, and timer state", async () => {
     await expect(readOwner(context(), { owner: "git", what: "delivery" }, dependencies({ inspectTaskWorktree: async () => ({ present: false, dirtyFileCount: 0, revision: null }) }))).resolves.toEqual({ type: "owner.absent" });
-    await expect(readOwner(context(), { owner: "git", what: "delivery" }, dependencies({ inspectTaskWorktree: async () => ({ present: true, dirtyFileCount: 1, revision: { proven: false, head: sha, headTree: tree, clean: false } }) }))).resolves.toEqual({ type: "owner.failed", reason: "Git worktree is dirty" });
+    await expect(readOwner(context(), { owner: "git", what: "delivery" }, dependencies({ inspectTaskWorktree: async () => ({ present: true, dirtyFileCount: 1, revision: { proven: false, head: sha, headTree: tree, clean: false } }) }))).resolves.toEqual({ type: "owner.live" });
     await expect(readOwner(context(), { owner: "git", what: "delivery" }, dependencies({ inspectTaskWorktree: async () => { throw new Error("git down"); } }))).resolves.toEqual({ type: "owner.unavailable", owner: "git", reason: "git down" });
     await expect(readOwner(context({ planApproved: true }), { owner: "member", decision: "plan_approval" }, dependencies())).resolves.toEqual({ type: "owner.done" });
     await expect(readOwner(context(), { owner: "member", decision: "plan_approval" }, dependencies())).resolves.toEqual({ type: "owner.absent" });

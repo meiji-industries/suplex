@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createTestModel } from "xstate/graph";
 
 import { ISSUE_STEPS, type IssueStep } from "../src/issue-phases.js";
-import { nextStep, stepMachine, type OwnerEvent } from "../src/engine/workflow/step-machine.js";
+import { nextAdoptFirst, nextStep, stepMachine, type OwnerEvent } from "../src/engine/workflow/step-machine.js";
 import { ANSWERS, STEP_TABLE, type Transition } from "../src/engine/workflow/step-table.js";
 
 const model = createTestModel(stepMachine);
@@ -66,6 +66,14 @@ describe("stepMachine", () => {
         const transitionRule = STEP_TABLE[step].on[answer];
         expect(nextStep(step, eventFor(answer)).actions).toEqual(expectedActions(transitionRule));
       }
+    }
+  });
+
+  it("maps a moved delivery head to target-base reconciliation before review", () => {
+    for (const step of ["delivery_ready", "delivery_reviewed"] as const) {
+      expect(nextAdoptFirst(step, { type: "owner.done" })).toEqual({ continue: true, actions: [] });
+      expect(nextAdoptFirst(step, { type: "owner.live" })).toEqual({ continue: false, actions: [{ type: "wait", params: { on: "signal" } }] });
+      expect(nextAdoptFirst(step, { type: "owner.failed" })).toEqual({ continue: false, actions: [{ type: "runCommand", params: { command: "retry_target_base_reconciliation" } }] });
     }
   });
 

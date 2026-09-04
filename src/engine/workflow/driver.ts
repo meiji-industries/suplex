@@ -2,12 +2,12 @@ import { assertNever } from "../../assert-never.js";
 import { gitSha, gitTree, type ExecutionId, type TurnId } from "../../ids.js";
 import { issueUpdates } from "../issue-updates.js";
 import { IssueWorkflowStateSchema, type IssueCommand, type IssueWorkflowState } from "../issue-contracts.js";
-import { runExecution } from "../registry.js";
+import { log, runExecution } from "../registry.js";
 import { turnResultSchema } from "../../turn-result-schemas.js";
-import { at } from "../../issue-phases.js";
+import { at, isBlocked } from "../../issue-phases.js";
 import type { IssueWorkflowContext } from "./context.js";
 import { inspectTaskWorktree, observeGithubPullRequest, readHerdrTurn } from "./activity-proxies.js";
-import { nextStep, type OwnerEvent } from "./step-machine.js";
+import { nextAdoptFirst, nextStep, type OwnerEvent } from "./step-machine.js";
 import { STEP_TABLE, type OwnerRead, type Transition } from "./step-table.js";
 import { herdrResultAnswer, ownerAnswer, type OwnerAnswer } from "./owner-answer.js";
 
@@ -23,7 +23,7 @@ type HerdrTurn = {
   result: unknown | null;
   terminalFailure: string | null;
 };
-type WorktreeRead = { present: boolean; dirtyFileCount: number; revision: { proven: boolean; head: string | null; headTree: string | null; clean: boolean; reason?: string } | null };
+type WorktreeRead = { present: boolean; dirtyFileCount: number; activeExecution?: boolean; revision: { proven: boolean; head: string | null; headTree: string | null; clean: boolean; reason?: string } | null };
 type GithubRead = { exists: boolean; state: "open" | "closed" | "merged" | null; mergeable: string | null; checks: { pending: number; failing: number; total: number; successful: number } };
 
 export type DriverDependencies = {
@@ -90,7 +90,7 @@ async function readGit(ctx: IssueWorkflowContext, waitsOn: Extract<OwnerRead, { 
   const inspect = dependencies.inspectTaskWorktree ?? inspectTaskWorktree;
   const worktree = await inspect({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, expectedCommit: gitSha(expectedCommit), ...(expectedTree ? { expectedTree: gitTree(expectedTree) } : {}), ...(ctx.state.branchName ? { expectedBranch: ctx.state.branchName } : {}) });
   if (!worktree.present) return parsed({ type: "owner.absent" });
-  if (worktree.dirtyFileCount > 0 || worktree.revision?.clean === false) return parsed({ type: "owner.failed", reason: "Git worktree is dirty" });
+  if (worktree.activeExecution || worktree.dirtyFileCount > 0 || worktree.revision?.clean === false) return parsed({ type: "owner.live" });
   return parsed(worktree.revision?.proven ? { type: "owner.done" } : { type: "owner.failed", reason: worktree.revision?.reason ?? "Git head differs from the expected revision" });
 }
 
@@ -127,18 +127,44 @@ export async function readOwner(ctx: IssueWorkflowContext, waitsOn: OwnerRead, d
   }
 }
 
-async function runDriverCommand(ctx: IssueWorkflowContext, command: IssueCommand, step: IssueWorkflowState["step"], event: OwnerEvent): Promise<void> {
+const refusedDriverCommands = new Set<string>();
+
+function sameState(left: IssueWorkflowState, right: IssueWorkflowState): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function isGuardRefusal(error: unknown): boolean {
+  return error instanceof Error && /not available in the current phase/i.test(error.message);
+}
+
+async function runDriverCommand(ctx: IssueWorkflowContext, command: IssueCommand, step: IssueWorkflowState["step"], event: OwnerEvent): Promise<boolean> {
   const revision = ctx.state.revision;
   const commandId = `${ctx.state.workflowId}:driver:${step}:${revision}:${event.type}`;
-  if (ctx.commandAlreadyProcessed(commandId)) return;
+  if (ctx.commandAlreadyProcessed(commandId)) return false;
   const handler = runExecution.current().commands.get(issueUpdates[command]);
   if (!handler) throw new Error(`Driver ${command} handler is unavailable`);
+  const before = ctx.state;
   if (command !== "start_development" && command !== "retry_development") {
     ctx.markCommandProcessed(commandId);
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: revision + 1, allowedCommands: ctx.state.allowedCommands.includes(command) ? ctx.state.allowedCommands : [...ctx.state.allowedCommands, command], lastEventId: `${ctx.state.workflowId}:${revision + 1}` });
-    await ctx.project();
   }
-  await Reflect.apply(handler, undefined, [{ expectedRevision: ctx.state.revision, actorUserId: "forge-driver", commandId }]);
+  const claimed = ctx.state;
+  try {
+    await Reflect.apply(handler, undefined, [{ expectedRevision: claimed.revision, actorUserId: "forge-driver", commandId }]);
+  } catch (error) {
+    ctx.state = before;
+    if (!isGuardRefusal(error)) throw error;
+    if (!refusedDriverCommands.has(commandId)) {
+      refusedDriverCommands.add(commandId);
+      log.warn("Driver command refused by phase guard", { command, commandId, step });
+    }
+    return false;
+  }
+  if (sameState(ctx.state, claimed)) {
+    ctx.state = before;
+    return false;
+  }
+  return true;
 }
 
 const DIRECT_STEP_DETAILS: Partial<Record<IssueWorkflowState["step"], Pick<IssueWorkflowState, "allowedCommands" | "pendingAction">>> = {
@@ -176,12 +202,26 @@ async function applyDirectStep(ctx: IssueWorkflowContext, target: Extract<Transi
 export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: DriverDependencies = {}): Promise<boolean> {
   const step = ctx.state.step;
   const rule = STEP_TABLE[step];
-  if (rule.terminal || rule.waitsOn.owner !== "herdr" || ctx.state.activeOperation !== null) return false;
+  if (rule.terminal || (!rule.adoptFirst && rule.waitsOn.owner !== "herdr") || ctx.state.activeOperation !== null) return false;
+  if (rule.adoptFirst && isBlocked(ctx.state)) return false;
+  if (rule.adoptFirst) {
+    const adopted = await readOwner(ctx, rule.adoptFirst, dependencies);
+    if (adopted.type === "owner.unavailable" || adopted.type === "owner.cancel") return false;
+    const adoption = nextAdoptFirst(step, adopted);
+    if (!adoption.continue) {
+      for (const action of adoption.actions) {
+        if (action.type === "runCommand" && !await runDriverCommand(ctx, action.params.command, step, adopted)) return false;
+        if (action.type === "changeStep") await applyDirectStep(ctx, action.params, step, adopted);
+        if (action.type === "wait") return false;
+      }
+      return true;
+    }
+  }
   const event = await readOwner(ctx, rule.waitsOn, dependencies);
   const { actions } = nextStep(step, event);
   for (const action of actions) {
     switch (action.type) {
-      case "runCommand": await runDriverCommand(ctx, action.params.command, step, event); break;
+      case "runCommand": if (!await runDriverCommand(ctx, action.params.command, step, event)) return false; break;
       case "changeStep": await applyDirectStep(ctx, action.params, step, event); break;
       case "wait": return false;
       default: assertNever(action);

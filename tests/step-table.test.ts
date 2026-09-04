@@ -47,4 +47,14 @@ describe("STEP_TABLE", () => {
       expect(resultSchemas, step).toMatch(new RegExp(`(?:"${promptKind}"|${promptKind}):`));
     }
   });
+
+  it("checks the delivery revision before reading a delivery review", () => {
+    for (const step of ["delivery_ready", "delivery_reviewed"] as const) {
+      const rule = STEP_TABLE[step];
+      if (rule.terminal) throw new Error(`${step} must be active`);
+      expect(rule.adoptFirst).toEqual({ owner: "git", what: "delivery" });
+      expect(rule.onAdoptFirst).toMatchObject({ done: { continue: true }, live: { wait: "signal" }, failed: { command: "retry_target_base_reconciliation" } });
+      if (step === "delivery_ready") expect(rule.waitsOn).toEqual({ owner: "herdr", role: "planner", promptKind: "delivery-review" });
+    }
+  });
 });

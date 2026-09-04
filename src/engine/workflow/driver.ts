@@ -1,24 +1,20 @@
-import { z } from "zod";
-
 import { assertNever } from "../../assert-never.js";
 import { gitSha, gitTree, type ExecutionId, type TurnId } from "../../ids.js";
+import { at } from "../../issue-phases.js";
+import { issueUpdates } from "../issue-updates.js";
+import type { IssueCommand } from "../../commands/registry.js";
 import type { IssueWorkflowState } from "../issue-contracts.js";
+import { IssueWorkflowStateSchema } from "../issue-contracts.js";
+import { condition, log, runExecution, sleep } from "../registry.js";
 import { turnResultSchema } from "../../turn-result-schemas.js";
 import type { IssueWorkflowContext } from "./context.js";
-import { inspectTaskWorktree, observeGithubPullRequest } from "./activity-proxies.js";
-import type { OwnerEvent } from "./step-machine.js";
+import { inspectTaskWorktree, observeGithubPullRequest, readHerdrTurn } from "./activity-proxies.js";
+import { herdrResultAnswer, ownerAnswer, type OwnerAnswer } from "./owner-answer.js";
+import { meta, nextStep, type OwnerEvent } from "./step-machine.js";
 import type { OwnerRead } from "./step-table.js";
+import { humanBlocker } from "./state-transitions.js";
 
-const outcomeSchema = z.enum(["approved", "findings", "disagreement"]);
-
-export const OwnerAnswerSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("owner.done"), outcome: outcomeSchema.optional() }).strict(),
-  z.object({ type: z.literal("owner.live") }).strict(),
-  z.object({ type: z.literal("owner.absent") }).strict(),
-  z.object({ type: z.literal("owner.failed"), reason: z.string().min(1) }).strict(),
-  z.object({ type: z.literal("owner.unavailable"), owner: z.enum(["member", "git", "github", "herdr", "timer"]), reason: z.string().min(1) }).strict(),
-]);
-export type OwnerAnswer = z.infer<typeof OwnerAnswerSchema>;
+export { OwnerAnswerSchema, type OwnerAnswer } from "./owner-answer.js";
 
 type HerdrTurn = {
   turnId: TurnId;
@@ -39,9 +35,11 @@ export type DriverDependencies = {
   readLatestHerdrTurn?: (input: { taskId: string; role: HerdrTurn["role"]; promptKind: string }) => Promise<HerdrTurn | null>;
   isTaskTurnLive?: (taskId: string) => Promise<{ live: boolean }>;
   now?: () => Date;
+  shouldWake?: () => boolean;
+  syncGithubPullRequest?: () => Promise<unknown>;
 };
 
-function parsed(value: OwnerAnswer): OwnerAnswer { return OwnerAnswerSchema.parse(value); }
+function parsed(value: OwnerAnswer): OwnerAnswer { return ownerAnswer(value); }
 function unavailable(owner: OwnerRead["owner"], error: unknown): OwnerAnswer { return parsed({ type: "owner.unavailable", owner, reason: error instanceof Error ? error.message : `${owner} owner read failed` }); }
 
 function memberAnswer(state: IssueWorkflowState, decision: Extract<OwnerRead, { owner: "member" }>['decision']): OwnerAnswer {
@@ -54,30 +52,26 @@ function memberAnswer(state: IssueWorkflowState, decision: Extract<OwnerRead, { 
   }
 }
 
-function matchesSubject(state: IssueWorkflowState, subject: HerdrTurn["subject"]): boolean {
-  return (!subject.commit || subject.commit === state.resultCommit)
-    && (!subject.tree || subject.tree === state.resultTree)
-    && (subject.planRevision === undefined || subject.planRevision === null || subject.planRevision === state.planRevision);
-}
-
-function resultAnswer(result: unknown): OwnerAnswer {
-  if (!result || typeof result !== "object" || Array.isArray(result)) return parsed({ type: "owner.done" });
-  const value = result as Record<string, unknown>;
-  if (value.outcome === "approved") return parsed({ type: "owner.done", outcome: "approved" });
-  if (value.outcome === "blocking") return parsed({ type: "owner.failed", reason: "Herdr reported blocking findings" });
-  if (value.decision === "repair") return parsed({ type: "owner.failed", reason: "Herdr requested a repair" });
-  if (value.decision === "ask") return parsed({ type: "owner.done", outcome: "disagreement" });
-  if (typeof value.blocker === "string" && value.blocker) return parsed({ type: "owner.failed", reason: value.blocker });
-  return parsed({ type: "owner.done" });
-}
-
 async function readHerdr(ctx: IssueWorkflowContext, waitsOn: Extract<OwnerRead, { owner: "herdr" }>, dependencies: DriverDependencies): Promise<OwnerAnswer> {
-  if (!dependencies.readLatestHerdrTurn || !dependencies.isTaskTurnLive) return parsed({ type: "owner.unavailable", owner: "herdr", reason: "Herdr owner reads are not wired" });
+  if (!dependencies.readLatestHerdrTurn || !dependencies.isTaskTurnLive) {
+    return readHerdrTurn({
+      taskId: ctx.input.issueId,
+      companyId: ctx.input.companyId,
+      workflowId: ctx.input.workflowId,
+      role: waitsOn.role,
+      promptKind: waitsOn.promptKind,
+      subject: {
+        ...(ctx.state.resultCommit !== undefined ? { commit: ctx.state.resultCommit } : {}),
+        ...(ctx.state.resultTree !== undefined ? { tree: ctx.state.resultTree } : {}),
+        ...(ctx.state.planRevision !== undefined ? { planRevision: ctx.state.planRevision } : {}),
+      },
+    });
+  }
   const turn = await dependencies.readLatestHerdrTurn({ taskId: ctx.input.issueId, role: waitsOn.role, promptKind: waitsOn.promptKind });
-  if (turn && turn.role === waitsOn.role && turn.promptKind === waitsOn.promptKind && matchesSubject(ctx.state, turn.subject)) {
+  if (turn && turn.role === waitsOn.role && turn.promptKind === waitsOn.promptKind) {
     if (turn.result !== null) {
-      const parsedResult = turnResultSchema(turn.ledger, turn.promptKind)?.safeParse(turn.result);
-      if (parsedResult?.success) return resultAnswer(parsedResult.data);
+      const result = turnResultSchema(turn.ledger, turn.promptKind)?.safeParse(turn.result);
+      if (result?.success) return herdrResultAnswer(result.data);
     }
     if (turn.terminalFailure) return parsed({ type: "owner.failed", reason: turn.terminalFailure });
   }
@@ -125,5 +119,72 @@ export async function readOwner(ctx: IssueWorkflowContext, waitsOn: OwnerRead, d
     }
   } catch (error) {
     return unavailable(waitsOn.owner, error);
+  }
+}
+
+function ownerSummary(event: Extract<OwnerEvent, { type: "owner.unavailable" }>): string {
+  return `${event.owner[0]!.toUpperCase()}${event.owner.slice(1)} is unavailable. Forge retries after a short backoff.`;
+}
+
+async function runDriverCommand(ctx: IssueWorkflowContext, command: IssueCommand, step: IssueWorkflowState["step"], event: OwnerEvent): Promise<void> {
+  const revision = ctx.state.revision;
+  const commandId = `${ctx.state.workflowId}:driver:${step}:${revision}:${event.type}`;
+  if (ctx.commandAlreadyProcessed(commandId)) return;
+  const handler = runExecution.current().commands.get(issueUpdates[command]);
+  if (!handler) throw new Error(`Driver ${command} handler is unavailable`);
+  ctx.markCommandProcessed(commandId);
+  ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: revision + 1, allowedCommands: ctx.state.allowedCommands.includes(command) ? ctx.state.allowedCommands : [...ctx.state.allowedCommands, command], lastEventId: `${ctx.state.workflowId}:${revision + 1}` });
+  await ctx.project();
+  await Reflect.apply(handler, undefined, [{ expectedRevision: ctx.state.revision, actorUserId: "forge-driver", commandId }]);
+}
+
+function changeStep(ctx: IssueWorkflowContext, step: IssueWorkflowState["step"], owner: "lead" | "human"): boolean {
+  const rule = meta(step);
+  const humanAction = owner === "human" ? rule.humanAction : undefined;
+  const pendingAction = owner === "human" ? "Your action is necessary." : "Forge reads the next owner.";
+  if (ctx.state.step === step && ctx.state.owner === owner && ctx.state.pendingAction === pendingAction) return false;
+  const revision = ctx.state.revision + 1;
+  ctx.state = IssueWorkflowStateSchema.parse({
+    ...ctx.state,
+    revision,
+    ...at(step),
+    owner,
+    allowedCommands: owner === "human" && humanAction ? [humanAction, "cancel_issue"] : owner === "human" ? ["cancel_issue"] : ["cancel_issue"],
+    pendingAction,
+    blocker: owner === "human" && humanAction
+      ? humanBlocker("member_authorization", pendingAction, [{ command: humanAction, label: "Continue", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], undefined)
+      : null,
+    stateChangedAt: new Date().toISOString(),
+    lastEventId: `${ctx.state.workflowId}:${revision}`,
+  });
+  return true;
+}
+
+export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: DriverDependencies = {}): Promise<void> {
+  const step = ctx.state.step;
+  const rule = meta(step);
+  if (rule.waitsOn.owner === "github" && dependencies.syncGithubPullRequest) {
+    const revision = ctx.state.revision;
+    await dependencies.syncGithubPullRequest();
+    if (ctx.state.step !== step || ctx.state.revision !== revision) return;
+  }
+  const event = await readOwner(ctx, rule.waitsOn as OwnerRead, dependencies);
+  const { actions } = nextStep(step, event);
+  for (const action of actions) {
+    if (action.type === "runCommand") await runDriverCommand(ctx, action.params.command, step, event);
+    else if (action.type === "changeStep") {
+      if (changeStep(ctx, action.params.step, action.params.owner)) await ctx.project();
+    } else if (event.type === "owner.unavailable") {
+      const summary = ownerSummary(event);
+      const retryAt = new Date((dependencies.now?.() ?? new Date()).getTime() + (action.params.pollMs ?? 15_000)).toISOString();
+      if (!ctx.state.ciNextPollAt || Date.parse(ctx.state.ciNextPollAt) <= (dependencies.now?.() ?? new Date()).getTime()) {
+        const revision = ctx.state.revision + 1;
+        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision, ciNextPollAt: retryAt, lastEventId: `${ctx.state.workflowId}:${revision}` });
+        await ctx.project();
+      }
+      log.warn(summary, { workflowId: ctx.state.workflowId, step });
+      await sleep(action.params.pollMs ?? 15_000);
+    } else if (action.params.on === "signal") await condition(dependencies.shouldWake ?? (() => false));
+    else await sleep(action.params.pollMs ?? 60_000);
   }
 }

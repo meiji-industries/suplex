@@ -96,14 +96,14 @@ export function applyLegacyLeadResult(state: IssueWorkflowState, result: LeadPla
 
 export function permanentActivityFailure(error: unknown, recoverExhausted = false): IssueWorkflowContext["permanentActivityFailure"] extends (error: unknown) => infer Result ? Result : never {
   if (error instanceof ApplicationFailure && error.nonRetryable) {
-    return { code: error.type ?? "permanent-activity-failure", summary: error.message || "The invocation cannot complete without a configuration change." };
+    return { code: error.type, summary: error.message || "The invocation cannot complete without a configuration change." };
   }
   if (!(error instanceof ActivityFailure)) return undefined;
   if (!(error.cause instanceof ApplicationFailure) || !error.cause.nonRetryable) {
     const cause = error.cause instanceof Error ? error.cause.message : String(error.cause);
     return recoverExhausted ? { code: "activity-failed", summary: `The operation failed after its retry attempts: ${cause}` } : undefined;
   }
-  const detail = error.cause.details?.[0];
+  const detail = error.cause.details[0];
   if (detail && typeof detail === "object") {
     const record = detail as Record<string, unknown>;
     if (typeof record.code === "string" && typeof record.summary === "string") {
@@ -111,12 +111,12 @@ export function permanentActivityFailure(error: unknown, recoverExhausted = fals
       return { code: record.code, summary: record.summary, ...(category.success ? { category: category.data } : {}), ...(typeof record.evidenceArtifactId === "string" ? { evidenceArtifactId: record.evidenceArtifactId } : {}), ...(typeof record.evidenceSha256 === "string" ? { evidenceSha256: record.evidenceSha256 } : {}) };
     }
   }
-  return { code: error.cause.type ?? "permanent-activity-failure", summary: "The invocation cannot complete without a configuration change." };
+  return { code: error.cause.type, summary: "The invocation cannot complete without a configuration change." };
 }
 
 export function rateLimitFailure(error: unknown): { retryAt?: string } | undefined {
   if (!(error instanceof ActivityFailure) || !(error.cause instanceof ApplicationFailure) || error.cause.type !== "rate-limited") return undefined;
-  const detail = error.cause.details?.[0];
+  const detail = error.cause.details[0];
   if (!detail || typeof detail !== "object") return {};
   const retryAt = (detail as Record<string, unknown>).retryAt;
   return typeof retryAt === "string" ? { retryAt } : {};

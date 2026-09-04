@@ -53,6 +53,7 @@ export async function createEngineHarness(overrides: Partial<IssueActivities> = 
       database.projectIssueEvent(event);
       return activity ? activity(...args) : event.state;
     }
+    if (name === "readHerdrTurn") return activity ? activity(...args) : { type: "owner.absent" };
     if (!activity) throw new Error(`Activity function ${name} is not registered`);
     return activity(...args);
   } });

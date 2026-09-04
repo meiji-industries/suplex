@@ -28,7 +28,7 @@ export type DriverAction =
   | { type: "wait"; params: { on: "signal" | "poll"; pollMs?: number } }
   | { type: "changeStep"; params: { step: IssueStep; owner: "lead" | "human" } };
 
-type StepMeta = { waitsOn: StepRule["waitsOn"]; humanAction?: IssueCommand };
+export type StepMeta = { waitsOn: StepRule["waitsOn"]; humanAction?: IssueCommand };
 type ActiveState = {
   meta: StepMeta;
   on: Record<`owner.${Answer}`, { target?: IssueStep }> & { "owner.cancel": { target: "cancelled" }; "owner.unavailable": {} };
@@ -112,6 +112,11 @@ export function nextStep(step: IssueStep, event: OwnerEvent): { step: IssueStep;
   if (event.type === "owner.cancel") return { step: value, actions: [] };
   if (event.type === "owner.unavailable") return { step: value, actions: [{ type: "wait", params: { on: "poll", pollMs: 15_000 } }] };
   return { step: value, actions: actionsFor(STEP_TABLE[step].on[answerFor(event)]) };
+}
+
+export function meta(step: IssueStep): StepMeta {
+  const rule = STEP_TABLE[step];
+  return { waitsOn: rule.waitsOn, ...(rule.humanAction ? { humanAction: rule.humanAction } : {}) };
 }
 
 function answerFor(event: Exclude<OwnerEvent, { type: "owner.cancel" | "owner.unavailable" }>): Answer {

@@ -25,7 +25,7 @@ import { registerMergeHandlers, registerMergeReconciliationHandler } from "./wor
 import { registerReleaseHandlers } from "./workflow/register-release.js";
 import { registerTargetBaseHandlers } from "./workflow/register-target-base.js";
 import { driverPollDelay, evaluateStep } from "./workflow/driver.js";
-import { applyLeadResult, autoChainedCommand, createAcquireExternalTurn, createGuarded, failureBlockCategory, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
+import { applyLeadResult, createAcquireExternalTurn, createGuarded, failureBlockCategory, leadResultKind, permanentActivityFailure, rateLimitFailure } from "./workflow/runtime.js";
 export * from "./issue-updates.js"; export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
 async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { const projected = withWorktreeCommands(state); return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: runExecution.current().runId, eventId: projected.lastEventId, state: projected })); }
 const MAX_RECONCILIATION_ATTEMPTS = 20; function sameTransition(state: IssueWorkflowState, next: Partial<IssueWorkflowState>): boolean { return Object.entries(next).every(([field, value]) => JSON.stringify(state[field as keyof IssueWorkflowState]) === JSON.stringify(value)); } export const issueStateQuery = "issueState" as const;
@@ -370,13 +370,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   // Continue-As-New carries the last business revision into a fresh run; re-emitting it would read as conflicting authoritative history.
   try {
     await workflowContext.initialProjection;
-    const automaticActionsAllowed = (): boolean => !automaticActionsHalted;
     const githubSyncPending = (): boolean => githubSyncRequested;
     function shouldWake(): boolean {
       return githubSyncRequested // GitHub changed.
         || (!workflowContext.state.allowedCommands.includes("delete_worktree") && (workflowContext.state.step === "done" || (workflowContext.state.step === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) // A terminal state needs completion.
-        || workflowContext.continuationRequested // A continuation was requested.
-        || (!automaticActionsHalted && autoChainedCommand(workflowContext, "") !== null); // A phase can advance automatically.
+        || workflowContext.continuationRequested; // A continuation was requested.
     }
     for (;;) {
       if ((workflowContext.state.step === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.step === "cancelled" && !(workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree")))) { return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
@@ -401,13 +399,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         githubSyncRequested = false;
         await syncGithubPullRequest();
         continue;
-      }
-      if (automaticActionsAllowed()) {
-        const chained = autoChainedCommand(workflowContext, "");
-        if (chained) {
-          await runAutoChainedCommand(workflowContext, chained);
-          continue;
-        }
       }
       await condition(shouldWake, driverPollDelay(workflowContext.state, runExecution.current().now()));
     }

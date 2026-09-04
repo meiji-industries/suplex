@@ -101,6 +101,37 @@ test("boot claims a completed approved delivery review before publishing without
   }
 });
 
+test("a completed delivery_reviewed owner publishes once through the driver", async () => {
+  let publishCalls = 0;
+  const harness = await createEngineHarness({
+    inspectTaskWorktree: async () => provenWorktree(),
+    pushDeliveryBranch: async () => ({ repository: "acme/forge", branchName: "forge/issue/driver-boot", commitSha: engineFixture.commit }),
+    publishRelease: async () => {
+      publishCalls += 1;
+      return { outcome: "completed" as const, repository: "acme/forge", branchName: "forge/issue/driver-boot", headSha: engineFixture.commit, headTree: engineFixture.tree, reused: false, attempt: 1, releaseId: "release", baseBranch: "main", pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", isDraft: true, targetBaseSha: engineFixture.base };
+    },
+    observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.test/42", state: "open" as const, isDraft: true, headSha: engineFixture.commit, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 0, pending: 0, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
+  });
+  const issueId = "driver-reviewed-publish";
+  const workflowId = harness.workflowId(issueId);
+  harness.seedTask(issueId, { deliveryTarget: "pull_request_draft" });
+  try {
+    await harness.startContinuation(issueId, {
+      ...deliveryReviewState(workflowId),
+      ...at("delivery_reviewed"),
+      owner: "lead",
+      allowedCommands: ["publish_draft", "cancel_issue"],
+      pendingAction: "Forge opens the pull request",
+    }, { deliveryTarget: "pull_request_draft" });
+    const done = await harness.settle(workflowId, (state) => state.step === "done");
+    expect(publishCalls).toBe(1);
+    expect(done.processedCommandIds).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(`^${workflowId}:driver:delivery_reviewed:\\d+:owner\\.done$`))]));
+    expect(done.processedCommandIds).not.toEqual(expect.arrayContaining([expect.stringMatching(":auto-")]));
+  } finally {
+    await harness.stop();
+  }
+});
+
 test("the driver completes a merged release through the GitHub synchronizer", async () => {
   let observations = 0;
   const harness = await createEngineHarness({

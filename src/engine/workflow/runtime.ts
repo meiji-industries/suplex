@@ -1,5 +1,5 @@
-import { at, isBlocked, type IssueStep } from "../../issue-phases.js";
-import { isCancellation, log, runExecution } from "../registry.js";
+import { at } from "../../issue-phases.js";
+import { isCancellation, log } from "../registry.js";
 import { ActivityFailure, ApplicationFailure } from "../failures.js";
 
 import {
@@ -8,11 +8,7 @@ import {
   type IssueWorkflowState,
   type LeadPlanningResult,
 } from "../issue-contracts.js";
-import { arbitrateReview, repairDelivery, resumeReviewedDeliveryTarget, reviewDelivery } from "./register-delivery-review.js";
-import { startDevelopment } from "./register-development.js";
-import { resolveMergeConflict } from "./register-merge.js";
 import { evidencePointer, humanBlocker } from "./state-transitions.js";
-import * as stateTransitions from "./state-transitions.js";
 import { TERMINAL_PHASES } from "../../issue-phases.js";
 import type { IssueWorkflowContext, StateRef } from "./context.js";
 
@@ -140,87 +136,8 @@ export function createAcquireExternalTurn(
   return acquire;
 }
 
-// Forge is a single-operator tool: a phase whose next step is an agent turn must not park
-// on a button. The human gates stay plan approval and pull-request handling.
-const AUTO_CHAINED_COMMANDS: Partial<Record<IssueStep, IssueWorkflowState["allowedCommands"][number]>> = {
-  delivery_ready: "review_delivery",
-  delivery_reviewed: "publish_draft",
-  repair_required: "repair_delivery",
-  review_arbitration: "arbitrate_review",
-  merge_conflict_resolving: "resolve_merge_conflict",
-  ready_for_development: "start_development",
-};
-
-// Human decision gates: the member is choosing, not handing work to an agent, so a failure inside one of
-// these is retried in place by the guarded fallback below.
 const DECISION_COMMANDS = new Set(["approve_plan", "accept_delivery", "request_delivery_changes", "record_delivery_decision", "reconcile_acceptance", "reconcile_merge"]);
 const CAPACITY_FAILURE_CODES = new Set(["not-found", "not-owner", "duplicate", "conflict", "stale-revision", "profile-unavailable", "invalid-status", "deadline-exhausted"]);
-
-export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): { command: string; commandId: string } | null {
-  void patchId;
-  const command = AUTO_CHAINED_COMMANDS[ctx.state.step];
-  if (isBlocked(ctx.state)) return null;
-  if (!command || (!ctx.state.allowedCommands.includes(command) && ctx.state.step !== "review_arbitration")) return null;
-  if (command === "resolve_merge_conflict" && (ctx.state.mergeDecision || ctx.state.owner !== "lead")) return null;
-  if (command === "resolve_merge_conflict") {
-    const progress = stateTransitions.withRepairProgress(ctx.state, { signature: stateTransitions.repairSignature({ source: "merge", code: "merge_conflict" }), commit: ctx.state.resultCommit ?? null, diagnosticHash: null });
-    if ((progress.repairProgress?.repeats ?? 0) >= (ctx.input.repairCycleLimit ?? 0)) {
-      const summary = "The merge conflict needs your decision";
-      ctx.state = IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: summary, blocker: humanBlocker("agent_exhausted", summary, [{ command: "resolve_merge_conflict", label: "Resolve the merge conflict", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence")), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
-      return null;
-    }
-  }
-  if (runExecution.current().autoActionsHalted()) return null;
-  const commandId = `${ctx.state.workflowId}:auto-${command}:${ctx.state.revision}`;
-  return ctx.commandAlreadyProcessed(commandId) ? null : { command, commandId };
-}
-
-export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: { command: string; commandId: string }): Promise<void> {
-  // Marked before the turn runs: a chained step that throws must not spin the Workflow loop.
-  // start_development is the exception: it already gates on commandAlreadyProcessed at its own
-  // entry and marks itself once its state mutation lands, so pre-marking here would make it a
-  // silent no-op before it ever runs.
-  if (chained.command !== "start_development") {
-    ctx.markCommandProcessed(chained.commandId);
-    const revision = ctx.state.revision + 1;
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision, lastEventId: `${ctx.state.workflowId}:${revision}` });
-    await ctx.project();
-  }
-  const before = { step: ctx.state.step, owner: ctx.state.owner, pendingAction: ctx.state.pendingAction, blocked: isBlocked(ctx.state) };
-  const command = { expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId ?? ctx.input.autoApprovePlanActorUserId ?? "forge-auto-chain", commandId: chained.commandId };
-  let failure: unknown;
-  try {
-    if (chained.command === "review_delivery") await reviewDelivery(ctx, command);
-    else if (chained.command === "arbitrate_review") await arbitrateReview(ctx, command);
-    else if (chained.command === "publish_draft") {
-      if (ctx.state.step === "delivery_reviewed" && (ctx.input.deliveryTarget === "remote_branch" || ctx.input.deliveryTarget === "local_worktree")) await resumeReviewedDeliveryTarget(ctx);
-      else await ctx.runPublishTurn();
-    }
-    else if (chained.command === "repair_delivery") await repairDelivery(ctx, command);
-    else if (chained.command === "start_development") await startDevelopment(ctx, command);
-    else await resolveMergeConflict(ctx, command);
-  } catch (error) {
-    if (isCancellation(error)) return;
-    failure = error;
-  }
-  const unchanged = ctx.state.step === before.step && ctx.state.owner === before.owner && ctx.state.pendingAction === before.pendingAction && isBlocked(ctx.state) === before.blocked;
-  if (!failure && !unchanged) return;
-  const reason = failure instanceof Error ? failure.message : failure ? String(failure) : `Automatic ${chained.command.replaceAll("_", " ")} made no progress`;
-  const retryCommand = (ctx.state.allowedCommands.find((command) => command !== "cancel_issue") ?? chained.command) as IssueWorkflowState["allowedCommands"][number];
-  const allowedCommands = [...new Set([...ctx.state.allowedCommands.filter((command) => command !== "cancel_issue"), retryCommand, "cancel_issue"])] as IssueWorkflowState["allowedCommands"];
-  ctx.state = IssueWorkflowStateSchema.parse({
-    ...ctx.state,
-    revision: ctx.state.revision + 1,
-    owner: "human",
-    allowedCommands,
-    pendingAction: reason.slice(0, 256),
-    blocker: humanBlocker("agent_exhausted", reason, [{ command: retryCommand, label: "Retry now", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence")),
-    lastHandlerError: { command: chained.command, reason: reason.slice(0, 256), at: new Date().toISOString() },
-    stateChangedAt: new Date().toISOString(),
-    lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
-  });
-  await ctx.project();
-}
 
 // A rejected update handler must never leave the Workflow holding mutated state
 // that the projection never saw: recover to a retryable failed state and project it.

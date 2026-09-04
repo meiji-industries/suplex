@@ -24,6 +24,26 @@ function isLiveHerdrStatus(status: string | null | undefined): boolean {
 }
 
 export type TaskTurnLiveness = { live: boolean; role?: string; agentName?: string };
+export type AuthoritativeTaskTurnLiveness = { state: "live"; role?: string; agentName?: string } | { state: "stopped" } | { state: "unknown" };
+
+export async function observeTaskTurnLiveness(
+  database: ForgeDatabase,
+  config: ForgeConfig,
+  taskId: string,
+  herdr: HerdrClient = new CliHerdrClient(),
+): Promise<AuthoritativeTaskTurnLiveness> {
+  try {
+    const snapshot = await herdr.runtimeSnapshot();
+    const observations = await observeHerdrSessions(database, herdr, taskId, snapshot);
+    for (const observation of observations) {
+      if (observation.classification === "active" && isLiveHerdrStatus(observation.lifecycleStatus)) return { state: "live", role: observation.role, ...(observation.agentName ? { agentName: observation.agentName } : {}) };
+    }
+    const local = await isTaskTurnLive(database, config, taskId, herdr);
+    return local.live ? { state: "live", ...(local.role ? { role: local.role } : {}), ...(local.agentName ? { agentName: local.agentName } : {}) } : { state: "stopped" };
+  } catch {
+    return { state: "unknown" };
+  }
+}
 
 export async function isTaskTurnLive(
   database: ForgeDatabase,

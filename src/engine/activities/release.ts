@@ -8,7 +8,7 @@ import { proveForwardMergeLineage } from "./forward-merge-lineage.js";
 import { proveRevisionInGit } from "./git-proof.js";
 import { runCommand } from "../../command-runner.js";
 import { cancelDeliveryIntent, claimOrRecoverDeliveryOwner, recordDeliveryObservation } from "../../delivery-supervision.js";
-import { isTaskTurnLive } from "./herdr-liveness.js";
+import { observeTaskTurnLiveness } from "./herdr-liveness.js";
 
 const LegacyReleaseDeliverySchema = z.object({
   summary: z.string().optional(),
@@ -279,9 +279,7 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
   const { database, createHash, randomBytes, ApplicationFailure, GithubReleaseFailure, PublishReleaseActivityResultSchema, githubRelease, artifacts, release } = ctx;
   return {
     async claimDeliveryOwner(input) {
-      let liveness: "live" | "stopped" | "unknown";
-      try { liveness = (await isTaskTurnLive(database, ctx.config, input.taskId)).live ? "live" : "stopped"; }
-      catch { liveness = "unknown"; }
+      const liveness = (await observeTaskTurnLiveness(database, ctx.config, input.taskId)).state;
       return claimOrRecoverDeliveryOwner(database, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, generation: input.generation, ...(input.objective ? { objective: input.objective } : {}) }, { token: input.token, liveness });
     },
     async recordDeliveryOwnerReceipt(input) {

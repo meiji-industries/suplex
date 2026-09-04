@@ -200,7 +200,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
       let merge;
       try {
         if (input.verificationOnly) {
-          if (!input.forwardMergeId) return blocked("merge_state_ownership_mismatch", "human", false, "The recorded forward-merge identity is unavailable");
+          if (!input.forwardMergeId) return blocked("merge_state_ownership_mismatch", "human", true, "The recorded forward-merge identity is unavailable");
           merge = await service.revalidateMergedOperation({ forwardMergeId: input.forwardMergeId, worktreePath: context.worktreePath, repositoryPath: pinned.repositoryPath, branchName: context.branchName, expectedBaseSha: input.expectedBaseSha, expectedHeadSha: input.expectedHeadSha, expectedHeadTree: input.expectedHeadTree, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: pinned.artifactId, checkpoint: input.checkpoint, developerExecutionId });
         } else {
           merge = await service.reconcile({ worktreePath: context.worktreePath, repositoryPath: pinned.repositoryPath, branchName: context.branchName, expectedBaseSha: input.expectedBaseSha, expectedHeadSha: input.expectedHeadSha, expectedHeadTree: input.expectedHeadTree, repository: pinned.repository, baseBranch: pinned.baseBranch, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: pinned.artifactId, checkpoint: input.checkpoint, developerExecutionId, ...(input.releaseId ? { releaseId: input.releaseId } : {}), ...(input.deliveryReviewId ? { deliveryReviewId: input.deliveryReviewId } : {}), ...(input.ciRunId ? { ciRunId: input.ciRunId } : {}), ...(input.finalReviewId ? { finalReviewId: input.finalReviewId } : {}), ...(input.acceptanceId ? { acceptanceId: input.acceptanceId } : {}) });
@@ -245,14 +245,14 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
         const failureCode = storedDelivery.failureCode;
         const failureSummary = storedDelivery.failureSummary;
         const ownsStoredVerificationFailure = storedLineageMatchesMerge && isVerificationBlockerCode(failureCode) && !!failureSummary;
-        if (!ownsStoredVerificationFailure) return blocked("merge_state_ownership_mismatch", "human", false, "The blocked Developer revision does not match the recorded forward-merge verification failure", undefined, coordinates, merge.forwardMergeId ?? checkId);
+        if (!ownsStoredVerificationFailure) return blocked("merge_state_ownership_mismatch", "human", true, "The blocked Developer revision does not match the recorded forward-merge verification failure", undefined, coordinates, merge.forwardMergeId ?? checkId);
         if (!verificationArtifact) return blocked("artifact_unavailable", "human", false, "The stored forward-merge verification artifact is unavailable", undefined, coordinates, merge.forwardMergeId ?? checkId);
         return blocked(failureCode, "lead", true, failureSummary, artifactReference({ id: verificationArtifact.id, kind: "forward-merge-verification" }), coordinates, merge.forwardMergeId ?? checkId);
       }
       if (merge.status === "merged" && storedDelivery && storedArtifacts.length === 2 && storedDelivery.developerExecutionId && storedDelivery.resultHead && storedDelivery.resultTree) {
         if (verificationArtifact && deliveryArtifact) {
           const adopted = storedLineageMatchesMerge && (storedLineage!.kind === "transitive" || adoptStoredDelivery({ developerExecutionId: storedDelivery.developerExecutionId, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: storedDelivery.resultHead, resultTree: storedDelivery.resultTree }));
-          if (!adopted) return blocked("merge_state_ownership_mismatch", "human", false, "The completed Developer revision does not match the recorded forward merge", undefined, { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: storedDelivery.resultHead, resultTree: storedDelivery.resultTree }, merge.forwardMergeId ?? checkId);
+          if (!adopted) return blocked("merge_state_ownership_mismatch", "human", true, "The completed Developer revision does not match the recorded forward merge", undefined, { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: storedDelivery.resultHead, resultTree: storedDelivery.resultTree }, merge.forwardMergeId ?? checkId);
           return { outcome: "revalidated", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, headSha: storedDelivery.resultHead, headTree: storedDelivery.resultTree, developerExecutionId: storedDelivery.developerExecutionId, deliveryArtifact: artifactReference({ id: deliveryArtifact.id, kind: deliveryArtifact.kind as DeliveryArtifactKind }), verificationArtifact: artifactReference({ id: verificationArtifact.id, kind: "forward-merge-verification" }), ...(storedDelivery.developerEvidenceArtifactId ? { developerEvidenceArtifactId: storedDelivery.developerEvidenceArtifactId } : {}) };
         }
       }
@@ -264,9 +264,81 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           const failure = reconcileBlocker(error);
           return blocked(failure.code, failure.owner, failure.retryable, failure.summary);
         }
-        return blocked("merge_state_ownership_mismatch", "human", false, "The Developer revision does not match the recorded forward merge", undefined, { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, ...(merge.mergeCommit ? { resultHead: merge.mergeCommit } : {}), ...(merge.tree ? { resultTree: merge.tree } : {}) }, merge.forwardMergeId ?? checkId);
+        return blocked("merge_state_ownership_mismatch", "human", true, "The Developer revision does not match the recorded forward merge", undefined, { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, ...(merge.mergeCommit ? { resultHead: merge.mergeCommit } : {}), ...(merge.tree ? { resultTree: merge.tree } : {}) }, merge.forwardMergeId ?? checkId);
       }
       if (merge.status === "no_drift") {
+        const gitProof = await proveRevisionInGit(githubRelease, {
+          worktreePath: context.worktreePath,
+          branchName: context.branchName,
+          commit: input.expectedHeadSha,
+          tree: input.expectedHeadTree,
+          baseSha: merge.targetBaseSha,
+        });
+        if (gitProof.proven) {
+          const receipt = database.authQuery((db) => db.prepare(`SELECT
+              m.id, m.prior_head AS priorHead, m.prior_tree AS priorTree, m.developer_execution_id AS developerExecutionId,
+              m.delivery_artifact_id AS deliveryArtifactId, m.verification_artifact_id AS verificationArtifactId,
+              d.evidence_artifact_id AS developerEvidenceArtifactId
+            FROM forge_forward_merges m
+            LEFT JOIN forge_developer_executions d ON d.id = m.developer_execution_id
+              AND d.task_id = m.task_id AND d.company_id = m.company_id AND d.workflow_id = m.workflow_id
+            WHERE m.task_id = ? AND m.company_id = ? AND m.workflow_id = ? AND m.status = 'merged'
+              AND lower(m.result_head) = lower(?)
+            ORDER BY m.created_at DESC, m.id DESC
+            LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.expectedHeadSha) as {
+              id: string;
+              priorHead: string;
+              priorTree: string | null;
+              developerExecutionId: string | null;
+              deliveryArtifactId: string | null;
+              verificationArtifactId: string | null;
+              developerEvidenceArtifactId: string | null;
+            } | undefined);
+          const receiptArtifacts = receipt && (receipt.deliveryArtifactId || receipt.verificationArtifactId)
+            ? database.authQuery((db) => db.prepare("SELECT id, kind FROM forge_artifacts WHERE company_id = ? AND (id = ? OR id = ?)").all(input.companyId, receipt.deliveryArtifactId, receipt.verificationArtifactId) as Array<{ id: string; kind: string }>)
+            : [];
+          const receiptDeliveryArtifact = receiptArtifacts.find((artifact) => artifact.id === receipt?.deliveryArtifactId && isDeliveryArtifactKind(artifact.kind));
+          let receiptVerificationArtifact = receiptArtifacts.find((artifact) => artifact.id === receipt?.verificationArtifactId && artifact.kind === "forward-merge-verification");
+          if (receipt && !receiptVerificationArtifact) {
+            const guard = await createGitCommandGuard(config.runtimeRoot);
+            try {
+              const verification = await runPinnedVerification({ taskId: input.taskId, stepId: receipt.id, worktreePath: context.worktreePath, setupCommand: pinned.setupCommand, verificationCommand: pinned.verificationCommand, runtimeRoot: config.runtimeRoot }, { guard });
+              const base = verification.outcome === "passed" ? undefined : await verifyBase(merge.targetBaseSha, guard);
+              const payload: ForwardMergeVerificationPayload = base?.outcome === "failed"
+                ? { ...verification, summary: "The base branch does not pass verification. GitHub CI judges the pull request.", base }
+                : { ...verification, ...(base ? { base } : {}) };
+              const verificationArtifact = await artifacts.putArtifact(input.companyId, "forward-merge-verification", { taskId: input.taskId, filename: `${receipt.id}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(payload), "utf8") });
+              database.authTransaction((db) => db.prepare("UPDATE forge_forward_merges SET verification_artifact_id = ?, verification_artifact_sha256 = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(verificationArtifact.id, verificationArtifact.sha256, new Date().toISOString(), receipt.id, input.taskId, input.companyId, input.workflowId));
+              receiptVerificationArtifact = { id: verificationArtifact.id, kind: "forward-merge-verification" };
+              if (verification.outcome !== "passed" && base?.outcome !== "failed") {
+                return blocked(verification.code === "verification_timed_out" ? "verification_timed_out" : verification.code === "verification_evidence_too_large" ? "verification_evidence_too_large" : "verification_failed", "lead", true, verification.summary, artifactReference(receiptVerificationArtifact), { observedBaseSha: merge.targetBaseSha, priorHead: receipt.priorHead, ...(receipt.priorTree ? { priorTree: receipt.priorTree } : {}) }, receipt.id);
+              }
+            } finally {
+              await guard.cleanup();
+            }
+          }
+          if (receipt?.developerExecutionId && receipt.priorTree && receiptDeliveryArtifact && receiptVerificationArtifact) {
+            return {
+              outcome: "revalidated",
+              checkId: merge.forwardMergeId ?? checkId,
+              checkpoint: input.checkpoint,
+              expectedBaseSha: input.expectedBaseSha,
+              observedBaseSha: merge.targetBaseSha,
+              priorHead: receipt.priorHead,
+              priorTree: receipt.priorTree,
+              headSha: gitProof.head!,
+              headTree: gitProof.headTree!,
+              developerExecutionId: receipt.developerExecutionId,
+              deliveryArtifact: artifactReference({ id: receiptDeliveryArtifact.id, kind: receiptDeliveryArtifact.kind as DeliveryArtifactKind }),
+              verificationArtifact: artifactReference({ id: receiptVerificationArtifact.id, kind: "forward-merge-verification" }),
+              ...(receipt.developerEvidenceArtifactId ? { developerEvidenceArtifactId: receipt.developerEvidenceArtifactId } : {}),
+            };
+          }
+          return { outcome: "no_drift", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, headSha: gitProof.head!, headTree: gitProof.headTree! };
+        }
+        if (gitProof.head !== null) {
+          return blocked("merge_state_ownership_mismatch", "human", true, "Git shows a different commit on the task branch. Retry the base update.", undefined, { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree }, merge.forwardMergeId ?? checkId);
+        }
         const mergedDeliveries = database.authQuery((db) => db.prepare(`SELECT
             m.id, m.project_revision_id AS projectRevisionId, m.expected_base_sha AS expectedBaseSha, m.current_base_sha AS targetBaseSha,
             m.prior_head AS priorHead, m.prior_tree AS priorTree, m.merge_commit AS mergeCommit, m.tree,
@@ -294,7 +366,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           const coordinates = candidate
             ? { observedBaseSha: merge.targetBaseSha, priorHead: candidate.priorHead, ...(candidate.priorTree ? { priorTree: candidate.priorTree } : {}), ...(candidate.resultHead ? { resultHead: candidate.resultHead } : {}), ...(candidate.resultTree ? { resultTree: candidate.resultTree } : {}) }
             : { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree };
-          return blocked("merge_state_ownership_mismatch", "human", false, "The Developer revision does not match the recorded forward merge", undefined, coordinates, candidate?.id ?? merge.forwardMergeId ?? checkId);
+          return blocked("merge_state_ownership_mismatch", "human", true, "The Developer revision does not match the recorded forward merge", undefined, coordinates, candidate?.id ?? merge.forwardMergeId ?? checkId);
         }
         const provedDelivery = provenDeliveries[0];
         if (provedDelivery) {
@@ -309,7 +381,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
             const failureCode = mergedDelivery.failureCode;
             const failureSummary = mergedDelivery.failureSummary;
             if (!isVerificationBlockerCode(failureCode) || !failureSummary) {
-              return blocked("merge_state_ownership_mismatch", "human", false, "The recorded forward merge is not an exact verification failure", undefined, coordinates, mergedDelivery.id);
+              return blocked("merge_state_ownership_mismatch", "human", true, "The recorded forward merge is not an exact verification failure", undefined, coordinates, mergedDelivery.id);
             }
             if (!mergedVerificationArtifact) {
               return blocked("artifact_unavailable", "human", false, "The stored forward-merge verification artifact is unavailable", undefined, coordinates, mergedDelivery.id);
@@ -317,7 +389,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
             return blocked(failureCode, "lead", true, failureSummary, artifactReference({ id: mergedVerificationArtifact.id, kind: "forward-merge-verification" }), coordinates, mergedDelivery.id);
           }
           if (lineage.developer.status !== "completed") {
-            return blocked("merge_state_ownership_mismatch", "human", false, "The completed Developer revision does not match the recorded forward merge", undefined, coordinates, mergedDelivery.id);
+            return blocked("merge_state_ownership_mismatch", "human", true, "The completed Developer revision does not match the recorded forward merge", undefined, coordinates, mergedDelivery.id);
           }
           if (!mergedVerificationArtifact || !mergedDeliveryArtifact || context.deliveryArtifactId !== mergedDelivery.deliveryArtifactId) {
             return blocked("artifact_unavailable", "human", false, "The stored forward-merge delivery artifacts are unavailable", undefined, coordinates, mergedDelivery.id);
@@ -328,7 +400,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           const verificationSha = database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(mergedVerificationArtifact.id, input.companyId) as { sha256: string } | undefined)?.sha256;
           reusedVerificationArtifact = { id: mergedVerificationArtifact.id, kind: "forward-merge-verification", ...(verificationSha ? { sha256: verificationSha } : {}) };
           if (lineage.kind !== "transitive" && !adoptStoredDelivery({ developerExecutionId: lineage.developer.id, priorHead: lineage.current.priorHead, priorTree: lineage.current.priorTree, resultHead: lineage.current.resultHead, resultTree: lineage.current.resultTree })) {
-            return blocked("merge_state_ownership_mismatch", "human", false, "The completed Developer revision does not match the recorded forward merge", undefined, coordinates, mergedDelivery.id);
+            return blocked("merge_state_ownership_mismatch", "human", true, "The completed Developer revision does not match the recorded forward merge", undefined, coordinates, mergedDelivery.id);
           }
         }
         if (!provedDelivery) {
@@ -353,7 +425,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
             const verificationArtifact = await artifacts.putArtifact(input.companyId, "forward-merge-verification", { filename: `${merge.forwardMergeId ?? checkId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(verification), "utf8") });
             const summary = "Pinned verification changed the forward-merge delivery";
             database.authTransaction((db) => db.prepare("UPDATE forge_forward_merges SET result_head = ?, result_tree = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, failure_code = ?, failure_summary = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(merge.mergeCommit, merge.tree, verificationArtifact.id, verificationArtifact.sha256, "merge_state_ownership_mismatch", summary, new Date().toISOString(), merge.forwardMergeId ?? "", input.taskId, input.companyId));
-            return blocked("merge_state_ownership_mismatch", "human", false, summary, artifactReference(verificationArtifact), { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: merge.mergeCommit!, resultTree: merge.tree! }, merge.forwardMergeId ?? checkId);
+            return blocked("merge_state_ownership_mismatch", "human", true, summary, artifactReference(verificationArtifact), { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: merge.mergeCommit!, resultTree: merge.tree! }, merge.forwardMergeId ?? checkId);
           }
           base = await verifyBase(merge.targetBaseSha, guard);
         }

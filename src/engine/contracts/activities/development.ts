@@ -97,7 +97,6 @@ export interface DeveloperExecutionActivityInput {
   capacityRequestId?: string;
   authorization?: AuthorizedPlanSubject;
   continuation?: { remainingSteps: number[]; completedSteps: number[]; previousCommit: string; turnsUsed: number; previousDeliverySummary: string };
-  resume?: { worktreePath: string; developerSessionRef: string; objective: string };
 }
 
 export interface DeveloperExecutionResult {

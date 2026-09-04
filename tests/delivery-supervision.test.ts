@@ -166,7 +166,7 @@ describe("durable delivery supervision", () => {
 
   test("a stopped Builder resumes its dirty worktree through the production handler after restart", async () => {
     const worktree = await mkdtemp(join(tmpdir(), "forge-delivery-owner-"));
-    const inputs: Array<{ developerTurnExecutionId: string; resume?: { worktreePath: string; developerSessionRef: string; objective: string } }> = [];
+    const inputs: Array<{ developerTurnExecutionId: string; supersedesExecutionId?: string | undefined; reuseWorktree?: boolean | undefined }> = [];
     let calls = 0;
     let builderLive = false;
     const value = await createEngineHarness({
@@ -236,13 +236,13 @@ describe("durable delivery supervision", () => {
       await value.restart();
       await value.settle(taskIntent.workflowId, () => inputs.length === 1);
       expect(inputs).toHaveLength(1);
-      expect(inputs[0]).toMatchObject({ resume: { worktreePath: worktree, developerSessionRef: "builder-session", objective: "Keep the partial Builder work and finish verification." } });
+      expect(inputs[0]).toMatchObject({ supersedesExecutionId: "interrupted-builder", reuseWorktree: true });
       expect(await readFile(join(worktree, "dirty.txt"), "utf8")).toBe("partial Builder work\n");
       builderLive = false;
       await value.restart();
       await value.settle(taskIntent.workflowId, () => inputs.length === 2);
       expect(calls).toBe(2);
-      expect(inputs[1]).toMatchObject({ resume: { worktreePath: worktree, developerSessionRef: "builder-session", objective: "Keep the partial Builder work and finish verification." } });
+      expect(inputs[1]).toMatchObject({ reuseWorktree: true });
       expect(value.database.authQuery((db) => db.prepare("SELECT completed_at AS completedAt FROM forge_provider_operations WHERE operation_key = ?").get(`delivery-owner:delivery-supervision:${taskIntent.workflowId}:0`))).toEqual({ completedAt: null });
     } finally {
       await rm(worktree, { recursive: true, force: true });

@@ -358,7 +358,7 @@ export class DeveloperService {
       db.prepare(`INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, NULL, NULL, ?, ?, ?, NULL)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, supersedesExecutionId, startedAt, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, existing && !reopened ? existing.sessionRef ?? undefined : undefined, worktree.worktreePath);
     });
-    const prompt = this.prompt(context.title, brief, planText, leadEvidence, worktree, input.runProjectTests, input.visualEvidence, input.operatorNote, input.continuation);
+    const prompt = this.prompt(context.title, brief, planText, leadEvidence, worktree, input.runProjectTests, input.visualEvidence, input.operatorNote, input.continuation, Boolean(prior || input.reuseWorktree));
     const evidenceLines = [
       JSON.stringify({ type: "forge.prompt", text: redact(prompt) }),
       ...(promptsRepinned ? [JSON.stringify({ type: "forge.prompts", promptsRepinned: true })] : []),
@@ -776,10 +776,11 @@ export class DeveloperService {
     return renderPrompt(this.prompts.get("developer/repair.md")!, { findings: JSON.stringify(findings), branch_name: worktree.branchName, worktree_path: worktree.worktreePath, target_base_sha: worktree.targetBaseSha, subject_commit: worktree.subjectCommit, subject_tree: worktree.subjectTree, controls });
   }
 
-  private prompt(title: string, brief: string, plan: string, evidence: string, worktree: { branchName: string; worktreePath: string; targetBaseSha: string }, runProjectTests?: boolean, visualEvidence?: "off" | "capture" | "required", operatorNote?: string, continuation?: DeveloperExecutionActivityInput["continuation"]): string {
+  private prompt(title: string, brief: string, plan: string, evidence: string, worktree: { branchName: string; worktreePath: string; targetBaseSha: string }, runProjectTests?: boolean, visualEvidence?: "off" | "capture" | "required", operatorNote?: string, continuation?: DeveloperExecutionActivityInput["continuation"], reuseWorktree = false): string {
     const controls = [this.testControl(runProjectTests), this.visualEvidenceInstruction(visualEvidence ?? "off")].join(" ");
     const continuationContext = continuation ? `You already completed steps ${continuation.completedSteps.join(", ")} in commit ${continuation.previousCommit} (summary: ${continuation.previousDeliverySummary}). Continue with steps ${continuation.remainingSteps.join(", ")} in the same worktree. Do not redo completed steps. Commit after each completed step.` : "";
-    return renderPrompt(this.prompts.get("developer/execution.md")!, { title, brief, plan, lead_evidence: evidence, branch_name: worktree.branchName, worktree_path: worktree.worktreePath, target_base_sha: worktree.targetBaseSha, controls, continuation_context: continuationContext, operator_note_section: operatorNote ? `\n\nOperator note (verbatim):\n${operatorNote}` : "" });
+    const reuseContext = reuseWorktree ? "This is a linked retry. The worktree contains preserved work from an earlier Builder turn. Keep its files and commits, then complete the remaining authorized work." : "";
+    return renderPrompt(this.prompts.get("developer/execution.md")!, { title, brief, plan, lead_evidence: evidence, branch_name: worktree.branchName, worktree_path: worktree.worktreePath, target_base_sha: worktree.targetBaseSha, controls, reuse_context: reuseContext, continuation_context: continuationContext, operator_note_section: operatorNote ? `\n\nOperator note (verbatim):\n${operatorNote}` : "" });
   }
 
   private projectTestControl(taskId: string, companyId: string): string {

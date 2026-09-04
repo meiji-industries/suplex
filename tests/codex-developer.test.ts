@@ -89,6 +89,31 @@ test("Developer delivery uses the fake turn role session and preserves delivery 
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("a stopped Builder adopts its dirty worktree and continues the authorized prompt", async () => {
+  const value = await fixture();
+  const repositoryPath = join(value.root, "repo");
+  const worktreePath = join(value.root, "worktrees", "task_1");
+  const branchName = buildGitBranchName({ branchSlug: fallbackGitPresentation("Fixture").branchSlug, taskId: "task_1" });
+  const targetBaseSha = await command("git", ["rev-parse", "HEAD"], repositoryPath);
+  const now = new Date().toISOString();
+  const fake = fakeTurnRunner(() => ({ kind: "delivery", summary: "Continue the Builder task.", steps: [{ number: 1, status: "blocked", filesChanged: ["dirty.txt"], commandsRun: [], testResults: [], notes: "Continue the saved work." }], authorizedStepsNotCompleted: [1], resultCommit: "a".repeat(40), resultTree: "b".repeat(40), dirtyState: "dirty", blocker: "Verification remains." }));
+  try {
+    await new WorktreeManager().reuse({ repositoryPath, worktreeRoot: join(value.root, "worktrees"), taskId: "task_1", targetBaseSha, branchName });
+    await writeFile(join(worktreePath, "dirty.txt"), "partial Builder work\n");
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, dirty_state) VALUES ('developer_interrupted', 'task_1', 'company_1', 'workflow_1', 1, 1, 'interrupted', ?, ?, ?, 'session_0123456789abcdef01234567', ?, ?, 'dirty')").run(branchName, worktreePath, targetBaseSha, now, now));
+    const result = await new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run({ ...value.input, developerTurnExecutionId: "developer_resumed", developerAttempt: 2, supersedesExecutionId: "developer_interrupted", reuseWorktree: true });
+    expect(result).toMatchObject({ outcome: "blocked", worktreePath, branchName, developerSessionRef: "session_0123456789abcdef01234567" });
+    expect(fake.calls[0]).toMatchObject({ task: { worktreePath }, promptKind: "implementation", executionRole: "builder" });
+    expect(fake.calls[0]!.prompt).toContain("Add marker");
+    expect(fake.calls[0]!.prompt).toContain("The worktree contains preserved work from an earlier Builder turn.");
+    expect(await command("git", ["show", "HEAD:dirty.txt"], worktreePath)).toBe("partial Builder work");
+    expect(value.database.authQuery((db) => db.prepare("SELECT supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef, worktree_path AS worktreePath FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toEqual({ supersedesExecutionId: "developer_interrupted", sessionRef: "session_0123456789abcdef01234567", worktreePath });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("CI repair starts from a blocked delivery receipt when git preserves its delivery commit", async () => {
   const value = await fixture();
   const repositoryPath = join(value.root, "repo");

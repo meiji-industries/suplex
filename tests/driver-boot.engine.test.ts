@@ -101,6 +101,65 @@ test("boot claims a completed approved delivery review before publishing without
   }
 });
 
+test("the driver completes a merged release through the GitHub synchronizer", async () => {
+  let observations = 0;
+  const harness = await createEngineHarness({
+    observeGithubPullRequest: async () => {
+      observations += 1;
+      return { exists: true, number: 42, url: "https://github.test/42", state: "merged", isDraft: false, headSha: engineFixture.commit, baseSha: engineFixture.base, mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, autoMergeEnabled: false, reviewDecision: null };
+    },
+  });
+  const issueId = "driver-boot-merged-release";
+  harness.seedTask(issueId, { deliveryTarget: "merged" });
+  try {
+    const workflowId = harness.workflowId(issueId);
+    await harness.startContinuation(issueId, {
+      ...deliveryReviewState(workflowId),
+      ...at("releasing"),
+      owner: "lead",
+      allowedCommands: [],
+      pendingAction: "Forge opens the pull request",
+      releaseId: "release",
+      releaseRepository: "acme/forge",
+      pullRequestNumber: 42,
+      pullRequestUrl: "https://github.test/42",
+    });
+    const done = await harness.settle(workflowId, (state) => state.step === "done");
+    expect(done.owner).toBe("human");
+    expect(observations).toBe(1);
+    expect(done.processedCommandIds).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(`^${workflowId}:driver:releasing:\\d+:owner\\.done$`))]));
+  } finally {
+    await harness.stop();
+  }
+});
+
+test("the driver sends a conflicted release to merge-conflict review", async () => {
+  const harness = await createEngineHarness({
+    observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.test/42", state: "open", isDraft: false, headSha: engineFixture.commit, baseSha: engineFixture.base, mergeable: "CONFLICTING", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, autoMergeEnabled: false, reviewDecision: null }),
+  });
+  const issueId = "driver-boot-conflicted-release";
+  harness.seedTask(issueId, { deliveryTarget: "merged" });
+  try {
+    const workflowId = harness.workflowId(issueId);
+    await harness.startContinuation(issueId, {
+      ...deliveryReviewState(workflowId),
+      ...at("releasing"),
+      owner: "lead",
+      allowedCommands: [],
+      pendingAction: "Forge opens the pull request",
+      releaseId: "release",
+      releaseRepository: "acme/forge",
+      pullRequestNumber: 42,
+      pullRequestUrl: "https://github.test/42",
+    });
+    const reviewing = await harness.settle(workflowId, (state) => state.step === "merge_conflict_reviewing");
+    expect(reviewing.owner).toBe("lead");
+    expect(reviewing.processedCommandIds).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(`^${workflowId}:driver:releasing:\\d+:owner\\.failed$`))]));
+  } finally {
+    await harness.stop();
+  }
+});
+
 test("boot claims a completed CI repair plan and starts its repair", async () => {
   let reads = 0;
   const activities: Partial<IssueActivities> = {

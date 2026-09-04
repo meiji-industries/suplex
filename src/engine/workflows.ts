@@ -1,4 +1,4 @@
-import { at, isBlocked } from "../issue-phases.js";
+import { at } from "../issue-phases.js";
 import { condition, isCancellation, log, runExecution, setHandler, sleep } from "./registry.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, normalizeSafeSummary, type IssueBlocker, type IssueBlockerAction, type IssueWorkflowInput, type IssueWorkflowState, type ReconcileTargetBaseActivityResult, type TargetBaseCheckpoint } from "./issue-contracts.js";
 import type { IssueCommand } from "../commands/registry.js";
@@ -195,13 +195,14 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     // GitHub reconciliation only runs while Forge is waiting on GitHub. While an agent turn or a
     // publish is in flight, an observation must not rewrite the phase under it. delivery_ready holds an
     // unreleased local head (after a repair the PR still points at the failed commit), so it is skipped too.
-    if (!isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "releasing", "merge_conflict_reviewing", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review"].includes(state.step))) return null;
+    if (!isSourcePullRequestPreDelivery(state, sourcePullRequest) && (state.activeOperation !== null || ["planning", "supplemental_review", "plan_consolidation", "development", "reviewing_delivery", "repair_required", "merge_conflict_reviewing", "merge_conflict_resolving", "ci_repair_planning", "ci_repairing", "final_review"].includes(state.step))) return null;
     const observed = await observeGithubPullRequest({ repository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch((error) => {
       if (isCancellation(error)) throw error;
       if (state.step === "ci_waiting") throw error;
       return null;
     });
     if (!observed) return null;
+    if (state.step === "releasing") return observed;
     const common = {
       ...githubPullRequestObservationFields(observed, new Date().toISOString()),
       ...(state.step === "ci_waiting" && state.owner === "human" ? { ciNextPollAt: new Date(runExecution.current().now() + 60_000).toISOString() } : {}),
@@ -387,17 +388,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       if (githubSyncPending()) {
         githubSyncRequested = false;
         await syncGithubPullRequest();
-        continue;
-      }
-      if (workflowContext.state.step === "releasing" && workflowContext.state.owner === "lead" && !isBlocked(workflowContext.state) && workflowContext.state.activeOperation === null && !workflowContext.state.releaseRetryAt) {
-        workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision: workflowContext.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: workflowContext.addRevisionCommand(["review_delivery", "cancel_issue"]), pendingAction: "The publish stopped. Review again before you publish.", lastEventId: `${workflowContext.state.workflowId}:${workflowContext.state.revision + 1}` });
-        await workflowContext.project();
-        continue;
-      }
-      if (workflowContext.state.step === "releasing" && workflowContext.state.releaseRetryAt) {
-        const delay = Math.max(0, Date.parse(workflowContext.state.releaseRetryAt) - Date.now());
-        if (delay > 0) await sleep(delay);
-        if (currentStep() === "releasing") await workflowContext.runPublishTurn();
         continue;
       }
       if (workflowContext.state.step === "manual_merge") {

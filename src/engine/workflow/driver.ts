@@ -26,7 +26,7 @@ type HerdrTurn = {
   terminalFailure: string | null;
 };
 type WorktreeRead = { present: boolean; dirtyFileCount: number; activeExecution?: boolean; revision: { proven: boolean; head: string | null; headTree: string | null; clean: boolean; reason?: string } | null };
-type GithubRead = { exists: boolean; state: "open" | "closed" | "merged" | null; mergeable: string | null; checks: { pending: number; failing: number; total: number; successful: number } };
+type GithubRead = { exists: boolean; state: "open" | "closed" | "merged" | null; isDraft?: boolean | null; mergeable: string | null; checks: { pending: number; failing: number; total: number; successful: number } };
 
 export type DriverDependencies = {
   inspectTaskWorktree?: (input: { taskId: string; companyId: string; workflowId: string; expectedCommit?: ReturnType<typeof gitSha>; expectedTree?: ReturnType<typeof gitTree>; expectedBranch?: string }) => Promise<WorktreeRead>;
@@ -99,9 +99,16 @@ async function readGit(ctx: IssueWorkflowContext, waitsOn: Extract<OwnerRead, { 
   return parsed(worktree.revision?.proven ? { type: "owner.done" } : { type: "owner.failed", reason: worktree.revision?.reason ?? "Git head differs from the expected revision" });
 }
 
-function githubAnswer(waitsOn: Extract<OwnerRead, { owner: "github" }>, observation: GithubRead | GithubPullRequestObservationResult | null): OwnerAnswer {
+function releaseTargetComplete(ctx: IssueWorkflowContext, observation: GithubRead | GithubPullRequestObservationResult): boolean {
+  if (observation.state === "merged") return true;
+  if (ctx.input.deliveryTarget === "pull_request_draft") return observation.isDraft === true;
+  return ctx.input.deliveryTarget === "pull_request_ready" && observation.state === "open" && observation.isDraft === false;
+}
+
+function githubAnswer(ctx: IssueWorkflowContext, waitsOn: Extract<OwnerRead, { owner: "github" }>, observation: GithubRead | GithubPullRequestObservationResult | null): OwnerAnswer {
   if (!observation) return parsed({ type: "owner.absent" });
   if (!observation.exists) return parsed({ type: "owner.absent" });
+  if (waitsOn.what === "pull_request" && releaseTargetComplete(ctx, observation)) return parsed({ type: "owner.done" });
   if (observation.state === "merged") return parsed({ type: "owner.done" });
   if (observation.state === "closed") return parsed({ type: "owner.failed", reason: "Pull request closed without merge" });
   if (["CONFLICTING", "DIRTY"].includes(observation.mergeable ?? "")) return parsed({ type: "owner.failed", reason: "Pull request has merge conflicts" });
@@ -119,14 +126,14 @@ async function readGithub(ctx: IssueWorkflowContext, waitsOn: Extract<OwnerRead,
       throw error;
     }
     if (waitsOn.what === "checks" && ctx.state.owner === "lead" && dependencies.reconcileCi) await dependencies.reconcileCi(observation);
-    return githubAnswer(waitsOn, observation);
+    return githubAnswer(ctx, waitsOn, observation);
   }
   const repository = ctx.state.releaseRepository ?? ctx.input.repository;
   const branch = ctx.state.branchName;
   if (!repository || !branch) return parsed({ type: "owner.absent" });
   const observe = dependencies.observeGithubPullRequest ?? observeGithubPullRequest;
   const observation = await observe({ repository, branch, ...(ctx.state.pullRequestNumber ? { pullRequestNumber: ctx.state.pullRequestNumber } : {}) });
-  return githubAnswer(waitsOn, observation);
+  return githubAnswer(ctx, waitsOn, observation);
 }
 
 export async function readOwner(ctx: IssueWorkflowContext, waitsOn: OwnerRead, dependencies: DriverDependencies = {}): Promise<OwnerEvent> {
@@ -162,6 +169,25 @@ async function runDriverCommand(ctx: IssueWorkflowContext, command: IssueCommand
   const revision = ctx.state.revision;
   const commandId = `${ctx.state.workflowId}:driver:${step}:${revision}:${event.type}`;
   if (ctx.commandAlreadyProcessed(commandId)) return false;
+  if (command === "publish_draft" && step === "releasing") {
+    ctx.markCommandProcessed(commandId);
+    if (!ctx.state.releaseRetryAt) {
+      const releaseRevision = ctx.state.revision + 1;
+      ctx.state = IssueWorkflowStateSchema.parse({
+        ...ctx.state,
+        revision: releaseRevision,
+        ...at("delivery_ready"),
+        owner: "lead",
+        allowedCommands: ctx.addRevisionCommand(["review_delivery", "cancel_issue"]),
+        pendingAction: "The publish stopped. Review again before you publish.",
+        lastEventId: `${ctx.state.workflowId}:${releaseRevision}`,
+      });
+      await ctx.project();
+      return true;
+    }
+    await ctx.runPublishTurn();
+    return true;
+  }
   const handler = runExecution.current().commands.get(issueUpdates[command]);
   if (!handler) throw new Error(`Driver ${command} handler is unavailable`);
   const before = ctx.state;
@@ -189,11 +215,13 @@ async function runDriverCommand(ctx: IssueWorkflowContext, command: IssueCommand
 }
 
 const DIRECT_STEP_DETAILS: Partial<Record<IssueWorkflowState["step"], Pick<IssueWorkflowState, "allowedCommands" | "pendingAction">>> = {
+  done: { allowedCommands: [], pendingAction: "Done. Pull request reached the delivery target." },
   delivery_reviewed: { allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Forge opens the pull request" },
   repair_required: { allowedCommands: ["repair_delivery", "cancel_issue"], pendingAction: "The Builder fixes the review findings" },
   accepted: { allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"], pendingAction: "Your delivery decision is necessary" },
   delivery_ready: { allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the delivery" },
   development: { allowedCommands: ["request_delivery_changes", "cancel_issue"], pendingAction: "Your delivery decision is necessary" },
+  merge_conflict_reviewing: { allowedCommands: ["cancel_issue"], pendingAction: "Forge prepares a conflict plan" },
 };
 
 function directStepDetails(step: IssueWorkflowState["step"]): Pick<IssueWorkflowState, "allowedCommands" | "pendingAction"> {
@@ -223,8 +251,10 @@ async function applyDirectStep(ctx: IssueWorkflowContext, target: Extract<Transi
 export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: DriverDependencies = {}): Promise<boolean> {
   const step = ctx.state.step;
   const rule = STEP_TABLE[step];
+  const githubWaiting = step === "releasing" || step === "ci_waiting";
   const ciWaiting = step === "ci_waiting" && rule.waitsOn.owner === "github" && rule.waitsOn.what === "checks";
-  if (rule.terminal || (!rule.adoptFirst && rule.waitsOn.owner !== "herdr" && !ciWaiting) || ctx.state.activeOperation !== null) return false;
+  if (step === "releasing" && ctx.state.releaseRetryAt && Date.parse(ctx.state.releaseRetryAt) > (dependencies.now?.().getTime() ?? runExecution.current().now())) return false;
+  if (rule.terminal || (!rule.adoptFirst && rule.waitsOn.owner !== "herdr" && !githubWaiting) || ctx.state.activeOperation !== null) return false;
   if (ciWaiting) {
     const now = dependencies.now?.().getTime() ?? runExecution.current().now();
     const pollAt = ctx.state.ciNextPollAt ? Date.parse(ctx.state.ciNextPollAt) : now;
@@ -247,7 +277,7 @@ export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: Driv
   }
   const revision = ctx.state.revision;
   const event = await readOwner(ctx, rule.waitsOn, dependencies);
-  if (ciWaiting && (ctx.state.step !== step || ctx.state.revision !== revision)) return true;
+  if (githubWaiting && (ctx.state.step !== step || ctx.state.revision !== revision)) return true;
   const { actions } = nextStep(step, event);
   for (const action of actions) {
     switch (action.type) {
@@ -265,6 +295,7 @@ export function driverPollDelay(state: IssueWorkflowState, now: number): number 
   if (rule.terminal) return undefined;
   const transition = rule.on.live;
   if (!("wait" in transition) || transition.wait === "signal") return undefined;
+  if (state.step === "releasing" && state.releaseRetryAt) return Math.max(1, Date.parse(state.releaseRetryAt) - now);
   if (state.step === "ci_waiting") return state.owner === "lead" && state.ciNextPollAt ? Math.max(1, Date.parse(state.ciNextPollAt) - now) : undefined;
   return transition.wait.pollMs;
 }

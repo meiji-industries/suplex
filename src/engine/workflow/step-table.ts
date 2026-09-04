@@ -1,8 +1,11 @@
 import type { IssueCommand } from "../../commands/registry.js";
 import type { IssueStep } from "../../issue-phases.js";
 
-export type Owner = "member" | "git" | "github" | "herdr" | "timer" | "terminal";
-export type Answer = "done" | "live" | "absent" | "failed";
+export const OWNERS = ["member", "git", "github", "herdr", "timer", "terminal"] as const;
+export type Owner = (typeof OWNERS)[number];
+
+export const ANSWERS = ["done", "live", "absent", "failed"] as const;
+export type Answer = (typeof ANSWERS)[number];
 
 export type OwnerRead =
   | { owner: "herdr"; role: "planner" | "reviewer" | "builder" | "integrator"; promptKind: string }
@@ -11,17 +14,28 @@ export type OwnerRead =
   | { owner: "member"; decision: "plan_approval" | "delivery_decision" | "product_decision" | "acceptance" }
   | { owner: "timer"; field: "releaseRetryAt" | "ciNextPollAt" | "acceptanceRetryAt" };
 
+export type TerminalRead = { owner: "terminal" };
+
 export type Transition =
   | { command: IssueCommand }
   | { wait: "signal" | { pollMs: number } }
   | { step: IssueStep; owner: "lead" | "human" };
 
-export type StepRule = {
-  waitsOn: OwnerRead | null;
+type ActiveStepRule = {
+  waitsOn: OwnerRead;
   on: Record<Answer, Transition>;
   humanAction?: IssueCommand;
-  terminal?: true;
+  terminal?: false;
 };
+
+type TerminalStepRule = {
+  waitsOn: TerminalRead;
+  on: Record<Answer, Transition>;
+  humanAction?: IssueCommand;
+  terminal: true;
+};
+
+export type StepRule = ActiveStepRule | TerminalStepRule;
 
 const signal = { wait: "signal" } as const;
 const poll = (pollMs: number) => ({ wait: { pollMs } }) as const;
@@ -119,13 +133,13 @@ export const STEP_TABLE: Record<IssueStep, StepRule> = {
     on: { done: { step: "done", owner: "human" }, live: poll(60_000), absent: { command: "reconcile_merge" }, failed: { step: "delivery_ready", owner: "lead" } },
   },
   done: {
-    waitsOn: null,
+    waitsOn: { owner: "terminal" },
     on: { done: signal, live: signal, absent: signal, failed: signal },
     terminal: true,
   },
   cancelled: {
-    waitsOn: null,
+    waitsOn: { owner: "terminal" },
     on: { done: signal, live: signal, absent: signal, failed: signal },
     terminal: true,
   },
-};
+} satisfies Record<IssueStep, StepRule>;

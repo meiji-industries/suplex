@@ -2,6 +2,8 @@ import type { ReleaseActivities, PublishReleaseActivityInput, AdoptPullRequestRe
 import type Database from "better-sqlite3";
 import { z } from "zod";
 import type { ActivityContext } from "./context.js";
+import type { ForgeConfig } from "../../config.js";
+import type { ForgeDatabase } from "../../database.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
 import { jsonRequired } from "../../task-utils.js";
 import { proveForwardMergeLineage } from "./forward-merge-lineage.js";
@@ -275,19 +277,29 @@ async function resolveGitReleaseContext(db: Database.Database, githubRelease: Ac
   return undefined;
 }
 
-export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities {
-  const { database, createHash, randomBytes, ApplicationFailure, GithubReleaseFailure, PublishReleaseActivityResultSchema, githubRelease, artifacts, release } = ctx;
+export function createDeliveryOwnerActivities(
+  database: ForgeDatabase,
+  config: ForgeConfig,
+  observeLiveness: typeof observeTaskTurnLiveness = observeTaskTurnLiveness,
+): Pick<ReleaseActivities, "claimDeliveryOwner" | "recordDeliveryOwnerReceipt" | "cancelDeliveryOwner"> {
   return {
     async claimDeliveryOwner(input) {
-      const liveness = (await observeTaskTurnLiveness(database, ctx.config, input.taskId)).state;
+      const liveness = (await observeLiveness(database, config, input.taskId)).state;
       return claimOrRecoverDeliveryOwner(database, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, generation: input.generation, ...(input.objective ? { objective: input.objective } : {}) }, { token: input.token, liveness });
     },
     async recordDeliveryOwnerReceipt(input) {
-      return recordDeliveryObservation(database, input, input.token, { builderReceipt: input.receipt });
+      return recordDeliveryObservation(database, input, input.token, { builderReceipt: input.receipt }, new Date(), { releaseOwner: true });
     },
     async cancelDeliveryOwner(input) {
       return cancelDeliveryIntent(database, input);
     },
+  };
+}
+
+export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities {
+  const { database, createHash, randomBytes, ApplicationFailure, GithubReleaseFailure, PublishReleaseActivityResultSchema, githubRelease, artifacts, release } = ctx;
+  return {
+    ...createDeliveryOwnerActivities(database, ctx.config),
     async pushDeliveryBranch(input) {
       try {
       const releaseInput = { kind: "push" as const, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, branchName: input.branchName, subjectCommit: input.commitSha };

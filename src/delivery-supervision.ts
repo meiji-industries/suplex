@@ -120,12 +120,12 @@ export function claimOrRecoverDeliveryOwner(
   return result!;
 }
 
-export function recordDeliveryObservation(database: ForgeDatabase, intent: DeliveryIntent, token: string, observation: unknown, now = new Date()): boolean {
+export function recordDeliveryObservation(database: ForgeDatabase, intent: DeliveryIntent, token: string, observation: unknown, now = new Date(), options: { releaseOwner?: boolean } = {}): boolean {
   return database.authTransaction((db) => db.prepare(`UPDATE forge_provider_operations
-    SET result_json = ?, observed_at = ?, updated_at = ?
+    SET result_json = ?, observed_at = ?, lease_expires_at = CASE WHEN ? THEN ? ELSE lease_expires_at END, updated_at = ?
     WHERE operation_key = ? AND delivery_generation = ?
       AND owner_token = ? AND cancelled_at IS NULL`)
-    .run(JSON.stringify({ derivedFrom: "owner observation", observedAt: now.toISOString(), observation }), now.toISOString(), now.toISOString(), operationKey(intent), intent.generation, token).changes === 1);
+    .run(JSON.stringify({ derivedFrom: "owner observation", observedAt: now.toISOString(), observation }), now.toISOString(), options.releaseOwner ? 1 : 0, now.toISOString(), now.toISOString(), operationKey(intent), intent.generation, token).changes === 1);
 }
 
 export function scheduleDeliveryWake(database: ForgeDatabase, intent: DeliveryIntent, token: string, wakeAt: string): boolean {

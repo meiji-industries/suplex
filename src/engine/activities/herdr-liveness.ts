@@ -38,6 +38,7 @@ export async function observeTaskTurnLiveness(
     for (const observation of observations) {
       if (observation.classification === "active" && isLiveHerdrStatus(observation.lifecycleStatus)) return { state: "live", role: observation.role, ...(observation.agentName ? { agentName: observation.agentName } : {}) };
     }
+    if (observations.some((observation) => observation.classification === "unverifiable")) return { state: "unknown" };
     const local = await isTaskTurnLive(database, config, taskId, herdr);
     return local.live ? { state: "live", ...(local.role ? { role: local.role } : {}), ...(local.agentName ? { agentName: local.agentName } : {}) } : { state: "stopped" };
   } catch {

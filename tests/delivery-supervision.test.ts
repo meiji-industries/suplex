@@ -12,10 +12,11 @@ import {
   recordDeliveryObservation,
   scheduleDeliveryWake,
 } from "../src/delivery-supervision.js";
+import { createDeliveryOwnerActivities } from "../src/engine/activities/release.js";
 import { recoverInterruptedOperation } from "../src/engine/runs.js";
 import { buildInitialIssueWorkflowState, type IssueWorkflowInput } from "../src/engine/issue-contracts.js";
 import { at } from "../src/issue-phases.js";
-import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
+import { createEngineHarness, engineFixture, ImmediateClock } from "./helpers/engine-harness.js";
 
 const intent = (generation = 1) => ({
   taskId: "delivery-supervision",
@@ -30,6 +31,12 @@ const intent = (generation = 1) => ({
   objective: "Preserve the Builder worktree.",
 });
 const exec = promisify(execFile);
+
+class PausedClock extends ImmediateClock {
+  override async wait(_milliseconds: number, signal: AbortSignal): Promise<void> {
+    await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  }
+}
 
 async function fixture() {
   const value = await createEngineHarness();
@@ -55,6 +62,21 @@ describe("durable delivery supervision", () => {
     expect(claimOrRecoverDeliveryOwner(value.database, intent(), { token: "unknown", now: new Date("2026-09-04T00:01:00.000Z"), liveness: "unknown" })).toMatchObject({ outcome: "owned_elsewhere" });
     expect(claimOrRecoverDeliveryOwner(value.database, intent(), { token: "recovered", now: new Date("2026-09-04T00:01:00.000Z"), liveness: "stopped" })).toMatchObject({ outcome: "recovered", token: "recovered" });
     await value.stop();
+  });
+
+  test("the production ownership activity keeps a live writer and schedules an unknown observation", async () => {
+    const value = await fixture();
+    try {
+      claimOrRecoverDeliveryOwner(value.database, intent(), { token: "stale-builder", now: new Date("2026-09-04T00:00:00.000Z"), leaseMs: 1, liveness: "stopped" });
+      const live = createDeliveryOwnerActivities(value.database, value.config, async () => ({ state: "live" as const }));
+      await expect(live.claimDeliveryOwner({ ...intent(), token: "replacement" })).resolves.toMatchObject({ outcome: "owned_elsewhere" });
+      const unknown = createDeliveryOwnerActivities(value.database, value.config, async () => ({ state: "unknown" as const }));
+      const unknownResult = await unknown.claimDeliveryOwner({ ...intent(2), token: "unknown-builder" });
+      expect(unknownResult).toMatchObject({ outcome: "owned_elsewhere", wakeAt: expect.any(String) });
+      expect(value.database.authQuery((db) => db.prepare("SELECT owner_token AS ownerToken, retry_at AS retryAt FROM forge_provider_operations WHERE operation_key = ?").get("delivery-owner:delivery-supervision:workflow-delivery-supervision:2"))).toEqual({ ownerToken: null, retryAt: expect.any(String) });
+    } finally {
+      await value.stop();
+    }
   });
 
   test("heartbeats, journals an observation, and keeps the wake through an engine restart", async () => {
@@ -87,6 +109,20 @@ describe("durable delivery supervision", () => {
     expect(completeDeliveryOperation(value.database, intent(), owner.token, { unexpected: "late" })).toBe("cancelled");
     expect(value.database.authQuery((db) => db.prepare("SELECT cancelled_at AS cancelledAt, retry_at AS retryAt FROM forge_provider_operations").get())).toEqual({ cancelledAt: expect.any(String), retryAt: null });
     await value.stop();
+  });
+
+  test("the production receipt activity rejects a result that arrives after cancellation", async () => {
+    const value = await fixture();
+    try {
+      const ownership = createDeliveryOwnerActivities(value.database, value.config, async () => ({ state: "stopped" as const }));
+      const owner = await ownership.claimDeliveryOwner({ ...intent(), token: "owner" });
+      if (owner.outcome === "owned_elsewhere" || owner.outcome === "cancelled") throw new Error("owner was not claimed");
+      expect(await ownership.cancelDeliveryOwner(intent())).toBe(true);
+      await expect(ownership.recordDeliveryOwnerReceipt({ ...intent(), token: "owner", receipt: { delayed: true } })).resolves.toBe(false);
+      expect(value.database.authQuery((db) => db.prepare("SELECT result_json AS resultJson FROM forge_provider_operations WHERE operation_key = ?").get("delivery-owner:delivery-supervision:workflow-delivery-supervision:1"))).toMatchObject({ resultJson: expect.not.stringContaining("delayed") });
+    } finally {
+      await value.stop();
+    }
   });
 
   test("a task without a plan revision keeps one intent through UI revisions and pre-claim cancellation", async () => {
@@ -128,9 +164,41 @@ describe("durable delivery supervision", () => {
     await value.stop();
   });
 
-  test("a real dirty worktree survives a stopped Builder handoff to the same objective", async () => {
-    const value = await fixture();
+  test("a stopped Builder resumes its dirty worktree through the production handler after restart", async () => {
     const worktree = await mkdtemp(join(tmpdir(), "forge-delivery-owner-"));
+    const inputs: Array<{ developerTurnExecutionId: string; resume?: { worktreePath: string; developerSessionRef: string; objective: string } }> = [];
+    let calls = 0;
+    let builderLive = false;
+    const value = await createEngineHarness({
+      projectIssueState: async (event) => event.state,
+      readHerdrTurn: async () => builderLive ? ({ type: "owner.live" as const }) : ({ type: "owner.absent" as const }),
+      runDeveloperExecutionSupervised: async (input) => {
+        inputs.push(input);
+        calls += 1;
+        builderLive = true;
+        return {
+          status: "completed" as const,
+          resultHash: engineFixture.sha256,
+          result: {
+            developerExecutionId: input.developerTurnExecutionId,
+            developerSessionRef: "builder-session",
+            branchName: "forge/delivery-supervision",
+            targetBaseSha: engineFixture.base,
+            currentStep: 1,
+            resultCommit: null,
+            resultTree: null,
+            dirtyState: "dirty" as const,
+            deliveryArtifactId: "delivery",
+            evidenceArtifactId: "evidence",
+            deliverySummary: "Keep the partial Builder work and finish verification.",
+            outcome: "blocked" as const,
+            steps: [{ number: 1, status: "incomplete" }],
+            authorizedStepsNotCompleted: [1],
+            blocker: null,
+          },
+        };
+      },
+    }, new PausedClock());
     try {
       await exec("git", ["init", "-b", "main"], { cwd: worktree });
       await exec("git", ["config", "user.email", "forge@test"], { cwd: worktree });
@@ -139,16 +207,43 @@ describe("durable delivery supervision", () => {
       await exec("git", ["add", "tracked.txt"], { cwd: worktree });
       await exec("git", ["commit", "-m", "base"], { cwd: worktree });
       await writeFile(join(worktree, "dirty.txt"), "partial Builder work\n");
-      const first = claimOrRecoverDeliveryOwner(value.database, intent(0), { token: "builder-one", now: new Date("2026-09-04T00:00:00.000Z"), leaseMs: 1, liveness: "stopped" });
-      if (first.outcome === "owned_elsewhere" || first.outcome === "cancelled") throw new Error("first Builder was not owned");
-      expect(recordDeliveryObservation(value.database, intent(0), first.token, { outcome: "blocked", objective: "Keep the dirty worktree." })).toBe(true);
-      const resumedPrompt = { worktreePath: worktree, objective: "Keep the dirty worktree.", priorReceipt: "blocked" };
-      const second = claimOrRecoverDeliveryOwner(value.database, intent(0), { token: "builder-two", now: new Date("2026-09-04T00:01:00.000Z"), liveness: "stopped" });
-      expect(second).toMatchObject({ outcome: "recovered", token: "builder-two" });
-      expect(resumedPrompt).toEqual(expect.objectContaining({ worktreePath: worktree, objective: "Keep the dirty worktree." }));
-      expect(await readFile(join(resumedPrompt.worktreePath, "dirty.txt"), "utf8")).toBe("partial Builder work\n");
+      value.seedTask("delivery-supervision");
+      const taskIntent = { ...intent(0), workflowId: value.workflowId("delivery-supervision") };
+      value.activities.claimDeliveryOwner = (input) => createDeliveryOwnerActivities(value.database, value.config, async () => ({ state: "stopped" as const })).claimDeliveryOwner(input);
+      value.activities.recordDeliveryOwnerReceipt = (input) => createDeliveryOwnerActivities(value.database, value.config, async () => ({ state: "stopped" as const })).recordDeliveryOwnerReceipt(input);
+      claimOrRecoverDeliveryOwner(value.database, taskIntent, { token: "interrupted-builder", now: new Date("2026-09-04T00:00:00.000Z"), leaseMs: 1, liveness: "stopped" });
+      const initial = {
+        ...buildInitialIssueWorkflowState({ workflowId: taskIntent.workflowId, companyId: taskIntent.companyId, projectId: engineFixture.projectId, issueId: taskIntent.taskId, projectRevisionId: taskIntent.projectRevisionId, briefArtifactId: engineFixture.briefArtifactId, imageArtifactIds: [], roleProfiles: engineFixture.roleProfiles, supplementalReview: false }),
+        ...at("development"),
+        revision: 4,
+        owner: "lead" as const,
+        activeOperation: { commandId: "interrupted-builder", kind: "development" as const, startedRevision: 4 },
+        developerExecutionId: "interrupted-builder",
+        developerSessionRef: "builder-session",
+        developerAttempt: 1,
+        worktreePath: worktree,
+        branchName: "forge/delivery-supervision",
+        targetBaseSha: engineFixture.base,
+        dirtyState: "dirty" as const,
+        deliverySummary: "Keep the partial Builder work and finish verification.",
+        planRevision: 4,
+        planApproved: true,
+        leadSessionRef: "lead-session",
+        leadOutputArtifactId: "plan-artifact",
+        lastEventId: `${taskIntent.workflowId}:4`,
+      };
+      value.seedContinuation("delivery-supervision", initial);
       await value.restart();
-      expect(value.database.authQuery((db) => db.prepare("SELECT completed_at AS completedAt FROM forge_provider_operations WHERE operation_key = ?").get("delivery-owner:delivery-supervision:workflow-delivery-supervision:0"))).toEqual({ completedAt: null });
+      await value.settle(taskIntent.workflowId, () => inputs.length === 1);
+      expect(inputs).toHaveLength(1);
+      expect(inputs[0]).toMatchObject({ resume: { worktreePath: worktree, developerSessionRef: "builder-session", objective: "Keep the partial Builder work and finish verification." } });
+      expect(await readFile(join(worktree, "dirty.txt"), "utf8")).toBe("partial Builder work\n");
+      builderLive = false;
+      await value.restart();
+      await value.settle(taskIntent.workflowId, () => inputs.length === 2);
+      expect(calls).toBe(2);
+      expect(inputs[1]).toMatchObject({ resume: { worktreePath: worktree, developerSessionRef: "builder-session", objective: "Keep the partial Builder work and finish verification." } });
+      expect(value.database.authQuery((db) => db.prepare("SELECT completed_at AS completedAt FROM forge_provider_operations WHERE operation_key = ?").get(`delivery-owner:delivery-supervision:${taskIntent.workflowId}:0`))).toEqual({ completedAt: null });
     } finally {
       await rm(worktree, { recursive: true, force: true });
       await value.stop();

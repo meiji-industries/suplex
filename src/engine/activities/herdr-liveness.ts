@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import { DeveloperDeliveryReportSchema } from "../../codex-developer.js";
+import { turnResultSchema } from "../../active-turn-recovery.js";
 import type { ForgeConfig } from "../../config.js";
 import type { ForgeDatabase } from "../../database.js";
 import { CliHerdrClient, type HerdrClient } from "../../herdr-client.js";
@@ -30,18 +30,19 @@ export async function isTaskTurnLive(
   taskId: string,
   herdr: HerdrClient = new CliHerdrClient(),
 ): Promise<TaskTurnLiveness> {
-  const turn = database.authQuery((db) => db.prepare(`SELECT turn.result_relative_path AS resultRelativePath, turn.execution_role AS role FROM forge_herdr_turns turn
+  const turn = database.authQuery((db) => db.prepare(`SELECT turn.result_relative_path AS resultRelativePath, turn.execution_role AS role, turn.ledger, turn.prompt_kind AS promptKind FROM forge_herdr_turns turn
     WHERE turn.task_id = ? AND turn.ledger = 'developer'
       AND turn.turn_id = (SELECT latest.turn_id FROM forge_herdr_turns latest WHERE latest.role_session_id = turn.role_session_id ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1)
-      AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating') LIMIT 1`).get(taskId) as { resultRelativePath: string; role: string } | undefined);
+      AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating') LIMIT 1`).get(taskId) as { resultRelativePath: string; role: string; ledger: "agent" | "developer"; promptKind: string } | undefined);
   if (turn) {
     const runtimeRoot = resolve(config.runtimeRoot);
     const resultPath = resolve(runtimeRoot, turn.resultRelativePath);
-    if (!resultPath.startsWith(`${runtimeRoot}/`)) return { live: true, role: turn.role };
-    try {
-      if (DeveloperDeliveryReportSchema.safeParse(json(await readFile(resultPath, "utf8"), null)).success) return { live: false };
-    } catch {}
-    return { live: true, role: turn.role };
+    if (resultPath.startsWith(`${runtimeRoot}/`)) {
+      try {
+        const schema = turnResultSchema(turn.ledger, turn.promptKind);
+        if (schema?.safeParse(json(await readFile(resultPath, "utf8"), null)).success) return { live: false };
+      } catch {}
+    }
   }
 
   const observations = await observeHerdrSessions(database, herdr, taskId);

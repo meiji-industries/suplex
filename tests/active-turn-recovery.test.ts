@@ -408,6 +408,7 @@ test("result and clean-handoff completion lose their exact CAS after session sup
 test("a late exact-schema Developer result triggers one reconcile-only retry", async () => {
   const value = await fixture();
   const turn = value.addTurn("developer", { role: "builder", ledger: "developer", promptKind: "implementation", status: "completed", executionStatus: "failed" });
+  value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'building' WHERE task_id = ?").run(turn.taskId));
   await value.writeResult(turn, validDeveloperDelivery);
   const calls: unknown[] = [];
   const reconcileDeveloper = async (_config: unknown, workflowId: string, input: unknown) => {

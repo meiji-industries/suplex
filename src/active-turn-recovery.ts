@@ -31,6 +31,7 @@ type TurnStatus = NonNullable<DurableTaskFacts["turn"]>["status"];
 type Turn = {
   turnId: string;
   taskId: string;
+  companyId: string;
   roleSessionId: string;
   role: "planner" | "builder" | "reviewer" | "integrator";
   status: TurnStatus;
@@ -81,7 +82,7 @@ const activeExecutionStatuses = new Set(["starting", "running"]);
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const safeText = (value: unknown) => String(redact(value)).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
 
-function resultSchema(ledger: Turn["ledger"], promptKind: string): ZodType | undefined {
+export function turnResultSchema(ledger: Turn["ledger"], promptKind: string): ZodType | undefined {
   return (ledger === "agent" ? agentResultSchemas : developerResultSchemas)[promptKind];
 }
 
@@ -89,7 +90,7 @@ async function resultAt(runtimeRoot: string, turn: Pick<Turn, "ledger" | "prompt
   const path = resolve(runtimeRoot, turn.resultRelativePath);
   const relativePath = relative(runtimeRoot, path);
   if (relativePath === ".." || relativePath.startsWith(`..${sep}`)) return { path, bytes: null, valid: false, promptable: false, evidence: "result:path outside runtime root" };
-  const schema = resultSchema(turn.ledger, turn.promptKind);
+  const schema = turnResultSchema(turn.ledger, turn.promptKind);
   if (!schema) return { path, bytes: null, valid: false, promptable: false, evidence: `result:unknown schema ${turn.ledger}/${turn.promptKind}` };
   let bytes: Buffer;
   try {
@@ -118,7 +119,7 @@ function sessionObservation(observation: HerdrSessionObservation | undefined, un
 }
 
 function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
-  return database.authQuery((db) => db.prepare(`SELECT turn.turn_id AS turnId, turn.task_id AS taskId, session.id AS roleSessionId, session.session_role AS role, turn.status, turn.result_relative_path AS resultRelativePath, turn.execution_id AS executionId, turn.execution_role AS executionRole, COALESCE(agent.status, developer.status) AS executionStatus, COALESCE(agent.finished_at, developer.finished_at) AS executionFinishedAt, turn.prompt_sent_at AS promptSentAt, turn.recovery_prompt_sent_at AS recoveryPromptSentAt, CASE WHEN turn.turn_id = (
+  return database.authQuery((db) => db.prepare(`SELECT turn.turn_id AS turnId, turn.task_id AS taskId, projection.company_id AS companyId, session.id AS roleSessionId, session.session_role AS role, turn.status, turn.result_relative_path AS resultRelativePath, turn.execution_id AS executionId, turn.execution_role AS executionRole, COALESCE(agent.status, developer.status) AS executionStatus, COALESCE(agent.finished_at, developer.finished_at) AS executionFinishedAt, turn.prompt_sent_at AS promptSentAt, turn.recovery_prompt_sent_at AS recoveryPromptSentAt, CASE WHEN turn.turn_id = (
       SELECT latest.turn_id FROM forge_herdr_turns latest
       WHERE latest.role_session_id = turn.role_session_id
       ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1
@@ -135,6 +136,25 @@ function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
       AND NOT EXISTS (SELECT 1 FROM forge_tasks task WHERE task.id = turn.task_id AND task.archived_at IS NOT NULL)${taskId ? " AND turn.task_id = ?" : ""}
 
     ORDER BY turn.task_id, turn.turn_id`).all(...(taskId ? [taskId] : [])) as Turn[]);
+}
+
+function supersedeLateResult(database: ForgeDatabase, turn: Turn, timestamp: string): boolean {
+  const summary = "The late Developer result was superseded before Forge could apply it.";
+  return database.authTransaction((db) => {
+    const completed = db.prepare(`UPDATE forge_herdr_turns
+      SET status = 'completed', task_complete_seen_at = COALESCE(task_complete_seen_at, ?), finished_at = COALESCE(finished_at, ?), attention_excerpt = ?, updated_at = ?
+      WHERE turn_id = ? AND task_id = ? AND status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed')`).run(timestamp, timestamp, summary, timestamp, turn.turnId, turn.taskId);
+    if (completed.changes !== 1) return false;
+    const metadata = JSON.stringify({ turnId: turn.turnId, executionId: turn.executionId, summary });
+    const eventHash = sha256(metadata);
+    db.prepare("INSERT OR IGNORE INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, source, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, ?, 'workflow', 'late_result_superseded', ?, ?, ?)")
+      .run(`${turn.workflowId}:late-result-superseded:${turn.turnId}`, turn.taskId, turn.companyId, turn.workflowId, turn.revision, metadata, timestamp, eventHash);
+    return true;
+  });
+}
+
+function currentWorkflow(database: ForgeDatabase, taskId: string): Pick<Turn, "revision" | "phase"> | undefined {
+  return database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = ?").get(taskId) as Pick<Turn, "revision" | "phase"> | undefined);
 }
 async function recreateMissingRuntime(database: ForgeDatabase, config: ForgeConfig, herdr: HerdrClient, turn: Turn): Promise<boolean> {
   const launch = database.authQuery((db) => db.prepare(`SELECT task.project_id AS projectId, project.name AS projectSlug, task.issue_number AS issueNumber,
@@ -293,7 +313,9 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
       let action: ActiveTurnOutcome["action"] = classified.action === "advance" || classified.action === "resume" || classified.action === "attention" ? classified.action : "no_change";
       const evidence = [...classified.evidence, result.evidence];
       const exactActiveExecution = turn.isLatestSessionTurn === 1 && turn.executionStatus !== null && activeExecutionStatuses.has(turn.executionStatus);
-      const lateDeveloperResult = turn.status === "completed" && turn.ledger === "developer" && turn.executionStatus === "failed" && result.valid;
+      const lateDeveloperResult = turn.ledger === "developer"
+        && result.valid
+        && (turn.executionStatus === "failed" || turn.executionStatus === "cancelled" || turn.executionStatus === "timeout" || !exactActiveExecution);
       const expectsResult = turn.promptSentAt !== null && exactActiveExecution;
       if (action === "attention" && !expectsResult) {
         action = "no_change";
@@ -342,8 +364,24 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
           evidence.push("resume:runtime recreation not eligible");
         }
       }
-      if (action === "advance" && (turn.role === "builder" || turn.role === "integrator") && turn.executionStatus === "failed" && result.valid) {
-        await (deps.reconcileDeveloper ?? reconcileIssueDeveloperDelivery)(config, turn.workflowId, { expectedRevision: turn.revision, actorUserId: "system", commandId: `late-result-${turn.turnId}-${turn.executionFinishedAt ?? "unknown"}`, reconcileOnly: true });
+      if (lateDeveloperResult) {
+        const workflow = currentWorkflow(database, turn.taskId);
+        if (turn.role === "builder" && workflow?.phase === "building") {
+          if (supersedeLateResult(database, turn, now())) {
+            await (deps.reconcileDeveloper ?? reconcileIssueDeveloperDelivery)(config, turn.workflowId, { expectedRevision: workflow.revision, actorUserId: "system", commandId: `late-result-${turn.turnId}-${turn.executionFinishedAt ?? "unknown"}`, reconcileOnly: true });
+            action = "advance";
+            evidence.push("late-result:Builder result reconciled at current revision");
+          } else {
+            action = "no_change";
+            evidence.push("late-result:completion CAS lost");
+          }
+        } else if (supersedeLateResult(database, turn, now())) {
+          action = "no_change";
+          evidence.push("late-result:superseded");
+        } else {
+          action = "no_change";
+          evidence.push("late-result:completion CAS lost");
+        }
       }
       outcomes.push({ taskId: turn.taskId, turnId: turn.turnId, role: turn.role, action, idempotencyKey: classified.idempotencyKey, evidence });
     } catch (error) {

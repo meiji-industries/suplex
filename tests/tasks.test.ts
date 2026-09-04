@@ -26,6 +26,7 @@ import { jsonRequired } from "../src/task-utils.js";
 import taskBranch from "../src/http/routes/task-branch.js";
 import { WorktreeManager } from "../src/worktrees.js";
 import { rebuildDriftedIssueProjections } from "../src/engine/host.js";
+import { CliHerdrClient, type HerdrClient } from "../src/herdr-client.js";
 import taskRoutes from "../src/http/routes/tasks.js";
 
 
@@ -42,7 +43,7 @@ function projectState(database: ForgeDatabase, state: IssueWorkflowState, runId 
   database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId, eventId: state.lastEventId, state }));
 }
 
-async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listOpenPullRequests" | "getPullRequest"> } = {}): Promise<{ root: string; config: ForgeConfig; database: ForgeDatabase; auth: AuthService; projects: ProjectService; tasks: TaskService; workflow: IssueWorkflowPort; stateByTask: Map<string, IssueWorkflowState>; workflowInputsByTask: Map<string, IssueWorkflowInput>; planningInputsByTask: Map<string, StartPlanningInput>; adminId: string; companyId: string; projectId: string; profileId: string }> {
+async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listOpenPullRequests" | "getPullRequest">; herdr?: HerdrClient } = {}): Promise<{ root: string; config: ForgeConfig; database: ForgeDatabase; auth: AuthService; projects: ProjectService; tasks: TaskService; workflow: IssueWorkflowPort; stateByTask: Map<string, IssueWorkflowState>; workflowInputsByTask: Map<string, IssueWorkflowInput>; planningInputsByTask: Map<string, StartPlanningInput>; adminId: string; companyId: string; projectId: string; profileId: string }> {
   const root = await mkdtemp(join(tmpdir(), "forge-task-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
@@ -127,9 +128,34 @@ async function fixture(options: { githubRelease?: Pick<GithubReleasePort, "listO
       return [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
     },
   };
-  tasks = new TaskService(database, auth, projects, config, { workflow });
+  tasks = new TaskService(database, auth, projects, config, { workflow, ...(options.herdr ? { herdr: options.herdr } : {}) });
   return { root, config, database, auth, projects, tasks, workflow, stateByTask, workflowInputsByTask, planningInputsByTask, adminId: "admin-1", companyId: company.id, projectId: project.id, profileId: profile.id };
 }
+
+test("task responses show a live Herdr worker even when the workflow is blocked", async () => {
+  const herdr = new class extends CliHerdrClient {
+    override async runtimeSnapshot() {
+      return { agents: [{ name: "integrator", paneId: "pane-integrator", status: "working" }], panes: [{ paneId: "pane-integrator", agent: "integrator", agentStatus: "working", tokens: { forge_binding_id: "session-integrator" } }] };
+    }
+  }();
+  const value = await fixture({ herdr });
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Live Integrator", description: "body", idempotencyKey: "live-integrator-status", images: [] });
+    const current = value.stateByTask.get(created.task.id)!;
+    const blocked = IssueWorkflowStateSchema.parse({ ...current, ...at("development"), revision: 1, owner: "human", allowedCommands: ["retry_development"], pendingAction: "The base branch moved", blocker: { category: "target_drift", summary: "The base branch moved", unblockOwner: "human", actions: [{ command: "retry_development", label: "Retry", requiresNote: false, destructive: false }], evidence: { artifactId: "blocker", kind: "attention-evidence" }, createdAt: "2026-09-03T03:31:00.000Z", retry: null }, lastEventId: `${current.workflowId}:1` });
+    value.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, agent_name, pane_id, status, created_at, updated_at) VALUES ('session-integrator', ?, 'integrator', 1, 1, 'codex', 'integrator', 'pane-integrator', 'ready', ?, ?)").run(created.task.id, "2026-09-03T03:31:00.000Z", "2026-09-03T03:31:00.000Z");
+    });
+    projectState(value.database, blocked);
+
+    const [summary] = await value.tasks.listTasksWithLiveStatus(value.adminId, value.companyId);
+    expect(summary).toMatchObject({ id: created.task.id, blocked: true, liveStatus: [{ role: "integrator", status: "working" }] });
+    expect(summary?.liveStatusObservedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
 
 test("rebuilds a legacy delivery-blocked projection before listing tasks", async () => {
   const value = await fixture();

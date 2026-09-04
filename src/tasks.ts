@@ -30,6 +30,8 @@ import type { HermesPrincipal } from "./hermes-agents.js";
 import type { HermesSafeTaskProjection } from "./http/contracts/hermes.js";
 import { TaskSourceFailure, type TaskSourceSelector } from "./task-sources.js";
 import { BrowserProofService, type BrowserProofProjection } from "./browser-proof.js";
+import { CliHerdrClient, type HerdrClient } from "./herdr-client.js";
+import { observeHerdrSessions } from "./herdr-recovery.js";
 import { MAX_TASK_IMAGES, MAX_TASK_IMAGE_BYTES, MAX_TASK_IMAGE_BASE64_LENGTH } from "./task-attachment-limits.js";
 import { attentionCardFromBlocker } from "./recovery/attention-card.js";
 import type { AttentionCard } from "./recovery/convergence.js";
@@ -439,6 +441,8 @@ export interface ForgeTask {
   phase: TaskPhase;
   step: IssueStep;
   blocked: boolean;
+  liveStatus: Array<{ role: string; status: string }>;
+  liveStatusObservedAt: string | null;
   revision: number;
   owner: "human" | "lead";
   allowedCommands: IssueCommand[];
@@ -595,7 +599,8 @@ export type TaskListSummary = Pick<ForgeTask, "id" | "companyId" | "projectId" |
   archivedAt: string | null;
   worktreeState: "present" | "cleaned" | "removed_externally" | null;
   agentInvocations: Array<Pick<TaskAgentInvocation, "id" | "role" | "status" | "attempt" | "startedAt" | "finishedAt" | "agentId" | "agentName" | "avatarSeed">>;
-  liveStatus?: Array<{ role: string; status: string }>;
+  liveStatus: Array<{ role: string; status: string }>;
+  liveStatusObservedAt: string | null;
   capacity: Pick<PublicCapacityStatus, "status"> | null;
   release?: Pick<TaskRelease, "status" | "pullRequestNumber" | "isDraft"> | null;
   ci?: Pick<TaskCiProjection, "outcome">;
@@ -722,6 +727,7 @@ interface TaskServiceOptions {
   now?: () => Date;
   capacity?: CapacityManager;
   promptOverrides?: PromptOverrideService;
+  herdr?: HerdrClient;
 }
 
 interface TaskRow {
@@ -845,6 +851,8 @@ export class TaskService {
   private readonly capacity: CapacityManager;
   private readonly eventListeners = new Set<{ afterCursor: number; send: (event: TaskEvent, cursor: number) => void }>();
   private readonly promptOverrides: PromptOverrideService;
+  private readonly herdr: HerdrClient;
+  private readonly liveStatusCache = new Map<string, { expiresAt: number; liveStatus: Array<{ role: string; status: string }>; observedAt: string }>();
   private readonly eventVersions = new Map<string, string>();
   private readonly taskLists = new Map<string, { cursor: number; expiresAt: number; tasks: TaskListSummary[] }>();
   private eventCursor = 0;
@@ -863,6 +871,7 @@ export class TaskService {
     this.browserProof = new BrowserProofService(database, this.artifacts);
     this.capacity = options.capacity ?? new CapacityManager(database, config);
     this.promptOverrides = options.promptOverrides ?? new PromptOverrideService(database, auth, projects);
+    this.herdr = options.herdr ?? new CliHerdrClient();
     this.workflow = options.workflow ?? {
       start: (input) => startIssueWorkflow(config, input),
       execute: (command, workflowId, input) => executeIssueCommand(config, workflowId, command, input),
@@ -963,6 +972,10 @@ export class TaskService {
     return tasks;
   }
 
+  async listTasksWithLiveStatus(actorUserId: string, companyId?: string, archived = false): Promise<TaskListSummary[]> {
+    return await Promise.all(this.listTasks(actorUserId, companyId, archived).map(async (task) => ({ ...task, ...await this.liveStatusForTask(task.id) })));
+  }
+
   getTask(actorUserId: string, taskId: string): ForgeTask {
     const user = this.user(actorUserId);
     const row = this.database.authQuery((db) => {
@@ -973,6 +986,29 @@ export class TaskService {
     });
     if (!row) throw new TaskFailure("Not found", [], 404);
     return this.publicTask(actorUserId, row);
+  }
+
+  async getTaskWithLiveStatus(actorUserId: string, taskId: string): Promise<ForgeTask> {
+    return { ...this.getTask(actorUserId, taskId), ...await this.liveStatusForTask(taskId) };
+  }
+
+  private async liveStatusForTask(taskId: string): Promise<{ liveStatus: Array<{ role: string; status: string }>; liveStatusObservedAt: string }> {
+    const cached = this.liveStatusCache.get(taskId);
+    if (cached && cached.expiresAt > this.now().getTime()) return { liveStatus: cached.liveStatus, liveStatusObservedAt: cached.observedAt };
+    const observedAt = this.now().toISOString();
+    let liveStatus: Array<{ role: string; status: string }> = [];
+    try {
+      const observations = await observeHerdrSessions(this.database, this.herdr, taskId);
+      liveStatus = (await Promise.all(observations.map(async (observation) => {
+        let status = observation.lifecycleStatus;
+        if (!status && observation.classification === "unverifiable" && observation.agentName) {
+          try { status = (await this.herdr.getAgent(observation.agentName))?.status ?? null; } catch {}
+        }
+        return status ? { role: observation.role, status } : undefined;
+      }))).flatMap((entry) => entry ? [entry] : []);
+    } catch {}
+    this.liveStatusCache.set(taskId, { expiresAt: this.now().getTime() + 10_000, liveStatus, observedAt });
+    return { liveStatus, liveStatusObservedAt: observedAt };
   }
 
   private getTaskByIdInternal(taskId: string): ForgeTask {
@@ -1945,7 +1981,7 @@ export class TaskService {
     const releaseState = workflowState.mergeOutcome === "merged" ? "merged" : workflowState.mergeOutcome === "closed_without_merge" ? "closed" : release ?.pullRequestNumber !== null ? "ready" : release ? "draft" : undefined;
     const githubPullRequestState = workflowState.githubPullRequestState === "open" || workflowState.githubPullRequestState === "closed" || workflowState.githubPullRequestState === "merged" ? workflowState.githubPullRequestState : null;
     const liveStatus = json<Array<{ role: string; status: string }>>(row.live_status_json, []).filter((entry) => typeof entry.role === "string" && typeof entry.status === "string");
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), phase: lifecycle.phase, step: lifecycle.step, blocked: isBlocked(workflowState), revision: row.projection_revision, owner: row.owner, allowedCommands, pendingAction: row.pending_action, worktreeState: null, createdAt: row.created_at, updatedAt: row.updated_at, agentInvocations, liveStatus, capacity: capacity ? { status: capacity.status } : null, ...(release ? { release: { status: release.pullRequestNumber !== null ? "ready" : "reconciling", pullRequestNumber: release.pullRequestNumber, isDraft: false } } : {}), ...(outcome ? { ci: { outcome: outcome.outcome } } : {}), ...(releaseState ? { deliveryGate: { release: { state: releaseState } } } : {}), ...(workflowState.githubPullRequestState !== undefined ? { githubPullRequest: { state: githubPullRequestState } } : {}) };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), phase: lifecycle.phase, step: lifecycle.step, blocked: isBlocked(workflowState), revision: row.projection_revision, owner: row.owner, allowedCommands, pendingAction: row.pending_action, worktreeState: null, createdAt: row.created_at, updatedAt: row.updated_at, agentInvocations, liveStatus, liveStatusObservedAt: null, capacity: capacity ? { status: capacity.status } : null, ...(release ? { release: { status: release.pullRequestNumber !== null ? "ready" : "reconciling", pullRequestNumber: release.pullRequestNumber, isDraft: false } } : {}), ...(outcome ? { ci: { outcome: outcome.outcome } } : {}), ...(releaseState ? { deliveryGate: { release: { state: releaseState } } } : {}), ...(workflowState.githubPullRequestState !== undefined ? { githubPullRequest: { state: githubPullRequestState } } : {}) };
   }
 
   private publicTask(actorUserId: string, row: TaskRow): ForgeTask {
@@ -2171,7 +2207,7 @@ export class TaskService {
     const roleAgents = parseRoleAgents(row.role_agents_json);
     const commands = taskCommandDescriptors(allowedCommands, row.projection_revision);
     const attentionCard = attentionCardFromBlocker(workflowState.blocker ?? undefined, { summary: row.pending_action, pendingAction: row.pending_action, step: lifecycle.step, blockerCode, actions: commands.map((command) => ({ command: command.name, label: command.label, ...(command.note === "required" ? { requiresNote: true } : {}) })), ...(workflowState.mergeDecision ? { mergeDecision: workflowState.mergeDecision } : {}) });
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleAgents, supplementalReview: row.supplemental_review === 1, autoApprovePlan: row.autoApprovePlan === 1, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), executionControls: { runProjectTests: row.run_project_tests === 1, visualEvidence: row.visual_evidence, supplementalReview: row.supplemental_review === 1 }, browserProof: this.browserProof.projectSync(row.id, row.company_id), deliveryReceipt: row.delivery_worktree_path || row.delivery_branch_name || row.delivery_commit ? { worktreePath: row.delivery_worktree_path, branchName: row.delivery_branch_name, commit: row.delivery_commit } : null, worktreeState: null, worktreePath: ownedWorktree?.worktreePath ?? developerExecution?.worktreePath ?? null, pullRequestMode: row.pull_request_mode, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, prompts: { overrides: prompts?.overrides ?? [] }, ...(source ? { source } : {}), phase: lifecycle.phase, step: lifecycle.step, blocked: isBlocked(workflowState), revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, attentionCard, lastHandlerError: workflowState.lastHandlerError ?? null, createdAt: row.created_at, updatedAt: row.updated_at, timeline, activity, agentInvocations, capacity, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, projection: { revision: row.projection_revision, projectedAt: row.projected_at }, reviewLineage, targetBaseReconciliation, ...(deliveryGate ? { deliveryGate } : {}), ...(githubPullRequest ? { githubPullRequest } : {}), ...(workflowState ? { planRevision: workflowState.planRevision ?? null, supplementalReviewUsed: workflowState.supplementalReviewUsed ?? false, supplementalReviewArtifactId: workflowState.supplementalReviewArtifactId ?? null, decisionId: workflowState.planDecisionReceipt?.decisionId ?? null, leadInputManifestArtifactId: workflowState.leadInputManifestArtifactId ?? undefined, blockedCategory: workflowState.blockedCategory ?? null, blockedResumePhase: workflowState.blockedResumePhase ?? null, blockerArtifactId: workflowState.blockerArtifactId ?? null, deliveryDecisionArtifactId: workflowState.deliveryDecisionArtifactId ?? null, predecessorTaskId: row.predecessor_task_id, successorTaskId: row.successor_task_id, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), ...(developerExecution ? { developerExecution: { ...developerExecution, branchName: developerExecution.branch_name, summary: developerSummary } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(leadOutput ? { leadOutput } : {}), ...(release !== undefined ? { release } : {}), ...(ci ? { ci } : {}) };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, archivedAt: row.archived_at, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleAgents, supplementalReview: row.supplemental_review === 1, autoApprovePlan: row.autoApprovePlan === 1, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), executionControls: { runProjectTests: row.run_project_tests === 1, visualEvidence: row.visual_evidence, supplementalReview: row.supplemental_review === 1 }, browserProof: this.browserProof.projectSync(row.id, row.company_id), deliveryReceipt: row.delivery_worktree_path || row.delivery_branch_name || row.delivery_commit ? { worktreePath: row.delivery_worktree_path, branchName: row.delivery_branch_name, commit: row.delivery_commit } : null, worktreeState: null, worktreePath: ownedWorktree?.worktreePath ?? developerExecution?.worktreePath ?? null, pullRequestMode: row.pull_request_mode, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, prompts: { overrides: prompts?.overrides ?? [] }, ...(source ? { source } : {}), phase: lifecycle.phase, step: lifecycle.step, blocked: isBlocked(workflowState), liveStatus: json<Array<{ role: string; status: string }>>(row.live_status_json, []).filter((entry) => typeof entry.role === "string" && typeof entry.status === "string"), liveStatusObservedAt: null, revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, attentionCard, lastHandlerError: workflowState.lastHandlerError ?? null, createdAt: row.created_at, updatedAt: row.updated_at, timeline, activity, agentInvocations, capacity, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, projection: { revision: row.projection_revision, projectedAt: row.projected_at }, reviewLineage, targetBaseReconciliation, ...(deliveryGate ? { deliveryGate } : {}), ...(githubPullRequest ? { githubPullRequest } : {}), ...(workflowState ? { planRevision: workflowState.planRevision ?? null, supplementalReviewUsed: workflowState.supplementalReviewUsed ?? false, supplementalReviewArtifactId: workflowState.supplementalReviewArtifactId ?? null, decisionId: workflowState.planDecisionReceipt?.decisionId ?? null, leadInputManifestArtifactId: workflowState.leadInputManifestArtifactId ?? undefined, blockedCategory: workflowState.blockedCategory ?? null, blockedResumePhase: workflowState.blockedResumePhase ?? null, blockerArtifactId: workflowState.blockerArtifactId ?? null, deliveryDecisionArtifactId: workflowState.deliveryDecisionArtifactId ?? null, predecessorTaskId: row.predecessor_task_id, successorTaskId: row.successor_task_id, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), ...(developerExecution ? { developerExecution: { ...developerExecution, branchName: developerExecution.branch_name, summary: developerSummary } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(leadOutput ? { leadOutput } : {}), ...(release !== undefined ? { release } : {}), ...(ci ? { ci } : {}) };
   }
 
   private developerReportSummary(companyId: string, artifactId: string): string | null {

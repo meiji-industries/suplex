@@ -9,6 +9,7 @@ const BACKGROUND_PHASES = new Set<IssuePhase>(["shipping"]);
 type DeliveryTarget = "local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged";
 type PullRequestState = "draft" | "ready" | "open" | "closed" | "merged" | null;
 type LiveStatus = { role: string; status: string };
+type LiveTaskStatus = "working" | "blocked" | undefined;
 
 export function deliveryTargetLabel(deliveryTarget?: DeliveryTarget): string {
   if (deliveryTarget === "local_worktree") return "Keep in worktree";
@@ -21,6 +22,16 @@ export function deliveryTargetLabel(deliveryTarget?: DeliveryTarget): string {
 
 export function taskStatusLabel(phase: IssuePhase, pendingAction?: string | null): string {
   return ACTIVE_PHASES.has(phase) && pendingAction ? `${PHASE_LABELS[phase]} · ${pendingAction}` : PHASE_LABELS[phase];
+}
+
+export function liveTaskStatus(liveStatus: ReadonlyArray<LiveStatus>): LiveTaskStatus {
+  if (liveStatus.some((entry) => ["working", "running", "starting"].includes(entry.status))) return "working";
+  return liveStatus.some((entry) => entry.status === "blocked") ? "blocked" : undefined;
+}
+
+export function taskDisplayStatusLabel(phase: IssuePhase, pendingAction: string | null | undefined, liveStatus: ReadonlyArray<LiveStatus>): string {
+  const status = liveTaskStatus(liveStatus);
+  return status === "working" ? "Working" : status === "blocked" ? "Needs an answer" : taskStatusLabel(phase, pendingAction);
 }
 
 export function taskIsProcessing({ phase, blocked = false, agentInvocations = [], capacityStatus }: { phase: IssuePhase; blocked?: boolean; agentInvocations?: ReadonlyArray<{ status: string }>; capacityStatus?: string | null | undefined }): boolean {
@@ -37,11 +48,13 @@ export function taskStatusAppearance(phase: IssuePhase, blocked = false): { icon
   return { icon: ACTIVE_PHASES.has(phase) ? CircleDotDashed : CircleDashed, iconClass: "text-muted-foreground", badge: "secondary" };
 }
 
-export function TaskStatusIcon({ phase, blocked = false, processing = false, pullRequestState }: { phase: IssuePhase; blocked?: boolean; processing?: boolean; pullRequestState?: PullRequestState | undefined }): ReactElement {
+export function TaskStatusIcon({ phase, blocked = false, processing = false, pullRequestState, liveStatus = [], liveStatusObservedAt = null }: { phase: IssuePhase; blocked?: boolean; processing?: boolean; pullRequestState?: PullRequestState | undefined; liveStatus?: ReadonlyArray<LiveStatus>; liveStatusObservedAt?: string | null }): ReactElement {
   if (phase === "done" && pullRequestState === "merged") return <span data-task-status-icon="merged" className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full bg-emerald-500"><Check aria-hidden="true" className="size-2.5 text-white" strokeWidth={3} /></span>;
-  const appearance = taskStatusAppearance(phase, blocked);
+  const status = liveTaskStatus(liveStatus);
+  const appearance = taskStatusAppearance(phase, blocked && !status);
   const Icon = appearance.icon;
-  return <Icon aria-hidden="true" className={`size-3.5 shrink-0 ${appearance.iconClass}${processing ? " animate-spin" : ""}`} />;
+  const icon = <Icon aria-hidden="true" className={`size-3.5 shrink-0 ${appearance.iconClass}${processing || status === "working" ? " animate-spin" : ""}`} />;
+  return liveStatusObservedAt ? <Tooltip><TooltipTrigger render={<span data-live-status-observed-at={liveStatusObservedAt}>{icon}</span>} /><TooltipContent>derived from Herdr at {liveStatusObservedAt}</TooltipContent></Tooltip> : icon;
 }
 
 export function LiveStatusDot({ liveStatus }: { liveStatus: ReadonlyArray<LiveStatus> }): ReactElement | null {
@@ -51,7 +64,7 @@ export function LiveStatusDot({ liveStatus }: { liveStatus: ReadonlyArray<LiveSt
   return <Tooltip><TooltipTrigger render={<span data-live-status-dot={status} aria-label={liveStatus.map((entry) => `${entry.role}: ${entry.status}`).join(", ")} className={`inline-flex size-2 shrink-0 rounded-full ${className}`} />} /><TooltipContent>{liveStatus.map((entry) => <span className="block" key={`${entry.role}:${entry.status}`}>{`${entry.role.charAt(0).toUpperCase()}${entry.role.slice(1)}: ${entry.status}`}</span>)}</TooltipContent></Tooltip>;
 }
 
-export function TaskStatus({ phase, blocked = false, pendingAction, processing = false, deliveryTarget, pullRequestState }: { phase: IssuePhase; blocked?: boolean; pendingAction?: string | null; processing?: boolean; deliveryTarget?: DeliveryTarget; pullRequestState?: PullRequestState | undefined }): ReactElement {
+export function TaskStatus({ phase, blocked = false, pendingAction, processing = false, deliveryTarget, pullRequestState, liveStatus = [], liveStatusObservedAt = null }: { phase: IssuePhase; blocked?: boolean; pendingAction?: string | null; processing?: boolean; deliveryTarget?: DeliveryTarget; pullRequestState?: PullRequestState | undefined; liveStatus?: ReadonlyArray<LiveStatus>; liveStatusObservedAt?: string | null }): ReactElement {
   void deliveryTarget;
-  return <span data-task-status={phase} className="inline-flex items-center gap-1.5"><TaskStatusIcon phase={phase} blocked={blocked} processing={processing} pullRequestState={pullRequestState} /><span>{taskStatusLabel(phase, pendingAction)}</span></span>;
+  return <span data-task-status={phase} className="inline-flex items-center gap-1.5"><TaskStatusIcon phase={phase} blocked={blocked} processing={processing} pullRequestState={pullRequestState} liveStatus={liveStatus} liveStatusObservedAt={liveStatusObservedAt} /><span>{taskDisplayStatusLabel(phase, pendingAction, liveStatus)}</span></span>;
 }

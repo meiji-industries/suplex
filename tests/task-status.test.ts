@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 
-import { LiveStatusDot, taskStatusAppearance, taskStatusLabel, TaskStatus } from "../src/frontend/components/app/task-status.js";
+import { LiveStatusDot, taskDisplayStatusLabel, taskStatusAppearance, taskStatusLabel, TaskStatus } from "../src/frontend/components/app/task-status.js";
 import { PHASE_LABELS } from "../src/issue-phases.js";
 
 test("task status uses the shared phase icons", () => {
@@ -26,6 +26,15 @@ test("task status uses the shared phase icons", () => {
   expect(taskStatusAppearance("cancelled")).toMatchObject({ iconClass: "text-foreground/70", badge: "secondary" });
   expect(taskStatusAppearance("shipping", true)).toMatchObject({ iconClass: "text-rose-500", badge: "destructive-light" });
   expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "reviewing", pendingAction: "Approve the delivery" }))).toContain("Reviewing · Approve the delivery");
+});
+
+test("a live Herdr worker overrides the blocked workflow icon and label", () => {
+  const status = renderToStaticMarkup(createElement(TaskStatus, { phase: "building", blocked: true, pendingAction: "The base branch moved", liveStatus: [{ role: "integrator", status: "working" }], liveStatusObservedAt: "2026-09-03T03:36:00.000Z" }));
+  expect(taskDisplayStatusLabel("building", "The base branch moved", [{ role: "integrator", status: "working" }])).toBe("Working");
+  expect(status).toContain("Working");
+  expect(status).toContain("animate-spin");
+  expect(status).not.toContain("lucide-circle-x");
+  expect(status).toContain('data-live-status-observed-at="2026-09-03T03:36:00.000Z"');
 });
 
 test("live status dots show the current role state", () => {

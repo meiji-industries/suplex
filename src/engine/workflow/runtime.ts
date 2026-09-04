@@ -191,7 +191,8 @@ export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): 
   if (command === "resolve_merge_conflict") {
     const progress = stateTransitions.withRepairProgress(ctx.state, { signature: stateTransitions.repairSignature({ source: "merge", code: "merge_conflict" }), commit: ctx.state.resultCommit ?? null, diagnosticHash: null });
     if ((progress.repairProgress?.repeats ?? 0) >= (ctx.input.repairCycleLimit ?? 0)) {
-      ctx.state = IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "The merge conflict needs your decision", activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      const summary = "The merge conflict needs your decision";
+      ctx.state = IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: summary, blocker: humanBlocker("agent_exhausted", summary, [{ command: "resolve_merge_conflict", label: "Resolve the merge conflict", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence")), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       return null;
     }
   }
@@ -263,13 +264,16 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   const unchanged = ctx.state.step === before.step && ctx.state.owner === before.owner && ctx.state.pendingAction === before.pendingAction && isBlocked(ctx.state) === before.blocked;
   if (!failure && !unchanged) return;
   const reason = failure instanceof Error ? failure.message : failure ? String(failure) : `Automatic ${chained.command.replaceAll("_", " ")} made no progress`;
+  const retryCommand = (ctx.state.allowedCommands.find((command) => command !== "cancel_issue") ?? chained.command) as IssueWorkflowState["allowedCommands"][number];
+  const allowedCommands = [...new Set([...ctx.state.allowedCommands.filter((command) => command !== "cancel_issue"), retryCommand, "cancel_issue"])] as IssueWorkflowState["allowedCommands"];
   haltedChains.add(chainKey(ctx.state.workflowId, chained.command));
   ctx.state = IssueWorkflowStateSchema.parse({
     ...ctx.state,
     revision: ctx.state.revision + 1,
     owner: "human",
-    allowedCommands: [...new Set([...ctx.state.allowedCommands, "cancel_issue"])],
+    allowedCommands,
     pendingAction: reason.slice(0, 256),
+    blocker: humanBlocker("agent_exhausted", reason, [{ command: retryCommand, label: "Retry now", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], evidencePointer(ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence")),
     lastHandlerError: { command: chained.command, reason: reason.slice(0, 256), at: new Date().toISOString() },
     stateChangedAt: new Date().toISOString(),
     lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
@@ -321,7 +325,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
       const category = "provider_connectivity_exhausted";
       // Record the exhausted blocker once; re-projecting it on every loop pass is a hot loop.
       // humanBlocker() returns null without evidence, so the projected blocker cannot be the guard.
-      if (ctx.state.owner === "human" && ctx.state.pendingAction === summary && ctx.state.allowedCommands.includes(command)) return false;
+      if (ctx.state.owner === "human" && ctx.state.pendingAction === summary && ctx.state.blocker?.actions.some((action) => action.command === command)) return false;
       ctx.state = IssueWorkflowStateSchema.parse({
         ...ctx.state,
         revision: ctx.state.revision + 1,

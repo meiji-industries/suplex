@@ -35,6 +35,17 @@ import { BrowserProofFailure, BrowserProofInputSchema, BrowserProofService, norm
 type OperationExecution = { signal?: AbortSignal | undefined };
 type OperationAware = OperationExecution;
 
+const IDENTITY_FAILURE_CODES = new Set(["developer-scope-mismatch", "developer-execution-identity-conflict", "stale-reviewed-revision"]);
+
+function developerFailure(error: unknown, fallbackCode: string, fallbackMessage: string): AgentFailure {
+  const code = error instanceof AgentFailure ? error.code : fallbackCode;
+  const message = error instanceof Error ? error.message : fallbackMessage;
+  const nonRetryable = error instanceof AgentFailure && error.nonRetryable
+    || IDENTITY_FAILURE_CODES.has(code)
+    || /scope mismatch|does not match/i.test(message);
+  return new AgentFailure(code, message, { nonRetryable });
+}
+
 async function git(args: string[], cwd: string, timeout = 8_000): Promise<string> {
   const result = await runCommand({ taskId: null, stepId: null, command: "git", args, cwd, timeout });
   if (result.exitCode !== 0 || result.timedOut) throw new Error(result.stderr || `git ${args[0] ?? "command"} failed`);
@@ -431,7 +442,7 @@ export class DeveloperService {
         return activityResult;
     } catch (error) {
       // Keep the real cause: a swallowed message made launch-path bugs look like Builder failures.
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("developer-failed", `Builder could not start: ${error instanceof Error ? error.message : String(error)}`);
+      const failure = developerFailure(error, "developer-failed", `Builder could not start: ${error instanceof Error ? error.message : String(error)}`);
       if (!(error instanceof AgentFailure)) console.error("Builder launch failed", executionId, error);
       const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
       this.database.authTransaction((db) => {
@@ -569,7 +580,7 @@ export class DeveloperService {
       if (terminalStatus !== "completed") throw new AgentFailure("developer-superseded", "The build was superseded before completion");
       return activityResult;
     } catch (error) {
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("merge-resolution-failed", `Codex Developer merge-conflict resolution failed: ${error instanceof Error ? error.message : String(error)}`);
+      const failure = developerFailure(error, "merge-resolution-failed", `Codex Developer merge-conflict resolution failed: ${error instanceof Error ? error.message : String(error)}`);
       const evidence = await this.artifacts.putArtifact(input.companyId, "agent-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
       if (verificationArtifact && completedMerge && ["verification_failed", "verification_timed_out", "verification_evidence_too_large"].includes(failure.code)) {
         const blockedVerificationArtifact = verificationArtifact;
@@ -669,7 +680,7 @@ export class DeveloperService {
       return activityResult;
     } catch (error) {
       const expectedFailure = error instanceof AgentFailure;
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("developer-repair-failed", `Codex Developer repair failed: ${error instanceof Error ? error.message : String(error)}`);
+      const failure = developerFailure(error, "developer-repair-failed", `Codex Developer repair failed: ${error instanceof Error ? error.message : String(error)}`);
       const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
       const code = repairBlockCode(failure);
       const expected = expectedFailure && ["invalid-output", "session-conflict", "authentication-required", "rate-limited", "process-failed", "evidence-too-large"].includes(code);
@@ -769,11 +780,7 @@ export class DeveloperService {
       if (terminalStatus !== "completed") throw new AgentFailure("developer-superseded", "The build was superseded before completion");
       return activityResult;
     } catch (error) {
-      const failure = error instanceof AgentFailure
-        ? error
-        : error instanceof Error && error.message.includes("scope mismatch")
-          ? new AgentFailure("developer-scope-mismatch", error.message, { nonRetryable: true })
-          : new AgentFailure("ci-repair-failed", `CI repair failed: ${error instanceof Error ? error.message : String(error)}`);
+      const failure = developerFailure(error, error instanceof Error && error.message.includes("scope mismatch") ? "developer-scope-mismatch" : "ci-repair-failed", `CI repair failed: ${error instanceof Error ? error.message : String(error)}`);
       // Leave the worktree on the recorded failed head so the retry starts clean.
       await rollbackUnpushedRepairCommits(worktreePath, input.branchName, input.priorCommit);
       const evidence = await this.persistEvidence(input.companyId, evidenceLines);

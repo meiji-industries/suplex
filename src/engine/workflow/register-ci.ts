@@ -64,7 +64,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
     const turnExecutionId = developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "repair");
-    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ci_repairing"), owner: "lead", allowedCommands: [], pendingAction: "The Builder repairs the failed CI job", developerExecutionId: ctx.supervisedDeveloperTurns ? turnExecutionId : priorDeveloperExecutionId, developerAttempt, developerTurnKind: "repair", ...ctx.recoveryFields("starting", null, "Starting Developer CI repair.", null), blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("ci_repairing"), owner: "lead", allowedCommands: [], pendingAction: "The Builder repairs the failed CI job", developerExecutionId: priorDeveloperExecutionId, developerAttempt, developerTurnKind: "repair", ...ctx.recoveryFields("starting", null, "Starting Developer CI repair.", null), blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     try {
       const result = await ctx.acquireExternalTurn<contracts.WorkflowCiRepairActivityResult>(

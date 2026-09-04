@@ -92,7 +92,7 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
 export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   const block = async (reason: string, developerAttempt = ctx.state.developerAttempt): Promise<contracts.IssueWorkflowState> => {
-    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "human", allowedCommands: [...new Set([...ctx.state.allowedCommands, "resolve_merge_conflict", "cancel_issue"])], pendingAction: reason, lastHandlerError: { command: "resolve_merge_conflict", reason, at: new Date().toISOString() }, developerAttempt, activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "human", allowedCommands: [...new Set([...ctx.state.allowedCommands, "resolve_merge_conflict", "cancel_issue"])], pendingAction: reason, blocker: stateTransitions.humanBlocker("agent_exhausted", reason, [{ command: "resolve_merge_conflict", label: "Resolve the merge conflict", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], undefined), lastHandlerError: { command: "resolve_merge_conflict", reason, at: new Date().toISOString() }, developerAttempt, activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     return ctx.state;
   };
@@ -133,7 +133,8 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
       ? stateTransitions.withRepairProgress(ctx.state, { signature: stateTransitions.repairSignature({ source: "merge", code: "merge_conflict" }), commit: ctx.state.resultCommit ?? null, diagnosticHash: null })
       : ctx.state;
     if (automatic && (progress.repairProgress?.repeats ?? 0) >= (ctx.input.repairCycleLimit ?? 0)) {
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "The merge conflict needs your decision", activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      const summary = "The merge conflict needs your decision";
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...progress, revision: ctx.state.revision + 1, ...at("merge_conflict_resolving"), owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: summary, blocker: stateTransitions.humanBlocker("agent_exhausted", summary, [{ command: "resolve_merge_conflict", label: "Resolve the merge conflict", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], undefined), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.state;
     }

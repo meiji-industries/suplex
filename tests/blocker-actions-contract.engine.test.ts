@@ -83,7 +83,9 @@ test("constructed human blockers retain every advertised command", () => {
   ];
   for (const entry of cases) {
     const blocker = humanBlocker("member_decision", entry.name, entry.actions.map((command) => ({ command, label: command, requiresNote: false, destructive: command === "cancel_issue" })), undefined);
-    const parked = { ...state, blocker };
+    const parked = { ...state, owner: "human" as const, blocker };
+    expect(parked.blocker).not.toBeNull();
+    expect(parked.blocker.actions.some((action) => !action.destructive)).toBe(true);
     for (const command of entry.actions) expect(blockerOffers(parked, command), `${entry.name} offers ${command}`).toBe(true);
   }
   const credential = credentialBlockedState(state, "reconcile_merge", undefined);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { executionId, turnId } from "../src/ids.js";
-import { readOwner, type DriverDependencies } from "../src/engine/workflow/driver.js";
+import { driverPollDelay, readOwner, type DriverDependencies } from "../src/engine/workflow/driver.js";
 import { STEP_TABLE } from "../src/engine/workflow/step-table.js";
 import type { IssueWorkflowContext } from "../src/engine/workflow/context.js";
 
@@ -75,6 +75,12 @@ describe("readOwner", () => {
     await expect(readOwner(context(), { owner: "member", decision: "plan_approval" }, dependencies())).resolves.toEqual({ type: "owner.absent" });
     await expect(readOwner(context({ acceptanceStatus: "requested_changes" }), { owner: "member", decision: "acceptance" }, dependencies())).resolves.toEqual({ type: "owner.failed", reason: "Member requested delivery changes" });
     await expect(readOwner(context({ acceptanceRetryAt: "2026-09-04T12:00:01.000Z" }), { owner: "timer", field: "acceptanceRetryAt" }, dependencies())).resolves.toEqual({ type: "owner.live" });
+  });
+
+  it("waits for the earlier acceptance retry or timer poll", () => {
+    const now = Date.parse("2026-09-04T12:00:00.000Z");
+    expect(driverPollDelay(context({ step: "ready_reconciliation", acceptanceRetryAt: "2026-09-04T12:00:15.000Z" }).state, now)).toBe(15_000);
+    expect(driverPollDelay(context({ step: "ready_reconciliation", acceptanceRetryAt: "2026-09-04T12:05:00.000Z" }).state, now)).toBe(60_000);
   });
 
   it("requires the matching completed Herdr review", async () => {

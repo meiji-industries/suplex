@@ -254,7 +254,7 @@ export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: Driv
   const githubWaiting = step === "releasing" || step === "ci_waiting" || step === "manual_merge";
   const ciWaiting = step === "ci_waiting" && rule.waitsOn.owner === "github" && rule.waitsOn.what === "checks";
   if (step === "releasing" && ctx.state.releaseRetryAt && Date.parse(ctx.state.releaseRetryAt) > (dependencies.now?.().getTime() ?? runExecution.current().now())) return false;
-  if (rule.terminal || (!rule.adoptFirst && rule.waitsOn.owner !== "herdr" && !githubWaiting) || ctx.state.activeOperation !== null) return false;
+  if (rule.terminal || (!rule.adoptFirst && rule.waitsOn.owner !== "herdr" && rule.waitsOn.owner !== "timer" && !githubWaiting) || ctx.state.activeOperation !== null) return false;
   if (ciWaiting) {
     const now = dependencies.now?.().getTime() ?? runExecution.current().now();
     const pollAt = ctx.state.ciNextPollAt ? Date.parse(ctx.state.ciNextPollAt) : now;
@@ -297,5 +297,6 @@ export function driverPollDelay(state: IssueWorkflowState, now: number): number 
   if (!("wait" in transition) || transition.wait === "signal") return undefined;
   if (state.step === "releasing" && state.releaseRetryAt) return Math.max(1, Date.parse(state.releaseRetryAt) - now);
   if (state.step === "ci_waiting") return state.owner === "lead" && state.ciNextPollAt ? Math.max(1, Date.parse(state.ciNextPollAt) - now) : undefined;
+  if (state.step === "ready_reconciliation" && state.acceptanceRetryAt) return Math.min(transition.wait.pollMs, Math.max(1, Date.parse(state.acceptanceRetryAt) - now));
   return transition.wait.pollMs;
 }

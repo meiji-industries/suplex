@@ -173,6 +173,32 @@ test("the driver reconciles manual merge through a GitHub sync signal", async ()
   }
 });
 
+test("the driver reconciles a due ready acceptance", async () => {
+  const harness = await createEngineHarness({
+    reconcileAcceptance: async () => ({ acceptanceId: "acceptance", status: "accepted", outcome: "ready", retryAt: null, readyAt: new Date().toISOString(), acceptedAt: new Date().toISOString(), pullRequestNumber: 42, pullRequestUrl: "https://github.test/42" }),
+  });
+  const issueId = "driver-boot-ready-acceptance";
+  harness.seedTask(issueId, { deliveryTarget: "merged" });
+  try {
+    const workflowId = harness.workflowId(issueId);
+    await harness.startContinuation(issueId, {
+      ...deliveryReviewState(workflowId),
+      ...at("ready_reconciliation"),
+      owner: "human",
+      allowedCommands: ["reconcile_acceptance", "cancel_issue"],
+      pendingAction: "Checking readiness",
+      acceptanceId: "acceptance",
+      acceptanceStatus: "pending_ready",
+      acceptanceRetryAt: new Date(harness.clock.now() - 1).toISOString(),
+    }, { deliveryTarget: "merged" });
+    const reconciled = await harness.settle(workflowId, (state) => state.step === "manual_merge");
+    expect(harness.calls.get("reconcileAcceptance")).toBe(1);
+    expect(reconciled.processedCommandIds).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(`^${workflowId}:driver:ready_reconciliation:\\d+:owner\\.done$`))]));
+  } finally {
+    await harness.stop();
+  }
+});
+
 test("the driver sends a conflicted release to merge-conflict review", async () => {
   const harness = await createEngineHarness({
     observeGithubPullRequest: async () => ({ exists: true, number: 42, url: "https://github.test/42", state: "open", isDraft: false, headSha: engineFixture.commit, baseSha: engineFixture.base, mergeable: "CONFLICTING", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, autoMergeEnabled: false, reviewDecision: null }),

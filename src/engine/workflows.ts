@@ -1,5 +1,5 @@
 import { at } from "../issue-phases.js";
-import { condition, isCancellation, log, runExecution, setHandler, sleep } from "./registry.js";
+import { condition, isCancellation, log, runExecution, setHandler } from "./registry.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, normalizeSafeSummary, type IssueBlocker, type IssueBlockerAction, type IssueWorkflowInput, type IssueWorkflowState, type ReconcileTargetBaseActivityResult, type TargetBaseCheckpoint } from "./issue-contracts.js";
 import type { IssueCommand } from "../commands/registry.js";
 import type { LeadPlanningResult } from "../lead-contracts.js";
@@ -28,7 +28,7 @@ import { driverPollDelay, evaluateStep } from "./workflow/driver.js"; import { r
 import { applyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, createAcquireExternalTurn, createGuarded, failureBlockCategory, leadResultKind, permanentActivityFailure, rateLimitFailure, resumeLeadTurn, runAutoChainedCommand } from "./workflow/runtime.js";
 export * from "./issue-updates.js"; export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
 async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { const projected = withWorktreeCommands(state); return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: runExecution.current().runId, eventId: projected.lastEventId, state: projected })); }
-const MAX_RECONCILIATION_ATTEMPTS = 20; function sleepUntil(retryAt: string | null | undefined): Promise<void> { return retryAt ? sleep(Math.max(1, Date.parse(retryAt) - Date.now())) : sleep("1 second"); } function sameTransition(state: IssueWorkflowState, next: Partial<IssueWorkflowState>): boolean { return Object.entries(next).every(([field, value]) => JSON.stringify(state[field as keyof IssueWorkflowState]) === JSON.stringify(value)); } export const issueStateQuery = "issueState" as const;
+const MAX_RECONCILIATION_ATTEMPTS = 20; function sameTransition(state: IssueWorkflowState, next: Partial<IssueWorkflowState>): boolean { return Object.entries(next).every(([field, value]) => JSON.stringify(state[field as keyof IssueWorkflowState]) === JSON.stringify(value)); } export const issueStateQuery = "issueState" as const;
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);
@@ -358,7 +358,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await workflowContext.initialProjection;
     const automaticActionsAllowed = (): boolean => !automaticActionsHalted;
     const githubSyncPending = (): boolean => githubSyncRequested;
-    const currentStep = (): IssueWorkflowState["step"] => workflowContext.state.step;
     function shouldWake(): boolean {
       return githubSyncRequested // GitHub changed.
         || (!workflowContext.state.allowedCommands.includes("delete_worktree") && (workflowContext.state.step === "done" || (workflowContext.state.step === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) // A terminal state needs completion.
@@ -388,11 +387,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       if (githubSyncPending()) {
         githubSyncRequested = false;
         await syncGithubPullRequest();
-        continue;
-      }
-      if (workflowContext.state.step === "ready_reconciliation") {
-        await sleepUntil(workflowContext.state.acceptanceRetryAt);
-        if (currentStep() === "ready_reconciliation") await workflowContext.reconcileAcceptanceTurn();
         continue;
       }
       if (automaticActionsAllowed()) {

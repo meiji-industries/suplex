@@ -42,7 +42,7 @@ function ciState(h: EngineHarness, issueId: string) {
   return { ...at("ci_waiting"), revision: 20, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Forge waits for CI", lastEventId: `${issueId}:20`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: new Date(h.clock.now()).toISOString(), leadSessionRef: "lead-session", leadExecutionId: "lead-execution", leadOutputArtifactId: "plan", planRevision: 1, developerExecutionId: "developer", developerSessionRef: "developer-session", worktreePath: join(h.root, "worktrees", issueId), branchName: `forge/issue/${issueId}`, targetBaseSha: engineFixture.base, resultCommit: head, resultTree: tree, dirtyState: "clean" as const, deliveryArtifactId: "delivery", developerEvidenceArtifactId: "evidence", deliveryReviewId: "review", releaseId: `release-${issueId}`, releaseRepository: "acme/forge", pullRequestNumber: 42, pullRequestUrl: "https://github.test/42", expectedHeadSha: head, expectedHeadTree: tree, ciAttempt: 0, ciOutcome: "waiting" as const, ciNextPollAt: null };
 }
 
-test.each(["ci_waiting", "manual_merge", "releasing"] as const)("an unchanged %s shipping state does not re-project while it waits", async (step) => {
+test.each(["ci_waiting", "manual_merge", "releasing", "ready_reconciliation"] as const)("an unchanged %s shipping state does not re-project while it waits", async (step) => {
   const clock = new FiveSecondClock();
   let tooManyProjections!: () => void;
   const hotLoop = new Promise<void>((resolve) => { tooManyProjections = resolve; });
@@ -59,7 +59,7 @@ test.each(["ci_waiting", "manual_merge", "releasing"] as const)("an unchanged %s
   }, clock);
   h.seedTask(`unchanged-${step}`);
   try {
-    const initial = { ...ciState(h, `unchanged-${step}`), ...at(step), releaseRepository: step === "manual_merge" ? "acme/forge" : null, releaseRetryAt: step === "releasing" ? new Date(Date.now() + 15_000).toISOString() : null };
+    const initial = { ...ciState(h, `unchanged-${step}`), ...at(step), releaseRepository: step === "manual_merge" ? "acme/forge" : null, releaseRetryAt: step === "releasing" ? new Date(Date.now() + 15_000).toISOString() : null, acceptanceId: step === "ready_reconciliation" ? "acceptance" : null, acceptanceStatus: step === "ready_reconciliation" ? "pending_ready" as const : null, acceptanceRetryAt: step === "ready_reconciliation" ? new Date(h.clock.now() + 15_000).toISOString() : null };
     const started = await h.startContinuation(`unchanged-${step}`, initial);
     const before = h.engine.run(started.workflowId).state.revision;
     const snapshotCountBefore = h.database.authQuery((db) => (db.prepare("SELECT count(*) AS count FROM forge_workflow_snapshots WHERE workflow_id = ?").get(started.workflowId) as { count: number }).count);

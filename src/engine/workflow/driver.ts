@@ -7,6 +7,8 @@ import { turnResultSchema } from "../../turn-result-schemas.js";
 import { at, isBlocked } from "../../issue-phases.js";
 import type { IssueWorkflowContext } from "./context.js";
 import { inspectTaskWorktree, observeGithubPullRequest, readHerdrTurn } from "./activity-proxies.js";
+import { deferCiGithubObservation } from "./register-ci.js";
+import type { GithubPullRequestObservationResult } from "../contracts/activities/github-sync.js";
 import { nextAdoptFirst, nextStep, type OwnerEvent } from "./step-machine.js";
 import { STEP_TABLE, type OwnerRead, type Transition } from "./step-table.js";
 import { herdrResultAnswer, ownerAnswer, type OwnerAnswer } from "./owner-answer.js";
@@ -29,6 +31,9 @@ type GithubRead = { exists: boolean; state: "open" | "closed" | "merged" | null;
 export type DriverDependencies = {
   inspectTaskWorktree?: (input: { taskId: string; companyId: string; workflowId: string; expectedCommit?: ReturnType<typeof gitSha>; expectedTree?: ReturnType<typeof gitTree>; expectedBranch?: string }) => Promise<WorktreeRead>;
   observeGithubPullRequest?: (input: { repository: string; branch: string; pullRequestNumber?: number | null }) => Promise<GithubRead>;
+  syncGithubPullRequest?: () => Promise<GithubPullRequestObservationResult | null>;
+  reconcileCi?: (observation: GithubPullRequestObservationResult | null) => Promise<void>;
+  takeGithubSyncSignal?: () => boolean;
   readLatestHerdrTurn?: (input: { taskId: string; role: HerdrTurn["role"]; promptKind: string }) => Promise<HerdrTurn | null>;
   isTaskTurnLive?: (taskId: string) => Promise<{ live: boolean }>;
   now?: () => Date;
@@ -94,18 +99,34 @@ async function readGit(ctx: IssueWorkflowContext, waitsOn: Extract<OwnerRead, { 
   return parsed(worktree.revision?.proven ? { type: "owner.done" } : { type: "owner.failed", reason: worktree.revision?.reason ?? "Git head differs from the expected revision" });
 }
 
-async function readGithub(ctx: IssueWorkflowContext, waitsOn: Extract<OwnerRead, { owner: "github" }>, dependencies: DriverDependencies): Promise<OwnerAnswer> {
-  const repository = ctx.state.releaseRepository ?? ctx.input.repository;
-  const branch = ctx.state.branchName;
-  if (!repository || !branch) return parsed({ type: "owner.absent" });
-  const observe = dependencies.observeGithubPullRequest ?? observeGithubPullRequest;
-  const observation = await observe({ repository, branch, ...(ctx.state.pullRequestNumber ? { pullRequestNumber: ctx.state.pullRequestNumber } : {}) });
+function githubAnswer(waitsOn: Extract<OwnerRead, { owner: "github" }>, observation: GithubRead | GithubPullRequestObservationResult | null): OwnerAnswer {
+  if (!observation) return parsed({ type: "owner.absent" });
   if (!observation.exists) return parsed({ type: "owner.absent" });
   if (observation.state === "merged") return parsed({ type: "owner.done" });
   if (observation.state === "closed") return parsed({ type: "owner.failed", reason: "Pull request closed without merge" });
   if (["CONFLICTING", "DIRTY"].includes(observation.mergeable ?? "")) return parsed({ type: "owner.failed", reason: "Pull request has merge conflicts" });
   if (waitsOn.what === "checks") return parsed(observation.checks.failing > 0 ? { type: "owner.failed", reason: "Required checks failed" } : observation.checks.pending > 0 || observation.checks.total === 0 || observation.checks.successful !== observation.checks.total ? { type: "owner.live" } : { type: "owner.done" });
   return parsed({ type: "owner.live" });
+}
+
+async function readGithub(ctx: IssueWorkflowContext, waitsOn: Extract<OwnerRead, { owner: "github" }>, dependencies: DriverDependencies): Promise<OwnerAnswer> {
+  if (dependencies.syncGithubPullRequest) {
+    let observation: GithubPullRequestObservationResult | null;
+    try {
+      observation = await dependencies.syncGithubPullRequest();
+    } catch (error) {
+      if (waitsOn.what === "checks") await deferCiGithubObservation(ctx, error);
+      throw error;
+    }
+    if (waitsOn.what === "checks" && ctx.state.owner === "lead" && dependencies.reconcileCi) await dependencies.reconcileCi(observation);
+    return githubAnswer(waitsOn, observation);
+  }
+  const repository = ctx.state.releaseRepository ?? ctx.input.repository;
+  const branch = ctx.state.branchName;
+  if (!repository || !branch) return parsed({ type: "owner.absent" });
+  const observe = dependencies.observeGithubPullRequest ?? observeGithubPullRequest;
+  const observation = await observe({ repository, branch, ...(ctx.state.pullRequestNumber ? { pullRequestNumber: ctx.state.pullRequestNumber } : {}) });
+  return githubAnswer(waitsOn, observation);
 }
 
 export async function readOwner(ctx: IssueWorkflowContext, waitsOn: OwnerRead, dependencies: DriverDependencies = {}): Promise<OwnerEvent> {
@@ -202,7 +223,14 @@ async function applyDirectStep(ctx: IssueWorkflowContext, target: Extract<Transi
 export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: DriverDependencies = {}): Promise<boolean> {
   const step = ctx.state.step;
   const rule = STEP_TABLE[step];
-  if (rule.terminal || (!rule.adoptFirst && rule.waitsOn.owner !== "herdr") || ctx.state.activeOperation !== null) return false;
+  const ciWaiting = step === "ci_waiting" && rule.waitsOn.owner === "github" && rule.waitsOn.what === "checks";
+  if (rule.terminal || (!rule.adoptFirst && rule.waitsOn.owner !== "herdr" && !ciWaiting) || ctx.state.activeOperation !== null) return false;
+  if (ciWaiting) {
+    const now = dependencies.now?.().getTime() ?? runExecution.current().now();
+    const pollAt = ctx.state.ciNextPollAt ? Date.parse(ctx.state.ciNextPollAt) : now;
+    const signalled = dependencies.takeGithubSyncSignal?.() ?? false;
+    if (pollAt > now && !signalled) return false;
+  }
   if (rule.adoptFirst && isBlocked(ctx.state)) return false;
   if (rule.adoptFirst) {
     const adopted = await readOwner(ctx, rule.adoptFirst, dependencies);
@@ -217,7 +245,9 @@ export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: Driv
       return true;
     }
   }
+  const revision = ctx.state.revision;
   const event = await readOwner(ctx, rule.waitsOn, dependencies);
+  if (ciWaiting && (ctx.state.step !== step || ctx.state.revision !== revision)) return true;
   const { actions } = nextStep(step, event);
   for (const action of actions) {
     switch (action.type) {
@@ -228,4 +258,13 @@ export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: Driv
     }
   }
   return true;
+}
+
+export function driverPollDelay(state: IssueWorkflowState, now: number): number | undefined {
+  const rule = STEP_TABLE[state.step];
+  if (rule.terminal) return undefined;
+  const transition = rule.on.live;
+  if (!("wait" in transition) || transition.wait === "signal") return undefined;
+  if (state.step === "ci_waiting") return state.owner === "lead" && state.ciNextPollAt ? Math.max(1, Date.parse(state.ciNextPollAt) - now) : undefined;
+  return transition.wait.pollMs;
 }

@@ -92,12 +92,27 @@ export function adoptCiPullRequestRelease(state: contracts.IssueWorkflowState, r
   return contracts.IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, releaseId: release.releaseId, releaseRepository: release.repository, baseBranch: release.baseBranch, targetBaseSha: release.targetBaseSha, pullRequestNumber: release.pullRequestNumber, pullRequestUrl: release.pullRequestUrl, expectedHeadSha: release.headSha, expectedHeadTree: release.headTree, resultCommit: release.headSha, resultTree: release.headTree, lastEventId: `${state.workflowId}:${state.revision + 1}` });
 }
 
+export async function deferCiGithubObservation(ctx: IssueWorkflowContext, error: unknown): Promise<contracts.IssueWorkflowState> {
+  if (isCancellation(error)) throw error;
+  const failure = ctx.permanentActivityFailure(error);
+  const failureClass = classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : failure?.code === "authentication-required" ? { category: "provider_authentication" } : {}), summary: failure?.summary ?? "Forge could not check CI. Retry.", source: "ci" });
+  const evidence = stateTransitions.evidencePointer(failure?.evidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence");
+  const deferred = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ciNextPollAt: new Date(runExecution.current().now() + CI_OBSERVATION_FAILURE_POLL_DELAY_MS).toISOString() });
+  if (failureClass === "credential_missing") ctx.state = stateTransitions.credentialBlockedState(deferred, "reconcile_ci", evidence);
+  else {
+    ctx.state = deferCiReconciliation(deferred, new Date(runExecution.current().now()).toISOString());
+  }
+  await ctx.project();
+  return ctx.state;
+}
+
 export function registerCiHandlers(ctx: IssueWorkflowContext): void {
   const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(true) };
   const agent = activityProxies;
   const validateReconcileCi = (rawInput: contracts.StartPlanningInput): contracts.StartPlanningInput => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
-    if (command.expectedRevision !== ctx.state.revision || !CI_COMMAND_STEPS.has(ctx.state.step) || !ctx.state.allowedCommands.includes("reconcile_ci")) throw new Error("CI reconciliation is not available in the current phase");
+    const driver = command.actorUserId === "forge-driver";
+    if (command.expectedRevision !== ctx.state.revision || !CI_COMMAND_STEPS.has(ctx.state.step) || (!driver && !ctx.state.allowedCommands.includes("reconcile_ci"))) throw new Error("CI reconciliation is not available in the current phase");
     return command;
   };
   setHandler(adoptCiRepairResultUpdate, ctx.guarded(async (rawInput: any) => {
@@ -157,25 +172,12 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
   };
   const reconcileCiTurn = async (initialObservation?: GithubPullRequestObservationResult | null): Promise<contracts.IssueWorkflowState> => {
     const expectedBaseSha = ctx.state.targetBaseSha;
-    const deferObservationFailure = async (error: unknown): Promise<contracts.IssueWorkflowState> => {
-      if (isCancellation(error)) throw error;
-      const failure = ctx.permanentActivityFailure(error);
-      const failureClass = classifyRepairFailure({ code: failure?.code ?? null, ...(failure?.category ? { category: failure.category } : failure?.code === "authentication-required" ? { category: "provider_authentication" } : {}), summary: failure?.summary ?? "Forge could not check CI. Retry.", source: "ci" });
-      const evidence = stateTransitions.evidencePointer(failure?.evidenceArtifactId ?? ctx.state.ciEvidenceArtifactId ?? ctx.state.developerEvidenceArtifactId ?? undefined, "attention-evidence");
-      if (failureClass === "credential_missing") ctx.state = stateTransitions.credentialBlockedState(ctx.state, "reconcile_ci", evidence);
-      else {
-        const deferred = deferCiReconciliation(ctx.state, new Date(runExecution.current().now()).toISOString());
-        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...deferred, ciNextPollAt: new Date(runExecution.current().now() + CI_OBSERVATION_FAILURE_POLL_DELAY_MS).toISOString() });
-      }
-      await ctx.project();
-      return ctx.state;
-    };
     let observed = initialObservation;
     if (observed === undefined && ctx.state.releaseRepository && ctx.state.branchName) {
       try {
         observed = await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
       } catch (error) {
-        return deferObservationFailure(error);
+        return deferCiGithubObservation(ctx, error);
       }
     }
     observed ??= null;

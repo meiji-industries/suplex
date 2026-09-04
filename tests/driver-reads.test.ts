@@ -50,6 +50,23 @@ describe("readOwner", () => {
     await expect(readOwner(context(), waitsOn, dependencies({ observeGithubPullRequest: async () => { throw new Error("gh down"); } }))).resolves.toEqual({ type: "owner.unavailable", owner: "github", reason: "gh down" });
   });
 
+  it("uses the workflow GitHub synchronizer for CI checks", async () => {
+    let synchronized = 0;
+    let observed = 0;
+    await expect(readOwner(context(), { owner: "github", what: "checks" }, dependencies({
+      syncGithubPullRequest: async () => {
+        synchronized += 1;
+        return { exists: true, number: 42, url: "https://github.test/42", state: "open", isDraft: false, headSha: sha, baseSha: sha, mergeable: "MERGEABLE", checks: { pending: 1, failing: 0, total: 1, successful: 0 }, autoMergeEnabled: false, reviewDecision: null };
+      },
+      observeGithubPullRequest: async () => {
+        observed += 1;
+        return { exists: true, state: "open", mergeable: "MERGEABLE", checks: { pending: 0, failing: 0, total: 1, successful: 1 } };
+      },
+    }))).resolves.toEqual({ type: "owner.live" });
+    expect(synchronized).toBe(1);
+    expect(observed).toBe(0);
+  });
+
   it("classifies git, member, and timer state", async () => {
     await expect(readOwner(context(), { owner: "git", what: "delivery" }, dependencies({ inspectTaskWorktree: async () => ({ present: false, dirtyFileCount: 0, revision: null }) }))).resolves.toEqual({ type: "owner.absent" });
     await expect(readOwner(context(), { owner: "git", what: "delivery" }, dependencies({ inspectTaskWorktree: async () => ({ present: true, dirtyFileCount: 1, revision: { proven: false, head: sha, headTree: tree, clean: false } }) }))).resolves.toEqual({ type: "owner.live" });

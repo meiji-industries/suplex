@@ -117,7 +117,7 @@ export const STEP_TABLE: Record<IssueStep, StepRule> = {
   },
   ci_waiting: {
     waitsOn: { owner: "github", what: "checks" },
-    on: { done: { command: "final_review" }, live: poll(60_000), absent: { command: "reconcile_ci" }, failed: { step: "ci_repair_planning", owner: "lead" } },
+    on: { done: { command: "final_review" }, live: poll(60_000), absent: signal, failed: { step: "ci_repair_planning", owner: "lead" } },
   },
   ci_repair_planning: {
     waitsOn: { owner: "herdr", role: "integrator", promptKind: "ci-repair-plan" },

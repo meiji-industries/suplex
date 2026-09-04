@@ -115,29 +115,13 @@ export function issueRunInputFromSnapshotRow(db: Parameters<typeof resolveAgentP
   });
 }
 
-export function recoverInterruptedOperation(state: IssueWorkflowState, database: ForgeDatabase): IssueWorkflowState {
+export function recoverInterruptedOperation(state: IssueWorkflowState, _database: ForgeDatabase): IssueWorkflowState {
   // CI reconciliation can enter its agent-owned repair phases from the workflow
   // loop rather than a user command. Those turns therefore have no
   // `activeOperation` to recover, even though an interrupted planner or repair
   // must still be made actionable after a worker restart.
   const ciRepairStep = state.step === "ci_repair_planning" || state.step === "ci_repairing";
   if ((!state.activeOperation && !ciRepairStep) || !AGENT_OWNED_STEPS[state.step]) return state;
-  const live = database.authQuery((db) => Boolean(db.prepare(`
-    SELECT 1 FROM forge_developer_executions execution
-    JOIN forge_herdr_turns turn ON turn.ledger = 'developer' AND turn.execution_id = execution.id AND turn.task_id = execution.task_id
-    JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.task_id = execution.task_id
-    WHERE execution.task_id = ? AND execution.company_id = ? AND execution.workflow_id = ?
-      AND execution.status IN ('starting', 'running')
-      AND session.is_current = 1 AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human')
-    UNION ALL
-    SELECT 1 FROM forge_agent_executions execution
-    JOIN forge_herdr_turns turn ON turn.ledger = 'agent' AND turn.execution_id = execution.id AND turn.task_id = execution.task_id
-    JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.task_id = execution.task_id
-    WHERE execution.task_id = ? AND execution.company_id = ? AND execution.workflow_id = ?
-      AND execution.status IN ('starting', 'running')
-      AND session.is_current = 1 AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human')
-    LIMIT 1`).get(state.issueId, state.companyId, state.workflowId, state.issueId, state.companyId, state.workflowId)));
-  if (live) return state;
   const revision = state.revision + 1;
   // Keep these projections aligned with the non-completed paths in the handlers.
   // A resumed run has no suspended handler to perform that transition itself.

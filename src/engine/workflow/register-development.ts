@@ -89,7 +89,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
       if (recovered) await ctx.project();
       return ctx.state;
     }
-    if (outcome.status === "completed") await activityProxies.completeDeliveryOwner({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, generation: deliveryGeneration, token: executionId, receipt: outcome.result });
+    if (outcome.status === "completed" && !await activityProxies.recordDeliveryOwnerReceipt({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, generation: deliveryGeneration, token: executionId, receipt: outcome.result })) return ctx.state;
     let autoRetry = false;
     let autoContinue = false;
     const automaticRestartRequested = (): boolean => autoRetry || autoContinue;
@@ -219,7 +219,7 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
     }
     throw error;
   }
-  if (outcome.status === "completed") await activityProxies.completeDeliveryOwner({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, generation: deliveryGeneration, token: executionId, receipt: outcome.result });
+  if (outcome.status === "completed" && !await activityProxies.recordDeliveryOwnerReceipt({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, generation: deliveryGeneration, token: executionId, receipt: outcome.result })) return ctx.state;
   const applied = await ctx.withStateMutation(() => {
     if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.step !== "development") return false;
     if (outcome.status === "completed") {

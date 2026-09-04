@@ -7,7 +7,7 @@ import { jsonRequired } from "../../task-utils.js";
 import { proveForwardMergeLineage } from "./forward-merge-lineage.js";
 import { proveRevisionInGit } from "./git-proof.js";
 import { runCommand } from "../../command-runner.js";
-import { cancelDeliveryIntent, claimOrRecoverDeliveryOwner, completeDeliveryOperation } from "../../delivery-supervision.js";
+import { cancelDeliveryIntent, claimOrRecoverDeliveryOwner, recordDeliveryObservation } from "../../delivery-supervision.js";
 import { isTaskTurnLive } from "./herdr-liveness.js";
 
 const LegacyReleaseDeliverySchema = z.object({
@@ -284,9 +284,8 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
       catch { liveness = "unknown"; }
       return claimOrRecoverDeliveryOwner(database, { taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, generation: input.generation, ...(input.objective ? { objective: input.objective } : {}) }, { token: input.token, liveness });
     },
-    async completeDeliveryOwner(input) {
-      const outcome = completeDeliveryOperation(database, input, input.token, input.receipt);
-      return outcome === "recovered" ? "owned" : outcome;
+    async recordDeliveryOwnerReceipt(input) {
+      return recordDeliveryObservation(database, input, input.token, { builderReceipt: input.receipt });
     },
     async cancelDeliveryOwner(input) {
       return cancelDeliveryIntent(database, input);

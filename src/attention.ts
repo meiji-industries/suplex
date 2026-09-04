@@ -55,6 +55,14 @@ interface ProjectionRow {
 
 interface Blocker { category?: unknown; summary?: unknown; actions?: unknown }
 
+interface AttentionSnapshot {
+  blocker?: Blocker;
+  mergeDecision?: unknown;
+  targetBaseBlockerCode?: string | null;
+  deliveryRepairBlockerCode?: string | null;
+  deliveryReviewBlockerCode?: string | null;
+}
+
 const NOTE_COMMANDS = new Set<IssueCommand>(["approve_plan", "reject_plan", "request_plan_revision", "record_delivery_decision", "request_delivery_changes"]);
 
 function actions(raw: string, expectedRevision: number): AttentionAction[] {
@@ -100,9 +108,10 @@ export class AttentionService {
         const summary = row.pane_id ? [`Agent needs you in ${row.pane_id}`, row.agent_name ? `(${row.agent_name})` : "", row.attention_excerpt].filter(Boolean).join(" ") : row.pending_action;
         const snapshot = row.pane_id ? undefined : this.database.authQuery((db) => {
           const snapshot = db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision DESC LIMIT 1").get(row.task_id) as { state_json?: string } | undefined;
-          try { return snapshot?.state_json ? jsonRequired(snapshot.state_json) as { blocker?: Blocker; mergeDecision?: unknown } : undefined; } catch { return undefined; }
+          try { return snapshot?.state_json ? jsonRequired(snapshot.state_json) as AttentionSnapshot : undefined; } catch { return undefined; }
         });
-        const card = attentionCardFromBlocker(snapshot?.blocker, { ...(row.pane_id ? { summary } : {}), pendingAction: row.pane_id ? "Agent is waiting for you" : row.pending_action, actions: actionList, ...(snapshot?.mergeDecision ? { mergeDecision: snapshot.mergeDecision } : {}) });
+        const blockerCode = snapshot?.targetBaseBlockerCode ?? snapshot?.deliveryRepairBlockerCode ?? snapshot?.deliveryReviewBlockerCode ?? null;
+        const card = attentionCardFromBlocker(snapshot?.blocker, { ...(row.pane_id ? { summary } : {}), pendingAction: row.pane_id ? "Agent is waiting for you" : row.pending_action, blockerCode, actions: actionList, ...(snapshot?.mergeDecision ? { mergeDecision: snapshot.mergeDecision } : {}) });
         const liveStatus = jsonRequired(row.live_status_json ?? "[]") as unknown;
         return { companyId: row.company_id, taskId: row.task_id, issueKey: row.issue_key, taskTitle: row.task_title, summary, sourceRevision: row.revision, phase: row.phase, activatedAt: row.activated_at, liveStatus: Array.isArray(liveStatus) ? liveStatus.filter((entry): entry is { role: string; status: string } => typeof entry === "object" && entry !== null && "role" in entry && "status" in entry && typeof entry.role === "string" && typeof entry.status === "string") : [], actions: actionList, card };
       });

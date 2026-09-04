@@ -89,7 +89,6 @@ function reviewedState(harness: EngineHarness, issueId: string, overrides: Parti
 
 function corruptState(harness: EngineHarness, issueId: string): IssueWorkflowState {
   const workflowId = harness.workflowId(issueId);
-  const processedCommandIds = [1, 2, 3].map((attempt) => `${workflowId}:auto-retry:review_delivery:${staleHead}:${attempt}`);
   return reviewedState(harness, issueId, {
     ...at("delivery_ready"),
     revision: 126,
@@ -117,7 +116,6 @@ function corruptState(harness: EngineHarness, issueId: string): IssueWorkflowSta
     forwardMergePriorTree: priorTree,
     forwardMergeTargetBaseSha: reviewedBase,
     mergeResolutionDeveloperExecutionId: "developer-reviewed",
-    processedCommandIds,
   });
 }
 
@@ -270,12 +268,10 @@ test("a complete delivery uses the normal review path and bypasses recovery", as
 
 test("a foreign remote head fails closed without publication, observation, or adoption", async () => {
   let publishCalls = 0;
-  let observeCalls = 0;
   const issueId = "foreign-reviewed-head";
   const harness = await createEngineHarness({
     pushDeliveryBranch: async () => { throw ApplicationFailure.nonRetryable("The remote task branch points to another commit.", "remote-head-conflict", { code: "remote-head-conflict", summary: "The remote task branch points to another commit." }); },
     publishRelease: async (input) => { publishCalls += 1; return completedRelease(input.branchName); },
-    observeGithubPullRequest: async () => { observeCalls += 1; return staleObservation(); },
   });
   harness.seedTask(issueId, { deliveryTarget: "pull_request_draft" });
   const continuation = reviewedState(harness, issueId);
@@ -287,7 +283,6 @@ test("a foreign remote head fails closed without publication, observation, or ad
     expect(harness.calls.get("pushDeliveryBranch")).toBe(1);
     expect(blocked.blocker?.actions.map((action) => action.command)).toEqual(["review_delivery", "cancel_issue"]);
     expect(publishCalls).toBe(0);
-    expect(observeCalls).toBe(1);
   } finally { await harness.stop(); }
 });
 

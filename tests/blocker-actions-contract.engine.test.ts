@@ -49,11 +49,6 @@ test("a publish-retry blocker action is accepted without a review blocker code",
     developerEvidenceArtifactId: "developer-evidence",
     leadSessionRef: "lead-session",
     leadOutputArtifactId: "lead-output",
-    processedCommandIds: [
-      `${workflowId}:auto-retry:review_delivery:${engineFixture.commit}:1`,
-      `${workflowId}:auto-retry:review_delivery:${engineFixture.commit}:2`,
-      `${workflowId}:auto-retry:review_delivery:${engineFixture.commit}:3`,
-    ],
     lastEventId: `${workflowId}:5`,
   };
   try {

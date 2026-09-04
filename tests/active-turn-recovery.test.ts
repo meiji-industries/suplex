@@ -438,43 +438,22 @@ test("result and clean-handoff completion lose their exact CAS after session sup
   }
 });
 
-test("a late exact-schema Developer result triggers one reconcile-only retry", async () => {
-  const value = await fixture();
-  const turn = value.addTurn("developer", { role: "builder", ledger: "developer", promptKind: "implementation", status: "completed", executionStatus: "failed" });
-  value.writeWorkflowState(turn, "development", "execution-developer");
-  await value.writeResult(turn, validDeveloperDelivery);
-  const calls: unknown[] = [];
-  const reconcileDeveloper = async (_config: unknown, workflowId: string, input: unknown) => {
-    calls.push({ workflowId, input });
-    value.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', failure_code = NULL WHERE id = 'execution-developer'").run());
-    return {} as never;
-  };
-  const herdr = { runtimeSnapshot: async () => ({ agents: [], panes: [] }) };
-  await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, reconcileDeveloper: reconcileDeveloper as never });
-  await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, reconcileDeveloper: reconcileDeveloper as never });
-  expect(calls).toEqual([{ workflowId: "workflow-developer", input: { expectedRevision: 1, actorUserId: "system", commandId: `late-result-${turn.turnId}-${stamp}`, reconcileOnly: true } }]);
-});
-
 test("a late integrator result is superseded after the workflow moves on", async () => {
   const value = await fixture();
   const turn = value.addTurn("late-integrator", { role: "integrator", ledger: "developer", promptKind: "ci-repair", status: "completed", executionStatus: "failed" });
   value.writeWorkflowState(turn, "reviewing_delivery", "execution-newer");
   await value.writeResult(turn, { summary: "Recovered CI repair.", blocker: null });
-  const calls: unknown[] = [];
   const herdr = { runtimeSnapshot: async () => ({ agents: [], panes: [] }) };
 
   const first = await reconcileActiveTurns(value.database, value.config, {
     herdr: herdr as never,
-    reconcileDeveloper: (async (...args: unknown[]) => { calls.push(args); return {} as never; }) as never,
   });
   const second = await reconcileActiveTurns(value.database, value.config, {
     herdr: herdr as never,
-    reconcileDeveloper: (async (...args: unknown[]) => { calls.push(args); return {} as never; }) as never,
   });
 
   expect(first).toMatchObject([{ turnId: turn.turnId, action: "no_change", evidence: expect.arrayContaining(["late-result:superseded"]) }]);
   expect(second).toMatchObject([{ turnId: turn.turnId, action: "no_change" }]);
-  expect(calls).toEqual([]);
   expect(value.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt, result_sha256 AS resultSha256 FROM forge_herdr_turns WHERE turn_id = ?").get(turn.turnId))).toEqual({ status: "completed", attention_excerpt: "The late Developer result was superseded before Forge could apply it.", resultSha256: createHash("sha256").update(JSON.stringify({ summary: "Recovered CI repair.", blocker: null })).digest("hex") });
   expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_issue_timeline WHERE event_type = 'late_result_superseded' AND task_id = ?").get(turn.taskId))).toEqual({ count: 1 });
 });

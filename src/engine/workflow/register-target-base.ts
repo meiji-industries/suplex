@@ -45,8 +45,7 @@ export function registerTargetBaseHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (!checkpoint) return ctx.state;
-    const automaticRetry = rawInput.commandId?.startsWith(`${ctx.state.workflowId}:auto-retry:retry_target_base_reconciliation:`) ?? false;
-    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: automaticRetry ? ctx.state.pendingAction : verificationOnly ? "Checking the merge again" : "Checking for updates", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: verificationOnly ? "Checking the merge again" : "Checking for updates", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     await ctx.runTargetBaseCheckpoint(checkpoint, verificationOnly);
     await makeOwnershipMismatchRetryable();

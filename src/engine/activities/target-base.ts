@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
 import { proveForwardMergeLineage, type ForwardMergeLineageProof } from "./forward-merge-lineage.js";
 import { proveRevisionInGit } from "./git-proof.js";
+import { isTaskTurnLive } from "./herdr-liveness.js";
 import { runCommand } from "../../command-runner.js";
 
 type VerificationBlockerCode = Extract<TargetBaseBlockerCode, "verification_failed" | "verification_timed_out" | "verification_evidence_too_large">;
@@ -83,6 +84,18 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
     async reconcileTargetBase(rawInput: ReconcileTargetBaseActivityInput): Promise<ReconcileTargetBaseActivityResult> {
       const input = ReconcileTargetBaseActivityInputSchema.parse(rawInput);
       const checkId = `target_base_${randomBytes(12).toString("hex")}`;
+      const liveTurn = await isTaskTurnLive(database, config, input.taskId);
+      if (liveTurn.live) {
+        return {
+          outcome: "blocked",
+          checkId,
+          checkpoint: input.checkpoint,
+          code: "provider_unavailable",
+          owner: "lead",
+          retryable: true,
+          summary: "A Builder turn is still running. Forge checks again when it finishes.",
+        };
+      }
       const requestedForwardMergeId = input.verificationOnly ? input.forwardMergeId : undefined;
       const recordedExecutionId = requestedForwardMergeId
         ? (database.authQuery((db) => db.prepare(`SELECT developer_execution_id AS developerExecutionId FROM forge_forward_merges

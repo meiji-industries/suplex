@@ -14,7 +14,7 @@ import { startDevelopment } from "./register-development.js";
 import { resolveMergeConflict } from "./register-merge.js";
 import { evidencePointer, humanBlocker } from "./state-transitions.js";
 import * as stateTransitions from "./state-transitions.js";
-import { observeGithubPullRequest } from "./activity-proxies.js";
+import { inspectTaskWorktree, observeGithubPullRequest } from "./activity-proxies.js";
 import { TERMINAL_PHASES } from "../../issue-phases.js";
 import type { IssueWorkflowContext, StateRef } from "./context.js";
 
@@ -315,6 +315,20 @@ export function canAutoRetryDeliveryBlocker(ctx: IssueWorkflowContext): boolean 
 }
 
 export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promise<boolean> {
+  const pendingCommand = retryOnlyBlockerCommand(ctx);
+  if (pendingCommand) {
+    try {
+      const worktree = await inspectTaskWorktree({
+        taskId: ctx.input.issueId,
+        companyId: ctx.input.companyId,
+        workflowId: ctx.input.workflowId,
+      });
+      if (worktree.activeExecution) {
+        await sleep(AUTO_RETRY_BLOCKER_DELAYS[0]);
+        return true;
+      }
+    } catch {}
+  }
   if (!canAutoRetryDeliveryBlocker(ctx)) {
     const command = retryOnlyBlockerCommand(ctx);
     if (command === "retry_target_base_reconciliation" && ctx.state.targetBaseBlockerRetryable === false) return false;

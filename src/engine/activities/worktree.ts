@@ -1,35 +1,18 @@
 import { existsSync, realpathSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { relative, resolve } from "node:path";
 
 import { ArtifactStore } from "../../artifacts.js";
 import { runCommand } from "../../command-runner.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
-import { json } from "../../task-utils.js";
 import type { ForgeConfig } from "../../config.js";
 import type { ForgeDatabase } from "../../database.js";
 import { readEnvironmentSettings } from "../../environment-settings.js";
 import { invalidateBranchSync, WorktreeManager } from "../../worktrees.js";
-import { DeveloperDeliveryReportSchema } from "../../codex-developer.js";
 import { CliHerdrClient, type HerdrClient } from "../../herdr-client.js";
-import { observeHerdrSessions } from "../../herdr-recovery.js";
 import type { ActivityContext } from "./context.js";
 import { proveRevisionInGit } from "./git-proof.js";
-
-const liveHerdrStatuses = new Set([
-  "working",
-  "running",
-  "starting",
-  "blocked",
-  "awaiting_human",
-  "awaiting_input",
-  "awaiting-input",
-]);
-
-function isLiveHerdrStatus(status: string | null | undefined): boolean {
-  return status !== undefined && status !== null && liveHerdrStatuses.has(status);
-}
+import { isTaskTurnLive } from "./herdr-liveness.js";
 
 export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" | "config" | "worktrees" | "createHash"> & Partial<Pick<ActivityContext, "githubRelease">> & { herdr?: HerdrClient }) {
   const { database, config, worktrees, createHash, githubRelease, herdr = new CliHerdrClient() } = ctx;
@@ -71,28 +54,7 @@ export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" |
       : resolve(worktreeRoot, relative(resolve(row.worktreeRoot), resolve(row.worktreePath)));
     return path.startsWith(`${canonical(config.worktreeRoot)}/`) && path.startsWith(`${worktreeRoot}/`);
   };
-  const active = async (input: { taskId: string }) => {
-    const turn = database.authQuery((db) => db.prepare(`SELECT turn.result_relative_path AS resultRelativePath FROM forge_herdr_turns turn
-    WHERE turn.task_id = ? AND turn.ledger = 'developer'
-      AND turn.turn_id = (SELECT latest.turn_id FROM forge_herdr_turns latest WHERE latest.role_session_id = turn.role_session_id ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1)
-      AND turn.status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating') LIMIT 1`).get(input.taskId) as { resultRelativePath: string } | undefined);
-    if (turn) {
-      const resultPath = resolve(config.runtimeRoot, turn.resultRelativePath);
-      if (!resultPath.startsWith(`${resolve(config.runtimeRoot)}/`)) return true;
-      try { if (DeveloperDeliveryReportSchema.safeParse(json(await readFile(resultPath, "utf8"), null)).success) return false; } catch { return true; }
-    }
-    const observations = await observeHerdrSessions(database, herdr, input.taskId);
-    for (const observation of observations) {
-      if (observation.classification === "active" && isLiveHerdrStatus(observation.lifecycleStatus)) return true;
-      if (observation.classification === "unverifiable" && observation.agentName) {
-        try {
-          const agent = await herdr.getAgent(observation.agentName);
-          if (isLiveHerdrStatus(agent?.status)) return true;
-        } catch {}
-      }
-    }
-    return false;
-  };
+  const active = async (input: { taskId: string }) => (await isTaskTurnLive(database, config, input.taskId, herdr)).live;
   const listed = async (row: { repositoryPath: string; worktreePath: string; branchName: string }) => {
     const result = await runCommand({ taskId: null, stepId: null, command: "git", args: ["worktree", "list", "--porcelain"], cwd: row.repositoryPath, timeout: 30_000 });
     if (result.exitCode !== 0) throw new Error("Git could not list task worktrees");

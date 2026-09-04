@@ -105,6 +105,29 @@ async function inheritedNoDriftVerificationFixture(prefix: string) {
 }
 
 describe("target-base reconciliation contracts", () => {
+  test("waits for a live Builder turn before inspecting a dirty worktree", async () => {
+    const fixture = await targetBaseActivityFixture("forge-target-base-live-turn-");
+    try {
+      await writeFile(join(fixture.repositoryPath, "live-dirty.txt"), "live turn owns this edit\n");
+      fixture.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, agent_name, pane_id, status, created_at, updated_at) VALUES ('session-live', 'task-1', 'builder', 1, 1, 'codex', 'builder-live', NULL, 'ready', ?, ?)").run(fixture.now, fixture.now);
+        db.prepare("INSERT INTO forge_herdr_turns (turn_id, task_id, role_session_id, execution_role, ledger, execution_id, prompt_kind, prompt_sha256, result_relative_path, correction_index, status, created_at, updated_at) VALUES ('turn-live', 'task-1', 'session-live', 'builder', 'developer', 'developer-live', 'implementation', ?, 'herdr-results/task-1/developer/result-turn-live.json', 0, 'waiting', ?, ?)").run("c".repeat(64), fixture.now, fixture.now);
+      });
+      const activities = createActivities(fixture.database, fixture.config, { githubRelease: {} as never });
+
+      await expect(activities.reconcileTargetBase({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: fixture.configuration.id, checkpoint: "pre_release", developerExecutionId: "developer-live", expectedBaseSha: fixture.repository.base, expectedHeadSha: fixture.repository.head, expectedHeadTree: fixture.priorTree })).resolves.toMatchObject({
+        outcome: "blocked",
+        code: "provider_unavailable",
+        owner: "lead",
+        retryable: true,
+        summary: "A Builder turn is still running. Forge checks again when it finishes.",
+      });
+      expect(fixture.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_forward_merges WHERE task_id = 'task-1'").get())).toEqual({ count: 0 });
+    } finally {
+      await closeTargetBaseActivityFixture(fixture);
+    }
+  });
+
   test("accepts every checkpoint and discriminated outcome", () => {
     const input = ReconcileTargetBaseActivityInputSchema.parse({
       taskId: "task-1",

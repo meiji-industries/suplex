@@ -57,7 +57,7 @@ test("simple capacity admission preserves the current pending action", async () 
   expect(projected).toEqual([state]);
 });
 
-function automaticRetryExecution(waits: number[]): RunExecutionContext {
+function automaticRetryExecution(waits: number[], activeExecution = false): RunExecutionContext {
   return {
     workflowId: "workflow-target-base-retry",
     runId: "run-target-base-retry",
@@ -67,7 +67,10 @@ function automaticRetryExecution(waits: number[]): RunExecutionContext {
     interrupts: new Map(),
     acceptedInterrupt: undefined,
     interruptResult: undefined,
-    async activity() { throw new Error("Unexpected activity"); },
+    async activity(name) {
+      if (name !== "inspectTaskWorktree") throw new Error("Unexpected activity");
+      return { present: true, owned: true, dirtyFileCount: 0, branch: "forge/issue/retry", activeExecution, revision: null };
+    },
     async wait(milliseconds) { waits.push(milliseconds); },
     now: () => 0,
     wake() {},
@@ -162,6 +165,21 @@ test("target-base drift without a check scopes the first retry to the result com
   expect(retries).toEqual([
     `workflow-target-base-retry:auto-retry:retry_target_base_reconciliation:${resultCommit}:1`,
   ]);
+});
+
+test("a live Developer turn defers target-base retry without consuming an attempt", async () => {
+  const waits: number[] = [];
+  const retries: string[] = [];
+  const context = targetBaseRetryContext(targetBaseDriftState(), retries, []);
+
+  await runExecution.run(automaticRetryExecution(waits, true), async () => {
+    await expect(autoRetryDeliveryBlocker(context)).resolves.toBe(true);
+    expect(canAutoRetryDeliveryBlocker(context)).toBe(true);
+  });
+
+  expect(waits).toEqual([30_000]);
+  expect(retries).toEqual([]);
+  expect(context.state.processedCommandIds).toEqual([]);
 });
 
 test("target-base reconciliation precedes delivery review and retains capped backoff", async () => {

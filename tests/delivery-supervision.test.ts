@@ -1,4 +1,9 @@
 import { describe, expect, test } from "vitest";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 
 import {
   cancelDeliveryIntent,
@@ -24,6 +29,7 @@ const intent = (generation = 1) => ({
   baseline: "a".repeat(40),
   objective: "Preserve the Builder worktree.",
 });
+const exec = promisify(execFile);
 
 async function fixture() {
   const value = await createEngineHarness();
@@ -120,5 +126,32 @@ describe("durable delivery supervision", () => {
     const recovered = recoverInterruptedOperation(state, value.database);
     expect(recovered).toMatchObject({ step: "development", owner: "lead", blocker: null, dirtyState: "dirty", activeOperation: null, developerRecoveryStatus: "interrupted" });
     await value.stop();
+  });
+
+  test("a real dirty worktree survives a stopped Builder handoff to the same objective", async () => {
+    const value = await fixture();
+    const worktree = await mkdtemp(join(tmpdir(), "forge-delivery-owner-"));
+    try {
+      await exec("git", ["init", "-b", "main"], { cwd: worktree });
+      await exec("git", ["config", "user.email", "forge@test"], { cwd: worktree });
+      await exec("git", ["config", "user.name", "Forge"], { cwd: worktree });
+      await writeFile(join(worktree, "tracked.txt"), "base\n");
+      await exec("git", ["add", "tracked.txt"], { cwd: worktree });
+      await exec("git", ["commit", "-m", "base"], { cwd: worktree });
+      await writeFile(join(worktree, "dirty.txt"), "partial Builder work\n");
+      const first = claimOrRecoverDeliveryOwner(value.database, intent(0), { token: "builder-one", now: new Date("2026-09-04T00:00:00.000Z"), leaseMs: 1, liveness: "stopped" });
+      if (first.outcome === "owned_elsewhere" || first.outcome === "cancelled") throw new Error("first Builder was not owned");
+      expect(recordDeliveryObservation(value.database, intent(0), first.token, { outcome: "blocked", objective: "Keep the dirty worktree." })).toBe(true);
+      const resumedPrompt = { worktreePath: worktree, objective: "Keep the dirty worktree.", priorReceipt: "blocked" };
+      const second = claimOrRecoverDeliveryOwner(value.database, intent(0), { token: "builder-two", now: new Date("2026-09-04T00:01:00.000Z"), liveness: "stopped" });
+      expect(second).toMatchObject({ outcome: "recovered", token: "builder-two" });
+      expect(resumedPrompt).toEqual(expect.objectContaining({ worktreePath: worktree, objective: "Keep the dirty worktree." }));
+      expect(await readFile(join(resumedPrompt.worktreePath, "dirty.txt"), "utf8")).toBe("partial Builder work\n");
+      await value.restart();
+      expect(value.database.authQuery((db) => db.prepare("SELECT completed_at AS completedAt FROM forge_provider_operations WHERE operation_key = ?").get("delivery-owner:delivery-supervision:workflow-delivery-supervision:0"))).toEqual({ completedAt: null });
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+      await value.stop();
+    }
   });
 });

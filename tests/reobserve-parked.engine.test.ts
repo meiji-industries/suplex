@@ -45,9 +45,9 @@ test("a parked reviewed delivery re-observes owners and publishes once", async (
   } finally { await h.stop(); }
 });
 
-test("a failed git proof remains parked and refreshes its observation time", async () => {
+test("a missing git proof records one parked reason across two wakes", async () => {
   const activities: Partial<IssueActivities> = {
-    inspectTaskWorktree: async () => ({ present: true, owned: true, dirtyFileCount: 0, branch: "forge/issue/reobserve", activeExecution: false, revision: { proven: false, head: null, headTree: null, branch: null, clean: false } }),
+    inspectTaskWorktree: async () => ({ present: true, owned: true, dirtyFileCount: 0, branch: "forge/issue/reobserve", activeExecution: false, revision: null }),
     observeGithubPullRequest: async () => github,
   };
   const h = await createEngineHarness(activities);
@@ -55,9 +55,14 @@ test("a failed git proof remains parked and refreshes its observation time", asy
   try {
     const before = parkedState(h.workflowId("reobserve-git"), "reobserve-git");
     const started = await h.startContinuation("reobserve-git", before, { deliveryTarget: "remote_branch" });
-    const state = await h.settle(started.workflowId, (next) => next.stateChangedAt !== before.stateChangedAt);
+    const state = await h.settle(started.workflowId, (next) => next.pendingAction?.includes("git does not have the reviewed commit at HEAD.") ?? false);
     expect(state.owner).toBe("human");
     expect(state.blocker?.category).toBe("agent_exhausted");
+    expect(state.pendingAction).toBe("The previous automatic action stopped. git does not have the reviewed commit at HEAD.");
+    await h.restart();
+    const afterSecondWake = await h.settle(started.workflowId, () => (h.calls.get("inspectTaskWorktree") ?? 0) === 2);
+    expect(afterSecondWake.pendingAction).toBe(state.pendingAction);
+    expect(h.calls.get("inspectTaskWorktree")).toBe(2);
   } finally { await h.stop(); }
 });
 

@@ -24,16 +24,23 @@ export async function reobserveParkedTask(ctx: IssueWorkflowContext, input: Issu
   const parked = ctx.state.owner === "human" && ["delivery_ready", "delivery_reviewed", "releasing", "ci_waiting", "development"].includes(ctx.state.step);
   if (!eligible || !parked || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.branchName) return false;
   const observedAt = new Date().toISOString();
+  let ownerConfirmation = "git does not have the reviewed commit at HEAD.";
   try {
     const git = await inspectTaskWorktree({ taskId: input.issueId, companyId: input.companyId, workflowId: input.workflowId, expectedCommit: ctx.state.resultCommit, expectedTree: ctx.state.resultTree, expectedBranch: ctx.state.branchName });
     const github = ctx.state.releaseRepository
       ? await observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
       : null;
-    if (!git.revision?.proven || git.activeExecution) throw new Error("The task owner has not cleared the parked state");
-    if ((ctx.state.pullRequestNumber != null && !github?.exists) || (github?.exists && (!github.headSha || github.headSha.toLowerCase() !== ctx.state.resultCommit.toLowerCase()))) throw new Error("The pull request head changed while the task was parked");
+    if (!git.revision?.proven) throw new Error(ownerConfirmation);
+    ownerConfirmation = "Herdr did not confirm that the Builder turn finished.";
+    if (git.activeExecution) throw new Error(ownerConfirmation);
+    ownerConfirmation = "GitHub does not have the reviewed pull request head.";
+    if ((ctx.state.pullRequestNumber != null && !github?.exists) || (github?.exists && (!github.headSha || github.headSha.toLowerCase() !== ctx.state.resultCommit.toLowerCase()))) throw new Error(ownerConfirmation);
   } catch (error) {
     if (isCancellation(error)) throw error;
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, stateChangedAt: observedAt });
+    const pendingAction = `${ctx.state.blocker?.summary ?? "The earlier automatic action stopped."} ${ownerConfirmation}`;
+    if (ctx.state.pendingAction?.includes(ownerConfirmation)) return false;
+    const revision = ctx.state.revision + 1;
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision, pendingAction, stateChangedAt: observedAt, lastEventId: `${ctx.state.workflowId}:${revision}` });
     await ctx.project();
     return false;
   }

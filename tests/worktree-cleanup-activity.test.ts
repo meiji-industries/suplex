@@ -70,6 +70,16 @@ test("cleans a worktree recorded only by a developer execution", async () => {
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("inspects a worktree found by its git branch without a worktree row", async () => {
+  const value = await fixture();
+  try {
+    const expectedTree = await git(["rev-parse", "HEAD^{tree}"], value.worktreePath);
+    value.database.authTransaction((db) => db.prepare("UPDATE forge_developer_executions SET worktree_path = ? WHERE id = 'developer_1'").run(join(value.root, "stale-worktree-path")));
+    const result = await activities(value).inspectTaskWorktree({ taskId: "task_1", companyId: "company_1", workflowId: "workflow_1", expectedCommit: await git(["rev-parse", "HEAD"], value.worktreePath), expectedTree, expectedBranch: "work/task_1" });
+    expect(result).toMatchObject({ present: true, owned: true, branch: "work/task_1", activeExecution: false, revision: { proven: true, headTree: expectedTree, branch: "work/task_1", clean: true } });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("cleans a worktree when a stale dispatching turn belongs to a failed execution", async () => {
   const value = await fixture();
   try {

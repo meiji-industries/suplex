@@ -105,7 +105,7 @@ export const STEP_TABLE: Record<IssueStep, StepRule> = {
   },
   releasing: {
     waitsOn: { owner: "github", what: "pull_request" },
-    on: { done: { step: "done", owner: "human" }, live: poll(60_000), absent: { command: "publish_draft" }, failed: { step: "merge_conflict_reviewing", owner: "lead" } },
+    on: { done: { step: "done", owner: "human" }, live: poll(60_000), absent: { command: "publish_draft" }, failed: { step: "ci_repair_planning", owner: "lead" } },
   },
   merge_conflict_reviewing: {
     waitsOn: { owner: "herdr", role: "integrator", promptKind: "merge-conflict-plan" },

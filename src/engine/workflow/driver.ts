@@ -108,6 +108,7 @@ function releaseTargetComplete(ctx: IssueWorkflowContext, observation: GithubRea
 function githubAnswer(ctx: IssueWorkflowContext, waitsOn: Extract<OwnerRead, { owner: "github" }>, observation: GithubRead | GithubPullRequestObservationResult | null): OwnerAnswer {
   if (!observation) return parsed({ type: "owner.absent" });
   if (!observation.exists) return parsed({ type: "owner.absent" });
+  if (waitsOn.what === "pull_request" && observation.checks.failing > 0) return parsed({ type: "owner.failed", reason: "Required checks failed" });
   if (waitsOn.what === "pull_request" && ctx.state.step !== "manual_merge" && releaseTargetComplete(ctx, observation)) return parsed({ type: "owner.done" });
   if (observation.state === "merged") return parsed({ type: "owner.done" });
   if (observation.state === "closed") return parsed({ type: "owner.failed", reason: "Pull request closed without merge" });
@@ -218,6 +219,7 @@ const DIRECT_STEP_DETAILS: Partial<Record<IssueWorkflowState["step"], Pick<Issue
   development: { allowedCommands: ["request_delivery_changes", "cancel_issue"], pendingAction: "Your delivery decision is necessary" },
   merge_conflict_reviewing: { allowedCommands: ["cancel_issue"], pendingAction: "Forge prepares a conflict plan" },
   ci_waiting: { allowedCommands: ["cancel_issue"], pendingAction: "Forge waits for CI" },
+  ci_repair_planning: { allowedCommands: ["cancel_issue"], pendingAction: "Forge plans the CI repair" },
 };
 
 function directStepDetails(step: IssueWorkflowState["step"]): Pick<IssueWorkflowState, "allowedCommands" | "pendingAction"> {

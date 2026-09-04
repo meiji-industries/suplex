@@ -13,6 +13,7 @@ import { issueWorkflow } from "./workflows.js";
 import { withWorktreeCommands } from "./workflow/state-transitions.js";
 import { runExecution, type Handler, type InterruptHandler, type RunExecutionContext } from "./registry.js";
 import { StructuredLogger } from "../logging.js";
+import { clearAutomaticChainHalt } from "./workflow/runtime.js";
 import { at } from "../issue-phases.js";
 import { evidencePointer, humanBlocker } from "./workflow/state-transitions.js";
 
@@ -53,6 +54,9 @@ export class Wakeable {
     }
     if (isAbortSignalAborted(signal)) throw new CancelledFailure();
   }
+}
+function isAutomaticCommand(workflowId: string, commandId: string): boolean {
+  return commandId.startsWith(`${workflowId}:auto-`);
 }
 type DeferredProjection = { event: IssueProjectionEvent; options: Parameters<ActivityCaller["call"]>[2] };
 type InterruptOutcome = { accepted: boolean; result: unknown; deferredProjections?: DeferredProjection[] };
@@ -444,6 +448,7 @@ export class IssueRun {
       const interruptOutcome = acceptedInterrupt ? await acceptedInterrupt : undefined;
       await this.ready();
       if (this.loopError) throw this.loopError;
+      const automatic = isAutomaticCommand(this.workflowId, commandId);
       if (commandId !== "legacy-command") {
         if (this.loopError) throw this.loopError;
         const stored = this.database.authQuery((db) => db.prepare("SELECT workflow_id, command, result_json FROM forge_engine_commands WHERE command_id = ?").get(commandId) as { workflow_id: string; command: string; result_json: string } | undefined);
@@ -495,6 +500,7 @@ export class IssueRun {
         return result;
       } finally {
         if (this.activeCommand.controller === controller) this.activeCommand = undefined;
+        if (!automatic && commandId !== "legacy-command") clearAutomaticChainHalt(this.workflowId);
         finishCommand();
       }
     });

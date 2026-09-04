@@ -6,7 +6,6 @@ import type { DevelopmentActivities } from "./development.js";
 import type { FinalReviewActivities } from "./final-review.js";
 import type { GovernanceActivities } from "./governance.js";
 import type { GithubSyncActivities } from "./github-sync.js";
-import type { HerdrTurnReadActivities } from "./herdr-turn-read.js";
 import type { MergeConflictActivities } from "./merge-conflict.js";
 import type { PlanningActivities } from "./planning.js";
 import type { ProjectionActivities } from "./projection.js";
@@ -14,7 +13,7 @@ import type { ReleaseActivities } from "./release.js";
 import type { TargetBaseActivities } from "./target-base.js";
 import type { WorktreeActivities } from "./worktree.js";
 
-export interface IssueActivities extends ProjectionActivities, PlanningActivities, GovernanceActivities, GithubSyncActivities, HerdrTurnReadActivities, CapacityActivities, DevelopmentActivities, DeliveryReviewActivities, ReleaseActivities, TargetBaseActivities, CiActivities, FinalReviewActivities, AcceptanceActivities, MergeConflictActivities, WorktreeActivities {}
+export interface IssueActivities extends ProjectionActivities, PlanningActivities, GovernanceActivities, GithubSyncActivities, CapacityActivities, DevelopmentActivities, DeliveryReviewActivities, ReleaseActivities, TargetBaseActivities, CiActivities, FinalReviewActivities, AcceptanceActivities, MergeConflictActivities, WorktreeActivities {}
 
 export * from "./acceptance.js";
 export * from "./ci.js";
@@ -23,7 +22,6 @@ export * from "./development.js";
 export * from "./final-review.js";
 export * from "./governance.js";
 export * from "./github-sync.js";
-export * from "./herdr-turn-read.js";
 export * from "./merge-conflict.js";
 export * from "./planning.js";
 export * from "./projection.js";

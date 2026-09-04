@@ -52,21 +52,21 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
         return ctx.state;
       }
       if (result.code === "stale-reviewed-revision") {
-        const reviewedCommitChanged = result.headSha.toLowerCase() !== ctx.state.resultCommit?.toLowerCase();
+        const reviewedCommitChanged = result.headSha.toLowerCase() !== ctx.state.resultCommit.toLowerCase();
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: reviewedCommitChanged ? "The Planner reviews the latest changes" : releaseFailureSummary, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, releaseFailureSummary, releaseRetryAt: null, releaseOperationAttempt: result.attempt, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
         await ctx.project();
         return ctx.state;
       }
       const waitingForRateLimit = result.code === "provider-rate-limited" && result.retryAt !== null;
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("releasing"), owner: waitingForRateLimit ? "lead" : "human", allowedCommands: waitingForRateLimit ? ["cancel_issue"] : ["publish_draft", "cancel_issue"], pendingAction: waitingForRateLimit ? "Forge waits for GitHub" : releaseFailureSummary ?? "Retry GitHub", releaseFailureSummary: releaseFailureSummary ?? "Retry GitHub", releaseRetryAt: result.retryAt ?? null, releaseOperationAttempt: result.attempt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("releasing"), owner: waitingForRateLimit ? "lead" : "human", allowedCommands: waitingForRateLimit ? ["cancel_issue"] : ["publish_draft", "cancel_issue"], pendingAction: waitingForRateLimit ? "Forge waits for GitHub" : releaseFailureSummary, releaseFailureSummary, releaseRetryAt: result.retryAt, releaseOperationAttempt: result.attempt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.state;
     }
-    if (result.outcome !== "completed" || !result.releaseId || result.pullRequestNumber === null || result.pullRequestUrl === null) throw new Error("Release completion result is incomplete");
+    if (result.pullRequestUrl === null) throw new Error("Release completion result is incomplete");
     if (ctx.input.deliveryTarget === "pull_request_draft" || ctx.input.deliveryTarget === "pull_request_ready") {
       const ready = ctx.input.deliveryTarget === "pull_request_ready";
       const observed = await activityProxies.observeGithubPullRequest({ repository: result.repository, branch: result.branchName, pullRequestNumber: result.pullRequestNumber });
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...(observed ? githubPullRequestLifecycleFields(observed, new Date().toISOString()) : {}), revision: ctx.state.revision + 1, ...at("done"), owner: "human", allowedCommands: [], pendingAction: ready ? `Done. Pull request #${result.pullRequestNumber} is ready for review.` : `Done. Draft pull request #${result.pullRequestNumber} opened.`, releaseFailureSummary: null, releaseRetryAt: null, releaseOperationAttempt: result.attempt, releaseId: result.releaseId, releaseRepository: result.repository, baseBranch: result.baseBranch, pullRequestNumber: result.pullRequestNumber, pullRequestUrl: result.pullRequestUrl, expectedHeadSha: result.headSha, expectedHeadTree: result.headTree, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...githubPullRequestLifecycleFields(observed, new Date().toISOString()), revision: ctx.state.revision + 1, ...at("done"), owner: "human", allowedCommands: [], pendingAction: ready ? `Done. Pull request #${result.pullRequestNumber} is ready for review.` : `Done. Draft pull request #${result.pullRequestNumber} opened.`, releaseFailureSummary: null, releaseRetryAt: null, releaseOperationAttempt: result.attempt, releaseId: result.releaseId, releaseRepository: result.repository, baseBranch: result.baseBranch, pullRequestNumber: result.pullRequestNumber, pullRequestUrl: result.pullRequestUrl, expectedHeadSha: result.headSha, expectedHeadTree: result.headTree, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.state;
     }

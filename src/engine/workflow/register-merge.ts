@@ -41,7 +41,7 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     const nextStep = result.outcome === "merged" ? "done" : "manual_merge";
-    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at(nextStep), owner: "human", allowedCommands: nextStep === "manual_merge" ? ["reconcile_merge", "cancel_issue"] : [], pendingAction: nextStep === "manual_merge" ? "Your merge is necessary" : nextStep === "done" ? "Merged" : "Pull request changed or closed without merge", mergeAttempt: attempt, mergeOutcome: result.outcome, mergeObservationId: result.mergeObservationId, completionReceiptId: result.completionReceiptId, mergeRetryAt: result.retryAt, mergeBlockerCode: result.blockerCode ?? null, mergeBlockerEvidenceArtifactId: result.evidenceArtifactId ?? null, pullRequestNumber: result.pullRequestNumber || ctx.state.pullRequestNumber, pullRequestUrl: result.pullRequestUrl || ctx.state.pullRequestUrl, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at(nextStep), owner: "human", allowedCommands: nextStep === "manual_merge" ? ["reconcile_merge", "cancel_issue"] : [], pendingAction: nextStep === "manual_merge" ? "Your merge is necessary" : "Merged", mergeAttempt: attempt, mergeOutcome: result.outcome, mergeObservationId: result.mergeObservationId, completionReceiptId: result.completionReceiptId, mergeRetryAt: result.retryAt, mergeBlockerCode: result.blockerCode ?? null, mergeBlockerEvidenceArtifactId: result.evidenceArtifactId ?? null, pullRequestNumber: result.pullRequestNumber || ctx.state.pullRequestNumber, pullRequestUrl: result.pullRequestUrl || ctx.state.pullRequestUrl, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     return ctx.state;
   };
@@ -175,7 +175,7 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
       const result = outcome.result;
       await ctx.withStateMutation(() => {
         if (ctx.state.activeOperation?.commandId !== command.commandId) return;
-        if ("outcome" in result && result.outcome === "verification_blocked") {
+        if ("outcome" in result) {
           ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, ...at("development"), owner: "lead", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], pendingAction: result.summary, targetBaseOutcome: "blocked", targetBaseBlockerCode: result.code, targetBaseBlockerOwner: "lead", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: result.summary, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: "clean", developerEvidenceArtifactId: result.verificationArtifact.id, developerOutcome: "blocked", ...ctx.recoveryFields(null, null, null, null), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
           return;
         }

@@ -14,6 +14,7 @@ import {
   type LeadPlanningResult,
   type PlanCommandInput,
   type SendPlannerNoteInput,
+  type SupplementalReviewResult,
 } from "../issue-contracts.js";
 import { issueUpdates } from "../issue-updates.js";
 import {
@@ -56,7 +57,7 @@ async function runPlanReview(ctx: IssueWorkflowContext, plan: LeadPlanningResult
   if (!ctx.input.roleProfiles.reviewer) return reviewFailure("Second review was requested, but no Reviewer profile is assigned.");
   if (!ctx.state.leadOutputArtifactId || !ctx.state.leadEvidenceArtifactId) return reviewFailure("Second review could not start because the Planner output or evidence is unavailable.");
   try {
-    const review = await ctx.acquireExternalTurn<import("../issue-contracts.js").SupplementalReviewResult>(
+    const review = await ctx.acquireExternalTurn<SupplementalReviewResult>(
       { operation: "supplemental_review", role: "reviewer", profileId: ctx.input.roleProfiles.reviewer },
       (capacityRequestId) => agentActivities(true).runSupplementalReview({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.planRevision ?? ctx.state.revision, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, leadEvidenceArtifactId: ctx.state.leadEvidenceArtifactId!, ...(ctx.state.leadSessionRef ? { primaryLeadSessionRef: ctx.state.leadSessionRef } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) }),
       (result) => result.executionId,
@@ -216,7 +217,7 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
     const command = validatePlanCommand(rawInput);
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...at("supplemental_review"), owner: "lead", allowedCommands: [], revision: ctx.state.revision + 1, pendingAction: "The second review is in progress", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
-    const review = await ctx.acquireExternalTurn<import("../issue-contracts.js").SupplementalReviewResult>(
+    const review = await ctx.acquireExternalTurn<SupplementalReviewResult>(
       { operation: "supplemental_review", role: "reviewer", profileId: ctx.input.roleProfiles.reviewer },
       (capacityRequestId) => agentActivities(true).runSupplementalReview({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.planRevision ?? ctx.state.revision, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, leadEvidenceArtifactId: ctx.state.leadEvidenceArtifactId!, ...(ctx.state.leadSessionRef ? { primaryLeadSessionRef: ctx.state.leadSessionRef } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) }),
       (result) => result.executionId,

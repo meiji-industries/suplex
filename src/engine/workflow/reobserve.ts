@@ -25,7 +25,7 @@ function parkedCommand(ctx: IssueWorkflowContext): { command: IssueCommand | nul
 
 export async function reobserveParkedTask(ctx: IssueWorkflowContext, input: IssueWorkflowInput): Promise<boolean> {
   const { command, eligible } = parkedCommand(ctx);
-  const parked = (ctx.state.owner === "human" || (ctx.state.owner === "lead" && !ctx.state.allowedCommands.includes("review_delivery"))) && ["delivery_ready", "delivery_reviewed", "releasing", "ci_waiting", "development"].includes(ctx.state.step);
+  const parked = (ctx.state.owner === "human" || !ctx.state.allowedCommands.includes("review_delivery")) && ["delivery_ready", "delivery_reviewed", "releasing", "ci_waiting", "development"].includes(ctx.state.step);
   if (!eligible || !parked || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.branchName) return false;
   const observedAt = new Date().toISOString();
   let ownerConfirmation = "git does not have the reviewed commit at HEAD.";

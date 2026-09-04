@@ -357,6 +357,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   // Continue-As-New carries the last business revision into a fresh run; re-emitting it would read as conflicting authoritative history.
   try {
     await workflowContext.initialProjection;
+    const automaticActionsAllowed = (): boolean => !automaticActionsHalted;
+    const githubSyncPending = (): boolean => githubSyncRequested;
+    const currentStep = (): IssueWorkflowState["step"] => workflowContext.state.step;
     function shouldWake(): boolean {
       return githubSyncRequested // GitHub changed.
         || (!workflowContext.state.allowedCommands.includes("delete_worktree") && (workflowContext.state.step === "done" || (workflowContext.state.step === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) // A terminal state needs completion.
@@ -364,11 +367,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         || (!automaticActionsHalted && (autoChainedCommand(workflowContext, "") !== null // A phase can advance automatically.
           || canAutoRetryDeliveryBlocker(workflowContext))); // A delivery blocker can retry.
     }
-    while (true) {
+    for (;;) {
       if ((workflowContext.state.step === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.step === "cancelled" && !(workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree")))) { return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
       if (continuation && await resumeLeadTurn(workflowContext)) continue;
-      if (!automaticActionsHalted && await reobserveParkedTask(workflowContext, validatedInput)) continue;
-      if (githubSyncRequested) {
+      if (automaticActionsAllowed() && await reobserveParkedTask(workflowContext, validatedInput)) continue;
+      if (githubSyncPending()) {
         githubSyncRequested = false;
         await syncGithubPullRequest();
         continue;
@@ -381,7 +384,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       if (workflowContext.state.step === "releasing" && workflowContext.state.releaseRetryAt) {
         const delay = Math.max(0, Date.parse(workflowContext.state.releaseRetryAt) - Date.now());
         if (delay > 0) await sleep(delay);
-        if (workflowContext.state.step === "releasing") await workflowContext.runPublishTurn();
+        if (currentStep() === "releasing") await workflowContext.runPublishTurn();
         continue;
       }
       if (workflowContext.state.step === "ci_waiting") {
@@ -391,7 +394,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         const pollAt = workflowContext.state.ciNextPollAt ? isoEpochMillis(workflowContext.state.ciNextPollAt) : runExecution.current().now();
         const delay = Math.max(0, pollAt - runExecution.current().now());
         if (delay > 0) await sleep(delay);
-        if (workflowContext.state.step !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
+        if (currentStep() !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
         const observation = await syncGithubPullRequest();
         if (observation === null && githubObservationFailure) {
           const failure = workflowContext.permanentActivityFailure(githubObservationFailure);
@@ -407,26 +410,26 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
           continue;
         }
         // CI reconciliation needs a release; without one the PR sync above is the only observer. Never throw from the loop.
-        if (workflowContext.state.step === "ci_waiting" && workflowContext.state.releaseId) await workflowContext.reconcileCiTurn(observation);
-        else if (workflowContext.state.step === "ci_waiting" && workflowContext.state.resultCommit && workflowContext.state.branchName && !workflowContext.state.deliveryReviewId) {
+        if (currentStep() === "ci_waiting" && workflowContext.state.releaseId) await workflowContext.reconcileCiTurn(observation);
+        else if (currentStep() === "ci_waiting" && workflowContext.state.resultCommit && workflowContext.state.branchName && !workflowContext.state.deliveryReviewId) {
           // ci_waiting without a release is a dead end: an unreleased exact delivery goes back through review and publish.
           workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision: workflowContext.state.revision + 1, ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the latest changes", ciNextPollAt: null, lastEventId: `${workflowContext.state.workflowId}:${workflowContext.state.revision + 1}` });
           await workflowContext.project();
         }
-        else if (workflowContext.state.step === "ci_waiting") await sleep("60 seconds");
+        else if (currentStep() === "ci_waiting") await sleep("60 seconds");
         continue;
       }
       if (workflowContext.state.step === "manual_merge") {
         await condition(() => githubSyncRequested, "60 seconds"); githubSyncRequested = false; // a sync signal (webhook, operator) wakes the poll
-        if (workflowContext.state.step === "manual_merge") await syncGithubPullRequest();
+        if (currentStep() === "manual_merge") await syncGithubPullRequest();
         continue;
       }
       if (workflowContext.state.step === "ready_reconciliation") {
         await sleepUntil(workflowContext.state.acceptanceRetryAt);
-        if (workflowContext.state.step === "ready_reconciliation") await workflowContext.reconcileAcceptanceTurn();
+        if (currentStep() === "ready_reconciliation") await workflowContext.reconcileAcceptanceTurn();
         continue;
       }
-      if (!automaticActionsHalted) {
+      if (automaticActionsAllowed()) {
         if (await autoRetryDeliveryBlocker(workflowContext)) continue;
         const chained = autoChainedCommand(workflowContext, "");
         if (chained) {

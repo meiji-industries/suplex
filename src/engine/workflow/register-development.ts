@@ -86,6 +86,8 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
     }
     let autoRetry = false;
     let autoContinue = false;
+    const automaticRestartRequested = (): boolean => autoRetry || autoContinue;
+    const automaticRestartCommand = (): string => autoContinue ? "continue-development" : "auto-retry-development";
     const applied = await ctx.withStateMutation(() => {
       if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.step !== "development") return false;
       if (outcome.status === "completed") {
@@ -115,7 +117,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...(result.outcome === "completed" ? {} : stateTransitions.freshDeliveryLineage()), revision: ctx.state.revision + 1, ...at(result.outcome === "completed" ? "delivery_ready" : "development"), owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ctx.addRevisionCommand(["review_delivery", "cancel_issue"]) : ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: result.outcome === "completed" ? "The Planner reviews the delivery" : "The Builder can retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, developerContinuation: result.outcome === "completed" ? null : ctx.state.developerContinuation, ...ctx.recoveryFields(typedBlockedState ? "failed" : "active", typedBlockedState ? result.failureCode ?? null : null, typedBlockedState ? result.deliverySummary : "Developer result claimed.", null), activeOperation: null, blocker: result.outcome === "blocked" ? stateTransitions.humanBlocker(result.failureCode === "delivery-reconciliation-failed" ? "unsafe_recovery" : "agent_exhausted", result.deliverySummary, [{ command: "retry_development", label: "Retry the build", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.attentionEvidenceArtifactId, "attention-evidence")) : null, stateChangedAt: new Date().toISOString() });
       } else {
         autoRetry = outcome.status === "interrupted" && developerAttempt === 1;
-        const resumeTurn = outcome.status === "failed" && ["turn_outcome_missing", "turn_stalled"].includes(outcome.reasonCode ?? "");
+        const resumeTurn = outcome.status === "failed" && ["turn_outcome_missing", "turn_stalled"].includes(outcome.reasonCode);
         const startupBlocked = outcome.status === "failed" && outcome.reasonCode === "agent_startup_blocked";
         const allowedCommands = autoRetry ? ctx.addRevisionCommand(["start_development", "cancel_issue"]) : ctx.addRevisionCommand(["retry_development", "cancel_issue"]);
         const attentionEvidence = outcome.status === "failed" ? outcome.evidenceArtifactId ?? undefined : undefined;
@@ -128,7 +130,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
     // command's own result is still being handed back to the caller.
     const settled = ctx.state;
     if (applied) await ctx.project();
-    if (applied && (autoRetry || autoContinue)) return startDevelopment(ctx, { ...command, expectedRevision: ctx.state.revision, commandId: `${ctx.state.workflowId}:${autoContinue ? "continue-development" : "auto-retry-development"}:${ctx.state.revision}` });
+    if (applied && automaticRestartRequested()) return startDevelopment(ctx, { ...command, expectedRevision: ctx.state.revision, commandId: `${ctx.state.workflowId}:${automaticRestartCommand()}:${ctx.state.revision}` });
     void command;
     return settled;
 }
@@ -215,7 +217,7 @@ export async function retryDevelopment(ctx: IssueWorkflowContext, command: Retur
       const typedBlockedState = result.outcome === "blocked";
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...(result.outcome === "completed" ? {} : stateTransitions.freshDeliveryLineage()), revision: ctx.state.revision + 1, ...at(result.outcome === "completed" ? "delivery_ready" : "development"), owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ctx.addRevisionCommand(["review_delivery", "cancel_issue"]) : ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: result.outcome === "completed" ? "The Planner reviews the delivery" : "The Builder can retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, activeOperation: null, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, developerContinuation: result.outcome === "completed" ? null : ctx.state.developerContinuation, ...ctx.recoveryFields(typedBlockedState ? "failed" : "active", typedBlockedState ? result.failureCode ?? null : null, typedBlockedState ? result.deliverySummary : "Developer result claimed.", null), blocker: result.outcome === "blocked" ? stateTransitions.humanBlocker(result.failureCode === "delivery-reconciliation-failed" ? "unsafe_recovery" : "agent_exhausted", result.deliverySummary, [{ command: "retry_development", label: "Retry the build", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.attentionEvidenceArtifactId, "attention-evidence")) : null, stateChangedAt: new Date().toISOString() });
     } else {
-      const resumeTurn = outcome.status === "failed" && ["turn_outcome_missing", "turn_stalled"].includes(outcome.reasonCode ?? "");
+      const resumeTurn = outcome.status === "failed" && ["turn_outcome_missing", "turn_stalled"].includes(outcome.reasonCode);
       const startupBlocked = outcome.status === "failed" && outcome.reasonCode === "agent_startup_blocked";
       const allowedCommands = ctx.addRevisionCommand(["retry_development", "cancel_issue"]);
       const attentionEvidence = outcome.status === "failed" ? outcome.evidenceArtifactId ?? undefined : undefined;

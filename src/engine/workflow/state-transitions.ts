@@ -150,7 +150,7 @@ export function repairBlockedState(state: IssueWorkflowState, result: BlockedRep
       deliveryRepairBlockerEvidenceArtifactId: result.evidenceArtifactId,
     });
   }
-  const progressState = withRepairProgress(state, { signature: repairSignature({ source: "local_check", code: result.code }), commit: state.resultCommit ?? null, diagnosticHash: result.evidenceArtifactId ?? null });
+  const progressState = withRepairProgress(state, { signature: repairSignature({ source: "local_check", code: result.code }), commit: state.resultCommit || null, diagnosticHash: result.evidenceArtifactId });
   const exhausted = noProgressEnabled ? (progressState.repairProgress?.repeats ?? 0) >= 1 : result.cycle > repairCycleLimit;
   if (exhausted) return reviewArbitrationState(IssueWorkflowStateSchema.parse({ ...progressState, repairCycle: result.cycle, deliveryRepairAttemptId: result.repairAttemptId, deliveryRepairBlockerCode: result.code, deliveryRepairBlockerSummary: result.summary, deliveryRepairBlockerEvidenceArtifactId: result.evidenceArtifactId }));
   return IssueWorkflowStateSchema.parse({

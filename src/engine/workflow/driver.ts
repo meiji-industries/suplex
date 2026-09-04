@@ -1,24 +1,16 @@
-import { z } from "zod";
-
 import { assertNever } from "../../assert-never.js";
 import { gitSha, gitTree, type ExecutionId, type TurnId } from "../../ids.js";
-import type { IssueWorkflowState } from "../issue-contracts.js";
+import { issueUpdates } from "../issue-updates.js";
+import { IssueWorkflowStateSchema, type IssueCommand, type IssueWorkflowState } from "../issue-contracts.js";
+import { runExecution } from "../registry.js";
 import { turnResultSchema } from "../../turn-result-schemas.js";
 import type { IssueWorkflowContext } from "./context.js";
-import { inspectTaskWorktree, observeGithubPullRequest } from "./activity-proxies.js";
-import type { OwnerEvent } from "./step-machine.js";
-import type { OwnerRead } from "./step-table.js";
+import { inspectTaskWorktree, observeGithubPullRequest, readHerdrTurn } from "./activity-proxies.js";
+import { nextStep, type OwnerEvent } from "./step-machine.js";
+import { STEP_TABLE, type OwnerRead, type Transition } from "./step-table.js";
+import { herdrResultAnswer, ownerAnswer, type OwnerAnswer } from "./owner-answer.js";
 
-const outcomeSchema = z.enum(["approved", "findings", "disagreement"]);
-
-export const OwnerAnswerSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("owner.done"), outcome: outcomeSchema.optional() }).strict(),
-  z.object({ type: z.literal("owner.live") }).strict(),
-  z.object({ type: z.literal("owner.absent") }).strict(),
-  z.object({ type: z.literal("owner.failed"), reason: z.string().min(1) }).strict(),
-  z.object({ type: z.literal("owner.unavailable"), owner: z.enum(["member", "git", "github", "herdr", "timer"]), reason: z.string().min(1) }).strict(),
-]);
-export type OwnerAnswer = z.infer<typeof OwnerAnswerSchema>;
+export { OwnerAnswerSchema, type OwnerAnswer } from "./owner-answer.js";
 
 type HerdrTurn = {
   turnId: TurnId;
@@ -41,7 +33,7 @@ export type DriverDependencies = {
   now?: () => Date;
 };
 
-function parsed(value: OwnerAnswer): OwnerAnswer { return OwnerAnswerSchema.parse(value); }
+function parsed(value: OwnerAnswer): OwnerAnswer { return ownerAnswer(value); }
 function unavailable(owner: OwnerRead["owner"], error: unknown): OwnerAnswer { return parsed({ type: "owner.unavailable", owner, reason: error instanceof Error ? error.message : `${owner} owner read failed` }); }
 
 function memberAnswer(state: IssueWorkflowState, decision: Extract<OwnerRead, { owner: "member" }>['decision']): OwnerAnswer {
@@ -61,18 +53,24 @@ function matchesSubject(state: IssueWorkflowState, subject: HerdrTurn["subject"]
 }
 
 function resultAnswer(result: unknown): OwnerAnswer {
-  if (!result || typeof result !== "object" || Array.isArray(result)) return parsed({ type: "owner.done" });
-  const value = result as Record<string, unknown>;
-  if (value.outcome === "approved") return parsed({ type: "owner.done", outcome: "approved" });
-  if (value.outcome === "blocking") return parsed({ type: "owner.failed", reason: "Herdr reported blocking findings" });
-  if (value.decision === "repair") return parsed({ type: "owner.failed", reason: "Herdr requested a repair" });
-  if (value.decision === "ask") return parsed({ type: "owner.done", outcome: "disagreement" });
-  if (typeof value.blocker === "string" && value.blocker) return parsed({ type: "owner.failed", reason: value.blocker });
-  return parsed({ type: "owner.done" });
+  return herdrResultAnswer(result);
 }
 
 async function readHerdr(ctx: IssueWorkflowContext, waitsOn: Extract<OwnerRead, { owner: "herdr" }>, dependencies: DriverDependencies): Promise<OwnerAnswer> {
-  if (!dependencies.readLatestHerdrTurn || !dependencies.isTaskTurnLive) return parsed({ type: "owner.unavailable", owner: "herdr", reason: "Herdr owner reads are not wired" });
+  if (!dependencies.readLatestHerdrTurn || !dependencies.isTaskTurnLive) {
+    return readHerdrTurn({
+      taskId: ctx.input.issueId,
+      companyId: ctx.input.companyId,
+      workflowId: ctx.input.workflowId,
+      role: waitsOn.role,
+      promptKind: waitsOn.promptKind,
+      subject: {
+        ...(ctx.state.resultCommit !== undefined ? { commit: ctx.state.resultCommit } : {}),
+        ...(ctx.state.resultTree !== undefined ? { tree: ctx.state.resultTree } : {}),
+        ...(ctx.state.planRevision !== undefined ? { planRevision: ctx.state.planRevision } : {}),
+      },
+    });
+  }
   const turn = await dependencies.readLatestHerdrTurn({ taskId: ctx.input.issueId, role: waitsOn.role, promptKind: waitsOn.promptKind });
   if (turn && turn.role === waitsOn.role && turn.promptKind === waitsOn.promptKind && matchesSubject(ctx.state, turn.subject)) {
     if (turn.result !== null) {
@@ -126,4 +124,40 @@ export async function readOwner(ctx: IssueWorkflowContext, waitsOn: OwnerRead, d
   } catch (error) {
     return unavailable(waitsOn.owner, error);
   }
+}
+
+async function runDriverCommand(ctx: IssueWorkflowContext, command: IssueCommand, step: IssueWorkflowState["step"], event: OwnerEvent): Promise<void> {
+  const revision = ctx.state.revision;
+  const commandId = `${ctx.state.workflowId}:driver:${step}:${revision}:${event.type}`;
+  if (ctx.commandAlreadyProcessed(commandId)) return;
+  const handler = runExecution.current().commands.get(issueUpdates[command]);
+  if (!handler) throw new Error(`Driver ${command} handler is unavailable`);
+  if (command !== "start_development" && command !== "retry_development") {
+    ctx.markCommandProcessed(commandId);
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: revision + 1, allowedCommands: ctx.state.allowedCommands.includes(command) ? ctx.state.allowedCommands : [...ctx.state.allowedCommands, command], lastEventId: `${ctx.state.workflowId}:${revision + 1}` });
+    await ctx.project();
+  }
+  await Reflect.apply(handler, undefined, [{ expectedRevision: ctx.state.revision, actorUserId: "forge-driver", commandId }]);
+}
+
+export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: DriverDependencies = {}): Promise<boolean> {
+  const step = ctx.state.step;
+  const rule = STEP_TABLE[step];
+  if (rule.terminal || rule.waitsOn.owner !== "herdr" || ctx.state.activeOperation !== null) return false;
+  const event = await readOwner(ctx, rule.waitsOn, dependencies);
+  const { actions } = nextStep(step, event);
+  for (const action of actions) {
+    switch (action.type) {
+      case "runCommand": await runDriverCommand(ctx, action.params.command, step, event); break;
+      case "changeStep": await runDriverCommand(ctx, claimCommand(rule.on.absent), step, event); break;
+      case "wait": return false;
+      default: assertNever(action);
+    }
+  }
+  return true;
+}
+
+function claimCommand(transition: Transition): IssueCommand {
+  if ("command" in transition) return transition.command;
+  throw new Error("Herdr step without a claim command");
 }

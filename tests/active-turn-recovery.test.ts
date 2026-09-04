@@ -10,6 +10,8 @@ import { DeveloperDeliveryReportSchema } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { isTaskTurnLive } from "../src/engine/activities/herdr-liveness.js";
+import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/engine/issue-contracts.js";
+import { at, type IssueStep } from "../src/issue-phases.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { await Promise.all(cleanup.splice(0).map((remove) => remove())); });
@@ -86,7 +88,22 @@ async function fixture() {
     await writeFile(path, raw ? String(value) : JSON.stringify(value));
     return path;
   };
-  return { database, config, addTurn, snapshot, writeResult };
+  const writeWorkflowState = (turn: AddedTurn, step: IssueStep, developerExecutionId: string, developerTurnKind: "implementation" | "repair" = "implementation") => {
+    const workflowId = turn.taskId.replace(/^task-/, "workflow-");
+    const state = IssueWorkflowStateSchema.parse({
+      ...buildInitialIssueWorkflowState({ workflowId, companyId: "company", projectId: "project", issueId: turn.taskId, projectRevisionId: "revision", briefArtifactId: "brief", imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }),
+      ...at(step),
+      revision: 1,
+      developerExecutionId,
+      developerTurnKind,
+      lastEventId: `${workflowId}:1`,
+    });
+    database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, 'company', ?, 1, ?, ?)").run(turn.taskId, workflowId, JSON.stringify(state), stamp);
+      db.prepare("UPDATE forge_issue_projections SET phase = ?, step = ? WHERE task_id = ?").run(state.phase, state.step, turn.taskId);
+    });
+  };
+  return { database, config, addTurn, snapshot, writeResult, writeWorkflowState };
 }
 
 test("terminal planner and reviewer runtime produces STE100 attention without prompting", async () => {
@@ -424,7 +441,7 @@ test("result and clean-handoff completion lose their exact CAS after session sup
 test("a late exact-schema Developer result triggers one reconcile-only retry", async () => {
   const value = await fixture();
   const turn = value.addTurn("developer", { role: "builder", ledger: "developer", promptKind: "implementation", status: "completed", executionStatus: "failed" });
-  value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'building' WHERE task_id = ?").run(turn.taskId));
+  value.writeWorkflowState(turn, "development", "execution-developer");
   await value.writeResult(turn, validDeveloperDelivery);
   const calls: unknown[] = [];
   const reconcileDeveloper = async (_config: unknown, workflowId: string, input: unknown) => {
@@ -436,4 +453,28 @@ test("a late exact-schema Developer result triggers one reconcile-only retry", a
   await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, reconcileDeveloper: reconcileDeveloper as never });
   await reconcileActiveTurns(value.database, value.config, { herdr: herdr as never, reconcileDeveloper: reconcileDeveloper as never });
   expect(calls).toEqual([{ workflowId: "workflow-developer", input: { expectedRevision: 1, actorUserId: "system", commandId: `late-result-${turn.turnId}-${stamp}`, reconcileOnly: true } }]);
+});
+
+test("a late integrator result is superseded after the workflow moves on", async () => {
+  const value = await fixture();
+  const turn = value.addTurn("late-integrator", { role: "integrator", ledger: "developer", promptKind: "ci-repair", status: "completed", executionStatus: "failed" });
+  value.writeWorkflowState(turn, "reviewing_delivery", "execution-newer");
+  await value.writeResult(turn, { summary: "Recovered CI repair.", blocker: null });
+  const calls: unknown[] = [];
+  const herdr = { runtimeSnapshot: async () => ({ agents: [], panes: [] }) };
+
+  const first = await reconcileActiveTurns(value.database, value.config, {
+    herdr: herdr as never,
+    reconcileDeveloper: (async (...args: unknown[]) => { calls.push(args); return {} as never; }) as never,
+  });
+  const second = await reconcileActiveTurns(value.database, value.config, {
+    herdr: herdr as never,
+    reconcileDeveloper: (async (...args: unknown[]) => { calls.push(args); return {} as never; }) as never,
+  });
+
+  expect(first).toMatchObject([{ turnId: turn.turnId, action: "no_change", evidence: expect.arrayContaining(["late-result:superseded"]) }]);
+  expect(second).toMatchObject([{ turnId: turn.turnId, action: "no_change" }]);
+  expect(calls).toEqual([]);
+  expect(value.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt, result_sha256 AS resultSha256 FROM forge_herdr_turns WHERE turn_id = ?").get(turn.turnId))).toEqual({ status: "completed", attention_excerpt: "The late Developer result was superseded before Forge could apply it.", resultSha256: createHash("sha256").update(JSON.stringify({ summary: "Recovered CI repair.", blocker: null })).digest("hex") });
+  expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_issue_timeline WHERE event_type = 'late_result_superseded' AND task_id = ?").get(turn.taskId))).toEqual({ count: 1 });
 });

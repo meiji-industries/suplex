@@ -30,7 +30,9 @@ import { fallbackGitPresentation } from "./git-presentation.js";
 import { jsonRequired } from "./task-utils.js";
 import { ensureResultSchema } from "./result-schema-files.js";
 import { runCommand } from "./command-runner.js";
-import { BrowserProofFailure, BrowserProofInputSchema, BrowserProofService, normalizeBrowserProofPath, normalizeBrowserProofPaths, type DurableBrowserProof } from "./browser-proof.js";
+import { BrowserProofFailure, BrowserProofService, normalizeBrowserProofPath, normalizeBrowserProofPaths, type DurableBrowserProof } from "./browser-proof.js";
+export { DeveloperDeliveryReportSchema, DeveloperMergeConflictResolutionReportSchema, DeveloperObjectionSchema, DeveloperRepairReportSchema } from "./turn-result-schemas.js";
+import { DeveloperDeliveryReportSchema, DeveloperMergeConflictResolutionReportSchema, DeveloperRepairReportSchema } from "./turn-result-schemas.js";
 
 type OperationExecution = { signal?: AbortSignal | undefined };
 type OperationAware = OperationExecution;
@@ -129,47 +131,6 @@ const ProjectRevisionSchema = z.object({
   baseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
   targetSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
 });
-const DeveloperDeliveryStepSchema = z.object({
-  number: z.number().int().positive(),
-  status: z.enum(["completed", "incomplete", "not_completed", "blocked", "not_applicable_locally"]),
-  filesChanged: z.array(z.string()),
-  commandsRun: z.array(z.string()).optional(),
-  testResults: z.array(z.string()).optional(),
-  notes: z.string(),
-});
-export const DeveloperObjectionSchema = z.object({ findingId: z.string().min(1), reason: z.string().min(1) }).strict();
-export const DeveloperDeliveryReportSchema = z.object({
-  kind: z.literal("delivery"),
-  summary: z.string().min(1),
-  steps: z.array(DeveloperDeliveryStepSchema).min(1),
-  authorizedStepsNotCompleted: z.array(z.number().int().positive()),
-  resultCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  dirtyState: z.enum(["clean", "dirty"]),
-  blocker: z.string().nullable(),
-  objections: z.array(DeveloperObjectionSchema).default([]),
-  visualEvidence: BrowserProofInputSchema.optional(),
-});
-
-export const DeveloperRepairReportSchema = z.object({
-  summary: z.string().min(1),
-  blocker: z.string().nullable(),
-  objections: z.array(DeveloperObjectionSchema).default([]),
-  visualEvidence: BrowserProofInputSchema.optional(),
-}).strict();
-
-export const DeveloperMergeConflictResolutionReportSchema = z.object({
-  kind: z.literal("merge_conflict_resolution"),
-  summary: z.string().min(1),
-  resolvedFiles: z.array(z.string().min(1)),
-  commandsRun: z.array(z.string()).min(1),
-  testResults: z.array(z.string()).min(1),
-  resultCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  dirtyState: z.enum(["clean", "dirty"]),
-  blocker: z.string().nullable(),
-});
-
 export type DeveloperDeliveryReport = z.infer<typeof DeveloperDeliveryReportSchema>;
 
 interface DeveloperContext {

@@ -2,10 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 
-import type { ZodType } from "zod";
-
-import { DeveloperDeliveryReportSchema, DeveloperMergeConflictResolutionReportSchema, DeveloperRepairReportSchema } from "./codex-developer.js";
-import { DeliveryRepairLeadOutputSchema, LeadOutputSchema, LeadReviewResponseSchema, SupplementalReviewSchema } from "./codex-lead.js";
+import { DeveloperDeliveryReportSchema, DeveloperRepairReportSchema, turnResultSchema } from "./turn-result-schemas.js";
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { detectGitHandoff } from "./git-handoff.js";
@@ -13,7 +10,6 @@ import { type HerdrClient, CliHerdrClient, snapshotHerdrRuntime } from "./herdr-
 import { observeHerdrSessions, type HerdrSessionObservation } from "./herdr-recovery.js";
 import { redact, type StructuredLogger } from "./logging.js";
 import { classifyRecovery, type DurableTaskFacts, type LiveObservations } from "./recovery/convergence.js";
-import { CiRepairPlanSchema, DeliveryReviewSchema, MergeConflictPlanSchema } from "./engine/issue-contracts.js";
 import { reconcileIssueDeveloperDelivery } from "./engine/service.js";
 import { json } from "./task-utils.js";
 import { HerdrSessionStore, type LaunchSettings, type RoleSessionTask } from "./herdr-session-store.js";
@@ -22,6 +18,7 @@ import { proveRevisionInGit } from "./engine/activities/git-proof.js";
 import { runCommand } from "./command-runner.js";
 import { getIssueEngine } from "./engine/index.js";
 import { adoptCiRepairResultUpdate, type AdoptedCiRepair } from "./engine/workflow/register-ci.js";
+import { IssueWorkflowStateSchema, type IssueWorkflowState } from "./engine/issue-contracts.js";
 
 export interface ActiveTurnOutcome {
   taskId: string;
@@ -64,24 +61,6 @@ type Turn = {
 
 type ResultObservation = { path: string; bytes: Buffer | null; valid: boolean; promptable: boolean; evidence: string };
 
-const agentResultSchemas: Readonly<Record<string, ZodType>> = {
-  "lead-plan": LeadOutputSchema,
-  "lead-plan-revision": LeadOutputSchema,
-  "delivery-repair-plan": DeliveryRepairLeadOutputSchema,
-  "merge-conflict-plan": MergeConflictPlanSchema,
-  "ci-repair-plan": CiRepairPlanSchema,
-  "delivery-review": DeliveryReviewSchema,
-  "final-review": DeliveryReviewSchema,
-  "supplemental-review": SupplementalReviewSchema,
-  "lead-consolidation": LeadReviewResponseSchema,
-  "lead-consolidation-correction": LeadReviewResponseSchema,
-};
-const developerResultSchemas: Readonly<Record<string, ZodType>> = {
-  implementation: DeveloperDeliveryReportSchema,
-  "delivery-repair": DeveloperRepairReportSchema,
-  "ci-repair": DeveloperRepairReportSchema,
-  "merge-conflict-resolution": DeveloperMergeConflictResolutionReportSchema,
-};
 
 // Keep completed turns with a durable result in the scan so an unchanged second
 // reconciliation reports the same idempotent outcome without writing again.
@@ -89,10 +68,6 @@ const activeStatuses = "'dispatching', 'waiting', 'blocked', 'awaiting_human', '
 const activeExecutionStatuses = new Set(["starting", "running"]);
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const safeText = (value: unknown) => String(redact(value)).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
-
-export function turnResultSchema(ledger: Turn["ledger"], promptKind: string): ZodType | undefined {
-  return (ledger === "agent" ? agentResultSchemas : developerResultSchemas)[promptKind];
-}
 
 async function resultAt(runtimeRoot: string, turn: Pick<Turn, "ledger" | "promptKind" | "resultRelativePath">): Promise<ResultObservation> {
   const path = resolve(runtimeRoot, turn.resultRelativePath);
@@ -146,12 +121,12 @@ function candidates(database: ForgeDatabase, taskId?: string): Turn[] {
     ORDER BY turn.task_id, turn.turn_id`).all(...(taskId ? [taskId] : [])) as Turn[]);
 }
 
-function supersedeLateResult(database: ForgeDatabase, turn: Turn, timestamp: string): boolean {
+function supersedeLateResult(database: ForgeDatabase, turn: Turn, bytes: Buffer, timestamp: string): boolean {
   const summary = "The late Developer result was superseded before Forge could apply it.";
   return database.authTransaction((db) => {
     const completed = db.prepare(`UPDATE forge_herdr_turns
-      SET status = 'completed', task_complete_seen_at = COALESCE(task_complete_seen_at, ?), finished_at = COALESCE(finished_at, ?), attention_excerpt = ?, updated_at = ?
-      WHERE turn_id = ? AND task_id = ? AND status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed')`).run(timestamp, timestamp, summary, timestamp, turn.turnId, turn.taskId);
+      SET result_sha256 = ?, status = 'completed', task_complete_seen_at = COALESCE(task_complete_seen_at, ?), finished_at = COALESCE(finished_at, ?), attention_excerpt = ?, updated_at = ?
+      WHERE turn_id = ? AND task_id = ? AND status IN ('dispatching', 'waiting', 'blocked', 'awaiting_human', 'validating', 'completed')`).run(sha256(bytes), timestamp, timestamp, summary, timestamp, turn.turnId, turn.taskId);
     if (completed.changes !== 1) return false;
     const metadata = JSON.stringify({ turnId: turn.turnId, executionId: turn.executionId, summary });
     const eventHash = sha256(metadata);
@@ -161,8 +136,24 @@ function supersedeLateResult(database: ForgeDatabase, turn: Turn, timestamp: str
   });
 }
 
-function currentWorkflow(database: ForgeDatabase, taskId: string): Pick<Turn, "revision" | "phase"> | undefined {
-  return database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = ?").get(taskId) as Pick<Turn, "revision" | "phase"> | undefined);
+function currentWorkflow(database: ForgeDatabase, taskId: string): IssueWorkflowState | undefined {
+  const row = database.authQuery((db) => db.prepare(`SELECT snapshot.state_json AS stateJson
+    FROM forge_issue_projections projection
+    JOIN forge_workflow_snapshots snapshot ON snapshot.task_id = projection.task_id AND snapshot.revision = projection.revision
+    WHERE projection.task_id = ?
+    ORDER BY snapshot.revision DESC
+    LIMIT 1`).get(taskId) as { stateJson: string } | undefined);
+  if (!row) return undefined;
+  const parsed = IssueWorkflowStateSchema.safeParse(json(row.stateJson, null));
+  return parsed.success ? parsed.data : undefined;
+}
+
+function workflowExpectsLateDeveloperResult(workflow: IssueWorkflowState | undefined, turn: Turn): boolean {
+  if (!workflow || workflow.revision !== turn.revision) return false;
+  if (turn.role === "builder") return workflow.step === "development" && workflow.developerExecutionId === turn.executionId;
+  if (turn.role !== "integrator") return false;
+  if (turn.promptKind === "ci-repair") return workflow.step === "ci_repairing" && (workflow.ciRepairDeveloperExecutionId ?? workflow.developerExecutionId) === turn.executionId;
+  return workflow.step === "merge_conflict_resolving" && workflow.developerExecutionId === turn.executionId;
 }
 async function recreateMissingRuntime(database: ForgeDatabase, config: ForgeConfig, herdr: HerdrClient, turn: Turn): Promise<boolean> {
   const launch = database.authQuery((db) => db.prepare(`SELECT task.project_id AS projectId, project.name AS projectSlug, task.issue_number AS issueNumber,
@@ -411,13 +402,21 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
         }
       }
       if (lateDeveloperResult) {
+        const workflow = currentWorkflow(database, turn.taskId);
+        if (!workflow || !workflowExpectsLateDeveloperResult(workflow, turn)) {
+          if (supersedeLateResult(database, turn, result.bytes!, now())) evidence.push("late-result:superseded");
+          else evidence.push("late-result:completion CAS lost");
+          action = "no_change";
+          outcomes.push({ taskId: turn.taskId, turnId: turn.turnId, role: turn.role, action, idempotencyKey: classified.idempotencyKey, evidence });
+          continue;
+        }
         if (turn.promptKind === "ci-repair" && (turn.executionStatus === "failed" || turn.executionStatus === "cancelled")) {
           const adopted = await adoptLateCiRepair(database, config, turn, result.bytes!, now());
           if (adopted === "adopted") {
             action = "advance";
             evidence.push("late-result:CI repair adopted from git");
           } else if (adopted === "superseded") {
-            if (supersedeLateResult(database, turn, now())) evidence.push("late-result:superseded");
+            if (supersedeLateResult(database, turn, result.bytes!, now())) evidence.push("late-result:superseded");
             action = "no_change";
           } else {
             action = "no_change";
@@ -426,9 +425,8 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
           outcomes.push({ taskId: turn.taskId, turnId: turn.turnId, role: turn.role, action, idempotencyKey: classified.idempotencyKey, evidence });
           continue;
         }
-        const workflow = currentWorkflow(database, turn.taskId);
-        if (turn.role === "builder" && workflow?.phase === "building") {
-          if (supersedeLateResult(database, turn, now())) {
+        if (turn.role === "builder") {
+          if (supersedeLateResult(database, turn, result.bytes!, now())) {
             await (deps.reconcileDeveloper ?? reconcileIssueDeveloperDelivery)(config, turn.workflowId, { expectedRevision: workflow.revision, actorUserId: "system", commandId: `late-result-${turn.turnId}-${turn.executionFinishedAt ?? "unknown"}`, reconcileOnly: true });
             action = "advance";
             evidence.push("late-result:Builder result reconciled at current revision");
@@ -436,7 +434,7 @@ export async function reconcileActiveTurns(database: ForgeDatabase, config: Forg
             action = "no_change";
             evidence.push("late-result:completion CAS lost");
           }
-        } else if (supersedeLateResult(database, turn, now())) {
+        } else if (supersedeLateResult(database, turn, result.bytes!, now())) {
           action = "no_change";
           evidence.push("late-result:superseded");
         } else {

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import { turnResultSchema } from "../../active-turn-recovery.js";
+import { turnResultSchema } from "../../turn-result-schemas.js";
 import type { ForgeConfig } from "../../config.js";
 import type { ForgeDatabase } from "../../database.js";
 import { CliHerdrClient, type HerdrClient } from "../../herdr-client.js";

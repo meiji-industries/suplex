@@ -30,40 +30,15 @@ import { BrowserProofService } from "./browser-proof.js";
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
 import { isTaskTurnLive, type TaskTurnLiveness } from "./engine/activities/herdr-liveness.js";
+export { DeliveryRepairLeadOutputSchema, LeadReviewResponseSchema, SupplementalReviewSchema } from "./turn-result-schemas.js";
+import { DeliveryRepairLeadOutputSchema, LeadReviewResponseSchema, SupplementalReviewSchema } from "./turn-result-schemas.js";
 
 const execFileAsync = promisify(execFile);
 const PROJECT_VERIFICATION_FAILURE_PREFIX = "Project verification failed:";
 type MergeConflictPlanInput = MergeConflictPlanActivityInput;
 
-const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
-export const LeadReviewResponseSchema = z.object({
-  version: z.literal(1),
-  originalPlanRevision: z.number().int().nonnegative(),
-  reviewArtifactId: durableId,
-  reviewResponse: z.string().min(1),
-  result: LeadOutputSchema,
-}).strict();
 export { AskUserQuestionSchema, DecisionBlockerSchema, LeadOutputSchema, LeadPlanSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type AskUserQuestion, type PersistedLeadOutput } from "./lead-contracts.js";
 export type { DecisionBlocker, LeadOutput, LeadPlan, LeadPlanningActivityInput, LeadPlanningResult, LegacyLeadPlanningResult } from "./lead-contracts.js";
-export const SupplementalReviewSchema = z.preprocess((value) => {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const review = value as Record<string, unknown>;
-    if (review.opinion === "approve" || review.opinion === "request_changes") return { verdict: review.opinion === "approve" ? "approve" : "revise", summary: review.summary, concerns: Array.isArray(review.concerns) ? review.concerns.map((text) => ({ severity: "advisory", text })) : Array.isArray(review.requiredChanges) ? review.requiredChanges.map((text) => ({ severity: "blocking", text })) : [] };
-  }
-  return value;
-}, z.object({
-  verdict: z.enum(["approve", "revise"]),
-  summary: z.string().min(1),
-  concerns: z.array(z.object({ severity: z.enum(["blocking", "advisory"]), text: z.string().min(1), step: z.number().int().positive().optional() })),
-}));
-
-export const DeliveryRepairLeadOutputSchema = z.object({
-  kind: z.literal("delivery_repair_plan"),
-  summary: z.string().min(1),
-  steps: z.array(z.object({ number: z.number().int().positive(), instruction: z.string().min(1), verification: z.string().min(1) })).min(1),
-  verificationStrategy: z.string().min(1),
-  unresolvedTechnicalQuestions: z.array(z.string()).length(0),
-});
 export type SupplementalReview = z.infer<typeof SupplementalReviewSchema>;
 
 export { AgentFailure } from "./agent-failure.js";

@@ -61,6 +61,22 @@ test("a failed git proof remains parked and refreshes its observation time", asy
   } finally { await h.stop(); }
 });
 
+test("a parked delivery with a changed pull request head remains parked", async () => {
+  const activities: Partial<IssueActivities> = {
+    inspectTaskWorktree: async () => ({ present: true, owned: true, dirtyFileCount: 0, branch: "forge/issue/reobserve", activeExecution: false, revision: { proven: true, head: engineFixture.commit, headTree: engineFixture.tree, branch: "forge/issue/reobserve", clean: true } }),
+    observeGithubPullRequest: async () => ({ ...github, exists: true, number: 1, url: "https://github.com/acme/forge/pull/1", state: "open", isDraft: true, headSha: "d".repeat(40) }),
+  };
+  const h = await createEngineHarness(activities);
+  h.seedTask("reobserve-head", { deliveryTarget: "remote_branch" });
+  try {
+    const before = { ...parkedState(h.workflowId("reobserve-head"), "reobserve-head"), pullRequestNumber: 1, pullRequestUrl: "https://github.com/acme/forge/pull/1" };
+    const started = await h.startContinuation("reobserve-head", before, { deliveryTarget: "remote_branch" });
+    const state = await h.settle(started.workflowId, (next) => next.stateChangedAt !== before.stateChangedAt);
+    expect(state.owner).toBe("human");
+    expect(state.processedCommandIds).not.toContain(`${started.workflowId}:auto-reobserve:publish_draft:${engineFixture.commit}`);
+  } finally { await h.stop(); }
+});
+
 test("a product decision park is not re-observed", async () => {
   const activities: Partial<IssueActivities> = {
     inspectTaskWorktree: async () => ({ present: true, owned: true, dirtyFileCount: 0, branch: "forge/issue/reobserve", activeExecution: false, revision: { proven: true, head: engineFixture.commit, headTree: engineFixture.tree, branch: "forge/issue/reobserve", clean: true } }),

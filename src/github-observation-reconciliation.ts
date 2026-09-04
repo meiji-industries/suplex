@@ -15,6 +15,7 @@ export interface GithubReconciliationResult { inspected: number; signalled: numb
 type Candidate = { taskId: string; companyId: string; workflowId: string; revision: number; phase: string; repository: string; branch: string; pullRequestNumber: number | null; worktreePath: string | null; targetBaseSha: string | null; state: IssueWorkflowState };
 type ReconciliationOptions = {
   taskId?: string;
+  shouldObserve?: (taskId: string) => boolean;
   observe?: (input: { repository: string; branch: string; pullRequestNumber?: number | null }) => Promise<GithubPullRequestObservation>;
   execute?: typeof executeIssueCommand;
   integrate?: typeof integrateRemoteBranch;
@@ -85,7 +86,7 @@ function commandFor(candidate: Candidate, observation: GithubObservation): Issue
 
 /** One idempotent entry point for poll, startup, webhook, and manual refresh. */
 export async function reconcileGithubObservations(database: ForgeDatabase, config: ForgeConfig, options: ReconciliationOptions = {}): Promise<GithubReconciliationResult> {
-  const rows = candidates(database, options.taskId);
+  const rows = candidates(database, options.taskId).filter((candidate) => options.shouldObserve?.(candidate.taskId) ?? true);
   const observe = options.observe ?? createGithubReleasePort().observePullRequest;
   const execute = options.execute ?? executeIssueCommand;
   const integrate = options.integrate ?? integrateRemoteBranch;

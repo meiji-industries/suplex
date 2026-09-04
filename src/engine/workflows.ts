@@ -9,8 +9,8 @@ import { advanceSourcePullRequestState, isSourcePullRequestPreDelivery, sourcePu
 import { githubPullRequestObservationFields } from "../github-pull-request-observation.js";
 import { pullRequestObservationKey, reconcile, type PullRequestObservation, type PullRequestTarget } from "../pull-request-reconciler.js";
 import type { GithubPullRequestObservationResult } from "./contracts/activities/github-sync.js";
-import { adoptPullRequestRelease, planMergeConflict, projectIssueStateActivity, reconcileTargetBase, loadTaskSourcePullRequest, observeGithubPullRequest, applyGithubPullRequestAction, inspectTaskWorktree } from "./workflow/activity-proxies.js";
-import { issueUpdates, syncGithubPullRequestSignal } from "./issue-updates.js";
+import { adoptPullRequestRelease, planMergeConflict, projectIssueStateActivity, reconcileTargetBase, loadTaskSourcePullRequest, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
+import { syncGithubPullRequestSignal } from "./issue-updates.js";
 import { credentialBlockedState, evidencePointer, humanBlocker, withWorktreeCommands } from "./workflow/state-transitions.js";
 import { createIssueWorkflowContext } from "./workflow/context.js";
 import { registerGovernanceHandlers } from "./workflow/register-governance.js";
@@ -24,7 +24,8 @@ import { registerDevelopmentHandlers } from "./workflow/register-development.js"
 import { registerMergeHandlers, registerMergeReconciliationHandler } from "./workflow/register-merge.js";
 import { registerReleaseHandlers } from "./workflow/register-release.js";
 import { registerTargetBaseHandlers } from "./workflow/register-target-base.js";
-import { applyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, classifyRepairFailure, clearAutomaticChainHalt, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
+import { reobserveParkedTask } from "./workflow/reobserve.js";
+import { applyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, classifyRepairFailure, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
 export * from "./issue-updates.js";
 export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
 async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { const projected = withWorktreeCommands(state); return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: runExecution.current().runId, eventId: projected.lastEventId, state: projected })); }
@@ -350,49 +351,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   registerLifecycleHandlersContinuation(workflowContext);
   registerPlanningHandlersReject(workflowContext);
   registerCapacityHandlers(workflowContext);
-  const parkedCommand = (): { command: IssueCommand | null; eligible: boolean } => {
-    if (workflowContext.state.owner !== "human") return { command: null, eligible: false };
-    const blockerCategory = workflowContext.state.blocker?.category;
-    const targetBaseFailure = workflowContext.state.step === "development" && Boolean(workflowContext.state.targetBaseBlockerCode);
-    const retriesPublishOrCi = blockerCategory === "agent_exhausted" && workflowContext.state.blocker?.actions.some((action) => action.command === "publish_draft" || action.command === "reconcile_ci");
-    const retryableFailure = retriesPublishOrCi || blockerCategory === "provider_ambiguity" || blockerCategory === "provider_authentication" || blockerCategory === "provider_connectivity_exhausted" || blockerCategory === "verification_unrecoverable" || blockerCategory === "target_drift" || blockerCategory === "unsafe_recovery";
-    if (!targetBaseFailure && !retryableFailure) return { command: null, eligible: false };
-    if (workflowContext.state.step === "delivery_ready") return { command: "review_delivery", eligible: true };
-    if (workflowContext.state.step === "delivery_reviewed") return { command: "publish_draft", eligible: true };
-    if (workflowContext.state.step === "ci_waiting") return { command: "reconcile_ci", eligible: true };
-    if (targetBaseFailure) return { command: "retry_target_base_reconciliation", eligible: true };
-    return { command: null, eligible: workflowContext.state.step === "releasing" };
-  };
-  const reobserveParkedTask = async (): Promise<boolean> => {
-    const { command, eligible } = parkedCommand();
-    const parked = workflowContext.state.owner === "human" && ["delivery_ready", "delivery_reviewed", "releasing", "ci_waiting", "development"].includes(workflowContext.state.step);
-    if (!eligible || !parked || !workflowContext.state.resultCommit || !workflowContext.state.resultTree || !workflowContext.state.branchName) return false;
-    const observedAt = new Date().toISOString();
-    try {
-      const git = await inspectTaskWorktree({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, expectedCommit: workflowContext.state.resultCommit, expectedTree: workflowContext.state.resultTree, expectedBranch: workflowContext.state.branchName });
-      const github = workflowContext.state.releaseRepository && workflowContext.state.branchName
-        ? await observeGithubPullRequest({ repository: workflowContext.state.releaseRepository, branch: workflowContext.state.branchName, pullRequestNumber: workflowContext.state.pullRequestNumber })
-        : null;
-      void github;
-      if (!git.revision?.proven || git.activeExecution) throw new Error("The task owner has not cleared the parked state");
-    } catch (error) {
-      if (isCancellation(error)) throw error;
-      workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, stateChangedAt: observedAt });
-      await workflowContext.project();
-      return false;
-    }
-    const commandId = command ? `${workflowContext.state.workflowId}:auto-reobserve:${command}:${workflowContext.state.resultCommit}` : null;
-    if (commandId && workflowContext.commandAlreadyProcessed(commandId)) return false;
-    const revision = workflowContext.state.revision + 1;
-    workflowContext.state = IssueWorkflowStateSchema.parse({ ...workflowContext.state, revision, owner: "lead", blocker: null, pendingAction: "Forge retried after the earlier failure cleared.", stateChangedAt: observedAt, ...(commandId ? { processedCommandIds: [...(workflowContext.state.processedCommandIds ?? []), commandId].slice(-32) } : {}), lastEventId: `${workflowContext.state.workflowId}:${revision}` });
-    clearAutomaticChainHalt(workflowContext.state.workflowId);
-    await workflowContext.project();
-    if (!command || !commandId) return true;
-    const handler = runExecution.current().commands.get(issueUpdates[command]);
-    if (!handler) throw new Error(`Automatic ${command} handler is unavailable`);
-    await Reflect.apply(handler, undefined, [{ expectedRevision: workflowContext.state.revision, actorUserId: "forge-auto-reobserve", commandId }]);
-    return true;
-  };
   assertPayloadWithinLimit("Issue Workflow result", state);
   // Continue-As-New carries the last business revision into a fresh run; re-emitting it would read as conflicting authoritative history.
   try {
@@ -406,7 +364,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     }
     while (true) {
       if ((workflowContext.state.step === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.step === "cancelled" && !(workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree")))) { return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
-      if (await reobserveParkedTask()) continue;
+      if (await reobserveParkedTask(workflowContext, validatedInput)) continue;
       if (githubSyncRequested) {
         githubSyncRequested = false;
         await syncGithubPullRequest();

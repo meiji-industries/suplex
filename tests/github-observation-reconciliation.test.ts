@@ -61,6 +61,22 @@ test("deduplicates the same observation without additional workflow commands or 
   expect(timelineRows).toBe(0);
 });
 
+test("filters GitHub observations before querying their owners", async () => {
+  const rows = [
+    { taskId: "ci", phase: "shipping", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])) },
+    { taskId: "merge", phase: "shipping", stateJson: JSON.stringify(state("manual_merge", ["reconcile_merge"])) },
+  ];
+  const observe = vi.fn(async () => observed());
+
+  const result = await reconcileGithubObservations(database(rows) as never, {} as never, {
+    shouldObserve: (taskId) => taskId === "ci",
+    observe,
+  });
+
+  expect(result.inspected).toBe(1);
+  expect(observe).toHaveBeenCalledTimes(1);
+});
+
 test("counts transient GitHub observation errors and continues", async () => {
   const rows = [{ taskId: "ci", phase: "shipping", stateJson: JSON.stringify(state("ci_waiting", ["reconcile_ci"])) }];
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);

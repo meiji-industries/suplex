@@ -4,6 +4,7 @@ import { at, isBlocked } from "../src/issue-phases.js";
 
 import { ApplicationFailure } from "../src/engine/failures.js";
 import { buildInitialIssueWorkflowState } from "../src/engine/issue-contracts.js";
+import { releaseFailureCopy } from "../src/release-failures.js";
 import { createEngineHarness, engineFixture } from "./helpers/engine-harness.js";
 
 test("a stale reviewed revision blocks publication for human review", async () => {
@@ -64,7 +65,7 @@ test("repeated stale publication of the same reviewed commit stops the automatic
   try {
     const started = await h.startContinuation("stale-auto-chain", continuationState);
     const state = await h.settle(started.workflowId, (value) => isBlocked(value) && value.owner === "human");
-    expect(state).toMatchObject({ step: "delivery_ready", pendingAction: "The exact approved Developer revision is unavailable", allowedCommands: expect.arrayContaining(["review_delivery", "publish_draft", "cancel_issue"]), blocker: expect.objectContaining({ category: "agent_exhausted" }) });
+    expect(state).toMatchObject({ step: "delivery_ready", pendingAction: releaseFailureCopy["stale-reviewed-revision"], allowedCommands: expect.arrayContaining(["review_delivery", "publish_draft", "cancel_issue"]), blocker: expect.objectContaining({ category: "agent_exhausted" }) });
     expect(state.blocker?.actions.map((action) => action.command)).toEqual(["review_delivery", "publish_draft", "cancel_issue"]);
     expect(publishAttempts).toBeLessThanOrEqual(3);
     const calls = { publish: h.calls.get("publishRelease") ?? 0, push: h.calls.get("pushDeliveryBranch") ?? 0 };

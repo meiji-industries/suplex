@@ -5,6 +5,7 @@ import type { ActivityContext } from "./context.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
 import { jsonRequired } from "../../task-utils.js";
 import { proveForwardMergeLineage } from "./forward-merge-lineage.js";
+import { proveRevisionInGit } from "./git-proof.js";
 
 const LegacyReleaseDeliverySchema = z.object({
   summary: z.string().optional(),
@@ -167,9 +168,6 @@ function forwardMergeReleaseContext(db: Database.Database, input: ReleaseContext
     JOIN forge_delivery_reviews r
       ON r.task_id = t.id AND r.company_id = t.company_id AND r.workflow_id = t.workflow_id
       AND r.outcome = 'approved' AND lower(r.subject_commit) = lower(?)
-    JOIN forge_artifacts verification
-      ON verification.id = m.verification_artifact_id AND verification.company_id = m.company_id
-      AND verification.kind = 'forward-merge-verification'
     WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?
     ORDER BY COALESCE(m.updated_at, m.created_at) DESC, m.id DESC`).all(input.subjectCommit, input.branchName, input.subjectCommit, input.taskId, input.companyId, input.workflowId) as ForwardMergeReleaseCandidate[];
   const contexts: ReleaseContext[] = [];
@@ -209,12 +207,48 @@ function resolveReleaseContext(db: Database.Database, input: ReleaseContextInput
   return directReleaseContext(db, input) ?? forwardMergeReleaseContext(db, input);
 }
 
+type GitReleaseCandidate = Omit<ReleaseContext, "delivery" | "reviewId"> & { deliveryArtifactId: string; deliveryStoragePath: string; deliverySha: string };
+
+async function resolveGitReleaseContext(db: Database.Database, githubRelease: ActivityContext["githubRelease"], input: ReleaseContextInput): Promise<ReleaseContext | undefined> {
+  const review = input.kind === "publish" ? db.prepare(`SELECT id FROM forge_delivery_reviews r
+    WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?
+      AND lower(r.subject_commit) = lower(?) AND lower(r.subject_tree) = lower(?)
+      AND (r.outcome = 'approved' OR EXISTS (SELECT 1 FROM forge_delivery_decisions dd WHERE dd.task_id = r.task_id AND dd.workflow_id = r.workflow_id AND dd.created_at >= r.created_at))`)
+    .get(input.reviewId, input.taskId, input.companyId, input.workflowId, input.subjectCommit, input.subjectTree) as { id: string } | undefined : { id: "push" };
+  if (!review) return undefined;
+  const candidates = db.prepare(`SELECT t.title, d.id AS developerExecutionId, d.worktree_path AS worktreePath, d.branch_name AS branchName,
+      d.target_base_sha AS targetBaseSha, d.result_commit AS subjectCommit, d.result_tree AS subjectTree,
+      a.id AS deliveryArtifactId, a.storage_path AS deliveryStoragePath, a.sha256 AS deliverySha
+    FROM forge_tasks t JOIN forge_developer_executions d ON d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
+    JOIN forge_artifacts a ON a.id = d.delivery_artifact_id AND a.company_id = d.company_id AND a.kind IN ('developer-delivery', 'developer-repair', 'forward-merge-delivery')
+    WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND d.branch_name = ? AND lower(d.result_commit) = lower(?)
+    UNION ALL
+    SELECT t.title, m.developer_execution_id AS developerExecutionId, d.worktree_path AS worktreePath, d.branch_name AS branchName,
+      m.current_base_sha AS targetBaseSha, m.result_head AS subjectCommit, m.result_tree AS subjectTree,
+      a.id AS deliveryArtifactId, a.storage_path AS deliveryStoragePath, a.sha256 AS deliverySha
+    FROM forge_tasks t JOIN forge_forward_merges m ON m.task_id = t.id AND m.company_id = t.company_id AND m.workflow_id = t.workflow_id
+    JOIN forge_developer_executions d ON d.id = m.developer_execution_id AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
+    JOIN forge_artifacts a ON a.id = m.delivery_artifact_id AND a.company_id = m.company_id AND a.kind IN ('developer-delivery', 'developer-repair', 'forward-merge-delivery')
+    WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND d.branch_name = ? AND lower(m.result_head) = lower(?)`).all(
+    input.taskId, input.companyId, input.workflowId, input.branchName, input.subjectCommit,
+    input.taskId, input.companyId, input.workflowId, input.branchName, input.subjectCommit,
+  ) as GitReleaseCandidate[];
+  for (const candidate of candidates) {
+    if (!candidate.subjectTree || input.kind === "publish" && !sameRevision(candidate.subjectTree, input.subjectTree)) continue;
+    const proof = await proveRevisionInGit(githubRelease, { worktreePath: candidate.worktreePath, branchName: candidate.branchName, commit: input.subjectCommit, tree: candidate.subjectTree, ...(input.kind === "publish" ? { baseSha: input.targetBaseSha } : {}) });
+    if (!proof.proven || !proof.branch || !proof.head || !proof.headTree) continue;
+    return { developerExecutionId: candidate.developerExecutionId, worktreePath: candidate.worktreePath, branchName: proof.branch, targetBaseSha: input.kind === "publish" ? input.targetBaseSha : candidate.targetBaseSha, subjectCommit: proof.head, subjectTree: proof.headTree, reviewId: input.kind === "publish" ? review.id : null, title: candidate.title, delivery: { id: candidate.deliveryArtifactId, storagePath: candidate.deliveryStoragePath, sha256: candidate.deliverySha } };
+  }
+  return undefined;
+}
+
 export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities {
   const { database, createHash, randomBytes, ApplicationFailure, GithubReleaseFailure, PublishReleaseActivityResultSchema, githubRelease, artifacts, release } = ctx;
   return {
     async pushDeliveryBranch(input) {
       try {
-      const context = database.authQuery((db) => resolveReleaseContext(db, { kind: "push", taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, branchName: input.branchName, subjectCommit: input.commitSha }));
+      const releaseInput = { kind: "push" as const, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, branchName: input.branchName, subjectCommit: input.commitSha };
+      const context = database.authQuery((db) => resolveReleaseContext(db, releaseInput)) ?? await database.authQuery((db) => resolveGitReleaseContext(db, githubRelease, releaseInput));
       if (!context) throw new GithubReleaseFailure("stale-reviewed-revision", "The reviewed revision does not match a completed build");
       let pinned: ReturnType<ActivityContext["pinnedProjectRevision"]>;
       try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "The task project configuration is incomplete"); }
@@ -245,7 +279,8 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
     async publishRelease(input: PublishReleaseActivityInput) {
       let identity = { repository: "", branchName: input.branchName, headSha: input.subjectCommit, headTree: input.subjectTree };
       try {
-        const context = database.authQuery((db) => resolveReleaseContext(db, { kind: "publish", taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, branchName: input.branchName, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree, reviewId: input.reviewId, developerExecutionId: input.developerExecutionId }));
+        const releaseInput = { kind: "publish" as const, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, branchName: input.branchName, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree, reviewId: input.reviewId, developerExecutionId: input.developerExecutionId };
+        const context = database.authQuery((db) => resolveReleaseContext(db, releaseInput)) ?? await database.authQuery((db) => resolveGitReleaseContext(db, githubRelease, releaseInput));
         if (!context?.delivery || !context.reviewId || !context.subjectTree) throw new GithubReleaseFailure("stale-reviewed-revision", "The exact approved Developer revision is unavailable");
         identity = { repository: "", branchName: context.branchName, headSha: context.subjectCommit, headTree: context.subjectTree };
         let pinned: ReturnType<ActivityContext["pinnedProjectRevision"]> & { artifactId: string };

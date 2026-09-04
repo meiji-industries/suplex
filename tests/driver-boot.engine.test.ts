@@ -72,8 +72,9 @@ function ciRepairPlanningState(workflowId: string) {
   });
 }
 
-test("boot claims a completed approved delivery review before publishing without another review prompt", async () => {
+test("a completed delivery-review owner runs review_delivery before publishing", async () => {
   const projected: IssueWorkflowState[] = [];
+  let reviewCalls = 0;
   const activities: Partial<IssueActivities> = {
     inspectTaskWorktree: async () => provenWorktree(),
     readHerdrTurn: async () => ({ type: "owner.done", outcome: "approved" }),
@@ -81,8 +82,9 @@ test("boot claims a completed approved delivery review before publishing without
       projected.push(event.state);
       return event.state;
     },
-    reviewDelivery: async () => {
-      throw new Error("completed review must not prompt again");
+    reviewDelivery: async (input) => {
+      reviewCalls += 1;
+      return { outcome: "completed" as const, attemptId: "claimed-review-attempt", correctionAttempts: 0, subject: input.subject, review: { reviewId: "claimed-review", leadExecutionId: "claimed-review-lead", leadSessionRef: "claimed-review-session", opinionArtifactId: "claimed-review-opinion", evidenceArtifactId: "claimed-review-evidence", opinion: "approved" as const, summary: "Approved", repairPlan: null, findings: [], supersedesReviewId: null, reviewArtifact: { artifactId: "claimed-review-artifact", companyId: engineFixture.companyId, kind: "delivery-review" as const, sha256: engineFixture.sha256, byteSize: 1, mimeType: "application/json" } } };
     },
     pushDeliveryBranch: async () => ({ repository: "acme/forge", branchName: "forge/issue/driver-boot", commitSha: engineFixture.commit }),
     publishRelease: async () => ({ outcome: "blocked", repository: "acme/forge", branchName: "forge/issue/driver-boot", headSha: engineFixture.commit, headTree: engineFixture.tree, reused: false, attempt: 1, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, isDraft: false, code: "provider-rate-limited", summary: "GitHub rate limited", retryAt: "2026-08-29T00:01:00.000Z" }),
@@ -91,11 +93,11 @@ test("boot claims a completed approved delivery review before publishing without
   const issueId = "driver-boot-review";
   harness.seedTask(issueId);
   try {
-    await harness.startContinuation(issueId, deliveryReviewState(harness.workflowId(issueId)));
+    await harness.startContinuation(issueId, { ...deliveryReviewState(harness.workflowId(issueId)), ...at("delivery_ready"), owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the delivery", deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null });
     const state = await harness.settle(harness.workflowId(issueId), (value) => value.step === "releasing");
     expect(state.step).toBe("releasing");
     expect(projected.map((value) => value.step)).toContain("delivery_reviewed");
-    expect(harness.calls.get("reviewDelivery") ?? 0).toBe(0);
+    expect(reviewCalls).toBe(1);
   } finally {
     await harness.stop();
   }
@@ -127,6 +129,142 @@ test("a completed delivery_reviewed owner publishes once through the driver", as
     expect(publishCalls).toBe(1);
     expect(done.processedCommandIds).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(`^${workflowId}:driver:delivery_reviewed:\\d+:owner\\.done$`))]));
     expect(done.processedCommandIds).not.toEqual(expect.arrayContaining([expect.stringMatching(":auto-")]));
+  } finally {
+    await harness.stop();
+  }
+});
+
+test("the driver rehydrates a malformed reviewed delivery before publishing", async () => {
+  let reviewCalls = 0;
+  let publishCalls = 0;
+  const harness = await createEngineHarness({
+    inspectTaskWorktree: async () => provenWorktree(),
+    reviewDelivery: async (input) => {
+      reviewCalls += 1;
+      return { outcome: "blocked" as const, attemptId: "recovery-review-attempt", code: "process-failed" as const, summary: "The delivery review did not complete.", evidenceArtifactId: "recovery-review-evidence", executionId: "recovery-review-lead", sessionRef: "recovery-review-session", correctionAttempts: 0, subject: input.subject };
+    },
+    publishRelease: async () => {
+      publishCalls += 1;
+      throw new Error("the malformed delivery must not publish");
+    },
+  });
+  const issueId = "driver-malformed-reviewed-delivery";
+  const workflowId = harness.workflowId(issueId);
+  harness.seedTask(issueId, { deliveryTarget: "pull_request_draft" });
+  try {
+    await harness.startContinuation(issueId, {
+      ...deliveryReviewState(workflowId),
+      ...at("delivery_reviewed"),
+      owner: "lead",
+      allowedCommands: ["publish_draft", "cancel_issue"],
+      pendingAction: "Forge opens the pull request",
+      deliveryReviewId: null,
+      deliveryReviewOutcome: null,
+      deliveryReviewSummary: null,
+    }, { deliveryTarget: "pull_request_draft" });
+    const state = await harness.settle(workflowId, (value) => value.step === "delivery_ready" && value.owner === "human");
+    expect(reviewCalls).toBe(1);
+    expect(publishCalls).toBe(0);
+    expect(state.processedCommandIds).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(`^${workflowId}:driver:delivery_reviewed:\\d+:owner\\.done$`))]));
+  } finally {
+    await harness.stop();
+  }
+});
+
+test("the driver leaves a human delivery authorization without a review ID untouched", async () => {
+  let reviewCalls = 0;
+  let publishCalls = 0;
+  const harness = await createEngineHarness({
+    reviewDelivery: async () => {
+      reviewCalls += 1;
+      throw new Error("a human authorization must not start a review");
+    },
+    publishRelease: async () => {
+      publishCalls += 1;
+      throw new Error("a human authorization must not publish");
+    },
+  });
+  const issueId = "driver-human-delivery-authorization";
+  const workflowId = harness.workflowId(issueId);
+  harness.seedTask(issueId, { deliveryTarget: "pull_request_draft" });
+  try {
+    await harness.startContinuation(issueId, {
+      ...deliveryReviewState(workflowId),
+      ...at("delivery_reviewed"),
+      owner: "human",
+      allowedCommands: ["publish_draft", "cancel_issue"],
+      pendingAction: "The Planner recommends that you accept the delivery as is",
+      deliveryReviewId: null,
+      deliveryReviewOutcome: null,
+      deliveryReviewSummary: "Accept the delivery.",
+      blocker: {
+        category: "member_authorization",
+        summary: "Accept the delivery.",
+        unblockOwner: "human",
+        actions: [
+          { command: "publish_draft", label: "Publish the pull request", requiresNote: false, destructive: false },
+          { command: "cancel_issue", label: "Cancel the task", requiresNote: false, destructive: true },
+        ],
+        evidence: { artifactId: "arbitration-output", kind: "delivery-review" },
+        createdAt: "2026-09-04T12:00:00.000Z",
+        retry: null,
+      },
+    }, { deliveryTarget: "pull_request_draft" });
+    const before = harness.engine.run(workflowId).state;
+    const state = await harness.settle(workflowId, (value) => value.step === "delivery_reviewed" && value.owner === "human" && value.blocker?.category === "member_authorization");
+    expect(state).toEqual(before);
+    expect(reviewCalls).toBe(0);
+    expect(publishCalls).toBe(0);
+  } finally {
+    await harness.stop();
+  }
+});
+
+test("a completed review-arbitration owner runs arbitrate_review and preserves the human authorization", async () => {
+  let arbitrationCalls = 0;
+  let reviewCalls = 0;
+  const harness = await createEngineHarness({
+    readHerdrTurn: async () => ({ type: "owner.done", outcome: "approved" }),
+    arbitrateReview: async () => {
+      arbitrationCalls += 1;
+      return {
+        arbitration: {
+          kind: "review_arbitration" as const,
+          summary: "The Planner decided the review outcome.",
+          decision: "accept" as const,
+          askUserQuestion: null,
+          repair: null,
+          recommendation: "Accept the delivery.",
+        },
+        leadExecutionId: "arbitration-lead",
+        leadSessionRef: "arbitration-session",
+        outputArtifactId: "arbitration-output",
+        evidenceArtifactId: "arbitration-evidence",
+      };
+    },
+    reviewDelivery: async () => {
+      reviewCalls += 1;
+      throw new Error("a human authorization must not start a review");
+    },
+  });
+  const issueId = "driver-review-arbitration";
+  const workflowId = harness.workflowId(issueId);
+  harness.seedTask(issueId);
+  try {
+    await harness.startContinuation(issueId, {
+      ...deliveryReviewState(workflowId),
+      ...at("review_arbitration"),
+      owner: "lead",
+      allowedCommands: ["cancel_issue"],
+      pendingAction: "The Planner decides how to resolve the review",
+      arbitrationCount: 1,
+      arbitrationRepairExhausted: false,
+    });
+    const state = await harness.settle(workflowId, (value) => value.step === "delivery_reviewed" && value.owner === "human" && value.blocker?.category === "member_authorization");
+    expect(arbitrationCalls).toBe(1);
+    expect(reviewCalls).toBe(0);
+    expect(state.deliveryReviewId).toBe("delivery-review");
+    expect(state.processedCommandIds).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(`^${workflowId}:driver:review_arbitration:\\d+:owner\\.done$`))]));
   } finally {
     await harness.stop();
   }

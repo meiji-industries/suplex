@@ -53,11 +53,15 @@ describe("stepMachine", () => {
     });
   });
 
-  it("keeps direct step transitions in the XState graph", () => {
-    const simplePaths = model.getSimplePaths({ events: [eventFor("done"), { type: "owner.cancel" }] });
-    const reached = new Set(simplePaths.map((path) => path.state.value));
-    expect(reached).toContain("done");
-    expect(reached).toContain("cancelled");
+  it("keeps direct step transitions in the table", () => {
+    const directTransitions = Object.values(STEP_TABLE)
+      .flatMap((rule) => Object.values(rule.on))
+      .filter((transition): transition is Extract<Transition, { step: IssueStep }> => "step" in transition);
+
+    expect(directTransitions).toEqual(expect.arrayContaining([
+      { step: "approval", owner: "human" },
+      { step: "repair_required", owner: "lead" },
+    ]));
   });
 
   it("matches every table answer through nextStep", () => {

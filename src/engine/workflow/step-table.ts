@@ -83,15 +83,15 @@ export const STEP_TABLE: Record<IssueStep, StepRule> = {
     adoptFirst: { owner: "git", what: "delivery" },
     onAdoptFirst: { done: { continue: true }, live: signal, absent: signal, failed: { command: "retry_target_base_reconciliation" } },
     waitsOn: { owner: "herdr", role: "planner", promptKind: "delivery-review" },
-    on: { done: { step: "delivery_reviewed", owner: "lead" }, live: signal, absent: { command: "review_delivery" }, failed: { command: "review_delivery" } },
+    on: { done: { command: "review_delivery" }, live: signal, absent: { command: "review_delivery" }, failed: { command: "review_delivery" } },
   },
   reviewing_delivery: {
     waitsOn: { owner: "herdr", role: "planner", promptKind: "delivery-review" },
-    on: { done: { step: "delivery_reviewed", owner: "lead" }, live: signal, absent: { command: "review_delivery" }, failed: { step: "repair_required", owner: "lead" } },
+    on: { done: { command: "review_delivery" }, live: signal, absent: { command: "review_delivery" }, failed: { step: "repair_required", owner: "lead" } },
   },
   review_arbitration: {
     waitsOn: { owner: "herdr", role: "planner", promptKind: "delivery-review" },
-    on: { done: { step: "delivery_reviewed", owner: "lead" }, live: signal, absent: { command: "arbitrate_review" }, failed: { step: "repair_required", owner: "lead" } },
+    on: { done: { command: "arbitrate_review" }, live: signal, absent: { command: "arbitrate_review" }, failed: { step: "repair_required", owner: "lead" } },
   },
   delivery_reviewed: {
     adoptFirst: { owner: "git", what: "delivery" },

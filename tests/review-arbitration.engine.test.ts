@@ -18,7 +18,7 @@ function oldDeadEnd(issueId: string, workflowId: string) {
 
 for (const [decision, expected] of [["ask", { step: "review_arbitration", owner: "human", commands: ["respond_plan_blocker", "cancel_issue"], category: "member_decision" }], ["repair", { step: "repair_required", owner: "lead", commands: ["repair_delivery", "cancel_issue"], category: null }], ["accept", { step: "delivery_reviewed", owner: "human", commands: ["publish_draft", "cancel_issue"], category: "member_authorization" }], ["cancel", { step: "development", owner: "human", commands: ["cancel_issue", "respond_plan_blocker"], category: "member_decision" }]] as const) {
   test(`routes ${decision} arbitration`, async () => {
-    const h = await createEngineHarness({ arbitrateReview: async () => ({ arbitration: arbitration(decision), leadExecutionId: "lead-execution", leadSessionRef: "lead-session", outputArtifactId: "arbitration-output", evidenceArtifactId: "arbitration-evidence" }) });
+    const h = await createEngineHarness({ readHerdrTurn: async () => ({ type: "owner.done", outcome: "approved" }), arbitrateReview: async () => ({ arbitration: arbitration(decision), leadExecutionId: "lead-execution", leadSessionRef: "lead-session", outputArtifactId: "arbitration-output", evidenceArtifactId: "arbitration-evidence" }) });
     h.seedTask(`arbitration-${decision}`);
     const workflowId = h.workflowId(`arbitration-${decision}`);
     try {
@@ -32,7 +32,7 @@ for (const [decision, expected] of [["ask", { step: "review_arbitration", owner:
 
 test("refuses a second repair and asks the member to decide", async () => {
   let calls = 0;
-  const h = await createEngineHarness({ arbitrateReview: async () => { calls += 1; return { arbitration: arbitration("repair"), leadExecutionId: `lead-${calls}`, leadSessionRef: "lead-session", outputArtifactId: `output-${calls}`, evidenceArtifactId: `evidence-${calls}` }; } });
+  const h = await createEngineHarness({ readHerdrTurn: async () => ({ type: "owner.done", outcome: "approved" }), arbitrateReview: async () => { calls += 1; return { arbitration: arbitration("repair"), leadExecutionId: `lead-${calls}`, leadSessionRef: "lead-session", outputArtifactId: `output-${calls}`, evidenceArtifactId: `evidence-${calls}` }; } });
   h.seedTask("arbitration-refused");
   const workflowId = h.workflowId("arbitration-refused");
   try {

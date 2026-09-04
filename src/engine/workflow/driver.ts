@@ -255,6 +255,9 @@ async function applyDirectStep(ctx: IssueWorkflowContext, target: Extract<Transi
 export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: DriverDependencies = {}): Promise<boolean> {
   const step = ctx.state.step;
   const rule = STEP_TABLE[step];
+  if (step === "delivery_reviewed" && !ctx.state.deliveryReviewId && ctx.state.owner === "lead" && !isBlocked(ctx.state)) {
+    return runDriverCommand(ctx, "review_delivery", step, parsed({ type: "owner.done" }));
+  }
   const githubWaiting = step === "releasing" || step === "ci_waiting" || step === "manual_merge";
   const ciWaiting = step === "ci_waiting" && rule.waitsOn.owner === "github" && rule.waitsOn.what === "checks";
   if (step === "releasing" && ctx.state.releaseRetryAt && Date.parse(ctx.state.releaseRetryAt) > (dependencies.now?.().getTime() ?? runExecution.current().now())) return false;

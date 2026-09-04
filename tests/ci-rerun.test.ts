@@ -5,7 +5,7 @@ import { boundedLogTail, ciRunIdFromDetailsUrl, createGithubCiProvider, CI_FAILE
 import { CiRepairPlanSchema } from "../src/engine/contracts/primitives.js";
 import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/engine/issue-contracts.js";
 import { reconcile } from "../src/pull-request-reconciler.js";
-import { adoptCiPullRequestRelease, ciDeadlineBlockedState, deferCiReconciliation, CI_RERUN_LIMIT } from "../src/engine/workflow/register-ci.js";
+import { adoptCiPullRequestRelease, applyCiReconciliationRead, ciDeadlineBlockedState, createCiReconciliationRead, deferCiReconciliation, CI_RERUN_LIMIT } from "../src/engine/workflow/register-ci.js";
 
 test("extracts the Actions run id from a check-run details url", () => {
   expect(ciRunIdFromDetailsUrl("https://github.com/o/r/actions/runs/32485824288/job/96781973569?pr=479")).toBe("32485824288");
@@ -63,6 +63,20 @@ test("a CI repair plan defaults to repair and accepts rerun", () => {
 
 test("reruns are bounded per CI cycle", () => {
   expect(CI_RERUN_LIMIT).toBe(2);
+});
+
+test("a CI read normalizes its next poll and legacy repair owner before projection", () => {
+  const state = IssueWorkflowStateSchema.parse({
+    ...buildInitialIssueWorkflowState({ workflowId: "workflow", companyId: "company", projectId: "project", issueId: "task", projectRevisionId: "revision", briefArtifactId: "brief", briefSha256: "a".repeat(64), imageArtifactIds: [], requestHash: "b".repeat(64), roleProfiles: {}, supplementalReview: false, repairCycleLimit: 2 }),
+    ...at("ci_waiting"), revision: 3, owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Forge waits for CI", releaseId: "release", expectedHeadSha: "a".repeat(40), lastEventId: "workflow:3",
+  });
+  const read = createCiReconciliationRead({
+    checks: { runId: "ci-run", attemptId: "ci-attempt", attemptNumber: 1, expectedHeadSha: "a".repeat(40), observedHeadSha: "a".repeat(40), evidenceArtifactId: "evidence", outcome: "waiting", reason: "checks_pending", owner: "lead", repairable: false, summary: "Forge waits for CI", retryAt: null, nextPollAt: "2026-09-04T00:00:05.000Z", propagationDeadline: null, overallDeadline: null },
+    now: "2026-09-04T00:00:00.000Z",
+  });
+
+  expect(read).toMatchObject({ checks: { outcome: "waiting", reason: "checks_pending" }, nextPollAt: "2026-09-04T00:00:15.000Z" });
+  expect(applyCiReconciliationRead(state, read, "2026-09-04T00:00:00.000Z")).toMatchObject({ revision: 4, ciRunId: "ci-run", ciAttemptId: "ci-attempt", ciOwner: "integrator", ciNextPollAt: "2026-09-04T00:00:15.000Z", pendingAction: "Forge waits for CI" });
 });
 
 test("missing CI head evidence defers to human reconciliation controls", () => {

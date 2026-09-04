@@ -10,6 +10,7 @@ import { developerExecutionId } from "../deterministic-id.js";
 import { classifyRepairFailure } from "./runtime.js";
 import type { IssueBlocker } from "../issue-contracts.js";
 import type { IssueWorkflowContext } from "./context.js";
+import type { ReconcileCiActivityResult } from "../contracts/activities/ci.js";
 import type { GithubPullRequestObservationResult } from "../contracts/activities/github-sync.js";
 
 /** Reruns are for flaky/unrelated failures; two per CI cycle, then repair the code. */
@@ -19,6 +20,49 @@ const CI_PENDING_POLL_DELAY_MS = 15_000;
 const CI_OBSERVATION_FAILURE_POLL_DELAY_MS = 60_000;
 const CI_COMMAND_STEPS = new Set(["ci_waiting", "ci_repair_planning", "ci_repairing"]);
 export const adoptCiRepairResultUpdate = "adopt_ci_repair_result";
+
+type CiReconciliationChecks = Omit<ReconcileCiActivityResult, "owner"> & {
+  owner: ReconcileCiActivityResult["owner"] | "lead";
+};
+
+export type CiReconciliationRead = {
+  checks: CiReconciliationChecks;
+  nextPollAt: string | null;
+};
+
+export function createCiReconciliationRead(input: { checks: CiReconciliationChecks; now: string }): CiReconciliationRead {
+  const pending = input.checks.outcome === "waiting" || input.checks.outcome === "rate_limited";
+  const minimumPollAt = new Date(Date.parse(input.now) + CI_PENDING_POLL_DELAY_MS).toISOString();
+  const nextPollAt = pending && (!input.checks.nextPollAt || Date.parse(input.checks.nextPollAt) < Date.parse(minimumPollAt)) ? minimumPollAt : input.checks.nextPollAt;
+  return { checks: input.checks, nextPollAt };
+}
+
+function normalizedCiOwner(owner: CiReconciliationChecks["owner"]): ReconcileCiActivityResult["owner"] {
+  return owner === "lead" ? "integrator" : owner;
+}
+
+export function applyCiReconciliationRead(state: contracts.IssueWorkflowState, read: CiReconciliationRead, observedAt: string): contracts.IssueWorkflowState {
+  const pending = read.checks.outcome === "waiting" || read.checks.outcome === "rate_limited";
+  return contracts.IssueWorkflowStateSchema.parse({
+    ...state,
+    revision: state.revision + 1,
+    expectedHeadSha: read.checks.expectedHeadSha,
+    ciAttempt: read.checks.attemptNumber,
+    ciAttemptId: read.checks.attemptId,
+    ciRunId: read.checks.runId,
+    ciReason: read.checks.reason,
+    ciOwner: normalizedCiOwner(read.checks.owner),
+    ciRepairable: read.checks.repairable,
+    ciEvidenceArtifactId: read.checks.evidenceArtifactId,
+    ciPropagationDeadline: read.checks.propagationDeadline,
+    ciOverallDeadline: read.checks.overallDeadline,
+    ciNextPollAt: read.nextPollAt,
+    pendingAction: pending ? "Forge waits for CI" : read.checks.summary,
+    blocker: null,
+    stateChangedAt: observedAt,
+    lastEventId: `${state.workflowId}:${state.revision + 1}`,
+  });
+}
 
 export type AdoptedCiRepair = {
   developerExecutionId: string;
@@ -187,12 +231,10 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (ctx.state.step !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId) return ctx.state;
-    const ciOwner = (result.owner as "system" | "integrator" | "human" | "lead" | null) === "lead" ? "integrator" : result.owner;
-    const pending = result.outcome === "waiting" || result.outcome === "rate_limited";
-    const minimumPollAt = new Date(runExecution.current().now() + CI_PENDING_POLL_DELAY_MS).toISOString();
-    const ciNextPollAt = pending && (!result.nextPollAt || Date.parse(result.nextPollAt) < Date.parse(minimumPollAt)) ? minimumPollAt : result.nextPollAt;
-    ctx.assignState(() => contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, expectedHeadSha: result.expectedHeadSha, ciAttempt: result.attemptNumber, ciAttemptId: result.attemptId, ciRunId: result.runId, ciReason: result.reason, ciOwner, ciRepairable: result.repairable, ciEvidenceArtifactId: result.evidenceArtifactId, ciPropagationDeadline: result.propagationDeadline, ciOverallDeadline: result.overallDeadline, ciNextPollAt, pendingAction: pending ? "Forge waits for CI" : result.summary, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }));
+    const read = createCiReconciliationRead({ checks: result, now: new Date(runExecution.current().now()).toISOString() });
+    ctx.assignState(() => applyCiReconciliationRead(ctx.state, read, new Date().toISOString()));
     await ctx.project();
+    const ciOwner = normalizedCiOwner(read.checks.owner);
     if (result.outcome === "failed" && ctx.state.ciOverallDeadline && Date.parse(ctx.state.ciOverallDeadline) <= Date.now()) {
       ctx.state = ciDeadlineBlockedState(ctx.state, result.summary, new Date().toISOString());
       await ctx.project();

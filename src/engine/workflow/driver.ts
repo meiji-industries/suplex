@@ -254,6 +254,7 @@ async function applyDirectStep(ctx: IssueWorkflowContext, target: Extract<Transi
 
 export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: DriverDependencies = {}): Promise<boolean> {
   const step = ctx.state.step;
+  if (step === "delivery_ready" && ctx.state.owner === "human") return false;
   const rule = STEP_TABLE[step];
   if (step === "delivery_reviewed" && !ctx.state.deliveryReviewId && ctx.state.owner === "lead" && !isBlocked(ctx.state)) {
     return runDriverCommand(ctx, "review_delivery", step, parsed({ type: "owner.done" }));

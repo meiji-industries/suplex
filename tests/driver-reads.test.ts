@@ -99,6 +99,144 @@ describe("readOwner", () => {
 });
 
 describe("evaluateStep", () => {
+  it("holds a human-owned delivery-ready retry boundary despite a completed review", async () => {
+    const initial = IssueWorkflowStateSchema.parse({
+      ...buildInitialIssueWorkflowState({
+        workflowId: "workflow",
+        companyId: "company",
+        projectId: "project",
+        issueId: "task",
+        projectRevisionId: "project-revision",
+        briefArtifactId: "brief",
+        briefSha256: "a".repeat(64),
+        imageArtifactIds: [],
+        requestHash: "a".repeat(64),
+        roleProfiles: { planner: "planner", builder: "builder" },
+        supplementalReview: false,
+        repairCycleLimit: 2,
+      }),
+      ...at("delivery_ready"),
+      revision: 7,
+      owner: "human",
+      allowedCommands: ["review_delivery", "cancel_issue"],
+      pendingAction: "Forge stopped an automatic loop. Review the task, then retry.",
+      resultCommit: sha,
+      resultTree: tree,
+      planRevision: 1,
+      lastEventId: "workflow:7",
+    });
+    let state = initial;
+    let reviewCalls = 0;
+    let publishCalls = 0;
+    let reviewReads = 0;
+    const ctx = {
+      input: initial,
+      get state() { return state; },
+      set state(next: IssueWorkflowState) { state = next; },
+      commandAlreadyProcessed: () => false,
+      markCommandProcessed: () => undefined,
+      beginDeferredProjection: () => undefined,
+      flushDeferredProjection: async () => undefined,
+      discardDeferredProjection: () => undefined,
+      project: async () => state,
+    } as unknown as IssueWorkflowContext;
+    const execution = {
+      workflowId: "workflow",
+      runId: "run",
+      signal: new AbortController().signal,
+      commands: new Map([
+        [issueUpdates.review_delivery, async () => { reviewCalls += 1; }],
+        [issueUpdates.publish_draft, async () => { publishCalls += 1; }],
+      ]),
+      queries: new Map(),
+      interrupts: new Map(),
+      acceptedInterrupt: undefined,
+      interruptResult: undefined,
+      activity: async () => undefined,
+      wait: async () => undefined,
+      now: () => Date.parse("2026-09-04T12:00:00.000Z"),
+      wake: () => undefined,
+      autoActionsHalted: () => false,
+    };
+    const completedReview = { turnId: turnId("turn"), executionId: executionId("execution"), role: "planner" as const, ledger: "agent" as const, promptKind: "delivery-review", subject: { commit: sha, tree, planRevision: 1 }, result: approvedReview, terminalFailure: null };
+
+    await expect(runExecution.run(execution, () => evaluateStep(ctx, dependencies({ readLatestHerdrTurn: async () => {
+      reviewReads += 1;
+      return completedReview;
+    } })))).resolves.toBe(false);
+
+    expect(reviewReads).toBe(0);
+    expect(reviewCalls).toBe(0);
+    expect(publishCalls).toBe(0);
+    expect(state.revision).toBe(initial.revision);
+    expect(state).toEqual(initial);
+  });
+
+  it("continues lead-owned delivery-ready reconciliation", async () => {
+    const initial = IssueWorkflowStateSchema.parse({
+      ...buildInitialIssueWorkflowState({
+        workflowId: "workflow",
+        companyId: "company",
+        projectId: "project",
+        issueId: "task",
+        projectRevisionId: "project-revision",
+        briefArtifactId: "brief",
+        briefSha256: "a".repeat(64),
+        imageArtifactIds: [],
+        requestHash: "a".repeat(64),
+        roleProfiles: { planner: "planner", builder: "builder" },
+        supplementalReview: false,
+        repairCycleLimit: 2,
+      }),
+      ...at("delivery_ready"),
+      revision: 7,
+      owner: "lead",
+      allowedCommands: ["review_delivery", "cancel_issue"],
+      pendingAction: "The Planner reviews the delivery",
+      resultCommit: sha,
+      resultTree: tree,
+      planRevision: 1,
+      lastEventId: "workflow:7",
+    });
+    let state = initial;
+    let reviewCalls = 0;
+    const ctx = {
+      input: initial,
+      get state() { return state; },
+      set state(next: IssueWorkflowState) { state = next; },
+      commandAlreadyProcessed: () => false,
+      markCommandProcessed: () => undefined,
+      beginDeferredProjection: () => undefined,
+      flushDeferredProjection: async () => undefined,
+      discardDeferredProjection: () => undefined,
+      project: async () => state,
+    } as unknown as IssueWorkflowContext;
+    const execution = {
+      workflowId: "workflow",
+      runId: "run",
+      signal: new AbortController().signal,
+      commands: new Map([[issueUpdates.review_delivery, async () => {
+        reviewCalls += 1;
+        state = IssueWorkflowStateSchema.parse({ ...state, ...at("delivery_reviewed"), owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Forge opens the pull request", deliveryReviewId: "review", deliveryReviewOutcome: "approved" });
+      }]]),
+      queries: new Map(),
+      interrupts: new Map(),
+      acceptedInterrupt: undefined,
+      interruptResult: undefined,
+      activity: async () => undefined,
+      wait: async () => undefined,
+      now: () => Date.parse("2026-09-04T12:00:00.000Z"),
+      wake: () => undefined,
+      autoActionsHalted: () => false,
+    };
+    const completedReview = { turnId: turnId("turn"), executionId: executionId("execution"), role: "planner" as const, ledger: "agent" as const, promptKind: "delivery-review", subject: { commit: sha, tree, planRevision: 1 }, result: approvedReview, terminalFailure: null };
+
+    await expect(runExecution.run(execution, () => evaluateStep(ctx, dependencies({ readLatestHerdrTurn: async () => completedReview })))).resolves.toBe(true);
+
+    expect(reviewCalls).toBe(1);
+    expect(state).toMatchObject({ revision: 8, step: "delivery_reviewed", owner: "lead" });
+  });
+
   it("does not project a driver claim when its handler makes no workflow change", async () => {
     const initial = IssueWorkflowStateSchema.parse({
       ...buildInitialIssueWorkflowState({

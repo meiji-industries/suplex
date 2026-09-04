@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
@@ -55,6 +55,10 @@ export type RunCommandInput = {
   env?: NodeJS.ProcessEnv;
   timeout?: number;
 };
+
+export function runCommandSync(input: Pick<RunCommandInput, "command" | "args" | "cwd">): string {
+  return execFileSync(input.command, [...input.args], { cwd: input.cwd, encoding: "utf8" });
+}
 
 let database: ForgeDatabase | undefined;
 

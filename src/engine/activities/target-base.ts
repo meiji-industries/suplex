@@ -7,6 +7,7 @@ import { proveForwardMergeLineage, type ForwardMergeLineageProof } from "./forwa
 import { proveRevisionInGit } from "./git-proof.js";
 import { isTaskTurnLive } from "./herdr-liveness.js";
 import { runCommand } from "../../command-runner.js";
+import { json } from "../../task-utils.js";
 
 type VerificationBlockerCode = Extract<TargetBaseBlockerCode, "verification_failed" | "verification_timed_out" | "verification_evidence_too_large">;
 type DeliveryArtifactKind = "developer-delivery" | "forward-merge-delivery";
@@ -166,7 +167,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           ORDER BY created_at DESC`).all(input.companyId, input.taskId) as Array<{ storagePath: string; sha256: string }>);
         for (const row of rows) {
           try {
-            const payload: unknown = JSON.parse((await artifacts.getArtifact({ companyId: input.companyId, storagePath: row.storagePath, sha256: row.sha256 })).toString("utf8"));
+            const payload = json((await artifacts.getArtifact({ companyId: input.companyId, storagePath: row.storagePath, sha256: row.sha256 })).toString("utf8"), undefined);
             const outcome = baseVerificationOutcome(payload, baseSha);
             if (outcome) return outcome;
           } catch {

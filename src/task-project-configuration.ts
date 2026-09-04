@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type Database from "better-sqlite3";
-import { execFileSync } from "node:child_process";
 import type { ArtifactStore } from "./artifacts.js";
+import { runCommandSync } from "./command-runner.js";
 import { resolveAgentProfiles } from "./projects.js";
 import { jsonRequired, parseRoleAgents } from "./task-utils.js";
 
@@ -77,8 +77,8 @@ export function loadTaskConfiguration(
     const snapshot = db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND company_id = ? ORDER BY revision DESC LIMIT 1").get(task.id, input.companyId) as { state_json: string } | undefined;
     let targetBaseSha: string | undefined;
     try { targetBaseSha = snapshot ? WorkflowTargetBaseSchema.parse(jsonRequired(snapshot.state_json)).targetBaseSha ?? undefined : undefined; } catch {}
-    const baseSha = targetBaseSha ?? execFileSync("git", ["rev-parse", project.base_branch], { cwd: project.repository_path, encoding: "utf8" }).trim();
-    const targetSha = targetBaseSha ?? execFileSync("git", ["rev-parse", project.target_branch], { cwd: project.repository_path, encoding: "utf8" }).trim();
+    const baseSha = targetBaseSha ?? runCommandSync({ command: "git", args: ["rev-parse", project.base_branch], cwd: project.repository_path }).trim();
+    const targetSha = targetBaseSha ?? runCommandSync({ command: "git", args: ["rev-parse", project.target_branch], cwd: project.repository_path }).trim();
     const capturedAt = new Date().toISOString();
     const roleAgents = parseRoleAgents(task.role_agents_json);
     const configuration = parseTaskProjectConfiguration({

@@ -3,13 +3,13 @@ import type { ActivityContext } from "./context.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
 
 export function createFinalReviewActivities(ctx: ActivityContext): FinalReviewActivities {
-  const { database, AgentFailure, SafeSummarySchema, normalizeSafeSummary, defaultAgent, githubRelease, artifacts, agent, attentionFailure, invokeAgent, bindCapacityExecution, latestWorktree, agentRuntime, pinnedProjectRevision, normalizeReviewResult, durableArtifactReference } = ctx;
+  const { database, AgentFailure, SafeSummarySchema, normalizeSafeSummary, defaultAgent, githubRelease, artifacts, agent, attentionFailure, invokeAgent, bindCapacityExecution, latestWorktree, agentRuntime, normalizeReviewResult, durableArtifactReference } = ctx;
   return {
     async finalReview(input: WorkflowFinalReviewActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
       const context = database.authQuery((db) => db.prepare("SELECT rel.repository, rel.pr_number AS pullRequestNumber, rel.pr_url AS pullRequestUrl, rel.head_branch AS headBranch, rel.base_branch AS baseBranch, rel.base_sha AS baseSha, rel.head_sha AS headSha, rel.superseded_at AS supersededAt FROM forge_tasks t JOIN forge_releases rel ON rel.id = ? AND rel.task_id = t.id AND rel.company_id = t.company_id WHERE t.id = ? AND t.company_id = ?").get(input.releaseId, input.taskId, input.companyId) as { repository: string; pullRequestNumber: number | null; pullRequestUrl: string | null; headBranch: string; baseBranch: string; baseSha: string; headSha: string; supersededAt: string | null } | undefined);
       if (!context || context.supersededAt || context.pullRequestNumber === null) return attentionFailure(input, "provider_ambiguity", "final_review_context_unavailable", "Final review release evidence is unavailable.");
-      let pinned: ReturnType<typeof pinnedProjectRevision> & { artifactId: string };
+      let pinned: ReturnType<ActivityContext["pinnedProjectRevision"]> & { artifactId: string };
       try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { return attentionFailure(input, "provider_ambiguity", "final_review_context_unavailable", "Final review release evidence is unavailable."); }
       let currentPullRequest;
       try { currentPullRequest = await githubRelease.getPullRequest({ repository: context.repository, number: context.pullRequestNumber }); } catch { return attentionFailure(input, "provider_connectivity_exhausted", "final_review_provider_unavailable", "The release provider could not confirm the pull request for final review."); }

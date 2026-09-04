@@ -12,7 +12,7 @@ const droppedTables = [
 ].join("|");
 
 export default tseslint.config({
-  ignores: ["dist/**", "node_modules/**", ".scratch/**", "coverage/**", "bb/**", "orca/**", "meiji-industries/**", "desktop/**"],
+  ignores: ["dist/**", "node_modules/**", ".forge/**", ".scratch/**", "coverage/**", "bb/**", "orca/**", "meiji-industries/**", "desktop/**"],
 }, {
   files: ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
   plugins: {

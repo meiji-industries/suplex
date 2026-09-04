@@ -68,13 +68,13 @@ test("task lists request archived tasks only when the archived filter is set", a
   app.addHook("preHandler", async (request) => { request.forgeUser = { id: "user" } as never; });
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(() => (data) => JSON.stringify(data));
-  const listTasks = vi.fn(() => []);
-  await app.register(taskRoutes, { tasks: { listTasks } as never });
+  const listTasksWithLiveStatus = vi.fn(async () => []);
+  await app.register(taskRoutes, { tasks: { listTasksWithLiveStatus } as never });
   await app.ready();
   const visible = await app.inject({ method: "GET", url: "/api/companies/company/tasks" });
   const archived = await app.inject({ method: "GET", url: "/api/companies/company/tasks?archived=true" });
   expect(visible.statusCode).toBe(200);
   expect(archived.statusCode).toBe(200);
-  expect(listTasks.mock.calls).toEqual([["user", "company", false], ["user", "company", true]]);
+  expect(listTasksWithLiveStatus.mock.calls).toEqual([["user", "company", false], ["user", "company", true]]);
   await app.close();
 });

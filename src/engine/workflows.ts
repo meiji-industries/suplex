@@ -25,9 +25,8 @@ import { registerMergeHandlers, registerMergeReconciliationHandler } from "./wor
 import { registerReleaseHandlers } from "./workflow/register-release.js";
 import { registerTargetBaseHandlers } from "./workflow/register-target-base.js";
 import { reobserveParkedTask } from "./workflow/reobserve.js";
-import { applyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, classifyRepairFailure, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
-export * from "./issue-updates.js";
-export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
+import { applyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, classifyRepairFailure, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, resumeLeadTurn, runAutoChainedCommand } from "./workflow/runtime.js";
+export * from "./issue-updates.js"; export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
 async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { const projected = withWorktreeCommands(state); return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: runExecution.current().runId, eventId: projected.lastEventId, state: projected })); }
 const MAX_RECONCILIATION_ATTEMPTS = 20;
 function sleepUntil(retryAt: string | null | undefined): Promise<void> { return retryAt ? sleep(Math.max(1, Date.parse(retryAt) - Date.now())) : sleep("1 second"); }
@@ -367,6 +366,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     }
     while (true) {
       if ((workflowContext.state.step === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.step === "cancelled" && !(workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree")))) { return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
+      if (continuation && await resumeLeadTurn(workflowContext)) continue;
       if (!automaticActionsHalted && await reobserveParkedTask(workflowContext, validatedInput)) continue;
       if (githubSyncRequested) {
         githubSyncRequested = false;

@@ -1,6 +1,7 @@
 import { at, isBlocked, type IssueStep } from "../../issue-phases.js";
 import { isCancellation, log, runExecution, sleep } from "../registry.js";
 import { ActivityFailure, ApplicationFailure } from "../failures.js";
+import { issueUpdates } from "../issue-updates.js";
 
 import {
   AttentionCategorySchema,
@@ -140,6 +141,26 @@ export function createAcquireExternalTurn(
     return run(undefined);
   };
   return acquire;
+}
+
+const LEAD_RESUME_COMMANDS: Partial<Record<IssueStep, IssueWorkflowState["allowedCommands"][number]>> = {
+  reviewing_delivery: "review_delivery",
+};
+
+export async function resumeLeadTurn(ctx: IssueWorkflowContext): Promise<boolean> {
+  const command = LEAD_RESUME_COMMANDS[ctx.state.step];
+  if (!command || ctx.state.step !== "reviewing_delivery" || ctx.state.deliveryReviewId != null || ctx.state.deliveryReviewArtifact != null || ctx.state.pendingAction !== "The Planner reviews the delivery" || ctx.state.owner !== "lead" || ctx.state.activeOperation !== null || isBlocked(ctx.state)) return false;
+  const commandId = `${ctx.state.workflowId}:resume:${ctx.state.step}:${ctx.state.revision}`;
+  if (ctx.commandAlreadyProcessed(commandId)) return false;
+  const handler = runExecution.current().commands.get(issueUpdates[command]);
+  if (!handler) throw new Error(`Resume ${command} handler is unavailable`);
+  ctx.markCommandProcessed(commandId);
+  const revision = ctx.state.revision + 1;
+  ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision, allowedCommands: ctx.state.allowedCommands.includes(command) ? ctx.state.allowedCommands : [...ctx.state.allowedCommands, command], lastEventId: `${ctx.state.workflowId}:${revision}` });
+  await ctx.project();
+  if (ctx.state.step !== "reviewing_delivery") return true;
+  await Reflect.apply(handler, undefined, [{ expectedRevision: ctx.state.revision, actorUserId: "forge-resume", commandId }]);
+  return true;
 }
 
 // Forge is a single-operator tool: a phase whose next step is an agent turn must not park

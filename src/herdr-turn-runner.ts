@@ -60,6 +60,8 @@ export class HerdrTurnRunner {
     let turnId: string | undefined;
     let promptNotStarted = false;
     try {
+      const adopted = await this.adoptCompatibleTurn(input);
+      if (adopted) return adopted;
       let correction = 0;
       let validationIssues: string | undefined;
       for (;;) {
@@ -358,6 +360,41 @@ export class HerdrTurnRunner {
   }
 
   private turnId(input: HerdrTurnInput<unknown>, correction: number): string { return `turn_${hash(`${input.executionId}\0${input.promptKind}\0${correction}`).slice(0, 32)}`; }
+  private async adoptCompatibleTurn<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T> | undefined> {
+    const turn = this.database.authQuery((db) => db.prepare(`SELECT turn.turn_id AS turnId, turn.status, turn.result_relative_path AS resultRelativePath,
+        session.id AS roleSessionId, session.agent_name AS agentName, session.codex_session_id AS sessionId
+      FROM forge_herdr_turns turn
+      JOIN forge_herdr_role_sessions session ON session.id = turn.role_session_id AND session.task_id = turn.task_id
+      LEFT JOIN forge_agent_executions execution ON turn.ledger = 'agent' AND execution.id = turn.execution_id
+      WHERE turn.task_id = ? AND turn.ledger = ? AND turn.execution_role = ? AND turn.prompt_kind = ?
+        AND execution.workflow_revision = ? AND turn.execution_id <> ?
+      ORDER BY turn.updated_at DESC, turn.created_at DESC, turn.correction_index DESC, turn.turn_id DESC
+      LIMIT 1`).get(input.task.taskId, input.ledger, input.executionRole, input.promptKind, input.revision, input.executionId) as {
+        turnId: string; status: string; resultRelativePath: string; roleSessionId: string; agentName: string; sessionId: string | null;
+      } | undefined);
+    if (!turn) return undefined;
+
+    const parse = async (): Promise<HerdrTurnOutput<T> | undefined> => {
+      const bytes = await readFile(this.existingResultPath(input, turn.resultRelativePath)).catch(() => undefined);
+      if (!bytes) return undefined;
+      const result = input.resultSchema.safeParse(jsonRequired(bytes.toString("utf8")));
+      if (!result.success) return undefined;
+      const resultHash = hash(bytes);
+      this.update("UPDATE forge_herdr_turns SET status = 'completed', result_sha256 = ?, finished_at = COALESCE(finished_at, ?), updated_at = ? WHERE turn_id = ?", resultHash, iso(), iso(), turn.turnId);
+      return { turnId: turn.turnId, sessionId: turn.sessionId ?? turn.agentName, roleSessionId: turn.roleSessionId, result: result.data, resultHash };
+    };
+
+    const completed = await parse();
+    if (completed) return completed;
+    if (!["dispatching", "waiting", "blocked", "awaiting_human", "validating"].includes(turn.status)) return undefined;
+    for (;;) {
+      const agent = await this.herdr.getAgent(turn.agentName).catch(() => undefined);
+      if (!agent || !["working", "running", "starting", "blocked", "awaiting_human", "awaiting_input", "awaiting-input"].includes(agent.status ?? "")) return undefined;
+      await this.sleep(1_000);
+      const result = await parse();
+      if (result) return result;
+    }
+  }
   private async promptOrObserveDelivery(name: string, prompt: string, marker: string, resultPath: string): Promise<HerdrAgent | null> {
     try {
       return await this.herdr.prompt(name, prompt, { waitForWorking: true });

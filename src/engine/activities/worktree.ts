@@ -12,10 +12,13 @@ import type { ForgeDatabase } from "../../database.js";
 import { readEnvironmentSettings } from "../../environment-settings.js";
 import { invalidateBranchSync, WorktreeManager } from "../../worktrees.js";
 import { DeveloperDeliveryReportSchema } from "../../codex-developer.js";
+import { CliHerdrClient } from "../../herdr-client.js";
+import { observeHerdrSessions } from "../../herdr-recovery.js";
 import type { ActivityContext } from "./context.js";
+import { proveRevisionInGit } from "./git-proof.js";
 
-export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" | "config" | "worktrees" | "createHash">) {
-  const { database, config, worktrees, createHash } = ctx;
+export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" | "config" | "worktrees" | "createHash"> & Partial<Pick<ActivityContext, "githubRelease">>) {
+  const { database, config, worktrees, createHash, githubRelease } = ctx;
   const owned = (input: { taskId: string; companyId: string; workflowId: string }) => database.authQuery((db) => db.prepare("SELECT repository_path AS repositoryPath, worktree_path AS worktreePath, worktree_root AS worktreeRoot, branch_name AS branchName, starting_sha AS targetBaseSha FROM forge_issue_worktrees WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY reserved_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId) as { repositoryPath: string; worktreePath: string; worktreeRoot: string; branchName: string; targetBaseSha: string } | undefined);
   const resolved = (input: { taskId: string; companyId: string; workflowId: string }) => {
     const lease = owned(input);
@@ -36,6 +39,8 @@ export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" |
     return path.startsWith(`${resolve(config.worktreeRoot)}/`) && path.startsWith(`${resolve(row.worktreeRoot)}/`);
   };
   const active = async (input: { taskId: string }) => {
+    const observations = await observeHerdrSessions(database, new CliHerdrClient(), input.taskId);
+    if (observations.some((observation) => observation.classification === "active" || observation.classification === "unverifiable")) return true;
     const turn = database.authQuery((db) => db.prepare(`SELECT turn.result_relative_path AS resultRelativePath FROM forge_herdr_turns turn
     WHERE turn.task_id = ? AND turn.ledger = 'developer'
       AND turn.turn_id = (SELECT latest.turn_id FROM forge_herdr_turns latest WHERE latest.role_session_id = turn.role_session_id ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.correction_index DESC, latest.turn_id DESC LIMIT 1)
@@ -65,16 +70,19 @@ export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" |
     return stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3)).slice(0, 20);
   };
   return {
-    async inspectTaskWorktree(input: { taskId: string; companyId: string; workflowId: string }) {
+    async inspectTaskWorktree(input: { taskId: string; companyId: string; workflowId: string; expectedCommit?: string; expectedTree?: string; expectedBranch?: string }) {
       const row = resolved(input);
       const isSafe = !!row && safe(row);
       const present = !!row && existsSync(row.worktreePath) && await listed(row);
       let dirtyFileCount = 0;
       if (isSafe && present) dirtyFileCount = (await worktrees.inspectDelivery(row.worktreePath, row.branchName)).dirtyState === "dirty" ? 1 : 0;
+      const revision = githubRelease && isSafe && present && input.expectedCommit && input.expectedTree
+        ? await proveRevisionInGit(githubRelease, { worktreePath: row.worktreePath, branchName: input.expectedBranch ?? row.branchName, commit: input.expectedCommit, tree: input.expectedTree })
+        : null;
       const artifact = !present && row
         ? await new ArtifactStore(config.artifactRoot, database).putArtifact(input.companyId, "attention-evidence", { taskId: input.taskId, filename: input.workflowId + "-worktree-missing.txt", mimeType: "text/plain", bytes: Buffer.from("The local worktree is missing: " + row.worktreePath, "utf8") })
         : undefined;
-      return { present, owned: isSafe, dirtyFileCount, branch: row?.branchName ?? null, activeExecution: await active(input), ...(artifact ? { evidenceArtifactId: artifact.id } : {}) };
+      return { present, owned: isSafe, dirtyFileCount, branch: row?.branchName ?? null, activeExecution: await active(input), revision, ...(artifact ? { evidenceArtifactId: artifact.id } : {}) };
     },
     async cleanupTaskWorktree(input: { taskId: string; companyId: string; workflowId: string; confirmDiscardDirty?: boolean }) {
       const row = resolved(input);

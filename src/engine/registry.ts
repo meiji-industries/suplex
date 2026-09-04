@@ -27,6 +27,7 @@ export interface RunExecutionContext {
   wait(milliseconds: number): Promise<void>;
   now(): number;
   wake(): void;
+  driverReconciled?(): void;
   autoActionsHalted(): boolean;
 }
 export interface ActivityCallOptions {

@@ -231,6 +231,28 @@ test("keeps task-actions cards with an available command", () => {
   expect(html).toContain(">Start planning<");
 });
 
+test("shows Retry outside More for every nonterminal task", () => {
+  const task = {
+    phase: "development",
+    allowedCommands: ["cancel_issue"],
+    commands: [],
+    pendingAction: "Forge checks the build",
+    projection: { status: "current" },
+  } as unknown as ApiTask;
+  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
+    task,
+    busy: false,
+    onStartPlanning: async () => undefined,
+    onPlanAction: async () => undefined,
+    onRevisePlan: async () => undefined,
+    onContinueWork: async () => undefined,
+    onRescue: async () => ({ status: "waiting" as const, detail: "Forge is checking the current workflow state.", revision: 1 }),
+  }) }));
+
+  expect(html).toContain(">Retry<");
+  expect(html).not.toContain("Retry workflow");
+});
+
 test("keeps incomplete verification actionable without a blocker card", () => {
   const task = {
     phase: "reviewing",

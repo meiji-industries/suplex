@@ -489,11 +489,11 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to resolve the decision blocker"); }
     finally { setBusy(false); }
   };
-  const rescueTask = async (): Promise<{ steps: Array<{ name: string; outcome: "completed" | "skipped" | "failed"; detail: string }> }> => {
-    if (!selected) return { steps: [] };
+  const rescueTask = async (): Promise<{ status: "reconciled" | "command_issued" | "waiting" | "cannot_proceed"; detail: string; revision: number; command?: string }> => {
+    if (!selected) return { status: "cannot_proceed", detail: "Task is not available.", revision: 0 };
     setBusy(true); setError("");
-    try { const report = await readJson<{ steps: Array<{ name: string; outcome: "completed" | "skipped" | "failed"; detail: string }> }>(`/api/tasks/${selected.id}/rescue`, { method: "POST" }); await reload(); return report; }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to rescue task"); throw reason; }
+    try { const report = await readJson<{ status: "reconciled" | "command_issued" | "waiting" | "cannot_proceed"; detail: string; revision: number; command?: string }>(`/api/tasks/${selected.id}/rescue`, { method: "POST" }); await reload(); return report; }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to retry the task"); throw reason; }
     finally { setBusy(false); }
   };
 

@@ -380,7 +380,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     }
     for (;;) {
       if ((workflowContext.state.step === "done" && !workflowContext.state.allowedCommands.includes("delete_worktree")) || (workflowContext.state.step === "cancelled" && !(workflowContext.state.allowedCommands.includes("continue_work") || workflowContext.state.allowedCommands.includes("delete_worktree")))) { return workflowContext.state; } // finish only after every handler landed its projection; a terminal issue offering cleanup or continuation stays open
-      if (await evaluateStep(workflowContext, {
+      const driverAdvanced = await evaluateStep(workflowContext, {
         syncGithubPullRequest: async () => {
           githubSyncRequested = false;
           return syncGithubPullRequest();
@@ -394,7 +394,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
           return true;
         },
         now: () => new Date(runExecution.current().now()),
-      })) continue;
+      });
+      runExecution.current().driverReconciled?.();
+      if (driverAdvanced) continue;
       if (githubSyncPending()) {
         githubSyncRequested = false;
         await syncGithubPullRequest();

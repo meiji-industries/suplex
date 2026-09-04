@@ -173,6 +173,8 @@ export class IssueRun {
   private releaseInterrupt: (() => void) | undefined;
   private interrupting = new Map<string, Promise<InterruptOutcome>>();
   private readonly projectionBurstGuard = new ProjectionBurstGuard();
+  private driverReconciliationVersion = 0;
+  private driverReconciliationWaiters = new Set<() => void>();
 
   constructor(
     readonly input: IssueWorkflowInput,
@@ -277,6 +279,7 @@ export class IssueRun {
       },
       now: () => this.clock.now(),
       wake: () => this.wakeable.wake(),
+      driverReconciled: () => this.driverReconciled(),
       autoActionsHalted: () => false,
     };
     if (durableProjection) (context as CommandExecutionContext).durableProjection = durableProjection;
@@ -312,6 +315,35 @@ export class IssueRun {
     this.start();
     for (let attempt = 0; attempt < 100 && !this.queries.has("issueState"); attempt += 1) await Promise.resolve();
     if (!this.queries.has("issueState")) throw this.loopError ?? new Error(`Issue run ${this.workflowId} did not register its state query`);
+  }
+
+  async reconcileOwnerRead(timeoutMs = 1_000): Promise<"reconciled" | "waiting"> {
+    await this.ready();
+    const observedVersion = this.driverReconciliationVersion;
+    let finish!: () => void;
+    const reconciliation = new Promise<void>((resolve) => { finish = resolve; });
+    this.driverReconciliationWaiters.add(finish);
+    this.wakeable.wake();
+    if (this.driverReconciliationVersion > observedVersion) {
+      this.driverReconciliationWaiters.delete(finish);
+      return "reconciled";
+    }
+    return await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.driverReconciliationWaiters.delete(finish);
+        resolve("waiting");
+      }, timeoutMs);
+      void reconciliation.then(() => {
+        clearTimeout(timer);
+        resolve("reconciled");
+      });
+    });
+  }
+
+  private driverReconciled(): void {
+    this.driverReconciliationVersion += 1;
+    for (const resolve of this.driverReconciliationWaiters) resolve();
+    this.driverReconciliationWaiters.clear();
   }
 
   private async waitForActiveCommand(context: CommandExecutionContext): Promise<void> {

@@ -5,19 +5,31 @@ import type { ForgeDatabase } from "./database.js";
 import { TERMINAL_PHASES } from "./issue-phases.js";
 import type { IssueCommand } from "./commands/registry.js";
 import { getIssueEngine } from "./engine/index.js";
-import { createRunFromLatestSnapshot } from "./engine/runs.js";
 import { TaskFailure, type ForgeTask, type TaskService } from "./tasks.js";
 
-export type RescueStep = { name: string; outcome: "completed" | "skipped" | "failed"; detail: string };
+export type TaskRetryReport = {
+  status: "reconciled" | "command_issued" | "waiting" | "cannot_proceed";
+  detail: string;
+  revision: number;
+  command?: IssueCommand;
+};
 export type TaskDiagnostics = {
   workflow: { status: "running" | "errored" | "not_loaded"; lastError: string | null };
   executions: Array<{ id: string; kind: "agent" | "developer"; status: string; pid: number | null; terminal: boolean }>;
 };
 
 const terminalExecution = new Set(["completed", "blocked", "interrupted", "cancelled", "failed"]);
-const retryCommands: IssueCommand[] = ["retry_target_base_reconciliation", "retry_forward_merge_verification", "repair_ci", "reconcile_ci", "repair_delivery", "reconcile_merge", "retry_capacity", "review_delivery", "publish_draft", "resolve_merge_conflict", "reconcile_acceptance", "retry_development"];
+const continuationCommands = new Set<IssueCommand>(["start_planning", "start_development", "repair_ci", "repair_delivery", "review_delivery", "publish_draft", "resolve_merge_conflict"]);
+
+function selectRetryCommand(commands: IssueCommand[]): IssueCommand | undefined {
+  return commands.find((command) => command.startsWith("retry_"))
+    ?? commands.find((command) => command.startsWith("reconcile_"))
+    ?? commands.find((command) => continuationCommands.has(command));
+}
 
 export class TaskRescueService {
+  private readonly retries = new Map<string, Promise<TaskRetryReport>>();
+
   constructor(private readonly tasks: TaskService, private readonly database: ForgeDatabase, private readonly config: ForgeConfig) {}
 
   private task(actorUserId: string, taskId: string): ForgeTask {
@@ -26,10 +38,9 @@ export class TaskRescueService {
     return this.tasks.getTask(actorUserId, taskId);
   }
 
-  private record(actorUserId: string, task: ForgeTask, name: string, outcome: RescueStep["outcome"], detail: string): RescueStep {
-    const step = { name, outcome, detail };
-    this.database.authQuery((db) => db.prepare("INSERT INTO forge_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES (?, ?, 'task_rescue', ?, ?, ?)").run(`audit_rescue_${randomUUID()}`, actorUserId, task.companyId, JSON.stringify({ taskId: task.id, actionLabel: `Retry workflow: ${name}`, outcome, detail, revision: task.revision }), new Date().toISOString()));
-    return step;
+  private record(actorUserId: string, task: ForgeTask, report: TaskRetryReport): TaskRetryReport {
+    this.database.authQuery((db) => db.prepare("INSERT INTO forge_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES (?, ?, 'task_retry', ?, ?, ?)").run(`audit_retry_${randomUUID()}`, actorUserId, task.companyId, JSON.stringify({ taskId: task.id, ...report }), new Date().toISOString()));
+    return report;
   }
 
   async diagnostics(actorUserId: string, taskId: string): Promise<TaskDiagnostics> {
@@ -43,18 +54,35 @@ export class TaskRescueService {
     return { workflow, executions: local.executions.map((entry) => ({ ...entry, terminal: terminalExecution.has(entry.status) })) };
   }
 
-  async rescue(actorUserId: string, taskId: string): Promise<{ steps: RescueStep[] }> {
+  async rescue(actorUserId: string, taskId: string): Promise<TaskRetryReport> {
     const task = this.task(actorUserId, taskId);
-    const steps: RescueStep[] = [];
-    if (TERMINAL_PHASES.has(task.phase)) return { steps: [...steps, this.record(actorUserId, task, "Retry workflow", "skipped", "Task is already terminal.")] };
+    if (TERMINAL_PHASES.has(task.phase)) return this.record(actorUserId, task, { status: "cannot_proceed", detail: "Task is already terminal.", revision: task.revision });
+    const active = this.retries.get(task.workflowId);
+    if (active) return active;
+    const retry = this.retry(actorUserId, task);
+    this.retries.set(task.workflowId, retry);
     try {
-      const run = await createRunFromLatestSnapshot(getIssueEngine(this.config), task.workflowId);
-      const command = retryCommands.find((candidate) => run.state.allowedCommands.includes(candidate));
-      if (command) {
-        await this.tasks.executeCommand(actorUserId, task.id, command, { expectedRevision: run.state.revision, commandId: randomUUID() });
-        steps.push(this.record(actorUserId, task, "Retry current step", "completed", `Issued ${command}.`));
-      } else steps.push(this.record(actorUserId, task, "Retry current step", "skipped", "No retry command is available for the current phase."));
-    } catch (error) { steps.push(this.record(actorUserId, task, "Retry current step", "failed", error instanceof Error ? error.message.slice(0, 300) : "Could not restart workflow.")); }
-    return { steps };
+      return await retry;
+    } finally { this.retries.delete(task.workflowId); }
+  }
+
+  private async retry(actorUserId: string, task: ForgeTask): Promise<TaskRetryReport> {
+    try {
+      const run = getIssueEngine(this.config).run(task.workflowId);
+      const reconciliation = await run.reconcileOwnerRead();
+      const current = this.tasks.getTask(actorUserId, task.id);
+      if (TERMINAL_PHASES.has(current.phase)) return this.record(actorUserId, current, { status: "reconciled", detail: "Forge reconciled the task to a terminal state.", revision: current.revision });
+      if (reconciliation === "waiting") return this.record(actorUserId, current, { status: "waiting", detail: "Forge is checking the current workflow state.", revision: current.revision });
+      const command = selectRetryCommand(current.allowedCommands);
+      if (!command) {
+        const status = run.state.activeOperation === null ? "cannot_proceed" : "waiting";
+        return this.record(actorUserId, current, { status, detail: status === "waiting" ? "Forge is waiting for the current workflow action." : "No retry action is available for the current task state.", revision: current.revision });
+      }
+      const updated = await this.tasks.executeCommand(actorUserId, current.id, command, { expectedRevision: current.revision, commandId: `${current.workflowId}:task-retry:${current.revision}:${command}` });
+      return this.record(actorUserId, updated, { status: "command_issued", command, detail: `Forge issued ${command}.`, revision: updated.revision });
+    } catch (error) {
+      const current = this.tasks.getTask(actorUserId, task.id);
+      return this.record(actorUserId, current, { status: "cannot_proceed", detail: error instanceof Error ? error.message.slice(0, 300) : "Forge could not retry the task.", revision: current.revision });
+    }
   }
 }

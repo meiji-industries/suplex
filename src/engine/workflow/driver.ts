@@ -4,6 +4,7 @@ import { issueUpdates } from "../issue-updates.js";
 import { IssueWorkflowStateSchema, type IssueCommand, type IssueWorkflowState } from "../issue-contracts.js";
 import { runExecution } from "../registry.js";
 import { turnResultSchema } from "../../turn-result-schemas.js";
+import { at } from "../../issue-phases.js";
 import type { IssueWorkflowContext } from "./context.js";
 import { inspectTaskWorktree, observeGithubPullRequest, readHerdrTurn } from "./activity-proxies.js";
 import { nextStep, type OwnerEvent } from "./step-machine.js";
@@ -140,6 +141,38 @@ async function runDriverCommand(ctx: IssueWorkflowContext, command: IssueCommand
   await Reflect.apply(handler, undefined, [{ expectedRevision: ctx.state.revision, actorUserId: "forge-driver", commandId }]);
 }
 
+const DIRECT_STEP_DETAILS: Partial<Record<IssueWorkflowState["step"], Pick<IssueWorkflowState, "allowedCommands" | "pendingAction">>> = {
+  delivery_reviewed: { allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Forge opens the pull request" },
+  repair_required: { allowedCommands: ["repair_delivery", "cancel_issue"], pendingAction: "The Builder fixes the review findings" },
+  accepted: { allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"], pendingAction: "Your delivery decision is necessary" },
+  delivery_ready: { allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "The Planner reviews the delivery" },
+  development: { allowedCommands: ["request_delivery_changes", "cancel_issue"], pendingAction: "Your delivery decision is necessary" },
+};
+
+function directStepDetails(step: IssueWorkflowState["step"]): Pick<IssueWorkflowState, "allowedCommands" | "pendingAction"> {
+  const details = DIRECT_STEP_DETAILS[step];
+  if (!details) throw new Error(`No direct driver transition details for ${step}`);
+  return details;
+}
+
+async function applyDirectStep(ctx: IssueWorkflowContext, target: Extract<Transition, { step: IssueWorkflowState["step"] }>, step: IssueWorkflowState["step"], event: OwnerEvent): Promise<void> {
+  const revision = ctx.state.revision;
+  const commandId = `${ctx.state.workflowId}:driver:${step}:${revision}:${event.type}`;
+  if (ctx.commandAlreadyProcessed(commandId)) return;
+  const details = directStepDetails(target.step);
+  ctx.markCommandProcessed(commandId);
+  ctx.state = IssueWorkflowStateSchema.parse({
+    ...ctx.state,
+    revision: revision + 1,
+    ...at(target.step),
+    owner: target.owner,
+    ...details,
+    blocker: null,
+    lastEventId: `${ctx.state.workflowId}:${revision + 1}`,
+  });
+  await ctx.project();
+}
+
 export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: DriverDependencies = {}): Promise<boolean> {
   const step = ctx.state.step;
   const rule = STEP_TABLE[step];
@@ -149,15 +182,10 @@ export async function evaluateStep(ctx: IssueWorkflowContext, dependencies: Driv
   for (const action of actions) {
     switch (action.type) {
       case "runCommand": await runDriverCommand(ctx, action.params.command, step, event); break;
-      case "changeStep": await runDriverCommand(ctx, claimCommand(rule.on.absent), step, event); break;
+      case "changeStep": await applyDirectStep(ctx, action.params, step, event); break;
       case "wait": return false;
       default: assertNever(action);
     }
   }
   return true;
-}
-
-function claimCommand(transition: Transition): IssueCommand {
-  if ("command" in transition) return transition.command;
-  throw new Error("Herdr step without a claim command");
 }

@@ -28,10 +28,7 @@ import { evaluateStep } from "./workflow/driver.js"; import { reobserveParkedTas
 import { applyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, classifyRepairFailure, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, resumeLeadTurn, runAutoChainedCommand } from "./workflow/runtime.js";
 export * from "./issue-updates.js"; export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
 async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { const projected = withWorktreeCommands(state); return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: runExecution.current().runId, eventId: projected.lastEventId, state: projected })); }
-const MAX_RECONCILIATION_ATTEMPTS = 20;
-function sleepUntil(retryAt: string | null | undefined): Promise<void> { return retryAt ? sleep(Math.max(1, Date.parse(retryAt) - Date.now())) : sleep("1 second"); }
-function sameTransition(state: IssueWorkflowState, next: Partial<IssueWorkflowState>): boolean { return Object.entries(next).every(([field, value]) => JSON.stringify(state[field as keyof IssueWorkflowState]) === JSON.stringify(value)); }
-export const issueStateQuery = "issueState" as const;
+const MAX_RECONCILIATION_ATTEMPTS = 20; function sleepUntil(retryAt: string | null | undefined): Promise<void> { return retryAt ? sleep(Math.max(1, Date.parse(retryAt) - Date.now())) : sleep("1 second"); } function sameTransition(state: IssueWorkflowState, next: Partial<IssueWorkflowState>): boolean { return Object.entries(next).every(([field, value]) => JSON.stringify(state[field as keyof IssueWorkflowState]) === JSON.stringify(value)); } export const issueStateQuery = "issueState" as const;
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);

@@ -4,6 +4,7 @@ export { asNonRetryableApplicationFailure, asRetryableAgentFailure } from "./act
 
 import { randomUUID } from "node:crypto";
 
+import { isAbortSignalAborted } from "../abort-signal.js";
 import type { ForgeDatabase } from "../database.js";
 import { StructuredLogger } from "../logging.js";
 import { activityContext } from "./activity-context.js";
@@ -36,9 +37,9 @@ export function createActivityCaller(database: ForgeDatabase, activities: object
       const maxDelay = durationMs(options.retry?.maximumInterval) ?? delay;
       let lastError: unknown;
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
-        if (runSignal.aborted) throw new CancelledFailure("Activity cancelled");
+        if (isAbortSignalAborted(runSignal)) throw new CancelledFailure("Activity cancelled");
         if (beforeAttempt) await beforeAttempt();
-        if (runSignal.aborted) throw new CancelledFailure("Activity cancelled");
+        if (isAbortSignalAborted(runSignal)) throw new CancelledFailure("Activity cancelled");
         const id = randomUUID();
         const startedAt = new Date().toISOString();
         const timeoutController = new AbortController();
@@ -53,10 +54,10 @@ export function createActivityCaller(database: ForgeDatabase, activities: object
             heartbeat: () => database.authTransaction((db) => db.prepare("UPDATE forge_engine_activities SET heartbeat_at = ? WHERE id = ?").run(new Date().toISOString(), id)),
             log: logger,
           }, () => Promise.resolve(operation(...args)));
-          if (signal.aborted) throw new CancelledFailure("Activity cancelled");
+          if (isAbortSignalAborted(signal)) throw new CancelledFailure("Activity cancelled");
           return result;
         } catch (error) {
-          lastError = signal.aborted ? new CancelledFailure(timeoutController.signal.aborted && !runSignal.aborted ? `Activity ${name} timed out` : "Activity cancelled") : error;
+          lastError = isAbortSignalAborted(signal) ? new CancelledFailure(isAbortSignalAborted(timeoutController.signal) && !isAbortSignalAborted(runSignal) ? `Activity ${name} timed out` : "Activity cancelled") : error;
           logger.warn("Activity attempt failed", { workflowId }, {
             activity: name,
             attempt,
@@ -67,7 +68,7 @@ export function createActivityCaller(database: ForgeDatabase, activities: object
             ...(lastError instanceof Error && lastError.cause instanceof Error ? { cause: lastError.cause.message } : {}),
           });
           const type = failureType(lastError);
-          if (runSignal.aborted || lastError instanceof ApplicationFailure && lastError.nonRetryable || type && options.retry?.nonRetryableErrorTypes?.includes(type) || attempt === attempts) break;
+          if (isAbortSignalAborted(runSignal) || lastError instanceof ApplicationFailure && lastError.nonRetryable || type && options.retry?.nonRetryableErrorTypes?.includes(type) || attempt === attempts) break;
           await wait(Math.min(delay, maxDelay), runSignal);
           delay = Math.min(maxDelay, delay * (options.retry?.backoffCoefficient ?? 2));
         } finally {

@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import type { HealthCheck } from "../health.js";
 import { commandFailure, runCommand, type CommandRunner } from "../provider-readiness.js";
-import { ProviderCredentialStore, testOpenRouterKey } from "../provider-credentials.js";
+import { type ProviderCredentialStore, testOpenRouterKey } from "../provider-credentials.js";
 export const MINIMUM_OMP_VERSION = "18.0.0";
 const supported = (version: string) => {
   const current = version.split(".").map(Number);

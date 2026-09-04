@@ -1,4 +1,4 @@
-import { type ZodTypeProvider } from "@fastify/type-provider-zod";
+import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import type { FastifyPluginAsync } from "fastify";
 
 import { ArtifactStore } from "../../artifacts.js";

@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, expect, test } from "vitest";
 
-import { AcceptanceFailure, AcceptanceService, type AcceptanceInput } from "../src/acceptance.js";
+import { type AcceptanceFailure, AcceptanceService, type AcceptanceInput } from "../src/acceptance.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import type { GithubAcceptancePort, GithubPullRequest } from "../src/github-release.js";

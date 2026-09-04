@@ -1,5 +1,5 @@
 import { ChevronDown, Search } from "lucide-react";
-import { type ComponentProps, type ReactElement, type ReactNode, type TdHTMLAttributes } from "react";
+import type { ComponentProps, ReactElement, ReactNode, TdHTMLAttributes } from "react";
 
 import { cn } from "../../lib/utils.js";
 import { Button } from "../ui/button.js";

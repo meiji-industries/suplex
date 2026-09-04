@@ -11,16 +11,16 @@ import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { AgentFailure } from "./agent-failure.js";
 import { LeadOutputSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type LeadOutput, type LeadPlanningActivityInput, type LeadPlanningResult } from "./lead-contracts.js";
-import { ForgeDatabase } from "./database.js";
+import type { ForgeDatabase } from "./database.js";
 import { HerdrFailure, CliHerdrClient } from "./herdr-client.js";
 import { IssueTimelineEvents } from "./issue-timeline-events.js";
 import { HerdrSessionStore } from "./herdr-session-store.js";
 import { HerdrTurnRunner, type HerdrTurnInput, type HerdrTurnOutput } from "./herdr-turn-runner.js";
 import { redact } from "./logging.js";
-import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, ReviewArbitrationActivityInputSchema, ReviewArbitrationActivityResultSchema, ReviewArbitrationSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type ReviewArbitrationActivityInput, type ReviewArbitrationActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./engine/issue-contracts.js";
+import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, ReviewArbitrationActivityInputSchema, ReviewArbitrationActivityResultSchema, ReviewArbitrationSchema, type CiRepairPlan, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryOperationBlockCode, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type ReviewArbitrationActivityInput, type ReviewArbitrationActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./engine/issue-contracts.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
-import { loadDefaultPrompts, renderPrompt } from "./prompts.js";
+import { loadDefaultPrompts, renderPrompt, type PromptPath } from "./prompts.js";
 import { isVersionedPromptSet } from "./prompt-resolution.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { json, jsonRequired } from "./task-utils.js";
@@ -122,7 +122,7 @@ function matchesDeliverySubject(evidence: DeliveryGitEvidence, branchName: strin
     && evidence.tree.toLowerCase() === subjectTree.toLowerCase();
 }
 
-export function deliveryBlockCode(failure: AgentFailure): import("./engine/issue-contracts.js").DeliveryOperationBlockCode {
+export function deliveryBlockCode(failure: AgentFailure): DeliveryOperationBlockCode {
   if (failure.code === "login-expired" || failure.code === "authentication-required") return "authentication-required";
   if (failure.code === "rate-limited") return "rate-limited";
   if (failure.code === "evidence-too-large") return "evidence-too-large";
@@ -135,9 +135,9 @@ export function deliveryBlockCode(failure: AgentFailure): import("./engine/issue
   return "preflight-failed";
 }
 
-export function safeBlockSummary(code: import("./engine/issue-contracts.js").DeliveryOperationBlockCode, correctionExhausted = false, reason?: string): string {
+export function safeBlockSummary(code: DeliveryOperationBlockCode, correctionExhausted = false, reason?: string): string {
   if (correctionExhausted) return "The Lead returned invalid review output after one format correction; retry the review.";
-  const summaries: Record<import("./engine/issue-contracts.js").DeliveryOperationBlockCode, string> = {
+  const summaries: Record<DeliveryOperationBlockCode, string> = {
     "invalid-output": "The Lead review was not machine-readable; retry the review.",
     "correction-exhausted": "The Lead returned invalid review output after one format correction; retry the review.",
     "session-conflict": "The Lead review returned a different session identity; retry the review.",
@@ -247,7 +247,7 @@ export class AgentService {
   private renderTaskPrompt(input: { taskId: string; companyId: string }, path: string, values: Record<string, string>): string {
     const configuration = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input);
     const guidance = "pull-request/guidance.md";
-    if (!configuration.prompts) { const defaults = loadDefaultPrompts(); return renderPrompt(defaults.get(path as import("./prompts.js").PromptPath)!, { pull_request_guidance: defaults.get(guidance)!, ...values }); }
+    if (!configuration.prompts) { const defaults = loadDefaultPrompts(); return renderPrompt(defaults.get(path as PromptPath)!, { pull_request_guidance: defaults.get(guidance)!, ...values }); }
     const pinned = configuration.prompts;
     const artifact = this.database.authQuery((db) => db.prepare("SELECT storage_path FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-prompt-set'").get(pinned.artifactId, input.companyId) as { storage_path: string } | undefined);
     if (!artifact) throw new AgentFailure("scoped-input-missing", "Pinned task prompts are unavailable");
@@ -635,7 +635,7 @@ export class AgentService {
     const evidenceRow = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(input.evidenceArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined);
     const failedLogs = evidenceRow ? await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: evidenceRow.storagePath, sha256: evidenceRow.sha256 }).then((bytes) => (jsonRequired(bytes.toString("utf8")) as { failedCheckLogs?: Array<{ name: string; runId: string; log: string }> }).failedCheckLogs ?? []).catch(() => []) : [];
     const prompt = this.ciRepairPrompt(context.title, { ...input, requiredChecks, localVerification }, failedChecks, failedLogs);
-    let plan: import("./engine/issue-contracts.js").CiRepairPlan;
+    let plan: CiRepairPlan;
     let leadSessionRef = input.leadSessionRef;
     try {
       const schemaPath = await this.ensureResultSchema("ci-repair-plan", CiRepairPlanSchema);

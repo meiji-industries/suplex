@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { DeveloperContextSchema, PlanStepVerificationSchema } from "./developer-contracts.js";
 import { GitPresentationSchema } from "./git-presentation.js";
-import { type PlanBlockerSubject, type PlanSubject } from "./plan-governance.js";
+import type { PlanBlockerSubject, PlanSubject } from "./plan-governance.js";
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
@@ -104,7 +104,6 @@ for (const variant of leadOutputVariants) {
 const leadOutputProperties = Object.fromEntries([...leadOutputPropertyEntries.entries()].map(([name, schema]) => {
   if (name === "kind") return [name, { type: "string", enum: ["plan", "decision_blocker"] }];
   // Structured clone of our own object; this file is part of the legacy workflow service workflow bundle and must not import node modules.
-  // eslint-disable-next-line no-restricted-syntax
   const schemaObject = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
   if (name === "developerContext") {
     const contextSchema = schemaObject as { properties?: Record<string, unknown> };

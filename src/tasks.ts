@@ -1,17 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { AuthUser } from "./auth.js";
-import { AuthFailure, AuthService } from "./auth.js";
+import { AuthFailure, type AuthService } from "./auth.js";
 import type { CheckConclusion, CheckStatus, CiOutcome, CiOwner } from "./ci.js";
 import type { ForgeConfig } from "./config.js";
 import { ArtifactFailure, ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { PersistedLeadOutputSchema, SupplementalReviewSchema, type PersistedLeadOutput, type SupplementalReview } from "./codex-lead.js";
 import { CapacityManager } from "./capacity.js";
 import type { PublicCapacityStatus } from "./capacity-contracts.js";
-import { ForgeDatabase, projectionStateHash } from "./database.js";
+import { type ForgeDatabase, projectionStateHash } from "./database.js";
 import { redact } from "./logging.js";
 import { configureCommandActivityStore } from "./command-runner.js";
-import { ProjectService, resolveAgentProfiles, type Project, type ProjectRole, type RoleAssignments } from "./projects.js";
+import { type ProjectService, resolveAgentProfiles, type Project, type ProjectRole, type RoleAssignments } from "./projects.js";
 import { loadTaskConfiguration, TaskProjectConfigurationSchema } from "./task-project-configuration.js";
 import { PromptOverrideService, type ResolvedPromptSet } from "./prompt-overrides.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";

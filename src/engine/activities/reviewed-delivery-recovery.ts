@@ -182,7 +182,7 @@ export async function recoverReviewedDelivery(
     pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input));
     if (pinned.artifactId !== input.projectRevisionId || pinned.projectId !== input.projectId) throw new Error("Task configuration does not match");
 
-    merge = database.authQuery((db) => db.prepare(`SELECT id, checkpoint, expected_base_sha AS expectedBaseSha,
+    const queriedMerge = database.authQuery((db) => db.prepare(`SELECT id, checkpoint, expected_base_sha AS expectedBaseSha,
         current_base_sha AS currentBaseSha, prior_head AS priorHead, prior_tree AS priorTree,
         merge_commit AS mergeCommit, tree AS mergeTree, result_head AS resultHead, result_tree AS resultTree,
         developer_execution_id AS developerExecutionId, verification_artifact_id AS verificationArtifactId,
@@ -191,13 +191,14 @@ export async function recoverReviewedDelivery(
       FROM forge_forward_merges
       WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND project_revision_id = ?`).get(
       input.forwardMergeId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId,
-    ) as MergeRow | undefined) as MergeRow;
-    if (!merge || merge.status !== "merged" || !merge.checkpoint || !merge.priorTree || !merge.mergeCommit || !merge.mergeTree
-      || !merge.resultHead || !merge.resultTree || !merge.verificationArtifactId || !merge.deliveryArtifactId
-      || merge.developerExecutionId !== input.developerExecutionId
-      || !same(merge.priorHead, input.forwardMergePriorHead) || !same(merge.priorTree, input.forwardMergePriorTree)
-      || !same(merge.currentBaseSha, input.forwardMergeTargetBaseSha)
-      || !same(merge.mergeCommit, merge.resultHead) || !same(merge.mergeTree, merge.resultTree)) throw new Error("Merge record does not match");
+    ) as MergeRow | undefined);
+    if (!queriedMerge || queriedMerge.status !== "merged" || !queriedMerge.priorTree || !queriedMerge.mergeCommit || !queriedMerge.mergeTree
+      || !queriedMerge.resultHead || !queriedMerge.resultTree || !queriedMerge.verificationArtifactId || !queriedMerge.deliveryArtifactId
+      || queriedMerge.developerExecutionId !== input.developerExecutionId
+      || !same(queriedMerge.priorHead, input.forwardMergePriorHead) || !same(queriedMerge.priorTree, input.forwardMergePriorTree)
+      || !same(queriedMerge.currentBaseSha, input.forwardMergeTargetBaseSha)
+      || !same(queriedMerge.mergeCommit, queriedMerge.resultHead) || !same(queriedMerge.mergeTree, queriedMerge.resultTree)) throw new Error("Merge record does not match");
+    merge = queriedMerge;
 
     const lineage = database.authQuery((db) => proveForwardMergeLineage(db, {
       currentMergeId: merge.id,
@@ -213,7 +214,7 @@ export async function recoverReviewedDelivery(
       || !same(lineage.current.currentBaseSha, merge.currentBaseSha)
       || !same(lineage.current.resultHead, merge.resultHead) || !same(lineage.current.resultTree, merge.resultTree)) throw new Error("Merge history is unavailable");
 
-    developer = database.authQuery((db) => db.prepare(`SELECT id, plan_revision AS planRevision, status,
+    const queriedDeveloper = database.authQuery((db) => db.prepare(`SELECT id, plan_revision AS planRevision, status,
         execution_kind AS executionKind, branch_name AS branchName, worktree_path AS worktreePath,
         target_base_sha AS targetBaseSha, session_ref AS sessionRef, finished_at AS finishedAt,
         result_commit AS resultCommit, result_tree AS resultTree, dirty_state AS dirtyState,
@@ -221,14 +222,15 @@ export async function recoverReviewedDelivery(
       FROM forge_developer_executions
       WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(
       input.developerExecutionId, input.taskId, input.companyId, input.workflowId,
-    ) as DeveloperRow | undefined) as DeveloperRow;
-    if (!developer || developer.executionKind !== "forward_merge" || !developer.finishedAt
-      || developer.branchName !== input.branchName || developer.worktreePath !== input.worktreePath
-      || developer.sessionRef !== input.developerSessionRef || developer.dirtyState !== "clean"
-      || developer.deliveryArtifactId !== input.deliveryArtifactId || developer.evidenceArtifactId !== input.developerEvidenceArtifactId
-      || merge.deliveryArtifactId !== developer.deliveryArtifactId
-      || !same(developer.targetBaseSha, merge.currentBaseSha)
-      || !same(developer.resultCommit, merge.resultHead) || !same(developer.resultTree, merge.resultTree)) throw new Error("Developer record does not match");
+    ) as DeveloperRow | undefined);
+    if (!queriedDeveloper || queriedDeveloper.executionKind !== "forward_merge" || !queriedDeveloper.finishedAt
+      || queriedDeveloper.branchName !== input.branchName || queriedDeveloper.worktreePath !== input.worktreePath
+      || queriedDeveloper.sessionRef !== input.developerSessionRef || queriedDeveloper.dirtyState !== "clean"
+      || queriedDeveloper.deliveryArtifactId !== input.deliveryArtifactId || queriedDeveloper.evidenceArtifactId !== input.developerEvidenceArtifactId
+      || merge.deliveryArtifactId !== queriedDeveloper.deliveryArtifactId
+      || !same(queriedDeveloper.targetBaseSha, merge.currentBaseSha)
+      || !same(queriedDeveloper.resultCommit, merge.resultHead) || !same(queriedDeveloper.resultTree, merge.resultTree)) throw new Error("Developer record does not match");
+    developer = queriedDeveloper;
 
     if (await hasLiveTaskWorktreeTurn(database, config.runtimeRoot, input)) return blocked("worktree-unsafe", WORKTREE_SUMMARY);
 

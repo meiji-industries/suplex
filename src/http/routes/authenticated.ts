@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 
 import type { AttentionService } from "../../attention.js";
-import type { AuthService } from "../../auth.js";
+import type { AuthService, AuthUser } from "../../auth.js";
 import type { ForgeConfig } from "../../config.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { ProjectService } from "../../projects.js";
@@ -38,7 +38,7 @@ export interface AuthenticatedRoutesOptions {
 }
 
 const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app, options) => {
-  app.decorateRequest("forgeUser", undefined as unknown as import("../../auth.js").AuthUser);
+  app.decorateRequest("forgeUser", undefined as unknown as AuthUser);
   app.addHook("preHandler", async (request, reply) => {
     const user = await sessionUser(options.auth, request, reply, options.config);
     if (!user) {

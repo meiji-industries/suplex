@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import { AuthService } from "./auth.js";
-import { ForgeDatabase } from "./database.js";
+import type { AuthService } from "./auth.js";
+import type { ForgeDatabase } from "./database.js";
 import { loadPromptCatalog, type PromptPath, type PromptTemplate } from "./prompts.js";
 import { resolvePromptSet, validateOverrideContent, type OverrideMode, type PromptOverrideRow, type ResolvedPrompt } from "./prompt-resolution.js";
-import { ProjectService } from "./projects.js";
+import type { ProjectService } from "./projects.js";
 
 export class PromptOverrideFailure extends Error {
   constructor(readonly publicMessage: string, readonly statusCode: number, readonly findings: Array<{ code: string; message: string }> = []) {

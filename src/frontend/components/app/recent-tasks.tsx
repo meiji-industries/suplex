@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactElement } from "react";
 
 import { withCompany } from "../../lib/api.js";
 import { readTaskList, subscribeTaskListInvalidations } from "../../lib/task-list.js";
-import { type ApiAgentRuntime, type ApiTaskSummary } from "../../lib/view-shared.js";
+import type { ApiAgentRuntime, ApiTaskSummary } from "../../lib/view-shared.js";
 import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar.js";
 import { taskIsProcessing, TaskStatusIcon } from "./task-status.js";
 import { useOptionalCompanyContext } from "./company-context.js";

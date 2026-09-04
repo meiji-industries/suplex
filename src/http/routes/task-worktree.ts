@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { FastifyPluginAsync } from "fastify";
-import { type ZodTypeProvider } from "@fastify/type-provider-zod";
+import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 
 import { runCommand, type CommandRunResult } from "../../command-runner.js";

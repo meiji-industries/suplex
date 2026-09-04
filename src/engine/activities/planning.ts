@@ -72,7 +72,7 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
       const reasonArtifact = existingArtifact ? undefined : await artifacts.putWithId(input.companyId, reasonArtifactId, "plan-revision-reason", { filename: `plan-revision-${input.requestRevision}.md`, mimeType: "text/markdown", bytes: Buffer.from(reason, "utf8") });
       let status: "accepted" | "blocked" = "accepted";
       let blockerCode: string | null = null;
-      let coordinates: RevisedExecutionCoordinates;
+      let coordinates: RevisedExecutionCoordinates | undefined;
       if (input.worktreeDisposition === "reuse") {
         const execution = input.developerExecutionId ? database.authQuery((db) => db.prepare("SELECT id, status, worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS baseSha, result_commit AS headSha, result_tree AS treeSha FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; status: string; worktreePath: string; branchName: string; baseSha: string; headSha: string | null; treeSha: string | null } | undefined) : undefined;
         if (!execution || !["cancelled", "interrupted", "blocked", "completed"].includes(execution.status) || !execution.headSha || !execution.treeSha) { status = "blocked"; blockerCode = "missing-preserved-execution"; }
@@ -98,8 +98,8 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
         if (reasonArtifact && (!persisted || persisted.companyId !== input.companyId || persisted.sha256 !== reasonArtifact.sha256)) await artifacts.removeArtifact(reasonArtifact);
         throw error;
       }
-      if (status === "blocked") return { status, revisionRequestId: requestId, blockerCode: blockerCode ?? "revision-blocked" };
-      return { status, revisionRequestId: requestId, coordinates: coordinates! };
+      if (status === "blocked" || !coordinates) return { status: "blocked", revisionRequestId: requestId, blockerCode: blockerCode ?? "revision-blocked" };
+      return { status, revisionRequestId: requestId, coordinates };
     },
     async authorizePlanRevision(input) {
       database.authTransaction((db) => {
@@ -154,7 +154,6 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
       const requestHash = createHash("sha256").update(JSON.stringify({ predecessor: input.predecessorTaskId, successor: input.successorTaskId, reasonArtifactId, projectRevisionId: current.projectRevisionId })).digest("hex");
       try {
         database.authTransaction((db) => {
-          if (existing) return;
           if (reasonArtifact) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reasonArtifact.id, reasonArtifact.companyId, reasonArtifact.kind, reasonArtifact.filename, reasonArtifact.mimeType, reasonArtifact.byteSize, reasonArtifact.sha256, reasonArtifact.storagePath, reasonArtifact.createdAt);
           db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, description, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, predecessor_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)").run(input.successorTaskId, input.companyId, input.projectId, `Continue: ${current.title}`.slice(0, 160), current.projectRevisionId, description, JSON.stringify(imageIds), JSON.stringify(roleAgents), input.successorWorkflowId, current.projectRevisionId, `continue_${input.intentId}`, requestHash, input.predecessorTaskId, now, now);
           const initialState = IssueWorkflowStateSchema.parse({ ...createInitialIssueWorkflowState({ workflowId: input.successorWorkflowId, companyId: input.companyId, projectId: input.projectId, issueId: input.successorTaskId, predecessorTaskId: input.predecessorTaskId, projectRevisionId: current.projectRevisionId, briefArtifactId: current.projectRevisionId, briefSha256: current.configurationSha256, imageArtifactIds: imageIds, requestHash, roleProfiles, supplementalReview: false, repairCycleLimit: config.deliveryRepairCycleLimit }), predecessorTaskId: input.predecessorTaskId });
@@ -170,10 +169,6 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
         const persisted = database.authQuery((db) => db.prepare("SELECT company_id AS companyId, sha256 FROM forge_artifacts WHERE id = ?").get(reasonArtifactId) as { companyId: string; sha256: string } | undefined);
         if (reasonArtifact && (!persisted || persisted.companyId !== input.companyId || persisted.sha256 !== reasonArtifact.sha256)) await artifacts.removeArtifact(reasonArtifact);
         throw error;
-      }
-      if (existing && reasonArtifact) {
-        const persisted = database.authQuery((db) => db.prepare("SELECT company_id AS companyId, sha256 FROM forge_artifacts WHERE id = ?").get(reasonArtifact.id) as { companyId: string; sha256: string } | undefined);
-        if (!persisted) await artifacts.removeArtifact(reasonArtifact);
       }
       try {
         await startIssueWorkflow(config, { workflowId: input.successorWorkflowId, companyId: input.companyId, projectId: input.projectId, issueId: input.successorTaskId, predecessorTaskId: input.predecessorTaskId, projectRevisionId: current.projectRevisionId, briefArtifactId: current.projectRevisionId, briefSha256: current.configurationSha256, imageArtifactIds: imageIds, requestHash, roleProfiles, supplementalReview: false, repairCycleLimit: config.deliveryRepairCycleLimit });

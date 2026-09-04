@@ -123,7 +123,7 @@ export interface CiRepairActivityResult {
   outcome: "completed" | "blocked";
 }
 
-export type WorkflowCiRepairActivityInput = Omit<CiRepairActivityInput, "worktreePath"> & import("./development.js").DeveloperSupervisorActivityIdentity & { worktreePath?: string };
+export type WorkflowCiRepairActivityInput = Omit<CiRepairActivityInput, "worktreePath"> & DeveloperSupervisorActivityIdentity & { worktreePath?: string };
 export type WorkflowCiRepairActivityResult = Omit<CiRepairActivityResult, "worktreePath">;
 
 export interface CiRepairPriorDeliveryInput {
@@ -147,3 +147,4 @@ export interface CiActivities {
   findCiRepairPriorDelivery(input: CiRepairPriorDeliveryInput): Promise<CiRepairPriorDelivery | null>;
   runCiRepair(input: WorkflowCiRepairActivityInput): Promise<WorkflowCiRepairActivityResult>;
 }
+import type { DeveloperSupervisorActivityIdentity } from "./development.js";

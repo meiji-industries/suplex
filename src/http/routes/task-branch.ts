@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { type ZodTypeProvider } from "@fastify/type-provider-zod";
+import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 
 import { ACTIVE_PHASES } from "../../issue-phases.js";

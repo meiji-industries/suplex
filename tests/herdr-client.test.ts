@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 
 import {
   CliHerdrClient,
-  HerdrFailure,
+  type HerdrFailure,
   snapshotAgents,
   snapshotHerdrRuntime,
 } from "../src/herdr-client.js";

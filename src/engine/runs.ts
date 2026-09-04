@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { isAbortSignalAborted } from "../abort-signal.js";
 import { issueCommands } from "../commands/registry.js";
 import type { ForgeConfig } from "../config.js";
 import { ProjectionPersistenceFailure, projectionStateHash, type ForgeDatabase } from "../database.js";
@@ -33,25 +34,25 @@ export class Wakeable {
   private waiters = new Set<() => void>();
   wake(): void { for (const waiter of this.waiters) waiter(); this.waiters.clear(); }
   async wait(milliseconds: number, signal: AbortSignal, clock: EngineClock): Promise<void> {
-    if (signal.aborted) throw new CancelledFailure();
+    if (isAbortSignalAborted(signal)) throw new CancelledFailure();
     const controller = new AbortController();
     const combined = AbortSignal.any([signal, controller.signal]);
-    let woken = false;
+    const waitState = { woken: false };
     try {
       await Promise.race([
         clock.wait(milliseconds, combined),
         new Promise<void>((resolve) => {
-          const waiter = () => { woken = true; controller.abort(); resolve(); };
+          const waiter = () => { waitState.woken = true; controller.abort(); resolve(); };
           this.waiters.add(waiter);
           combined.addEventListener("abort", () => this.waiters.delete(waiter), { once: true });
         }),
       ]);
     } catch (error) {
-      if (!woken || signal.aborted) throw error;
+      if (!waitState.woken || isAbortSignalAborted(signal)) throw error;
     } finally {
       controller.abort();
     }
-    if (signal.aborted) throw new CancelledFailure();
+    if (isAbortSignalAborted(signal)) throw new CancelledFailure();
   }
 }
 function isAutomaticCommand(workflowId: string, commandId: string): boolean {
@@ -498,7 +499,7 @@ export class IssueRun {
         this.wakeable.wake();
         return result;
       } finally {
-        if (this.activeCommand?.controller === controller) this.activeCommand = undefined;
+        if (this.activeCommand.controller === controller) this.activeCommand = undefined;
         if (!automatic && commandId !== "legacy-command") clearAutomaticChainHalt(this.workflowId);
         finishCommand();
       }

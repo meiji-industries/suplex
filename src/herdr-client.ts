@@ -1,4 +1,4 @@
-import { runCommand } from "./command-runner.js";
+import { runCommand, type CommandRunResult } from "./command-runner.js";
 import type { HerdrAgentKind } from "./agent-providers/provider.js";
 import { json } from "./task-utils.js";
 type ExecFileRunner = (
@@ -6,13 +6,13 @@ type ExecFileRunner = (
   args: readonly string[],
   options: {
     maxBuffer: number;
-    expectNonZero?: (result: import("./command-runner.js").CommandRunResult) => boolean;
+    expectNonZero?: (result: CommandRunResult) => boolean;
   },
 ) => Promise<{
   stdout: string;
   stderr?: string;
 }>;
-const missingResourceResult = (result: import("./command-runner.js").CommandRunResult): boolean => {
+const missingResourceResult = (result: CommandRunResult): boolean => {
   const output = `${result.stdout} ${result.stderr}`;
   return [...missing].some((code) => output.includes(`"code":"${code}"`));
 };

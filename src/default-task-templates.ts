@@ -2,7 +2,7 @@ import type { Database } from "better-sqlite3";
 
 import type { DeliveryTarget, VisualEvidence } from "./tasks.js";
 import type { RoleAssignments } from "./projects.js";
-import { ForgeDatabase } from "./database.js";
+import type { ForgeDatabase } from "./database.js";
 import { id, json } from "./task-utils.js";
 
 export const DEFAULT_TASK_TEMPLATES: ReadonlyArray<{

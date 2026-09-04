@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { type ZodTypeProvider } from "@fastify/type-provider-zod";
+import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 

@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { type ZodTypeProvider } from "@fastify/type-provider-zod";
+import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 
 import type { ForgeConfig } from "../../config.js";
 import type { ForgeDatabase } from "../../database.js";

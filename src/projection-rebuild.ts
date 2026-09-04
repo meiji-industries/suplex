@@ -1,5 +1,5 @@
 import type { ForgeConfig } from "./config.js";
-import { ForgeDatabase } from "./database.js";
+import type { ForgeDatabase } from "./database.js";
 import { IssueWorkflowStateSchema } from "./engine/issue-contracts.js";
 import { json } from "./task-utils.js";
 

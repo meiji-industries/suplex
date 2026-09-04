@@ -1,5 +1,5 @@
 import type { ArtifactReference } from "../primitives.js";
-import type { DeveloperTurnActivityOutcome } from "./development.js";
+import type { DeveloperSupervisorActivityIdentity, DeveloperTurnActivityOutcome } from "./development.js";
 
 export interface MergeConflictPlanActivityInput {
   taskId: string;
@@ -89,7 +89,7 @@ export interface MergeConflictResolutionVerificationBlocked {
 
 export type MergeConflictResolutionActivityResult = MergeConflictResolutionActivitySuccess | MergeConflictResolutionVerificationBlocked;
 
-export type SupervisedMergeConflictResolutionActivityInput = WorkflowMergeConflictResolutionActivityInput & import("./development.js").DeveloperSupervisorActivityIdentity;
+export type SupervisedMergeConflictResolutionActivityInput = WorkflowMergeConflictResolutionActivityInput & DeveloperSupervisorActivityIdentity;
 
 export interface ReconcileMergeActivityInput {
   taskId: string;

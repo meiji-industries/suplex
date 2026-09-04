@@ -207,7 +207,6 @@ function prettyDestination(): DestinationStream {
         if (!line) continue;
         try {
           // task-utils imports redact from this module, so using its json helper here would create a cycle.
-          // eslint-disable-next-line no-restricted-syntax
           const formatted = formatDevLogLine(JSON.parse(line) as DevLogRecord);
           if (formatted) process.stdout.write(`${formatted}\n`);
         } catch {
@@ -225,7 +224,6 @@ function infoConsoleDestination(): DestinationStream {
         if (!line) continue;
         try {
           // task-utils imports redact from this module, so parsing locally avoids a cycle.
-          // eslint-disable-next-line no-restricted-syntax
           const record = JSON.parse(line) as DevLogRecord;
           if (typeof record.level === "number" && record.level < 30 && !includeDebugLogs()) continue;
         } catch {

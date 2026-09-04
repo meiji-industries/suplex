@@ -5,7 +5,7 @@ import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "
 
 import { z } from "zod";
 
-import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
+import type { ArtifactStore, StoredArtifact } from "./artifacts.js";
 import type { ForgeDatabase } from "./database.js";
 import { runCommand } from "./command-runner.js";
 import { jsonRequired } from "./task-utils.js";

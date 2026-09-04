@@ -11,6 +11,7 @@ import WebSocket from "ws";
 import { ForgeDatabase } from "../src/database.js";
 import taskPane, { originAllowed } from "../src/http/routes/task-pane.js";
 import { installHttpErrorHandlers } from "../src/http/errors.js";
+import type { BridgeEvent } from "../src/herdr-terminal-bridge.js";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "forge-task-pane-routes-"));
@@ -80,7 +81,7 @@ test("terminal WebSocket streams frames and forwards client controls", async () 
   const input = vi.fn();
   const resize = vi.fn();
   const release = vi.fn();
-  let emit: ((event: import("../src/herdr-terminal-bridge.js").BridgeEvent) => void) | undefined;
+  let emit: ((event: BridgeEvent) => void) | undefined;
   await app.register(taskPane, {
     tasks: { getTask: () => ({ companyId: "company" }) } as never,
     database,

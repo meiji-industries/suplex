@@ -4,7 +4,7 @@ import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
-import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
+import type { ArtifactStore, StoredArtifact } from "./artifacts.js";
 import type { ForgeDatabase } from "./database.js";
 import type { GithubReleasePort } from "./github-release.js";
 import { redact } from "./logging.js";

@@ -14,7 +14,7 @@ import { CliHerdrClient } from "./herdr-client.js";
 import { HerdrTurnRunner, type HerdrTurnInput, type HerdrTurnOutput } from "./herdr-turn-runner.js";
 import { HerdrSessionStore } from "./herdr-session-store.js";
 import { IssueTimelineEvents } from "./issue-timeline-events.js";
-import { ForgeDatabase } from "./database.js";
+import type { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import type { GithubReleasePort } from "./github-release.js";
 import { createGitCommandGuard, WorktreeFailure, WorktreeManager } from "./worktrees.js";
@@ -24,7 +24,7 @@ import { runPinnedVerification } from "./verification.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { loadDefaultPrompts, loadPromptCatalog, renderPrompt, type PromptPath } from "./prompts.js";
 import { isVersionedPromptSet, resolvePromptSet, type PromptOverrideRow } from "./prompt-resolution.js";
-import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./engine/issue-contracts.js";
+import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeliveryOperationBlockCode, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./engine/issue-contracts.js";
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
 import { jsonRequired } from "./task-utils.js";
@@ -111,7 +111,7 @@ export function buildDeveloperExecutionPrompt(input: { executionId: string; reus
 
 
 
-type RepairBlockCode = import("./engine/issue-contracts.js").DeliveryOperationBlockCode;
+type RepairBlockCode = DeliveryOperationBlockCode;
 function repairBlockCode(failure: AgentFailure): RepairBlockCode {
   if (["missing-repair-report", "malformed-repair-report", "invalid-repair-report"].includes(failure.code)) return "invalid-output";
   if (failure.code === "session-identity-conflict" || failure.code === "session-conflict") return "session-conflict";

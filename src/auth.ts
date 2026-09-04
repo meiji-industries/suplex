@@ -15,9 +15,10 @@ import {
   type WebAuthnCredential,
 } from "@simplewebauthn/server";
 import { z } from "zod";
+import type { Database } from "better-sqlite3";
 
 import type { ForgeConfig } from "./config.js";
-import { ForgeDatabase } from "./database.js";
+import type { ForgeDatabase } from "./database.js";
 import { AuthRepository, type AuthCompanyRow } from "./auth-repository.js";
 import {
   INVITATION_TOKEN_PATTERN,
@@ -490,7 +491,7 @@ export class AuthService {
     this.repository.recordAuditEvent({ id: id("audit"), actorUserId: actorUserId ?? null, actorAgentId: null, action, targetUserId: targetUserId ?? null, companyId: companyId ?? null, metadataJson: safeJson(metadata), createdAt: this.now().toISOString() });
   }
 
-  recordAuditEventInTransaction(_database: import("better-sqlite3").Database | undefined, actorUserId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
+  recordAuditEventInTransaction(_database: Database | undefined, actorUserId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
     this.repository.recordAuditEvent({ id: id("audit"), actorUserId: actorUserId ?? null, actorAgentId: null, action, targetUserId: targetUserId ?? null, companyId: companyId ?? null, metadataJson: safeJson(metadata), createdAt: this.now().toISOString() });
   }
 
@@ -498,7 +499,7 @@ export class AuthService {
     this.repository.recordAuditEvent({ id: id("audit"), actorUserId: null, actorAgentId: actorAgentId ?? null, action, targetUserId: targetUserId ?? null, companyId: companyId ?? null, metadataJson: safeJson(metadata), createdAt: this.now().toISOString() });
   }
 
-  recordAgentAuditEventInTransaction(_database: import("better-sqlite3").Database | undefined, actorAgentId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
+  recordAgentAuditEventInTransaction(_database: Database | undefined, actorAgentId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
     this.repository.recordAuditEvent({ id: id("audit"), actorUserId: null, actorAgentId: actorAgentId ?? null, action, targetUserId: targetUserId ?? null, companyId: companyId ?? null, metadataJson: safeJson(metadata), createdAt: this.now().toISOString() });
   }
 
@@ -868,7 +869,7 @@ export class AuthService {
     return row;
   }
 
-  private findValidInvitation(_db: import("better-sqlite3").Database | undefined, tokenHash: string, kind: InvitationKind): InvitationRow | undefined {
+  private findValidInvitation(_db: Database | undefined, tokenHash: string, kind: InvitationKind): InvitationRow | undefined {
     const row = this.repository.findInvitation(tokenHash, kind);
     if (!row || row.consumedAt || row.replacedAt || Date.parse(row.expiresAt) <= this.now().getTime()) {
       return undefined;
@@ -882,7 +883,7 @@ export class AuthService {
     return { id: row.id, kind: row.kind, display_name: row.displayName, user_id: row.userId, expires_at: row.expiresAt, consumed_at: row.consumedAt, replaced_at: row.replacedAt, metadata_json: row.metadataJson };
   }
 
-  private issueInvitation(_db: import("better-sqlite3").Database | undefined, kind: InvitationKind, displayName: string, userId?: string, metadata: Record<string, string> = {}): IssuedInvitation {
+  private issueInvitation(_db: Database | undefined, kind: InvitationKind, displayName: string, userId?: string, metadata: Record<string, string> = {}): IssuedInvitation {
     const now = this.now();
     const nowIso = now.toISOString();
     if (kind !== "user") {

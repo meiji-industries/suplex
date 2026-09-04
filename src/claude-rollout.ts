@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { basename } from "node:path";
 import { redact } from "./logging.js";
-import { type NeutralTimelineEvent, type RolloutCandidate, type RolloutParserInput, type RolloutParseResult } from "./codex-rollout.js";
+import type { NeutralTimelineEvent, RolloutCandidate, RolloutParserInput, RolloutParseResult } from "./codex-rollout.js";
 import { claudeTranscriptCandidates } from "./agent-providers/claude-launch.js";
 import { jsonRequired } from "./task-utils.js";
 

@@ -269,15 +269,15 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       heartbeat = (details?: unknown) => {
         activityContext.heartbeat(details);
         if (!queueHint && details && typeof details === "object" && "queued" in details && details.queued === true && input.taskId) {
+          const taskId = input.taskId;
           queueHint = setTimeout(() => {
             // This is projection-only feedback. A stale/missing projection must
             // never turn a queued activity into a failed one.
             try {
-              if (typeof input.taskId === "string" && details && typeof details === "object"
-                && "provider" in details && typeof details.provider === "string"
+              if ("provider" in details && typeof details.provider === "string"
                 && "position" in details && typeof details.position === "number"
                 && "activeCount" in details && typeof details.activeCount === "number") {
-                restoreQueueHint = applyQueueHintProjection(database, input.taskId, { provider: details.provider, position: details.position, activeCount: details.activeCount });
+                restoreQueueHint = applyQueueHintProjection(database, taskId, { provider: details.provider, position: details.position, activeCount: details.activeCount });
               }
             } catch { /* queued hint is best-effort */ }
           }, 10_000);

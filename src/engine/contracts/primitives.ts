@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IssuePhaseSchema } from "../../issue-phases.js";
+import type { IssuePhaseSchema } from "../../issue-phases.js";
 import { durableId, exactSha } from "../../commands/inputs.js";
 import { IssueCommandSchema } from "../../commands/registry.js";
 

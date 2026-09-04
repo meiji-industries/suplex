@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 
 import type { ForgeDatabase } from "./database.js";
-import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
+import type { ArtifactStore, StoredArtifact } from "./artifacts.js";
 import { redact } from "./logging.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { jsonRequired } from "./task-utils.js";

@@ -14,7 +14,7 @@ export function createDeliveryReviewActivities(ctx: ActivityContext): DeliveryRe
       const input = ReviewArbitrationActivityInputSchema.parse(rawInput);
       const runner = agent as (typeof agent & { arbitrateReview?: (value: typeof input) => Promise<unknown> });
       const service = defaultAgent as unknown as { arbitrateReview: (value: typeof input, runtime: { signal?: AbortSignal }) => Promise<unknown> };
-      const result = ReviewArbitrationActivityResultSchema.parse(await invokeAgent(input, () => runner?.arbitrateReview ? runner.arbitrateReview(input) : service.arbitrateReview(input, agentRuntime())));
+      const result = ReviewArbitrationActivityResultSchema.parse(await invokeAgent(input, () => runner.arbitrateReview ? runner.arbitrateReview(input) : service.arbitrateReview(input, agentRuntime())));
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef, worktreePath: input.worktreePath }, result);
     },
     async recoverRevalidatedDeliveryReview(rawInput) {

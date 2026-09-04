@@ -1,4 +1,4 @@
-import { type ReactElement, type ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 import { Separator } from "../ui/separator.js";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "../ui/sidebar.js";

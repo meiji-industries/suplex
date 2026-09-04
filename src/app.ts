@@ -4,7 +4,7 @@ import { serializerCompiler, validatorCompiler } from "@fastify/type-provider-zo
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { Logger } from "pino";
 
-import { AuthService } from "./auth.js";
+import type { AuthService } from "./auth.js";
 import type { AttentionService } from "./attention.js";
 import type { AcceptanceService } from "./acceptance.js";
 import type { CiService } from "./ci.js";
@@ -14,8 +14,8 @@ import type { ForgeConfig } from "./config.js";
 import type { CapacityManager } from "./capacity.js";
 import type { HermesAgentService } from "./hermes-agents.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
-import { ProjectService } from "./projects.js";
-import { TaskService } from "./tasks.js";
+import type { ProjectService } from "./projects.js";
+import type { TaskService } from "./tasks.js";
 import type { TaskTemplateService } from "./task-templates.js";
 import type { ProjectionRebuildService } from "./projection-rebuild.js";
 import { HealthSnapshotSchema } from "./schemas.js";

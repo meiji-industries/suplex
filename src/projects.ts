@@ -5,12 +5,13 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
+import type { Database } from "better-sqlite3";
 
 import type { AuthUser } from "./auth.js";
-import { AuthFailure, AuthService } from "./auth.js";
+import { AuthFailure, type AuthService } from "./auth.js";
 import type { ForgeConfig } from "./config.js";
 import { GithubFailure, createGithubAdapter, type GithubAdapter } from "./github.js";
-import { ForgeDatabase } from "./database.js";
+import type { ForgeDatabase } from "./database.js";
 import { jsonRequired } from "./task-utils.js";
 import { createGithubReleasePort, type GithubReleasePort } from "./github-release.js";
 import { TaskSourceService, type TaskSourceSelector } from "./task-sources.js";
@@ -322,7 +323,7 @@ export function publicAgent(row: AgentRow, config: Pick<ForgeConfig, "externalTu
   return { id: row.id, name: row.name, role: row.role, avatarSeed: row.avatar_seed, profileId: row.profile_id, provider: row.provider, model: row.model, reasoningLevel: row.reasoning_level, servicePriority: row.service_priority, capacity: row.capacity, effectiveCapacity: effectiveProfileCapacity(row, config), archivedAt: row.archived_at ?? null, activeCount: row.active_count ?? 0, lastSeenAt: row.last_seen_at ?? row.created_at, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
-export function resolveAgentProfiles(db: import("better-sqlite3").Database, roleAgents: RoleAssignments): RoleAssignments {
+export function resolveAgentProfiles(db: Database, roleAgents: RoleAssignments): RoleAssignments {
   const resolved: RoleAssignments = {};
   for (const [role, agentId] of Object.entries(roleAgents)) {
     if (!agentId) continue;
@@ -1024,7 +1025,7 @@ export class ProjectService {
     return this.getProject(actorUserId, row.id);
   }
 
-  private rowForProject(db: import("better-sqlite3").Database, projectId: string): ProjectRow | undefined {
+  private rowForProject(db: Database, projectId: string): ProjectRow | undefined {
     return db.prepare(`SELECT ${projectColumns} FROM forge_projects p WHERE p.id = ?`).get(projectId) as ProjectRow | undefined;
   }
 

@@ -1,9 +1,8 @@
-/* eslint-disable no-restricted-syntax -- transcript JSON rows are isolated in this parser. */
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { redact } from "./logging.js";
-import { type NeutralTimelineEvent, type RolloutCandidate, type RolloutParseResult, type RolloutParserInput } from "./codex-rollout.js";
+import type { NeutralTimelineEvent, RolloutCandidate, RolloutParseResult, RolloutParserInput } from "./codex-rollout.js";
 import { json } from "./task-utils.js";
 const clip = (value: string) => value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, " ").slice(0, 4000);
 const text = (value: unknown) => clip(String(redact(typeof value === "string" ? value : "")));

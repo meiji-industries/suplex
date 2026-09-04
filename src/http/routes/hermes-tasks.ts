@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { type ZodTypeProvider } from "@fastify/type-provider-zod";
+import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 
 import { HermesAgentFailure, type HermesAgentService, type HermesPrincipal } from "../../hermes-agents.js";
 import { HermesSafeTaskProjectionSchema, HermesTaskCreateBodySchema, HermesTaskIdParamsSchema } from "../contracts/hermes.js";

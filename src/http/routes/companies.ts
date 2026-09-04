@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { type ZodTypeProvider } from "@fastify/type-provider-zod";
+import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 
 import type { AuthService } from "../../auth.js";
 import { CompanyIdParamsSchema, CompanyStatusParamsSchema, CompanyListResponseSchema, CompanyResponseSchema } from "../contracts/common.js";

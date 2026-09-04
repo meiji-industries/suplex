@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
-import { type ZodTypeProvider } from "@fastify/type-provider-zod";
+import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 
 import type { AttentionService } from "../../attention.js";

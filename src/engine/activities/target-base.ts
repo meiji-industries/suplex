@@ -1,8 +1,11 @@
 import type { TargetBaseActivities } from "../contracts/activities/target-base.js";
 import type { ReconcileTargetBaseActivityInput, ReconcileTargetBaseActivityResult, TargetBaseBlockerCode } from "../contracts/primitives.js";
 import type { ActivityContext } from "./context.js";
+import { join } from "node:path";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
 import { proveForwardMergeLineage, type ForwardMergeLineageProof } from "./forward-merge-lineage.js";
+import { proveRevisionInGit } from "./git-proof.js";
+import { runCommand } from "../../command-runner.js";
 
 type VerificationBlockerCode = Extract<TargetBaseBlockerCode, "verification_failed" | "verification_timed_out" | "verification_evidence_too_large">;
 type DeliveryArtifactKind = "developer-delivery" | "forward-merge-delivery";
@@ -47,8 +50,31 @@ type DeveloperDeliveryContext = {
   evidenceArtifactId: string | null;
 };
 
+type BaseVerificationOutcome = {
+  sha: string;
+  outcome: "passed" | "failed" | "unknown";
+  summary: string;
+};
+
+type ForwardMergeVerificationPayload = {
+  outcome: "passed" | "failed";
+  code?: VerificationBlockerCode;
+  summary: string;
+  commands: unknown[];
+  base?: BaseVerificationOutcome;
+};
+
 function sameRevision(left: string | null | undefined, right: string | null | undefined): boolean {
   return !!left && !!right && left.toLowerCase() === right.toLowerCase();
+}
+
+function baseVerificationOutcome(raw: unknown, sha: string): BaseVerificationOutcome | undefined {
+  if (!raw || typeof raw !== "object" || !("base" in raw)) return undefined;
+  const base = raw.base;
+  if (!base || typeof base !== "object" || !("sha" in base) || !("outcome" in base) || !("summary" in base)) return undefined;
+  if (typeof base.sha !== "string" || !sameRevision(base.sha, sha) || typeof base.summary !== "string") return undefined;
+  if (base.outcome !== "passed" && base.outcome !== "failed" && base.outcome !== "unknown") return undefined;
+  return { sha: base.sha, outcome: base.outcome, summary: base.summary };
 }
 
 export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActivities {
@@ -75,12 +101,16 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
         LEFT JOIN forge_artifacts da ON da.id = d.delivery_artifact_id AND da.company_id = d.company_id AND da.kind IN ('developer-delivery', 'forward-merge-delivery')
         WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`;
       const recordedContext = database.authQuery((db) => db.prepare(`${contextQuery} AND d.id = ?`).get(input.taskId, input.companyId, input.workflowId, developerExecutionId) as DeveloperDeliveryContext | undefined);
-      const context = recordedContext && ["completed", "blocked"].includes(recordedContext.developerStatus)
-        ? recordedContext
-        : database.authQuery((db) => db.prepare(`${contextQuery}
+      const fallbackContext = database.authQuery((db) => db.prepare(`${contextQuery}
             AND d.status IN ('completed', 'blocked') AND d.session_ref IS NOT NULL
             ORDER BY CASE WHEN lower(d.result_commit) = lower(?) THEN 0 ELSE 1 END, d.finished_at DESC
             LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.expectedHeadSha) as DeveloperDeliveryContext | undefined);
+      const recordedRevisionContext = database.authQuery((db) => db.prepare(`${contextQuery}
+            AND lower(d.result_commit) = lower(?) AND lower(d.result_tree) = lower(?)
+            ORDER BY d.finished_at DESC LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.expectedHeadSha, input.expectedHeadTree) as DeveloperDeliveryContext | undefined);
+      let context = recordedContext && ["completed", "blocked"].includes(recordedContext.developerStatus)
+        ? recordedContext
+        : fallbackContext ?? recordedRevisionContext;
       const blocked = (code: TargetBaseBlockerCode, owner: "human" | "provider" | "lead", retryable: boolean, summary: string, evidenceArtifact?: ReturnType<typeof artifactReference>, coordinates?: { observedBaseSha?: string; priorHead?: string; priorTree?: string; resultHead?: string; resultTree?: string }, operationId = requestedForwardMergeId ?? checkId): ReconcileTargetBaseActivityResult => ({ outcome: "blocked", checkId: operationId, checkpoint: input.checkpoint, code, owner, retryable, summary: normalizeSafeSummary(summary, 200), ...(evidenceArtifact ? { evidenceArtifact } : {}), ...(coordinates ?? {}) });
       const adoptStoredDelivery = (delivery: { developerExecutionId: string; priorHead: string; priorTree: string; resultHead: string; resultTree: string }): boolean => database.authTransaction((db) => {
         const updated = db.prepare(`UPDATE forge_developer_executions SET result_commit = ?, result_tree = ?
@@ -91,13 +121,61 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
           WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND status = 'completed'
             AND lower(result_commit) = lower(?) AND lower(result_tree) = lower(?)`).get(delivery.developerExecutionId, input.taskId, input.companyId, input.workflowId, delivery.resultHead, delivery.resultTree) !== undefined;
       });
-      if (!context || !["completed", "blocked"].includes(context.developerStatus) || !context.resultCommit || !context.resultTree) {
-        return blocked("merge_state_ownership_mismatch", "human", true, "Forge cannot find a completed Builder delivery for this task. Retry the reconciliation or cancel the task.");
-      }
       const artifacts = new ArtifactStore(config.artifactRoot, database);
       let pinned: ReturnType<typeof loadTaskConfiguration>;
       try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { return blocked("artifact_unavailable", "human", false, "The task project configuration is unavailable or incomplete"); }
+      if (!context || !["completed", "blocked"].includes(context.developerStatus) || !context.resultCommit || !context.resultTree) {
+        const worktree = context ?? database.authQuery((db) => db.prepare(`SELECT branch_name AS branchName, worktree_path AS worktreePath
+          FROM forge_issue_worktrees WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY reserved_at DESC LIMIT 1`).get(input.taskId, input.companyId, input.workflowId) as { branchName: string; worktreePath: string } | undefined);
+        if (!worktree) return blocked("merge_state_ownership_mismatch", "human", true, "Git could not find the task worktree for reconciliation.");
+        const proof = await proveRevisionInGit(githubRelease, { worktreePath: worktree.worktreePath, branchName: worktree.branchName, commit: input.expectedHeadSha, tree: input.expectedHeadTree, baseSha: input.expectedBaseSha });
+        if (!proof.proven) return blocked("merge_state_ownership_mismatch", "human", true, "Git could not prove the reviewed delivery in the task worktree.");
+        context = {
+          developerExecutionId: context?.developerExecutionId ?? developerExecutionId,
+          developerStatus: "completed",
+          developerSessionRef: context?.developerSessionRef ?? null,
+          branchName: worktree.branchName,
+          worktreePath: worktree.worktreePath,
+          targetBaseSha: input.expectedBaseSha,
+          resultCommit: input.expectedHeadSha,
+          resultTree: input.expectedHeadTree,
+          planRevision: context?.planRevision ?? 1,
+          deliveryArtifactId: context?.deliveryArtifactId ?? null,
+          deliveryArtifactKind: context?.deliveryArtifactKind ?? null,
+          deliveryArtifactSha256: context?.deliveryArtifactSha256 ?? null,
+          evidenceArtifactId: context?.evidenceArtifactId ?? null,
+        };
+      }
       const service = new ForwardMergeService(database, githubRelease, artifacts);
+      const previousBaseVerification = async (baseSha: string): Promise<BaseVerificationOutcome | undefined> => {
+        const rows = database.authQuery((db) => db.prepare(`SELECT storage_path AS storagePath, sha256
+          FROM forge_artifacts WHERE company_id = ? AND task_id = ? AND kind = 'forward-merge-verification'
+          ORDER BY created_at DESC`).all(input.companyId, input.taskId) as Array<{ storagePath: string; sha256: string }>);
+        for (const row of rows) {
+          try {
+            const payload: unknown = JSON.parse((await artifacts.getArtifact({ companyId: input.companyId, storagePath: row.storagePath, sha256: row.sha256 })).toString("utf8"));
+            const outcome = baseVerificationOutcome(payload, baseSha);
+            if (outcome) return outcome;
+          } catch {
+            continue;
+          }
+        }
+        return undefined;
+      };
+      const verifyBase = async (baseSha: string, guard: Awaited<ReturnType<typeof createGitCommandGuard>>): Promise<BaseVerificationOutcome> => {
+        const reused = await previousBaseVerification(baseSha);
+        if (reused) return reused;
+        const worktreePath = join(config.runtimeRoot, `${checkId}-base`);
+        const added = await runCommand({ taskId: input.taskId, stepId: checkId, command: "git", args: ["worktree", "add", "--detach", worktreePath, baseSha], cwd: pinned.repositoryPath, timeout: 60_000 });
+        if (added.exitCode !== 0 || added.timedOut) return { sha: baseSha, outcome: "unknown", summary: "The base branch verification worktree could not be created." };
+        try {
+          const result = await runPinnedVerification({ taskId: input.taskId, stepId: checkId, worktreePath, setupCommand: pinned.setupCommand, verificationCommand: pinned.verificationCommand, runtimeRoot: config.runtimeRoot }, { guard });
+          if (result.code === "verification_timed_out") return { sha: baseSha, outcome: "unknown", summary: result.summary };
+          return { sha: baseSha, outcome: result.outcome === "passed" ? "passed" : "failed", summary: result.summary };
+        } finally {
+          await runCommand({ taskId: input.taskId, stepId: checkId, command: "git", args: ["worktree", "remove", "--force", worktreePath], cwd: pinned.repositoryPath, timeout: 60_000 });
+        }
+      };
       const adoptObservedTaskBranch = async (): Promise<ReconcileTargetBaseActivityResult | undefined> => {
         const priorHead = context.resultCommit!;
         const priorTree = context.resultTree!;
@@ -267,20 +345,32 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
       const guard = await createGitCommandGuard(config.runtimeRoot);
       try {
         const verification = await runPinnedVerification({ taskId: input.taskId, stepId: merge.forwardMergeId ?? checkId, worktreePath: context.worktreePath, setupCommand: pinned.setupCommand, verificationCommand: pinned.verificationCommand, runtimeRoot: config.runtimeRoot }, { guard });
-        const verificationArtifact = await artifacts.putArtifact(input.companyId, "forward-merge-verification", { filename: `${merge.forwardMergeId ?? checkId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(verification), "utf8") });
-        const recordVerification = (code: string, summary: string): void => {
-          database.authTransaction((db) => db.prepare("UPDATE forge_forward_merges SET result_head = ?, result_tree = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, failure_code = ?, failure_summary = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(merge.mergeCommit, merge.tree, verificationArtifact.id, verificationArtifact.sha256, code, summary, new Date().toISOString(), merge.forwardMergeId ?? "", input.taskId, input.companyId));
-        };
+        let base: BaseVerificationOutcome | undefined;
         if (verification.outcome !== "passed") {
           try {
             await service.assertMergedOwnership({ worktreePath: context.worktreePath, branchName: context.branchName, priorHead: merge.priorHead, targetBaseSha: merge.targetBaseSha, mergeCommit: merge.mergeCommit!, tree: merge.tree! });
           } catch {
+            const verificationArtifact = await artifacts.putArtifact(input.companyId, "forward-merge-verification", { filename: `${merge.forwardMergeId ?? checkId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(verification), "utf8") });
             const summary = "Pinned verification changed the forward-merge delivery";
-            recordVerification("merge_state_ownership_mismatch", summary);
+            database.authTransaction((db) => db.prepare("UPDATE forge_forward_merges SET result_head = ?, result_tree = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, failure_code = ?, failure_summary = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(merge.mergeCommit, merge.tree, verificationArtifact.id, verificationArtifact.sha256, "merge_state_ownership_mismatch", summary, new Date().toISOString(), merge.forwardMergeId ?? "", input.taskId, input.companyId));
             return blocked("merge_state_ownership_mismatch", "human", false, summary, artifactReference(verificationArtifact), { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: merge.mergeCommit!, resultTree: merge.tree! }, merge.forwardMergeId ?? checkId);
           }
+          base = await verifyBase(merge.targetBaseSha, guard);
+        }
+        const verificationPayload: ForwardMergeVerificationPayload = base?.outcome === "failed"
+          ? { ...verification, summary: "The base branch does not pass verification. GitHub CI judges the pull request.", base }
+          : { ...verification, ...(base ? { base } : {}) };
+        const verificationArtifact = await artifacts.putArtifact(input.companyId, "forward-merge-verification", { taskId: input.taskId, filename: `${merge.forwardMergeId ?? checkId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(verificationPayload), "utf8") });
+        const recordVerification = (code: string | null, summary: string | null): void => {
+          database.authTransaction((db) => db.prepare("UPDATE forge_forward_merges SET result_head = ?, result_tree = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, failure_code = ?, failure_summary = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(merge.mergeCommit, merge.tree, verificationArtifact.id, verificationArtifact.sha256, code, summary, new Date().toISOString(), merge.forwardMergeId ?? "", input.taskId, input.companyId));
+        };
+        if (verification.outcome !== "passed") {
+          if (base?.outcome === "failed") {
+            recordVerification(null, null);
+          } else {
           recordVerification(verification.code ?? "verification_failed", verification.summary);
           return blocked(verification.code === "verification_timed_out" ? "verification_timed_out" : verification.code === "verification_evidence_too_large" ? "verification_evidence_too_large" : "verification_failed", "lead", true, verification.summary, artifactReference(verificationArtifact), { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: merge.mergeCommit!, resultTree: merge.tree! }, merge.forwardMergeId ?? checkId);
+          }
         }
         await service.assertMergedOwnership({ worktreePath: context.worktreePath, branchName: context.branchName, priorHead: merge.priorHead, targetBaseSha: merge.targetBaseSha, mergeCommit: merge.mergeCommit!, tree: merge.tree! });
         const inheritedDeliveryArtifact = !context.deliveryArtifactId ? database.authQuery((db) => db.prepare(`WITH RECURSIVE execution_lineage(id, supersedes_execution_id, delivery_artifact_id, depth, path) AS (

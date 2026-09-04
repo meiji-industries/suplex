@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 
 import { ArtifactStore } from "../../artifacts.js";
 import { runCommand } from "../../command-runner.js";
@@ -12,14 +12,43 @@ import type { ForgeDatabase } from "../../database.js";
 import { readEnvironmentSettings } from "../../environment-settings.js";
 import { invalidateBranchSync, WorktreeManager } from "../../worktrees.js";
 import { DeveloperDeliveryReportSchema } from "../../codex-developer.js";
-import { CliHerdrClient } from "../../herdr-client.js";
+import { CliHerdrClient, type HerdrClient } from "../../herdr-client.js";
 import { observeHerdrSessions } from "../../herdr-recovery.js";
 import type { ActivityContext } from "./context.js";
 import { proveRevisionInGit } from "./git-proof.js";
 
-export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" | "config" | "worktrees" | "createHash"> & Partial<Pick<ActivityContext, "githubRelease">>) {
-  const { database, config, worktrees, createHash, githubRelease } = ctx;
+const liveHerdrStatuses = new Set([
+  "working",
+  "running",
+  "starting",
+  "blocked",
+  "awaiting_human",
+  "awaiting_input",
+  "awaiting-input",
+]);
+
+function isLiveHerdrStatus(status: string | null | undefined): boolean {
+  return status !== undefined && status !== null && liveHerdrStatuses.has(status);
+}
+
+export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" | "config" | "worktrees" | "createHash"> & Partial<Pick<ActivityContext, "githubRelease">> & { herdr?: HerdrClient }) {
+  const { database, config, worktrees, createHash, githubRelease, herdr = new CliHerdrClient() } = ctx;
   const owned = (input: { taskId: string; companyId: string; workflowId: string }) => database.authQuery((db) => db.prepare("SELECT repository_path AS repositoryPath, worktree_path AS worktreePath, worktree_root AS worktreeRoot, branch_name AS branchName, starting_sha AS targetBaseSha FROM forge_issue_worktrees WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY reserved_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId) as { repositoryPath: string; worktreePath: string; worktreeRoot: string; branchName: string; targetBaseSha: string } | undefined);
+  const worktreeListedByBranch = async (input: { taskId: string; companyId: string; workflowId: string; expectedBranch?: string }) => {
+    const pinned = database.authQuery((db) => {
+      try { return loadTaskConfiguration(db, new ArtifactStore(config.artifactRoot, database), input); }
+      catch { return undefined; }
+    });
+    if (!pinned) return undefined;
+    const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string } | undefined);
+    const branchName = input.expectedBranch ?? execution?.branchName;
+    if (!branchName) return execution ? { ...execution, repositoryPath: pinned.repositoryPath, worktreeRoot: pinned.worktreeRoot } : undefined;
+    const result = await runCommand({ taskId: null, stepId: null, command: "git", args: ["worktree", "list", "--porcelain"], cwd: pinned.repositoryPath, timeout: 30_000 });
+    if (result.exitCode !== 0) throw new Error("Git could not list task worktrees");
+    const entry = result.stdout.split(/\r?\n\r?\n/).map((value) => value.split(/\r?\n/)).find((lines) => lines.includes(`branch refs/heads/${branchName}`));
+    const path = entry?.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+    return path ? { repositoryPath: pinned.repositoryPath, worktreePath: path, worktreeRoot: pinned.worktreeRoot, branchName } : undefined;
+  };
   const resolved = (input: { taskId: string; companyId: string; workflowId: string }) => {
     const lease = owned(input);
     if (lease) return { ...lease, leased: true };
@@ -34,25 +63,13 @@ export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" |
       }
     });
   };
-  const worktreeListedByBranch = async (input: { taskId: string; companyId: string; workflowId: string; expectedBranch?: string }) => {
-    const pinned = database.authQuery((db) => {
-      try { return loadTaskConfiguration(db, new ArtifactStore(config.artifactRoot, database), input); }
-      catch { return undefined; }
-    });
-    if (!pinned) return undefined;
-    const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string } | undefined);
-    const branchName = input.expectedBranch ?? execution?.branchName;
-    if (!branchName) return execution ? { ...execution, repositoryPath: pinned.repositoryPath, worktreeRoot: pinned.worktreeRoot } : undefined;
-    const result = await runCommand({ taskId: null, stepId: null, command: "git", args: ["worktree", "list", "--porcelain"], cwd: pinned.repositoryPath, timeout: 30_000 });
-    if (result.exitCode !== 0) throw new Error("Git could not list task worktrees");
-    const entry = result.stdout.split(/\r?\n\r?\n/).map((value) => value.split(/\r?\n/)).find((lines) => lines.includes(`branch refs/heads/${branchName}`));
-    const path = entry?.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
-    return path ? { repositoryPath: pinned.repositoryPath, worktreePath: path, worktreeRoot: pinned.worktreeRoot, branchName } : execution ? { ...execution, repositoryPath: pinned.repositoryPath, worktreeRoot: pinned.worktreeRoot } : undefined;
-  };
   const safe = (row: { worktreePath: string; worktreeRoot: string }) => {
     const canonical = (path: string) => existsSync(path) ? realpathSync(path) : resolve(path);
-    const path = canonical(row.worktreePath);
-    return path.startsWith(`${canonical(config.worktreeRoot)}/`) && path.startsWith(`${canonical(row.worktreeRoot)}/`);
+    const worktreeRoot = canonical(row.worktreeRoot);
+    const path = existsSync(row.worktreePath)
+      ? realpathSync(row.worktreePath)
+      : resolve(worktreeRoot, relative(resolve(row.worktreeRoot), resolve(row.worktreePath)));
+    return path.startsWith(`${canonical(config.worktreeRoot)}/`) && path.startsWith(`${worktreeRoot}/`);
   };
   const active = async (input: { taskId: string }) => {
     const turn = database.authQuery((db) => db.prepare(`SELECT turn.result_relative_path AS resultRelativePath FROM forge_herdr_turns turn
@@ -64,14 +81,13 @@ export function createWorktreeActivities(ctx: Pick<ActivityContext, "database" |
       if (!resultPath.startsWith(`${resolve(config.runtimeRoot)}/`)) return true;
       try { if (DeveloperDeliveryReportSchema.safeParse(json(await readFile(resultPath, "utf8"), null)).success) return false; } catch { return true; }
     }
-    const herdr = new CliHerdrClient();
     const observations = await observeHerdrSessions(database, herdr, input.taskId);
     for (const observation of observations) {
-      if (observation.classification === "active" && !["done", "cancelled", "failed"].includes(observation.lifecycleStatus ?? "")) return true;
+      if (observation.classification === "active" && isLiveHerdrStatus(observation.lifecycleStatus)) return true;
       if (observation.classification === "unverifiable" && observation.agentName) {
         try {
           const agent = await herdr.getAgent(observation.agentName);
-          if (["working", "running"].includes(agent?.status ?? "")) return true;
+          if (isLiveHerdrStatus(agent?.status)) return true;
         } catch {}
       }
     }

@@ -13,6 +13,7 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { createActivityContext } from "../src/engine/activities/context.js";
 import { createWorktreeActivities } from "../src/engine/activities/worktree.js";
+import { CliHerdrClient } from "../src/herdr-client.js";
 import { WorktreeManager } from "../src/worktrees.js";
 
 const execFileAsync = promisify(execFile);
@@ -21,10 +22,24 @@ async function git(args: string[], cwd: string): Promise<string> {
   return (await execFileAsync("/usr/bin/git", args, { cwd })).stdout.trim();
 }
 
-function activities(value: Awaited<ReturnType<typeof fixture>>) {
+function activities(value: Awaited<ReturnType<typeof fixture>>, herdr?: CliHerdrClient) {
   const context = createActivityContext(value.database, value.config);
-  Object.assign(context, { worktrees: new WorktreeManager({ run: git }) });
+  Object.assign(context, { worktrees: new WorktreeManager({ run: git }), ...(herdr ? { herdr } : {}) });
   return createWorktreeActivities(context);
+}
+
+function herdrWithStatus(status: string) {
+  return new CliHerdrClient("herdr", async () => ({
+    stdout: JSON.stringify({
+      id: "request_1",
+      result: {
+        snapshot: {
+          agents: [{ name: "builder_1", pane_id: "pane_1", status }],
+          panes: [{ pane_id: "pane_1", agent: "builder_1", agent_status: status, tokens: { forge_binding_id: "session_1" } }],
+        },
+      },
+    }),
+  }));
 }
 
 async function fixture() {
@@ -77,6 +92,22 @@ test("inspects a worktree found by its git branch without a worktree row", async
     value.database.authTransaction((db) => db.prepare("UPDATE forge_developer_executions SET worktree_path = ? WHERE id = 'developer_1'").run(join(value.root, "stale-worktree-path")));
     const result = await activities(value).inspectTaskWorktree({ taskId: "task_1", companyId: "company_1", workflowId: "workflow_1", expectedCommit: await git(["rev-parse", "HEAD"], value.worktreePath), expectedTree, expectedBranch: "work/task_1" });
     expect(result).toMatchObject({ present: true, owned: true, branch: "work/task_1", activeExecution: false, revision: { proven: true, headTree: expectedTree, branch: "work/task_1", clean: true } });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test.each([
+  ["idle", false],
+  ["working", true],
+])("treats a Herdr %s pane as active execution %s", async (status, activeExecution) => {
+  const value = await fixture();
+  try {
+    const now = new Date().toISOString();
+    value.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task_1', 'company_1', 'project_1', 'workflow_1', 1, 'developing', 'builder', '[]', NULL, ?, 'event_1')").run(now);
+      db.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, agent_name, pane_id, status, created_at, updated_at) VALUES ('session_1', 'task_1', 'builder', 1, 1, 'codex', 'builder_1', 'pane_1', 'ready', ?, ?)").run(now, now);
+    });
+    const result = await activities(value, herdrWithStatus(status)).inspectTaskWorktree({ taskId: "task_1", companyId: "company_1", workflowId: "workflow_1" });
+    expect(result.activeExecution).toBe(activeExecution);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

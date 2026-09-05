@@ -12,8 +12,6 @@ import { TaskControlStore } from "./root-session-store.js";
 import type { TaskProfile, TaskSession } from "./task-control.js";
 import { observeNativePromptMarker, observeNativeWorkerTurn, type NativeWorkerTurnObservation } from "./root-worker-turn-observation.js";
 
-const liveStatuses = new Set(["starting", "working", "running", "blocked", "awaiting_human", "awaiting_input", "awaiting-input", "idle"]);
-
 export interface WorkerRuntime {
   launch(input: { taskId: string; root: RootIdentity; session: TaskSession; instruction: string; persistAttempt: (attempt: { paneId: string; agentName: string }) => void }): Promise<{ paneId: string; agentName: string; nativeSessionId?: string }>;
 }
@@ -103,11 +101,10 @@ export class RootController implements RootBridgeAdapter {
       if (!session.paneId || !session.agentName) return "unknown";
       const agent = session.paneId ? snapshot.agents.find((candidate) => candidate.paneId === session.paneId) : undefined;
       const pane = session.paneId ? snapshot.panes.find((candidate) => candidate.paneId === session.paneId) : undefined;
-      if (!agent) return (session.kind === "root" && session.lifecycle === "live") || (session.kind === "worker" && !pane && !session.launchOwner) ? "stopped" : "unknown";
+      if (!agent) return !pane && !session.launchOwner ? "stopped" : "unknown";
       if (agent.name !== session.agentName || session.nativeSessionId && agent.agentSession !== session.nativeSessionId) return "unknown";
-      if (liveStatuses.has(agent.status ?? "")) return "live";
-      if (["done", "failed", "cancelled", "stopped"].includes(agent.status ?? "")) return "stopped";
-      return "unknown";
+      if (["failed", "cancelled", "stopped"].includes(agent.status ?? "")) return "stopped";
+      return "live";
     };
     const rootAbsent = !root.paneId || !root.agentName || !snapshot.agents.some((agent) => agent.paneId === root.paneId && agent.name === root.agentName);
     if (root.lifecycle === "reserved" && root.launchOwner) {

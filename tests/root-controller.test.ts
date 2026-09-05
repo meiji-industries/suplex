@@ -122,7 +122,7 @@ test("restart replaces a terminal Root through Herdr while retaining a live Work
   value.store.bindLive({ sessionId: worker.id, generation: worker.generation, paneId: "worker", agentName: "worker", nativeSessionId: "worker-native" });
   const starts: string[] = []; const prompts: string[] = [];
   const herdr = {
-    runtimeSnapshot: async () => ({ agents: [{ name: "old-root", paneId: "old-root", status: "done" }, { name: "worker", paneId: "worker", agentSession: "worker-native", status: "working" }], panes: [] }),
+    runtimeSnapshot: async () => ({ agents: [{ name: "worker", paneId: "worker", agentSession: "worker-native", status: "working" }], panes: [] }),
     readAgent: async () => "",
     prompt: async (name: string, prompt: string) => { prompts.push(`${name}:${prompt}`); return { name, paneId: "new-root", agentSession: "new-native" }; },
     createWorkspace: async () => ({ workspace: { workspaceId: "workspace", label: "task" }, tab: { tabId: "tab", label: "task" }, rootPane: { paneId: "new-root" } }),
@@ -134,6 +134,22 @@ test("restart replaces a terminal Root through Herdr while retaining a live Work
     expect(starts).toHaveLength(1); expect(prompts).toHaveLength(1);
     expect(value.store.currentSession("task", "root")?.generation).toBe(2);
     expect(value.store.currentSession("task", "worker")).toMatchObject({ id: worker.id, lifecycle: "live" });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("a done Root turn keeps the matched Root session and does not start a replacement", async () => {
+  const value = await fixture();
+  const root = value.store.claimRoot({ taskId: "task" });
+  value.store.bindLive({ sessionId: root.id, generation: root.generation, paneId: "root-pane", agentName: "root", nativeSessionId: "native-root" });
+  let starts = 0;
+  let observations = 0;
+  const herdr = { runtimeSnapshot: async () => { observations += 1; return { agents: [{ name: "root", paneId: "root-pane", agentSession: "native-root", status: observations === 1 ? "done" : "idle" }], panes: [] }; }, readAgent: async () => "", prompt: async () => ({ name: "root", paneId: "root-pane" }) };
+  const runtime = { launch: async () => { starts += 1; return { paneId: "new-root", agentName: "new-root", nativeSessionId: "new-native" }; } };
+  try {
+    await new RootController(value.store, herdr, undefined, runtime).recover("task");
+    await new RootController(value.store, herdr, undefined, runtime).recover("task");
+    expect(starts).toBe(0);
+    expect(value.store.currentSession("task", "root")).toMatchObject({ id: root.id, generation: root.generation, lifecycle: "live" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -210,7 +226,7 @@ test("a stopped accepted Worker becomes one interruption wake, not a completion"
   value.store.bindLive({ sessionId: worker.id, generation: worker.generation, paneId: "worker-pane", agentName: "worker", nativeSessionId: "native-worker" });
   const observer = await writeAcceptedNativeTurn(value.root, worker, value.store.get("task").worktree!.path);
   const prompts: string[] = [];
-  const herdr = { runtimeSnapshot: async () => ({ agents: [{ name: "root", paneId: "root-pane", status: "working" }, { name: "worker", paneId: "worker-pane", agentSession: "native-worker", status: "done" }], panes: [] }), readAgent: async () => "", prompt: async (_name: string, prompt: string) => { prompts.push(prompt); return { name: "root", paneId: "root-pane" }; } };
+  const herdr = { runtimeSnapshot: async () => ({ agents: [{ name: "root", paneId: "root-pane", status: "working" }], panes: [] }), readAgent: async () => "", prompt: async (_name: string, prompt: string) => { prompts.push(prompt); return { name: "root", paneId: "root-pane" }; } };
   try {
     await new RootController(value.store, herdr, undefined, undefined, observer).recover("task");
     await new RootController(value.store, herdr, undefined, undefined, observer).recover("task");
@@ -231,7 +247,7 @@ test("two recovery controllers claim one replacement Root launch while retaining
   const wait = new Promise<void>((resolve) => { release = resolve; });
   const started = new Promise<void>((resolve) => { firstStarted = resolve; });
   const observedTwice = new Promise<void>((resolve) => { secondObserved = resolve; });
-  const herdr = { runtimeSnapshot: async () => { observed += 1; if (observed === 2) secondObserved?.(); return { agents: [{ name: "old-root", paneId: "old-root", status: "done" }, { name: "worker", paneId: "worker", agentSession: "native-worker", status: "working" }], panes: [] }; }, readAgent: async () => "", prompt: async () => ({ name: "root", paneId: "new-root" }) };
+  const herdr = { runtimeSnapshot: async () => { observed += 1; if (observed === 2) secondObserved?.(); return { agents: [{ name: "worker", paneId: "worker", agentSession: "native-worker", status: "working" }], panes: [] }; }, readAgent: async () => "", prompt: async () => ({ name: "root", paneId: "new-root" }) };
   const runtime = { launch: async () => { starts += 1; firstStarted?.(); await wait; return { paneId: "new-root", agentName: "root", nativeSessionId: "new-native" }; } };
   try {
     const first = new RootController(value.store, herdr, undefined, runtime).recover("task");

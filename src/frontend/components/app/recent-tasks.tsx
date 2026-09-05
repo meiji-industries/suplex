@@ -1,5 +1,4 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { GitPullRequest } from "lucide-react";
 import { withCompany } from "../../lib/api.js";
 import { readTaskList } from "../../lib/task-list.js";
 import type { Task } from "../../../task-contracts.js";
@@ -7,8 +6,7 @@ import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, Side
 import { useOptionalCompanyContext } from "./company-context.js";
 import { TaskStatusIcon, taskStatusLabels } from "./task-status.js";
 import { RecentTaskAgents } from "./recent-task-agents.js";
-
-const pullRequestDots: Readonly<Record<string, string>> = { draft: "bg-amber-500", open: "bg-blue-500", merged: "bg-emerald-500", closed: "bg-rose-500" };
+import { RecentPullRequest } from "./recent-pull-request.js";
 
 export function recentTasks<T extends Pick<Task, "status" | "updatedAt">>(tasks: T[]): T[] {
   return tasks.filter(task => task.status !== "cancelled").sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 10);
@@ -36,7 +34,7 @@ export function RecentTasks({ close }: { close?: () => void }): ReactElement | n
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <span data-recent-task-status={task.status} className={`inline-flex shrink-0${task.status === "active" ? " animate-spin" : ""}`}><TaskStatusIcon status={task.status} /></span>
         <span className="min-w-0 flex-1 truncate">{task.title}</span>
-        {task.pullRequest ? <span data-recent-pull-request={task.pullRequest.state} className="relative inline-flex size-4 shrink-0 items-center justify-center" title={`Pull request ${task.pullRequest.state}`}><GitPullRequest aria-hidden="true" className="size-4" /><span aria-hidden="true" className={`absolute bottom-0 right-0 size-1.5 rounded-full ring-2 ring-sidebar ${pullRequestDots[task.pullRequest.state] ?? "bg-muted-foreground"}`} /></span> : null}
+        {task.pullRequest ? <RecentPullRequest taskId={task.id} state={task.pullRequest.state} headSha={task.pullRequest.headSha} /> : null}
       </span>
     </a>} isActive={window.location.pathname === `/tasks/${task.id}`} tooltip={task.title} />
     <RecentTaskAgents taskId={task.id} />

@@ -13,6 +13,7 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     store.askHuman(waiting.id, "Which branch?");
     store.setPullRequest(active.id, { repository: "owner/repo", number: 10, url: "https://github.com/owner/repo/pull/10", headSha: "a".repeat(40), state: "open", mergedAt: null });
     const { page } = value;
+    await page.route(`**/api/tasks/${active.id}/checks`, route => route.fulfill({ json: { available: true, pullRequestState: "ready", runs: [{ name: "Failed", status: "failing", url: null }, { name: "Running", status: "pending", url: null }] } }));
     let workerStatus = "working";
     await page.route(`**/api/tasks/${active.id}/agents`, route => route.fulfill({ json: { agents: [{ id: "root", role: "root", paneId: "wProof:p1", status: "idle" }, { id: "worker", role: "worker", paneId: "wProof:p2", status: workerStatus }] } }));
     await page.goto(`${value.base}/tasks?company=${value.company.id}`);
@@ -29,6 +30,7 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     await page.getByText("Worker · Working", { exact: true }).waitFor();
     expect(await working.locator("[data-recent-task-status]").evaluate(element => getComputedStyle(element).animationName)).toBe("spin");
     await working.locator('[data-recent-pull-request="open"] svg').waitFor();
+    expect(await working.locator("[data-pr-color]").getAttribute("data-pr-color")).toBe("red");
     const waitingRow = page.getByRole("link", { name: "Waiting task, Answer necessary", exact: true });
     expect(await waitingRow.locator("[data-recent-task-status]").evaluate(element => getComputedStyle(element).animationName)).toBe("none");
     expect(await waitingRow.locator("[data-recent-pull-request]").count()).toBe(0);
@@ -38,6 +40,7 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     await delivered.waitFor();
     expect(await delivered.locator("[data-recent-task-status]").evaluate(element => getComputedStyle(element).animationName)).toBe("none");
     await delivered.locator('[data-recent-pull-request="merged"] svg').waitFor();
+    await expect.poll(() => delivered.locator("[data-pr-color]").getAttribute("data-pr-color")).toBe("purple");
     await page.screenshot({ path: join(tmpdir(), `forge-recent-icons-${width}.png`), fullPage: true });
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }

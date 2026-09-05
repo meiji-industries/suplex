@@ -22,5 +22,6 @@ export const TaskAgentStatusSchema = z.enum(["queued", "working", "retrying", "i
 export const TaskAgentsResponseSchema = z.object({ agents: z.array(z.object({ id: z.string(), role: TaskSessionKindSchema, paneId: z.string().nullable(), status: TaskAgentStatusSchema })) });
 export const TaskChecksResponseSchema = z.object({
   available: z.boolean(),
+  pullRequestState: z.enum(["draft", "ready", "closed", "merged"]).nullable().optional(),
   runs: z.array(z.object({ name: z.string(), status: z.enum(["pending", "failing", "successful"]), url: z.string().nullable() })),
 });

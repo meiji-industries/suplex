@@ -1,4 +1,6 @@
 import type { Task } from "./task-contracts.js";
+import type { z } from "zod";
+import type { TaskChecksResponseSchema } from "./http/contracts/tasks.js";
 import { runCommand } from "./command-runner.js";
 import { createGithubReleasePort, type GithubReleasePort } from "./github-delivery.js";
 
@@ -9,8 +11,9 @@ export async function readTaskDiff(task: Task) {
   return { available: true, patch: result.stdout, truncated: false };
 }
 
-export async function readTaskChecks(task: Task, github: Pick<Required<GithubReleasePort>, "observePullRequest"> = createGithubReleasePort()) {
+export async function readTaskChecks(task: Task, github: Pick<Required<GithubReleasePort>, "observePullRequest"> = createGithubReleasePort()): Promise<z.infer<typeof TaskChecksResponseSchema>> {
   if (!task.pullRequest) return { available: false, runs: [] };
   const observation = await github.observePullRequest({ repository: task.configuration.repository, branch: task.configuration.branch, pullRequestNumber: task.pullRequest.number });
-  return { available: observation.exists, runs: observation.checks.runs };
+  const pullRequestState = observation.state === "open" ? observation.isDraft === false ? "ready" : "draft" : observation.state;
+  return { available: observation.exists, runs: observation.checks.runs, pullRequestState };
 }

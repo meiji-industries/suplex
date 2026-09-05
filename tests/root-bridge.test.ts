@@ -108,7 +108,7 @@ test("stdio bridge invokes the production controller against a durable task cont
     });
     const store = new TaskControlStore(database);
     const profile = { profileId: "profile", provider: "codex" as const, model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
-    store.create({ taskId: "task", objective: "Ship it", deliveryTarget: "pull request", rootProfile: profile, workerProfile: profile, worktree: { path: repository, branch: "main", baseSha: "a", headSha: "a", dirty: false } });
+    store.create({ taskId: "task", objective: "Ship it", deliveryTarget: "pull request", deliveryIntent: { repository: "owner/repo", headBranch: "main", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: repository, branch: "main", baseSha: "a", headSha: "a", dirty: false } });
     const session = store.claimRoot({ taskId: "task" });
     store.bindLive({ sessionId: session.id, generation: session.generation, paneId: "root-pane", agentName: "root" });
     const controller = new RootController(store, { runtimeSnapshot: async () => ({ agents: [], panes: [] }), prompt: async () => ({ name: "root", paneId: "root-pane" }), readAgent: async () => "" }, { launch: async () => ({ paneId: "worker-pane", agentName: "worker", nativeSessionId: "native-worker" }) });

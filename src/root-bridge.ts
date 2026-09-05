@@ -26,7 +26,7 @@ export interface RootBridgeAdapter {
   assertCurrentRoot(root: RootIdentity): Promise<void>;
   observe(root: RootIdentity): Promise<unknown>;
   delegateWorker(root: RootIdentity, instruction: string): Promise<unknown>;
-  requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation']): Promise<unknown>;
+  requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation'], expectedHead?: string): Promise<unknown>;
   askHuman(root: RootIdentity, question: string): Promise<unknown>;
 }
 
@@ -48,7 +48,7 @@ export class RootBridge {
       case "delegate_worker":
         return this.adapter.delegateWorker(this.root, tool.instruction);
       case "request_delivery":
-        return this.adapter.requestDelivery(this.root, tool.operation);
+        return this.adapter.requestDelivery(this.root, tool.operation, tool.expectedHead);
       case "ask_human":
         return this.adapter.askHuman(this.root, tool.question);
     }

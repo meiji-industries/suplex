@@ -19,11 +19,12 @@ export const DeliveryOperationSchema = z.enum([
   "request_review",
   "merge_after_approval",
 ]);
+export type DeliveryOperation = z.infer<typeof DeliveryOperationSchema>;
 
 export const RootToolSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("observe") }).strict(),
   z.object({ kind: z.literal("delegate_worker"), instruction: z.string().min(1).max(20_000) }).strict(),
-  z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema }).strict(),
+  z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional() }).strict(),
   z.object({ kind: z.literal("ask_human"), question: z.string().min(1).max(4_000) }).strict(),
 ]);
 

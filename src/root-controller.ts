@@ -9,6 +9,7 @@ import { rootBridgeMcpConfig } from "./root-bridge.js";
 import type { RootBridgeAdapter } from "./root-bridge.js";
 import type { RootIdentity } from "./root-contracts.js";
 import { TaskControlStore } from "./root-session-store.js";
+import { DeliveryOperations } from "./delivery-operations.js";
 import type { TaskProfile, TaskSession } from "./task-control.js";
 import { observeNativePromptMarker, observeNativeWorkerTurn, type NativeWorkerTurnObservation } from "./root-worker-turn-observation.js";
 
@@ -28,6 +29,7 @@ export class RootController implements RootBridgeAdapter {
     private readonly workerRuntime?: WorkerRuntime,
     private readonly rootRuntime?: RootRuntime,
     private readonly observeWorkerTurn: (input: { cwd: string; nativeSessionId: string; assignmentMarker: string }) => Promise<NativeWorkerTurnObservation> = observeNativeWorkerTurn,
+    private readonly delivery = new DeliveryOperations(store),
   ) {}
 
   async assertCurrentRoot(root: RootIdentity): Promise<void> { this.store.assertCurrentRoot(root); }
@@ -54,9 +56,8 @@ export class RootController implements RootBridgeAdapter {
     }
   }
 
-  async requestDelivery(root: RootIdentity): Promise<unknown> {
-    this.store.assertCurrentRoot(root);
-    throw new Error("delivery_operations_unconfigured");
+  async requestDelivery(root: RootIdentity, operation: import("./root-contracts.js").DeliveryOperation, expectedHead?: string): Promise<unknown> {
+    return this.delivery.execute(root, operation, expectedHead);
   }
 
   async askHuman(root: RootIdentity, question: string): Promise<unknown> {
@@ -206,7 +207,7 @@ export function productionRootRuntime(databasePath: string, store: TaskControlSt
       const nativeSessionId = runtime.presetSessionId ? randomUUID() : undefined;
       input.persistAttempt({ paneId: workspace.rootPane.paneId, agentName: name, ...(nativeSessionId ? { nativeSessionId } : {}) });
       const live = await herdr.startAgent({ name, paneId: workspace.rootPane.paneId, kind: control.rootProfile.provider === "claude" ? "claude" : "codex", args: runtime.launchArgs(control.rootProfile, nativeSessionId ?? null, false, undefined, { kind: "root", bridgeConfig: bridge, bridgeConfigPath: join(bindingDirectory, `${input.session.id}.mcp.json`) }) });
-      const prompted = await herdr.prompt(live.name, `You are the continuing Root for this task. Objective: ${input.objective}. Use only forge_root to observe, delegate, deliver, or ask one human question.`, { waitForWorking: false });
+      const prompted = await herdr.prompt(live.name, `You are the continuing Root for this task.\n\nObjective: ${input.objective}\nDelivery target: ${control.deliveryTarget}\nRepository: ${control.deliveryIntent.repository}\nBranch: ${control.deliveryIntent.headBranch}\n\nUse only forge_root. First observe the task. Review evidence before you delegate or request a delivery action. Delegate one scoped Worker at a time. Give the Worker a concrete edit and verification assignment. Read Worker evidence before the next decision. Ask one specific human question when external facts are ambiguous or a decision is necessary. Do not write files, run Git or GitHub mutations, push, create pull requests, merge, or launch workers outside forge_root.`, { waitForWorking: false });
       return { paneId: live.paneId, agentName: live.name, ...(prompted.agentSession ? { nativeSessionId: prompted.agentSession } : live.agentSession ? { nativeSessionId: live.agentSession } : nativeSessionId ? { nativeSessionId } : {}) };
     },
   };
@@ -239,7 +240,7 @@ export function productionWorkerRuntime(store: TaskControlStore, herdr: Pick<Her
         args: herdrRuntime("codex").launchArgs(control.workerProfile, null, false, undefined, { kind: "worker" }),
       });
       const marker = `forge-worker-assignment:${input.session.id}:${input.session.generation}:${input.session.assignmentHash}`;
-      const prompted = await herdr.prompt(live.name, `${input.instruction}\n\n[${marker}]`, { waitForWorking: false });
+      const prompted = await herdr.prompt(live.name, `You are the scoped Worker for this Forge task. Execute the assigned edits yourself. Do not delegate or start subagents. Do not push, create or merge pull requests, or use GitHub mutation commands. Report the files changed, verification you ran, and any blocker to the Root.\n\nAssignment:\n${input.instruction}\n\n[${marker}]`, { waitForWorking: false });
       return { paneId: live.paneId, agentName: live.name, ...(prompted.agentSession ? { nativeSessionId: prompted.agentSession } : live.agentSession ? { nativeSessionId: live.agentSession } : {}) };
     },
   };

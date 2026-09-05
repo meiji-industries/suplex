@@ -15,9 +15,17 @@ export const WorktreeReferenceSchema = z.object({
 export const PullRequestReferenceSchema = z.object({
   repository: z.string().min(1), number: z.number().int().positive(), url: z.string().url(), headSha: z.string().min(1), state: z.string().min(1), mergedAt: z.string().datetime().nullable(),
 }).strict();
+export const DeliveryIntentSchema = z.object({
+  repository: z.string().min(1),
+  headBranch: z.string().min(1),
+  baseBranch: z.string().min(1),
+  baselineSha: z.string().min(1),
+  pullRequestNumber: z.number().int().positive().nullable(),
+}).strict();
 
 export type WorktreeReference = z.infer<typeof WorktreeReferenceSchema>;
 export type PullRequestReference = z.infer<typeof PullRequestReferenceSchema>;
+export type DeliveryIntent = z.infer<typeof DeliveryIntentSchema>;
 export type TaskControlStatus = z.infer<typeof TaskControlStatusSchema>;
 export type TaskSessionKind = z.infer<typeof TaskSessionKindSchema>;
 export type TaskSessionLifecycle = z.infer<typeof TaskSessionLifecycleSchema>;
@@ -28,6 +36,7 @@ export interface TaskControl {
   taskId: string;
   objective: string;
   deliveryTarget: string;
+  deliveryIntent: DeliveryIntent;
   status: TaskControlStatus;
   wakeAt: string | null;
   humanQuestion: string | null;

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { expect, test } from "vitest";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
-test.each([1280, 390])("live panes appear automatically, span the task column, and resize at %ipx", { timeout: 90_000 }, async width => {
+test.each([1280, 390])("live panes span the workspace below the scrolling task and properties at %ipx", { timeout: 90_000 }, async width => {
   const value = await nativeBrowser(width);
   try {
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Live pane restoration", description: "Watch the agent work.", startImmediately: true, idempotencyKey: "live-dock" });
@@ -25,13 +25,21 @@ test.each([1280, 390])("live panes appear automatically, span the task column, a
     await dock.locator(".xterm-screen").waitFor();
     expect(await page.getByRole("button", { name: /Open (Root|Worker) terminal/ }).count()).toBe(0);
     expect(await page.getByLabel("Note to Root", { exact: true }).count()).toBe(0);
-    const main = await page.locator("[data-task-main]").boundingBox();
+    const main = await page.locator("[data-task-detail]").boundingBox();
     const bounds = await dock.boundingBox();
     expect(bounds!.x).toBe(main!.x);
     expect(bounds!.width).toBe(main!.width);
-    expect(Math.abs(bounds!.y + bounds!.height - 844)).toBeLessThanOrEqual(1);
+    expect(Math.abs(bounds!.y + bounds!.height - (width >= 768 ? 836 : 844))).toBeLessThanOrEqual(1);
     expect(await dock.evaluate(element => getComputedStyle(element).position)).toBe("sticky");
     expect(await dock.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(30, 30, 46)");
+    const body = page.locator("[data-task-body]");
+    expect(await body.evaluate(element => getComputedStyle(element).overflowY)).toBe("auto");
+    await body.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    expect(await body.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    expect(await dock.boundingBox()).toEqual(bounds);
+    const properties = await page.getByRole("complementary", { name: "Task properties" }).boundingBox();
+    expect(properties!.x + properties!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width + 1);
     const slider = dock.getByRole("slider", { name: "Resize live agent output" });
     await slider.focus();
     await slider.press("ArrowUp");

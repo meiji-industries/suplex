@@ -22,7 +22,8 @@ test.each([1280, 390])("task tabs do not capture page scrolling at %ipx", { time
     }
     await row.hover();
     await page.mouse.wheel(0, 120);
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+    await expect.poll(() => page.locator("[data-task-body]").evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
     expect(await row.evaluate(element => element.scrollTop)).toBe(0);
     await page.screenshot({ path: join(tmpdir(), `forge-task-tab-scroll-${width}.png`), fullPage: true });
     expect(value.errors).toEqual([]);

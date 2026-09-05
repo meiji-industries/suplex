@@ -53,9 +53,9 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
     catch (error) { setError(String(error)); }
   };
 
-  return <article data-task-detail className="flex min-w-0 flex-1 flex-col">
-    <div data-task-body className="grid min-w-0 flex-1 lg:grid-cols-[minmax(0,1fr)_260px]">
-      <div data-task-main className="flex min-h-[calc(100dvh-var(--header-height))] min-w-0 flex-col">
+  return <article data-task-detail className="flex h-[calc(100dvh-var(--header-height))] min-h-0 min-w-0 flex-none flex-col overflow-hidden md:h-[calc(100dvh-var(--header-height)-1rem)]">
+    <div data-task-body className="grid min-h-0 min-w-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_260px]">
+      <div data-task-main className="flex min-w-0 flex-col">
         <header className="px-4 pb-3 pt-4 sm:px-6 lg:px-10"><div className="mx-auto max-w-4xl"><h2 className="text-xl font-semibold leading-8" aria-label={task.title}>{editable ? <button className="text-left hover:text-muted-foreground focus-visible:outline" type="button" aria-label="Edit task title" onClick={() => setEdit({ title: task.title, description: task.description })}>{task.title}</button> : task.title}</h2></div></header>
         <div data-task-content className="min-w-0 px-4 pb-6 pt-4 sm:px-6 lg:px-10"><div data-task-content-inner className="mx-auto max-w-4xl space-y-7">
           {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
@@ -67,9 +67,8 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
           </div></div> : null}
           <TaskWork task={task} activity={activity} />
         </div></div>
-        <LivePaneDock taskId={task.id} activity={activity} />
       </div>
-      <aside aria-label="Task properties" className="min-w-0 border-t px-4 py-5 lg:min-h-[calc(100dvh-6rem)] lg:border-l lg:border-t-0">
+      <aside aria-label="Task properties" className="min-w-0 border-t px-4 py-5 lg:border-l lg:border-t-0">
         <h3 className="mb-4 text-xs font-medium">Properties</h3>
         <dl className="grid grid-cols-1 gap-5 text-xs">
           <div className="space-y-1.5"><dt className="text-muted-foreground">Status</dt><dd className="flex items-center gap-2"><TaskStatus status={task.status} />{task.archivedAt ? <Badge variant="outline">Archived</Badge> : null}</dd></div>
@@ -85,6 +84,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
         </dl>
       </aside>
     </div>
+    <LivePaneDock taskId={task.id} activity={activity} />
     <Dialog open={image !== null} onOpenChange={open => { if (!open) setImage(null); }}><DialogContent><DialogHeader><DialogTitle>{image?.filename ?? "Image preview"}</DialogTitle></DialogHeader>{image ? <img className="max-h-[70dvh] w-full object-contain" src={`/api/tasks/${task.id}/images/${image.artifactId}`} alt={image.filename} /> : null}</DialogContent></Dialog>
   </article>;
 }

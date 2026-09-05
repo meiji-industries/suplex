@@ -81,4 +81,14 @@ describe("Root delivery operations", () => {
     expect(fake.calls.filter((call) => call === "inspect")).toHaveLength(inspections);
     expect(fake.calls).toEqual(expect.arrayContaining(["inspect", "remote", "observe"]));
   });
+
+  it("requests an exact-head merge without a Forge or GitHub review mirror", async () => {
+    const value = await fixture();
+    const fake = github(value.local);
+    fake.setObserved({ exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "open", isDraft: false, headSha: value.local.headSha, baseSha: "base", mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: null });
+    const controller = new RootController(value.store, { runtimeSnapshot: async () => ({ agents: [], panes: [] }), prompt: async () => ({ name: "root", paneId: "root-pane" }), readAgent: async () => "" }, undefined, undefined, undefined, new DeliveryOperations(value.store, fake.port));
+    await controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_after_approval", value.local.headSha);
+    expect(fake.calls).toContain("merge");
+    expect(value.store.get("task").status).toBe("delivered");
+  });
 });

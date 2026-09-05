@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { openCodeAttachCommand, openCodeRoleConfig, readOpenCodeServer, type OpenCodeServerReference } from "../src/opencode-server.js";
+import { openCodeAttachCommand, openCodeRoleConfig, readOpenCodeServer, stopOpenCodeServer, type OpenCodeServerReference } from "../src/opencode-server.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -34,7 +34,7 @@ describe("OpenCode role configuration", () => {
 it("keeps attach credentials out of the pane command", async () => {
   const directory = await mkdtemp(join(tmpdir(), "forge-attach-test-"));
   directories.push(directory);
-  const reference: OpenCodeServerReference = { pid: process.pid, baseUrl: "http://127.0.0.1:1234", password: "private-proof-password-not-for-pane-output", directory: "/repo with spaces", executable: "/bin/opencode", generation: "b775df17-718a-4cb2-8e23-6912b8aa0d39" };
+  const reference: OpenCodeServerReference = { pid: process.pid, baseUrl: "http://127.0.0.1:1234", password: "private-proof-password-not-for-pane-output", directory: "/repo with spaces", executable: "/bin/opencode", generation: "b775df17-718a-4cb2-8e23-6912b8aa0d39", configHash: "a".repeat(64), processIdentity: { command: "opencode serve", executable: "/bin/opencode", argv: ["opencode", "serve"], processGroup: process.pid, startTime: "original", ownerUid: 501 } };
   const command = await openCodeAttachCommand({ reference, runtimeDirectory: directory, sessionID: "ses_proof" });
   expect(command).not.toContain(reference.password);
   expect(command).toContain("--session 'ses_proof'");
@@ -43,4 +43,19 @@ it("keeps attach credentials out of the pane command", async () => {
   expect(await readFile(join(directory, "attach.env"), "utf8")).toContain(reference.password);
   expect(await readOpenCodeServer(directory)).toBeNull();
   await expect(openCodeAttachCommand({ reference, runtimeDirectory: directory, sessionID: "ses_bad; touch /tmp/no" })).rejects.toThrow("Invalid OpenCode session identity");
+});
+
+it("never signals a reused server PID", async () => {
+  const reference: OpenCodeServerReference = {
+    pid: 4321, baseUrl: "http://127.0.0.1:1234", password: "a".repeat(64), directory: "/repo", executable: "/bin/opencode",
+    generation: "b775df17-718a-4cb2-8e23-6912b8aa0d39", configHash: "a".repeat(64),
+    processIdentity: { command: "opencode serve", executable: "/bin/opencode", argv: ["opencode", "serve"], processGroup: 4321, startTime: "original", ownerUid: 501 },
+  };
+  const signalled: number[] = [];
+  await expect(stopOpenCodeServer(reference, {
+    inspect: async () => ({ pid: reference.pid, ...reference.processIdentity, startTime: "replacement" }),
+    signal: async pid => { signalled.push(pid); },
+    signalGroup: async pid => { signalled.push(pid); },
+  })).rejects.toThrow("wrong start time");
+  expect(signalled).toEqual([]);
 });

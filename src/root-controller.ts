@@ -68,21 +68,32 @@ export class RootController implements RootBridgeAdapter {
   }
 
   async recover(taskId: string): Promise<void> {
-    if (this.store.get(taskId).status === "cancelled") {
-      for (const session of this.store.pendingStops(taskId)) {
-        if (session.nativeSessionId) await this.harness.stop(scope(this.store.get(taskId), session), session.nativeSessionId);
-        this.store.completeStop(session.id);
-      }
-      return;
-    }
+    this.store.retireDeliveredSessions(taskId);
+    await this.stopRetiredSessions(taskId);
     if (this.store.get(taskId).status !== "active") return;
     const root = this.store.currentSession(taskId, "root") ?? this.store.claimRoot({ taskId });
     await this.recoverSession(root);
     const worker = this.store.currentSession(taskId, "worker");
     if (worker && worker.lifecycle !== "stopped" && worker.lifecycle !== "cancelled") await this.recoverSession(worker);
+    await this.stopRetiredSessions(taskId);
     if (this.store.get(taskId).status === "active") {
       this.store.wakeIdleRoot(taskId);
       this.store.scheduleWake(taskId, new Date(Date.now() + 15_000).toISOString());
+    }
+  }
+
+  private async stopRetiredSessions(taskId: string): Promise<void> {
+    const failures: unknown[] = [];
+    for (const session of this.store.pendingStops(taskId)) {
+      try {
+        await this.harness.stop({ id: session.id }, session.nativeSessionId);
+        this.store.completeStop(session.id);
+      } catch (error) { failures.push(error); }
+    }
+    if (failures.length) {
+      const error = new AggregateError(failures, "Some OpenCode sessions could not be stopped");
+      if (["cancelled", "delivered"].includes(this.store.get(taskId).status)) throw error;
+      new StructuredLogger().warn("Completed session cleanup will be retried", { taskId }, { error: error.message });
     }
   }
 

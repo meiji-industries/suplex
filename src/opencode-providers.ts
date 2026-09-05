@@ -1,9 +1,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { resolveOpenCodeExecutable } from "./opencode-executable.js";
-import { ensureOpenCodeServer, openCodeProcessAlive, openCodeServerClient, readOpenCodeServer } from "./opencode-server.js";
+import { ensureOpenCodeServer, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer } from "./opencode-server.js";
 import type { ProviderListResponse } from "./http/contracts/providers.js";
 
 export type ReadOpenCodeProviders = () => Promise<ProviderListResponse>;
@@ -26,11 +25,7 @@ export async function readOpenCodeProviders(input: { directory: string; executab
     };
   } finally {
     const reference = await readOpenCodeServer(runtimeDirectory);
-    if (reference && openCodeProcessAlive(reference.pid)) {
-      process.kill(reference.pid, "SIGTERM");
-      for (let attempt = 0; attempt < 50 && openCodeProcessAlive(reference.pid); attempt++) await delay(100);
-      if (openCodeProcessAlive(reference.pid)) process.kill(reference.pid, "SIGKILL");
-    }
+    if (reference) await stopOpenCodeServer(reference);
     await rm(runtimeDirectory, { recursive: true, force: true });
   }
 }

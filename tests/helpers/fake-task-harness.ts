@@ -11,9 +11,9 @@ export class FakeTaskHarness implements TaskHarness {
   failStop = false;
   readonly stopped: string[] = [];
 
-  async stop(_scope: OpenCodeTaskScope, nativeSessionId: string): Promise<void> {
+  async stop(_scope: Pick<OpenCodeTaskScope, "id">, nativeSessionId: string | null): Promise<void> {
     if (this.failStop) throw new Error("Abort unavailable");
-    this.stopped.push(nativeSessionId);
+    if (nativeSessionId) this.stopped.push(nativeSessionId);
   }
 
   async ensureSession(scope: OpenCodeTaskScope, nativeSessionId: string | null): Promise<string> {

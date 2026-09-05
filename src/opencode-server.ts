@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { OpenCodeClient } from "./opencode-client.js";
+import { compareProcessIdentity, defaultProcessController, inspectProcessOnce, stopOwnedProcesses, type ProcessController } from "./process-manager.js";
 
 export const OpenCodeServerReferenceSchema = z.object({
   pid: z.number().int().positive(),
@@ -14,6 +15,15 @@ export const OpenCodeServerReferenceSchema = z.object({
   directory: z.string(),
   executable: z.string(),
   generation: z.string().uuid(),
+  configHash: z.string().regex(/^[a-f0-9]{64}$/),
+  processIdentity: z.object({
+    command: z.string().min(1),
+    executable: z.string().min(1),
+    argv: z.array(z.string()),
+    processGroup: z.number().int().positive(),
+    startTime: z.string().min(1),
+    ownerUid: z.number().int().nonnegative(),
+  }).strict(),
 }).strict();
 export type OpenCodeServerReference = z.infer<typeof OpenCodeServerReferenceSchema>;
 
@@ -74,6 +84,14 @@ export function openCodeProcessAlive(pid: number): boolean {
   catch (error) { return !(error instanceof Error && "code" in error && error.code === "ESRCH"); }
 }
 
+function ownedProcess(reference: OpenCodeServerReference) {
+  return { ...reference.processIdentity, pid: reference.pid, name: `opencode-${reference.generation}`, startedAt: reference.processIdentity.startTime };
+}
+
+export async function stopOpenCodeServer(reference: OpenCodeServerReference, controller: ProcessController = { ...defaultProcessController, inspect: inspectProcessOnce }): Promise<void> {
+  await stopOwnedProcesses({ version: 1, processes: [ownedProcess(reference)] }, controller);
+}
+
 async function unusedPort(): Promise<number> {
   const listener = createServer();
   await new Promise<void>((resolve, reject) => { listener.once("error", reject); listener.listen(0, "127.0.0.1", resolve); });
@@ -94,9 +112,11 @@ export async function ensureOpenCodeServer(input: {
 }): Promise<OpenCodeServerReference> {
   if (!isAbsolute(input.executable)) throw new Error("OpenCode executable must be absolute");
   const directory = await realpath(input.directory);
+  const configHash = createHash("sha256").update(JSON.stringify(input.config)).digest("hex");
   const previous = await readOpenCodeServer(input.runtimeDirectory);
   if (previous && openCodeProcessAlive(previous.pid)) {
-    if (previous.directory !== directory || previous.executable !== input.executable) throw new Error("OpenCode runtime scope changed");
+    if (compareProcessIdentity(ownedProcess(previous), await inspectProcessOnce(previous.pid)).kind !== "exact_match") throw new Error("OpenCode server process ownership changed");
+    if (previous.directory !== directory || previous.executable !== input.executable || previous.configHash !== configHash) throw new Error("OpenCode runtime scope changed");
     await openCodeServerClient(previous).health();
     return previous;
   }
@@ -116,7 +136,10 @@ export async function ensureOpenCodeServer(input: {
   } finally { await log.close(); }
   if (!child.pid) throw new Error("OpenCode did not start");
   child.unref();
-  const reference: OpenCodeServerReference = { pid: child.pid, baseUrl: `http://127.0.0.1:${port}`, password, directory, executable: input.executable, generation: randomUUID() };
+  const inspection = await inspectProcessOnce(child.pid);
+  if (!inspection || inspection.ownerUid === undefined || inspection.processGroup !== child.pid) throw new Error("OpenCode process identity could not be established");
+  const processIdentity = { command: inspection.command, executable: inspection.executable, argv: inspection.argv, processGroup: inspection.processGroup, startTime: inspection.startTime, ownerUid: inspection.ownerUid };
+  const reference: OpenCodeServerReference = { pid: child.pid, baseUrl: `http://127.0.0.1:${port}`, password, directory, executable: input.executable, generation: randomUUID(), configHash, processIdentity };
   const pending = join(input.runtimeDirectory, `server-${reference.generation}.json`);
   await writeFile(pending, JSON.stringify(reference), { mode: 0o600 });
   await rename(pending, join(input.runtimeDirectory, "server.json"));

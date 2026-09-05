@@ -64,6 +64,8 @@ export interface TaskSession {
   resultReceiptId: string | null;
   launchOwner: string | null;
   launchOwnerPid: number | null;
+  stopRequestedAt: string | null;
+  stoppedAt: string | null;
 }
 
 export interface TaskTurn {

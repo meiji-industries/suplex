@@ -98,7 +98,7 @@ test("cancellation fences dispatch before native abort and retries abort after r
   await value.controller.recover("task");
   const root = value.store.currentSession("task", "root")!;
   value.harness.failStop = true;
-  await expect(value.controller.cancel("task")).rejects.toThrow("Abort unavailable");
+  await expect(value.controller.cancel("task")).rejects.toThrow("Some OpenCode sessions could not be stopped");
   expect(value.store.get("task").status).toBe("cancelled");
   expect(value.store.currentSession("task", "root")).toBeNull();
   value.harness.failStop = false;
@@ -142,6 +142,36 @@ test("cancellation waits for an in-flight dispatch to settle before aborting", a
   await value.controller.recover("task");
   expect(value.harness.stopped).toHaveLength(1);
   expect(value.harness.dispatched).toHaveLength(1);
+});
+
+test("delivery retires the Root server without another model turn", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  const root = value.store.currentSession("task", "root")!;
+  value.store.markDelivered("task");
+  await value.controller.recover("task");
+  expect(value.harness.stopped).toEqual([root.nativeSessionId]);
+  expect(value.store.currentSession("task", "root")).toBeNull();
+  await value.controller.recover("task");
+  expect(value.harness.stopped).toHaveLength(1);
+  expect(value.harness.dispatched).toHaveLength(1);
+});
+
+test("completed Worker cleanup cannot gate Root progress", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  await value.controller.delegateWorker(value.identity(), "Make the change");
+  const worker = value.store.currentSession("task", "worker")!;
+  value.harness.finish(value.harness.dispatched[1]!.messageID);
+  value.harness.failStop = true;
+  await value.controller.recover("task");
+  await value.controller.recover("task");
+  expect(value.harness.dispatched.filter(turn => turn.agent === "forge-root")).toHaveLength(2);
+  expect(value.store.pendingStops("task").map(session => session.id)).toEqual([worker.id]);
+  value.harness.failStop = false;
+  await value.controller.recover("task");
+  expect(value.store.pendingStops("task")).toEqual([]);
 });
 
 test("Herdr display failure does not prevent native dispatch", async () => {

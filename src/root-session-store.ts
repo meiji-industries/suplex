@@ -24,7 +24,7 @@ function session(row: Row): TaskSession {
   const id = text(row, "id"); const taskId = text(row, "task_id");
   if (!id || !taskId) throw new Error("Invalid persisted task session");
   const launchOwnerPid = row.launch_owner_pid === null || row.launch_owner_pid === undefined ? null : integer(row, "launch_owner_pid");
-  return { id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), agentName: text(row, "agent_name"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), promptHash: text(row, "prompt_hash"), resultReceiptId: text(row, "result_receipt_id"), launchOwner: text(row, "launch_owner"), launchOwnerPid };
+  return { id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), agentName: text(row, "agent_name"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), promptHash: text(row, "prompt_hash"), resultReceiptId: text(row, "result_receipt_id"), launchOwner: text(row, "launch_owner"), launchOwnerPid, stopRequestedAt: text(row, "stop_requested_at"), stoppedAt: text(row, "stopped_at") };
 }
 function turn(row: Row): TaskTurn {
   const id = text(row, "id"); const taskId = text(row, "task_id"); const sessionId = text(row, "session_id"); const promptHash = text(row, "prompt_hash"); const promptText = text(row, "prompt_text");
@@ -101,12 +101,15 @@ export class TaskControlStore {
   hasTurns(sessionId: string): boolean {
     return this.database.authQuery((db) => Boolean(db.prepare("SELECT 1 FROM forge_task_turns WHERE session_id = ? LIMIT 1").get(sessionId)));
   }
+  retireDeliveredSessions(taskId: string): void {
+    this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET is_current = 0, lifecycle = 'stopped', stop_requested_at = COALESCE(stop_requested_at, ?), updated_at = ? WHERE task_id = ? AND stopped_at IS NULL AND EXISTS (SELECT 1 FROM forge_task_controls c WHERE c.task_id = forge_task_sessions.task_id AND c.status = 'delivered')").run(now(), now(), taskId));
+  }
   pendingStops(taskId: string): TaskSession[] {
-    const sessions = this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND lifecycle = 'cancelled'").all(taskId) as Row[]).map(session));
+    const sessions = this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND stop_requested_at IS NOT NULL AND stopped_at IS NULL").all(taskId) as Row[]).map(session));
     return sessions.filter((session) => !session.launchOwnerPid || !this.processAlive(session.launchOwnerPid));
   }
   completeStop(sessionId: string): void {
-    this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET lifecycle = 'stopped', updated_at = ? WHERE id = ? AND lifecycle = 'cancelled' AND is_current = 0").run(now(), sessionId));
+    this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET stopped_at = ?, updated_at = ? WHERE id = ? AND stop_requested_at IS NOT NULL AND stopped_at IS NULL").run(now(), now(), sessionId));
   }
   wakeIdleRoot(taskId: string): void {
     const time = now();
@@ -171,7 +174,7 @@ export class TaskControlStore {
       if (!root) throw new Error("root_notification_unavailable");
       const time = now(); const wakeId = createOpenCodeMessageID(); const promptText = `Worker result receipt ${input.receiptId}. Observe the task and continue the objective.\n\n${input.observation}`; const promptHash = hash(promptText);
       db.prepare("UPDATE forge_task_turns SET status = 'completed', result_receipt_id = ?, terminal_observation = ?, native_turn_id = ?, completed_at = ?, updated_at = ? WHERE id = ?").run(input.receiptId, input.observation, input.nativeTurnId ?? null, time, time, text(workerTurn, "id"));
-      db.prepare("UPDATE forge_task_sessions SET lifecycle = 'stopped', updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1").run(time, input.sessionId, input.generation);
+      db.prepare("UPDATE forge_task_sessions SET lifecycle = 'stopped', stop_requested_at = ?, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1").run(time, time, input.sessionId, input.generation);
       db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending_prompt', NULL, NULL, ?, NULL, NULL, ?)").run(wakeId, input.taskId, text(root, "id"), integer(root, "generation"), promptHash, promptText, time, time);
       db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ?").run(time, time, input.taskId);
       return { kind: "recorded", wake: turn(db.prepare("SELECT * FROM forge_task_turns WHERE id = ?").get(wakeId) as Row) };
@@ -187,7 +190,7 @@ export class TaskControlStore {
     this.database.authTransaction((db) => {
       const changed = db.prepare("UPDATE forge_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, updated_at = ? WHERE task_id = ? AND status <> 'delivered'").run(now(), taskId).changes;
       if (changed !== 1) throw new Error("task_not_cancellable");
-      db.prepare("UPDATE forge_task_sessions SET is_current = 0, lifecycle = 'cancelled', updated_at = ? WHERE task_id = ? AND is_current = 1").run(now(), taskId);
+      db.prepare("UPDATE forge_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = COALESCE(stop_requested_at, ?), updated_at = ? WHERE task_id = ? AND stopped_at IS NULL").run(now(), now(), taskId);
       db.prepare("UPDATE forge_task_turns SET status = 'cancelled', updated_at = ? WHERE task_id = ? AND status IN ('pending_prompt', 'prompted', 'unknown')").run(now(), taskId);
     });
   }

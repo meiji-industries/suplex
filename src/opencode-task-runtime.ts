@@ -5,7 +5,7 @@ import type { HerdrClient } from "./herdr-client.js";
 import type { RootIdentity } from "./root-contracts.js";
 import { createGitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
 import { resolveOpenCodeExecutable } from "./opencode-executable.js";
-import { ensureOpenCodeServer, openCodeAttachCommand, openCodeProcessAlive, openCodeRoleConfig, openCodeServerClient, readOpenCodeServer, type OpenCodeProfile } from "./opencode-server.js";
+import { ensureOpenCodeServer, openCodeAttachCommand, openCodeProcessAlive, openCodeRoleConfig, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer, type OpenCodeProfile } from "./opencode-server.js";
 import { reconcileOpenCodePrompt, replayOpenCodePrompt, type OpenCodePromptClaim, type OpenCodePromptIntent, type OpenCodePromptObservation } from "./opencode-session.js";
 
 type TaskPanePort = Pick<HerdrClient, "getPane" | "createWorkspace" | "splitPane" | "renamePane" | "runPaneCommand" | "reportPaneMetadata">;
@@ -20,7 +20,7 @@ export type OpenCodeTaskScope = {
 export class OpenCodeTaskRuntime {
   constructor(private readonly databasePath: string, private readonly herdr: TaskPanePort, private readonly executable?: string) {}
 
-  private runtimeDirectory(scope: OpenCodeTaskScope): string {
+  private runtimeDirectory(scope: Pick<OpenCodeTaskScope, "id">): string {
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(scope.id)) throw new Error("Invalid task session identity");
     return join(dirname(this.databasePath), "runtime", "task-sessions", scope.id);
   }
@@ -89,14 +89,19 @@ export class OpenCodeTaskRuntime {
     return reconcileOpenCodePrompt(openCodeServerClient(reference), intent);
   }
 
-  async stop(scope: OpenCodeTaskScope, nativeSessionId: string): Promise<void> {
+  async stop(scope: Pick<OpenCodeTaskScope, "id">, nativeSessionId: string | null): Promise<void> {
     const reference = await readOpenCodeServer(this.runtimeDirectory(scope));
-    if (!reference) throw new Error("OpenCode server reference is missing");
-    if (!openCodeProcessAlive(reference.pid)) return;
-    const client = openCodeServerClient(reference);
-    await client.abortSession(nativeSessionId, scope.directory);
-    const status = (await client.getStatus(scope.directory))[nativeSessionId];
-    if (status && status.type !== "idle") throw new Error("OpenCode session has not stopped");
+    if (!reference) {
+      if (nativeSessionId) throw new Error("OpenCode server reference is missing");
+      return;
+    }
+    if (nativeSessionId && openCodeProcessAlive(reference.pid)) {
+      const client = openCodeServerClient(reference);
+      await client.abortSession(nativeSessionId, reference.directory);
+      const status = (await client.getStatus(reference.directory))[nativeSessionId];
+      if (status && status.type !== "idle") throw new Error("OpenCode session has not stopped");
+    }
+    await stopOpenCodeServer(reference);
   }
 
   async dispatch(scope: OpenCodeTaskScope, intent: OpenCodePromptIntent, claim: OpenCodePromptClaim): Promise<OpenCodePromptObservation> {

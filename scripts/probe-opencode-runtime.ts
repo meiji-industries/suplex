@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { z } from "zod";
-import { ensureOpenCodeServer, openCodeRoleConfig, openCodeServerClient, openCodeProcessAlive, type OpenCodeServerReference } from "../src/opencode-server.js";
+import { ensureOpenCodeServer, openCodeRoleConfig, openCodeServerClient, stopOpenCodeServer, type OpenCodeServerReference } from "../src/opencode-server.js";
 import { createOpenCodePromptIntent, reconcileOpenCodePrompt, replayOpenCodePrompt } from "../src/opencode-session.js";
 import { createGitCommandGuard } from "../src/worktrees.js";
 
@@ -59,12 +59,7 @@ await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve));
 const address = provider.address();
 assert.ok(address && typeof address !== "string");
 async function stop(reference: OpenCodeServerReference): Promise<void> {
-  process.kill(reference.pid, "SIGTERM");
-  const deadline = Date.now() + 10_000;
-  while (openCodeProcessAlive(reference.pid)) {
-    assert.ok(Date.now() < deadline, "Scratch server did not stop");
-    await delay(50);
-  }
+  await stopOpenCodeServer(reference);
   live.delete(reference);
 }
 try {
@@ -126,6 +121,7 @@ try {
       holdModelRequest = false;
     }
     assert.equal((await ensureOpenCodeServer(input)).pid, reference.pid);
+    await assert.rejects(ensureOpenCodeServer({ ...input, config: { ...config, default_agent: "changed" } }), /runtime scope changed/);
     await stop(reference);
     const restarted = await ensureOpenCodeServer(input);
     live.add(restarted);

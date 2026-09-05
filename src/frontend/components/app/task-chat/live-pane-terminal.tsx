@@ -9,6 +9,16 @@ import { Button } from "../../ui/button.js";
 
 export type TerminalStatus = "connecting" | "live" | "reconnecting" | "taken_over" | "ended";
 
+function ReconnectingStatus() {
+  const [frame, setFrame] = useState(0);
+  const frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+  useEffect(() => {
+    const timer = window.setInterval(() => setFrame(value => (value + 1) % frames.length), 80);
+    return () => window.clearInterval(timer);
+  }, [frames.length]);
+  return <span role="status">Reconnecting <span aria-hidden="true" className="inline-block w-[1ch] font-mono">{frames[frame]}</span></span>;
+}
+
 export function wheelToScroll(deltaY: number, rowHeightPx: number): { direction: "up" | "down"; lines: number } | null {
   if (Math.abs(deltaY) < 1) return null;
   return { direction: deltaY < 0 ? "up" : "down", lines: Math.max(1, Math.round(Math.abs(deltaY) / rowHeightPx)) };
@@ -97,6 +107,6 @@ export function LivePaneTerminal({ taskId, role, paneId }: { taskId: string; rol
     connect();
     return () => { disposed = true; window.clearTimeout(retry); window.clearTimeout(resizeTimer); observer.disconnect(); socketRef.current?.close(1000); socketRef.current = null; terminal.dispose(); };
   }, [connection, paneId, role, taskId]);
-  const overlay = status === "connecting" ? "Forge connects" : status === "reconnecting" ? "Forge reconnects" : status === "taken_over" ? "Another viewer took control" : status === "ended" ? (paneId ? "Pane ended" : "No live pane") : null;
+  const overlay = status === "connecting" ? "Forge connects" : status === "reconnecting" ? <ReconnectingStatus /> : status === "taken_over" ? "Another viewer took control" : status === "ended" ? (paneId ? "Pane ended" : "No live pane") : null;
   return <div className="flex h-full min-h-0 flex-col"><div className="relative mt-1 min-h-0 flex-1 overflow-hidden bg-[#1e1e2e] p-2"><div aria-label={`Live pane output for ${role}`} className="h-full" ref={hostRef} />{overlay ? <div className="absolute inset-0 flex items-center justify-center gap-2 bg-[#1e1e2e]/85 text-sm text-[#cdd6f4]">{overlay}{status === "taken_over" ? <Button size="xs" onClick={() => { setConnection((value) => value + 1); statusRef.current = "connecting"; setStatus("connecting"); }}>Take control</Button> : null}</div> : null}{showJump ? <Button className="absolute bottom-2 right-2" size="xs" onClick={() => { if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: "scroll", direction: "down", lines: 65_535 })); setShowJump(false); }}>Jump to bottom</Button> : null}</div></div>;
 }

@@ -64,6 +64,16 @@ test.each([1280, 390])("live panes span the workspace below the scrolling task a
     expect(await slider.getAttribute("aria-valuenow")).toBe("368");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: join(tmpdir(), `forge-live-dock-${width}.png`), fullPage: true });
+    await page.routeWebSocket(/\/pane\/.*\/terminal/, socket => socket.close({ code: 1011, reason: "Connection lost" }));
+    await page.reload();
+    const reconnecting = page.getByRole("status").filter({ hasText: "Reconnecting" });
+    await reconnecting.waitFor();
+    const spinner = reconnecting.locator('[aria-hidden="true"]');
+    const firstFrame = await spinner.innerText();
+    expect("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏").toContain(firstFrame);
+    await expect.poll(() => spinner.innerText()).not.toBe(firstFrame);
+    expect(await page.getByText("Forge reconnects", { exact: true }).count()).toBe(0);
+    await page.screenshot({ path: join(tmpdir(), `forge-reconnecting-${width}.png`), fullPage: true });
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

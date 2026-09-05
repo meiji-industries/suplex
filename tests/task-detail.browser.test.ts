@@ -47,6 +47,8 @@ test.each([1280, 390])("native task detail supports answers, cancellation and ar
     await page.getByRole("button", { name: "Answer and continue", exact: true }).click();
     await page.getByRole("region", { name: "Question" }).waitFor({ state: "hidden" });
     expect(store.get(task.id).status).toBe("active");
+    expect(await page.locator("[data-task-current]").count()).toBe(0);
+    expect(await page.getByText("Root owns the task. Agent replies appear below.", { exact: true }).count()).toBe(0);
     expect(store.pendingTurns(root.id).some(turn => turn.promptText.includes("Use main and preserve local work."))).toBe(true);
     expect(await page.getByLabel("Note to Root", { exact: true }).count()).toBe(0);
     expect(await page.getByRole("button", { name: "Send note", exact: true }).count()).toBe(0);

@@ -274,6 +274,12 @@ After building the package, the same setup entry point is available as `npx forg
 
 ## Development checks
 
+Run the unit-test project only with:
+
+```sh
+pnpm test
+```
+
 ```sh
 pnpm verify
 ```

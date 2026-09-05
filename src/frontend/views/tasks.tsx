@@ -199,6 +199,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const [createError, setCreateError] = useState("");
   const [createOpen, setCreateOpen] = useState(() => mode === "tasks" && new URLSearchParams(window.location.search).get("new") === "1");
   const [taskFilter, setTaskFilter] = useState<TaskListFilter>("all");
+  const [taskSearch, setTaskSearch] = useState("");
   const [branchSync, setBranchSync] = useState<ApiCompanyBranchSync>({});
   const [busy, setBusy] = useState(false);
   const [detailNotFound, setDetailNotFound] = useState(false);
@@ -317,7 +318,9 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   };
   const activeCount = visibleTasks.filter((task) => activeTaskPhases.has(task.phase) || task.blocked).length;
   const backlogCount = visibleTasks.filter((task) => task.phase === "backlog").length;
-  const taskGroups = taskListGroups(visibleTasks, taskFilter);
+  const taskSearchTerm = taskSearch.trim().toLowerCase();
+  const filteredTasks = taskSearchTerm ? visibleTasks.filter((task) => `${task.issueKey ?? ""} ${task.title}`.toLowerCase().includes(taskSearchTerm)) : visibleTasks;
+  const taskGroups = taskListGroups(filteredTasks, taskFilter);
   const archivedCount = taskFilter === "archived" ? taskGroups.reduce((count, group) => count + group.tasks.length, 0) : undefined;
   const selectTask = (task: ApiTaskSummary): void => { setSelected(undefined); selectedRef.current = undefined; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`${routeBase}/${encodeURIComponent(task.id)}`, companyId)); window.dispatchEvent(new Event("forge:navigate")); };
   const addImages = async (files: File[]): Promise<void> => {
@@ -571,7 +574,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   return (
     <ApplicationFrame title="Tasks">
       <div data-task-list className="min-h-[calc(100vh-2.5rem)] border-t border-border/70 bg-background text-foreground">
-        <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border/70 px-3 py-1 sm:px-4">
+        <div className="flex min-h-11 flex-wrap items-center justify-between gap-3 border-b border-border/70 px-3 py-1 sm:px-4">
           <Tabs value={taskFilter} onValueChange={(value) => setTaskFilter(value as TaskListFilter)}>
             <TabsList>
               <TabsTrigger value="active">Active <span className="text-[11px] text-muted-foreground">{activeCount}</span></TabsTrigger>
@@ -580,10 +583,11 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
               <TabsTrigger value="archived">Archived {archivedCount === undefined ? null : <span className="text-[11px] text-muted-foreground">{archivedCount}</span>}</TabsTrigger>
             </TabsList>
           </Tabs>
+          <div className="w-full shrink-0 sm:w-56"><Input aria-label="Search tasks" placeholder="Search tasks" value={taskSearch} onChange={(event) => setTaskSearch(event.target.value)} onKeyDown={(event) => { if (event.key !== "Escape") return; event.preventDefault(); event.stopPropagation(); setTaskSearch(""); }} /></div>
         </div>
         {error ? <div className="p-3 sm:p-4"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
         {!scopeLoaded && !error ? <div className="space-y-px p-2" aria-label="Loading tasks" aria-busy="true"><Skeleton className="h-8 w-full" /><Skeleton className="h-9 w-full" /><Skeleton className="h-9 w-full" /></div> : null}
-        {scopeLoaded && taskGroups.length === 0 ? <div className="px-4 py-8 text-xs text-muted-foreground">{taskFilter === "active" ? "No active tasks." : taskFilter === "backlog" ? "No backlog tasks." : taskFilter === "archived" ? "No archived tasks." : "No tasks yet. Press ⌘N to create one."}</div> : null}
+        {scopeLoaded && taskGroups.length === 0 ? <div className="px-4 py-8 text-xs text-muted-foreground">{taskSearchTerm ? "No tasks match the search." : taskFilter === "active" ? "No active tasks." : taskFilter === "backlog" ? "No backlog tasks." : taskFilter === "archived" ? "No archived tasks." : "No tasks yet. Press ⌘N to create one."}</div> : null}
         {scopeLoaded ? <div aria-label="Task groups" className="py-1">
           {taskGroups.map((group) => {
             const GroupIcon = group.id === "completed" ? CheckCircle2 : group.id === "cancelled" ? CircleSlash : group.id === "blocked" ? CircleX : group.id === "active" ? CircleDotDashed : CircleDashed;

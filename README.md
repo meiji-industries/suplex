@@ -131,6 +131,12 @@ backup alone cannot restore missing native sessions or repository contents.
 
 ## Verify changes
 
+Run the unit-test project only with:
+
+```sh
+pnpm test
+```
+
 ```sh
 pnpm verify
 ```

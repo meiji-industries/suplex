@@ -14,9 +14,9 @@ export function ApplicationFrame({ title, headerActions, headerRight, sidebar, c
           <div className="flex w-full items-center gap-1 px-4 lg:gap-2 lg:px-6">
             <SidebarTrigger className="-ml-1" aria-label="Open navigation" title="Toggle navigation" />
             <Separator orientation="vertical" className="mx-2 data-[orientation=vertical]:h-4" />
-            <h1 className="text-base font-medium">{title}</h1>
+            <h1 className="min-w-0 truncate text-base font-medium" title={title}>{title}</h1>
             {headerActions}
-            <div className="ml-auto flex items-center gap-2">{headerRight}</div>
+            <div className="ml-auto flex shrink-0 items-center gap-2">{headerRight}</div>
           </div>
         </header>
         <SystemHealthAlert />

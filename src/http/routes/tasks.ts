@@ -3,6 +3,8 @@ import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 import type { TaskService } from "../../tasks.js";
 import type { TaskHost } from "../../task-host.js";
+import { readTaskChecks, readTaskDiff } from "../../task-inspection.js";
+import { TaskChecksResponseSchema, TaskDiffResponseSchema } from "../contracts/tasks.js";
 import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { MAX_TASK_REQUEST_BYTES, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
 
@@ -49,6 +51,16 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host }
   });
   for (const action of ["archive", "unarchive"] as const) typed.post(`/api/tasks/:taskId/${action}`, { schema: taskResponse }, async request => tasks.archiveTask(request.forgeUser.id, request.params.taskId, action === "archive"));
   typed.get("/api/tasks/:taskId/activity", { schema: { params: TaskIdParamsSchema, response: { 200: TaskActivityResponseSchema } } }, async (request, reply) => reply.header("Cache-Control", "private, no-store").send(tasks.getTaskActivity(request.forgeUser.id, request.params.taskId)));
+  typed.get("/api/tasks/:taskId/diff", { schema: { params: TaskIdParamsSchema, response: { 200: TaskDiffResponseSchema } } }, async (request, reply) => {
+    const result = await readTaskDiff(tasks.getTask(request.forgeUser.id, request.params.taskId));
+    tasks.getTask(request.forgeUser.id, request.params.taskId);
+    return reply.header("Cache-Control", "private, no-store").send(result);
+  });
+  typed.get("/api/tasks/:taskId/checks", { schema: { params: TaskIdParamsSchema, response: { 200: TaskChecksResponseSchema } } }, async (request, reply) => {
+    const result = await readTaskChecks(tasks.getTask(request.forgeUser.id, request.params.taskId));
+    tasks.getTask(request.forgeUser.id, request.params.taskId);
+    return reply.header("Cache-Control", "private, no-store").send(result);
+  });
   for (const kind of ["artifacts", "images"] as const) typed.get(`/api/tasks/:taskId/${kind}/:artifactId`, { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
     const result = await tasks.getTaskArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
     return reply.header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").type(result.artifact.mimeType).send(result.bytes);

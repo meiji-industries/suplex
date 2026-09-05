@@ -13,7 +13,7 @@ test.each([1280, 390])("native task detail supports answers, notes, cancellation
     store.askHuman(task.id, "Which base branch should I use?");
     const { page } = value;
     await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
-    await page.getByRole("heading", { name: "Native task detail", exact: true }).waitFor();
+    await page.getByRole("heading", { name: "Native task detail", level: 2, exact: true }).waitFor();
     await page.getByRole("region", { name: "Question" }).getByText("Which base branch should I use?").waitFor();
     await page.getByLabel("Answer", { exact: true }).fill("Use main and preserve local work.");
     await page.getByRole("button", { name: "Answer and continue", exact: true }).click();
@@ -25,6 +25,7 @@ test.each([1280, 390])("native task detail supports answers, notes, cancellation
     await page.getByRole("button", { name: "Send note", exact: true }).click();
     expect((await sent).status()).toBe(200);
     expect(store.pendingTurns(root.id).some(turn => turn.promptText.includes("Please verify the new behavior."))).toBe(true);
+    await page.getByText("Please verify the new behavior.", { exact: true }).waitFor();
     const uncertain = store.pendingTurns(root.id)[0]!;
     store.requireExecutionCleanup(uncertain);
     await page.reload();
@@ -34,18 +35,25 @@ test.each([1280, 390])("native task detail supports answers, notes, cancellation
     await page.getByRole("button", { name: "Answer and continue", exact: true }).click();
     await page.getByLabel("Note to Root", { exact: true }).waitFor();
     expect(store.get(task.id).recoveryTurnId).toBeNull();
+    expect(await page.getByText("ses_browser_root", { exact: true }).isVisible()).toBe(false);
+    await page.getByRole("tab", { name: "Other", exact: true }).click();
+    await page.getByText("Runtime diagnostics", { exact: true }).click();
     await page.getByRole("region", { name: "Sessions", exact: true }).getByText("ses_browser_root", { exact: true }).waitFor();
+    await page.getByRole("tab", { name: "Chat", exact: true }).click();
     expect(await page.getByText(/Planner|Builder|Integrator|Start planning/).count()).toBe(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: join(tmpdir(), `forge-native-task-detail-${width}.png`), fullPage: true });
-    await page.getByRole("button", { name: "Cancel task", exact: true }).click();
+    await page.getByRole("button", { name: "Task options", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Cancel task", exact: true }).click();
     await page.getByText("Cancelled", { exact: true }).first().waitFor();
     expect(store.get(task.id).status).toBe("cancelled");
-    await page.getByRole("button", { name: "Keep in archive", exact: true }).click();
-    await page.getByRole("button", { name: "Open from archive", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Task options", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Keep in archive", exact: true }).click();
+    await expect.poll(() => value.tasks.getTask(value.userId, task.id).archivedAt).not.toBeNull();
     expect(value.tasks.getTask(value.userId, task.id).archivedAt).not.toBeNull();
-    await page.getByRole("button", { name: "Open from archive", exact: true }).click();
-    await page.getByRole("button", { name: "Keep in archive", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Task options", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Open from archive", exact: true }).click();
+    await expect.poll(() => value.tasks.getTask(value.userId, task.id).archivedAt).toBeNull();
     expect(value.tasks.getTask(value.userId, task.id).archivedAt).toBeNull();
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
@@ -60,7 +68,7 @@ test.each([1280, 390])("backlog details save through the interface at %ipx", { t
     await value.page.getByLabel("Task title", { exact: true }).fill("Updated title");
     await value.page.getByLabel("Task description", { exact: true }).fill("Updated objective");
     await value.page.getByRole("button", { name: "Save task", exact: true }).click();
-    await value.page.getByRole("heading", { name: "Updated title", exact: true }).waitFor();
+    await value.page.getByRole("heading", { name: "Updated title", level: 2, exact: true }).waitFor();
     expect(value.tasks.getTask(value.userId, task.id)).toMatchObject({ title: "Updated title", description: "Updated objective", status: "backlog" });
     expect(await value.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(value.errors).toEqual([]);

@@ -16,3 +16,9 @@ export const TaskActivityResponseSchema = z.object({
   sessions: z.array(z.object({ id: z.string(), kind: TaskSessionKindSchema, generation: z.number(), nativeSessionId: z.string().nullable(), paneId: z.string().nullable(), current: z.boolean() })),
   turns: z.array(z.object({ id: z.string(), sessionId: z.string(), prompt: z.string(), status: TaskTurnStatusSchema, result: z.string().nullable() })),
 });
+
+export const TaskDiffResponseSchema = z.object({ available: z.boolean(), patch: z.string(), truncated: z.boolean() });
+export const TaskChecksResponseSchema = z.object({
+  available: z.boolean(),
+  runs: z.array(z.object({ name: z.string(), status: z.enum(["pending", "failing", "successful"]), url: z.string().nullable() })),
+});

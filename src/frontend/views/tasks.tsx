@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { Plus, RefreshCw } from "lucide-react";
+import { ChevronRight, Layers3, Plus, RefreshCw } from "lucide-react";
 import { ApplicationFrame } from "../components/app/application-frame.js";
 import { useCompanyContext } from "../components/app/company-context.js";
 import { Button } from "../components/ui/button.js";
@@ -12,8 +12,10 @@ import type { Task } from "../../task-contracts.js";
 import { TaskControlStatusSchema } from "../../task-control.js";
 import { NewTaskDialog } from "../components/app/new-task-dialog.js";
 import { TaskDetailsPage } from "./task-details.js";
-
-export const taskStatusLabels = { backlog: "Backlog", active: "Active", waiting_human: "Answer necessary", cancelled: "Cancelled", delivered: "Delivered" };
+import { TaskStatus, TaskStatusIcon, taskStatusLabels } from "../components/app/task-status.js";
+import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs.js";
+import { Checkbox } from "../components/ui/checkbox.js";
+import { relativeTime, type ApiProject } from "../lib/view-shared.js";
 
 export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): ReactElement {
   const { currentCompany } = useCompanyContext();
@@ -27,19 +29,24 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const [archived, setArchived] = useState(false);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
+  const [projects, setProjects] = useState<ApiProject[]>([]);
+  const [projectId, setProjectId] = useState("all");
+  const [hideEmpty, setHideEmpty] = useState(true);
   const scope = `${companyId}:${selectedId}:${archived}`;
   const currentScope = useRef(scope);
   currentScope.current = scope;
   const reload = useCallback(async () => {
     if (!companyId) return;
-    const [result, task] = await Promise.all([
+    const [result, task, projectResult] = await Promise.all([
       readJson<{ tasks: Task[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks?archived=${archived}`),
       selectedId ? readJson<Task>(`/api/tasks/${encodeURIComponent(selectedId)}`) : Promise.resolve(null),
+      readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
     ]);
     if (currentScope.current !== scope) return;
     if (task && task.companyId !== companyId) throw new Error("This task is not in the selected company");
     setTasks(result.tasks);
     setSelected(task);
+    setProjects(projectResult.projects);
     setLoaded(true);
     setError("");
   }, [companyId, selectedId, archived, scope]);
@@ -63,21 +70,27 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
     window.addEventListener("forge:new-task", open);
     return () => window.removeEventListener("forge:new-task", open);
   }, []);
-  const visible = tasks.filter(task => (status === "all" || task.status === status) && `${task.issueKey} ${task.title}`.toLowerCase().includes(query.toLowerCase()));
-  return <ApplicationFrame title={selected?.issueKey ?? (mode === "board" ? "Board" : "Tasks")} headerRight={<><Button variant="ghost" size="icon-sm" aria-label="Check tasks" onClick={() => void reload().catch(error => setError(String(error)))}><RefreshCw /></Button><Button size="sm" disabled={!companyId || currentCompany?.status !== "active"} onClick={() => setCreateOpen(true)}><Plus />Create task</Button></>}>
+  const visible = tasks.filter(task => (status === "all" || task.status === status || status === "active" && task.status === "waiting_human") && (projectId === "all" || task.projectId === projectId) && `${task.issueKey ?? ""} ${task.title}`.toLowerCase().includes(query.toLowerCase()));
+  const groups = ["waiting_human", "active", "backlog", "delivered", "cancelled"] as const;
+  return <ApplicationFrame title={selected ? `${selected.issueKey ? `${selected.issueKey} · ` : ""}${selected.title}` : mode === "board" ? "Board" : "Tasks"} headerRight={<><Button variant="ghost" size="icon-sm" aria-label="Check tasks" onClick={() => void reload().catch(error => setError(String(error)))}><RefreshCw /></Button><Button size="sm" disabled={!companyId || currentCompany?.status !== "active"} onClick={() => setCreateOpen(true)}><Plus />Create task</Button></>}>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-    {selectedId ? selected ? <TaskDetailsPage key={selected.id} task={selected} onChange={setSelected} /> : <p className="p-4">{loaded ? "Task not found" : "Forge reads the task"}</p> : <>
-      <div className="flex flex-wrap items-center gap-2 border-b p-3">
-        <div className="min-w-40 flex-1"><Input aria-label="Search tasks" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search tasks" /></div>
-        <Select value={status} onValueChange={value => setStatus(value ?? "all")}><SelectTrigger aria-label="Task status"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All statuses</SelectItem>{TaskControlStatusSchema.options.map(value => <SelectItem key={value} value={value}>{taskStatusLabels[value]}</SelectItem>)}</SelectContent></Select>
-        <Button variant="outline" size="sm" onClick={() => setArchived(value => !value)}>{archived ? "Open current tasks" : "Open archived tasks"}</Button>
+    {selectedId ? selected ? <TaskDetailsPage key={selected.id} task={selected} project={projects.find(project => project.id === selected.projectId)} returnTo={mode === "board" ? "/board" : "/tasks"} onChange={setSelected} /> : <p className="p-4">{loaded ? "Task not found" : "Forge reads the task"}</p> : <div data-task-list className="min-w-0">
+      <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b px-3 py-1 sm:px-4">
+        <div className="max-w-full overflow-x-auto"><Tabs value={archived ? "archived" : status} onValueChange={value => { setArchived(value === "archived"); setStatus(value === "archived" ? "all" : String(value)); }}><TabsList>
+          <TabsTrigger value="active">Active</TabsTrigger><TabsTrigger value="backlog">Backlog</TabsTrigger><TabsTrigger value="all">All tasks</TabsTrigger><TabsTrigger value="archived">Archived</TabsTrigger>
+        </TabsList></Tabs></div>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="w-44"><Input aria-label="Search tasks" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search tasks" /></div>
+          <Select value={projectId} onValueChange={value => setProjectId(value ?? "all")}><SelectTrigger size="sm" aria-label="Filter by project"><SelectValue>{value => value === "all" ? "All projects" : projects.find(project => project.id === value)?.name}</SelectValue></SelectTrigger><SelectContent><SelectItem value="all">All projects</SelectItem>{projects.map(project => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select>
+        </div>
       </div>
-      {!loaded ? <p className="p-4">Forge reads the tasks</p> : !visible.length ? <p className="p-4">No tasks</p> : mode === "board" ? <div className="grid gap-3 p-3 md:grid-cols-3 xl:grid-cols-5">{TaskControlStatusSchema.options.map(value => <section key={value} aria-label={taskStatusLabels[value]}><h2 className="mb-2 text-xs font-medium">{taskStatusLabels[value]}</h2><ul className="divide-y">{visible.filter(task => task.status === value).map(task => <TaskRow key={task.id} task={task} />)}</ul></section>)}</div> : <ul className="divide-y" aria-label="Tasks">{visible.map(task => <TaskRow key={task.id} task={task} />)}</ul>}
-    </>}
+      {mode === "board" ? <div className="flex h-10 items-center gap-3 border-b px-4 text-xs"><label className="flex items-center gap-2"><Checkbox checked={hideEmpty} onCheckedChange={value => setHideEmpty(value === true)} />Hide empty columns</label><span className="text-muted-foreground">{visible.length} tasks</span></div> : null}
+      {!loaded ? <p className="p-4 text-xs text-muted-foreground" aria-busy="true">Forge reads the tasks</p> : !visible.length ? <p className="px-4 py-8 text-xs text-muted-foreground">No tasks</p> : mode === "board" ? <div className="max-w-full overflow-x-auto p-2" data-task-board><div className="flex min-h-[calc(100dvh-12rem)] w-max gap-2">{TaskControlStatusSchema.options.filter(value => !hideEmpty || visible.some(task => task.status === value)).map(value => <section key={value} className="w-72 shrink-0 rounded-md bg-muted/45" aria-label={taskStatusLabels[value]}><header className="flex h-10 items-center gap-2 px-3 text-xs"><TaskStatusIcon status={value} /><h2 className="font-medium">{taskStatusLabels[value]}</h2><span className="text-muted-foreground">{visible.filter(task => task.status === value).length}</span><div className="ml-auto"><Button size="icon-xs" variant="ghost" aria-label={`Create task in ${taskStatusLabels[value]}`} onClick={() => setCreateOpen(true)}><Plus /></Button></div></header><ul className="grid gap-2 px-2 pb-2">{visible.filter(task => task.status === value).map(task => <li key={task.id}><a href={withCompany(`/board/${task.id}`, task.companyId)} className="block rounded-md border bg-card p-3 text-xs hover:bg-background focus-visible:outline-2 focus-visible:outline-ring"><span className="flex items-start gap-2 font-medium leading-5"><TaskStatusIcon status={task.status} /><span>{task.issueKey ? <span className="mr-2 text-muted-foreground">{task.issueKey}</span> : null}{task.title}</span></span>{task.humanQuestion ? <p className="mt-1 truncate text-muted-foreground">{task.humanQuestion.text}</p> : null}<span className="mt-2 flex items-center gap-1.5 text-muted-foreground"><Layers3 className="size-3" />{projects.find(project => project.id === task.projectId)?.name ?? task.configuration.repository}</span></a></li>)}</ul></section>)}</div></div> : <div aria-label="Task groups" className="py-1">{groups.filter(value => visible.some(task => task.status === value)).map(value => <details key={value} open className="group/task-group pt-1"><summary className="mx-2 flex min-h-9 cursor-pointer list-none items-center gap-2 rounded-md bg-muted/60 px-2 text-xs focus-visible:outline"><ChevronRight className="size-3 transition-transform group-open/task-group:rotate-90" /><TaskStatusIcon status={value} /><span className="font-medium">{taskStatusLabels[value]}</span><span className="text-muted-foreground">{visible.filter(task => task.status === value).length}</span></summary><ul className="pt-0.5">{visible.filter(task => task.status === value).map(task => <TaskRow key={task.id} task={task} project={projects.find(project => project.id === task.projectId)} />)}</ul></details>)}</div>}
+    </div>}
     {companyId ? <NewTaskDialog key={companyId} open={createOpen} onOpenChange={setCreateOpen} companyId={companyId} onCreated={task => { setCreateOpen(false); navigate(withCompany(`/tasks/${task.id}`, companyId)); }} /> : null}
   </ApplicationFrame>;
 }
 
-function TaskRow({ task }: { task: Task }): ReactElement {
-  return <li><a className="flex min-h-9 min-w-0 items-center gap-3 px-3 py-2 text-sm hover:bg-muted focus-visible:outline" href={withCompany(`/tasks/${task.id}`, task.companyId)}><span className="shrink-0 text-xs text-muted-foreground">{task.issueKey}</span><span className="min-w-0 flex-1 truncate">{task.title}</span><span className="shrink-0 text-xs">{taskStatusLabels[task.status]}</span></a></li>;
+function TaskRow({ task, project }: { task: Task; project: ApiProject | undefined }): ReactElement {
+  return <li><a data-task-row className="grid min-h-9 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3 text-[13px] hover:bg-muted/40 focus-visible:outline sm:grid-cols-[auto_minmax(0,1fr)_auto_auto] sm:px-4" href={withCompany(`/tasks/${task.id}`, task.companyId)}><TaskStatusIcon status={task.status} /><span className="flex min-w-0 items-center gap-2">{task.issueKey ? <span className="shrink-0 text-xs text-muted-foreground">{task.issueKey}</span> : null}<span className="truncate font-medium">{task.title}</span>{project ? <><ChevronRight className="hidden size-3 shrink-0 text-muted-foreground md:block" /><span className="hidden truncate text-xs text-muted-foreground md:block">{project.name}</span></> : null}</span><span className="hidden sm:block"><TaskStatus status={task.status} /></span><time dateTime={task.updatedAt} className="w-16 text-right text-[11px] text-muted-foreground">{new Date(task.updatedAt).toDateString() === new Date().toDateString() ? relativeTime(task.updatedAt) : new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(task.updatedAt))}</time></a></li>;
 }

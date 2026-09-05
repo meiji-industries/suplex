@@ -44,7 +44,7 @@ test.each([1280, 390])("native task creation preserves start intent and role cho
       const task = TaskSchema.parse(await created.json());
       expect(task.status).toBe(immediate ? "active" : "backlog");
       expect(value.wakes.includes(task.id)).toBe(immediate);
-      await page.getByRole("heading", { name: `Task ${immediate}`, exact: true }).waitFor();
+      await page.getByRole("heading", { name: `Task ${immediate}`, level: 2, exact: true }).waitFor();
       expect(await page.getByRole("button", { name: "Start task", exact: true }).count()).toBe(immediate ? 0 : 1);
       if (!immediate) {
         const started = page.waitForResponse(response => response.url().endsWith(`/api/tasks/${task.id}/start`));

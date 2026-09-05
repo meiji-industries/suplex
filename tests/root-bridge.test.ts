@@ -1,9 +1,19 @@
 import { PassThrough } from "node:stream";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { expect, test } from "vitest";
 
 import { RootBridge, RootBridgeFailure, startRootBridgeTransport, type RootBridgeAdapter } from "../src/root-bridge.js";
 import type { RootIdentity } from "../src/root-contracts.js";
+import { ForgeDatabase } from "../src/database.js";
+import { RootController } from "../src/root-controller.js";
+import { TaskControlStore } from "../src/root-session-store.js";
+
+const run = promisify(execFile);
 
 const root: RootIdentity = { taskId: "task_1", sessionId: "session_1", generation: 3 };
 
@@ -81,4 +91,35 @@ test("MCP discovery and typed Root calls use the scoped bridge transport", async
   expect(delegated).toMatchObject({ result: { structuredContent: { assignmentId: "worker_1" } } });
   expect(adapter.calls).toContain("delegate:session_1:Inspect the current diff.");
   reader.close();
+});
+
+test("stdio bridge invokes the production controller against a durable task control", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "forge-root-bridge-"));
+  const repository = join(directory, "repo");
+  const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+  const stamp = new Date().toISOString();
+  await run("git", ["init", repository]);
+  try {
+    database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
+      db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', 'main', '', '', '[]', '{}', 'active', ?, ?)").run(repository, directory, stamp, stamp);
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief', 'text/plain', 1, ?, 'brief', ?)").run("a".repeat(64), stamp);
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES ('task', 'company', 'project', 'Task', 'brief', '[]', '{}', 0, 'workflow', 'revision', 'key', ?, ?, ?)").run("b".repeat(64), stamp, stamp);
+    });
+    const store = new TaskControlStore(database);
+    const profile = { profileId: "profile", provider: "codex" as const, model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
+    store.create({ taskId: "task", objective: "Ship it", deliveryTarget: "pull request", rootProfile: profile, workerProfile: profile, worktree: { path: repository, branch: "main", baseSha: "a", headSha: "a", dirty: false } });
+    const session = store.claimRoot({ taskId: "task" });
+    store.bindLive({ sessionId: session.id, generation: session.generation, paneId: "root-pane", agentName: "root" });
+    const controller = new RootController(store, { runtimeSnapshot: async () => ({ agents: [], panes: [] }), prompt: async () => ({ name: "root", paneId: "root-pane" }), readAgent: async () => "" }, { launch: async () => ({ paneId: "worker-pane", agentName: "worker", nativeSessionId: "native-worker" }) });
+    const stdin = new PassThrough(); const stdout = new PassThrough(); const responses: unknown[] = [];
+    stdout.on("data", (chunk: Buffer) => responses.push(JSON.parse(chunk.toString())));
+    const reader = startRootBridgeTransport({ bridge: new RootBridge({ taskId: "task", sessionId: session.id, generation: session.generation }, controller), stdin, stdout });
+    const call = mcpClient(stdin, responses);
+    await call({ method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } } });
+    const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", instruction: "Inspect the worktree." } } });
+    expect(delegated).toMatchObject({ result: { structuredContent: { kind: "worker", lifecycle: "live" } } });
+    expect(store.currentSession("task", "worker")).toMatchObject({ lifecycle: "live", nativeSessionId: "native-worker" });
+    reader.close();
+  } finally { database.close(); await rm(directory, { recursive: true, force: true }); }
 });

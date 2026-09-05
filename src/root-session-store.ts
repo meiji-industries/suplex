@@ -21,12 +21,12 @@ function control(row: Row): TaskControl {
 function session(row: Row): TaskSession {
   const id = text(row, "id"); const taskId = text(row, "task_id");
   if (!id || !taskId) throw new Error("Invalid persisted task session");
-  return { id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), agentName: text(row, "agent_name"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), promptHash: text(row, "prompt_hash"), resultReceiptId: text(row, "result_receipt_id") };
+  return { id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), agentName: text(row, "agent_name"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), promptHash: text(row, "prompt_hash"), resultReceiptId: text(row, "result_receipt_id"), launchOwner: text(row, "launch_owner") };
 }
 function turn(row: Row): TaskTurn {
   const id = text(row, "id"); const taskId = text(row, "task_id"); const sessionId = text(row, "session_id"); const promptHash = text(row, "prompt_hash"); const promptText = text(row, "prompt_text");
   if (!id || !taskId || !sessionId || !promptHash || promptText === null) throw new Error("Invalid persisted task turn");
-  return { id, taskId, sessionId, generation: integer(row, "generation"), assignmentHash: text(row, "assignment_hash"), promptHash, promptText, status: TaskTurnStatusSchema.parse(text(row, "status")), resultReceiptId: text(row, "result_receipt_id"), terminalObservation: text(row, "terminal_observation") };
+  return { id, taskId, sessionId, generation: integer(row, "generation"), assignmentHash: text(row, "assignment_hash"), promptHash, promptText, status: TaskTurnStatusSchema.parse(text(row, "status")), resultReceiptId: text(row, "result_receipt_id"), terminalObservation: text(row, "terminal_observation"), nativeTurnId: text(row, "native_turn_id") };
 }
 
 export class TaskControlStore {
@@ -51,7 +51,14 @@ export class TaskControlStore {
     const lifecycle = await input.observe(current);
     this.observeSession({ sessionId: current.id, generation: current.generation, lifecycle });
     if (lifecycle !== "stopped") return this.currentSession(input.taskId, "root")!;
-    return this.claimRoot({ taskId: input.taskId, expectedGeneration: current.generation });
+    try {
+      return this.claimRoot({ taskId: input.taskId, expectedGeneration: current.generation });
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "stale_generation") throw error;
+      const replacement = this.currentSession(input.taskId, "root");
+      if (!replacement) throw error;
+      return replacement;
+    }
   }
   launchWorker(input: { taskId: string; rootSessionId: string; rootGeneration: number; instruction: string }): TaskSession {
     const assignmentHash = hash(input.instruction); const time = now(); const id = randomUUID();
@@ -65,7 +72,7 @@ export class TaskControlStore {
       const generation = (current ? integer(current, "generation") : 0) + 1;
       db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, agent_name, native_session_id, lifecycle, assignment_hash, prompt_hash, result_receipt_id, created_at, updated_at) VALUES (?, ?, 'worker', ?, 1, NULL, NULL, NULL, 'reserved', ?, NULL, NULL, ?, ?)").run(id, input.taskId, generation, assignmentHash, time, time);
       db.prepare("UPDATE forge_task_controls SET worker_session_id = ?, updated_at = ? WHERE task_id = ? AND status = 'active'").run(id, time, input.taskId);
-      db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'prompted', NULL, NULL, ?, ?, NULL, ?)").run(randomUUID(), input.taskId, id, generation, assignmentHash, assignmentHash, input.instruction, time, time, time);
+      db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown', NULL, NULL, ?, NULL, NULL, ?)").run(randomUUID(), input.taskId, id, generation, assignmentHash, assignmentHash, input.instruction, time, time);
       return session(db.prepare("SELECT * FROM forge_task_sessions WHERE id = ?").get(id) as Row);
     });
   }
@@ -86,12 +93,42 @@ export class TaskControlStore {
     });
   }
   bindLive(input: { sessionId: string; generation: number; paneId: string; agentName: string; nativeSessionId?: string }): TaskSession {
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET pane_id = ?, agent_name = ?, native_session_id = ?, lifecycle = 'live', updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'reserved'").run(input.paneId, input.agentName, input.nativeSessionId ?? null, now(), input.sessionId, input.generation).changes);
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET pane_id = ?, agent_name = ?, native_session_id = ?, lifecycle = 'live', launch_owner = NULL, launch_claimed_at = NULL, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'reserved'").run(input.paneId, input.agentName, input.nativeSessionId ?? null, now(), input.sessionId, input.generation).changes);
     if (changed !== 1) throw new Error("stale_generation"); return this.byId(input.sessionId);
   }
   bindLaunchAttempt(input: { sessionId: string; generation: number; paneId: string; agentName: string }): void {
     const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET pane_id = ?, agent_name = ?, lifecycle = 'reserved', updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'reserved'").run(input.paneId, input.agentName, now(), input.sessionId, input.generation).changes);
     if (changed !== 1) throw new Error("stale_generation");
+  }
+  bindNativeSession(input: { sessionId: string; generation: number; paneId: string; agentName: string; nativeSessionId: string }): TaskSession {
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET native_session_id = ?, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND pane_id = ? AND agent_name = ? AND native_session_id IS NULL").run(input.nativeSessionId, now(), input.sessionId, input.generation, input.paneId, input.agentName).changes);
+    if (changed !== 1) throw new Error("stale_generation");
+    return this.byId(input.sessionId);
+  }
+  claimLaunch(input: { sessionId: string; generation: number }): string | null {
+    const owner = randomUUID();
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET launch_owner = ?, launch_claimed_at = ?, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'reserved' AND launch_owner IS NULL").run(owner, now(), now(), input.sessionId, input.generation).changes);
+    return changed === 1 ? owner : null;
+  }
+  reclaimUnstartedLaunch(input: { sessionId: string; generation: number; observedAbsent: boolean }): boolean {
+    if (!input.observedAbsent) return false;
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET launch_owner = NULL, launch_claimed_at = NULL, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'reserved' AND launch_owner IS NOT NULL").run(now(), input.sessionId, input.generation).changes);
+    return changed === 1;
+  }
+  markWorkerPromptAccepted(input: { sessionId: string; generation: number }): void {
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_turns SET status = 'prompted', prompt_observed_at = ?, prompted_at = COALESCE(prompted_at, ?), updated_at = ? WHERE session_id = ? AND generation = ? AND status IN ('unknown', 'pending_prompt')").run(now(), now(), now(), input.sessionId, input.generation).changes);
+    if (changed === 1) return;
+    const current = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_task_turns WHERE session_id = ? AND generation = ? ORDER BY created_at DESC LIMIT 1").get(input.sessionId, input.generation) as Row | undefined);
+    if (!current || TaskTurnStatusSchema.parse(text(current, "status")) !== "prompted") throw new Error("stale_turn");
+  }
+  scheduleWorkerPromptRetry(input: { sessionId: string; generation: number }): TaskSession {
+    const changed = this.database.authTransaction((db) => {
+      const sessionChanged = db.prepare("UPDATE forge_task_sessions SET pane_id = NULL, agent_name = NULL, native_session_id = NULL, lifecycle = 'reserved', launch_owner = NULL, launch_claimed_at = NULL, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'stopped'").run(now(), input.sessionId, input.generation).changes;
+      if (sessionChanged !== 1) return 0;
+      return db.prepare("UPDATE forge_task_turns SET status = 'pending_prompt', terminal_observation = NULL, prompt_observed_at = NULL, updated_at = ? WHERE session_id = ? AND generation = ? AND status = 'unknown'").run(now(), input.sessionId, input.generation).changes;
+    });
+    if (changed !== 1) throw new Error("stale_turn");
+    return this.byId(input.sessionId);
   }
   observeSession(input: { sessionId: string; generation: number; lifecycle: "live" | "stopped" | "unknown"; terminalObservation?: string }): TaskSession {
     const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET lifecycle = ?, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1").run(input.lifecycle, now(), input.sessionId, input.generation).changes);
@@ -111,7 +148,7 @@ export class TaskControlStore {
   workerReceiptState(input: { taskId: string; sessionId: string; generation: number; receiptId: string }): "new" | "duplicate" {
     return this.database.authQuery((db) => { const row = db.prepare("SELECT status, result_receipt_id FROM forge_task_turns WHERE task_id = ? AND session_id = ? AND generation = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.sessionId, input.generation) as Row | undefined; if (!row || TaskTurnStatusSchema.parse(text(row, "status")) === "cancelled") throw new Error("stale_generation"); return TaskTurnStatusSchema.parse(text(row, "status")) === "completed" && text(row, "result_receipt_id") === input.receiptId ? "duplicate" : "new"; });
   }
-  recordWorkerResultAndWake(input: { taskId: string; sessionId: string; generation: number; receiptId: string; observation: string }): { kind: "recorded"; wake: TaskTurn } | { kind: "duplicate" } {
+  recordWorkerResultAndWake(input: { taskId: string; sessionId: string; generation: number; receiptId: string; observation: string; nativeTurnId?: string }): { kind: "recorded"; wake: TaskTurn } | { kind: "duplicate" } {
     return this.database.authTransaction((db) => {
       const workerTurn = db.prepare("SELECT * FROM forge_task_turns WHERE task_id = ? AND session_id = ? AND generation = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.sessionId, input.generation) as Row | undefined;
       const worker = db.prepare("SELECT id FROM forge_task_sessions WHERE id = ? AND kind = 'worker' AND is_current = 1 AND generation = ? AND lifecycle <> 'cancelled'").get(input.sessionId, input.generation);
@@ -120,9 +157,21 @@ export class TaskControlStore {
       const root = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'root' AND is_current = 1").get(input.taskId) as Row | undefined;
       if (!root) throw new Error("root_notification_unavailable");
       const time = now(); const wakeId = randomUUID(); const promptText = `Worker result receipt ${input.receiptId}. Observe the task and continue the objective.\n\n${input.observation}`; const promptHash = hash(promptText);
-      db.prepare("UPDATE forge_task_turns SET status = 'completed', result_receipt_id = ?, terminal_observation = ?, completed_at = ?, updated_at = ? WHERE id = ?").run(input.receiptId, input.observation, time, time, text(workerTurn, "id"));
+      db.prepare("UPDATE forge_task_turns SET status = 'completed', result_receipt_id = ?, terminal_observation = ?, native_turn_id = ?, completed_at = ?, updated_at = ? WHERE id = ?").run(input.receiptId, input.observation, input.nativeTurnId ?? null, time, time, text(workerTurn, "id"));
       db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending_prompt', NULL, NULL, ?, NULL, NULL, ?)").run(wakeId, input.taskId, text(root, "id"), integer(root, "generation"), promptHash, promptText, time, time);
       db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ?").run(time, time, input.taskId);
+      return { kind: "recorded", wake: turn(db.prepare("SELECT * FROM forge_task_turns WHERE id = ?").get(wakeId) as Row) };
+    });
+  }
+  recordWorkerInterruptionAndWake(input: { taskId: string; sessionId: string; generation: number; observation: string }): { kind: "recorded"; wake: TaskTurn } | { kind: "duplicate" } {
+    return this.database.authTransaction((db) => {
+      const workerTurn = db.prepare("SELECT * FROM forge_task_turns WHERE task_id = ? AND session_id = ? AND generation = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.sessionId, input.generation) as Row | undefined;
+      const root = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'root' AND is_current = 1").get(input.taskId) as Row | undefined;
+      if (!workerTurn || !root || TaskTurnStatusSchema.parse(text(workerTurn, "status")) === "cancelled") throw new Error("stale_generation");
+      if (text(workerTurn, "terminal_observation")) return { kind: "duplicate" };
+      const time = now(); const wakeId = randomUUID(); const promptText = `Worker interruption. Preserve the existing worktree diff, observe the task, and delegate one continuation if needed.\n\n${input.observation}`; const promptHash = hash(promptText);
+      db.prepare("UPDATE forge_task_turns SET terminal_observation = ?, updated_at = ? WHERE id = ? AND terminal_observation IS NULL").run(input.observation, time, text(workerTurn, "id"));
+      db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending_prompt', NULL, NULL, ?, NULL, NULL, ?)").run(wakeId, input.taskId, text(root, "id"), integer(root, "generation"), promptHash, promptText, time, time);
       return { kind: "recorded", wake: turn(db.prepare("SELECT * FROM forge_task_turns WHERE id = ?").get(wakeId) as Row) };
     });
   }

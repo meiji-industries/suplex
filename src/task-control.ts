@@ -52,6 +52,7 @@ export interface TaskSession {
   assignmentHash: string | null;
   promptHash: string | null;
   resultReceiptId: string | null;
+  launchOwner: string | null;
 }
 
 export interface TaskTurn {
@@ -65,6 +66,7 @@ export interface TaskTurn {
   status: TaskTurnStatus;
   resultReceiptId: string | null;
   terminalObservation: string | null;
+  nativeTurnId: string | null;
 }
 
 export function taskPromptHash(value: string): string {

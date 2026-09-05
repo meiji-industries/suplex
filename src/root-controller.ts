@@ -10,6 +10,7 @@ import type { RootBridgeAdapter } from "./root-bridge.js";
 import type { RootIdentity } from "./root-contracts.js";
 import { TaskControlStore } from "./root-session-store.js";
 import type { TaskProfile, TaskSession } from "./task-control.js";
+import { observeNativePromptMarker, observeNativeWorkerTurn, type NativeWorkerTurnObservation } from "./root-worker-turn-observation.js";
 
 const liveStatuses = new Set(["starting", "working", "running", "blocked", "awaiting_human", "awaiting_input", "awaiting-input", "idle"]);
 
@@ -28,6 +29,7 @@ export class RootController implements RootBridgeAdapter {
     private readonly herdr: Pick<HerdrClient, "runtimeSnapshot" | "prompt" | "readAgent">,
     private readonly workerRuntime?: WorkerRuntime,
     private readonly rootRuntime?: RootRuntime,
+    private readonly observeWorkerTurn: (input: { cwd: string; nativeSessionId: string; assignmentMarker: string }) => Promise<NativeWorkerTurnObservation> = observeNativeWorkerTurn,
   ) {}
 
   async assertCurrentRoot(root: RootIdentity): Promise<void> { this.store.assertCurrentRoot(root); }
@@ -44,6 +46,7 @@ export class RootController implements RootBridgeAdapter {
   async delegateWorker(root: RootIdentity, instruction: string): Promise<unknown> {
     if (!this.workerRuntime) throw new Error("worker_runtime_unconfigured");
     const worker = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, instruction });
+    if (!this.store.claimLaunch({ sessionId: worker.id, generation: worker.generation })) return this.store.currentSession(root.taskId, "worker");
     try {
       const launched = await this.workerRuntime.launch({ taskId: root.taskId, root, session: worker, instruction, persistAttempt: (attempt) => this.store.bindLaunchAttempt({ sessionId: worker.id, generation: worker.generation, ...attempt }) });
       return this.store.bindLive({ sessionId: worker.id, generation: worker.generation, ...launched });
@@ -79,7 +82,7 @@ export class RootController implements RootBridgeAdapter {
     } catch {}
   }
 
-  async recordWorkerResult(input: { taskId: string; sessionId: string; generation: number; receiptId: string; observation: string }): Promise<void> {
+  async recordWorkerResult(input: { taskId: string; sessionId: string; generation: number; receiptId: string; observation: string; nativeTurnId?: string }): Promise<void> {
     const recorded = this.store.recordWorkerResultAndWake(input);
     if (recorded.kind === "duplicate") return;
     const root = this.store.currentSession(input.taskId, "root");
@@ -89,35 +92,70 @@ export class RootController implements RootBridgeAdapter {
   }
 
   async recover(taskId: string): Promise<void> {
-    const root = this.store.currentSession(taskId, "root");
+    let root = this.store.currentSession(taskId, "root");
     if (!root || !root.current || root.lifecycle === "cancelled") return;
     let snapshot;
-    try { snapshot = await this.herdr.runtimeSnapshot(); } catch { this.store.observeSession({ sessionId: root.id, generation: root.generation, lifecycle: "unknown" }); const worker = this.store.currentSession(taskId, "worker"); if (worker) this.store.observeSession({ sessionId: worker.id, generation: worker.generation, lifecycle: "unknown" }); return; }
+    try { snapshot = await this.herdr.runtimeSnapshot(); } catch { this.store.observeSession({ sessionId: root.id, generation: root.generation, lifecycle: "unknown" }); const worker = this.store.currentSession(taskId, "worker"); if (worker) this.store.observeSession({ sessionId: worker.id, generation: worker.generation, lifecycle: "unknown" }); this.store.scheduleWake(taskId, new Date().toISOString()); return; }
+    const rootAgent = root.paneId ? snapshot.agents.find((agent) => agent.paneId === root!.paneId) : undefined;
+    if (!root.nativeSessionId && root.paneId && root.agentName && rootAgent?.name === root.agentName && rootAgent.agentSession)
+      root = this.store.bindNativeSession({ sessionId: root.id, generation: root.generation, paneId: root.paneId, agentName: root.agentName, nativeSessionId: rootAgent.agentSession });
     const observe = (session: TaskSession): "live" | "stopped" | "unknown" => {
       if (!session.paneId || !session.agentName) return "unknown";
       const agent = session.paneId ? snapshot.agents.find((candidate) => candidate.paneId === session.paneId) : undefined;
       if (!agent) return session.kind === "root" && session.lifecycle === "live" ? "stopped" : "unknown";
       if (agent.name !== session.agentName || session.nativeSessionId && agent.agentSession !== session.nativeSessionId) return "unknown";
-      if (session.kind === "worker" && agent.status === "idle") return "stopped";
       if (liveStatuses.has(agent.status ?? "")) return "live";
       if (["done", "failed", "cancelled", "stopped"].includes(agent.status ?? "")) return "stopped";
       return "unknown";
     };
+    const rootAbsent = !root.paneId || !root.agentName || !snapshot.agents.some((agent) => agent.paneId === root.paneId && agent.name === root.agentName);
+    if (root.lifecycle === "reserved" && root.launchOwner && this.store.reclaimUnstartedLaunch({ sessionId: root.id, generation: root.generation, observedAbsent: rootAbsent })) {
+      if (this.rootRuntime && this.store.claimLaunch({ sessionId: root.id, generation: root.generation })) {
+        const control = this.store.get(taskId);
+        const launched = await this.rootRuntime.launch({ taskId, session: root, objective: control.objective, persistAttempt: (attempt) => this.store.bindLaunchAttempt({ sessionId: root.id, generation: root.generation, ...attempt }) });
+        this.store.bindLive({ sessionId: root.id, generation: root.generation, ...launched });
+      }
+      return;
+    }
     const rootLifecycle = observe(root);
     this.store.observeSession({ sessionId: root.id, generation: root.generation, lifecycle: rootLifecycle });
-    const worker = this.store.currentSession(taskId, "worker");
+    let worker = this.store.currentSession(taskId, "worker");
     if (worker) {
+      const liveAgent = worker.paneId ? snapshot.agents.find((candidate) => candidate.paneId === worker!.paneId) : undefined;
+      if (!worker.nativeSessionId && worker.paneId && worker.agentName && liveAgent?.name === worker.agentName && liveAgent.agentSession)
+        worker = this.store.bindNativeSession({ sessionId: worker.id, generation: worker.generation, paneId: worker.paneId, agentName: worker.agentName, nativeSessionId: liveAgent.agentSession });
       const workerLifecycle = observe(worker);
-      this.store.observeSession({ sessionId: worker.id, generation: worker.generation, lifecycle: workerLifecycle });
-      if (workerLifecycle === "stopped" && worker.assignmentHash) {
-        const agent = worker.paneId ? snapshot.agents.find((candidate) => candidate.paneId === worker.paneId) : undefined;
-        const status = agent?.status ?? "stopped";
-        await this.recordWorkerResult({ taskId, sessionId: worker.id, generation: worker.generation, receiptId: `${worker.id}:${worker.generation}:${worker.assignmentHash}:${status}`, observation: `Herdr observed the assigned Worker session ${worker.id} at terminal status ${status}.` });
+      const control = this.store.get(taskId);
+      const native = worker.nativeSessionId && worker.assignmentHash && control.worktree
+        ? await this.observeWorkerTurn({ cwd: control.worktree.path, nativeSessionId: worker.nativeSessionId, assignmentMarker: `forge-worker-assignment:${worker.id}:${worker.generation}:${worker.assignmentHash}` })
+        : { kind: "unknown" } as const;
+      if (native.kind === "completed") {
+        this.store.observeSession({ sessionId: worker.id, generation: worker.generation, lifecycle: "stopped" });
+        await this.recordWorkerResult({ taskId, sessionId: worker.id, generation: worker.generation, receiptId: native.receiptId, observation: native.evidence, nativeTurnId: native.nativeTurnId });
+      } else {
+        if (native.kind === "unknown") this.store.scheduleWake(taskId, new Date().toISOString());
+        if (native.kind === "accepted") this.store.markWorkerPromptAccepted({ sessionId: worker.id, generation: worker.generation });
+        this.store.observeSession({ sessionId: worker.id, generation: worker.generation, lifecycle: workerLifecycle });
+        if (workerLifecycle === "stopped" && native.kind === "missing") {
+          const retry = this.store.scheduleWorkerPromptRetry({ sessionId: worker.id, generation: worker.generation });
+          const currentRoot = this.store.currentSession(taskId, "root");
+          if (this.workerRuntime && currentRoot && this.store.claimLaunch({ sessionId: retry.id, generation: retry.generation })) {
+            const launched = await this.workerRuntime.launch({ taskId, root: { taskId, sessionId: currentRoot.id, generation: currentRoot.generation }, session: retry, instruction: this.store.pendingTurns(retry.id)[0]?.promptText ?? "", persistAttempt: (attempt) => this.store.bindLaunchAttempt({ sessionId: retry.id, generation: retry.generation, ...attempt }) });
+            this.store.bindLive({ sessionId: retry.id, generation: retry.generation, ...launched });
+          }
+        }
+        if (workerLifecycle === "stopped" && native.kind === "accepted") {
+          const interrupted = this.store.recordWorkerInterruptionAndWake({ taskId, sessionId: worker.id, generation: worker.generation, observation: "The native Worker turn started but did not complete. Its worktree is preserved for one continuation." });
+          if (interrupted.kind === "recorded") {
+            const currentRoot = this.store.currentSession(taskId, "root");
+            if (currentRoot?.lifecycle === "live") await this.deliverTurn({ taskId, sessionId: currentRoot.id, generation: currentRoot.generation }, interrupted.wake);
+          }
+        }
       }
     }
     if (rootLifecycle === "stopped") {
-      const replacement = await this.store.ensureRoot({ taskId, observe: async () => "stopped" });
-      if (replacement.id !== root.id && this.rootRuntime) {
+      const replacement = await this.store.ensureRoot({ taskId, observe: async (session) => session.id === root.id ? "stopped" : "unknown" });
+      if (replacement.id !== root.id && this.rootRuntime && this.store.claimLaunch({ sessionId: replacement.id, generation: replacement.generation })) {
         const control = this.store.get(taskId);
         const launched = await this.rootRuntime.launch({ taskId, session: replacement, objective: control.objective, persistAttempt: (attempt) => this.store.bindLaunchAttempt({ sessionId: replacement.id, generation: replacement.generation, ...attempt }) });
         this.store.bindLive({ sessionId: replacement.id, generation: replacement.generation, ...launched });
@@ -125,14 +163,14 @@ export class RootController implements RootBridgeAdapter {
       }
       return;
     }
-    if (!root.agentName) return;
-    let transcript: string;
-    try { transcript = await this.herdr.readAgent(root.agentName, "recent-unwrapped", 120); } catch { return; }
     for (const turn of this.store.pendingTurns(root.id)) {
       if (turn.status === "pending_prompt") { await this.deliverTurn({ taskId, sessionId: root.id, generation: root.generation }, turn); continue; }
-      if (transcript.includes(turn.promptHash)) {
-        this.store.markPrompted({ turnId: turn.id, generation: root.generation });
-      }
+      const control = this.store.get(taskId);
+      if (turn.status === "unknown" && control.rootProfile.provider === "codex" && root.nativeSessionId && control.worktree) {
+        const prompt = await observeNativePromptMarker({ cwd: control.worktree.path, nativeSessionId: root.nativeSessionId, marker: `forge-turn:${turn.promptHash}` });
+        if (prompt === "accepted") this.store.markPrompted({ turnId: turn.id, generation: root.generation });
+        else this.store.scheduleWake(taskId, new Date().toISOString());
+      } else if (turn.status === "unknown") this.store.scheduleWake(taskId, new Date().toISOString());
     }
   }
 }
@@ -157,8 +195,8 @@ export function productionRootRuntime(databasePath: string, store: TaskControlSt
       const nativeSessionId = runtime.presetSessionId ? randomUUID() : undefined;
       input.persistAttempt({ paneId: workspace.rootPane.paneId, agentName: name, ...(nativeSessionId ? { nativeSessionId } : {}) });
       const live = await herdr.startAgent({ name, paneId: workspace.rootPane.paneId, kind: control.rootProfile.provider === "claude" ? "claude" : "codex", args: runtime.launchArgs(control.rootProfile, nativeSessionId ?? null, false, undefined, { kind: "root", bridgeConfig: bridge, bridgeConfigPath: join(bindingDirectory, `${input.session.id}.mcp.json`) }) });
-      await herdr.prompt(live.name, `You are the continuing Root for this task. Objective: ${input.objective}. Use only forge_root to observe, delegate, deliver, or ask one human question.`, { waitForWorking: false });
-      return { paneId: live.paneId, agentName: live.name, ...(live.agentSession ? { nativeSessionId: live.agentSession } : nativeSessionId ? { nativeSessionId } : {}) };
+      const prompted = await herdr.prompt(live.name, `You are the continuing Root for this task. Objective: ${input.objective}. Use only forge_root to observe, delegate, deliver, or ask one human question.`, { waitForWorking: false });
+      return { paneId: live.paneId, agentName: live.name, ...(prompted.agentSession ? { nativeSessionId: prompted.agentSession } : live.agentSession ? { nativeSessionId: live.agentSession } : nativeSessionId ? { nativeSessionId } : {}) };
     },
   };
 }
@@ -190,8 +228,8 @@ export function productionWorkerRuntime(store: TaskControlStore, herdr: Pick<Her
         args: herdrRuntime("codex").launchArgs(control.workerProfile, null, false, undefined, { kind: "worker" }),
       });
       const marker = `forge-worker-assignment:${input.session.id}:${input.session.generation}:${input.session.assignmentHash}`;
-      await herdr.prompt(live.name, `${input.instruction}\n\n[${marker}]`, { waitForWorking: false });
-      return { paneId: live.paneId, agentName: live.name, ...(live.agentSession ? { nativeSessionId: live.agentSession } : {}) };
+      const prompted = await herdr.prompt(live.name, `${input.instruction}\n\n[${marker}]`, { waitForWorking: false });
+      return { paneId: live.paneId, agentName: live.name, ...(prompted.agentSession ? { nativeSessionId: prompted.agentSession } : live.agentSession ? { nativeSessionId: live.agentSession } : {}) };
     },
   };
 }

@@ -72,22 +72,20 @@ export class RootController implements RootBridgeAdapter {
   private async deliverTurn(root: RootIdentity, turn: { id: string; promptHash: string; promptText: string; generation: number }): Promise<void> {
     const session = this.store.currentSession(root.taskId, "root");
     if (!session?.agentName) throw new Error("root_not_live");
+    this.store.markPromptUnknown(turn.id);
     try {
       await this.herdr.prompt(session.agentName, `${turn.promptText}\n\n[forge-turn:${turn.promptHash}]`, { waitForWorking: false });
       this.store.markPrompted({ turnId: turn.id, generation: turn.generation });
-    } catch {
-      this.store.markPromptUnknown(turn.id);
-    }
+    } catch {}
   }
 
   async recordWorkerResult(input: { taskId: string; sessionId: string; generation: number; receiptId: string; observation: string }): Promise<void> {
-    if (this.store.workerReceiptState(input) === "duplicate") return;
+    const recorded = this.store.recordWorkerResultAndWake(input);
+    if (recorded.kind === "duplicate") return;
     const root = this.store.currentSession(input.taskId, "root");
     if (!root || root.lifecycle !== "live") return;
     const rootIdentity = { taskId: input.taskId, sessionId: root.id, generation: root.generation };
-    const wake = this.store.wakeRoot({ taskId: rootIdentity.taskId, rootSessionId: rootIdentity.sessionId, generation: rootIdentity.generation, prompt: `Worker result receipt ${input.receiptId}. Observe the task and continue the objective.\n\n${input.observation}` });
-    this.store.recordWorkerTurn({ taskId: input.taskId, sessionId: input.sessionId, generation: input.generation, receiptId: input.receiptId, terminalObservation: input.observation });
-    await this.deliverTurn(rootIdentity, wake);
+    await this.deliverTurn(rootIdentity, recorded.wake);
   }
 
   async recover(taskId: string): Promise<void> {
@@ -98,8 +96,9 @@ export class RootController implements RootBridgeAdapter {
     const observe = (session: TaskSession): "live" | "stopped" | "unknown" => {
       if (!session.paneId || !session.agentName) return "unknown";
       const agent = session.paneId ? snapshot.agents.find((candidate) => candidate.paneId === session.paneId) : undefined;
-      if (!agent) return session.lifecycle === "live" ? "stopped" : "unknown";
+      if (!agent) return session.kind === "root" && session.lifecycle === "live" ? "stopped" : "unknown";
       if (agent.name !== session.agentName || session.nativeSessionId && agent.agentSession !== session.nativeSessionId) return "unknown";
+      if (session.kind === "worker" && agent.status === "idle") return "stopped";
       if (liveStatuses.has(agent.status ?? "")) return "live";
       if (["done", "failed", "cancelled", "stopped"].includes(agent.status ?? "")) return "stopped";
       return "unknown";
@@ -107,13 +106,22 @@ export class RootController implements RootBridgeAdapter {
     const rootLifecycle = observe(root);
     this.store.observeSession({ sessionId: root.id, generation: root.generation, lifecycle: rootLifecycle });
     const worker = this.store.currentSession(taskId, "worker");
-    if (worker) this.store.observeSession({ sessionId: worker.id, generation: worker.generation, lifecycle: observe(worker) });
+    if (worker) {
+      const workerLifecycle = observe(worker);
+      this.store.observeSession({ sessionId: worker.id, generation: worker.generation, lifecycle: workerLifecycle });
+      if (workerLifecycle === "stopped" && worker.assignmentHash) {
+        const agent = worker.paneId ? snapshot.agents.find((candidate) => candidate.paneId === worker.paneId) : undefined;
+        const status = agent?.status ?? "stopped";
+        await this.recordWorkerResult({ taskId, sessionId: worker.id, generation: worker.generation, receiptId: `${worker.id}:${worker.generation}:${worker.assignmentHash}:${status}`, observation: `Herdr observed the assigned Worker session ${worker.id} at terminal status ${status}.` });
+      }
+    }
     if (rootLifecycle === "stopped") {
       const replacement = await this.store.ensureRoot({ taskId, observe: async () => "stopped" });
       if (replacement.id !== root.id && this.rootRuntime) {
         const control = this.store.get(taskId);
         const launched = await this.rootRuntime.launch({ taskId, session: replacement, objective: control.objective, persistAttempt: (attempt) => this.store.bindLaunchAttempt({ sessionId: replacement.id, generation: replacement.generation, ...attempt }) });
         this.store.bindLive({ sessionId: replacement.id, generation: replacement.generation, ...launched });
+        for (const turn of this.store.pendingTurns(replacement.id)) if (turn.status === "pending_prompt") await this.deliverTurn({ taskId, sessionId: replacement.id, generation: replacement.generation }, turn);
       }
       return;
     }

@@ -101,3 +101,43 @@ test("restart replaces a terminal Root through Herdr while retaining a live Work
     expect(value.store.currentSession("task", "worker")).toMatchObject({ id: worker.id, lifecycle: "live" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
+
+test("recovery ingests a completed Worker transcript and wakes Root once", async () => {
+  const value = await fixture();
+  const root = value.store.claimRoot({ taskId: "task" });
+  value.store.bindLive({ sessionId: root.id, generation: root.generation, paneId: "root-pane", agentName: "root" });
+  const worker = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Change one file." });
+  value.store.bindLive({ sessionId: worker.id, generation: worker.generation, paneId: "worker-pane", agentName: "worker" });
+  const marker = `forge-worker-assignment:${worker.id}:${worker.generation}:${worker.assignmentHash}`;
+  const prompts: string[] = [];
+  const herdr = {
+    runtimeSnapshot: async () => ({ agents: [{ name: "root", paneId: "root-pane", status: "working" }, { name: "worker", paneId: "worker-pane", status: "done" }], panes: [] }),
+    readAgent: async (name: string) => name === "worker" ? `completed\n[${marker}]` : "",
+    prompt: async (_name: string, prompt: string) => { prompts.push(prompt); return { name: "root", paneId: "root-pane" }; },
+  };
+  try {
+    await new RootController(value.store, herdr).recover("task");
+    await new RootController(new TaskControlStore(value.database), herdr).recover("task");
+    expect(prompts).toHaveLength(1);
+    expect(value.store.currentSession("task", "worker")?.lifecycle).toBe("stopped");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("an idle Worker after a long pane transcript wakes Root without tail matching", async () => {
+  const value = await fixture();
+  const root = value.store.claimRoot({ taskId: "task" });
+  value.store.bindLive({ sessionId: root.id, generation: root.generation, paneId: "root-pane", agentName: "root" });
+  const worker = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Change one file." });
+  value.store.bindLive({ sessionId: worker.id, generation: worker.generation, paneId: "worker-pane", agentName: "worker" });
+  const prompts: string[] = [];
+  const herdr = {
+    runtimeSnapshot: async () => ({ agents: [{ name: "root", paneId: "root-pane", status: "working" }, { name: "worker", paneId: "worker-pane", status: "idle" }], panes: [] }),
+    readAgent: async () => Array.from({ length: 200 }, (_, index) => `line ${index}`).join("\n"),
+    prompt: async (_name: string, prompt: string) => { prompts.push(prompt); return { name: "root", paneId: "root-pane" }; },
+  };
+  try {
+    await new RootController(value.store, herdr).recover("task");
+    await new RootController(new TaskControlStore(value.database), herdr).recover("task");
+    expect(prompts).toHaveLength(1);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});

@@ -12,6 +12,9 @@ export const OpenCodeHealthSchema = z.object({
 }).passthrough();
 export type OpenCodeHealth = z.infer<typeof OpenCodeHealthSchema>;
 
+export const OpenCodeMcpStatusSchema = z.record(z.string(), z.object({ status: z.string(), error: z.string().optional() }).passthrough());
+export type OpenCodeMcpStatus = z.infer<typeof OpenCodeMcpStatusSchema>;
+
 export const OpenCodeModelSchema = z.object({
   id: z.string().min(1),
   providerID: z.string().min(1),

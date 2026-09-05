@@ -1,5 +1,6 @@
 import type { ForgeDatabase } from "./database.js";
-import { RootController, productionRootRuntime } from "./root-controller.js";
+import { RootController } from "./root-controller.js";
+import { OpenCodeTaskRuntime } from "./opencode-task-runtime.js";
 import { TaskControlStore } from "./root-session-store.js";
 import { DeliveryOperations } from "./delivery-operations.js";
 import {
@@ -193,7 +194,7 @@ export async function reconcileHerdrSessions(
 export async function recoverTaskControls(database: ForgeDatabase, herdr: HerdrClient = new CliHerdrClient()): Promise<number> {
   const taskIds = database.authQuery((db) => db.prepare("SELECT task_id FROM forge_task_controls WHERE status IN ('active', 'waiting_human')").all() as Array<{ task_id: string }>);
   const store = new TaskControlStore(database);
-  const controller = new RootController(store, herdr, undefined, productionRootRuntime(database.filename(), store, herdr));
+  const controller = new RootController(store, new OpenCodeTaskRuntime(database.filename(), herdr));
   const delivery = new DeliveryOperations(store);
   const failures: unknown[] = [];
   for (const row of taskIds) {

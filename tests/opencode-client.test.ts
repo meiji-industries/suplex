@@ -44,6 +44,17 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
+test("MCP discovery uses a bodyless GET scoped to the session directory", async () => {
+  const client = new OpenCodeClient({ baseUrl: "http://127.0.0.1:43123", password: "test-password", fetch: async (input, init) => {
+    const request = new Request(input, init);
+    expect(request.method).toBe("GET");
+    expect(request.body).toBeNull();
+    expect(new URL(request.url).searchParams.get("directory")).toBe("/tmp/forge-opencode");
+    return jsonResponse({ forge_root: { status: "connected" } });
+  } });
+  await expect(client.mcpStatus("/tmp/forge-opencode")).resolves.toEqual({ forge_root: { status: "connected" } });
+});
+
 test("client uses the installed v1 routes and validates native envelopes", async () => {
   const calls: Array<{ url: string; method: string; redirect: RequestRedirect; body?: unknown }> = [];
   const client = new OpenCodeClient({

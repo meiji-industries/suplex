@@ -21,6 +21,7 @@ import { createWorktreeActivities } from "./worktree.js";
 import { createRootControlActivities } from "./root-control.js";
 import { RootController } from "../../root-controller.js";
 import { TaskControlStore } from "../../root-session-store.js";
+import { OpenCodeTaskRuntime } from "../../opencode-task-runtime.js";
 import { CliHerdrClient } from "../../herdr-client.js";
 
 export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): IssueActivities & DeliveryBlockerActivities {
@@ -40,7 +41,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     ...createAcceptanceActivities(ctx),
     ...createMergeConflictActivities(ctx),
     ...createWorktreeActivities(ctx),
-    ...createRootControlActivities(new RootController(new TaskControlStore(database), new CliHerdrClient())),
+    ...createRootControlActivities(new RootController(new TaskControlStore(database), new OpenCodeTaskRuntime(database.filename(), new CliHerdrClient()))),
   } as unknown as IssueActivities & DeliveryBlockerActivities;
 }
 

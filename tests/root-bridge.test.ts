@@ -11,6 +11,7 @@ import { RootBridge, RootBridgeFailure, startRootBridgeTransport, type RootBridg
 import type { RootIdentity } from "../src/root-contracts.js";
 import { ForgeDatabase } from "../src/database.js";
 import { RootController } from "../src/root-controller.js";
+import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { TaskControlStore } from "../src/root-session-store.js";
 
 const run = promisify(execFile);
@@ -84,6 +85,7 @@ test("MCP discovery and typed Root calls use the scoped bridge transport", async
   stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
   const listed = await call({ method: "tools/list", params: {} });
+  expect(listed).toMatchObject({ result: { tools: [{ inputSchema: { type: "object" } }] } });
   expect(listed).toMatchObject({ result: { tools: [expect.objectContaining({ name: "forge_root" })] } });
   const observed = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "observe", _meta: { progressToken: "mcp-client" } }, _meta: { progressToken: "request" } } });
   expect(observed).toMatchObject({ result: { structuredContent: { taskId: "task_1", observed: true } } });
@@ -110,8 +112,9 @@ test("stdio bridge invokes the production controller against a durable task cont
     const profile = { profileId: "profile", provider: "codex" as const, model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
     store.create({ taskId: "task", objective: "Ship it", deliveryTarget: "pull request", deliveryIntent: { repository: "owner/repo", headBranch: "main", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: repository, branch: "main", baseSha: "a", headSha: "a", dirty: false } });
     const session = store.claimRoot({ taskId: "task" });
-    store.bindLive({ sessionId: session.id, generation: session.generation, paneId: "root-pane", agentName: "root" });
-    const controller = new RootController(store, { runtimeSnapshot: async () => ({ agents: [], panes: [] }), prompt: async () => ({ name: "root", paneId: "root-pane" }), readAgent: async () => "" }, { launch: async () => ({ paneId: "worker-pane", agentName: "worker", nativeSessionId: "native-worker" }) });
+    store.bindHarnessSession({ sessionId: session.id, generation: session.generation, nativeSessionId: "ses_root" });
+    store.bindPane({ sessionId: session.id, generation: session.generation, paneId: "root-pane" });
+    const controller = new RootController(store, new FakeTaskHarness());
     const stdin = new PassThrough(); const stdout = new PassThrough(); const responses: unknown[] = [];
     stdout.on("data", (chunk: Buffer) => responses.push(JSON.parse(chunk.toString())));
     const reader = startRootBridgeTransport({ bridge: new RootBridge({ taskId: "task", sessionId: session.id, generation: session.generation }, controller), stdin, stdout });
@@ -119,7 +122,7 @@ test("stdio bridge invokes the production controller against a durable task cont
     await call({ method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } } });
     const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", instruction: "Inspect the worktree." } } });
     expect(delegated).toMatchObject({ result: { structuredContent: { kind: "worker", lifecycle: "live" } } });
-    expect(store.currentSession("task", "worker")).toMatchObject({ lifecycle: "live", nativeSessionId: "native-worker" });
+    expect(store.currentSession("task", "worker")).toMatchObject({ lifecycle: "live", nativeSessionId: expect.stringMatching(/^ses_/) });
     reader.close();
   } finally { database.close(); await rm(directory, { recursive: true, force: true }); }
 });

@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { z } from "zod";
 import { ensureOpenCodeServer, openCodeRoleConfig, openCodeServerClient, openCodeProcessAlive, type OpenCodeServerReference } from "../src/opencode-server.js";
 import { createOpenCodePromptIntent, reconcileOpenCodePrompt, replayOpenCodePrompt } from "../src/opencode-session.js";
+import { createGitCommandGuard } from "../src/worktrees.js";
 
 const executable = process.argv[2];
 if (!executable) throw new Error("Usage: tsx scripts/probe-opencode-runtime.ts <absolute-opencode-executable>");
@@ -30,9 +31,9 @@ const provider = createServer(async (request, response) => {
   if (names.length > 0) {
     advertised.set(activeRole, names);
     const step = turn++;
-    if (step === 0) {
+    if (step === 0 || activeRole === "worker" && step === 1) {
       delta = { tool_calls: [{ index: 0, id: `call_${activeRole}`, type: "function", function: {
-        name: "bash", arguments: JSON.stringify({ command: `touch ${activeRole === "root" ? "forbidden" : "allowed"}.txt`, description: "Disposable permission probe" }),
+        name: "bash", arguments: JSON.stringify({ command: step === 1 ? "git push" : `touch ${activeRole === "root" ? "forbidden" : "allowed"}.txt`, description: "Disposable permission probe" }),
       } }] };
       finish = "tool_calls";
     }
@@ -66,7 +67,8 @@ try {
     const config = openCodeRoleConfig({ role, profile });
     config.provider = { "forge-proof": { npm: "@ai-sdk/openai-compatible", options: { baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: "disposable-proof" }, models: { proof: { limit: { context: 128000, output: 4096 } } } } };
     config.small_model = "forge-proof/proof";
-    const input: Parameters<typeof ensureOpenCodeServer>[0] = { executable, directory, runtimeDirectory, config };
+    const guard = role === "worker" ? await createGitCommandGuard(runtimeDirectory, "git-guard") : undefined;
+    const input: Parameters<typeof ensureOpenCodeServer>[0] = { executable, directory, runtimeDirectory, config, ...(guard ? { env: guard.env } : {}) };
     const reference = await ensureOpenCodeServer(input);
     live.add(reference);
     assert.equal((await stat(join(runtimeDirectory, "server.json"))).mode & 0o777, 0o600);
@@ -92,7 +94,10 @@ try {
     const toolParts = z.array(z.object({ tool: z.string(), state: z.object({ status: z.string(), input: z.unknown(), output: z.string().optional() }) })).parse(messages.flatMap((message) => message.parts.filter((part) => part.type === "tool")));
     assert.ok(toolParts.length > 0, "Provider must attempt a tool call");
     assert.ok(toolParts.some((part) => part.tool === (role === "root" ? "invalid" : "bash") && part.state.status === "completed"));
-    if (role === "worker") assert.equal(await readFile(join(directory, "allowed.txt"), "utf8"), "");
+    if (role === "worker") {
+      assert.equal(await readFile(join(directory, "allowed.txt"), "utf8"), "");
+      assert.ok(toolParts.some((part) => part.state.output?.includes("policy blocked git push")), "Worker shell must inherit the Git guard");
+    }
     else assert.equal(await stat(join(directory, "forbidden.txt")).then(() => true, () => false), false);
     checks.push({ role, sessionID: session.id, advertisedTools: names, toolParts });
     assert.equal((await ensureOpenCodeServer(input)).pid, reference.pid);

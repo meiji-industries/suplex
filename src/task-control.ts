@@ -7,7 +7,7 @@ export const TaskControlStatusSchema = z.enum(["active", "waiting_human", "cance
 export const TaskSessionKindSchema = z.enum(["root", "worker"]);
 export const TaskSessionLifecycleSchema = z.enum(["reserved", "live", "stopped", "unknown", "cancelled"]);
 export const TaskTurnStatusSchema = z.enum(["pending_prompt", "prompted", "unknown", "completed", "cancelled"]);
-export const TaskProfileSchema = z.object({ profileId: z.string().min(1), provider: z.enum(["codex", "claude"]), model: z.string().min(1), reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]), serviceTier: z.enum(["default", "priority", "fast"]) }).strict();
+export const TaskProfileSchema = z.object({ profileId: z.string().min(1), provider: z.string().min(1), model: z.string().min(1), reasoningLevel: z.enum(["low", "medium", "high", "xhigh", "max"]), serviceTier: z.enum(["default", "priority"]) }).strict();
 
 export const WorktreeReferenceSchema = z.object({
   path: z.string().min(1), branch: z.string().min(1), baseSha: z.string().min(1), headSha: z.string().min(1), dirty: z.boolean(),

@@ -1,6 +1,5 @@
 import { createInterface, type Interface } from "node:readline";
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
@@ -13,7 +12,8 @@ import {
 } from "./root-contracts.js";
 import { ForgeDatabase } from "./database.js";
 import { CliHerdrClient } from "./herdr-client.js";
-import { RootController, productionWorkerRuntime } from "./root-controller.js";
+import { RootController } from "./root-controller.js";
+import { OpenCodeTaskRuntime } from "./opencode-task-runtime.js";
 import { TaskControlStore } from "./root-session-store.js";
 
 export class RootBridgeFailure extends Error {
@@ -100,7 +100,7 @@ export function startRootBridgeTransport(input: {
       }
       if (!initialized) throw new Error("MCP client must initialize before calling tools");
       if (request.method === "tools/list") {
-        respond(request.id, { tools: [{ name: "forge_root", description: "Observe this task or request a Forge-owned delivery action.", inputSchema: z.toJSONSchema(RootToolSchema) }] });
+        respond(request.id, { tools: [{ name: "forge_root", description: "Observe this task or request a Forge-owned delivery action.", inputSchema: { ...z.toJSONSchema(RootToolSchema), type: "object" } }] });
         return;
       }
       if (request.method !== "tools/call") {
@@ -109,7 +109,8 @@ export function startRootBridgeTransport(input: {
       }
       const params = z.object({ name: z.literal("forge_root"), arguments: z.object({ _meta: z.unknown().optional() }).passthrough(), _meta: z.unknown().optional() }).strict().parse(request.params);
       try {
-        const { _meta: _protocolMetadata, ...argumentsWithoutMetadata } = params.arguments;
+        const argumentsWithoutMetadata = { ...params.arguments };
+        delete argumentsWithoutMetadata._meta;
         const result = await input.bridge.call(argumentsWithoutMetadata);
         respond(request.id, { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result });
       } catch (error) {
@@ -134,7 +135,7 @@ async function runRootBridge(): Promise<void> {
   const database = new ForgeDatabase(config.databasePath, { migrate: false });
   const herdr = new CliHerdrClient();
   const store = new TaskControlStore(database);
-  const controller = new RootController(store, herdr, productionWorkerRuntime(store, herdr, join(dirname(config.databasePath), "runtime")));
+  const controller = new RootController(store, new OpenCodeTaskRuntime(config.databasePath, herdr));
   startRootBridgeTransport({ bridge: new RootBridge(config.root, controller), stdin: process.stdin, stdout: process.stdout });
 }
 

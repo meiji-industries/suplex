@@ -8,6 +8,13 @@ export class FakeTaskHarness implements TaskHarness {
   readonly sessions = new Map<string, string>();
   failAttachment = false;
   loseAcknowledgement = false;
+  failStop = false;
+  readonly stopped: string[] = [];
+
+  async stop(_scope: OpenCodeTaskScope, nativeSessionId: string): Promise<void> {
+    if (this.failStop) throw new Error("Abort unavailable");
+    this.stopped.push(nativeSessionId);
+  }
 
   async ensureSession(scope: OpenCodeTaskScope, nativeSessionId: string | null): Promise<string> {
     const id = nativeSessionId ?? `ses_${scope.id.replaceAll("-", "")}`;

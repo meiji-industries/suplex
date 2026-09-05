@@ -8,7 +8,7 @@ import type { DeliveryOperation, RootIdentity } from "./root-contracts.js";
 import type { TaskControlStore } from "./root-session-store.js";
 import type { TaskControl, TaskSession, TaskTurn } from "./task-control.js";
 
-export type TaskHarness = Pick<OpenCodeTaskRuntime, "ensureSession" | "attach" | "observe" | "dispatch" | "resultText">;
+export type TaskHarness = Pick<OpenCodeTaskRuntime, "ensureSession" | "attach" | "observe" | "dispatch" | "resultText" | "stop">;
 
 function scope(control: TaskControl, session: TaskSession): OpenCodeTaskScope {
   if (!control.worktree) throw new Error("Task worktree is not configured");
@@ -68,6 +68,13 @@ export class RootController implements RootBridgeAdapter {
   }
 
   async recover(taskId: string): Promise<void> {
+    if (this.store.get(taskId).status === "cancelled") {
+      for (const session of this.store.pendingStops(taskId)) {
+        if (session.nativeSessionId) await this.harness.stop(scope(this.store.get(taskId), session), session.nativeSessionId);
+        this.store.completeStop(session.id);
+      }
+      return;
+    }
     if (this.store.get(taskId).status !== "active") return;
     const root = this.store.currentSession(taskId, "root") ?? this.store.claimRoot({ taskId });
     await this.recoverSession(root);
@@ -77,6 +84,11 @@ export class RootController implements RootBridgeAdapter {
       this.store.wakeIdleRoot(taskId);
       this.store.scheduleWake(taskId, new Date(Date.now() + 15_000).toISOString());
     }
+  }
+
+  async cancel(taskId: string): Promise<void> {
+    this.store.cancel(taskId);
+    await this.recover(taskId);
   }
 
   private async recoverSession(previous: TaskSession): Promise<void> {
@@ -105,6 +117,7 @@ export class RootController implements RootBridgeAdapter {
         if (observed.retry === "allowed" && turn.status === "pending_prompt") {
           observed = await this.harness.dispatch(taskScope, intent, async () => this.store.claimPrompt(turn.id));
         }
+        if (this.store.get(control.taskId).status === "cancelled") break;
         if (observed.admission === "observed" && turn.status !== "prompted") this.store.markPrompted({ turnId: turn.id, generation: session.generation });
         if (!["completed", "error", "interrupted", "terminal_incomplete"].includes(observed.state)) break;
         await this.finishTurn(taskScope, session, turn, observed);
@@ -119,6 +132,9 @@ export class RootController implements RootBridgeAdapter {
     const evidence = JSON.stringify({ state: observed.state, native: observed.native, reason: observed.reason, text });
     if (session.kind === "root") {
       this.store.completeRootTurn(turn.id, evidence);
+      if (observed.state !== "completed" && this.store.get(session.taskId).status === "active") {
+        this.store.askHuman(session.taskId, `OpenCode stopped the Root turn (${observed.state}). ${observed.reason ?? text} Can you resolve the failure and continue?`);
+      }
       return;
     }
     this.store.recordWorkerResultAndWake({ taskId: session.taskId, sessionId: session.id, generation: session.generation, receiptId: `${observed.sessionID}:${observed.messageID}:${observed.state}`, observation: evidence, ...(observed.assistantMessageID ? { nativeTurnId: observed.assistantMessageID } : {}) });

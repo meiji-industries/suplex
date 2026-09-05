@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   OpenCodeConfigSchema,
   OpenCodeHealthSchema,
@@ -186,6 +187,10 @@ export class OpenCodeClient {
 
   async getStatus(directory?: string): Promise<Record<string, OpenCodeSessionStatus>> {
     return this.request("GET", "/session/status", OpenCodeSessionStatusMapSchema, undefined, { directory });
+  }
+
+  async abortSession(sessionID: string, directory: string): Promise<boolean> {
+    return this.request("POST", `/session/${encodeURIComponent(sessionID)}/abort`, z.boolean(), undefined, { directory });
   }
 
   async promptAsync(input: OpenCodePromptInput): Promise<void> {

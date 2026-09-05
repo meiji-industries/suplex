@@ -43,7 +43,7 @@ async function fixture() {
   });
   const profile = { profileId: "profile", provider: "codex" as const, model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
   const store = new TaskControlStore(database);
-  store.create({ taskId: "task", objective: "Deliver the change", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: local.branch, baseBranch: "main", baselineSha: local.headSha, pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: directory, branch: local.branch, baseSha: local.headSha, headSha: local.headSha, dirty: false } });
+  store.create({ startImmediately: true, taskId: "task", objective: "Deliver the change", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: local.branch, baseBranch: "main", baselineSha: local.headSha, pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: directory, branch: local.branch, baseSha: local.headSha, headSha: local.headSha, dirty: false } });
   const root = store.claimRoot({ taskId: "task" });
   store.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "ses_root" });
   store.bindPane({ sessionId: root.id, generation: root.generation, paneId: "root-pane" });

@@ -3,7 +3,7 @@ import { z } from "zod";
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 
-export const TaskControlStatusSchema = z.enum(["active", "waiting_human", "cancelled", "delivered"]);
+export const TaskControlStatusSchema = z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]);
 export const TaskSessionKindSchema = z.enum(["root", "worker"]);
 export const TaskSessionLifecycleSchema = z.enum(["reserved", "live", "stopped", "unknown", "cancelled"]);
 export const TaskTurnStatusSchema = z.enum(["pending_prompt", "prompted", "unknown", "completed", "cancelled"]);
@@ -40,6 +40,7 @@ export interface TaskControl {
   status: TaskControlStatus;
   wakeAt: string | null;
   humanQuestion: string | null;
+  humanQuestionId: string | null;
   worktree: WorktreeReference | null;
   pullRequest: PullRequestReference | null;
   rootSessionId: string | null;

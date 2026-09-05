@@ -20,12 +20,20 @@ const live = new Set<OpenCodeServerReference>();
 const checks: unknown[] = [];
 let activeRole: "root" | "worker" = "root";
 let turn = 0;
+let holdModelRequest = false;
+let modelRequestHeld = false;
 const advertised = new Map<string, string[]>();
 const provider = createServer(async (request, response) => {
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(Buffer.from(chunk));
   const body = z.object({ stream: z.boolean().optional(), tools: z.array(z.object({ function: z.object({ name: z.string() }) })).optional() }).parse(JSON.parse(Buffer.concat(chunks).toString()));
   const names = body.tools?.map((tool) => tool.function.name) ?? [];
+  if (holdModelRequest && names.length > 0) {
+    modelRequestHeld = true;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.flushHeaders();
+    return;
+  }
   let delta: Record<string, unknown> = { content: "proof complete" };
   let finish = "stop";
   if (names.length > 0) {
@@ -100,6 +108,23 @@ try {
     }
     else assert.equal(await stat(join(directory, "forbidden.txt")).then(() => true, () => false), false);
     checks.push({ role, sessionID: session.id, advertisedTools: names, toolParts });
+    if (role === "worker") {
+      holdModelRequest = true;
+      const interrupted = createOpenCodePromptIntent({ sessionID: session.id, directory, model: { providerID: profile.providerID, modelID: profile.modelID }, agent: "forge-worker", variant: "max", prompt: "Wait for cancellation." });
+      await replayOpenCodePrompt(client, interrupted, async () => true);
+      const abortDeadline = Date.now() + 10_000;
+      while (!modelRequestHeld) {
+        assert.ok(Date.now() < abortDeadline, "Native Worker must enter the held model request");
+        await delay(50);
+      }
+      assert.equal(await client.abortSession(session.id, directory), true);
+      const status = (await client.getStatus(directory))[session.id];
+      assert.ok(!status || status.type === "idle", "Native Worker must stop before abort completes");
+      assert.equal((await client.getSession(session.id, directory)).id, session.id);
+      assert.ok((await client.getMessages(session.id, { directory })).some(message => message.info.id === interrupted.messageID), "Abort must preserve the admitted message");
+      checks.push({ role, abortedSession: session.id, preservedMessage: interrupted.messageID });
+      holdModelRequest = false;
+    }
     assert.equal((await ensureOpenCodeServer(input)).pid, reference.pid);
     await stop(reference);
     const restarted = await ensureOpenCodeServer(input);

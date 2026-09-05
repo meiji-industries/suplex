@@ -10,7 +10,7 @@ import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
 
-async function fixture() {
+async function fixture(startImmediately = true) {
   const directory = await mkdtemp(join(tmpdir(), "forge-native-controller-"));
   const database = new ForgeDatabase(join(directory, "forge.sqlite"));
   cleanups.push(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
@@ -23,7 +23,7 @@ async function fixture() {
   });
   const profile = { profileId: "profile", provider: "openai", model: "gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
   const store = new TaskControlStore(database);
-  store.create({ taskId: "task", objective: "Ship it", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: directory, branch: "task", baseSha: "a", headSha: "a", dirty: false } });
+  store.create({ taskId: "task", startImmediately, objective: "Ship it", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: directory, branch: "task", baseSha: "a", headSha: "a", dirty: false } });
   const harness = new FakeTaskHarness();
   const controller = new RootController(store, harness);
   const identity = () => {
@@ -34,6 +34,54 @@ async function fixture() {
   return { directory, database, store, harness, controller, identity };
 }
 
+test("backlog waits for a durable start and resumes after reopening the database", async () => {
+  const value = await fixture(false);
+  await value.controller.recover("task");
+  expect(value.store.get("task").status).toBe("backlog");
+  expect(value.harness.dispatched).toHaveLength(0);
+  value.store.start("task");
+  value.database.close();
+  const reopened = new ForgeDatabase(join(value.directory, "forge.sqlite"));
+  try {
+    const store = new TaskControlStore(reopened);
+    expect(store.start("task").status).toBe("active");
+    await new RootController(store, value.harness).recover("task");
+    expect(value.harness.dispatched).toHaveLength(1);
+  } finally { reopened.close(); }
+});
+
+test("answers wake the same Root atomically and stale answers cannot revive another question", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  await value.controller.askHuman(value.identity(), "Which branch should receive the change?");
+  const first = value.store.get("task").humanQuestionId!;
+  expect(first).toBeTruthy();
+  value.store.answerHuman("task", first, "Use main.");
+  await value.controller.recover("task");
+  expect(value.harness.dispatched).toHaveLength(2);
+  expect(value.harness.dispatched[1]).toMatchObject({ sessionID: value.harness.dispatched[0]!.sessionID });
+  expect(value.harness.dispatched[1]!.prompt).toContain("Use main.");
+  await value.controller.askHuman(value.identity(), "Publish a draft?");
+  expect(() => value.store.answerHuman("task", first, "Stale response")).toThrow("question_identity_mismatch");
+  expect(value.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestion: "Publish a draft?" });
+  value.store.cancel("task");
+  expect(() => value.store.start("task")).toThrow("task_not_startable");
+  expect(() => value.store.askHuman("task", "Late question")).toThrow("task_not_active");
+  expect(value.store.get("task").status).toBe("cancelled");
+});
+
+test("start immediately survives closing Forge before the first native dispatch", async () => {
+  const value = await fixture(true);
+  expect(value.harness.dispatched).toHaveLength(0);
+  value.database.close();
+  const reopened = new ForgeDatabase(join(value.directory, "forge.sqlite"));
+  try {
+    await new RootController(new TaskControlStore(reopened), value.harness).recover("task");
+    expect(value.harness.dispatched).toHaveLength(1);
+  } finally { reopened.close(); }
+});
+
 test("Root resumes the same native session without reposting its prompt", async () => {
   const value = await fixture();
   await value.controller.recover("task");
@@ -43,6 +91,57 @@ test("Root resumes the same native session without reposting its prompt", async 
   expect(value.harness.dispatched).toHaveLength(1);
   expect(value.harness.dispatched[0]).toMatchObject({ agent: "forge-root", variant: "max", model: { providerID: "openai", modelID: "gpt-5.6-luna" } });
   expect(value.harness.dispatched[0]?.messageID).toMatch(/^msg_/);
+});
+
+test("cancellation fences dispatch before native abort and retries abort after restart", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  const root = value.store.currentSession("task", "root")!;
+  value.harness.failStop = true;
+  await expect(value.controller.cancel("task")).rejects.toThrow("Abort unavailable");
+  expect(value.store.get("task").status).toBe("cancelled");
+  expect(value.store.currentSession("task", "root")).toBeNull();
+  value.harness.failStop = false;
+  await new RootController(new TaskControlStore(value.database), value.harness).recover("task");
+  expect(value.harness.stopped).toEqual([root.nativeSessionId]);
+  await value.controller.recover("task");
+  expect(value.harness.stopped).toHaveLength(1);
+  expect(value.harness.dispatched).toHaveLength(1);
+});
+
+test("native Root errors ask for a specific intervention instead of consuming repeated turns", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  value.harness.finish(value.harness.dispatched[0]!.messageID, "error");
+  await value.controller.recover("task");
+  await value.controller.recover("task");
+  expect(value.store.get("task").status).toBe("waiting_human");
+  expect(value.store.get("task").humanQuestion).toContain("OpenCode");
+  expect(value.harness.dispatched).toHaveLength(1);
+});
+
+test("cancellation waits for an in-flight dispatch to settle before aborting", async () => {
+  const value = await fixture();
+  let release!: () => void;
+  let entered!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const admitted = new Promise<void>(resolve => { entered = resolve; });
+  const dispatch = value.harness.dispatch.bind(value.harness);
+  value.harness.dispatch = async (...args) => {
+    const result = await dispatch(...args);
+    entered();
+    await waiting;
+    return result;
+  };
+  const recovering = value.controller.recover("task");
+  await admitted;
+  await value.controller.cancel("task");
+  expect(value.harness.stopped).toHaveLength(0);
+  release();
+  await recovering;
+  await value.controller.recover("task");
+  expect(value.harness.stopped).toHaveLength(1);
+  expect(value.harness.dispatched).toHaveLength(1);
 });
 
 test("Herdr display failure does not prevent native dispatch", async () => {

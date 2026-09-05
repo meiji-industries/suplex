@@ -25,7 +25,7 @@ database.authTransaction((db) => {
 });
 const store = new TaskControlStore(database);
 const profile = { profileId: "proof", provider: "openai", model: "gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
-store.create({
+store.create({ startImmediately: true,
   taskId: "task", objective: "This is a capability probe only. Read README.md using the native read tool. Then call forge_root with kind ask_human and question equal to the exact line you read. Do not delegate Workers or request delivery operations. No GitHub action is needed.",
   deliveryTarget: "merged", deliveryIntent: { repository: "meiji-industries/forge", headBranch: `probe-${token}`, baseBranch: "main", baselineSha: "a", pullRequestNumber: null },
   rootProfile: profile, workerProfile: profile, worktree: { path: directory, branch: `probe-${token}`, baseSha: "a", headSha: "a", dirty: false },

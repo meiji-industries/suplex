@@ -55,6 +55,18 @@ test("provider observations strip credentials and configuration secrets", async 
   expect(await client.providers("/tmp/providers")).toEqual({ all: [{ id: "openai", name: "OpenAI", models: { luna: { id: "luna", name: "Luna" } } }], connected: ["openai"], default: { openai: "luna" } });
 });
 
+test("abort targets the native session without deleting its history", async () => {
+  const client = new OpenCodeClient({ baseUrl: "http://127.0.0.1:43123", password: "test-password", fetch: async (input, init) => {
+    const request = new Request(input, init);
+    expect(request.method).toBe("POST");
+    expect(request.body).toBeNull();
+    expect(new URL(request.url).pathname).toBe("/session/ses_test/abort");
+    expect(new URL(request.url).searchParams.get("directory")).toBe("/tmp/task");
+    return jsonResponse(true);
+  } });
+  await expect(client.abortSession("ses_test", "/tmp/task")).resolves.toBe(true);
+});
+
 test("MCP discovery uses a bodyless GET scoped to the session directory", async () => {
   const client = new OpenCodeClient({ baseUrl: "http://127.0.0.1:43123", password: "test-password", fetch: async (input, init) => {
     const request = new Request(input, init);

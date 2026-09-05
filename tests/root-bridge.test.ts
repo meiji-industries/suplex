@@ -1,9 +1,7 @@
 import { PassThrough } from "node:stream";
-import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import { expect, test } from "vitest";
 
@@ -13,8 +11,9 @@ import { ForgeDatabase } from "../src/database.js";
 import { RootController } from "../src/root-controller.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { TaskControlStore } from "../src/root-session-store.js";
+import { runCommand } from "../src/command-runner.js";
 
-const run = promisify(execFile);
+const run = (command: string, args: string[]) => runCommand({ taskId: null, stepId: null, command, args });
 
 const root: RootIdentity = { taskId: "task_1", sessionId: "session_1", generation: 3 };
 
@@ -109,8 +108,8 @@ test("stdio bridge invokes the production controller against a durable task cont
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES ('task', 'company', 'project', 'Task', 'brief', '[]', '{}', 0, 'workflow', 'revision', 'key', ?, ?, ?)").run("b".repeat(64), stamp, stamp);
     });
     const store = new TaskControlStore(database);
-    const profile = { profileId: "profile", provider: "codex" as const, model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
-    store.create({ taskId: "task", objective: "Ship it", deliveryTarget: "pull request", deliveryIntent: { repository: "owner/repo", headBranch: "main", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: repository, branch: "main", baseSha: "a", headSha: "a", dirty: false } });
+    const profile = { profileId: "profile", provider: "openai", model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
+    store.create({ startImmediately: true, taskId: "task", objective: "Ship it", deliveryTarget: "pull request", deliveryIntent: { repository: "owner/repo", headBranch: "main", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: repository, branch: "main", baseSha: "a", headSha: "a", dirty: false } });
     const session = store.claimRoot({ taskId: "task" });
     store.bindHarnessSession({ sessionId: session.id, generation: session.generation, nativeSessionId: "ses_root" });
     store.bindPane({ sessionId: session.id, generation: session.generation, paneId: "root-pane" });

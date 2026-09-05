@@ -192,19 +192,19 @@ export async function reconcileHerdrSessions(
 
 /** Recover Root-owned tasks separately from the legacy role-session subsystem. */
 export async function recoverTaskControls(database: ForgeDatabase, herdr: HerdrClient = new CliHerdrClient()): Promise<number> {
-  const taskIds = database.authQuery((db) => db.prepare("SELECT task_id FROM forge_task_controls WHERE status IN ('active', 'waiting_human')").all() as Array<{ task_id: string }>);
+  const taskIds = database.authQuery((db) => db.prepare("SELECT task_id FROM forge_task_controls c WHERE status IN ('active', 'waiting_human') OR (status = 'cancelled' AND EXISTS (SELECT 1 FROM forge_task_sessions s WHERE s.task_id = c.task_id AND s.lifecycle = 'cancelled'))").all() as Array<{ task_id: string }>);
   const store = new TaskControlStore(database);
   const controller = new RootController(store, new OpenCodeTaskRuntime(database.filename(), herdr));
   const delivery = new DeliveryOperations(store);
   const failures: unknown[] = [];
   for (const row of taskIds) {
     try {
-      await delivery.observe(row.task_id);
+      if (store.get(row.task_id).status !== "cancelled") await delivery.observe(row.task_id);
     } catch (error) {
       failures.push(error);
     }
     try {
-      if (store.get(row.task_id).status === "active") await controller.recover(row.task_id);
+      await controller.recover(row.task_id);
     } catch (error) {
       failures.push(error);
     }

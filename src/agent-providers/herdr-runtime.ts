@@ -24,7 +24,7 @@ const codexArgs = (settings: { model: string; reasoningLevel: string; serviceTie
   const profile = ["--model", settings.model, "-c", `model_reasoning_effort=${JSON.stringify(settings.reasoningLevel)}`, "-c", `service_tier=${JSON.stringify(settings.serviceTier)}`, "-c", "check_for_update_on_startup=false"];
   if (capability.kind === "root") {
     const { command, args } = capability.bridgeConfig.server;
-    profile.push("--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "--ask-for-approval", "never", "-c", "mcp_servers={}", "-c", `mcp_servers.forge_root.command=${JSON.stringify(command)}`, "-c", `mcp_servers.forge_root.args=${JSON.stringify(args)}`, "-c", 'mcp_servers.forge_root.default_tools_approval_mode="approve"');
+    profile.push("--sandbox", "read-only", "--ask-for-approval", "never", "-c", `mcp_servers.forge_root.command=${JSON.stringify(command)}`, "-c", `mcp_servers.forge_root.args=${JSON.stringify(args)}`, "-c", 'mcp_servers.forge_root.default_tools_approval_mode="approve"');
   } else {
     profile.push("--dangerously-bypass-approvals-and-sandbox");
   }

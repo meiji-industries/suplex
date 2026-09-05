@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,9 +24,26 @@ async function command(file: string, args: string[], cwd?: string): Promise<{ ex
   });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function record(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("Herdr returned an invalid JSON result");
+  return value;
+}
+
+function paneIdFromHerdr(output: string): string {
+  const result = record(record(JSON.parse(output)).result);
+  const pane = record(result.pane);
+  if (typeof pane.pane_id !== "string") throw new Error("Herdr did not return the temporary probe pane ID");
+  return pane.pane_id;
+}
+
 async function main(): Promise<void> {
   const denialsOnly = process.argv.includes("--denials-only");
   const root = await mkdtemp(join(tmpdir(), "forge-root-capability-"));
+  let probePaneId: string | undefined;
   let receivedFixtureRequests = 0;
   const fixture = createServer((_request, response) => {
     receivedFixtureRequests += 1;
@@ -66,20 +84,33 @@ async function main(): Promise<void> {
       undefined,
       { kind: "root", bridgeConfig: config, bridgeConfigPath: join(root, "root.mcp.json") },
     );
-    const execArgs = runtimeArgs.filter((value, index, values) =>
-      value !== "--ask-for-approval" && value !== "never" && values[index - 1] !== "--ask-for-approval",
+    const freshParser = await command("codex", [...runtimeArgs, "--help"], root);
+    if (freshParser.exitCode !== 0) throw new Error(`Codex interactive fresh argv was rejected: ${freshParser.output}`);
+    const resumeArgs = herdrRuntime("codex").launchArgs(
+      { model: "gpt-5.6-terra", reasoningLevel: "medium", serviceTier: "default" },
+      "01963d1a-8f83-7e92-8000-000000000001",
+      false,
+      undefined,
+      { kind: "root", bridgeConfig: config, bridgeConfigPath: join(root, "root.mcp.json") },
     );
-    execArgs.push("-c", 'approval_policy="never"', "--json");
+    const resumeParser = await command("codex", [...resumeArgs, "--help"], root);
+    if (resumeParser.exitCode !== 0) throw new Error(`Codex interactive resume argv was rejected: ${resumeParser.output}`);
     if (!denialsOnly) {
-      const mcpProbe = await command("codex", [
-        "exec", "-C", root, ...execArgs,
-        "Use the forge_root MCP tool twice. First call it with {\"kind\":\"observe\"}. Then call it with {\"kind\":\"delegate_worker\",\"instruction\":\"Inspect the current diff.\"}. Report both structured results.",
-      ]);
-      if (mcpProbe.exitCode !== 0) throw new Error(`Codex MCP probe failed: ${mcpProbe.output}`);
+      if (process.env.HERDR_ENV !== "1") throw new Error("Root capability interactive probe must run from a Herdr-managed pane");
+      const split = await command("herdr", ["pane", "split", "--current", "--direction", "right", "--cwd", process.cwd(), "--no-focus"]);
+      if (split.exitCode !== 0) throw new Error(`Herdr probe pane creation failed: ${split.output}`);
+      probePaneId = paneIdFromHerdr(split.output);
+      const name = `rootprobe${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+      const started = await command("herdr", ["agent", "start", name, "--kind", "codex", "--pane", probePaneId, "--timeout", "120000", "--", ...runtimeArgs]);
+      if (started.exitCode !== 0) {
+        const transcript = await command("herdr", ["agent", "read", name, "--source", "visible", "--lines", "80"]);
+        throw new Error(`Herdr interactive Codex startup failed: ${started.output}\n${transcript.output}`);
+      }
+      const prompted = await command("herdr", ["agent", "prompt", name, "Use the forge_root MCP tool twice. First call it with {\"kind\":\"observe\"}. Then call it with {\"kind\":\"delegate_worker\",\"instruction\":\"Inspect the current diff.\"}. Report both structured results.", "--wait", "--timeout", "120000"]);
+      if (prompted.exitCode !== 0) throw new Error(`Herdr interactive Codex MCP probe failed: ${prompted.output}`);
       const calls = await readFile(mcpCalls, "utf8");
       if (!calls.includes('"kind":"observe"') || !calls.includes('"kind":"delegate_worker"'))
         throw new Error("Codex did not discover and call both scoped Forge MCP operations");
-      if (!mcpProbe.output.includes("forge_root")) throw new Error("Codex did not emit a structured forge_root tool event");
     }
     const denied = async (shellCommand: string): Promise<string> => {
       const result = await command("codex", [
@@ -112,6 +143,7 @@ async function main(): Promise<void> {
       ? "Root capability denial probe passed. Repository write, Git commit and push, local-fake GitHub PR creation, and raw Herdr launch were denied.\n"
       : "Root capability probe passed. Native MCP discovery and scoped observe/delegate calls succeeded. Repository write, Git commit and push, local-fake GitHub PR creation, and raw Herdr launch were denied.\n");
   } finally {
+    if (probePaneId) await command("herdr", ["pane", "close", probePaneId]).catch(() => undefined);
     await new Promise<void>((resolve) => fixture.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }

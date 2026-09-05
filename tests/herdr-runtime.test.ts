@@ -8,13 +8,14 @@ const rootCapability = {
   bridgeConfig: { version: 1 as const, root: { taskId: "task_1", sessionId: "session_1", generation: 1 }, server: { command: "node", args: ["/forge/root-bridge.js", "--binding", "/runtime/root.binding.json"] } },
 };
 
-test("Root argv keeps Codex and Claude read-only and gives them only Forge's bridge", () => {
+test("Root argv keeps Codex and Claude read-only and configures Forge's bridge", () => {
   const codex = herdrRuntime("codex").launchArgs({ model: "gpt", reasoningLevel: "high", serviceTier: "default" }, null, false, undefined, rootCapability);
   expect(codex).toEqual(expect.arrayContaining(["--sandbox", "read-only", "--ask-for-approval", "never"]));
-  expect(codex).toEqual(expect.arrayContaining(["--ignore-user-config", "--ignore-rules"]));
-  expect(codex).toEqual(expect.arrayContaining(["mcp_servers={}"]));
   expect(codex.join(" ")).toContain("mcp_servers.forge_root.command");
   expect(codex).toContain('mcp_servers.forge_root.default_tools_approval_mode="approve"');
+  expect(codex).not.toContain("--ignore-user-config");
+  expect(codex).not.toContain("--ignore-rules");
+  expect(codex).not.toContain("mcp_servers={}");
   expect(codex).not.toContain("--dangerously-bypass-approvals-and-sandbox");
 
   const claude = herdrRuntime("claude").launchArgs({ model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" }, "session-1", false, undefined, rootCapability);

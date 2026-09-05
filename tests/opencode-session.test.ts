@@ -98,6 +98,34 @@ function port(input: {
 
 const allowClaim = async () => true;
 
+test.each(["pending", "running"])("a final assistant does not complete a turn with a %s tool", async (status) => {
+  const result = await reconcileOpenCodePrompt(port({ messages: [
+    { info: user, parts: [{ type: "text", text: intent.prompt }] },
+    assistant({ id: "msg_final", created: 4, completed: 6, finish: "stop", parts: [
+      { type: "tool", callID: "call-active", tool: "bash", state: { status, input: {}, title: "active", time: { start: 5 } } },
+    ] }),
+  ] }), intent);
+  expect(result).toMatchObject({ state: "running", reason: "tool_pending_or_running", retry: "forbidden" });
+});
+
+test("a later user does not hide an exact-parent final response", async () => {
+  const result = await reconcileOpenCodePrompt(port({ messages: [
+    { info: user, parts: [{ type: "text", text: intent.prompt }] },
+    { info: { ...user, id: "msg_later_user", time: { created: 4 } }, parts: [{ type: "text", text: "A queued follow-up" }] },
+    assistant({ id: "msg_original_final", parentID: intent.messageID, created: 5, completed: 6, finish: "stop" }),
+  ] }), intent);
+  expect(result).toMatchObject({ state: "completed", assistantMessageID: "msg_original_final", retry: "forbidden" });
+});
+
+test("a final assistant does not hide an unfinished correlated assistant", async () => {
+  const result = await reconcileOpenCodePrompt(port({ messages: [
+    { info: user, parts: [{ type: "text", text: intent.prompt }] },
+    assistant({ id: "msg_unfinished", created: 4 }),
+    assistant({ id: "msg_final", created: 5, completed: 6, finish: "stop" }),
+  ] }), intent);
+  expect(result).toMatchObject({ state: "running", retry: "forbidden" });
+});
+
 test("generated prompt IDs use OpenCode's ascending native message format", () => {
   const first = createOpenCodeMessageID(1_788_576_300_000);
   const second = createOpenCodeMessageID(1_788_576_300_000);

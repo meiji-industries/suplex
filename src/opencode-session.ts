@@ -182,7 +182,7 @@ function correlatedAssistants(messages: readonly OpenCodeMessageEnvelope[], mess
 
   for (const message of history.slice(targetIndex + 1)) {
     if (isAssistantEnvelope(message)) {
-      if (pendingCompactionID !== undefined && message.info.parentID === pendingCompactionID && isCompactionSummary(message)) {
+      if (reason === undefined && pendingCompactionID !== undefined && message.info.parentID === pendingCompactionID && isCompactionSummary(message)) {
         pendingCompactionID = undefined;
         awaitingSynthetic = true;
         continue;
@@ -192,6 +192,7 @@ function correlatedAssistants(messages: readonly OpenCodeMessageEnvelope[], mess
       continue;
     }
 
+    if (reason !== undefined) continue;
     if (isAutoCompactionUser(message) && pendingCompactionID === undefined && !awaitingSynthetic) {
       pendingCompactionID = message.info.id;
       continue;
@@ -202,7 +203,6 @@ function correlatedAssistants(messages: readonly OpenCodeMessageEnvelope[], mess
       continue;
     }
     reason = awaitingSynthetic || pendingCompactionID === undefined ? "later_user_boundary" : "continuation_ambiguous";
-    break;
   }
 
   if (reason === undefined && (pendingCompactionID !== undefined || awaitingSynthetic)) reason = "continuation_ambiguous";
@@ -249,6 +249,9 @@ function classify(
   const last = latest(assistantMessages);
   const activeTool = hasActiveTool(assistantMessages);
   const common = { admission: "observed" as const, retry: "forbidden" as const, assistantMessageIDs, ...(status === undefined ? {} : { status }) };
+  if (activeTool || assistantMessages.some((message) => message.info.time.completed === undefined && !message.info.error)) {
+    return { ...baseObservation(intent, { state: "running", ...common, reason: activeTool ? "tool_pending_or_running" : "assistant_not_terminal" }), ...(last?.info.role === "assistant" ? { assistantMessageID: last.info.id, native: assistantEvidence(last.info) } : {}) };
+  }
   if (last?.info.role === "assistant") {
     const name = errorName(last);
     if (name === "MessageAbortedError") return { ...baseObservation(intent, { state: "interrupted", ...common, reason: "native_abort" }), assistantMessageID: last.info.id, native: assistantEvidence(last.info) };
@@ -257,9 +260,6 @@ function classify(
     if (last.info.time.completed !== undefined && last.info.finish !== "tool-calls") return { ...baseObservation(intent, { state: "terminal_incomplete", ...common, reason: "native_terminal_incomplete" }), assistantMessageID: last.info.id, native: assistantEvidence(last.info) };
   }
   if (correlation.reason) return baseObservation(intent, { state: "unknown", ...common, reason: correlation.reason });
-  if (activeTool) {
-    return { ...baseObservation(intent, { state: "running", ...common, reason: "tool_pending_or_running" }), ...(last?.info.role === "assistant" ? { assistantMessageID: last.info.id, native: assistantEvidence(last.info) } : {}) };
-  }
   const running = status?.type === "busy" || status?.type === "retry";
   return {
     ...baseObservation(intent, { state: running ? "running" : "admitted", ...common, reason: "final_response_not_observed" }),

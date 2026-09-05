@@ -1,9 +1,24 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
-import { readProcessRegistry, stopOwnedProcesses, type OwnedProcess, type ProcessController, type ProcessInspection } from "../src/process-manager.js";
+import { compareProcessIdentity, inspectProcessOnce, readProcessRegistry, stopOwnedProcesses, type OwnedProcess, type ProcessController, type ProcessInspection } from "../src/process-manager.js";
+
+test("process identity survives a change in the observing process locale", async () => {
+  try {
+    vi.stubEnv("LC_ALL", "C");
+    const original = await inspectProcessOnce(process.pid);
+    if (!original) throw new Error("Could not inspect the test process");
+    const owned = { ...original, name: "test", startedAt: original.startTime };
+    vi.stubEnv("LC_ALL", "en_CA.UTF-8");
+    const observed = await inspectProcessOnce(process.pid);
+    expect(observed?.startTime).toBe(original.startTime);
+    expect(compareProcessIdentity(owned, observed).kind).toBe("exact_match");
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
 
 function makeInspection(owned: OwnedProcess): ProcessInspection {
   return {

@@ -3,6 +3,32 @@ import { tmpdir } from "node:os";
 import { expect, test } from "vitest";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
+test.each([1280, 390])("task tabs do not capture page scrolling at %ipx", { timeout: 30_000 }, async width => {
+  const value = await nativeBrowser(width);
+  try {
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Scroll task tabs", description: "Scroll over the tabs to move the page.", startImmediately: false, idempotencyKey: "tab-scroll" });
+    const { page } = value;
+    await page.setViewportSize({ width, height: 600 });
+    await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
+    const row = page.locator("[data-task-work-tabs] > div").first();
+    await row.waitFor();
+    expect(await row.evaluate(element => ({ x: getComputedStyle(element).overflowX, y: getComputedStyle(element).overflowY }))).toEqual({ x: "visible", y: "visible" });
+    const tabs = row.getByRole("tab");
+    expect(await tabs.count()).toBe(5);
+    for (const tab of await tabs.all()) {
+      const bounds = await tab.boundingBox();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    }
+    await row.hover();
+    await page.mouse.wheel(0, 120);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+    expect(await row.evaluate(element => element.scrollTop)).toBe(0);
+    await page.screenshot({ path: join(tmpdir(), `forge-task-tab-scroll-${width}.png`), fullPage: true });
+    expect(value.errors).toEqual([]);
+  } finally { await value.close(); }
+});
+
 test.each([1280, 390])("native task detail supports answers, cancellation and archival at %ipx", { timeout: 90_000 }, async width => {
   const value = await nativeBrowser(width);
   try {

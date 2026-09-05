@@ -31,7 +31,7 @@ function humanMessage(prompt: string): string {
 export function TaskWork({ task, activity }: { task: Task; activity: TaskActivity }) {
   const [tab, setTab] = useState("chat");
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
-    <div className="max-w-full overflow-x-auto border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
+    <div className="max-w-full border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
     <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3" aria-label="Conversation">
       {activity.turns.filter(turn => resultText(turn.result) || humanMessage(turn.prompt)).map(turn => {
         const session = activity.sessions.find(session => session.id === turn.sessionId);

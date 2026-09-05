@@ -18,6 +18,8 @@ export const TaskActivityResponseSchema = z.object({
 });
 
 export const TaskDiffResponseSchema = z.object({ available: z.boolean(), patch: z.string(), truncated: z.boolean() });
+export const TaskAgentStatusSchema = z.enum(["queued", "working", "retrying", "idle", "waiting_human", "stopped", "unknown"]);
+export const TaskAgentsResponseSchema = z.object({ agents: z.array(z.object({ id: z.string(), role: TaskSessionKindSchema, paneId: z.string().nullable(), status: TaskAgentStatusSchema })) });
 export const TaskChecksResponseSchema = z.object({
   available: z.boolean(),
   runs: z.array(z.object({ name: z.string(), status: z.enum(["pending", "failing", "successful"]), url: z.string().nullable() })),

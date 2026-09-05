@@ -48,7 +48,7 @@ const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app
   await app.register(administration, { auth: options.auth, ...(options.profiles ? { profiles: options.profiles } : {}), ...(options.readProviders ? { readProviders: options.readProviders } : {}), ...(options.config ? { config: options.config } : {}), ...(options.projects ? { projects: options.projects } : {}), ...(options.database ? { database: options.database } : {}) });
   if (options.hermes) await app.register(hermesAdministration, { hermes: options.hermes });
   if (options.projects) await app.register(projects, { projects: options.projects });
-  if (options.tasks) await app.register(tasks, { tasks: options.tasks, ...(options.host ? { host: options.host } : {}) });
+  if (options.tasks) await app.register(tasks, { tasks: options.tasks, ...(options.config ? { config: options.config } : {}), ...(options.host ? { host: options.host } : {}) });
   if (options.tasks) await app.register(taskPane, { tasks: options.tasks, ...(options.config ? { config: options.config } : {}) });
   if (options.tasks && options.database) await app.register(taskWorktree, { tasks: options.tasks, database: options.database });
 };

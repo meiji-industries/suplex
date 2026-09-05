@@ -6,6 +6,7 @@ import type { Task } from "../../../task-contracts.js";
 import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 import { TaskStatusIcon, taskStatusLabels } from "./task-status.js";
+import { RecentTaskAgents } from "./recent-task-agents.js";
 
 const pullRequestDots: Readonly<Record<string, string>> = { draft: "bg-amber-500", open: "bg-blue-500", merged: "bg-emerald-500", closed: "bg-rose-500" };
 
@@ -38,5 +39,6 @@ export function RecentTasks({ close }: { close?: () => void }): ReactElement | n
         {task.pullRequest ? <span data-recent-pull-request={task.pullRequest.state} className="relative inline-flex size-4 shrink-0 items-center justify-center" title={`Pull request ${task.pullRequest.state}`}><GitPullRequest aria-hidden="true" className="size-4" /><span aria-hidden="true" className={`absolute bottom-0 right-0 size-1.5 rounded-full ring-2 ring-sidebar ${pullRequestDots[task.pullRequest.state] ?? "bg-muted-foreground"}`} /></span> : null}
       </span>
     </a>} isActive={window.location.pathname === `/tasks/${task.id}`} tooltip={task.title} />
+    <RecentTaskAgents taskId={task.id} />
   </SidebarMenuItem>)}</SidebarMenu></SidebarGroupContent></SidebarGroup>;
 }

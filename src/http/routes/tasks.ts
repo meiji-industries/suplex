@@ -3,17 +3,27 @@ import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 import type { TaskService } from "../../tasks.js";
 import type { TaskHost } from "../../task-host.js";
+import type { ForgeConfig } from "../../config.js";
+import { readTaskAgentStatuses } from "../../task-agent-status.js";
+import { TaskAgentsResponseSchema } from "../contracts/tasks.js";
 import { readTaskChecks, readTaskDiff } from "../../task-inspection.js";
 import { TaskChecksResponseSchema, TaskDiffResponseSchema } from "../contracts/tasks.js";
 import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { MAX_TASK_REQUEST_BYTES, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
 
-export interface TaskRoutesOptions { tasks: TaskService; host?: Pick<TaskHost, "recover"> }
+export interface TaskRoutesOptions { tasks: TaskService; host?: Pick<TaskHost, "recover">; config?: Pick<ForgeConfig, "databasePath"> }
 
-const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host }) => {
+const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, config }) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const taskResponse = { params: TaskIdParamsSchema, response: { 200: TaskResponseSchema } };
   const listQuery = z.object({ archived: z.enum(["true", "false"]).optional() });
+  typed.get("/api/tasks/:taskId/agents", { schema: { params: TaskIdParamsSchema, response: { 200: TaskAgentsResponseSchema, 503: z.object({ error: z.string() }) } } }, async (request, reply) => {
+    const task = tasks.getTask(request.forgeUser.id, request.params.taskId);
+    if (!config) return reply.code(503).send({ error: "Agent status is not available" });
+    const result = await readTaskAgentStatuses(config.databasePath, task, tasks.repository.controls.sessions(task.id));
+    tasks.getTask(request.forgeUser.id, task.id);
+    return reply.header("Cache-Control", "private, no-store").send(result);
+  });
   const wake = (taskId: string): void => { if (host) void host.recover(taskId).catch(error => app.log.warn({ taskId, err: error }, "Task recovery will be retried")); };
   typed.get("/api/tasks", { schema: { querystring: listQuery, response: { 200: TaskListResponseSchema } } }, async request => ({ tasks: tasks.listTasks(request.forgeUser.id, undefined, request.query.archived === "true") }));
   typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, querystring: listQuery, response: { 200: TaskListResponseSchema } } }, async request => ({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId, request.query.archived === "true") }));

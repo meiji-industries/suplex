@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { HerdrClient } from "./herdr-client.js";
 import type { RootIdentity } from "./root-contracts.js";
 import { createGitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
-import { runCommand } from "./command-runner.js";
+import { resolveOpenCodeExecutable } from "./opencode-executable.js";
 import { ensureOpenCodeServer, openCodeAttachCommand, openCodeRoleConfig, openCodeServerClient, readOpenCodeServer, type OpenCodeProfile } from "./opencode-server.js";
 import { reconcileOpenCodePrompt, replayOpenCodePrompt, type OpenCodePromptClaim, type OpenCodePromptIntent, type OpenCodePromptObservation } from "./opencode-session.js";
 
@@ -29,12 +29,7 @@ export class OpenCodeTaskRuntime {
   // identity before permitting any prompt dispatch.
   async ensureSession(scope: OpenCodeTaskScope, nativeSessionId: string | null): Promise<string> {
     const runtimeDirectory = this.runtimeDirectory(scope);
-    let executable = this.executable;
-    if (!executable) {
-      const found = await runCommand({ command: "which", args: ["opencode"], taskId: scope.taskId, stepId: null });
-      executable = found.stdout.trim();
-      if (!executable) throw new Error("OpenCode executable is not configured or on PATH");
-    }
+    const executable = await resolveOpenCodeExecutable(this.executable ? { executable: this.executable } : {});
     let bridge: { command: string; args: string[] } | undefined;
     if (scope.role === "root") {
       await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });

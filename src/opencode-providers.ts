@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { runCommand } from "./command-runner.js";
+import { resolveOpenCodeExecutable } from "./opencode-executable.js";
 import { ensureOpenCodeServer, openCodeProcessAlive, openCodeServerClient, readOpenCodeServer } from "./opencode-server.js";
 import type { ProviderListResponse } from "./http/contracts/providers.js";
 
@@ -11,7 +11,7 @@ export type ReadOpenCodeProviders = () => Promise<ProviderListResponse>;
 // A fresh, session-free server reads current native auth and configuration.
 // Disposing it cannot interrupt a task's server or refresh its credentials.
 export async function readOpenCodeProviders(input: { directory: string; executable?: string }): Promise<ProviderListResponse> {
-  const executable = input.executable ?? (await runCommand({ command: "which", args: ["opencode"], taskId: "system", stepId: null })).stdout.trim();
+  const executable = await resolveOpenCodeExecutable(input);
   const runtimeDirectory = await mkdtemp(join(tmpdir(), "forge-provider-observation-"));
   try {
     const reference = await ensureOpenCodeServer({ runtimeDirectory, executable, directory: input.directory, config: {} });

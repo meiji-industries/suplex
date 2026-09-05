@@ -10,6 +10,8 @@ import type { RootBridgeAdapter } from "./root-bridge.js";
 import type { RootIdentity } from "./root-contracts.js";
 import { TaskControlStore } from "./root-session-store.js";
 import { DeliveryOperations } from "./delivery-operations.js";
+import { developerPaneEnvironment } from "./herdr-session-store.js";
+import { createGitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
 import type { TaskProfile, TaskSession } from "./task-control.js";
 import { observeNativePromptMarker, observeNativeWorkerTurn, type NativeWorkerTurnObservation } from "./root-worker-turn-observation.js";
 
@@ -223,7 +225,7 @@ async function observeWorktree(path: string): Promise<unknown> {
   } catch (error) { return { state: "unknown", error: error instanceof Error ? error.message : "Git observation failed" }; }
 }
 
-export function productionWorkerRuntime(store: TaskControlStore, herdr: Pick<HerdrClient, "splitPane" | "startAgent" | "prompt">): WorkerRuntime {
+export function productionWorkerRuntime(store: TaskControlStore, herdr: Pick<HerdrClient, "splitPane" | "startAgent" | "prompt" | "runPaneCommand" | "waitPaneOutput">, runtimeRoot: string): WorkerRuntime {
   return {
     async launch(input) {
       const root = store.currentSession(input.taskId, "root");
@@ -231,6 +233,11 @@ export function productionWorkerRuntime(store: TaskControlStore, herdr: Pick<Her
       if (!root?.paneId || !control.worktree) throw new Error("worker_launch_context_missing");
       if (control.workerProfile.provider !== "codex" || control.workerProfile.model === "unconfigured") throw new Error("worker_profile_unconfigured");
       const pane = await herdr.splitPane({ paneId: root.paneId, direction: "right", cwd: control.worktree.path, focus: false });
+      const guard = await createGitCommandGuard(runtimeRoot, `root-worker-guard-${input.session.id}`);
+      const gitRealBin = guard.gitRealBin ?? guard.env.FORGE_GIT_REAL_BIN;
+      if (!gitRealBin) throw new Error("worker_git_guard_invalid");
+      await herdr.runPaneCommand(pane.paneId, developerPaneEnvironment({ guardDirectory: guard.directory, gitRealBin, env: withWorktreeMiseTrust(process.env, control.worktree.path) }));
+      await herdr.waitPaneOutput(pane.paneId, guard.directory);
       const name = `forge-${input.taskId.slice(-8)}-w-${input.session.generation}-${input.session.id.slice(-10)}`.slice(0, 32);
       input.persistAttempt({ paneId: pane.paneId, agentName: name });
       const live = await herdr.startAgent({

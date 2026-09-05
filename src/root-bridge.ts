@@ -1,5 +1,6 @@
 import { createInterface, type Interface } from "node:readline";
 import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
@@ -133,7 +134,7 @@ async function runRootBridge(): Promise<void> {
   const database = new ForgeDatabase(config.databasePath, { migrate: false });
   const herdr = new CliHerdrClient();
   const store = new TaskControlStore(database);
-  const controller = new RootController(store, herdr, productionWorkerRuntime(store, herdr));
+  const controller = new RootController(store, herdr, productionWorkerRuntime(store, herdr, join(dirname(config.databasePath), "runtime")));
   startRootBridgeTransport({ bridge: new RootBridge(config.root, controller), stdin: process.stdin, stdout: process.stdout });
 }
 

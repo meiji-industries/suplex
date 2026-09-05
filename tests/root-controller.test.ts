@@ -204,11 +204,13 @@ test("prompt response adopts a native Worker session after startAgent had none",
     runtimeSnapshot: async () => ({ agents: [{ name: "root", paneId: "root-pane", status: "working" }, { name: "worker", paneId: "worker-pane", agentSession: "native-worker", status: "done" }], panes: [] }),
     readAgent: async () => "",
     splitPane: async () => ({ paneId: "worker-pane" }),
+    runPaneCommand: async () => {},
+    waitPaneOutput: async () => {},
     startAgent: async () => ({ name: "worker", paneId: "worker-pane" }),
     prompt: async (name: string, prompt: string) => { prompts.push(`${name}:${prompt}`); return { name, paneId: name === "worker" ? "worker-pane" : "root-pane", ...(name === "worker" ? { agentSession: "native-worker" } : {}) }; },
   };
   try {
-    const controller = new RootController(value.store, herdr, productionWorkerRuntime(value.store, herdr));
+    const controller = new RootController(value.store, herdr, productionWorkerRuntime(value.store, herdr, value.root));
     await controller.delegateWorker({ taskId: "task", sessionId: root.id, generation: root.generation }, "Change one file.");
     const worker = value.store.currentSession("task", "worker")!;
     expect(worker.nativeSessionId).toBe("native-worker");

@@ -53,15 +53,18 @@ test("stale engine activities are ignored after two minutes", async () => {
 
 test("engine startup removes activity rows left by a stopped worker", async () => {
   const harness = await createEngineHarness();
+  const scheduled: Array<{ milliseconds: number; operation: () => Promise<unknown> | unknown }> = [];
   try {
     const startedAt = new Date(Date.now() - 1_000).toISOString();
     harness.database.authQuery((db) => db.prepare("INSERT INTO forge_engine_activities (id, workflow_id, activity, started_at, heartbeat_at) VALUES (?, ?, ?, ?, ?)").run("recent-orphan", "workflow-recent", "runCiRepair", startedAt, startedAt));
     const engine = await startEngineHost(harness.config, harness.database, {
       herdr: { runtimeSnapshot: async () => { throw new Error("Herdr is unavailable in this unit test"); } } as never,
       loadRuns: async () => 0,
-      schedule: () => undefined,
+      schedule: (milliseconds, operation) => { scheduled.push({ milliseconds, operation }); },
     });
     expect(harness.database.authQuery((db) => (db.prepare("SELECT count(*) AS count FROM forge_engine_activities").get() as { count: number }).count)).toBe(0);
+    expect(scheduled.filter((entry) => entry.milliseconds === 15_000)).toHaveLength(2);
+    for (const entry of scheduled.filter((entry) => entry.milliseconds === 15_000)) await entry.operation();
     engine.dispose();
   } finally {
     await harness.stop();

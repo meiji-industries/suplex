@@ -106,7 +106,7 @@ export async function startEngineHost(config: ForgeConfig, database = new ForgeD
   const rebuiltProjections = await rebuildDriftedIssueProjections(database, config);
   logger.info(`Rebuilt ${rebuiltProjections} drifted issue projections`);
   await failOrphanedExecutionsFromHerdr(database, options.herdr ?? new CliHerdrClient(), logger);
-  await recoverTaskControls(database, options.herdr ?? new CliHerdrClient());
+  await recoverTaskControls(database, options.herdr ?? new CliHerdrClient()).catch((error: unknown) => logScheduledReconciliationFailure(errorLogger, error));
   const engine = new IssueEngine(config, database); installIssueEngine(config, engine); await (options.loadRuns ?? loadIssueRuns)(engine);
   const workerId = `${runtimeIdentifiers(config.installationId).workerPrefix}-${process.pid}`;
   const registration = { workerId, taskQueue: runtimeIdentifiers(config.installationId).taskQueue, buildId: runtimeIdentifiers(config.installationId).buildId };
@@ -115,6 +115,7 @@ export async function startEngineHost(config: ForgeConfig, database = new ForgeD
   const schedule = options.schedule ?? ((milliseconds: number, operation: () => Promise<unknown> | unknown): void => { const run = createNonOverlappingRunner(operation, (error) => logScheduledReconciliationFailure(errorLogger, error)); void run(); const timer = setInterval(() => void run(), milliseconds); timer.unref(); });
   // The health page treats a worker whose heartbeat is older than its max age as unavailable.
   schedule(15_000, () => database.registerWorker(registration));
+  schedule(15_000, () => recoverTaskControls(database, options.herdr ?? new CliHerdrClient()));
   schedule(60_000, () => reconcile(database, config, engine, { herdr: options.herdr, logger: errorLogger }));
   return engine;
 }

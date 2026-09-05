@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { ForgeDatabase } from "./database.js";
+import type { PullRequestReference } from "./task-control.js";
 import { DeliveryIntentSchema, PullRequestReferenceSchema, TaskControlStatusSchema, TaskProfileSchema, TaskSessionKindSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, WorktreeReferenceSchema, type DeliveryIntent, type TaskControl, type TaskProfile, type TaskSession, type TaskSessionKind, type TaskTurn, type WorktreeReference } from "./task-control.js";
 
 const now = (): string => new Date().toISOString();
@@ -42,13 +43,13 @@ export class TaskControlStore {
     if (changed !== 1) throw new Error("task_not_active");
     return this.get(taskId);
   }
-  setPullRequest(taskId: string, pullRequest: import("./task-control.js").PullRequestReference): TaskControl {
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET pull_request_json = ?, updated_at = ? WHERE task_id = ? AND status IN ('active', 'delivered')").run(JSON.stringify(PullRequestReferenceSchema.parse(pullRequest)), now(), taskId).changes);
+  setPullRequest(taskId: string, pullRequest: PullRequestReference): TaskControl {
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET pull_request_json = ?, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(JSON.stringify(PullRequestReferenceSchema.parse(pullRequest)), now(), taskId).changes);
     if (changed !== 1) throw new Error("task_not_active");
     return this.get(taskId);
   }
   markDelivered(taskId: string): TaskControl {
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET status = 'delivered', wake_at = NULL, human_question = NULL, updated_at = ? WHERE task_id = ? AND status = 'active'").run(now(), taskId).changes);
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET status = 'delivered', wake_at = NULL, human_question = NULL, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(now(), taskId).changes);
     if (changed !== 1) throw new Error("task_not_active");
     return this.get(taskId);
   }

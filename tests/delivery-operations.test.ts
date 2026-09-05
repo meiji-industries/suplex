@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -11,8 +9,9 @@ import { DeliveryOperations } from "../src/delivery-operations.js";
 import type { GithubReleasePort, GithubPullRequest, GithubPullRequestObservation, LocalRevision } from "../src/github-release.js";
 import { RootController } from "../src/root-controller.js";
 import { TaskControlStore } from "../src/root-session-store.js";
+import { runCommand } from "../src/command-runner.js";
 
-const run = promisify(execFile);
+const run = (command: string, args: string[]) => runCommand({ command, args, taskId: null, stepId: null });
 const cleanup: string[] = [];
 
 async function revision(cwd: string): Promise<LocalRevision> {
@@ -64,6 +63,59 @@ afterEach(async () => {
 });
 
 describe("Root delivery operations", () => {
+  it.each(["pull_request_draft", "pull_request_ready"])("adopts an existing ready PR for the %s target", async (target) => {
+    const value = await fixture();
+    const fake = github(value.local);
+    value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET delivery_target = ?, worktree_json = NULL WHERE task_id = 'task'").run(target));
+    await new DeliveryOperations(value.store, fake.port).observe("task");
+    expect(value.store.get("task").status).toBe("delivered");
+    expect(fake.calls).not.toContain("inspect");
+  });
+
+  it("does not resume a cancelled task when GitHub changes", async () => {
+    const value = await fixture();
+    const fake = github(value.local);
+    value.store.cancel("task");
+    await new DeliveryOperations(value.store, fake.port).observe("task");
+    expect(value.store.get("task").status).toBe("cancelled");
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("does not treat a draft as a ready pull request", async () => {
+    const value = await fixture();
+    const fake = github(value.local);
+    const list = fake.port.listPullRequests;
+    fake.port.listPullRequests = async (input) => (await list(input)).map((pull) => ({ ...pull, isDraft: true }));
+    value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET delivery_target = 'pull_request_ready' WHERE task_id = 'task'").run());
+    await new DeliveryOperations(value.store, fake.port).observe("task");
+    expect(value.store.get("task").status).toBe("active");
+  });
+
+  it("does not push a branch outside the immutable task intent", async () => {
+    const value = await fixture();
+    const fake = github(value.local);
+    fake.port.inspectLocalRevision = async () => ({ ...value.local, branch: "unrelated-work" });
+    fake.port.getBranchHead = async () => null;
+    const delivery = new DeliveryOperations(value.store, fake.port);
+    await expect(delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch")).rejects.toMatchObject({ code: "head_diverged" });
+    expect(fake.calls).not.toContain("push");
+  });
+
+  it("adopts an external merge while waiting for a human without inspecting the worktree", async () => {
+    const value = await fixture();
+    const fake = github(value.local);
+    fake.port.getPullRequest = async () => ({ number: 7, url: "https://github.com/owner/repo/pull/7", repository: "owner/repo", headBranch: value.local.branch, baseBranch: "main", headSha: value.local.headSha, baseSha: "base", isDraft: false, state: "merged", mergedAt: new Date().toISOString() });
+    value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 7), worktree_json = NULL WHERE task_id = 'task'").run());
+    value.store.askHuman("task", "Resolve the branch manually");
+    const delivery = new DeliveryOperations(value.store, fake.port);
+    await delivery.observe("task");
+    expect(value.store.get("task")).toMatchObject({ status: "delivered", humanQuestion: null, pullRequest: { number: 7, state: "merged" } });
+    expect(fake.calls).not.toContain("inspect");
+    expect(fake.calls).not.toContain("merge");
+    await delivery.observe("task");
+    expect(value.store.get("task").status).toBe("delivered");
+  });
+
   it("uses no review receipt, rechecks the expected head, and adopts a known external merge without a worktree", async () => {
     const value = await fixture();
     const fake = github(value.local);

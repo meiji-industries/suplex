@@ -1,6 +1,7 @@
 import type { ForgeDatabase } from "./database.js";
 import { RootController, productionRootRuntime } from "./root-controller.js";
 import { TaskControlStore } from "./root-session-store.js";
+import { DeliveryOperations } from "./delivery-operations.js";
 import {
   CliHerdrClient,
   snapshotHerdrRuntime,
@@ -190,9 +191,23 @@ export async function reconcileHerdrSessions(
 
 /** Recover Root-owned tasks separately from the legacy role-session subsystem. */
 export async function recoverTaskControls(database: ForgeDatabase, herdr: HerdrClient = new CliHerdrClient()): Promise<number> {
-  const taskIds = database.authQuery((db) => db.prepare("SELECT task_id FROM forge_task_controls WHERE status = 'active'").all() as Array<{ task_id: string }>);
+  const taskIds = database.authQuery((db) => db.prepare("SELECT task_id FROM forge_task_controls WHERE status IN ('active', 'waiting_human')").all() as Array<{ task_id: string }>);
   const store = new TaskControlStore(database);
   const controller = new RootController(store, herdr, undefined, productionRootRuntime(database.filename(), store, herdr));
-  for (const row of taskIds) await controller.recover(row.task_id);
+  const delivery = new DeliveryOperations(store);
+  const failures: unknown[] = [];
+  for (const row of taskIds) {
+    try {
+      await delivery.observe(row.task_id);
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      if (store.get(row.task_id).status === "active") await controller.recover(row.task_id);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, "Some task controls could not be recovered");
   return taskIds.length;
 }

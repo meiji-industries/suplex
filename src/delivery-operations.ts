@@ -3,7 +3,7 @@ import type { RootIdentity } from "./root-contracts.js";
 import type { GithubReleasePort, GithubPullRequest, GithubPullRequestObservation } from "./github-release.js";
 import { createGithubReleasePort } from "./github-release.js";
 import type { PullRequestReference, TaskControl } from "./task-control.js";
-import { TaskControlStore } from "./root-session-store.js";
+import type { TaskControlStore } from "./root-session-store.js";
 
 export class DeliveryOperationFailure extends Error {
   constructor(readonly code: "worktree_missing" | "pull_request_ambiguous" | "pull_request_closed" | "head_diverged" | "approval_missing" | "checks_pending" | "checks_failed", message: string) {
@@ -24,13 +24,21 @@ function currentPull(repository: string, observed: GithubPullRequestObservation)
 export class DeliveryOperations {
   constructor(private readonly store: TaskControlStore, private readonly github: GithubReleasePort = createGithubReleasePort()) {}
 
+  async observe(taskId: string): Promise<PullRequestReference | null> {
+    const control = this.store.get(taskId);
+    if (control.status === "cancelled" || control.status === "delivered") return control.pullRequest;
+    return this.observeKnownPull(control);
+  }
+
   async execute(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string): Promise<unknown> {
     this.store.assertCurrentRoot(root);
     const control = this.store.get(root.taskId);
     const known = await this.observeKnownPull(control);
+    if (this.store.get(root.taskId).status === "delivered") return known;
     if (known?.state === "merged") return this.completeIfTargetMatches(control, known);
     if (!control.worktree) throw new DeliveryOperationFailure("worktree_missing", "Forge has no observed worktree for this task");
     const local = await this.github.inspectLocalRevision({ cwd: control.worktree.path });
+    if (local.branch !== control.deliveryIntent.headBranch) throw new DeliveryOperationFailure("head_diverged", "The worktree branch does not match this task intent");
     this.store.setWorktree(root.taskId, { ...control.worktree, branch: local.branch, headSha: local.headSha, dirty: !local.clean });
     const refreshed = this.store.get(root.taskId);
     const repository = refreshed.deliveryIntent.repository;
@@ -71,8 +79,7 @@ export class DeliveryOperations {
   private adoptKnownPull(control: TaskControl, pull: GithubPullRequest): PullRequestReference {
     if (pull.repository !== control.deliveryIntent.repository || pull.headBranch !== control.deliveryIntent.headBranch || pull.baseBranch !== control.deliveryIntent.baseBranch) throw new DeliveryOperationFailure("pull_request_ambiguous", "The stored pull request no longer matches this task intent");
     const result = reference(pull);
-    this.store.setPullRequest(control.taskId, result);
-    return result;
+    return this.completeIfTargetMatches(control, result, pull.isDraft);
   }
 
   private async observePull(control: TaskControl, repository: string, branch: string): Promise<PullRequestReference | null> {
@@ -103,8 +110,7 @@ export class DeliveryOperations {
     if (candidates.length > 1) throw new DeliveryOperationFailure("pull_request_ambiguous", "GitHub returned more than one matching pull request");
     const created = candidates[0] ?? await this.github.createDraftPullRequest({ repository, owner: repository.split("/")[0]!, headBranch: local.branch, baseBranch: control.deliveryIntent.baseBranch, title: control.objective.slice(0, 120), body: control.objective });
     const result = reference(created);
-    this.store.setPullRequest(control.taskId, result);
-    return result;
+    return this.completeIfTargetMatches(control, result, created.isDraft);
   }
 
   private async checks(control: TaskControl, repository: string, branch: string): Promise<GithubPullRequestObservation> {
@@ -140,9 +146,12 @@ export class DeliveryOperations {
     return this.completeIfTargetMatches(control, reference(final));
   }
 
-  private completeIfTargetMatches(control: TaskControl, pull: PullRequestReference): PullRequestReference {
+  private completeIfTargetMatches(control: TaskControl, pull: PullRequestReference, isDraft?: boolean): PullRequestReference {
     this.store.setPullRequest(control.taskId, pull);
-    if (control.deliveryTarget === "merged" && pull.state === "merged") this.store.markDelivered(control.taskId);
+    const reached = pull.state === "merged"
+      || pull.state === "open" && (control.deliveryTarget === "pull_request_draft"
+        || control.deliveryTarget === "pull_request_ready" && isDraft === false);
+    if (reached) this.store.markDelivered(control.taskId);
     return pull;
   }
 }

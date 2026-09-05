@@ -1,6 +1,6 @@
 import type { DeliveryOperation } from "./root-contracts.js";
 import type { RootIdentity } from "./root-contracts.js";
-import type { GithubReleasePort, GithubPullRequest, GithubPullRequestObservation } from "./github-release.js";
+import type { GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation } from "./github-release.js";
 import { createGithubReleasePort } from "./github-release.js";
 import type { PullRequestReference, TaskControl } from "./task-control.js";
 import type { TaskControlStore } from "./root-session-store.js";
@@ -12,6 +12,12 @@ export class DeliveryOperationFailure extends Error {
   }
 }
 
+export type DeliveryGithubPort = Required<Pick<GithubReleaseAdapter,
+  "getRemoteRepository" | "getBranchHead" | "inspectLocalRevision" | "pushNormal" |
+  "listPullRequests" | "createDraftPullRequest" | "getPullRequest" |
+  "observePullRequest" | "markReadyForReview" | "mergePullRequest"
+>>;
+
 function reference(pull: GithubPullRequest): PullRequestReference {
   return { repository: pull.repository, number: pull.number, url: pull.url, headSha: pull.headSha, state: pull.state, mergedAt: pull.mergedAt };
 }
@@ -22,7 +28,7 @@ function currentPull(repository: string, observed: GithubPullRequestObservation)
 }
 
 export class DeliveryOperations {
-  constructor(private readonly store: TaskControlStore, private readonly github: GithubReleasePort = createGithubReleasePort()) {}
+  constructor(private readonly store: TaskControlStore, private readonly github: DeliveryGithubPort = createGithubReleasePort()) {}
 
   async observe(taskId: string): Promise<PullRequestReference | null> {
     const control = this.store.get(taskId);
@@ -83,8 +89,8 @@ export class DeliveryOperations {
   }
 
   private async observePull(control: TaskControl, repository: string, branch: string): Promise<PullRequestReference | null> {
-    const observed = await this.github.observePullRequest?.({ repository, branch, ...(control.pullRequest ? { pullRequestNumber: control.pullRequest.number } : {}) });
-    const pull = currentPull(repository, observed ?? { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, checks: { total: 0, pending: 0, failing: 0, successful: 0 }, autoMergeEnabled: null, reviewDecision: null });
+    const observed = await this.github.observePullRequest({ repository, branch, ...(control.pullRequest ? { pullRequestNumber: control.pullRequest.number } : {}) });
+    const pull = currentPull(repository, observed);
     if (pull) this.store.setPullRequest(control.taskId, pull);
     return pull;
   }
@@ -114,8 +120,8 @@ export class DeliveryOperations {
   }
 
   private async checks(control: TaskControl, repository: string, branch: string): Promise<GithubPullRequestObservation> {
-    const observed = await this.github.observePullRequest?.({ repository, branch, ...(control.pullRequest ? { pullRequestNumber: control.pullRequest.number } : {}) });
-    if (!observed?.exists) throw new DeliveryOperationFailure("pull_request_closed", "GitHub did not return the pull request");
+    const observed = await this.github.observePullRequest({ repository, branch, ...(control.pullRequest ? { pullRequestNumber: control.pullRequest.number } : {}) });
+    if (!observed.exists) throw new DeliveryOperationFailure("pull_request_closed", "GitHub did not return the pull request");
     return observed;
   }
 
@@ -130,7 +136,12 @@ export class DeliveryOperations {
     const observed = await this.checks(control, repository, branch);
     if (observed.headSha !== control.worktree!.headSha) throw new DeliveryOperationFailure("head_diverged", "GitHub returned a pull request for another head");
     if (!expectedHead || expectedHead !== observed.headSha) throw new DeliveryOperationFailure("head_diverged", "The Root must review the current observed pull request head before requesting merge");
-    return observed;
+    if (observed.state !== "open" || observed.number === null) throw new DeliveryOperationFailure("pull_request_closed", "The pull request is not open for review");
+    await this.github.markReadyForReview({ repository, number: observed.number });
+    const final = await this.github.getPullRequest({ repository, number: observed.number });
+    if (final.headSha !== expectedHead) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed while requesting review");
+    this.adoptKnownPull(control, final);
+    return this.checks(this.store.get(control.taskId), repository, branch);
   }
 
   private async merge(control: TaskControl, repository: string, branch: string, expectedHead?: string): Promise<unknown> {
@@ -138,9 +149,7 @@ export class DeliveryOperations {
     if (observed.state === "merged") return this.completeIfTargetMatches(control, currentPull(repository, observed)!);
     if (observed.headSha !== control.worktree!.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed after review");
     if (!expectedHead || expectedHead !== observed.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed after the Root reviewed it");
-    if (observed.checks.pending > 0) throw new DeliveryOperationFailure("checks_pending", "GitHub checks are still running");
-    if (observed.checks.failing > 0) throw new DeliveryOperationFailure("checks_failed", "GitHub checks failed for the current pull request head");
-    await this.github.mergePullRequest?.({ repository, number: observed.number!, headSha: observed.headSha! });
+    await this.github.mergePullRequest({ repository, number: observed.number!, headSha: observed.headSha! });
     const final = await this.github.getPullRequest({ repository, number: observed.number! });
     if (final.state !== "merged") return reference(final);
     return this.completeIfTargetMatches(control, reference(final));

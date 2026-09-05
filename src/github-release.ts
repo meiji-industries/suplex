@@ -320,7 +320,7 @@ const defaultRunner: GithubCommandRunner = async ({ command, args, cwd, timeout,
   }
 };
 
-export function createGithubReleasePort(options: GithubReleasePortOptions = {}): GithubReleaseAdapter {
+export function createGithubReleasePort(options: GithubReleasePortOptions = {}): Required<GithubReleaseAdapter> {
   const ghCommand = options.ghCommand ?? process.env.FORGE_GH_COMMAND ?? "gh";
   const gitCommand = options.gitCommand ?? "git";
   const runner = options.runner ?? (options.taskId && options.stepId
@@ -427,14 +427,14 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       try { value = parseJson((await runGh(["pr", "list", "--repo", input.repository, "--head", input.headBranch, "--state", "all", "--limit", "100", "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid"])).stdout); } catch (error) { throw error instanceof GithubReleaseFailure ? error : classifyCommandFailure(error, "pull request list"); }
       const rows = PullListResponseSchema.safeParse(value);
       if (!rows.success) throw providerFailure("invalid-provider-response", "GitHub pull request list could not be parsed");
-      return rows.data.map((row) => ({ number: row.number, url: row.url, repository: normalizeRepository(input.repository), headBranch: row.headRefName, baseBranch: row.baseRefName, headSha: row.headRefOid, baseSha: row.baseRefOid, isDraft: row.isDraft, state: row.state.toLowerCase() as GithubPullRequest["state"], mergedAt: null, title: row.title, body: row.body, author: row.author?.login ?? "", updatedAt: row.updatedAt, isCrossRepository: row.isCrossRepository }));
+      return rows.data.map((row) => ({ number: row.number, url: row.url, repository: normalizeRepository(input.repository), headBranch: row.headRefName, baseBranch: row.baseRefName, headSha: row.headRefOid, baseSha: row.baseRefOid, isDraft: row.isDraft, state: row.state.toLowerCase() as GithubPullRequest["state"], mergedAt: null, title: row.title, body: row.body, author: row.author?.login ?? "", ...(row.updatedAt === undefined ? {} : { updatedAt: row.updatedAt }), isCrossRepository: row.isCrossRepository }));
     },
     async listOpenPullRequests(input) {
       let value: unknown;
       try { value = parseJson((await runGh(["pr", "list", "--repo", input.repository, "--state", "open", "--limit", String(Math.min(100, Math.max(1, input.limit))), "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid,title,body,author,updatedAt,isCrossRepository"])).stdout); } catch (error) { throw error instanceof GithubReleaseFailure ? error : classifyCommandFailure(error, "pull request list"); }
       const rows = PullListResponseSchema.safeParse(value);
       if (!rows.success) throw providerFailure("invalid-provider-response", "GitHub pull request list could not be parsed");
-      return rows.data.map((row) => ({ number: row.number, url: row.url, repository: normalizeRepository(input.repository), headBranch: row.headRefName, baseBranch: row.baseRefName, headSha: row.headRefOid, baseSha: row.baseRefOid, isDraft: row.isDraft, state: row.state.toLowerCase() as GithubPullRequest["state"], mergedAt: null, title: row.title, body: row.body, author: row.author?.login ?? "", updatedAt: row.updatedAt, isCrossRepository: row.isCrossRepository }));
+      return rows.data.map((row) => ({ number: row.number, url: row.url, repository: normalizeRepository(input.repository), headBranch: row.headRefName, baseBranch: row.baseRefName, headSha: row.headRefOid, baseSha: row.baseRefOid, isDraft: row.isDraft, state: row.state.toLowerCase() as GithubPullRequest["state"], mergedAt: null, title: row.title, body: row.body, author: row.author?.login ?? "", ...(row.updatedAt === undefined ? {} : { updatedAt: row.updatedAt }), isCrossRepository: row.isCrossRepository }));
     },
     async createDraftPullRequest(input) {
       const value = await api(["api", "--method", "POST", `repos/${input.repository}/pulls`, "-f", `title=${input.title}`, "-f", `head=${input.headBranch}`, "-f", `base=${input.baseBranch}`, "-f", `body=${input.body}`, "-F", "draft=true"], "draft pull request creation", false, `Branch ${input.headBranch} is not on GitHub yet`);
@@ -483,7 +483,7 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       const method = repo.allow_squash_merge !== false ? "--squash" : repo.allow_merge_commit !== false ? "--merge" : "--rebase";
       try { await runGh(["pr", "merge", String(input.number), "--repo", input.repository, "--auto", method, "--match-head-commit", input.headSha]); } catch (error) { throw classifyCommandFailure(error, "enable auto-merge"); }
     },
-  } as GithubReleasePort & GithubAcceptancePort;
+  };
 }
 
 function truncateUtf8(value: string, byteLimit: number): string {

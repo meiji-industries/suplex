@@ -33,12 +33,13 @@ test.each([1280, 390])("native task creation preserves start intent and role cho
       await page.getByRole("option", { name: /Worker · openai/ }).waitFor();
       expect(await page.getByRole("option", { name: /Root ·/ }).count()).toBe(0);
       await page.getByRole("option", { name: "Project default", exact: true }).click();
-      await dialog.getByLabel("Title", { exact: true }).fill(`Task ${immediate}`);
-      await dialog.getByLabel("Description", { exact: true }).fill("Use the native Root and Worker");
+      await dialog.getByLabel("Task title", { exact: true }).fill(`Task ${immediate}`);
+      await dialog.getByLabel("Task description", { exact: true }).fill("Use the native Root and Worker");
       await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).setChecked(immediate);
       await page.screenshot({ path: join(tmpdir(), `forge-native-create-${width}-${immediate}.png`) });
       const response = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/api/companies/${value.company.id}/tasks`));
-      await dialog.getByRole("button", { name: "Create task", exact: true }).click();
+      if (immediate) await dialog.getByLabel("Task description", { exact: true }).press("Control+Enter");
+      else await dialog.getByRole("button", { name: "Create task", exact: true }).click();
       const created = await response;
       expect(created.status(), await created.text()).toBe(201);
       const task = TaskSchema.parse(await created.json());

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
+import { ChevronDown, FileText, FolderKanban } from "lucide-react";
 import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../../task-contracts.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate } from "../../lib/view-shared.js";
 import { readJson } from "../../lib/api.js";
@@ -10,22 +11,28 @@ import { Textarea } from "../ui/textarea.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.js";
 import { InlineAttachmentPicker } from "../ui/inline-attachment-picker.js";
 import { Alert, AlertDescription } from "../ui/alert.js";
+import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar.js";
+import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbSeparator } from "../ui/breadcrumb.js";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
+import { RadioGroup, RadioGroupItem } from "../ui/radio-group.js";
 import { TaskSourcePicker, prefillForTaskSource, type TaskSourceSelector, type TaskSourceSummary } from "./task-source-picker.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
+import { readNewTaskMemory, writeNewTaskMemory } from "./new-task-memory.js";
 
 export function NewTaskDialog({ open, onOpenChange, companyId, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; companyId: string; onCreated: (task: Task) => void }): ReactElement {
+  const [remembered] = useState(readNewTaskMemory);
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   const [templates, setTemplates] = useState<ApiTaskTemplate[]>([]);
-  const [projectId, setProjectId] = useState("");
+  const [projectId, setProjectId] = useState(remembered.projectId ?? "");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [rootProfileId, setRootProfileId] = useState("");
-  const [workerProfileId, setWorkerProfileId] = useState("");
-  const [startImmediately, setStartImmediately] = useState(true);
-  const [deliveryTarget, setDeliveryTarget] = useState<NonNullable<TaskInput["deliveryTarget"]>>("pull_request_draft");
-  const [runProjectTests, setRunProjectTests] = useState(true);
-  const [visualEvidence, setVisualEvidence] = useState<NonNullable<TaskInput["visualEvidence"]>>("off");
+  const [rootProfileId, setRootProfileId] = useState(remembered.rootProfileId ?? "");
+  const [workerProfileId, setWorkerProfileId] = useState(remembered.workerProfileId ?? "");
+  const [startImmediately, setStartImmediately] = useState(remembered.startImmediately ?? true);
+  const [deliveryTarget, setDeliveryTarget] = useState<NonNullable<TaskInput["deliveryTarget"]>>(remembered.deliveryTarget ?? "pull_request_draft");
+  const [runProjectTests, setRunProjectTests] = useState(remembered.runProjectTests ?? true);
+  const [visualEvidence, setVisualEvidence] = useState<NonNullable<TaskInput["visualEvidence"]>>(remembered.visualEvidence ?? "off");
   const [source, setSource] = useState<TaskSourceSelector>();
   const [sourceSummary, setSourceSummary] = useState<TaskSourceSummary>();
   const [images, setImages] = useState<NonNullable<TaskInput["images"]>>([]);
@@ -44,6 +51,8 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated }: { op
     void Promise.all([readJson<{ projects: ApiProject[] }>(`/api/companies/${companyId}/projects`), readJson<{ profiles: ApiProfile[] }>("/api/profiles")]).then(([projectResult, profileResult]) => {
       if (cancelled) return;
       setProjects(projectResult.projects); setProfiles(profileResult.profiles);
+      setRootProfileId(current => profileResult.profiles.some(profile => profile.id === current && profile.role === "root") ? current : "");
+      setWorkerProfileId(current => profileResult.profiles.some(profile => profile.id === current && profile.role === "worker") ? current : "");
       setProjectId(current => projectResult.projects.some(project => project.id === current) ? current : projectResult.projects[0]?.id ?? "");
     }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : "Task settings are not available"); });
     return () => { cancelled = true; };
@@ -56,13 +65,14 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated }: { op
     return () => { cancelled = true; };
   }, [projectId, open]);
   const submit = async () => {
-    if (busy || imageRead.current.pending) return;
+    if (busy || imageRead.current.pending || !projectId || !title.trim() || !description.trim()) return;
     setBusy(true); setError("");
     try {
       const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(source ? { source } : {}) };
       const serialized = JSON.stringify(body);
       if (request.current?.body !== serialized) request.current = { body: serialized, key: crypto.randomUUID() };
       const task = await readJson<Task>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ ...body, idempotencyKey: request.current.key }) });
+      writeNewTaskMemory({ projectId, rootProfileId: rootProfileId || undefined, workerProfileId: workerProfileId || undefined, startImmediately, deliveryTarget, runProjectTests, visualEvidence });
       request.current = null;
       setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined);
       onCreated(task);
@@ -86,23 +96,39 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated }: { op
     } catch (error) { if (imageRead.current.generation === generation) setError(error instanceof Error ? error.message : "The image is not valid"); }
     finally { if (imageRead.current.generation === generation) { imageRead.current.pending = false; setReadingImages(false); } }
   };
-  return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}><DialogContent><DialogHeader><DialogTitle>Create task</DialogTitle></DialogHeader>
-    <form className="grid gap-3" onSubmit={event => { event.preventDefault(); void submit(); }}>
-      <div className="grid max-h-[60dvh] gap-3 overflow-y-auto">
-      {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-      <label className="grid gap-1 text-xs">Project<Select value={projectId} onValueChange={value => { setProjectId(value ?? ""); setSource(undefined); setSourceSummary(undefined); }}><SelectTrigger aria-label="Project"><SelectValue /></SelectTrigger><SelectContent>{projects.map(project => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select></label>
-      {templates.length ? <Select onValueChange={id => { const template = templates.find(template => template.id === id); if (!template) return; setDescription(template.description); setRootProfileId(template.rootProfileId ?? ""); setWorkerProfileId(template.workerProfileId ?? ""); setDeliveryTarget(template.deliveryTarget); setRunProjectTests(template.runProjectTests); setVisualEvidence(template.visualEvidence); }}><SelectTrigger aria-label="Template"><SelectValue placeholder="Select a template" /></SelectTrigger><SelectContent>{templates.map(template => <SelectItem key={template.id} value={template.id}>{template.name}</SelectItem>)}</SelectContent></Select> : null}
-      <TaskSourcePicker projectId={projectId} value={sourceSummary} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
-      <label className="grid gap-1 text-xs">Title<Input aria-label="Title" value={title} onChange={event => setTitle(event.target.value)} required /></label>
-      <label className="grid gap-1 text-xs">Description<Textarea aria-label="Description" value={description} rows={5} onChange={event => setDescription(event.target.value)} required /></label>
-      <InlineAttachmentPicker attachments={images.map((image, index) => ({ id: String(index), filename: image.filename }))} onSelect={addImages} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} />
-      <div className="grid gap-3 sm:grid-cols-2">{([{ role: "Root", value: rootProfileId, change: setRootProfileId }, { role: "Worker", value: workerProfileId, change: setWorkerProfileId }]).map(field => <label key={field.role} className="grid gap-1 text-xs">{field.role}<Select value={field.value || "default"} onValueChange={value => field.change(value === "default" ? "" : value ?? "")}><SelectTrigger aria-label={`${field.role} profile`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Project default</SelectItem>{profiles.filter(profile => profile.role === field.role.toLowerCase()).map(profile => <SelectItem key={profile.id} value={profile.id}>{profile.name} · {profile.provider}/{profile.model}</SelectItem>)}</SelectContent></Select></label>)}</div>
-      <label className="grid gap-1 text-xs">Delivery target<Select value={deliveryTarget} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))}><SelectTrigger aria-label="Delivery target"><SelectValue /></SelectTrigger><SelectContent>{taskDeliveryTargetOptions.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></label>
-      <label className="grid gap-1 text-xs">Browser evidence<Select value={visualEvidence} onValueChange={value => setVisualEvidence(VisualEvidenceSchema.parse(value))}><SelectTrigger aria-label="Browser evidence"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="off">Off</SelectItem><SelectItem value="capture">Capture</SelectItem><SelectItem value="required">Necessary</SelectItem></SelectContent></Select></label>
-      <label className="flex items-center gap-2 text-sm"><Checkbox checked={runProjectTests} onCheckedChange={value => setRunProjectTests(value === true)} />Run project tests</label>
-      </div>
-      <label className="flex items-center gap-2 text-sm"><Checkbox checked={startImmediately} onCheckedChange={value => setStartImmediately(value === true)} />Start immediately</label>
-      <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button><Button type="submit" disabled={busy || readingImages || !projectId || !title.trim() || !description.trim()}>{busy ? "Forge creates the task" : "Create task"}</Button></DialogFooter>
-    </form>
-  </DialogContent></Dialog>;
+  const project = projects.find(project => project.id === projectId);
+  return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}>
+    <DialogContent className="max-h-[min(85vh,420px)] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto rounded-xl p-0 shadow-2xl sm:max-w-[936px]" showCloseButton={false}>
+      <DialogHeader className="flex-row items-center justify-between px-4 py-3 sm:px-5">
+        <Breadcrumb><BreadcrumbList className="gap-2 text-sm"><BreadcrumbItem>
+          <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" aria-label="Project" disabled={busy || !projects.length} />}>
+            {project ? <Avatar size="xs" shape="square"><AvatarImage src={`/api/projects/${project.id}/favicon`} alt="" /><AvatarFallback>{project.name.slice(0, 1).toUpperCase()}</AvatarFallback></Avatar> : <FolderKanban className="size-3.5 text-muted-foreground" />}<span className="max-w-40 truncate">{project?.name ?? "Project"}</span><ChevronDown className="size-3.5" />
+          </DropdownMenuTrigger><DropdownMenuContent align="start">{projects.map(candidate => <DropdownMenuItem key={candidate.id} onClick={() => { setProjectId(candidate.id); setRootProfileId(""); setWorkerProfileId(""); setSource(undefined); setSourceSummary(undefined); }}>{candidate.name}{candidate.id === projectId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
+        </BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><DialogTitle className="font-normal">New task</DialogTitle></BreadcrumbItem></BreadcrumbList></Breadcrumb>
+        <div className="flex items-center gap-1"><TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
+          {templates.length ? <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={busy} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.map(template => <DropdownMenuItem key={template.id} onClick={() => { setDescription(template.description); setRootProfileId(template.rootProfileId ?? ""); setWorkerProfileId(template.workerProfileId ?? ""); setDeliveryTarget(template.deliveryTarget); setRunProjectTests(template.runProjectTests); setVisualEvidence(template.visualEvidence); }}>{template.name}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null}
+        </div>
+      </DialogHeader>
+      <form className="flex min-h-[310px] flex-col" onPaste={event => { const files = Array.from(event.clipboardData.files); if (files.length && !busy) { event.preventDefault(); void addImages(files); } }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.requestSubmit(); } }} onSubmit={event => { event.preventDefault(); void submit(); }}>
+        <div className="px-5 pt-1">
+          <Input aria-label="Task title" autoFocus placeholder="Task title" value={title} onChange={event => setTitle(event.target.value)} className="h-10 border-0 bg-transparent px-0 text-xl font-medium placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-xl" />
+          <Textarea aria-label="Task description" placeholder="Write a description" value={description} onChange={event => setDescription(event.target.value)} className="min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-sm shadow-none focus-visible:ring-0" />
+        </div>
+        {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
+        <div className="mt-auto flex flex-wrap items-end gap-2 px-5 pb-4">
+          <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} />
+          {([{ role: "Root", value: rootProfileId, change: setRootProfileId }, { role: "Worker", value: workerProfileId, change: setWorkerProfileId }]).map(field => <Select key={field.role} value={field.value || "default"} onValueChange={value => field.change(value === "default" ? "" : value ?? "")}><SelectTrigger size="sm" aria-label={`${field.role} profile`}><span>{field.role}</span><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Project default</SelectItem>{profiles.filter(profile => profile.role === field.role.toLowerCase()).map(profile => <SelectItem key={profile.id} value={profile.id}>{profile.name} · {profile.provider}/{profile.model}</SelectItem>)}</SelectContent></Select>)}
+          <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end"><Button type="submit" size="sm" disabled={busy || readingImages || !projectId || !title.trim() || !description.trim()} title="Create task (⌘Enter)">{busy ? "Forge saves" : "Create task"}</Button></DialogFooter>
+        </div>
+        <fieldset className="border-t border-border/70 bg-muted/30 px-5 py-3"><legend className="px-0 text-xs font-medium text-muted-foreground">Delivery &amp; checks</legend>
+          <RadioGroup aria-label="Delivery target" value={deliveryTarget} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))} className="mt-2.5 flex flex-wrap gap-x-4 gap-y-2">{taskDeliveryTargetOptions.map(option => <label className="flex items-center gap-1.5 text-xs" key={option.value}><RadioGroupItem value={option.value} />{option.label}</label>)}</RadioGroup>
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border/60 pt-2.5 text-xs">
+            <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={startImmediately} onCheckedChange={value => setStartImmediately(value === true)} />Start immediately</label>
+            {project?.verificationCommand.trim() ? <label className="flex items-center gap-2"><Checkbox checked={runProjectTests} onCheckedChange={value => setRunProjectTests(value === true)} />Run project tests</label> : <span className="text-muted-foreground">No project test command configured.</span>}
+            <label className="flex items-center gap-2">Screenshots<Select value={visualEvidence} onValueChange={value => setVisualEvidence(VisualEvidenceSchema.parse(value))}><SelectTrigger aria-label="Screenshots" size="sm"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="off">Off</SelectItem><SelectItem value="capture">Capture</SelectItem><SelectItem value="required">Necessary</SelectItem></SelectContent></Select></label>
+          </div>
+        </fieldset>
+      </form>
+    </DialogContent>
+  </Dialog>;
 }

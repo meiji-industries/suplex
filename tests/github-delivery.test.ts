@@ -31,7 +31,7 @@ test("check observations retain actionable CI names and log links", () => {
     { context: "deploy", state: "PENDING", targetUrl: "https://example.com/deploy" },
   ] });
   expect(observed.checks).toEqual({ total: 2, pending: 1, failing: 1, successful: 0, runs: [
-    { name: "unit", status: "failing", url: "https://github.com/owner/repo/actions/runs/1" },
+    { name: "unit", status: "failing", conclusion: "FAILURE", url: "https://github.com/owner/repo/actions/runs/1" },
     { name: "deploy", status: "pending", url: "https://example.com/deploy" },
   ] });
 });

@@ -23,5 +23,5 @@ export const TaskAgentsResponseSchema = z.object({ agents: z.array(z.object({ id
 export const TaskChecksResponseSchema = z.object({
   available: z.boolean(),
   pullRequestState: z.enum(["draft", "ready", "closed", "merged"]).nullable().optional(),
-  runs: z.array(z.object({ name: z.string(), status: z.enum(["pending", "failing", "successful"]), url: z.string().nullable() })),
+  runs: z.array(z.object({ name: z.string(), status: z.enum(["pending", "failing", "successful"]), url: z.string().nullable(), conclusion: z.string().optional() })),
 });

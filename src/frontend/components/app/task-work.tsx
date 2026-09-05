@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { z } from "zod";
-import { CheckCircle2, CircleDashed, CircleX, ExternalLink } from "lucide-react";
+import { CircleDashed } from "lucide-react";
 import type { Task } from "../../../task-contracts.js";
 import { type TaskActivityResponseSchema, TaskChecksResponseSchema, TaskDiffResponseSchema } from "../../../http/contracts/tasks.js";
 import { readJson } from "../../lib/api.js";
@@ -8,6 +8,8 @@ import { Alert, AlertDescription } from "../ui/alert.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Markdown } from "./markdown.js";
 import { ProfileAvatar } from "./profile-avatar.js";
+import { RootPlan, TaskTools, useTaskExecution } from "./task-execution.js";
+import { TaskCheckResults } from "./task-check-results.js";
 import { DeveloperDiff } from "./developer-diff.js";
 
 export type TaskActivity = z.infer<typeof TaskActivityResponseSchema>;
@@ -30,9 +32,11 @@ function humanMessage(prompt: string): string {
 
 export function TaskWork({ task, activity }: { task: Task; activity: TaskActivity }) {
   const [tab, setTab] = useState("chat");
+  const { execution, error: executionError } = useTaskExecution(task.id);
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
     <div className="max-w-full border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
     <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3" aria-label="Conversation">
+      <RootPlan execution={execution} />
       {activity.turns.filter(turn => resultText(turn.result) || humanMessage(turn.prompt)).map(turn => {
         const session = activity.sessions.find(session => session.id === turn.sessionId);
         const role = session?.kind === "worker" ? "Worker" : "Root";
@@ -40,7 +44,7 @@ export function TaskWork({ task, activity }: { task: Task; activity: TaskActivit
       })}
       {!activity.turns.some(turn => resultText(turn.result) || humanMessage(turn.prompt)) ? <p className="text-xs text-muted-foreground">{task.status === "backlog" ? "Start the task to work with Root." : "Agent replies appear here."}</p> : null}
     </div></TabsContent>
-    <TabsContent value="activity"><section aria-label="Task activity" className="grid gap-0 pt-3">{activity.turns.map(turn => <div key={turn.id} className="flex gap-3 border-b py-3 text-xs"><CircleDashed className="size-4 shrink-0 text-muted-foreground" /><span className="font-medium">{activity.sessions.find(session => session.id === turn.sessionId)?.kind === "worker" ? "Worker" : "Root"}</span><span className="text-muted-foreground">{turnLabels[turn.status]}</span></div>)}{!activity.turns.length ? <p className="text-xs text-muted-foreground">No activity yet.</p> : null}</section></TabsContent>
+    <TabsContent value="activity"><section aria-label="Task activity" className="grid gap-0 pt-3">{activity.turns.map(turn => <div key={turn.id} className="flex gap-3 border-b py-3 text-xs"><CircleDashed className="size-4 shrink-0 text-muted-foreground" /><span className="font-medium">{activity.sessions.find(session => session.id === turn.sessionId)?.kind === "worker" ? "Worker" : "Root"}</span><span className="text-muted-foreground">{turnLabels[turn.status]}</span></div>)}{!activity.turns.length && !execution?.sessions.some(session => session.tools.length) ? <p className="text-xs text-muted-foreground">No activity yet.</p> : null}<TaskTools execution={execution} error={executionError} /></section></TabsContent>
     <TabsContent value="diffs">{tab === "diffs" ? <TaskDiff task={task} /> : null}</TabsContent>
     <TabsContent value="checks">{tab === "checks" ? <TaskChecks task={task} /> : null}</TabsContent>
     <TabsContent value="other"><div className="grid min-w-0 gap-4 pt-3 text-xs"><details><summary className="cursor-pointer font-medium">Runtime diagnostics</summary><section aria-label="Sessions" className="grid gap-3 pt-3">{activity.sessions.map(session => <div key={session.id}><p>{session.kind === "root" ? "Root" : "Worker"} {session.generation}</p><code className="break-all text-muted-foreground">{session.nativeSessionId ?? "Not started"}</code></div>)}</section>{activity.turns.map(turn => <details key={turn.id} className="border-b py-2"><summary className="cursor-pointer">{turnLabels[turn.status]} · Prompt</summary><Markdown source={turn.prompt} /></details>)}</details></div></TabsContent>
@@ -84,5 +88,5 @@ function TaskChecks({ task }: { task: Task }) {
     const timer = setInterval(() => void read(), 15000);
     return () => { closed = true; clearInterval(timer); };
   }, [task.id, task.updatedAt]);
-  return <section aria-label="GitHub checks" className="space-y-3 pt-3">{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : !checks ? <p className="text-xs text-muted-foreground">Forge reads the checks.</p> : !checks.runs.length ? <p className="text-xs text-muted-foreground">{checks.available ? "GitHub has no checks for this pull request." : "No pull request checks are available."}</p> : <ul className="divide-y">{checks.runs.map((run, index) => <li key={`${run.name}:${index}`} className="flex items-center gap-2 py-3 text-xs">{run.status === "successful" ? <CheckCircle2 className="size-4 text-emerald-500" /> : run.status === "failing" ? <CircleX className="size-4 text-red-500" /> : <CircleDashed className="size-4 text-amber-500" />}<span className="min-w-0 flex-1 truncate">{run.name}</span><span className="text-muted-foreground">{run.status === "successful" ? "Passed" : run.status === "failing" ? "Failed" : "Pending"}</span>{run.url ? <a href={run.url} target="_blank" rel="noreferrer" aria-label={`Open ${run.name}`}><ExternalLink className="size-3.5" /></a> : null}</li>)}</ul>}</section>;
+  return <section aria-label="GitHub checks" className="space-y-3 pt-3">{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : !checks ? <p className="text-xs text-muted-foreground">Forge reads the checks.</p> : !checks.runs.length ? <p className="text-xs text-muted-foreground">{checks.available ? "GitHub has no checks for this pull request." : "No pull request checks are available."}</p> : <TaskCheckResults runs={checks.runs} />}</section>;
 }

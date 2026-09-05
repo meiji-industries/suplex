@@ -45,7 +45,7 @@ export interface GithubPullRequestObservation {
   headSha: string | null;
   baseSha: string | null;
   mergeable: string | null;
-  checks: { total: number; pending: number; failing: number; successful: number; runs: Array<{ name: string; status: "pending" | "failing" | "successful"; url: string | null }> };
+  checks: { total: number; pending: number; failing: number; successful: number; runs: Array<{ name: string; status: "pending" | "failing" | "successful"; url: string | null; conclusion?: string }> };
   author?: { login: string; avatarUrl: string } | null;
   changedFiles?: number | null;
   additions?: number | null;
@@ -227,7 +227,7 @@ function summarizeChecks(checks: z.infer<typeof PullViewResponseSchema>["statusC
     else status = check.conclusion === "SUCCESS" || check.conclusion === "NEUTRAL" || check.conclusion === "SKIPPED" ? "successful" : "failing";
     summary[status] += 1;
     const url = z.string().url().safeParse(check.detailsUrl ?? check.targetUrl);
-    summary.runs.push({ name, status, url: url.success ? url.data : null });
+    summary.runs.push({ name, status, url: url.success ? url.data : null, ...(check.conclusion ? { conclusion: check.conclusion } : {}) });
   }
   return summary;
 }

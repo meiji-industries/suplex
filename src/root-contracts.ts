@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RecommendedQuestionOptionsSchema } from "./human-question.js";
 
 const opaqueId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
@@ -35,7 +36,7 @@ export const RootToolSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("read_image"), artifactId: opaqueId }).strict(),
   z.object({ kind: z.literal("delegate_worker"), instruction: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional(), review: DeliveryReviewSchema.optional() }).strict(),
-  z.object({ kind: z.literal("ask_human"), question: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("ask_human"), question: z.string().min(1), options: RecommendedQuestionOptionsSchema }).strict(),
 ]);
 
 export type RootTool = z.infer<typeof RootToolSchema>;

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { HumanQuestionOptions } from "./human-question.js";
 
 
 export const TaskControlStatusSchema = z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]);
@@ -40,6 +41,7 @@ export interface TaskControl {
   status: TaskControlStatus;
   wakeAt: string | null;
   humanQuestion: string | null;
+  humanQuestionOptions?: HumanQuestionOptions;
   humanQuestionId: string | null;
   recoveryTurnId: string | null;
   worktree: WorktreeReference | null;

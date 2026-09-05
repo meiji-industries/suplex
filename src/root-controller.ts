@@ -1,4 +1,5 @@
 import { runCommand } from "./command-runner.js";
+import type { HumanQuestionOptions } from "./human-question.js";
 import { createHash } from "node:crypto";
 import type { ArtifactStore } from "./artifacts.js";
 import { DeliveryOperations } from "./delivery-operations.js";
@@ -67,9 +68,9 @@ export class RootController implements RootBridgeAdapter {
     return this.delivery.execute(root, operation, expectedHead, review);
   }
 
-  async askHuman(root: RootIdentity, question: string): Promise<unknown> {
+  async askHuman(root: RootIdentity, question: string, options: HumanQuestionOptions): Promise<unknown> {
     this.store.assertCurrentRoot(root);
-    this.store.askHuman(root.taskId, question);
+    this.store.askHuman(root.taskId, question, options);
     return this.store.get(root.taskId);
   }
 

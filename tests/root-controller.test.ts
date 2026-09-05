@@ -194,7 +194,7 @@ test("answers wake the same Root atomically and stale answers cannot revive anot
   const value = await fixture();
   await value.controller.recover("task");
   value.harness.finish(value.harness.dispatched[0]!.messageID);
-  await value.controller.askHuman(value.identity(), "Which branch should receive the change?");
+  await value.controller.askHuman(value.identity(), "Which branch should receive the change?", [{ label: "Main", description: "Use the project base", recommended: true }, { label: "Release", description: "Use the release branch", recommended: false }]);
   const first = value.store.get("task").humanQuestionId!;
   expect(first).toBeTruthy();
   value.store.answerHuman("task", first, "Use main.");
@@ -202,7 +202,7 @@ test("answers wake the same Root atomically and stale answers cannot revive anot
   expect(value.harness.dispatched).toHaveLength(2);
   expect(value.harness.dispatched[1]).toMatchObject({ sessionID: value.harness.dispatched[0]!.sessionID });
   expect(value.harness.dispatched[1]!.prompt).toContain("Use main.");
-  await value.controller.askHuman(value.identity(), "Publish a draft?");
+  await value.controller.askHuman(value.identity(), "Publish a draft?", [{ label: "Yes", description: "Publish for review", recommended: true }, { label: "No", description: "Keep local", recommended: false }]);
   expect(() => value.store.answerHuman("task", first, "Stale response")).toThrow("question_identity_mismatch");
   expect(value.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestion: "Publish a draft?" });
   value.store.cancel("task");

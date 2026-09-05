@@ -90,7 +90,7 @@ export class TaskRepository {
       title: row.title, description: row.description, status: control.status, deliveryTarget: control.deliveryTarget,
       rootProfile: control.rootProfile, workerProfile: control.workerProfile, configuration: JSON.parse(row.configuration_json),
       worktree: control.worktree, pullRequest: control.pullRequest,
-      humanQuestion: control.humanQuestion && control.humanQuestionId ? { id: control.humanQuestionId, text: control.humanQuestion, requiresCommandCleanup: control.recoveryTurnId !== null } : null,
+      humanQuestion: control.humanQuestion && control.humanQuestionId ? { id: control.humanQuestionId, text: control.humanQuestion, options: control.humanQuestionOptions ?? [], requiresCommandCleanup: control.recoveryTurnId !== null } : null,
       wakeAt: control.wakeAt, images, createdAt: row.created_at, updatedAt: row.activity_updated_at, archivedAt: row.archived_at,
     });
   }

@@ -34,7 +34,7 @@ export interface RootBridgeAdapter {
   readImage(root: RootIdentity, artifactId: string): Promise<RootImageResult>;
   delegateWorker(root: RootIdentity, instruction: string): Promise<unknown>;
   requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation'], expectedHead?: string, review?: Extract<RootTool, { kind: "request_delivery" }>['review']): Promise<unknown>;
-  askHuman(root: RootIdentity, question: string): Promise<unknown>;
+  askHuman(root: RootIdentity, question: string, options: Extract<RootTool, { kind: "ask_human" }>['options']): Promise<unknown>;
 }
 
 export class RootBridge {
@@ -59,7 +59,7 @@ export class RootBridge {
       case "request_delivery":
         return this.adapter.requestDelivery(this.root, tool.operation, tool.expectedHead, tool.review);
       case "ask_human":
-        return this.adapter.askHuman(this.root, tool.question);
+        return this.adapter.askHuman(this.root, tool.question, tool.options);
     }
   }
 }

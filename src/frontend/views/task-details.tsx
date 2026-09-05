@@ -7,7 +7,7 @@ import { adminDate, type ApiProject } from "../lib/view-shared.js";
 import { Button } from "../components/ui/button.js";
 import { Textarea } from "../components/ui/textarea.js";
 import { Input } from "../components/ui/input.js";
-import { Checkbox } from "../components/ui/checkbox.js";
+import { TaskQuestion } from "../components/app/task-question.js";
 import { Badge } from "../components/ui/badge.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
@@ -20,10 +20,8 @@ import { LivePaneDock } from "../components/app/task-chat/live-pane-dock.js";
 
 export function TaskDetailsPage({ task, project, onChange }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void }): ReactElement {
   const [activity, setActivity] = useState<TaskActivity>({ sessions: [], turns: [] });
-  const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [cleanupQuestion, setCleanupQuestion] = useState<string | null>(null);
   const [image, setImage] = useState<Task["images"][number] | null>(null);
   const [edit, setEdit] = useState<{ title: string; description: string } | null>(null);
   const editable = task.status === "backlog" && !task.archivedAt;
@@ -44,7 +42,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
   const act = async (action: string, body?: unknown) => {
     if (busy) return;
     setBusy(true); setError("");
-    try { onChange(await readJson<Task>(`/api/tasks/${task.id}/${action}`, { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) })); setMessage(""); }
+    try { onChange(await readJson<Task>(`/api/tasks/${task.id}/${action}`, { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) })); }
     catch (error) { setError(error instanceof Error ? error.message : "The action failed"); }
     finally { setBusy(false); }
   };
@@ -63,7 +61,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
           {task.images.length ? <ul className="flex flex-wrap gap-2" aria-label="Task images">{task.images.map(item => <li key={item.artifactId}><button type="button" className="size-16 overflow-hidden rounded-md border bg-muted/30 focus-visible:outline" aria-label={`Open ${item.filename}`} onClick={() => setImage(item)}><img className="size-full object-cover" src={`/api/tasks/${task.id}/images/${item.artifactId}`} alt={item.filename} /></button></li>)}</ul> : null}
           {task.status !== "active" || task.pullRequest || task.humanQuestion ? <div data-task-current className="-mx-4 border-y px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10"><div className="mx-auto max-w-4xl space-y-3">
             {task.pullRequest ? <a data-active-pull-request href={task.pullRequest.url} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-3 rounded-md border p-3 hover:bg-muted/30">{task.pullRequest.state === "merged" ? <GitMerge className="size-5 shrink-0 text-violet-500" /> : <GitPullRequest className="size-5 shrink-0 text-emerald-500" />}<span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{task.configuration.repository} #{task.pullRequest.number}</span></span><Badge variant="secondary">{task.pullRequest.state === "merged" ? "Merged" : task.pullRequest.state === "closed" ? "Closed" : "Open"}</Badge><ExternalLink className="size-3.5 shrink-0 text-muted-foreground" /></a> : task.status === "active" ? null : <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-muted-foreground">{task.status === "backlog" ? "The task is ready to start." : task.status === "delivered" ? "The delivery target is complete." : task.status === "cancelled" ? "The task is cancelled." : "Root needs your answer."}</p>{editable ? <Button size="sm" disabled={busy} onClick={() => void act("start")}>Start task</Button> : null}</div>}
-            {task.humanQuestion ? <section className="grid gap-3" aria-label="Question"><h3 className="text-sm font-medium">Answer necessary</h3><Markdown source={task.humanQuestion.text} /><form className="grid gap-2" onSubmit={event => { event.preventDefault(); void act("answer", { questionId: task.humanQuestion?.id, answer: message, confirmCommandsStopped: cleanupQuestion === task.humanQuestion?.id }); }}><Textarea aria-label="Answer" value={message} onChange={event => setMessage(event.target.value)} required />{task.humanQuestion.requiresCommandCleanup ? <label className="flex items-center gap-2 text-xs"><Checkbox checked={cleanupQuestion === task.humanQuestion.id} onCheckedChange={checked => setCleanupQuestion(checked ? task.humanQuestion!.id : null)} />All commands from this session have stopped</label> : null}<div><Button size="sm" type="submit" disabled={busy || !message.trim() || task.humanQuestion.requiresCommandCleanup && cleanupQuestion !== task.humanQuestion.id}>Answer and continue</Button></div></form></section> : null}
+            {task.humanQuestion ? <TaskQuestion key={task.humanQuestion.id} question={task.humanQuestion} busy={busy} onAnswer={answer => act("answer", { questionId: task.humanQuestion?.id, ...answer })} /> : null}
           </div></div> : null}
           <TaskWork task={task} activity={activity} />
         </div></div>

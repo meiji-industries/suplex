@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HumanQuestionOptionsSchema } from "./human-question.js";
 import { TaskControlStatusSchema, TaskProfileSchema, WorktreeReferenceSchema, PullRequestReferenceSchema } from "./task-control.js";
 import { MAX_TASK_IMAGES, MAX_TASK_IMAGE_BASE64_LENGTH } from "./task-attachment-limits.js";
 
@@ -63,7 +64,7 @@ export const TaskSchema = z.object({
   configuration: TaskConfigurationSchema,
   worktree: WorktreeReferenceSchema.nullable(),
   pullRequest: PullRequestReferenceSchema.nullable(),
-  humanQuestion: z.object({ id, text: z.string(), requiresCommandCleanup: z.boolean() }).nullable(),
+  humanQuestion: z.object({ id, text: z.string(), options: HumanQuestionOptionsSchema.default([]), requiresCommandCleanup: z.boolean() }).nullable(),
   wakeAt: z.string().nullable(),
   images: z.array(TaskImageSchema),
   createdAt: z.string(), updatedAt: z.string(), archivedAt: z.string().nullable(),

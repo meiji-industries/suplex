@@ -21,7 +21,8 @@ function control(row: Row): TaskControl {
 function session(row: Row): TaskSession {
   const id = text(row, "id"); const taskId = text(row, "task_id");
   if (!id || !taskId) throw new Error("Invalid persisted task session");
-  return { id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), agentName: text(row, "agent_name"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), promptHash: text(row, "prompt_hash"), resultReceiptId: text(row, "result_receipt_id"), launchOwner: text(row, "launch_owner") };
+  const launchOwnerPid = row.launch_owner_pid === null || row.launch_owner_pid === undefined ? null : integer(row, "launch_owner_pid");
+  return { id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), agentName: text(row, "agent_name"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), promptHash: text(row, "prompt_hash"), resultReceiptId: text(row, "result_receipt_id"), launchOwner: text(row, "launch_owner"), launchOwnerPid };
 }
 function turn(row: Row): TaskTurn {
   const id = text(row, "id"); const taskId = text(row, "task_id"); const sessionId = text(row, "session_id"); const promptHash = text(row, "prompt_hash"); const promptText = text(row, "prompt_text");
@@ -30,7 +31,7 @@ function turn(row: Row): TaskTurn {
 }
 
 export class TaskControlStore {
-  constructor(private readonly database: ForgeDatabase) {}
+  constructor(private readonly database: ForgeDatabase, private readonly processAlive: (pid: number) => boolean = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } }) {}
   create(input: { taskId: string; objective: string; deliveryTarget: string; rootProfile: TaskProfile; workerProfile: TaskProfile; worktree?: WorktreeReference }): TaskControl {
     const time = now();
     this.database.authTransaction((db) => db.prepare("INSERT INTO forge_task_controls (task_id, objective, delivery_target, status, wake_at, human_question, worktree_json, pull_request_json, root_session_id, worker_session_id, root_profile_json, worker_profile_json, created_at, updated_at) VALUES (?, ?, ?, 'active', NULL, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?)").run(input.taskId, input.objective, input.deliveryTarget, input.worktree ? JSON.stringify(input.worktree) : null, JSON.stringify(TaskProfileSchema.parse(input.rootProfile)), JSON.stringify(TaskProfileSchema.parse(input.workerProfile)), time, time));
@@ -93,7 +94,7 @@ export class TaskControlStore {
     });
   }
   bindLive(input: { sessionId: string; generation: number; paneId: string; agentName: string; nativeSessionId?: string }): TaskSession {
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET pane_id = ?, agent_name = ?, native_session_id = ?, lifecycle = 'live', launch_owner = NULL, launch_claimed_at = NULL, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'reserved'").run(input.paneId, input.agentName, input.nativeSessionId ?? null, now(), input.sessionId, input.generation).changes);
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET pane_id = ?, agent_name = ?, native_session_id = ?, lifecycle = 'live', launch_owner = NULL, launch_owner_pid = NULL, launch_claimed_at = NULL, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'reserved'").run(input.paneId, input.agentName, input.nativeSessionId ?? null, now(), input.sessionId, input.generation).changes);
     if (changed !== 1) throw new Error("stale_generation"); return this.byId(input.sessionId);
   }
   bindLaunchAttempt(input: { sessionId: string; generation: number; paneId: string; agentName: string }): void {
@@ -107,12 +108,14 @@ export class TaskControlStore {
   }
   claimLaunch(input: { sessionId: string; generation: number }): string | null {
     const owner = randomUUID();
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET launch_owner = ?, launch_claimed_at = ?, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'reserved' AND launch_owner IS NULL").run(owner, now(), now(), input.sessionId, input.generation).changes);
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET launch_owner = ?, launch_owner_pid = ?, launch_claimed_at = ?, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'reserved' AND launch_owner IS NULL").run(owner, process.pid, now(), now(), input.sessionId, input.generation).changes);
     return changed === 1 ? owner : null;
   }
-  reclaimUnstartedLaunch(input: { sessionId: string; generation: number; observedAbsent: boolean }): boolean {
+  reclaimDeadLaunch(input: { sessionId: string; generation: number; observedAbsent: boolean }): boolean {
     if (!input.observedAbsent) return false;
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET launch_owner = NULL, launch_claimed_at = NULL, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'reserved' AND launch_owner IS NOT NULL").run(now(), input.sessionId, input.generation).changes);
+    const owner = this.byId(input.sessionId);
+    if (!owner.launchOwnerPid || this.processAlive(owner.launchOwnerPid)) return false;
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_sessions SET launch_owner = NULL, launch_owner_pid = NULL, launch_claimed_at = NULL, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'reserved' AND launch_owner IS NOT NULL AND launch_owner_pid = ?").run(now(), input.sessionId, input.generation, owner.launchOwnerPid).changes);
     return changed === 1;
   }
   markWorkerPromptAccepted(input: { sessionId: string; generation: number }): void {
@@ -123,7 +126,7 @@ export class TaskControlStore {
   }
   scheduleWorkerPromptRetry(input: { sessionId: string; generation: number }): TaskSession {
     const changed = this.database.authTransaction((db) => {
-      const sessionChanged = db.prepare("UPDATE forge_task_sessions SET pane_id = NULL, agent_name = NULL, native_session_id = NULL, lifecycle = 'reserved', launch_owner = NULL, launch_claimed_at = NULL, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'stopped'").run(now(), input.sessionId, input.generation).changes;
+      const sessionChanged = db.prepare("UPDATE forge_task_sessions SET pane_id = NULL, agent_name = NULL, native_session_id = NULL, lifecycle = 'reserved', launch_owner = NULL, launch_owner_pid = NULL, launch_claimed_at = NULL, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle = 'stopped'").run(now(), input.sessionId, input.generation).changes;
       if (sessionChanged !== 1) return 0;
       return db.prepare("UPDATE forge_task_turns SET status = 'pending_prompt', terminal_observation = NULL, prompt_observed_at = NULL, updated_at = ? WHERE session_id = ? AND generation = ? AND status = 'unknown'").run(now(), input.sessionId, input.generation).changes;
     });

@@ -227,14 +227,18 @@ test("two recovery controllers claim one replacement Root launch while retaining
   value.store.bindLive({ sessionId: root.id, generation: root.generation, paneId: "old-root", agentName: "old-root" });
   const worker = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Keep editing." });
   value.store.bindLive({ sessionId: worker.id, generation: worker.generation, paneId: "worker", agentName: "worker", nativeSessionId: "native-worker" });
-  let starts = 0; let release: (() => void) | undefined;
+  let starts = 0; let release: (() => void) | undefined; let observed = 0; let secondObserved: (() => void) | undefined; let firstStarted: (() => void) | undefined;
   const wait = new Promise<void>((resolve) => { release = resolve; });
-  const herdr = { runtimeSnapshot: async () => ({ agents: [{ name: "old-root", paneId: "old-root", status: "done" }, { name: "worker", paneId: "worker", agentSession: "native-worker", status: "working" }], panes: [] }), readAgent: async () => "", prompt: async () => ({ name: "root", paneId: "new-root" }) };
-  const runtime = { launch: async () => { starts += 1; await wait; return { paneId: "new-root", agentName: "root", nativeSessionId: "new-native" }; } };
+  const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+  const observedTwice = new Promise<void>((resolve) => { secondObserved = resolve; });
+  const herdr = { runtimeSnapshot: async () => { observed += 1; if (observed === 2) secondObserved?.(); return { agents: [{ name: "old-root", paneId: "old-root", status: "done" }, { name: "worker", paneId: "worker", agentSession: "native-worker", status: "working" }], panes: [] }; }, readAgent: async () => "", prompt: async () => ({ name: "root", paneId: "new-root" }) };
+  const runtime = { launch: async () => { starts += 1; firstStarted?.(); await wait; return { paneId: "new-root", agentName: "root", nativeSessionId: "new-native" }; } };
   try {
     const first = new RootController(value.store, herdr, undefined, runtime).recover("task");
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await started;
     const other = new RootController(new TaskControlStore(second), herdr, undefined, runtime).recover("task");
+    await observedTwice;
+    expect(starts).toBe(1);
     release?.();
     await Promise.all([first, other]);
     expect(starts).toBe(1);
@@ -242,7 +246,7 @@ test("two recovery controllers claim one replacement Root launch while retaining
   } finally { second.close(); value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("recovery reclaims a launch claim made before any Root pane existed", async () => {
+test("recovery reclaims a dead Root launch owner with no pane", async () => {
   const value = await fixture();
   const root = value.store.claimRoot({ taskId: "task" });
   expect(value.store.claimLaunch({ sessionId: root.id, generation: root.generation })).toBeTruthy();
@@ -250,9 +254,25 @@ test("recovery reclaims a launch claim made before any Root pane existed", async
   const herdr = { runtimeSnapshot: async () => ({ agents: [], panes: [] }), readAgent: async () => "", prompt: async () => ({ name: "root", paneId: "root-pane", agentSession: "native-root" }) };
   const runtime = { launch: async () => { starts += 1; return { paneId: "root-pane", agentName: "root", nativeSessionId: "native-root" }; } };
   try {
-    await new RootController(value.store, herdr, undefined, runtime).recover("task");
+    await new RootController(new TaskControlStore(value.database, () => false), herdr, undefined, runtime).recover("task");
     expect(starts).toBe(1);
     expect(value.store.currentSession("task", "root")).toMatchObject({ lifecycle: "live", nativeSessionId: "native-root" });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("recovery reclaims a dead Worker launch owner with no pane", async () => {
+  const value = await fixture();
+  const root = value.store.claimRoot({ taskId: "task" });
+  value.store.bindLive({ sessionId: root.id, generation: root.generation, paneId: "root-pane", agentName: "root" });
+  const worker = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Change one file." });
+  expect(value.store.claimLaunch({ sessionId: worker.id, generation: worker.generation })).toBeTruthy();
+  let starts = 0;
+  const herdr = { runtimeSnapshot: async () => ({ agents: [{ name: "root", paneId: "root-pane", status: "working" }], panes: [] }), readAgent: async () => "", prompt: async () => ({ name: "root", paneId: "root-pane" }) };
+  const runtime = { launch: async () => { starts += 1; return { paneId: "worker-pane", agentName: "worker", nativeSessionId: "native-worker" }; } };
+  try {
+    await new RootController(new TaskControlStore(value.database, () => false), herdr, runtime).recover("task");
+    expect(starts).toBe(1);
+    expect(value.store.currentSession("task", "worker")).toMatchObject({ lifecycle: "live", nativeSessionId: "native-worker" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

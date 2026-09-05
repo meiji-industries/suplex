@@ -109,12 +109,12 @@ export class RootController implements RootBridgeAdapter {
       return "unknown";
     };
     const rootAbsent = !root.paneId || !root.agentName || !snapshot.agents.some((agent) => agent.paneId === root.paneId && agent.name === root.agentName);
-    if (root.lifecycle === "reserved" && root.launchOwner && this.store.reclaimUnstartedLaunch({ sessionId: root.id, generation: root.generation, observedAbsent: rootAbsent })) {
-      if (this.rootRuntime && this.store.claimLaunch({ sessionId: root.id, generation: root.generation })) {
+    if (root.lifecycle === "reserved" && root.launchOwner) {
+      if (this.store.reclaimDeadLaunch({ sessionId: root.id, generation: root.generation, observedAbsent: rootAbsent }) && this.rootRuntime && this.store.claimLaunch({ sessionId: root.id, generation: root.generation })) {
         const control = this.store.get(taskId);
         const launched = await this.rootRuntime.launch({ taskId, session: root, objective: control.objective, persistAttempt: (attempt) => this.store.bindLaunchAttempt({ sessionId: root.id, generation: root.generation, ...attempt }) });
         this.store.bindLive({ sessionId: root.id, generation: root.generation, ...launched });
-      }
+      } else this.store.scheduleWake(taskId, new Date().toISOString());
       return;
     }
     const rootLifecycle = observe(root);
@@ -122,6 +122,19 @@ export class RootController implements RootBridgeAdapter {
     let worker = this.store.currentSession(taskId, "worker");
     if (worker) {
       const liveAgent = worker.paneId ? snapshot.agents.find((candidate) => candidate.paneId === worker!.paneId) : undefined;
+      const workerAbsent = !worker.paneId || !worker.agentName || !liveAgent || liveAgent.name !== worker.agentName;
+      if (worker.lifecycle === "reserved" && worker.launchOwner) {
+        if (this.store.reclaimDeadLaunch({ sessionId: worker.id, generation: worker.generation, observedAbsent: workerAbsent })) {
+          const currentRoot = this.store.currentSession(taskId, "root");
+          const instruction = this.store.pendingTurns(worker.id)[0]?.promptText;
+          const retryWorker = worker;
+          if (this.workerRuntime && currentRoot && instruction && this.store.claimLaunch({ sessionId: retryWorker.id, generation: retryWorker.generation })) {
+            const launched = await this.workerRuntime.launch({ taskId, root: { taskId, sessionId: currentRoot.id, generation: currentRoot.generation }, session: retryWorker, instruction, persistAttempt: (attempt) => this.store.bindLaunchAttempt({ sessionId: retryWorker.id, generation: retryWorker.generation, ...attempt }) });
+            this.store.bindLive({ sessionId: retryWorker.id, generation: retryWorker.generation, ...launched });
+          }
+        } else this.store.scheduleWake(taskId, new Date().toISOString());
+        return;
+      }
       if (!worker.nativeSessionId && worker.paneId && worker.agentName && liveAgent?.name === worker.agentName && liveAgent.agentSession)
         worker = this.store.bindNativeSession({ sessionId: worker.id, generation: worker.generation, paneId: worker.paneId, agentName: worker.agentName, nativeSessionId: liveAgent.agentSession });
       const workerLifecycle = observe(worker);

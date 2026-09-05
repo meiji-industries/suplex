@@ -53,6 +53,7 @@ export interface TaskSession {
   promptHash: string | null;
   resultReceiptId: string | null;
   launchOwner: string | null;
+  launchOwnerPid: number | null;
 }
 
 export interface TaskTurn {

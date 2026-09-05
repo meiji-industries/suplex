@@ -19,24 +19,25 @@ import { TaskSourcePicker, prefillForTaskSource, type TaskSourceSelector, type T
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
 import { readNewTaskMemory, writeNewTaskMemory } from "./new-task-memory.js";
 import { TaskRoleSelector } from "./task-role-selectors.js";
+import type { NewTaskDraft } from "../../lib/duplicate-task-prefill.js";
 
-export function NewTaskDialog({ open, onOpenChange, companyId, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; companyId: string; onCreated: (task: Task) => void }): ReactElement {
+export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initialDraft }: { open: boolean; onOpenChange: (open: boolean) => void; companyId: string; onCreated: (task: Task) => void; initialDraft?: NewTaskDraft }): ReactElement {
   const [remembered] = useState(readNewTaskMemory);
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   const [templates, setTemplates] = useState<ApiTaskTemplate[]>([]);
-  const [projectId, setProjectId] = useState(remembered.projectId ?? "");
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [rootProfileId, setRootProfileId] = useState(remembered.rootProfileId ?? "");
-  const [workerProfileId, setWorkerProfileId] = useState(remembered.workerProfileId ?? "");
-  const [startImmediately, setStartImmediately] = useState(remembered.startImmediately ?? true);
-  const [deliveryTarget, setDeliveryTarget] = useState<NonNullable<TaskInput["deliveryTarget"]>>(remembered.deliveryTarget ?? "pull_request_draft");
-  const [runProjectTests, setRunProjectTests] = useState(remembered.runProjectTests ?? true);
-  const [visualEvidence, setVisualEvidence] = useState<NonNullable<TaskInput["visualEvidence"]>>(remembered.visualEvidence ?? "off");
-  const [source, setSource] = useState<TaskSourceSelector>();
-  const [sourceSummary, setSourceSummary] = useState<TaskSourceSummary>();
-  const [images, setImages] = useState<NonNullable<TaskInput["images"]>>([]);
+  const [projectId, setProjectId] = useState(initialDraft?.projectId ?? remembered.projectId ?? "");
+  const [title, setTitle] = useState(initialDraft?.title ?? "");
+  const [description, setDescription] = useState(initialDraft?.description ?? "");
+  const [rootProfileId, setRootProfileId] = useState(initialDraft?.rootProfileId ?? remembered.rootProfileId ?? "");
+  const [workerProfileId, setWorkerProfileId] = useState(initialDraft?.workerProfileId ?? remembered.workerProfileId ?? "");
+  const [startImmediately, setStartImmediately] = useState(initialDraft?.startImmediately ?? remembered.startImmediately ?? true);
+  const [deliveryTarget, setDeliveryTarget] = useState<NonNullable<TaskInput["deliveryTarget"]>>(initialDraft?.deliveryTarget ?? remembered.deliveryTarget ?? "pull_request_draft");
+  const [runProjectTests, setRunProjectTests] = useState(initialDraft?.runProjectTests ?? remembered.runProjectTests ?? true);
+  const [visualEvidence, setVisualEvidence] = useState<NonNullable<TaskInput["visualEvidence"]>>(initialDraft?.visualEvidence ?? remembered.visualEvidence ?? "off");
+  const [source, setSource] = useState<TaskSourceSelector | undefined>(initialDraft?.source);
+  const [sourceSummary, setSourceSummary] = useState<TaskSourceSummary | undefined>(initialDraft?.sourceSummary);
+  const [images, setImages] = useState<NonNullable<TaskInput["images"]>>(initialDraft?.images ?? []);
   const [busy, setBusy] = useState(false);
   const [readingImages, setReadingImages] = useState(false);
   const imageRead = useRef({ generation: 0, pending: false });

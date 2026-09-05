@@ -4,6 +4,7 @@ import {
   OpenCodeMcpStatusSchema,
   OpenCodeMessageEnvelopeSchema,
   OpenCodePromptRequestSchema,
+  OpenCodeProvidersSchema,
   OpenCodeSessionCreateRequestSchema,
   OpenCodeSessionSchema,
   OpenCodeSessionStatusMapSchema,
@@ -12,6 +13,7 @@ import {
   type OpenCodeMcpStatus,
   type OpenCodeMessageEnvelope,
   type OpenCodePromptRequest,
+  type OpenCodeProviders,
   type OpenCodeSessionCreateRequest,
   type OpenCodeSession,
   type OpenCodeSessionStatus,
@@ -148,6 +150,10 @@ export class OpenCodeClient {
 
   async health(): Promise<OpenCodeHealth> {
     return this.request("GET", "/global/health", OpenCodeHealthSchema);
+  }
+
+  async providers(directory?: string): Promise<OpenCodeProviders> {
+    return this.request("GET", "/provider", OpenCodeProvidersSchema, undefined, { directory });
   }
 
   async mcpStatus(directory: string): Promise<OpenCodeMcpStatus> {

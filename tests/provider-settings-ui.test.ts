@@ -6,13 +6,15 @@ import { CompanyProvider } from "../src/frontend/components/app/company-context.
 import { StatusLight } from "../src/frontend/components/app/status-light.js";
 import { ProviderSettingsView } from "../src/frontend/views/provider-settings.js";
 
-test("provider settings uses a dense provider table and password key control", () => {
+test("provider settings identifies native configuration without claiming authentication", () => {
   const html = renderToStaticMarkup(createElement(CompanyProvider, null, createElement(ProviderSettingsView)));
   expect(html).toContain('aria-label="Providers"');
-  expect(html).toContain("Agent providers");
+  expect(html).toContain("Configured in OpenCode");
   expect(html).toContain("Provider");
-  expect(html).toContain("Harness");
-  expect(html).toContain("Status");
+  expect(html).toContain("Configuration");
+  expect(html).toContain("Model request");
+  expect(html).toContain("opencode auth login");
+  expect(html).not.toContain('type="password"');
 });
 
 test("the shared status light has an accessible state label", () => {

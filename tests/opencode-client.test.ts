@@ -44,6 +44,17 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
+test("provider observations strip credentials and configuration secrets", async () => {
+  const client = new OpenCodeClient({ baseUrl: "http://127.0.0.1:43123", password: "test-password", fetch: async (input, init) => {
+    const request = new Request(input, init);
+    expect(request.method).toBe("GET");
+    expect(new URL(request.url).pathname).toBe("/provider");
+    expect(new URL(request.url).searchParams.get("directory")).toBe("/tmp/providers");
+    return jsonResponse({ all: [{ id: "openai", name: "OpenAI", key: "secret-key", options: { apiKey: "secret-option" }, models: { luna: { id: "luna", name: "Luna", options: { apiKey: "model-secret" } } } }], connected: ["openai"], default: { openai: "luna" } });
+  } });
+  expect(await client.providers("/tmp/providers")).toEqual({ all: [{ id: "openai", name: "OpenAI", models: { luna: { id: "luna", name: "Luna" } } }], connected: ["openai"], default: { openai: "luna" } });
+});
+
 test("MCP discovery uses a bodyless GET scoped to the session directory", async () => {
   const client = new OpenCodeClient({ baseUrl: "http://127.0.0.1:43123", password: "test-password", fetch: async (input, init) => {
     const request = new Request(input, init);

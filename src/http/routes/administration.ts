@@ -12,10 +12,8 @@ import { ProjectionRebuildFailure, ProjectionRebuildService } from "../../projec
 import { AuditEventListResponseSchema, CredentialIdParamsSchema, CredentialListResponseSchema, ErrorResponseSchema, InvitationResponseSchema, InvitationSummaryListResponseSchema, UserIdParamsSchema, UserListResponseSchema } from "../contracts/common.js";
 import { DisplayNameBodySchema } from "../contracts/auth.js";
 import { AdminCapacityListResponseSchema, AgentBodySchema, AgentPatchBodySchema, AgentResponseSchema, ModelBodySchema, ModelIdParamsSchema, ModelListResponseSchema, ModelResponseSchema, ModelStatusBodySchema } from "../contracts/projects.js";
-import { ProviderCredentialBodySchema, ProviderListResponseSchema, ProviderTestResponseSchema } from "../contracts/providers.js";
-import { PROVIDER_HARNESSES, type AgentProviderKind } from "../../agent-providers/provider.js";
-import { ProviderCredentialStore } from "../../provider-credentials.js";
-import { OpenRouterReadinessProbe } from "../../agent-providers/openrouter-readiness.js";
+import { ProviderListResponseSchema, type ProviderListResponse } from "../contracts/providers.js";
+import { readOpenCodeProviders, type ReadOpenCodeProviders } from "../../opencode-providers.js";
 import { MAX_MIN_FREE_DISK_GB, readEnvironmentSettings, updateEnvironmentSettings } from "../../environment-settings.js";
 
 const ProjectionRebuildBodySchema = z.object({ companyId: z.string().optional(), taskId: z.string().optional() }).default({});
@@ -29,6 +27,7 @@ export interface AdministrationRoutesOptions {
   attention?: AttentionService;
   config?: ForgeConfig;
   capacity?: CapacityManager;
+  readProviders?: ReadOpenCodeProviders;
 }
 
 const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (app, options) => {
@@ -52,15 +51,19 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     auth.recordAuditEvent(request.forgeUser.id, "environment_settings_updated", undefined, undefined, { previousMinFreeDiskGb: String(previous.minFreeDiskGb), minFreeDiskGb: String(updated.minFreeDiskGb) });
     return reply.header("Cache-Control", "private, no-store").send(updated);
   });
-  typed.get("/api/admin/providers", { schema: { response: { 200: ProviderListResponseSchema } } }, async (_request, reply) => {
-    if (!requireAdmin(_request.forgeUser.role, reply)) return;
-    if (!database) return reply.send({ providers: [] });
-    const credentials = new ProviderCredentialStore(database);
-    return reply.send({ providers: (Object.entries(PROVIDER_HARNESSES) as [AgentProviderKind, typeof PROVIDER_HARNESSES[AgentProviderKind]][]).map(([id, provider]) => ({ id, ...provider, credential: id === "openrouter" ? { required: true, ...credentials.describe("openrouter") } : { required: false, configured: false, maskedKey: null, lastTestedAt: null, lastTestStatus: null, lastTestSummary: null } })) });
+  const readProviders = options.readProviders ?? (() => readOpenCodeProviders({ directory: process.cwd() }));
+  let providerObservation: Promise<ProviderListResponse> | undefined;
+  typed.get("/api/admin/providers", { schema: { response: { 200: ProviderListResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
+    if (!requireAdmin(request.forgeUser.role, reply)) return;
+    reply.header("Cache-Control", "private, no-store");
+    try {
+      providerObservation ??= readProviders().finally(() => { providerObservation = undefined; });
+      return reply.send(await providerObservation);
+    } catch (error) {
+      request.log.warn({ err: error }, "OpenCode provider observation failed");
+      return reply.code(503).send({ error: "OpenCode provider configuration is not available. Check OpenCode on the Forge host." });
+    }
   });
-  typed.put("/api/admin/providers/openrouter/credential", { schema: { body: ProviderCredentialBodySchema } }, async (request, reply) => { if (!requireAdmin(request.forgeUser.role, reply)) return; if (!database) throw new Error("Database is unavailable"); new ProviderCredentialStore(database).set("openrouter", request.body.apiKey); return reply.header("Cache-Control", "private, no-store").code(204).send(); });
-  typed.delete("/api/admin/providers/openrouter/credential", async (request, reply) => { if (!requireAdmin(request.forgeUser.role, reply)) return; if (!database) throw new Error("Database is unavailable"); new ProviderCredentialStore(database).clear("openrouter"); return reply.header("Cache-Control", "private, no-store").code(204).send(); });
-  typed.post("/api/admin/providers/openrouter/test", { schema: { response: { 200: ProviderTestResponseSchema } } }, async (request, reply) => { if (!requireAdmin(request.forgeUser.role, reply)) return; if (!database) throw new Error("Database is unavailable"); const check = await new OpenRouterReadinessProbe(undefined, new ProviderCredentialStore(database)).check(); return reply.header("Cache-Control", "private, no-store").send({ ok: check.status === "healthy", summary: check.summary, check }); });
   typed.post("/api/admin/invitations", { schema: { body: DisplayNameBodySchema, response: { 201: InvitationResponseSchema } } }, async (request, reply) => reply.code(201).send(auth.inviteUser(request.forgeUser.id, { displayName: request.body.displayName })));
   typed.get("/api/admin/invitations", { schema: { response: { 200: InvitationSummaryListResponseSchema } } }, async (request, reply) => reply.send({ invitations: auth.listInvitations(request.forgeUser.id) }));
   typed.get("/api/admin/users", { schema: { response: { 200: UserListResponseSchema } } }, async (request, reply) => reply.send({ users: auth.listUsers(request.forgeUser.id) }));

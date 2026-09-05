@@ -19,25 +19,36 @@ function cookie(headers: OutgoingHttpHeaders, name: string): string {
   return (all.find((value) => value.split("=", 1)[0] === name) ?? "").split(";", 1)[0]!.split("=", 2)[1] ?? "";
 }
 
-test("provider API masks, saves, clears, and tests the OpenRouter key", async () => {
+test("provider API uses native configuration, not CLI health or Forge credentials", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-providers-api-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111" });
   const auth = new AuthService(database, config, { webAuthn });
-  const app = createApp({ config, auth, database, health });
+  let failObservation = false;
+  const app = createApp({ config, auth, database, health, readProviders: async () => {
+    if (failObservation) throw new Error("native server failed");
+    return { harness: "opencode", directory: root, observedAt: new Date().toISOString(), providers: [
+      { id: "openai", label: "OpenAI", modelCount: 3, status: "configured" },
+      { id: "opencode", label: "OpenCode Zen", modelCount: 5, status: "configured" },
+    ] };
+  } });
   try {
     const invitation = auth.ensureBootstrapInvitation()!;
     const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });
     const enrolled = await app.inject({ method: "POST", url: "/api/auth/bootstrap/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: "provider-admin", type: "public-key" } } });
     const session = cookie(enrolled.headers, SESSION_COOKIE_NAME); const csrf = cookie(enrolled.headers, CSRF_COOKIE_NAME);
     const headers = { cookie: `${SESSION_COOKIE_NAME}=${session}; ${CSRF_COOKIE_NAME}=${csrf}`, origin: config.reachableAddress, "x-csrf-v1": csrf };
-    expect((await app.inject({ method: "GET", url: "/api/admin/providers", headers })).json().providers).toHaveLength(3);
-    const secret = "sk-openrouter-api-secret";
-    expect((await app.inject({ method: "PUT", url: "/api/admin/providers/openrouter/credential", headers, payload: { apiKey: secret } })).statusCode).toBe(204);
-    const listed = (await app.inject({ method: "GET", url: "/api/admin/providers", headers })).json();
-    expect(JSON.stringify(listed)).not.toContain(secret);
-    expect(listed.providers.find((provider: { id: string }) => provider.id === "openrouter").credential.maskedKey).toBe("…cret");
-    expect((await app.inject({ method: "DELETE", url: "/api/admin/providers/openrouter/credential", headers })).statusCode).toBe(204);
-    expect((await app.inject({ method: "POST", url: "/api/admin/providers/openrouter/test", headers })).json()).toMatchObject({ ok: false, check: { id: "openrouter-auth" } });
+    const listed = await app.inject({ method: "GET", url: "/api/admin/providers", headers });
+    expect(listed.json()).toMatchObject({ harness: "opencode", providers: [{ id: "openai", status: "configured" }, { id: "opencode", status: "configured" }] });
+    expect(listed.headers["cache-control"]).toBe("private, no-store");
+    expect(listed.body).not.toContain("healthy");
+    expect(listed.body).not.toContain("codex");
+    expect((await app.inject({ method: "PUT", url: "/api/admin/providers/openrouter/credential", headers, payload: { apiKey: "not-a-real-key" } })).statusCode).toBe(404);
+    expect((await app.inject({ method: "DELETE", url: "/api/admin/providers/openrouter/credential", headers })).statusCode).toBe(404);
+    expect((await app.inject({ method: "POST", url: "/api/admin/providers/openrouter/test", headers })).statusCode).toBe(404);
+    failObservation = true;
+    const failed = await app.inject({ method: "GET", url: "/api/admin/providers", headers });
+    expect(failed.statusCode).toBe(503);
+    expect(failed.json()).not.toHaveProperty("providers");
   } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }
 });

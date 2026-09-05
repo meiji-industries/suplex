@@ -9,6 +9,7 @@ import type { TaskService } from "../../tasks.js";
 import type { ReleaseService } from "../../github-release.js";
 import type { CapacityManager } from "../../capacity.js";
 import type { HermesAgentService } from "../../hermes-agents.js";
+import type { ReadOpenCodeProviders } from "../../opencode-providers.js";
 import { sessionUser } from "../session.js";
 import administration from "./administration.js";
 import { authMe } from "./auth.js";
@@ -35,6 +36,7 @@ export interface AuthenticatedRoutesOptions {
   database?: ForgeDatabase;
   capacity?: CapacityManager;
   hermes?: HermesAgentService;
+  readProviders?: ReadOpenCodeProviders;
 }
 
 const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app, options) => {
@@ -50,7 +52,7 @@ const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app
 
   await app.register(authMe, { prefix: "/api/auth", auth: options.auth });
   await app.register(companies, { auth: options.auth });
-  await app.register(administration, { auth: options.auth, ...(options.config ? { config: options.config } : {}), ...(options.projects ? { projects: options.projects } : {}), ...(options.attention ? { attention: options.attention } : {}), ...(options.database ? { database: options.database } : {}), ...(options.capacity ? { capacity: options.capacity } : {}) });
+  await app.register(administration, { auth: options.auth, ...(options.readProviders ? { readProviders: options.readProviders } : {}), ...(options.config ? { config: options.config } : {}), ...(options.projects ? { projects: options.projects } : {}), ...(options.attention ? { attention: options.attention } : {}), ...(options.database ? { database: options.database } : {}), ...(options.capacity ? { capacity: options.capacity } : {}) });
   if (options.hermes) await app.register(hermesAdministration, { hermes: options.hermes });
   if (options.projects) await app.register(projects, { projects: options.projects, ...(options.database ? { database: options.database } : {}) });
   if (options.tasks) await app.register(tasks, { tasks: options.tasks, ...(options.release ? { release: options.release } : {}), ...(options.database ? { database: options.database } : {}), ...(options.config ? { config: options.config } : {}) });

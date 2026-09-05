@@ -13,6 +13,7 @@ import type { ForgeDatabase } from "./database.js";
 import type { ForgeConfig } from "./config.js";
 import type { CapacityManager } from "./capacity.js";
 import type { HermesAgentService } from "./hermes-agents.js";
+import type { ReadOpenCodeProviders } from "./opencode-providers.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
 import type { ProjectService } from "./projects.js";
 import type { TaskService } from "./tasks.js";
@@ -56,6 +57,7 @@ export interface AppDependencies {
   logger?: Logger | false;
   capacity?: CapacityManager;
   hermes?: HermesAgentService;
+  readProviders?: ReadOpenCodeProviders;
   https?: { key: Buffer; cert: Buffer };
   frontendDevelopment?: {
     transformIndexHtml(url: string, html: string): Promise<string>;
@@ -121,7 +123,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
     if (dependencies.hermes) void app.register(hermesPairing, { hermes: dependencies.hermes });
     if (dependencies.hermes && taskService) registerHermesTaskRoutes(app, { hermes: dependencies.hermes, tasks: taskService });
-    void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(releaseService ? { release: releaseService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}), ...(rebuild ? { rebuild } : {}), ...(dependencies.capacity ? { capacity: dependencies.capacity } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
+    void app.register(authenticated, { auth, config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(releaseService ? { release: releaseService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}), ...(rebuild ? { rebuild } : {}), ...(dependencies.capacity ? { capacity: dependencies.capacity } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
     if (projectService && database) void app.register(prompts, { auth, config: dependencies.config, database, projects: projectService });
     if (taskService && database) void app.register(taskPrompts, { auth, config: dependencies.config, database, tasks: taskService });
     if (templateService) void app.register(taskTemplates, { auth, config: dependencies.config, templates: templateService });

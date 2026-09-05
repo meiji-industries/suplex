@@ -284,11 +284,14 @@ test("an interrupted Worker preserves dirty bytes and permits exactly one contin
   value.store.bindLive({ sessionId: worker.id, generation: worker.generation, paneId: "worker-pane", agentName: "worker", nativeSessionId: "native-worker" });
   await writeFile(join(value.store.get("task").worktree!.path, "dirty.txt"), "keep this partial change\n");
   const observer = await writeAcceptedNativeTurn(value.root, worker, value.store.get("task").worktree!.path);
-  const herdr = { runtimeSnapshot: async () => ({ agents: [{ name: "root", paneId: "root-pane", status: "working" }, { name: "worker", paneId: "worker-pane", agentSession: "native-worker", status: "done" }], panes: [] }), readAgent: async () => "", prompt: async (name: string) => ({ name, paneId: "root-pane" }) };
+  let observations = 0;
+  const herdr = { runtimeSnapshot: async () => { observations += 1; if (observations === 1) throw new Error("temporary Herdr failure"); return { agents: [{ name: "root", paneId: "root-pane", status: "working" }], panes: [] }; }, readAgent: async () => "", prompt: async (name: string) => ({ name, paneId: "root-pane" }) };
   let launches = 0;
   const workerRuntime = { launch: async () => { launches += 1; return { paneId: "continuation-pane", agentName: "continuation", nativeSessionId: "continuation-native" }; } };
   try {
     const controller = new RootController(value.store, herdr, workerRuntime, undefined, observer);
+    await controller.recover("task");
+    expect(value.store.currentSession("task", "worker")?.lifecycle).toBe("unknown");
     await controller.recover("task");
     expect(await readFile(join(value.store.get("task").worktree!.path, "dirty.txt"), "utf8")).toBe("keep this partial change\n");
     await controller.delegateWorker({ taskId: "task", sessionId: root.id, generation: root.generation }, "Continue the preserved work.");

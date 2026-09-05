@@ -102,7 +102,8 @@ export class RootController implements RootBridgeAdapter {
     const observe = (session: TaskSession): "live" | "stopped" | "unknown" => {
       if (!session.paneId || !session.agentName) return "unknown";
       const agent = session.paneId ? snapshot.agents.find((candidate) => candidate.paneId === session.paneId) : undefined;
-      if (!agent) return session.kind === "root" && session.lifecycle === "live" ? "stopped" : "unknown";
+      const pane = session.paneId ? snapshot.panes.find((candidate) => candidate.paneId === session.paneId) : undefined;
+      if (!agent) return (session.kind === "root" && session.lifecycle === "live") || (session.kind === "worker" && !pane && !session.launchOwner) ? "stopped" : "unknown";
       if (agent.name !== session.agentName || session.nativeSessionId && agent.agentSession !== session.nativeSessionId) return "unknown";
       if (liveStatuses.has(agent.status ?? "")) return "live";
       if (["done", "failed", "cancelled", "stopped"].includes(agent.status ?? "")) return "stopped";

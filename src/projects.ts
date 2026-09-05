@@ -15,7 +15,8 @@ import type { ForgeDatabase } from "./database.js";
 import { jsonRequired } from "./task-utils.js";
 import { createGithubReleasePort, type GithubReleasePort } from "./github-release.js";
 import { TaskSourceService, type TaskSourceSelector } from "./task-sources.js";
-import { AGENT_PROVIDER_KINDS, type AgentProviderKind } from "./agent-providers/provider.js";
+import type { AgentProviderKind } from "./agent-providers/provider.js";
+import { readOpenCodeProviders, type ReadOpenCodeProviders } from "./opencode-providers.js";
 import { seedDefaultTaskTemplates } from "./default-task-templates.js";
 import type { ServicePriority } from "./agent-providers/kinds.js";
 
@@ -25,7 +26,7 @@ export type { ServicePriority };
 const execFileAsync = promisify(execFile);
 
 export type RoleAssignments = Partial<Record<ProjectRole, string | undefined>>;
-export type ReasoningLevel = "low" | "medium" | "high" | "xhigh";
+export type ReasoningLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ProjectFinding {
   code: string;
@@ -84,17 +85,12 @@ export interface Agent {
 export type AgentInput = { name: string; role: ProjectRole; avatarSeed?: string | undefined; provider?: AgentProviderKind | undefined; model?: string | undefined; reasoningLevel?: ReasoningLevel | undefined; servicePriority?: ServicePriority | undefined; capacity?: number | null | undefined; profileId?: string | undefined };
 export type AgentUpdate = { name?: string | undefined; role?: ProjectRole | undefined; avatarSeed?: string | undefined; provider?: AgentProviderKind | undefined; model?: string | undefined; reasoningLevel?: ReasoningLevel | undefined; servicePriority?: ServicePriority | undefined; capacity?: number | null | undefined; archived?: boolean | undefined };
 
-export type ModelStatus = "active" | "retired";
 
-export interface CodexModel {
+export interface OpenCodeModelOption {
   id: string;
-  provider: AgentProviderKind;
+  provider: string;
+  providerLabel: string;
   displayName: string;
-  description: string;
-  status: ModelStatus;
-  sortOrder: number;
-  createdAt: string;
-  updatedAt: string;
 }
 
 export interface ProjectCheckOption {
@@ -156,6 +152,7 @@ export interface GithubRepositoryCoordinate {
 }
 
 interface ProjectServiceOptions {
+  readProviders?: ReadOpenCodeProviders;
   github?: GithubAdapter;
   localRepository?: LocalRepositoryAdapter;
   repositoryProvisioner?: RepositoryProvisioner;
@@ -209,17 +206,6 @@ export interface AgentRow {
   reasoning_level: ReasoningLevel;
   service_priority: ServicePriority;
   capacity: number | null;
-}
-
-interface ModelRow {
-  model_id: string;
-  provider: AgentProviderKind;
-  display_name: string;
-  description: string;
-  status: ModelStatus;
-  sort_order: number;
-  created_at: string;
-  updated_at: string;
 }
 
 const projectColumns = "p.*";
@@ -331,10 +317,6 @@ export function resolveAgentProfiles(db: Database, roleAgents: RoleAssignments):
     if (agent) resolved[role as ProjectRole] = agent.profile_id;
   }
   return resolved;
-}
-
-function publicModel(row: ModelRow): CodexModel {
-  return { id: row.model_id, provider: row.provider, displayName: row.display_name, description: row.description, status: row.status, sortOrder: row.sort_order, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 function publicProject(row: ProjectRow): Project {
@@ -581,6 +563,7 @@ export class ProjectService {
   private readonly repositoryProvisioner: RepositoryProvisioner;
   private readonly validateProjectConfiguration: boolean;
   private readonly taskSources: TaskSourceService;
+  private readonly readProviders: ReadOpenCodeProviders;
 
   constructor(
     private readonly database: ForgeDatabase,
@@ -597,17 +580,17 @@ export class ProjectService {
     // save-time guard unless an explicit test fake supplies a value.
     this.validateProjectConfiguration = options.validateProjectConfiguration ?? process.env.VITEST === undefined;
     this.taskSources = new TaskSourceService(options.githubRelease ?? createGithubReleasePort());
+    this.readProviders = options.readProviders ?? (() => readOpenCodeProviders({ directory: process.cwd() }));
   }
 
   private validateProfileInput(input: ProfileInput): Required<ProfileInput> {
     const name = input.name.trim();
     const model = input.model.trim();
     const capacity = input.capacity ?? null;
-    const provider = input.provider ?? "codex";
-    if (!AGENT_PROVIDER_KINDS.includes(provider)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-provider", "provider", "Provider is unknown")]);
-    const catalogModel = this.database.authQuery((db) => db.prepare("SELECT model_id FROM forge_models WHERE model_id = ? AND provider = ? AND status = 'active'").get(model, provider) as { model_id: string } | undefined);
-    if (!modelIdPattern.test(model) || secretPattern.test(model) || !catalogModel) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-model", "model", "Select an active model from the catalog")]);
-    if (!["low", "medium", "high", "xhigh"].includes(input.reasoningLevel)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-reasoning", "reasoningLevel", "Reasoning level is invalid")]);
+    const provider = input.provider ?? "openai";
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(provider) || ["codex", "claude"].includes(provider)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-provider", "provider", "Select an OpenCode provider")]);
+    if (!modelIdPattern.test(model) || secretPattern.test(model)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-model", "model", "Select an OpenCode model")]);
+    if (!["low", "medium", "high", "xhigh", "max"].includes(input.reasoningLevel)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-reasoning", "reasoningLevel", "Reasoning level is invalid")]);
     if (!["standard", "priority", "fast"].includes(input.servicePriority)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-priority", "servicePriority", "Service priority is invalid")]);
     if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 32)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-capacity", "capacity", "Capacity must be an integer from 1 to 32")]);
     return { name, provider, model, reasoningLevel: input.reasoningLevel, servicePriority: input.servicePriority, capacity };
@@ -660,7 +643,7 @@ export class ProjectService {
     if (!(["planner", "builder", "reviewer", "integrator"] as ProjectRole[]).includes(input.role)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-role", "role", "Agent role is invalid")]);
     if (input.avatarSeed !== undefined && !avatarSeedPattern.test(input.avatarSeed)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-avatar", "avatarSeed", "Avatar seed is invalid")]);
     const legacyProfile = input.profileId ? this.database.authQuery((db) => db.prepare("SELECT * FROM forge_profiles WHERE id = ?").get(input.profileId) as ProfileRow | undefined) : undefined;
-    const profile = this.validateProfileInput({ name, provider: input.provider ?? legacyProfile?.provider ?? "codex", model: input.model ?? legacyProfile?.model ?? "", reasoningLevel: input.reasoningLevel ?? legacyProfile?.reasoning_level ?? "medium", servicePriority: input.servicePriority ?? legacyProfile?.service_priority ?? "standard", capacity: input.capacity ?? legacyProfile?.capacity ?? null });
+    const profile = this.validateProfileInput({ name, provider: input.provider ?? legacyProfile?.provider ?? "openai", model: input.model ?? legacyProfile?.model ?? (input.role === "builder" ? "gpt-5.6-luna" : "gpt-5.6-sol"), reasoningLevel: input.reasoningLevel ?? legacyProfile?.reasoning_level ?? (input.role === "builder" ? "max" : "medium"), servicePriority: input.servicePriority ?? legacyProfile?.service_priority ?? (input.role === "builder" ? "priority" : "standard"), capacity: input.capacity ?? legacyProfile?.capacity ?? null });
     return { name, role: input.role, avatarSeed: input.avatarSeed ?? randomBytes(16).toString("hex"), provider: profile.provider, model: profile.model, reasoningLevel: profile.reasoningLevel, servicePriority: profile.servicePriority, capacity: profile.capacity, profileId: input.profileId ?? "" };
   }
 
@@ -766,47 +749,10 @@ export class ProjectService {
     return publicProfile(changed, this.config);
   }
 
-  listModels(actorUserId: string, includeRetired = false): CodexModel[] {
-    if (includeRetired) this.requireAdmin(actorUserId);
-    else this.user(actorUserId);
-    return this.database.authQuery((db) => {
-      const rows = (includeRetired
-        ? db.prepare("SELECT * FROM forge_models ORDER BY sort_order, model_id").all()
-        : db.prepare("SELECT * FROM forge_models WHERE status = 'active' ORDER BY sort_order, model_id").all()) as ModelRow[];
-      return rows.map(publicModel);
-    });
-  }
-  createModel(actorUserId: string, input: { id: string; provider?: AgentProviderKind; displayName: string; description?: string; sortOrder?: number }): CodexModel {
-    this.requireAdmin(actorUserId);
-    const id = input.id.trim().toLowerCase();
-    const displayName = input.displayName.trim();
-    const description = input.description?.trim() ?? "";
-    const sortOrder = input.sortOrder ?? 100;
-    if (!modelIdPattern.test(id) || !displayName || displayName.length > 120 || description.length > 240 || !Number.isInteger(sortOrder) || sortOrder < 0 || sortOrder > 10_000) {
-      throw new ProjectFailure("Model configuration is invalid", [finding("invalid-model", "model", "Use a valid model ID, display name, and sort order")]);
-    }
-    const now = this.now().toISOString();
-    try {
-      this.database.authTransaction((db) => {
-        db.prepare("INSERT INTO forge_models (model_id, provider, display_name, description, status, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)").run(id, input.provider ?? "codex", displayName, description, sortOrder, now, now);
-        this.auth.recordAuditEventInTransaction(db, actorUserId, "model_created", undefined, undefined, { modelId: id });
-      });
-    } catch {
-      throw new ProjectFailure("Model configuration is invalid", [finding("duplicate-model", "model", "Model ID is already in the catalog")], 409);
-    }
-    return this.database.authQuery((db) => publicModel(db.prepare("SELECT * FROM forge_models WHERE model_id = ?").get(id) as ModelRow));
-  }
-
-  setModelStatus(actorUserId: string, modelId: string, status: ModelStatus): CodexModel {
-    this.requireAdmin(actorUserId);
-    if (!modelIdPattern.test(modelId) || !["active", "retired"].includes(status)) throw new ProjectFailure("Model configuration is invalid", [finding("invalid-model", "model", "Model ID or status is invalid")]);
-    const now = this.now().toISOString();
-    this.database.authTransaction((db) => {
-      const result = db.prepare("UPDATE forge_models SET status = ?, updated_at = ? WHERE model_id = ?").run(status, now, modelId);
-      if (result.changes === 0) throw new ProjectFailure("Not found", [], 404);
-      this.auth.recordAuditEventInTransaction(db, actorUserId, status === "active" ? "model_restored" : "model_retired", undefined, undefined, { modelId });
-    });
-    return this.database.authQuery((db) => publicModel(db.prepare("SELECT * FROM forge_models WHERE model_id = ?").get(modelId) as ModelRow));
+  async listModels(actorUserId: string): Promise<OpenCodeModelOption[]> {
+    this.user(actorUserId);
+    const native = await this.readProviders();
+    return native.providers.flatMap((provider) => provider.models.map((model) => ({ id: model.id, provider: provider.id, providerLabel: provider.label, displayName: model.label })));
   }
 
   async listProjectChecks(actorUserId: string, projectId: string): Promise<ProjectCheckOption[]> {

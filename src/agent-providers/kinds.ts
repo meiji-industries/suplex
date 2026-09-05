@@ -1,6 +1,6 @@
-export const AGENT_PROVIDER_KINDS = ["codex", "claude", "openrouter"] as const;
+export const AGENT_PROVIDER_KINDS: readonly string[] = ["codex", "claude", "openrouter"];
 
-export type AgentProviderKind = (typeof AGENT_PROVIDER_KINDS)[number];
+export type AgentProviderKind = string;
 export const SERVICE_PRIORITIES = ["standard", "priority", "fast"] as const;
 
 export type ServicePriority = (typeof SERVICE_PRIORITIES)[number];
@@ -38,5 +38,5 @@ export const PROVIDER_HARNESSES: Record<AgentProviderKind, {
 
 export function servicePriorityLabel(provider: AgentProviderKind, priority: string): string {
   if (!(SERVICE_PRIORITIES as readonly string[]).includes(priority)) return priority;
-  return PROVIDER_HARNESSES[provider].servicePriorityLabels[priority as ServicePriority];
+  return PROVIDER_HARNESSES[provider]?.servicePriorityLabels[priority as ServicePriority] ?? priority;
 }

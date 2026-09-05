@@ -21,6 +21,7 @@ export async function readOpenCodeProviders(input: { directory: string; executab
       harness: "opencode", directory: reference.directory, observedAt: new Date().toISOString(),
       providers: native.all.filter((provider) => connected.has(provider.id)).map((provider) => ({
         id: provider.id, label: provider.name, modelCount: Object.keys(provider.models).length, status: "configured" as const,
+        models: Object.values(provider.models).map((model) => ({ id: model.id, label: model.name })).sort((a, b) => a.label.localeCompare(b.label)),
       })).sort((a, b) => a.label.localeCompare(b.label)),
     };
   } finally {

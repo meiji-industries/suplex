@@ -11,7 +11,7 @@ import type { ForgeConfig } from "../../config.js";
 import { ProjectionRebuildFailure, ProjectionRebuildService } from "../../projection-rebuild.js";
 import { AuditEventListResponseSchema, CredentialIdParamsSchema, CredentialListResponseSchema, ErrorResponseSchema, InvitationResponseSchema, InvitationSummaryListResponseSchema, UserIdParamsSchema, UserListResponseSchema } from "../contracts/common.js";
 import { DisplayNameBodySchema } from "../contracts/auth.js";
-import { AdminCapacityListResponseSchema, AgentBodySchema, AgentPatchBodySchema, AgentResponseSchema, ModelBodySchema, ModelIdParamsSchema, ModelListResponseSchema, ModelResponseSchema, ModelStatusBodySchema } from "../contracts/projects.js";
+import { AdminCapacityListResponseSchema, AgentBodySchema, AgentPatchBodySchema, AgentResponseSchema, ModelListResponseSchema } from "../contracts/projects.js";
 import { ProviderListResponseSchema, type ProviderListResponse } from "../contracts/providers.js";
 import { readOpenCodeProviders, type ReadOpenCodeProviders } from "../../opencode-providers.js";
 import { MAX_MIN_FREE_DISK_GB, readEnvironmentSettings, updateEnvironmentSettings } from "../../environment-settings.js";
@@ -81,9 +81,7 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     typed.post("/api/admin/agents", { schema: { body: AgentBodySchema, response: { 201: AgentResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.createAgent(request.forgeUser.id, { ...request.body, capacity: request.body.capacity ?? null })));
     typed.patch("/api/admin/agents/:agentId", { schema: { params: z.object({ agentId: z.string() }), body: AgentPatchBodySchema, response: { 200: AgentResponseSchema } } }, async (request, reply) => reply.send(projects.updateAgent(request.forgeUser.id, request.params.agentId, request.body)));
     typed.post("/api/admin/agents/:agentId/duplicate", { schema: { params: z.object({ agentId: z.string() }), response: { 201: AgentResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.duplicateAgent(request.forgeUser.id, request.params.agentId)));
-    typed.get("/api/admin/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: projects.listModels(request.forgeUser.id, true) }));
-    typed.post("/api/admin/models", { schema: { body: ModelBodySchema, response: { 201: ModelResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.createModel(request.forgeUser.id, request.body)));
-    typed.patch("/api/admin/models/:modelId", { schema: { params: ModelIdParamsSchema, body: ModelStatusBodySchema, response: { 200: ModelResponseSchema } } }, async (request, reply) => reply.send(projects.setModelStatus(request.forgeUser.id, request.params.modelId, request.body.status)));
+    typed.get("/api/admin/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: await projects.listModels(request.forgeUser.id) }));
   }
   if (capacity) typed.get("/api/admin/capacity", { schema: { response: { 200: AdminCapacityListResponseSchema, 403: ErrorResponseSchema } } }, async (request, reply) => {
     if (request.forgeUser.role !== "admin") return reply.code(403).send({ error: "Administrator access required" });

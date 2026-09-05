@@ -304,7 +304,7 @@ export class ForgeDatabase {
     this.orm = drizzle(this.db, { schema: { ...authSchema, workerRegistrations } });
     try {
       if (migrate) {
-        this.ensureModelCatalog();
+        if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '__drizzle_migrations'").get()) this.bootstrapHistoricalModelMigrations();
         this.preflightProjectRepositoryIdentities();
         applyMigrations(this.db, migrationFolder());
       }
@@ -322,7 +322,9 @@ export class ForgeDatabase {
     return this.db.name;
   }
 
-  private ensureModelCatalog(): void {
+  // Immutable early migrations expect this original bootstrap table. The
+  // native OpenCode migration drops it; opening a migrated database never recreates it.
+  private bootstrapHistoricalModelMigrations(): void {
     this.db.exec(`CREATE TABLE IF NOT EXISTS forge_models (
       model_id TEXT PRIMARY KEY NOT NULL,
       display_name TEXT NOT NULL,

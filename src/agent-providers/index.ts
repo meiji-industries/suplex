@@ -3,7 +3,7 @@ import { herdrCodexProvider } from "./herdr-codex.js";
 import { herdrOpenRouterProvider } from "./herdr-openrouter.js";
 import type { AgentProvider, AgentProviderKind } from "./provider.js";
 
-export const agentProviders = { codex: herdrCodexProvider, claude: herdrClaudeProvider, openrouter: herdrOpenRouterProvider } as const satisfies Record<AgentProviderKind, AgentProvider>;
+export const agentProviders: Record<string, AgentProvider> = { codex: herdrCodexProvider, claude: herdrClaudeProvider, openrouter: herdrOpenRouterProvider };
 
 export function resolveAgentProvider(provider: AgentProviderKind = "codex"): AgentProvider {
   const resolved = agentProviders[provider];

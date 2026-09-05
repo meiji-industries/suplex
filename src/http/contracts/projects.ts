@@ -1,16 +1,15 @@
 import { z } from "zod";
-import { AGENT_PROVIDER_KINDS } from "../../agent-providers/provider.js";
-
 import { AdminCapacityLaneSchema } from "../../capacity-contracts.js";
 
+const ProviderIdSchema = z.string().min(1).max(128).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/).refine((id) => id !== "codex" && id !== "claude", "Select an OpenCode provider");
 const ProjectRoleDefaultsSchema = z.object({ planner: z.string().optional(), builder: z.string().optional(), reviewer: z.string().optional(), integrator: z.string().optional() });
 
 const OptionalCapacitySchema = z.preprocess((value) => value === "" ? null : value, z.coerce.number().int().min(1).max(32).nullable().optional());
 
 const AgentSettingsSchema = z.object({
-  provider: z.enum(AGENT_PROVIDER_KINDS).default("codex"),
+  provider: ProviderIdSchema.default("openai"),
   model: z.string().default(""),
-  reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]),
+  reasoningLevel: z.enum(["low", "medium", "high", "xhigh", "max"]),
   servicePriority: z.enum(["standard", "priority", "fast"]),
   capacity: OptionalCapacitySchema,
 });
@@ -29,8 +28,8 @@ export const ProjectBodySchema = z.object({
 });
 
 export const AgentBodySchema = z.object({ name: z.string().min(1), role: z.enum(["planner", "builder", "reviewer", "integrator"]), avatarSeed: z.string().regex(/^[a-f0-9]{32}$/).optional() }).extend(AgentSettingsSchema.shape);
-export const AgentPatchBodySchema = z.object({ name: z.string().min(1).optional(), role: z.enum(["planner", "builder", "reviewer", "integrator"]).optional(), avatarSeed: z.string().regex(/^[a-f0-9]{32}$/).optional(), archived: z.boolean().optional(), provider: z.enum(AGENT_PROVIDER_KINDS).optional(), model: z.string().optional(), reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]).optional(), servicePriority: z.enum(["standard", "priority", "fast"]).optional(), capacity: OptionalCapacitySchema });
-export const AgentResponseSchema = z.object({ id: z.string(), name: z.string(), role: z.enum(["planner", "builder", "reviewer", "integrator"]), avatarSeed: z.string(), profileId: z.string(), provider: z.enum(AGENT_PROVIDER_KINDS), model: z.string(), reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]), servicePriority: z.enum(["standard", "priority", "fast"]), capacity: z.number().nullable(), effectiveCapacity: z.number().int().min(1).max(32), archivedAt: z.string().nullable(), activeCount: z.number().int().nonnegative(), lastSeenAt: z.string(), createdAt: z.string(), updatedAt: z.string() });
+export const AgentPatchBodySchema = z.object({ name: z.string().min(1).optional(), role: z.enum(["planner", "builder", "reviewer", "integrator"]).optional(), avatarSeed: z.string().regex(/^[a-f0-9]{32}$/).optional(), archived: z.boolean().optional(), provider: ProviderIdSchema.optional(), model: z.string().optional(), reasoningLevel: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(), servicePriority: z.enum(["standard", "priority", "fast"]).optional(), capacity: OptionalCapacitySchema });
+export const AgentResponseSchema = z.object({ id: z.string(), name: z.string(), role: z.enum(["planner", "builder", "reviewer", "integrator"]), avatarSeed: z.string(), profileId: z.string(), provider: ProviderIdSchema, model: z.string(), reasoningLevel: z.enum(["low", "medium", "high", "xhigh", "max"]), servicePriority: z.enum(["standard", "priority", "fast"]), capacity: z.number().nullable(), effectiveCapacity: z.number().int().min(1).max(32), archivedAt: z.string().nullable(), activeCount: z.number().int().nonnegative(), lastSeenAt: z.string(), createdAt: z.string(), updatedAt: z.string() });
 export const AgentListResponseSchema = z.object({ agents: z.array(AgentResponseSchema) });
 export const AgentListQuerySchema = z.object({ companyId: z.string().min(1).optional(), includeArchived: z.literal("true").optional() });
 export type AgentResponse = z.infer<typeof AgentResponseSchema>;
@@ -44,14 +43,11 @@ export const ProjectRepositoryBodySchema = z.object({
 
 export const ProjectCreateBodySchema = z.union([ProjectRepositoryBodySchema, ProjectBodySchema]);
 
-export const ProfileResponseSchema = z.object({ id: z.string(), name: z.string(), provider: z.enum(AGENT_PROVIDER_KINDS), model: z.string(), reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]), servicePriority: z.enum(["standard", "priority", "fast"]), capacity: z.number().nullable(), effectiveCapacity: z.number().int().min(1).max(32), createdAt: z.string(), updatedAt: z.string() });
+export const ProfileResponseSchema = z.object({ id: z.string(), name: z.string(), provider: ProviderIdSchema, model: z.string(), reasoningLevel: z.enum(["low", "medium", "high", "xhigh", "max"]), servicePriority: z.enum(["standard", "priority", "fast"]), capacity: z.number().nullable(), effectiveCapacity: z.number().int().min(1).max(32), createdAt: z.string(), updatedAt: z.string() });
 export const ProfileListResponseSchema = z.object({ profiles: z.array(ProfileResponseSchema) });
 export const AdminCapacityListResponseSchema = z.object({ lanes: z.array(AdminCapacityLaneSchema) });
-export const ModelResponseSchema = z.object({ id: z.string(), provider: z.enum(AGENT_PROVIDER_KINDS), displayName: z.string(), description: z.string(), status: z.enum(["active", "retired"]), sortOrder: z.number(), createdAt: z.string(), updatedAt: z.string() });
+export const ModelResponseSchema = z.object({ id: z.string(), provider: ProviderIdSchema, providerLabel: z.string(), displayName: z.string() });
 export const ModelListResponseSchema = z.object({ models: z.array(ModelResponseSchema) });
-export const ModelBodySchema = z.object({ id: z.string().default(""), provider: z.enum(AGENT_PROVIDER_KINDS).default("codex"), displayName: z.string().default(""), description: z.string().default(""), sortOrder: z.coerce.number().int().default(100) });
-export const ModelStatusBodySchema = z.object({ status: z.enum(["active", "retired"]) });
-export const ModelIdParamsSchema = z.object({ modelId: z.string() });
 export const ProjectCheckListResponseSchema = z.object({ checks: z.array(z.object({ name: z.string(), status: z.string(), conclusion: z.string().optional() })) });
 export const ProjectRepositoryDefaultsResponseSchema = z.object({ setupCommand: z.string(), verificationCommand: z.string() });
 export const ProjectResponseSchema = z.object({

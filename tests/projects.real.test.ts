@@ -47,7 +47,7 @@ test.skipIf(!runRealGithubProof)("activates through the production GitHub adapte
     const auth = new AuthService(database, config);
     const projects = new ProjectService(database, auth, config);
     const company = auth.createCompany("real-gh-admin", "Real GitHub proof");
-    const model = projects.listModels("real-gh-admin")[0]?.id;
+    const model = (await projects.listModels("real-gh-admin"))[0]?.id;
     if (!model) throw new Error("No active model is available for the real GitHub proof");
     const profile = projects.createProfile("real-gh-admin", { name: "Real GitHub proof", model, reasoningLevel: "medium", servicePriority: "standard", capacity: 1 });
     const planner = projects.createAgent("real-gh-admin", { name: "Planner", role: "planner", profileId: profile.id });

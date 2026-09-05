@@ -28,8 +28,8 @@ test("provider API uses native configuration, not CLI health or Forge credential
   const app = createApp({ config, auth, database, health, readProviders: async () => {
     if (failObservation) throw new Error("native server failed");
     return { harness: "opencode", directory: root, observedAt: new Date().toISOString(), providers: [
-      { id: "openai", label: "OpenAI", modelCount: 3, status: "configured" },
-      { id: "opencode", label: "OpenCode Zen", modelCount: 5, status: "configured" },
+      { id: "openai", label: "OpenAI", modelCount: 1, models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], status: "configured" },
+      { id: "opencode", label: "OpenCode Zen", modelCount: 1, models: [{ id: "gpt-5.6-luna", label: "GPT-5.6 Luna" }], status: "configured" },
     ] };
   } });
   try {

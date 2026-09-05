@@ -8,7 +8,6 @@ import { AuthService } from "../src/auth.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { ProjectService, effectiveProfileCapacity, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects.js";
-import type { AgentProviderKind } from "../src/agent-providers/provider.js";
 import type { GithubAdapter } from "../src/github.js";
 
 interface Fixture {
@@ -48,7 +47,12 @@ async function fixture(): Promise<Fixture> {
   database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin-1', 'Admin', 'admin@forge.local', 'admin', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run());
   const config = createTestConfig(root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot, worktreeRoot });
   const auth = new AuthService(database, config);
-  const projects = new ProjectService(database, auth, config, { localRepository, github, validateProjectConfiguration: true });
+  const projects = new ProjectService(database, auth, config, { localRepository, github, validateProjectConfiguration: true, readProviders: async () => ({
+    harness: "opencode", directory: root, observedAt: new Date().toISOString(), providers: [
+      { id: "openai", label: "OpenAI", status: "configured", modelCount: 1, models: [{ id: "shared-model", label: "OpenAI model" }] },
+      { id: "opencode", label: "OpenCode Zen", status: "configured", modelCount: 1, models: [{ id: "shared-model", label: "Zen model" }] },
+    ],
+  }) });
   const company = auth.createCompany("admin-1", "Acme");
   const profile = projects.createProfile("admin-1", { name: "Default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const planner = projects.createAgent("admin-1", { name: "Planner", role: "planner", profileId: profile.id });
@@ -91,23 +95,37 @@ test("normalizes supported GitHub repository URLs", () => {
   expect(() => parseGithubRepositoryUrl("https://gitlab.com/meiji-industries/sampler.git")).toThrowError("GitHub repository URL is invalid");
 });
 
-test("maintains the model catalog and only creates profiles from active models", async () => {
+test("reads provider-qualified models from OpenCode without a Forge catalog gate", async () => {
   const value = await fixture();
   try {
-    expect(value.projects.listModels(value.adminId).map((model) => model.id)).toContain("gpt-5.6-sol");
-    const custom = value.projects.createModel(value.adminId, { id: "acme-codex-1", displayName: "Acme Codex 1" });
-    expect(custom).toMatchObject({ id: "acme-codex-1", status: "active" });
-    expect(value.projects.createProfile(value.adminId, { name: "Custom", model: custom.id, reasoningLevel: "high", servicePriority: "priority", capacity: 1 })).toMatchObject({ model: custom.id });
-    const openrouter = value.projects.createModel(value.adminId, { id: "acme/coder-1", provider: "openrouter", displayName: "Acme Coder" });
-    expect(value.projects.createProfile(value.adminId, { name: "OpenRouter", provider: "openrouter", model: openrouter.id, reasoningLevel: "medium", servicePriority: "standard", capacity: 1 })).toMatchObject({ provider: "openrouter", model: openrouter.id });
-    expect(() => value.projects.createProfile(value.adminId, { name: "Unknown", provider: "nope" as AgentProviderKind, model: openrouter.id, reasoningLevel: "medium", servicePriority: "standard", capacity: 1 })).toThrowError("Profile configuration is invalid");
-    value.projects.setModelStatus(value.adminId, custom.id, "retired");
-    expect(value.projects.listModels(value.adminId).map((model) => model.id)).not.toContain(custom.id);
-    expect(value.projects.listModels(value.adminId, true)).toEqual(expect.arrayContaining([expect.objectContaining({ id: custom.id, status: "retired" })]));
-    expect(() => value.projects.createProfile(value.adminId, { name: "Retired", model: custom.id, reasoningLevel: "medium", servicePriority: "standard", capacity: 1 })).toThrowError("Profile configuration is invalid");
+    expect(await value.projects.listModels(value.adminId)).toEqual([
+      { id: "shared-model", provider: "openai", providerLabel: "OpenAI", displayName: "OpenAI model" },
+      { id: "shared-model", provider: "opencode", providerLabel: "OpenCode Zen", displayName: "Zen model" },
+    ]);
+    expect(value.projects.createProfile(value.adminId, { name: "Custom provider", provider: "my-provider", model: "custom/model", reasoningLevel: "max", servicePriority: "priority" })).toMatchObject({ provider: "my-provider", model: "custom/model", reasoningLevel: "max" });
+    expect(() => value.projects.createProfile(value.adminId, { name: "Old harness", provider: "codex", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard" })).toThrowError("Profile configuration is invalid");
   } finally {
     await close(value);
   }
+});
+
+test("fresh installs use OpenCode defaults and never recreate the removed model catalog", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-native-defaults-"));
+  const filename = join(root, "forge.sqlite");
+  try {
+    for (let opening = 0; opening < 2; opening++) {
+      const database = new ForgeDatabase(filename);
+      try {
+        const profiles = database.authQuery((db) => db.prepare("SELECT p.provider, p.model, p.reasoning_level, p.service_priority, a.role FROM forge_agents a JOIN forge_profiles p ON p.id = a.profile_id WHERE a.kind = 'internal'").all());
+        expect(profiles.length).toBeGreaterThan(0);
+        expect(profiles).toEqual(expect.arrayContaining([
+          expect.objectContaining({ role: "planner", provider: "openai", model: "gpt-5.6-sol", reasoning_level: "medium" }),
+          expect.objectContaining({ role: "builder", provider: "openai", model: "gpt-5.6-luna", reasoning_level: "max", service_priority: "priority" }),
+        ]));
+        expect(database.authQuery((db) => db.prepare("SELECT name FROM sqlite_master WHERE name = 'forge_models'").get())).toBeUndefined();
+      } finally { database.close(); }
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("preserves inherited capacity and applies integer profile overrides", async () => {
@@ -144,7 +162,7 @@ test("sorts agents by active execution count", async () => {
       db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at, heartbeat_at) VALUES ('planner-agent-leaderboard', 'task-agent-leaderboard', ?, 'workflow-agent-leaderboard', 'planner', 'completed', 1, ?, ?, ?)").run(value.companyId, now, now, now);
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('developer-agent-leaderboard', 'task-agent-leaderboard', ?, 'workflow-agent-leaderboard', 1, 1, 'running', 'work/leaderboard', '/tmp/leaderboard', ?, ?)").run(value.companyId, "b".repeat(40), now);
     });
-    const agents = value.projects.listAgents(value.adminId);
+    const agents = value.projects.listAgents(value.adminId).filter((agent) => Object.values(value.roleDefaults).includes(agent.id));
     expect(agents.map(({ role, activeCount, lastSeenAt }) => ({ role, activeCount, lastSeenAt }))).toEqual([
       { role: "builder", activeCount: 1, lastSeenAt: now },
       { role: "planner", activeCount: 0, lastSeenAt: now },

@@ -127,11 +127,11 @@ test("hides archived agents from pickers until they are unarchived", async () =>
     const planner = value.agent("Planner", "planner");
     value.agent("Builder", "builder");
     value.projects.updateAgent("admin-1", planner.id, { archived: true });
-    expect(value.projects.listAgents("admin-1").map((agent) => agent.name)).toEqual(["Builder"]);
-    expect(value.projects.listAgents("admin-1", undefined, true).map((agent) => agent.name)).toEqual(["Builder", "Planner"]);
+    expect(value.projects.listAgents("admin-1").map((agent) => agent.name)).toEqual(["Builder", "Root", "Worker"]);
+    expect(value.projects.listAgents("admin-1", undefined, true).map((agent) => agent.name)).toEqual(["Builder", "Root", "Worker", "Planner"]);
     const restored = value.projects.updateAgent("admin-1", planner.id, { archived: false });
     expect(restored.archivedAt).toBeNull();
-    expect(value.projects.listAgents("admin-1").map((agent) => agent.name)).toEqual(["Builder", "Planner"]);
+    expect(value.projects.listAgents("admin-1").map((agent) => agent.name)).toEqual(["Builder", "Planner", "Root", "Worker"]);
   } finally {
     await close(value);
   }

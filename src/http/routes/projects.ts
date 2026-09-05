@@ -38,7 +38,7 @@ const projects: FastifyPluginAsync<ProjectRoutesOptions> = async (app, options) 
     return reply.send({ runtime: database ? await projectAgentRuntime(database, herdr, agents.map((agent) => agent.id), companyIds) : [] });
   });
   typed.get("/api/profiles", { schema: { response: { 200: ProfileListResponseSchema } } }, async (request, reply) => reply.send({ profiles: projects.listProfiles(request.forgeUser.id) }));
-  typed.get("/api/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: projects.listModels(request.forgeUser.id) }));
+  typed.get("/api/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: await projects.listModels(request.forgeUser.id) }));
   typed.get("/api/projects", { schema: { response: { 200: ProjectListResponseSchema } } }, async (request, reply) => reply.send({ projects: projects.listProjects(request.forgeUser.id) }));
   typed.get("/api/companies/:companyId/projects", { schema: { params: CompanyIdParamsSchema, response: { 200: ProjectListResponseSchema } } }, async (request, reply) => reply.send({ projects: projects.listProjects(request.forgeUser.id, request.params.companyId) }));
   typed.post("/api/companies/:companyId/projects", { schema: { params: CompanyIdParamsSchema, body: ProjectCreateBodySchema, response: { 201: ProjectResponseSchema } } }, async (request, reply) => {

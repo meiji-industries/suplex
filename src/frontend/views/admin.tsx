@@ -17,7 +17,8 @@ import { readJson, withCompany, type ApiUser } from ".././lib/api.js";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { adminDate, type ApiAgent, type ApiCredential, type ApiHermesAgent, type ApiInvitation, type ApiModel, type ApiProject } from "../lib/view-shared.js";
 import { Archive, ArchiveRestore, Check, Copy, Ellipsis, Key, Pencil, RotateCw, ShieldAlert } from "lucide-react";
-import { PROVIDER_HARNESSES, SERVICE_PRIORITIES, servicePriorityLabel } from "../../agent-providers/provider.js";
+const SERVICE_PRIORITIES = ["standard", "priority"] as const;
+const servicePriorityLabel = (_provider: string, priority: string): string => priority === "priority" ? "Priority" : "Default";
 import type { AgentProviderKind } from "../../agent-providers/provider.js";
 
 import { PromptSettings } from "./prompt-settings.js";
@@ -82,13 +83,9 @@ const PASSKEY_COLUMNS: SettingsTableColumn[] = [
 ];
 
 const MODEL_COLUMNS: SettingsTableColumn[] = [
-  { key: "model", label: "Model ↓", width: 220 },
-  { key: "provider", label: "Provider", width: 110 },
-  { key: "displayName", label: "Display name", width: 200 },
-  { key: "status", label: "Status", width: 100 },
-  { key: "sort", label: "Sort", width: 64 },
-  { key: "menu", width: 28 },
-  { key: "end", width: 32 },
+  { key: "model", label: "Model", width: 240 },
+  { key: "provider", label: "Provider", width: 180 },
+  { key: "displayName", label: "Display name", width: 220 },
 ];
 
 const USER_GROUPS: Array<{ label: string; status: ApiUser["status"] }> = [
@@ -126,13 +123,14 @@ export function AdminView(): ReactElement {
   const [hermesAgents, setHermesAgents] = useState<ApiHermesAgent[]>([]);
   const [companyProjects, setCompanyProjects] = useState<ApiProject[]>([]);
   const [models, setModels] = useState<ApiModel[]>([]);
+  const providerOptions = [...new Map(models.map((model) => [model.provider, model.providerLabel])).entries()];
   const [displayName, setDisplayName] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [agentName, setAgentName] = useState("");
   const [agentRole, setAgentRole] = useState<"planner" | "builder" | "reviewer" | "integrator">("planner");
   const [agentAvatarSeed, setAgentAvatarSeed] = useState("");
   const [agentModel, setAgentModel] = useState("gpt-5.6-sol");
-  const [agentProvider, setAgentProvider] = useState<AgentProviderKind>("codex");
+  const [agentProvider, setAgentProvider] = useState<AgentProviderKind>("openai");
   const [agentReasoning, setAgentReasoning] = useState("medium");
   const [agentPriority, setAgentPriority] = useState("standard");
   const [agentCapacity, setAgentCapacity] = useState("");
@@ -140,10 +138,6 @@ export function AdminView(): ReactElement {
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<ApiAgent | null>(null);
   const [capacityEdits, setCapacityEdits] = useState<Record<string, string>>({});
-  const [modelId, setModelId] = useState("");
-  const [modelName, setModelName] = useState("");
-  const [modelProvider, setModelProvider] = useState<AgentProviderKind>("codex");
-  const [modelOpen, setModelOpen] = useState(false);
   const [inviteToken, setInviteToken] = useState("");
   const [inviteExpiresAt, setInviteExpiresAt] = useState("");
   const [copied, setCopied] = useState(false);
@@ -167,6 +161,7 @@ export function AdminView(): ReactElement {
 
   const reload = useCallback(async (): Promise<void> => {
     try {
+      setError("");
       const [userList, invitationList, credentialList, agentList, hermesList, projectList, modelList] = await Promise.all([
         readJson<{ users: ApiUser[] }>("/api/admin/users"),
         readJson<{ invitations: ApiInvitation[] }>("/api/admin/invitations"),
@@ -174,7 +169,10 @@ export function AdminView(): ReactElement {
         readJson<{ agents: ApiAgent[] }>("/api/agents?includeArchived=true").catch(() => ({ agents: [] })),
         readJson<{ agents: ApiHermesAgent[] }>(`/api/admin/hermes-agents${currentCompany ? `?companyId=${encodeURIComponent(currentCompany.id)}` : ""}`).catch(() => ({ agents: [] })),
         currentCompany ? readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(currentCompany.id)}/projects`).catch(() => ({ projects: [] })) : Promise.resolve({ projects: [] }),
-        readJson<{ models: ApiModel[] }>("/api/admin/models").catch(() => ({ models: [] })),
+        readJson<{ models: ApiModel[] }>("/api/admin/models").catch(() => {
+          setError("Forge cannot read the OpenCode model configuration. Check OpenCode on the Forge host.");
+          return { models: [] };
+        }),
       ]);
       setUsers(userList.users);
       setInvitations(invitationList.invitations);
@@ -186,8 +184,6 @@ export function AdminView(): ReactElement {
       setHermesProjectIds((selected) => selected.filter((projectId) => projectIds.has(projectId)));
       setEditingHermesProjectIds((selected) => selected.filter((projectId) => projectIds.has(projectId)));
       setModels(modelList.models);
-      const activeModels = modelList.models.filter((model) => model.status === "active");
-      setAgentModel((current) => activeModels.some((model) => model.id === current) ? current : activeModels[0]?.id ?? "");
     } catch (reason) {
       if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
       else setError("Unable to load administration");
@@ -213,7 +209,7 @@ export function AdminView(): ReactElement {
       setCopied(true);
     } catch { setError("Unable to copy invitation"); }
   };
-  const openNewAgent = (): void => { setEditingAgentId(null); setAgentName(""); setAgentRole("planner"); setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", "")); setAgentProvider("codex"); setAgentModel("gpt-5.6-sol"); setAgentReasoning("medium"); setAgentPriority("standard"); setAgentCapacity(""); setAgentOpen(true); };
+  const openNewAgent = (): void => { setEditingAgentId(null); setAgentName(""); setAgentRole("planner"); setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", "")); setAgentProvider("openai"); setAgentModel("gpt-5.6-sol"); setAgentReasoning("medium"); setAgentPriority("standard"); setAgentCapacity(""); setAgentOpen(true); };
   const openEditAgent = (agent: ApiAgent): void => { setEditingAgentId(agent.id); setAgentName(agent.name); setAgentRole(agent.role); setAgentAvatarSeed(agent.avatarSeed); setAgentProvider(agent.provider); setAgentModel(agent.model); setAgentReasoning(agent.reasoningLevel); setAgentPriority(agent.servicePriority); setAgentCapacity(agent.capacity === null ? "" : String(agent.capacity)); setAgentOpen(true); };
   const saveAgent = async (): Promise<void> => {
     const editing = editingAgentId !== null;
@@ -420,16 +416,6 @@ export function AdminView(): ReactElement {
     }
   };
 
-  const createModel = async (): Promise<void> => {
-    try {
-      await readJson("/api/admin/models", { method: "POST", body: JSON.stringify({ id: modelId, provider: modelProvider, displayName: modelName, description: "", sortOrder: 100 }) });
-      setModelId(""); setModelName(""); setModelOpen(false); await reload();
-    } catch { setError("Unable to add model"); }
-  };
-  const toggleModel = async (model: ApiModel): Promise<void> => {
-    try { await readJson(`/api/admin/models/${encodeURIComponent(model.id)}`, { method: "PATCH", body: JSON.stringify({ status: model.status === "active" ? "retired" : "active" }) }); await reload(); }
-    catch { setError("Unable to update model"); }
-  };
   const changeMembership = async (companyId: string, targetUserId: string, add: boolean): Promise<void> => {
     const action = `membership:${companyId}:${targetUserId}`;
     if (!add && pendingAction !== action) {
@@ -649,14 +635,14 @@ export function AdminView(): ReactElement {
             <Dialog open={agentOpen} onOpenChange={(open) => { setAgentOpen(open); if (!open) setEditingAgentId(null); }}>
               <DialogContent>
                 <DialogHeader><DialogTitle>{editingAgentId ? "Edit agent" : "New internal agent"}</DialogTitle><DialogDescription>Set the role and execution settings for this agent.</DialogDescription></DialogHeader>
-                <form onSubmit={(event) => { event.preventDefault(); void saveAgent(); }}>
+                <form className="max-h-[calc(100dvh-12rem)] overflow-y-auto" onSubmit={(event) => { event.preventDefault(); void saveAgent(); }}>
                   <FieldGroup>
                     <Field><FieldLabel>Avatar</FieldLabel><span className="flex items-center gap-3"><ProfileAvatar name={agentName || "Agent"} seed={agentAvatarSeed} /><Button type="button" variant="outline" size="sm" onClick={() => setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", ""))}>Randomize</Button></span></Field>
                     <Field><FieldLabel htmlFor="agent-name">Agent name</FieldLabel><Input id="agent-name" autoFocus value={agentName} onChange={(event) => setAgentName(event.target.value)} /></Field>
                     <Field><FieldLabel htmlFor="agent-role">Role</FieldLabel><Select value={agentRole} onValueChange={(value) => setAgentRole((value ?? "planner") as typeof agentRole)}><SelectTrigger id="agent-role"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="planner">Planner</SelectItem><SelectItem value="reviewer">Reviewer</SelectItem><SelectItem value="builder">Builder</SelectItem><SelectItem value="integrator">Integrator</SelectItem></SelectContent></Select></Field>
-                    <Field><FieldLabel htmlFor="agent-provider">Provider</FieldLabel><Select value={agentProvider} onValueChange={(value) => { const provider = value as AgentProviderKind; setAgentProvider(provider); if (!models.some((model) => model.status === "active" && model.provider === provider && model.id === agentModel)) setAgentModel(""); }}><SelectTrigger id="agent-provider"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(PROVIDER_HARNESSES).map(([id, provider]) => <SelectItem key={id} value={id}>{provider.label}</SelectItem>)}</SelectContent></Select></Field>
-                    {(() => { const providerModels = models.filter((model) => model.status === "active" && model.provider === agentProvider); return <Field><FieldLabel htmlFor="agent-model">Model</FieldLabel><Select value={agentModel || null} onValueChange={(value) => setAgentModel(value ?? "")}><SelectTrigger id="agent-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{providerModels.map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field>; })()}
-                    <Field><FieldLabel htmlFor="agent-reasoning">Reasoning level</FieldLabel><Select value={agentReasoning} onValueChange={(value) => setAgentReasoning(value ?? "medium")}><SelectTrigger id="agent-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem><SelectItem value="xhigh">XHigh</SelectItem></SelectContent></Select></Field>
+                    <Field><FieldLabel htmlFor="agent-provider">Provider</FieldLabel><Select value={agentProvider} onValueChange={(value) => { const provider = value as AgentProviderKind; setAgentProvider(provider); if (!models.some((model) => model.provider === provider && model.id === agentModel)) setAgentModel(""); }}><SelectTrigger id="agent-provider"><SelectValue /></SelectTrigger><SelectContent>{providerOptions.map(([id, label]) => <SelectItem key={id} value={id}>{label}</SelectItem>)}</SelectContent></Select></Field>
+                    {(() => { const providerModels = models.filter((model) => model.provider === agentProvider); return <Field><FieldLabel htmlFor="agent-model">Model</FieldLabel><Select value={agentModel || null} onValueChange={(value) => setAgentModel(value ?? "")}><SelectTrigger id="agent-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{providerModels.map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field>; })()}
+                    <Field><FieldLabel htmlFor="agent-reasoning">Reasoning level</FieldLabel><Select value={agentReasoning} onValueChange={(value) => setAgentReasoning(value ?? "medium")}><SelectTrigger id="agent-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem><SelectItem value="xhigh">XHigh</SelectItem><SelectItem value="max">Max</SelectItem></SelectContent></Select></Field>
                     <Field><FieldLabel htmlFor="agent-priority">Service priority</FieldLabel><Select value={agentPriority} onValueChange={(value) => setAgentPriority(value ?? "standard")}><SelectTrigger id="agent-priority"><SelectValue /></SelectTrigger><SelectContent>{SERVICE_PRIORITIES.map((value) => <SelectItem key={value} value={value}>{servicePriorityLabel(agentProvider, value)}</SelectItem>)}</SelectContent></Select></Field>
                     <Field><FieldLabel htmlFor="agent-capacity">Capacity override</FieldLabel><Input id="agent-capacity" inputMode="numeric" placeholder="Default" value={agentCapacity} onChange={(event) => setAgentCapacity(event.target.value)} /></Field>
                     <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!agentName.trim() || !agentModel}>{editingAgentId ? "Save changes" : "Create agent"}</Button></DialogFooter>
@@ -871,30 +857,20 @@ export function AdminView(): ReactElement {
           </section>
         ) : null}
 
-        {isModels ? (
-          <>
-            <section>
-              <SettingsToolbar searchLabel="Search models" searchPlaceholder="Search models" filterLabel="All" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={() => setModelOpen(true)}>Add model</SettingsToolbarAction>} />
-              <SettingsDataTable label="Models" columns={MODEL_COLUMNS} className="mt-5">
-                <SettingsTableGroup columnCount={MODEL_COLUMNS.length} count={models.filter((model) => model.status === "active").length} label="Model catalog">
-                  {models.map((model) => (
-                    <SettingsTableRow key={model.id} size="member">
-                      <SettingsTableCell className="truncate"><code className="text-[11px] text-muted-foreground">{model.id}</code></SettingsTableCell>
-                      <SettingsTableCell>{PROVIDER_HARNESSES[model.provider].label}</SettingsTableCell>
-                      <SettingsTableCell className="truncate">{model.displayName}{model.description ? <span className="ml-1 text-muted-foreground">· {model.description}</span> : null}</SettingsTableCell>
-                      <SettingsTableCell className="text-muted-foreground">{model.status}</SettingsTableCell>
-                      <SettingsTableCell className="text-muted-foreground">{model.sortOrder}</SettingsTableCell>
-                      <SettingsTableCell className="p-0"><DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${model.displayName} actions`} title={`${model.displayName} actions`} />}><Ellipsis /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem variant={model.status === "active" ? "destructive" : "default"} onClick={() => void toggleModel(model)}>{model.status === "active" ? "Retire model" : "Restore model"}</DropdownMenuItem></DropdownMenuContent></DropdownMenu></SettingsTableCell>
-                      <SettingsTableCell className="p-0" />
-                    </SettingsTableRow>
-                  ))}
-                </SettingsTableGroup>
-                {models.length === 0 ? <SettingsTableEmpty columnCount={MODEL_COLUMNS.length}>No models configured.</SettingsTableEmpty> : null}
-              </SettingsDataTable>
-            </section>
-            <Dialog open={modelOpen} onOpenChange={setModelOpen}><DialogContent><DialogHeader><DialogTitle>Add model</DialogTitle><DialogDescription>Make a model available to new agents.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void createModel(); }}><FieldGroup><Field><FieldLabel htmlFor="model-id">Model ID</FieldLabel><Input id="model-id" autoFocus placeholder={modelProvider === "openrouter" ? "vendor/model" : "gpt-5-codex"} value={modelId} onChange={(event) => setModelId(event.target.value)} /></Field><Field><FieldLabel htmlFor="model-provider">Provider</FieldLabel><Select value={modelProvider} onValueChange={(value) => setModelProvider((value ?? "codex") as AgentProviderKind)}><SelectTrigger id="model-provider"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(PROVIDER_HARNESSES).map(([id, provider]) => <SelectItem key={id} value={id}>{provider.label}</SelectItem>)}</SelectContent></Select></Field><Field><FieldLabel htmlFor="model-display-name">Display name</FieldLabel><Input id="model-display-name" value={modelName} onChange={(event) => setModelName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!modelId.trim() || !modelName.trim()}>Add model</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
-          </>
-        ) : null}
+        {isModels ? <section>
+          <SettingsToolbar searchLabel="Search models" searchPlaceholder="Search models" filterLabel="OpenCode" actions={<Button size="sm" variant="outline" onClick={() => void reload()}>Check configuration</Button>} />
+          <p>OpenCode supplies these models. Configure providers in OpenCode on the Forge host.</p>
+          <SettingsDataTable label="Models" columns={MODEL_COLUMNS}>
+            <SettingsTableGroup columnCount={MODEL_COLUMNS.length} count={models.length} label="OpenCode models">
+              {models.map((model) => <SettingsTableRow key={model.provider + "/" + model.id}>
+                <SettingsTableCell>{model.id}</SettingsTableCell>
+                <SettingsTableCell>{model.providerLabel}</SettingsTableCell>
+                <SettingsTableCell>{model.displayName}</SettingsTableCell>
+              </SettingsTableRow>)}
+            </SettingsTableGroup>
+            {models.length === 0 ? <SettingsTableEmpty columnCount={MODEL_COLUMNS.length}>OpenCode models are not available. Check provider configuration.</SettingsTableEmpty> : null}
+          </SettingsDataTable>
+        </section> : null}
 
         {error ? <div className="px-4 py-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       </div>

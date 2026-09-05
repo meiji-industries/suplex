@@ -9,10 +9,10 @@ import { claudeRuntime } from "../src/agent-providers/herdr-runtime.js";
 
 test("Claude runtime launches fresh sessions and resumes transcripts", () => {
   const settings = { model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" as const };
-  expect(claudeRuntime.launchArgs(settings, "session", false)).toEqual(["--model", "claude-fable-5", "--effort", "high", "--permission-mode", "bypassPermissions", "--session-id", "session"]);
-  expect(claudeRuntime.launchArgs(settings, "session", true)).toEqual(["--model", "claude-fable-5", "--effort", "high", "--permission-mode", "bypassPermissions", "--resume", "session"]);
-  expect(() => claudeRuntime.launchArgs({ ...settings, model: "invalid model" }, "session", false)).toThrow("Claude launch settings are invalid");
-  expect(() => claudeRuntime.launchArgs({ ...settings, reasoningLevel: "max" }, "session", false)).toThrow("Claude launch settings are invalid");
+  expect(claudeRuntime.launchArgs(settings, "session", false, undefined, { kind: "worker" })).toEqual(["--model", "claude-fable-5", "--effort", "high", "--permission-mode", "bypassPermissions", "--session-id", "session"]);
+  expect(claudeRuntime.launchArgs(settings, "session", true, undefined, { kind: "worker" })).toEqual(["--model", "claude-fable-5", "--effort", "high", "--permission-mode", "bypassPermissions", "--resume", "session"]);
+  expect(() => claudeRuntime.launchArgs({ ...settings, model: "invalid model" }, "session", false, undefined, { kind: "worker" })).toThrow("Claude launch settings are invalid");
+  expect(() => claudeRuntime.launchArgs({ ...settings, reasoningLevel: "max" }, "session", false, undefined, { kind: "worker" })).toThrow("Claude launch settings are invalid");
 });
 
 test("Claude preparation creates and preserves its config idempotently", async () => {

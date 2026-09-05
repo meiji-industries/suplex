@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { access, chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ForgeDatabase } from "./database.js";
 import {
   HerdrFailure,
@@ -8,12 +9,14 @@ import {
   type HerdrAgent,
   type HerdrClient,
 } from "./herdr-client.js";
-import { herdrRuntime, type HerdrProviderRuntime } from "./agent-providers/herdr-runtime.js";
+import { herdrRuntime, type AgentSessionCapability, type HerdrProviderRuntime } from "./agent-providers/herdr-runtime.js";
 import type { AgentProviderKind, HerdrAgentKind } from "./agent-providers/provider.js";
 import { ProviderCredentialStore } from "./provider-credentials.js";
 import { SUPPORTED_NODE_VERSION } from "./config.js";
 import { runCommand } from "./command-runner.js";
 import { createGitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
+import { rootBridgeMcpConfig } from "./root-bridge.js";
+import type { RootBridgeConfig } from "./root-contracts.js";
 export type RoleSessionRole = "planner" | "builder" | "reviewer" | "integrator";
 export interface LaunchSettings {
   provider?: AgentProviderKind;
@@ -44,6 +47,7 @@ const now = (): string => new Date().toISOString();
 export interface EnsureRoleSessionOptions {
   initialPrompt?: { path: string; content: string };
   beforeLaunch?: (session: { id: string; rolloutPath?: string; promptInArgv: boolean }) => void;
+  capability?: "root" | "worker";
 }
 const quote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 const isMissingHerdrFailure = (error: unknown): boolean =>
@@ -96,9 +100,9 @@ export function agentName(
     .replace(/^-/, "a-")
     .slice(0, 32);
 }
-export function launchFingerprint(settings: LaunchSettings, cwd = ""): string {
+export function launchFingerprint(settings: LaunchSettings, cwd = "", capability: unknown = { kind: "worker" }): string {
   const { provider, ...profile } = settings;
-  return createHash("sha256").update(JSON.stringify({ ...profile, ...(provider !== "codex" ? { provider } : {}), cwd })).digest("hex");
+  return createHash("sha256").update(JSON.stringify({ ...profile, ...(provider !== "codex" ? { provider } : {}), cwd, capability })).digest("hex");
 }
 export function developerPaneEnvironment(input: {
   guardDirectory: string;
@@ -221,9 +225,17 @@ export class HerdrSessionStore {
     settings: LaunchSettings,
     options: EnsureRoleSessionOptions,
   ): Promise<EnsuredRoleSession> {
+    const capability = options.capability ?? (role === "planner" ? "root" : "worker");
+    if (capability === "root" && settings.provider === "openrouter")
+      throw new HerdrFailure("unsupported_root_provider", false, "OpenRouter cannot run a Root session. Configure Codex or Claude for this Root.");
     if (settings.provider === "openrouter" && !this.credentials.get("openrouter"))
       throw new HerdrFailure("authentication-required", false, "OpenRouter API key is not configured. Add it in Settings > Providers and retry.");
-    const fingerprint = launchFingerprint(settings, task.worktreePath);
+    let fingerprint = launchFingerprint(settings, task.worktreePath, capability === "root" ? {
+      kind: "root",
+      taskId: task.taskId,
+      sessionId: String(row.id),
+      generation: Math.max(1, Number(row.generation)),
+    } : { kind: "worker" });
     let closedPaneId: string | undefined;
     let paneMismatch = false;
     let existing = await this.getRecordedAgent(row);
@@ -353,7 +365,10 @@ export class HerdrSessionStore {
       const initialPromptPath = runtime.kind === "omp" && options.initialPrompt
         ? await this.writeInitialPrompt(options.initialPrompt)
         : undefined;
-      const args = runtime.launchArgs(settings, row.codex_session_id ?? null, transcriptExists, initialPromptPath);
+      const launchCapability = capability === "root"
+        ? await this.rootCapability(task, row)
+        : { kind: "worker" } satisfies AgentSessionCapability;
+      const args = runtime.launchArgs(settings, row.codex_session_id ?? null, transcriptExists, initialPromptPath, launchCapability);
       let live: HerdrAgent;
       try {
         await runtime.prepareLaunch({ cwd: task.worktreePath, env: this.environment });
@@ -379,6 +394,14 @@ export class HerdrSessionStore {
         throw error;
       }
       this.assertIdentity(row, live);
+      if (capability === "root") {
+        fingerprint = launchFingerprint(settings, task.worktreePath, {
+          kind: "root",
+          taskId: task.taskId,
+          sessionId: String(row.id),
+          generation: Math.max(1, Number(row.generation) + 1),
+        });
+      }
       this.started(row, live, fingerprint);
       const ready = this.ready(
         { ...row, agent_name: name, pane_id: live.paneId, generation: Number(row.generation) + 1 },
@@ -417,6 +440,27 @@ export class HerdrSessionStore {
         );
       throw error;
     }
+  }
+  private async rootCapability(task: RoleSessionTask, row: Record<string, any>): Promise<AgentSessionCapability> {
+    const currentFile = fileURLToPath(import.meta.url);
+    const extension = currentFile.endsWith(".ts") ? ".ts" : ".js";
+    const packageRoot = resolve(dirname(currentFile), "..");
+    const bindingDirectory = join(task.runtimeRoot, "root-bridges");
+    await mkdir(bindingDirectory, { recursive: true, mode: 0o700 });
+    const bindingPath = join(bindingDirectory, `${row.id}.binding.json`);
+    const mcpConfigPath = join(bindingDirectory, `${row.id}.mcp.json`);
+    const bridgeEntry = join(dirname(currentFile), `root-bridge${extension}`);
+    const command = this.environment.FORGE_ROOT_BRIDGE_COMMAND ?? (extension === ".ts" ? join(packageRoot, "node_modules", ".bin", "tsx") : process.execPath);
+    const config: RootBridgeConfig = {
+      version: 1,
+      root: { taskId: task.taskId, sessionId: String(row.id), generation: Number(row.generation) + 1 },
+      server: { command, args: [bridgeEntry, "--binding", bindingPath] },
+    };
+    await writeFile(bindingPath, `${JSON.stringify(config)}\n`, { mode: 0o600 });
+    await chmod(bindingPath, 0o600);
+    await writeFile(mcpConfigPath, `${JSON.stringify(rootBridgeMcpConfig(config))}\n`, { mode: 0o600 });
+    await chmod(mcpConfigPath, 0o600);
+    return { kind: "root", bridgeConfig: config, bridgeConfigPath: mcpConfigPath };
   }
   private async startupExcerpt(paneId: string): Promise<string> {
     try {

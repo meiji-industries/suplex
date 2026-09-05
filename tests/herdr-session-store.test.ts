@@ -334,31 +334,33 @@ const startupTask: RoleSessionTask = {
   runtimeRoot: "/runtime",
 };
 const startupSettings = { model: "gpt", reasoningLevel: "high", serviceTier: "priority" as const };
+const rootLaunchFingerprint = (settings: typeof startupSettings, worktreePath: string, sessionId: string, generation = 1): string =>
+  launchFingerprint(settings, worktreePath, { kind: "root", taskId: "task", sessionId, generation });
 const taskFor = (runtimeRoot: string): RoleSessionTask => ({
   ...startupTask,
   runtimeRoot,
 });
 
-test("an OpenRouter session rejects a missing key before it creates a pane", async () => {
+test("an unsupported OpenRouter Root fails before it creates a pane", async () => {
   const value = await startupFixture();
   const herdr = new StartupHerdrFake();
   const store = new HerdrSessionStore(value.database, herdr as never);
   try {
     await expect(store.ensureRoleSession(taskFor(value.root), "planner", { provider: "openrouter", model: "anthropic/claude-sonnet-4.5", reasoningLevel: "high", serviceTier: "default" })).rejects.toMatchObject({
-      code: "authentication-required", message: expect.stringContaining("Settings > Providers"),
+      code: "unsupported_root_provider", message: expect.stringContaining("Configure Codex or Claude"),
     });
     expect(herdr.panes).toEqual([]);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("an OpenRouter lead sources a protected secret file without exposing its key", async () => {
+test("an OpenRouter Worker sources a protected secret file without exposing its key", async () => {
   const value = await startupFixture();
   const herdr = new StartupHerdrFake();
   const credentials = new ProviderCredentialStore(value.database);
   credentials.set("openrouter", "sk-openrouter-session-secret");
   const store = new HerdrSessionStore(value.database, herdr as never, process.env, undefined, undefined, credentials);
   try {
-    await store.ensureRoleSession(taskFor(value.root), "planner", { provider: "openrouter", model: "anthropic/claude-sonnet-4.5", reasoningLevel: "high", serviceTier: "default" });
+    await store.ensureRoleSession(taskFor(value.root), "reviewer", { provider: "openrouter", model: "anthropic/claude-sonnet-4.5", reasoningLevel: "high", serviceTier: "default" });
     const file = join(value.root, "secrets", (await readdir(join(value.root, "secrets")))[0]!);
     expect((await stat(file)).mode & 0o777).toBe(0o600);
     expect(herdr.commands.join("\n")).toContain(file);
@@ -391,6 +393,13 @@ test("starts a fresh session without waiting for its lazy Codex identity", async
         forge_generation: "1",
       },
     }]);
+    const args = herdr.startInputs[0]?.args ?? [];
+    expect(args).toEqual(expect.arrayContaining(["--sandbox", "read-only", "--ask-for-approval", "never", "mcp_servers={}"]));
+    const bridgeDirectory = join(value.root, "root-bridges");
+    const bridgeFiles = await readdir(bridgeDirectory);
+    expect(bridgeFiles).toHaveLength(2);
+    for (const file of bridgeFiles)
+      expect((await stat(join(bridgeDirectory, file))).mode & 0o777).toBe(0o600);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -660,7 +669,7 @@ test("adopts by pane when the stored name is stale and collides elsewhere", asyn
         .prepare(
           "UPDATE forge_herdr_role_sessions SET agent_name = 'stale-planner', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?",
         )
-        .run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
+        .run(rootLaunchFingerprint(startupSettings, taskFor(value.root).worktreePath, row.id), row.id),
     );
     await expect(
       store.ensureRoleSession(taskFor(value.root), "planner", startupSettings),
@@ -708,7 +717,7 @@ test("rejects a pane-first adoption with a conflicting native session", async ()
     value.database.authQuery((db) =>
       db.prepare(
         "UPDATE forge_herdr_role_sessions SET codex_session_id = 'recorded-session', agent_name = 'stale-planner', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?",
-      ).run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
+      ).run(rootLaunchFingerprint(startupSettings, taskFor(value.root).worktreePath, row.id), row.id),
     );
 
     await expect(
@@ -739,7 +748,7 @@ test("adopts a legacy name-only binding and durably records its live pane", asyn
     value.database.authQuery((db) =>
       db.prepare(
         "UPDATE forge_herdr_role_sessions SET agent_name = 'legacy-planner', launch_fingerprint = ? WHERE id = ?",
-      ).run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
+      ).run(rootLaunchFingerprint(startupSettings, taskFor(value.root).worktreePath, row.id), row.id),
     );
 
     await expect(
@@ -773,7 +782,7 @@ test("keeps a bound working agent as a ready lifecycle binding", async () => {
     value.database.authQuery((db) =>
       db.prepare(
         "UPDATE forge_herdr_role_sessions SET agent_name = 'working-planner', launch_fingerprint = ?, last_agent_status = 'idle', last_seen_at = '2000-01-01T00:00:00.000Z' WHERE id = ?",
-      ).run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
+      ).run(rootLaunchFingerprint(startupSettings, taskFor(value.root).worktreePath, row.id), row.id),
     );
 
     await store.ensureRoleSession(taskFor(value.root), "planner", startupSettings);
@@ -795,7 +804,7 @@ test("does not adopt a matching live name from another pane", async () => {
     const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
     const row = (store as unknown as { reserve(task: RoleSessionTask, role: "planner"): { id: string } }).reserve(taskFor(value.root), "planner");
     value.database.authQuery((db) =>
-      db.prepare("UPDATE forge_herdr_role_sessions SET agent_name = 'task-planner', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?").run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
+      db.prepare("UPDATE forge_herdr_role_sessions SET agent_name = 'task-planner', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?").run(rootLaunchFingerprint(startupSettings, taskFor(value.root).worktreePath, row.id), row.id),
     );
 
     await expect(store.ensureRoleSession(taskFor(value.root), "planner", startupSettings)).resolves.toMatchObject({
@@ -861,7 +870,7 @@ test("relaunches a recorded live agent when its launch fingerprint changes", asy
         .prepare(
           "UPDATE forge_herdr_role_sessions SET agent_name = 'task-planner', pane_id = 'pane-recorded', launch_fingerprint = ? WHERE id = ?",
         )
-        .run(launchFingerprint(startupSettings, taskFor(value.root).worktreePath), row.id),
+        .run(rootLaunchFingerprint(startupSettings, taskFor(value.root).worktreePath, row.id), row.id),
     );
 
     await expect(
@@ -881,7 +890,7 @@ test("relaunches a recorded live agent when its launch fingerprint changes", asy
       ),
     ).toEqual({
       pane_id: "pane-1",
-      launch_fingerprint: launchFingerprint(changedSettings, taskFor(value.root).worktreePath),
+      launch_fingerprint: rootLaunchFingerprint(changedSettings, taskFor(value.root).worktreePath, row.id),
     });
   } finally {
     value.database.close();
@@ -1126,7 +1135,7 @@ test("Claude sessions preassign identities and launch through Herdr as Claude", 
     const session = await store.ensureRoleSession(taskFor(value.root), "planner", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
     expect(session.provider).toBe("claude");
     expect(session.codexSessionId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(herdr.startInputs).toContainEqual(expect.objectContaining({ kind: "claude", args: ["--model", "claude-fable-5", "--effort", "high", "--permission-mode", "bypassPermissions", "--session-id", session.codexSessionId] }));
+    expect(herdr.startInputs).toContainEqual(expect.objectContaining({ kind: "claude", args: expect.arrayContaining(["--restricted", "--tools", "Read,Grep,Glob,mcp__forge_root__forge_root", "--permission-mode", "dontAsk", "--session-id", session.codexSessionId]) }));
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -1164,7 +1173,7 @@ test("Claude resumes when its preassigned transcript already exists", async () =
 
     expect(herdr.startInputs).toContainEqual(expect.objectContaining({
       kind: "claude",
-      args: ["--model", "claude-fable-5", "--effort", "high", "--permission-mode", "bypassPermissions", "--resume", sessionId],
+      args: expect.arrayContaining(["--restricted", "--tools", "Read,Grep,Glob,mcp__forge_root__forge_root", "--permission-mode", "dontAsk", "--resume", sessionId]),
     }));
   } finally {
     value.database.close();

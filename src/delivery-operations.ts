@@ -1,4 +1,5 @@
-import type { DeliveryOperation } from "./root-contracts.js";
+import type { DeliveryOperation, DeliveryReview } from "./root-contracts.js";
+import { inspectDeliveryDiff, matchesDeliveryReview } from "./delivery-review.js";
 import type { RootIdentity } from "./root-contracts.js";
 import type { GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation } from "./github-delivery.js";
 import { createGithubReleasePort } from "./github-delivery.js";
@@ -6,7 +7,7 @@ import type { PullRequestReference, TaskControl } from "./task-control.js";
 import type { TaskControlStore } from "./root-session-store.js";
 
 export class DeliveryOperationFailure extends Error {
-  constructor(readonly code: "worktree_missing" | "pull_request_ambiguous" | "pull_request_closed" | "head_diverged" | "delivery_target_mismatch", message: string) {
+  constructor(readonly code: "worktree_missing" | "pull_request_ambiguous" | "pull_request_closed" | "head_diverged" | "delivery_target_mismatch" | "delivery_review_required", message: string) {
     super(message);
     this.name = "DeliveryOperationFailure";
   }
@@ -41,9 +42,14 @@ export class DeliveryOperations {
     return this.observeKnownPull(control);
   }
 
-  async execute(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string): Promise<unknown> {
+  async execute(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string, review?: DeliveryReview): Promise<unknown> {
     this.store.assertCurrentRoot(root);
     const control = this.store.get(root.taskId);
+    if (operation === "inspect_delivery_diff") {
+      if (!control.worktree) throw new DeliveryOperationFailure("worktree_missing", "The task has no worktree");
+      const local = await this.github.inspectLocalRevision({ cwd: control.worktree.path });
+      return this.deliveryDiff(control, local.headSha);
+    }
     if (operation === "complete_local_work") return this.completeLocal(root, control, expectedHead);
     const known = operation === "push_branch" ? null : await this.observeKnownPull(control);
     if (this.store.get(root.taskId).status === "delivered") return known;
@@ -56,6 +62,12 @@ export class DeliveryOperations {
     const repository = refreshed.deliveryIntent.repository;
     const remote = await this.github.getRemoteRepository({ cwd: refreshed.worktree!.path });
     if (remote !== repository) throw new DeliveryOperationFailure("head_diverged", "The worktree remote does not match this task intent");
+    if (["push_branch", "create_or_adopt_pull_request", "request_review", "merge_pull_request"].includes(operation)) {
+      if (!review || expectedHead !== local.headSha) throw new DeliveryOperationFailure("delivery_review_required", "Inspect delivery with inspect_delivery_diff. Independently review the entire GitHub-base-to-head diff and every commit, then supply expectedHead and review { baseSha, headSha, files, commits }. Do not approve unrelated changes or import unpublished local main; ask the human if the task depends on unpublished work.");
+      const actual = await this.deliveryDiff(refreshed, local.headSha);
+      if (!matchesDeliveryReview(review, actual)) throw new DeliveryOperationFailure("delivery_review_required", "The GitHub base, task head, files, or commits differ from the reviewed delivery range. Inspect delivery again and review the whole range before retrying.");
+      this.store.assertCurrentRoot(root);
+    }
     const pull = operation === "push_branch" ? null : await this.observePull(refreshed, repository, local.branch);
     if (pull?.state === "merged") return this.completeIfTargetMatches(refreshed, pull);
     switch (operation) {
@@ -73,6 +85,12 @@ export class DeliveryOperations {
         return this.merge(root, refreshed, repository, local.branch, expectedHead);
     }
     throw new Error("delivery_operation_invalid");
+  }
+
+  private async deliveryDiff(control: TaskControl, headSha: string) {
+    const baseSha = await this.github.getBranchHead({ repository: control.deliveryIntent.repository, branch: control.deliveryIntent.baseBranch });
+    if (!baseSha) throw new DeliveryOperationFailure("head_diverged", "GitHub did not return the intended delivery base");
+    return inspectDeliveryDiff(control.worktree!.path, baseSha, headSha);
   }
 
   private async completeLocal(root: RootIdentity, control: TaskControl, expectedHead?: string) {

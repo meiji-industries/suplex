@@ -11,6 +11,7 @@ export const RootIdentitySchema = z.object({
 export type RootIdentity = z.infer<typeof RootIdentitySchema>;
 
 export const DeliveryOperationSchema = z.enum([
+  "inspect_delivery_diff",
   "complete_local_work",
   "push_branch",
   "create_or_adopt_pull_request",
@@ -21,11 +22,19 @@ export const DeliveryOperationSchema = z.enum([
 ]);
 export type DeliveryOperation = z.infer<typeof DeliveryOperationSchema>;
 
+export const DeliveryReviewSchema = z.object({
+  baseSha: z.string().regex(/^[a-f0-9]{40,64}$/),
+  headSha: z.string().regex(/^[a-f0-9]{40,64}$/),
+  files: z.array(z.string().min(1)),
+  commits: z.array(z.string().regex(/^[a-f0-9]{40,64}$/)),
+}).strict();
+export type DeliveryReview = z.infer<typeof DeliveryReviewSchema>;
+
 export const RootToolSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("observe") }).strict(),
   z.object({ kind: z.literal("read_image"), artifactId: opaqueId }).strict(),
   z.object({ kind: z.literal("delegate_worker"), instruction: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional() }).strict(),
+  z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional(), review: DeliveryReviewSchema.optional() }).strict(),
   z.object({ kind: z.literal("ask_human"), question: z.string().min(1) }).strict(),
 ]);
 

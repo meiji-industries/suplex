@@ -21,7 +21,7 @@ test.each([1280, 390])("human questions show recommendations and accept Other at
       expect(value.tasks.getTask(value.userId, task.id).status).toBe("waiting_human");
       await page.reload();
       if (other) {
-        await question.getByRole("radio", { name: "Other", exact: true }).click();
+        await question.getByText("Other", { exact: true }).waitFor();
         expect(await question.getByRole("button", { name: "Answer and continue" }).isDisabled()).toBe(true);
         await question.getByLabel("Answer", { exact: true }).fill("Use runtime/native as the base.");
       } else await question.getByRole("radio", { name: /Wait for main/ }).click();

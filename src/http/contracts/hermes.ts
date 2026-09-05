@@ -102,9 +102,8 @@ export const HermesSafeTaskProjectionSchema = z.object({
   issueKey: z.string().nullable(),
   projectId: z.string(),
   title: z.string(),
-  phase: z.string(),
-  revision: z.number().int(),
-  pendingAction: z.string().nullable(),
+  status: z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]),
+  humanQuestion: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

@@ -6,17 +6,16 @@ import { chromium } from "playwright";
 import { expect, test } from "vitest";
 
 import { AuthService, productionWebAuthnAdapter } from "../src/auth.js";
+import { AgentProfileService } from "../src/agent-profiles.js";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { addVirtualAuthenticator, freePort } from "./webauthn-helpers.js";
 
 const health = {
-  engine: async () => ({ id: "engine" as const, label: "Engine", status: "healthy" as const, summary: "Reachable", details: {} }),
   database: async () => ({ id: "database" as const, label: "Database", status: "healthy" as const, summary: "Reachable", details: {} }),
   artifactRoot: async () => ({ id: "artifact-root" as const, label: "Artifacts", status: "healthy" as const, summary: "Reachable", details: {} }),
-  worker: async () => ({ id: "worker" as const, label: "Worker", status: "healthy" as const, summary: "Reachable", details: {} }),
-  codexAuth: async () => ({ id: "codex-auth" as const, label: "Codex", status: "healthy" as const, summary: "Ready", details: {} }),
+  opencode: async () => ({ id: "opencode" as const, label: "OpenCode", status: "healthy" as const, summary: "Ready", details: {} }),
   ghAuth: async () => ({ id: "gh-auth" as const, label: "GitHub", status: "healthy" as const, summary: "Ready", details: {} }),
 };
 
@@ -52,6 +51,7 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
   const app = createApp({
     config,
     auth,
+    profiles: new AgentProfileService(database, auth),
     health,
     getHealth: async () => ({ generatedAt: new Date().toISOString(), reachableAddress: config.reachableAddress, ready: true, checks: [] }),
   });
@@ -68,6 +68,7 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
     try {
       const adminContext = await browser.newContext({ viewport: { width: 1100, height: 800 } });
       const adminPage = await adminContext.newPage();
+      adminPage.setDefaultTimeout(5_000);
       logConsole(adminPage);
       await addVirtualAuthenticator(adminPage);
 

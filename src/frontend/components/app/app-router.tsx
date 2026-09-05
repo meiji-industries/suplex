@@ -11,8 +11,6 @@ import { ProfileView } from "../../views/profile.js";
 import { Dashboard } from "../../views/dashboard.js";
 import { ProjectsView } from "../../views/projects.js";
 import { TasksView } from "../../views/tasks.js";
-import { TimelineView } from "../../views/timeline.js";
-import { PromptSettings } from "../../views/prompt-settings.js";
 import { TaskTemplateSettings } from "../../views/task-template-settings.js";
 import { ProviderSettingsView } from "../../views/provider-settings.js";
 import { EnvironmentSettingsView } from "../../views/environment-settings.js";
@@ -25,15 +23,13 @@ function AppView(): ReactElement {
   }
   if (pathname === "/admin/providers") return <ProviderSettingsView />;
   if (pathname === "/admin/environment") return <EnvironmentSettingsView />;
-  if (pathname === "/admin" || pathname === "/admin/agents" || pathname === "/admin/models" || pathname === "/admin/companies" || pathname === "/admin/invitations" || pathname === "/admin/passkeys" || pathname === "/admin/prompts") return <AdminView />;
+  if (pathname === "/admin" || pathname === "/admin/agents" || pathname === "/admin/models" || pathname === "/admin/companies" || pathname === "/admin/invitations" || pathname === "/admin/passkeys") return <AdminView />;
   if (/^\/companies\/[^/]+\/settings$/.test(pathname)) return <CompanySettingsView />;
   if (pathname === "/profile") return <ProfileView />;
   if (pathname === "/projects") return <ProjectsView />;
-  if (/^\/projects\/[^/]+\/prompts$/.test(pathname)) return <PromptSettings scope="project" projectId={pathname.split("/")[2]!} />;
-  if (/^\/projects\/[^/]+\/templates$/.test(pathname)) return <TaskTemplateSettings projectId={pathname.split("/")[2]!} />;
+  if (/^\/projects\/[^/]+\/templates$/.test(pathname)) return <TaskTemplateSettings key={pathname} projectId={pathname.split("/")[2]!} />;
   if (pathname === "/tasks" || pathname.startsWith("/tasks/")) return <TasksView />;
   if (pathname === "/board" || pathname.startsWith("/board/")) return <TasksView mode="board" />;
-  if (pathname === "/timeline") return <TimelineView />;
   if (pathname === "/attention") return <AttentionView />;
   return <Dashboard />;
 }

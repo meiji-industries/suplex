@@ -7,14 +7,14 @@ import { expect, test } from "vitest";
 import { AuthService } from "../src/auth.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
+import { insertNativeTaskRow } from "./helpers/native-task-row.js";
 
 const now = "2026-08-12T00:00:00.000Z";
 
 function insertIssue(database: ForgeDatabase, companyId: string, suffix: string): void {
   database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'main', 'main', 'true', 'true', '[]', '{}', 'active', ?, ?)").run(`project-${suffix}`, companyId, `Project ${suffix}`, `/repo/${suffix}`, `/worktrees/${suffix}`, now, now);
-    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, 'task-brief', 'brief.md', 'text/markdown', 1, ?, ?, ?)").run(`brief-${suffix}`, companyId, suffix.padEnd(64, "a").slice(0, 64), `${companyId}/${suffix}`, now);
-    db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES (?, ?, ?, 'Issue', ?, '[]', '{}', 0, ?, 'revision', ?, ?, ?)").run(`task-${suffix}`, companyId, `project-${suffix}`, `brief-${suffix}`, `workflow-${suffix}`, `key-${suffix}`, now, now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, setup_command, verification_command, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'main', 'true', 'true', ?, ?)").run(`project-${suffix}`, companyId, `Project ${suffix}`, `/repo/${suffix}`, `/worktrees/${suffix}`, now, now);
+    insertNativeTaskRow(db, { taskId: `task-${suffix}`, companyId, projectId: `project-${suffix}` });
   });
 }
 

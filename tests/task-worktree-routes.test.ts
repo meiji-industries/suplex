@@ -1,58 +1,51 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import { validatorCompiler } from "@fastify/type-provider-zod";
 import Fastify from "fastify";
 import { expect, test, vi } from "vitest";
 
-import { ForgeDatabase } from "../src/database.js";
+import { nativeApp } from "./helpers/native-app.js";
 import taskWorktree from "../src/http/routes/task-worktree.js";
 import { installHttpErrorHandlers } from "../src/http/errors.js";
 
 async function fixture(withWorktree = true) {
-  const root = await mkdtemp(join(tmpdir(), "forge-task-worktree-routes-"));
-  const database = new ForgeDatabase(join(root, "forge.sqlite"));
-  if (withWorktree) database.authQuery((db) => {
-    db.pragma("foreign_keys = OFF");
-    db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, reserved_at) VALUES ('worktree', 'task', 'company', 'project', 'workflow', '/repo', '/worktrees', '/worktrees/task', 'forge/task', 'a', 'lease', ?)").run(new Date().toISOString());
-  });
+  const native = await nativeApp();
+  const { database, tasks } = native;
+  const { task } = await tasks.createTask(native.userId, native.company.id, { projectId: native.project.id, title: "Open worktree", description: "Open the existing checkout", idempotencyKey: "open-worktree-test", startImmediately: true });
+  if (withWorktree) tasks.repository.controls.setWorktree(task.id, { path: "/worktrees/task", branch: task.configuration.branch, baseSha: "a", headSha: "a", dirty: false });
   const app = Fastify();
-  app.decorateRequest("forgeUser", undefined as never);
+  const user = native.auth.listUsers(native.userId)[0]!;
+  app.decorateRequest("forgeUser", { getter: () => user });
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(() => (data) => JSON.stringify(data));
   installHttpErrorHandlers(app);
-  app.addHook("preHandler", async (request) => { request.forgeUser = { id: "user" } as never; });
   const runCommand = vi.fn(async () => ({ command: "code /worktrees/task", exitCode: 0, durationMs: 1, stdout: "", stderr: "", entries: [], startedAt: "2026-09-01T00:00:00.000Z", finishedAt: "2026-09-01T00:00:00.001Z", timedOut: false }));
-  await app.register(taskWorktree, { tasks: { getTask: () => ({ companyId: "company" }) } as never, database, runCommand });
+  await app.register(taskWorktree, { tasks, database, runCommand });
   await app.ready();
-  return { root, database, app, runCommand };
+  return { native, task, database, app, runCommand };
 }
 
 test("opens a task worktree in the configured editor and records the action", async () => {
   const value = await fixture();
   try {
-    const response = await value.app.inject({ method: "POST", url: "/api/tasks/task/worktree/open", payload: { app: "editor" } });
+    const response = await value.app.inject({ method: "POST", url: `/api/tasks/${value.task.id}/worktree/open`, payload: { app: "editor" } });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true });
-    expect(value.runCommand).toHaveBeenCalledWith(expect.objectContaining({ command: "code", args: ["/worktrees/task"], taskId: "task" }));
-    expect(value.database.authQuery((db) => db.prepare("SELECT action FROM forge_audit_events").all())).toEqual([{ action: "worktree_opened" }]);
+    expect(value.runCommand).toHaveBeenCalledWith(expect.objectContaining({ command: "code", args: ["/worktrees/task"], taskId: value.task.id }));
+    expect(value.database.authQuery((db) => db.prepare("SELECT action FROM forge_audit_events WHERE action = 'worktree_opened'").all())).toEqual([{ action: "worktree_opened" }]);
   } finally {
     await value.app.close();
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
+    await value.native.close();
   }
 });
 
 test("returns not found when the task has no worktree", async () => {
   const value = await fixture(false);
   try {
-    const response = await value.app.inject({ method: "POST", url: "/api/tasks/task/worktree/open", payload: { app: "editor" } });
+    const response = await value.app.inject({ method: "POST", url: `/api/tasks/${value.task.id}/worktree/open`, payload: { app: "editor" } });
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ error: "Worktree not found" });
   } finally {
     await value.app.close();
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
+    await value.native.close();
   }
 });

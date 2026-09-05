@@ -1,11 +1,14 @@
 import { createInterface, type Interface } from "node:readline";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 
 import {
   RootBridgeConfigSchema,
   RootToolSchema,
+  RootImageResultSchema,
+  type RootImageResult,
   type RootBridgeConfig,
   type RootIdentity,
   type RootTool,
@@ -15,6 +18,8 @@ import { CliHerdrClient } from "./herdr-client.js";
 import { RootController } from "./root-controller.js";
 import { OpenCodeTaskRuntime } from "./opencode-task-runtime.js";
 import { TaskControlStore } from "./root-session-store.js";
+import { ArtifactStore } from "./artifacts.js";
+import { configureProcessLogSink, createDevLogFileSink } from "./logging.js";
 
 export class RootBridgeFailure extends Error {
   constructor(readonly code: "invalid_request" | "root_identity_mismatch", message: string) {
@@ -26,6 +31,7 @@ export class RootBridgeFailure extends Error {
 export interface RootBridgeAdapter {
   assertCurrentRoot(root: RootIdentity): Promise<void>;
   observe(root: RootIdentity): Promise<unknown>;
+  readImage(root: RootIdentity, artifactId: string): Promise<RootImageResult>;
   delegateWorker(root: RootIdentity, instruction: string): Promise<unknown>;
   requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation'], expectedHead?: string): Promise<unknown>;
   askHuman(root: RootIdentity, question: string): Promise<unknown>;
@@ -46,6 +52,8 @@ export class RootBridge {
     switch (tool.kind) {
       case "observe":
         return this.adapter.observe(this.root);
+      case "read_image":
+        return this.adapter.readImage(this.root, tool.artifactId);
       case "delegate_worker":
         return this.adapter.delegateWorker(this.root, tool.instruction);
       case "request_delivery":
@@ -112,7 +120,9 @@ export function startRootBridgeTransport(input: {
         const argumentsWithoutMetadata = { ...params.arguments };
         delete argumentsWithoutMetadata._meta;
         const result = await input.bridge.call(argumentsWithoutMetadata);
-        respond(request.id, { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result });
+        const image = RootImageResultSchema.safeParse(result);
+        if (image.success) respond(request.id, { content: [{ type: "text", text: image.data.filename }, { type: "image", data: image.data.data, mimeType: image.data.mimeType }] });
+        else respond(request.id, { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Root bridge failed";
         respond(request.id, { content: [{ type: "text", text: message }], isError: true });
@@ -130,12 +140,14 @@ async function runRootBridge(): Promise<void> {
   const bindingIndex = process.argv.indexOf("--binding");
   const bindingPath = bindingIndex >= 0 ? process.argv[bindingIndex + 1] : undefined;
   if (!bindingPath) throw new Error("Root bridge requires --binding <path>");
+  const fileSink = createDevLogFileSink("worker", join(dirname(bindingPath), "logs"));
+  configureProcessLogSink(line => { fileSink(line); process.stderr.write(line); });
   const config = RootBridgeConfigSchema.parse(JSON.parse(await readFile(bindingPath, "utf8")));
   if (!config.databasePath) throw new Error("Root bridge binding has no server database path");
   const database = new ForgeDatabase(config.databasePath, { migrate: false });
   const herdr = new CliHerdrClient();
   const store = new TaskControlStore(database);
-  const controller = new RootController(store, new OpenCodeTaskRuntime(config.databasePath, herdr));
+  const controller = new RootController(store, new OpenCodeTaskRuntime(config.databasePath, herdr, { artifactRoot: config.artifactRoot }), undefined, new ArtifactStore(config.artifactRoot));
   startRootBridgeTransport({ bridge: new RootBridge(config.root, controller), stdin: process.stdin, stdout: process.stdout });
 }
 

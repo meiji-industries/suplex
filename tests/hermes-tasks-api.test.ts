@@ -14,8 +14,6 @@ import type { GithubAdapter } from "../src/github.js";
 import { HermesAgentService } from "../src/hermes-agents.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import { TaskService } from "../src/tasks.js";
-import { IssueProjectionEventSchema } from "../src/engine/issue-contracts.js";
-import { createWorkflowPortFake } from "./fakes/workflow-port.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -55,7 +53,7 @@ let otherProjectId: string;
 let crossCompanyProjectId: string;
 let agentCredential: string;
 let agentId: string;
-let workflowStarts: number;
+let recoveryWakes: number;
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "forge-hermes-tasks-api-test-"));
@@ -108,25 +106,18 @@ beforeEach(async () => {
   companyId = company.id;
   auth.setCompanyIssueCode(adminId, companyId, "hmc");
 
-  const profile = projects.createProfile(adminId, { name: "Hermes test profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const planner = projects.createAgent(adminId, { name: "Planner", role: "planner", profileId: profile.id });
-  const builder = projects.createAgent(adminId, { name: "Builder", role: "builder", profileId: profile.id });
-  const reviewer = projects.createAgent(adminId, { name: "Reviewer", role: "reviewer", profileId: profile.id });
-
   const project = await projects.createProject(adminId, companyId, {
     name: "Hermes Project",
     repositoryPath,
     worktreeRoot: project1Worktrees,
     repository: "meiji/hermes-test",
     baseBranch: "main",
-    targetBranch: "main",
     setupCommand: "pnpm install",
     verificationCommand: "pnpm test",
-    requiredChecks: ["Tests / unit"],
-    roleDefaults: { planner: planner.id, reviewer: reviewer.id, builder: builder.id },
+    rootProfileId: "profile_native_root",
+    workerProfileId: "profile_native_worker",
   });
-  const active = await projects.activateProject(adminId, project.id);
-  projectId = active.id;
+  projectId = project.id;
 
   const otherProj = await projects.createProject(adminId, companyId, {
     name: "Other Project",
@@ -134,14 +125,12 @@ beforeEach(async () => {
     worktreeRoot: otherWorktrees,
     repository: "meiji/other-test",
     baseBranch: "main",
-    targetBranch: "main",
     setupCommand: "pnpm install",
     verificationCommand: "pnpm test",
-    requiredChecks: ["Tests / unit"],
-    roleDefaults: { planner: planner.id, reviewer: reviewer.id, builder: builder.id },
+    rootProfileId: "profile_native_root",
+    workerProfileId: "profile_native_worker",
   });
-  const activeOther = await projects.activateProject(adminId, otherProj.id);
-  otherProjectId = activeOther.id;
+  otherProjectId = otherProj.id;
 
   const crossCompany = auth.createCompany(adminId, "Hermes Other Company");
   const crossProject = await projects.createProject(adminId, crossCompany.id, {
@@ -150,30 +139,15 @@ beforeEach(async () => {
     worktreeRoot: crossWorktrees,
     repository: "meiji/hermes-cross-company-test",
     baseBranch: "main",
-    targetBranch: "main",
     setupCommand: "pnpm install",
     verificationCommand: "pnpm test",
-    requiredChecks: ["Tests / unit"],
-    roleDefaults: { planner: planner.id, reviewer: reviewer.id, builder: builder.id },
+    rootProfileId: "profile_native_root",
+    workerProfileId: "profile_native_worker",
   });
-  crossCompanyProjectId = (await projects.activateProject(adminId, crossProject.id)).id;
+  crossCompanyProjectId = crossProject.id;
 
-  const workflow = createWorkflowPortFake({
-    companyId,
-    projectId,
-    projectRevisionId: active.activeRevisionId!,
-    projectState: (state) => {
-      database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state }));
-      return state;
-    },
-  });
-  workflowStarts = 0;
-  const start = workflow.start;
-  workflow.start = async (input) => {
-    workflowStarts += 1;
-    return start(input);
-  };
-  tasks = new TaskService(database, auth, projects, config, { workflow });
+  recoveryWakes = 0;
+  tasks = new TaskService(database, auth, projects, config);
   hermes = new HermesAgentService(database, auth);
 
   // Create and pair Hermes agent with access only to projectId
@@ -188,23 +162,23 @@ beforeEach(async () => {
     projects,
     tasks,
     hermes,
+    host: { async recover() { recoveryWakes++; } },
     health: {
-      engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }),
       database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
       artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
-      worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }),
-      codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }),
+      opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy", summary: "Ready", details: {} }),
       ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
     },
   });
 });
 
 afterEach(async () => {
+  await app?.close();
   database.close();
   await rm(root, { recursive: true, force: true });
 });
 
-test("POST /api/hermes/tasks creates task with 9-field projection, private no-store headers, and records creator attribution", async () => {
+test("POST /api/hermes/tasks creates task with native status, private no-store headers, and records creator attribution", async () => {
   const payload = {
     projectId,
     title: "Hermes task creation",
@@ -225,32 +199,19 @@ test("POST /api/hermes/tasks creates task with 9-field projection, private no-st
   expect(response.headers["cache-control"]).toBe("private, no-store");
 
   const body = response.json();
-  const expectedKeys = ["id", "issueKey", "projectId", "title", "phase", "revision", "pendingAction", "createdAt", "updatedAt"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "title", "status", "humanQuestion", "createdAt", "updatedAt"].sort();
   expect(Object.keys(body).sort()).toEqual(expectedKeys);
   expect(body).toMatchObject({
     issueKey: "HMC-1",
     projectId,
     title: "Hermes task creation",
-    phase: "backlog",
-    revision: 0,
-    pendingAction: "Start planning",
+    status: "backlog",
+    humanQuestion: null,
   });
 
   // Verify creator_agent_id persisted on task and intent
   const taskRow = database.authQuery((db) => db.prepare("SELECT creator_agent_id FROM forge_tasks WHERE id = ?").get(body.id) as { creator_agent_id: string | null });
   expect(taskRow.creator_agent_id).toBe(agentId);
-
-  const intentRow = database.authQuery((db) => db.prepare("SELECT creator_agent_id FROM forge_task_creation_intents WHERE task_id = ?").get(body.id) as { creator_agent_id: string | null });
-  expect(intentRow.creator_agent_id).toBe(agentId);
-
-  // Verify activity log resolves creator as an agent
-  const fullTask = tasks.getTask(adminId, body.id);
-  const createdActivity = fullTask.activity.find((a) => a.eventType === "task_created");
-  expect(createdActivity?.actor).toMatchObject({
-    kind: "agent",
-    id: agentId,
-    displayName: "Hermes Bot",
-  });
 
   // Replay with identical payload and idempotency key returns 200 with unchanged projection
   const replay = await app.inject({
@@ -266,24 +227,17 @@ test("POST /api/hermes/tasks creates task with 9-field projection, private no-st
   expect(replay.json()).toEqual(body);
   const count = (table: string, clause = ""): number => database.authQuery((db) => (db.prepare(`SELECT COUNT(*) AS count FROM ${table} ${clause}`).get() as { count: number }).count);
   expect(count("forge_tasks")).toBe(1);
-  expect(count("forge_task_creation_intents")).toBe(1);
-  expect(count("forge_artifacts")).toBe(2);
-  expect(database.authQuery((db) => db.prepare("SELECT kind, filename FROM forge_artifacts WHERE task_id = ? ORDER BY kind").all(body.id))).toEqual([
-    { kind: "task-project-configuration", filename: `project-configuration-${body.id}.json` },
-    { kind: "task-prompt-set", filename: `prompts-${body.id}.json` },
-  ]);
-  expect(count("forge_issue_projections")).toBe(1);
-  expect(count("forge_workflow_snapshots")).toBe(1);
-  expect(count("forge_issue_timeline")).toBe(1);
+  expect(count("forge_task_controls")).toBe(1);
+  expect(count("forge_artifacts")).toBe(0);
   expect(count("forge_audit_events", "WHERE action = 'task_created'")).toBe(1);
-  expect(workflowStarts).toBe(1);
+  expect(recoveryWakes).toBe(0);
 });
 
 
 test("cross-company and out-of-grant projects are non-enumerating with zero side effects", async () => {
   const counts = (): Record<string, number> => Object.fromEntries([
-    "forge_task_creation_intents", "forge_tasks", "forge_artifacts", "forge_issue_projections", "forge_workflow_snapshots", "forge_issue_timeline",
-  ].map((table) => [table, database.authQuery((db) => (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count)]).concat([["task_created_audits", database.authQuery((db) => (db.prepare("SELECT COUNT(*) AS count FROM forge_audit_events WHERE action = 'task_created'").get() as { count: number }).count)], ["workflow_starts", workflowStarts]]));
+    "forge_task_controls", "forge_tasks", "forge_artifacts", "forge_task_turns", "forge_task_sessions",
+  ].map((table) => [table, database.authQuery((db) => (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count)]).concat([["task_created_audits", database.authQuery((db) => (db.prepare("SELECT COUNT(*) AS count FROM forge_audit_events WHERE action = 'task_created'").get() as { count: number }).count)], ["recovery_wakes", recoveryWakes]]));
   const denied = async (deniedProjectId: string, idempotencyKey: string) => app.inject({
     method: "POST",
     url: "/api/hermes/tasks",
@@ -382,7 +336,7 @@ test("GET /api/hermes/tasks/:taskId returns safe projection, handles non-enumera
   });
   expect(getSuccess.statusCode).toBe(200);
   expect(getSuccess.headers["cache-control"]).toBe("private, no-store");
-  const expectedKeys = ["id", "issueKey", "projectId", "title", "phase", "revision", "pendingAction", "createdAt", "updatedAt"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "title", "status", "humanQuestion", "createdAt", "updatedAt"].sort();
   expect(Object.keys(getSuccess.json()).sort()).toEqual(expectedKeys);
   expect(getSuccess.json().title).toBe("Task For Status Check");
 

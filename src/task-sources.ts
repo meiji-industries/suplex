@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import type { GithubReleasePort } from "./github-release.js";
+import type { GithubReleasePort } from "./github-delivery.js";
 import type { Project } from "./projects.js";
 
 const execFileAsync = promisify(execFile);
@@ -26,7 +26,7 @@ async function git(project: Project, args: string[], timeout = 30_000): Promise<
 
 function safeBranch(project: Project, branch: string): void {
   safeRef(branch);
-  if (branch === project.baseBranch || branch === project.targetBranch) throw new TaskSourceFailure("source-base-branch", "The configured base or target branch cannot be used as a task source");
+  if (branch === project.baseBranch) throw new TaskSourceFailure("source-base-branch", "The configured base branch cannot be used as a task source");
 }
 
 function safeRef(branch: string): void {
@@ -41,14 +41,14 @@ export class TaskSourceService {
       if (!project.repository || !this.github.listOpenPullRequests) return { available: false, reason: "Pull request provider unavailable", sources: [] };
       try {
         const pulls = await this.github.listOpenPullRequests({ repository: project.repository, limit: 100 });
-        return { available: true, sources: pulls.filter((pull) => !pull.isCrossRepository && pull.state === "open" && pull.headBranch !== project.baseBranch && pull.headBranch !== project.targetBranch).map((pull) => ({ kind: "pull_request", number: pull.number, url: pull.url, title: pull.title ?? `Pull request #${pull.number}`, body: pull.body ?? "", author: pull.author ?? "", headBranch: pull.headBranch, baseBranch: pull.baseBranch, headSha: pull.headSha, ...(pull.updatedAt ? { updatedAt: pull.updatedAt } : {}), isDraft: pull.isDraft })) };
+        return { available: true, sources: pulls.filter((pull) => !pull.isCrossRepository && pull.state === "open" && pull.headBranch !== project.baseBranch).map((pull) => ({ kind: "pull_request", number: pull.number, url: pull.url, title: pull.title ?? `Pull request #${pull.number}`, body: pull.body ?? "", author: pull.author ?? "", headBranch: pull.headBranch, baseBranch: pull.baseBranch, headSha: pull.headSha, ...(pull.updatedAt ? { updatedAt: pull.updatedAt } : {}), isDraft: pull.isDraft })) };
       } catch { return { available: false, reason: "Pull requests are temporarily unavailable", sources: [] }; }
     }
     await git(project, ["fetch", "--no-tags", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"]);
     const output = await git(project, ["for-each-ref", "--sort=-committerdate", "--count=200", "--format=%(refname:strip=3)%00%(objectname)%00%(committerdate:iso-strict)%00%(subject)%00%(authorname)", "refs/remotes/origin"]);
     const sources = output ? output.split("\n").flatMap((line) => {
       const [branch, headSha, updatedAt, subject, author] = line.split("\0");
-      if (!branch || !headSha || !updatedAt || branch === "HEAD" || branch === project.baseBranch || branch === project.targetBranch || !branchPattern.test(branch)) return [];
+      if (!branch || !headSha || !updatedAt || branch === "HEAD" || branch === project.baseBranch || !branchPattern.test(branch)) return [];
       return [{ kind: "branch" as const, branch, headSha, updatedAt, subject: subject ?? "", author: author ?? "" }];
     }) : [];
     return { available: true, sources };

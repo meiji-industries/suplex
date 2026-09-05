@@ -40,35 +40,6 @@ export FORGE_PORT=${CONDUCTOR_PORT:-4111}
 exec tsx watch --clear-screen=false --exclude './src/frontend/**' src/server.ts
 '''
 
-[tasks.worker]
-description = "Run the engine host without HTTP"
-run = '''
-export PATH="$(dirname "$(mise which node)"):$PATH"
-[ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
-export FORGE_PORT=${CONDUCTOR_PORT:-4111}
-exec tsx src/engine/host.ts
-'''
-
-[tasks."dev:idle"]
-description = "Exit 0 when no engine activities are in flight"
-run = '''
-db=${FORGE_DATABASE_PATH:-.forge/data/forge.sqlite}
-port=${CONDUCTOR_PORT:-4111}
-cutoff=$(date -u -v-2M +%Y-%m-%dT%H:%M:%SZ)
-listening=$(lsof -ti:"$port" -sTCP:LISTEN 2>/dev/null || true)
-if [ -z "$listening" ]; then
-  stale=$(sqlite3 "$db" "select workflow_id||': '||activity from forge_engine_activities where heartbeat_at < '$cutoff'" 2>/dev/null || true)
-  if [ -n "$stale" ]; then
-    echo "STALE — removing activities from a stopped stack:"
-    echo "$stale"
-    sqlite3 "$db" "delete from forge_engine_activities where heartbeat_at < '$cutoff'"
-  fi
-fi
-busy=$(sqlite3 "$db" "select workflow_id||': '||activity from forge_engine_activities" 2>/dev/null || true)
-if [ -n "$busy" ]; then echo "BUSY — activities in flight:"; echo "$busy"; exit 1; fi
-echo "IDLE — safe to restart"
-'''
-
 [tasks.down]
 description = "Stop this checkout's dev stack"
 run = '''
@@ -102,7 +73,5 @@ run = "pnpm run build"
 run = "pnpm run typecheck"
 [tasks.test]
 run = "pnpm run test"
-[tasks.test-engine]
-run = "pnpm run test:engine"
 [tasks.test-browser]
 run = "pnpm run test:browser"

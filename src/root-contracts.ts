@@ -11,29 +11,34 @@ export const RootIdentitySchema = z.object({
 export type RootIdentity = z.infer<typeof RootIdentitySchema>;
 
 export const DeliveryOperationSchema = z.enum([
+  "complete_local_work",
   "push_branch",
   "create_or_adopt_pull_request",
   "observe_pull_request",
   "observe_checks",
-  "rerun_or_diagnose_checks",
   "request_review",
-  "merge_after_approval",
+  "merge_pull_request",
 ]);
 export type DeliveryOperation = z.infer<typeof DeliveryOperationSchema>;
 
 export const RootToolSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("observe") }).strict(),
-  z.object({ kind: z.literal("delegate_worker"), instruction: z.string().min(1).max(20_000) }).strict(),
+  z.object({ kind: z.literal("read_image"), artifactId: opaqueId }).strict(),
+  z.object({ kind: z.literal("delegate_worker"), instruction: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional() }).strict(),
-  z.object({ kind: z.literal("ask_human"), question: z.string().min(1).max(4_000) }).strict(),
+  z.object({ kind: z.literal("ask_human"), question: z.string().min(1) }).strict(),
 ]);
 
 export type RootTool = z.infer<typeof RootToolSchema>;
+
+export const RootImageResultSchema = z.object({ kind: z.literal("image"), filename: z.string(), mimeType: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]), data: z.string() }).strict();
+export type RootImageResult = z.infer<typeof RootImageResultSchema>;
 
 export const RootBridgeConfigSchema = z.object({
   version: z.literal(1),
   root: RootIdentitySchema,
   databasePath: z.string().min(1).optional(),
+  artifactRoot: z.string().min(1),
   server: z.object({ command: z.string().min(1), args: z.array(z.string()) }).strict(),
 }).strict();
 

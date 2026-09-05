@@ -5,12 +5,9 @@ import { randomUUID } from "node:crypto";
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import type { HealthCheck } from "./health.js";
-import { resolveAgentProvider } from "./agent-providers/index.js";
-import { HerdrOpenRouterProvider } from "./agent-providers/herdr-openrouter.js";
 import { checkGithubAuthentication } from "./provider-readiness.js";
 import { checkBackupHealth } from "./backup.js";
-import { runtimeIdentifiers } from "./runtime-identifiers.js";
-import { EngineHealthProbe } from "./engine/service.js";
+import { resolveOpenCodeExecutable } from "./opencode-executable.js";
 import { CliHerdrClient } from "./herdr-client.js";
 
 async function checkHerdrReadiness(): Promise<HealthCheck> {
@@ -23,7 +20,6 @@ async function checkHerdrReadiness(): Promise<HealthCheck> {
 }
 
 const minimumFreeBytes = 100 * 1024 * 1024;
-const workerHeartbeatMaxAgeMs = 30_000;
 
 export async function checkDatabase(database: ForgeDatabase): Promise<HealthCheck> {
   try {
@@ -87,56 +83,14 @@ export async function checkArtifactRoot(root: string): Promise<HealthCheck> {
   }
 }
 
-export async function checkWorker(database: ForgeDatabase, taskQueue: string, installationId: string, expectedBuildId = runtimeIdentifiers(installationId).buildId): Promise<HealthCheck> {
-  const worker = database.workerHealth(taskQueue);
-  const identifiers = runtimeIdentifiers(installationId);
-  if (!worker) {
-    return {
-      id: "worker",
-      label: "Worker and task queue",
-      status: "unhealthy",
-      summary: "No worker registration is available",
-      details: { taskQueue, workerId: "missing", buildId: identifiers.buildId, heartbeatAgeMs: -1 },
-    };
-  }
-  const expectedWorkerPrefix = `${identifiers.workerPrefix}-`;
-  const identityMatches = worker.workerId.startsWith(expectedWorkerPrefix);
-  const buildMatches = worker.buildId === expectedBuildId;
-  const heartbeatIsRecent = worker.heartbeatAgeMs >= 0 && worker.heartbeatAgeMs <= workerHeartbeatMaxAgeMs;
-  const healthy = identityMatches && buildMatches && heartbeatIsRecent;
-  const summary = healthy
-    ? "Worker identity, build, task queue, and heartbeat are current"
-    : worker.heartbeatAgeMs > workerHeartbeatMaxAgeMs
-      ? "Worker heartbeat is stale"
-      : "Worker identity or build does not match this installation";
-  return {
-    id: "worker",
-    label: "Worker and task queue",
-    status: healthy ? "healthy" : "unhealthy",
-    summary,
-    details: {
-      workerId: worker.workerId,
-      taskQueue: worker.taskQueue,
-      buildId: worker.buildId,
-      heartbeatAt: worker.heartbeatAt,
-      heartbeatAgeMs: worker.heartbeatAgeMs,
-    },
-  };
-}
-
 export function createHostHealthDependencies(config: ForgeConfig, database: ForgeDatabase) {
-  const engine = new EngineHealthProbe(config);
-  const agent = resolveAgentProvider().readinessProbe();
-  const claude = resolveAgentProvider("claude").readinessProbe();
-  const openrouter = new HerdrOpenRouterProvider(database).readinessProbe();
   return {
-    engine: () => engine.check(),
     database: () => checkDatabase(database),
     artifactRoot: () => checkArtifactRoot(config.artifactRoot),
-    worker: async () => checkWorker(database, runtimeIdentifiers(config.installationId).taskQueue, config.installationId),
-    codexAuth: () => agent.check(),
-    claudeAuth: () => claude.check(),
-    openrouterAuth: () => openrouter.check(),
+    opencode: async (): Promise<HealthCheck> => {
+      try { await resolveOpenCodeExecutable(); return { id: "opencode", label: "OpenCode", status: "healthy", summary: "Executable found. Model access is not tested.", details: {} }; }
+      catch { return { id: "opencode", label: "OpenCode", status: "unhealthy", summary: "OpenCode is not available on the Forge host", details: {} }; }
+    },
     herdrReadiness: () => checkHerdrReadiness(),
     ghAuth: checkGithubAuthentication(process.env.FORGE_GH_COMMAND ?? "gh"),
     backup: () => checkBackupHealth(config),

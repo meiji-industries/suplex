@@ -1,11 +1,7 @@
 export const HEALTH_CHECK_IDS = [
-  "engine",
   "database",
   "artifact-root",
-  "worker",
-  "codex-auth",
-  "claude-auth",
-  "openrouter-auth",
+  "opencode",
   "herdr-readiness",
   "gh-auth",
   "backup",
@@ -13,7 +9,7 @@ export const HEALTH_CHECK_IDS = [
 
 export type HealthCheckId = (typeof HEALTH_CHECK_IDS)[number];
 
-export const OWNED_HEALTH_CHECK_IDS = ["engine", "database", "artifact-root", "worker"] as const satisfies readonly HealthCheckId[];
+export const OWNED_HEALTH_CHECK_IDS = ["database", "artifact-root"] as const satisfies readonly HealthCheckId[];
 
 export function isOwnedHealthCheck(id: HealthCheckId): boolean {
   return (OWNED_HEALTH_CHECK_IDS as readonly string[]).includes(id);

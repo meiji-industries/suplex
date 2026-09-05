@@ -34,10 +34,10 @@ beforeEach(async () => {
 
   companyId = auth.createCompany(adminId, "Hermes Company").id;
   database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project_allowed', ?, 'Allowed', ?, ?, 'meiji/allowed', 'main', 'main', '', '', '[]', '{}', 'draft', ?, ?)").run(companyId, join(root, "repo"), join(root, "worktrees"), now, now);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project_second', ?, 'Second', ?, ?, 'meiji/second', 'main', 'main', '', '', '[]', '{}', 'draft', ?, ?)").run(companyId, join(root, "repo2"), join(root, "worktrees2"), now, now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_allowed', ?, 'Allowed', ?, ?, 'meiji/allowed', 'main', '', '', ?, ?)").run(companyId, join(root, "repo"), join(root, "worktrees"), now, now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_second', ?, 'Second', ?, ?, 'meiji/second', 'main', '', '', ?, ?)").run(companyId, join(root, "repo2"), join(root, "worktrees2"), now, now);
     const otherCompanyId = auth.createCompany(adminId, "Other Company").id;
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project_other', ?, 'Other', ?, ?, 'meiji/other', 'main', 'main', '', '', '[]', '{}', 'draft', ?, ?)").run(otherCompanyId, join(root, "other-repo"), join(root, "other-worktrees"), now, now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_other', ?, 'Other', ?, ?, 'meiji/other', 'main', '', '', ?, ?)").run(otherCompanyId, join(root, "other-repo"), join(root, "other-worktrees"), now, now);
   });
   service = new HermesAgentService(database, auth);
 });
@@ -52,14 +52,11 @@ test("canonical forge_agents identity and one-to-one extension are created atomi
 
   // Base agent in forge_agents
   const baseAgent = database.authQuery((db) => db.prepare("SELECT * FROM forge_agents WHERE id = ?").get(issued.agent.id) as {
-    id: string; kind: string; name: string; role: string | null; profile_id: string | null; avatar_seed: string;
+    id: string; name: string; avatar_seed: string;
   });
   expect(baseAgent).toMatchObject({
     id: issued.agent.id,
-    kind: "hermes",
     name: "Hermes Unified",
-    role: null,
-    profile_id: null,
   });
 
   // Extension row in forge_external_agents

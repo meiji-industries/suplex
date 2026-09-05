@@ -10,12 +10,12 @@ import { expect, test } from "vitest";
 
 import { AuthService, type WebAuthnAdapter } from "../src/auth.js";
 import { createApp } from "../src/app.js";
+import { AgentProfileService } from "../src/agent-profiles.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { ProjectService } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
 import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
-import { CapacityManager } from "../src/capacity.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,7 +32,6 @@ function webAuthn(): WebAuthnAdapter {
 const github: GithubAdapter = {
   async checkAuthentication() {},
   async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; },
-  async listChecks() { return [{ name: "Tests / unit", status: "completed", conclusion: "success" }]; },
 };
 
 function responseCookie(response: { headers: OutgoingHttpHeaders }, name: string): { name: string; value: string } {
@@ -42,7 +41,7 @@ function responseCookie(response: { headers: OutgoingHttpHeaders }, name: string
   return { name: cookieName ?? name, value: cookieValue ?? "" };
 }
 
-test("projects desktop flow auto-activates valid clones and shows actionable validation findings", async () => {
+test("projects desktop flow creates native projects and shows actionable validation findings", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-project-browser-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
@@ -72,12 +71,10 @@ test("projects desktop flow auto-activates valid clones and shows actionable val
     github,
     repositoryProvisioner: { async ensure(input) { await mkdir(input.repositoryPath, { recursive: true }); await mkdir(input.worktreeRoot, { recursive: true }); } },
   });
-  const app = createApp({ config, auth, projects, capacity: new CapacityManager(database, config), health: {
-    engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }),
+  const app = createApp({ config, auth, projects, profiles: new AgentProfileService(database, auth), health: {
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
     artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
-    worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }),
-    codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }),
+    opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy", summary: "Ready", details: {} }),
     ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
   } });
   await app.listen({ host: "127.0.0.1", port: 0 });
@@ -95,7 +92,6 @@ test("projects desktop flow auto-activates valid clones and shows actionable val
       const csrf = responseCookie(enrolled, CSRF_COOKIE_NAME);
       await context.addCookies([{ ...session, domain: "127.0.0.1", path: "/" }, { ...csrf, domain: "127.0.0.1", path: "/" }]);
       const adminId = (await auth.getUserBySession(session.value))!.id;
-      projects.createProfile(adminId, { name: "Browser profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
       auth.createCompany(adminId, "Browser Projects");
       const page = await context.newPage();
       await page.goto(`${baseUrl}/projects`);
@@ -107,7 +103,8 @@ test("projects desktop flow auto-activates valid clones and shows actionable val
       const forgeProject = page.locator("article").filter({ hasText: "forge" });
       await forgeProject.getByRole("button", { name: "Configure" }).click();
       expect(await page.getByLabel("Base branch").inputValue()).toBe("main");
-      expect(await page.getByLabel("Target branch").inputValue()).toBe("main");
+      expect(await page.getByLabel("Root default").innerText()).toContain("Root");
+      expect(await page.getByLabel("Worker default").innerText()).toContain("Worker");
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
       await page.getByRole("button", { name: "New Project", exact: true }).click();
       await page.getByLabel("GitHub repository URL", { exact: true }).fill("https://token@github.com/acme/unsafe.git");
@@ -127,7 +124,7 @@ test("projects desktop flow auto-activates valid clones and shows actionable val
       expect(await systemHealth.innerText()).toBe("Healthy");
       await systemHealth.click();
       const healthDialog = page.getByRole("dialog", { name: "System health", exact: true });
-      await healthDialog.getByText("Engine", { exact: true }).waitFor();
+      await healthDialog.getByText("OpenCode", { exact: true }).waitFor();
       await healthDialog.getByRole("button", { name: "Close", exact: true }).click();
       await page.close();
       await context.close();

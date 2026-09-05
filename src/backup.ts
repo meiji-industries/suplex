@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { cp, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -8,11 +8,7 @@ import { promisify } from "node:util";
 import Database from "better-sqlite3";
 
 import type { ForgeConfig } from "./config.js";
-import type { ForgeDatabase } from "./database.js";
-import type { GithubReleasePort } from "./github-release.js";
 import type { HealthCheck } from "./health.js";
-import { reconcileRestoredDeveloperExecutions, type RestoredDeveloperRecoveryReport } from "./developer-recovery.js";
-import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 const backupVersion = 1;
@@ -51,22 +47,6 @@ export interface BackupRestoreResult extends BackupVerification {
 
 export interface BackupCreateInput {
   destination: string;
-}
-
-export interface RestoredProviderReconciliation {
-  releaseId: string;
-  repository: string;
-  branch: string;
-  pullRequestNumber: number | null;
-  status: "matched" | "changed" | "merged" | "closed" | "provider_unavailable" | "reauthentication_required" | "not_published";
-  branchHead?: string;
-  pullRequestHead?: string;
-  summary: string;
-}
-
-export interface RestoredStateReconciliation {
-  developerExecutions: RestoredDeveloperRecoveryReport[];
-  providers: RestoredProviderReconciliation[];
 }
 
 export class BackupFailure extends Error {
@@ -128,8 +108,6 @@ function configuration(config: ForgeConfig): Record<string, string | number | bo
     runtimeRoot: config.runtimeRoot,
     repositoryRoot: config.repositoryRoot,
     worktreeRoot: config.worktreeRoot,
-    deliveryRepairCycleLimit: config.deliveryRepairCycleLimit,
-    externalTurnCapacity: config.externalTurnCapacity,
     installationId: config.installationId,
   };
 }
@@ -148,7 +126,6 @@ function removeAuthenticationState(snapshotPath: string): void {
       snapshot.prepare("DELETE FROM forge_credentials").run();
       snapshot.prepare("DELETE FROM forge_invitations").run();
       snapshot.prepare("DELETE FROM forge_external_agent_credentials").run();
-      snapshot.prepare("DELETE FROM forge_provider_credentials").run();
       snapshot.prepare("DELETE FROM forge_hermes_pairing_codes").run();
     })();
   } finally {
@@ -215,7 +192,7 @@ export class BackupService {
       }
       await execFileAsync("tar", ["-xzf", archive, "-C", staging, "--no-same-owner"], { timeout: 60_000, maxBuffer: 64 * 1024 });
       const root = join(staging, backupRoot);
-      manifest = jsonRequired(await readFile(join(root, "manifest.json"), "utf8")) as BackupManifest;
+      manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as BackupManifest;
       if (manifest.version !== backupVersion) errors.push("unsupported backup version");
       const manifestEntries = Array.isArray(manifest.entries) ? manifest.entries : [];
       const actualEntries = (await filesUnder(root)).filter((entry) => entry.path !== "manifest.json");
@@ -240,7 +217,7 @@ export class BackupService {
         } catch { errors.push(`missing entry: ${entry.path}`); }
       }
       const configPath = join(root, "config", "config.json");
-      const configValue = jsonRequired(await readFile(configPath, "utf8")) as { version?: number; config?: Record<string, unknown>; requiresReauthentication?: boolean };
+      const configValue = JSON.parse(await readFile(configPath, "utf8")) as { version?: number; config?: Record<string, unknown>; requiresReauthentication?: boolean };
       if (configValue.version !== backupVersion || !configValue.requiresReauthentication) errors.push("required configuration is missing");
       for (const required of manifest.requiredConfiguration ?? []) if (configValue.config?.[required] === undefined) errors.push(`missing configuration: ${required}`);
       const databaseRelativePath = manifest.database?.path ?? "app/forge.sqlite";
@@ -287,45 +264,6 @@ export class BackupService {
   }
 }
 
-/**
- * Reconcile facts that are not contained in the application database after a
- * restore. This function is deliberately read-only with respect to providers:
- * reauthentication and any later mutation remain explicit operator actions.
- */
-export async function reconcileRestoredState(database: ForgeDatabase, github: GithubReleasePort): Promise<RestoredStateReconciliation> {
-  const developerExecutions = await reconcileRestoredDeveloperExecutions(database);
-  const releases = database.authQuery((db) => db.prepare("SELECT id, repository, head_branch AS branch, base_branch AS baseBranch, head_sha AS headSha, pr_number AS pullRequestNumber FROM forge_releases WHERE pr_number IS NOT NULL ORDER BY updated_at, id").all() as Array<{ id: string; repository: string; branch: string; baseBranch: string; headSha: string; pullRequestNumber: number | null }>);
-  const providers: RestoredProviderReconciliation[] = [];
-  for (const release of releases) {
-    const operationKey = `restore-reconcile:${release.id}:${release.headSha}`;
-    let observation: RestoredProviderReconciliation;
-    try {
-      if (typeof github.getPullRequest !== "function") {
-        observation = { releaseId: release.id, repository: release.repository, branch: release.branch, pullRequestNumber: release.pullRequestNumber, status: "reauthentication_required", summary: "Provider read APIs are unavailable; reauthenticate before resuming release work." };
-      } else {
-        const [branchHead, pullRequest] = await Promise.all([
-          typeof github.getBranchHead === "function" ? github.getBranchHead({ repository: release.repository, branch: release.branch }) : Promise.resolve(undefined),
-          release.pullRequestNumber !== null && typeof github.getPullRequest === "function" ? github.getPullRequest({ repository: release.repository, number: release.pullRequestNumber }) : Promise.resolve(undefined),
-        ]);
-        const branchMatches = branchHead === undefined || branchHead === null || branchHead.toLowerCase() === release.headSha.toLowerCase();
-        if (!pullRequest) {
-          observation = { releaseId: release.id, repository: release.repository, branch: release.branch, pullRequestNumber: release.pullRequestNumber, status: branchMatches ? "matched" : "changed", ...(branchHead ? { branchHead } : {}), summary: branchMatches ? "The restored release branch matches its recorded head." : "The restored release branch differs from its recorded head." };
-        } else {
-          const pullRequestMatches = pullRequest.headSha.toLowerCase() === release.headSha.toLowerCase() && pullRequest.baseBranch === release.baseBranch;
-          const status = pullRequest.state === "merged" ? (branchMatches && pullRequestMatches ? "merged" : "changed") : pullRequest.state === "closed" ? "closed" : branchMatches && pullRequestMatches ? "matched" : "changed";
-          observation = { releaseId: release.id, repository: release.repository, branch: release.branch, pullRequestNumber: release.pullRequestNumber, status, ...(branchHead ? { branchHead } : {}), pullRequestHead: pullRequest.headSha, summary: `Observed pull request ${pullRequest.number} as ${pullRequest.state} at ${pullRequest.headSha}.` };
-        }
-      }
-    } catch {
-      observation = { releaseId: release.id, repository: release.repository, branch: release.branch, pullRequestNumber: release.pullRequestNumber, status: "provider_unavailable", summary: "Provider state could not be read; no release mutation was attempted." };
-    }
-    const now = new Date().toISOString();
-    database.authTransaction((db) => db.prepare("INSERT INTO forge_provider_operations (id, operation_key, task_id, company_id, kind, result_json, observed_at, created_at, updated_at) SELECT ?, ?, task_id, company_id, 'restore-reconcile', ?, ?, ?, ? FROM forge_releases WHERE id = ? ON CONFLICT(operation_key) DO UPDATE SET result_json = excluded.result_json, observed_at = excluded.observed_at, updated_at = excluded.updated_at").run(`provider_restore_${randomBytes(12).toString("hex")}`, operationKey, JSON.stringify({ ...observation, derivedFrom: "GitHub", observedAt: now }), now, now, now, release.id));
-    providers.push(observation);
-  }
-  return { developerExecutions, providers };
-}
-
 function component(entries: BackupManifestEntry[], prefix: string): { path: string; count: number; bytes: number } {
   const selected = entries.filter((entry) => entry.path.startsWith(prefix));
   return { path: prefix.replace(/\/$/, ""), count: selected.length, bytes: selected.reduce((total, entry) => total + entry.bytes, 0) };
@@ -333,7 +271,7 @@ function component(entries: BackupManifestEntry[], prefix: string): { path: stri
 
 export async function checkBackupHealth(config: ForgeConfig, now: () => number = Date.now): Promise<HealthCheck> {
   try {
-    const value = jsonRequired(await readFile(join(config.dataRoot, "backup-status.json"), "utf8")) as { valid?: boolean; verifiedAt?: string; errors?: string[] };
+    const value = JSON.parse(await readFile(join(config.dataRoot, "backup-status.json"), "utf8")) as { valid?: boolean; verifiedAt?: string; errors?: string[] };
     const verifiedAt = typeof value.verifiedAt === "string" ? value.verifiedAt : "";
     const verifiedAtMs = Date.parse(verifiedAt);
     const valid = value.valid === true && Boolean(verifiedAt) && !Number.isNaN(verifiedAtMs);

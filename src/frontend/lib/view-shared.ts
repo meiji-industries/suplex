@@ -1,39 +1,19 @@
 import { isApiError } from "./api.js";
-import { ISSUE_PHASES, type IssuePhase } from "../../issue-phases.js";
-import type { AttentionActionResponse, AttentionItemResponse, CompanyAttentionResponse } from "../../http/contracts/attention.js";
 import type { CredentialResponse, InvitationSummaryResponse } from "../../http/contracts/common.js";
-import type { AgentResponse, AgentRuntimeProjection, ModelResponse, ProfileResponse, ProjectCheckResponse, ProjectResponse } from "../../http/contracts/projects.js";
+import type { ModelResponse, ProfileResponse, ProjectResponse } from "../../http/contracts/projects.js";
 import type { HermesAdminAgent } from "../../http/contracts/hermes.js";
-import type { TaskBranchSyncResponse } from "../../http/contracts/task-branch.js";
 import type { TaskListTask, TaskResponse } from "../../http/contracts/tasks.js";
 import type { TaskTemplateResponse } from "../../http/contracts/task-templates.js";
 
 export type ApiProfile = ProfileResponse;
-export type ApiAgent = AgentResponse;
-export type ApiAgentRuntime = AgentRuntimeProjection;
 export type ApiHermesAgent = HermesAdminAgent;
 export type ApiModel = ModelResponse;
-export type ApiCheck = ProjectCheckResponse;
 export type ApiInvitation = InvitationSummaryResponse;
 export type ApiCredential = CredentialResponse;
 export type ApiProject = ProjectResponse;
-export type ApiAttentionAction = AttentionActionResponse;
-export type ApiAttentionItem = AttentionItemResponse;
-export type ApiAttentionCompany = CompanyAttentionResponse;
 export type ApiTask = TaskResponse;
 export type ApiTaskSummary = TaskListTask;
 export type ApiTaskTemplate = TaskTemplateResponse;
-export type ApiTaskBranchSync = TaskBranchSyncResponse;
-export type ApiCompanyBranchSync = Record<string, { ahead: number; behind: number; remoteExists: boolean }>;
-export type TaskPhase = IssuePhase;
-export type ApiCi = NonNullable<ApiTask["ci"]>;
-export type ApiRelease = NonNullable<ApiTask["release"]>;
-
-export const taskPhases = ISSUE_PHASES;
-
-export function taskActionPayload(expectedRevision: number, note?: string, payload: Record<string, unknown> = {}): Record<string, unknown> {
-  return "expectedWorkflowRevision" in payload ? payload : { expectedRevision, ...(note ? { note } : {}), ...payload };
-}
 
 export async function reconcileScopedNotFound(reason: unknown, reloadCompanies: () => Promise<void>): Promise<boolean> {
   if (!isApiError(reason, 404)) return false;

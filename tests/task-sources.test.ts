@@ -1,19 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 
-import type { GithubPullRequest, GithubReleasePort } from "../src/github-release.js";
+import type { GithubPullRequest, GithubReleasePort } from "../src/github-delivery.js";
 import type { Project } from "../src/projects.js";
 import { TaskSourceService } from "../src/task-sources.js";
-import { WorktreeManager } from "../src/worktrees.js";
 import { TaskBodySchema } from "../src/http/contracts/tasks.js";
 
 const roots: string[] = [];
 afterEach(() => { delete process.env.FORGE_MIN_FREE_DISK_GB; while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
 const sha = "a".repeat(40);
-const project = (repositoryPath = "/tmp/repo"): Project => ({ id: "p", companyId: "c", name: "Forge", repositoryPath, worktreeRoot: "/tmp/worktrees", repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "true", verificationCommand: "true", requiredChecks: [], roleDefaults: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+const project = (repositoryPath = "/tmp/repo"): Project => ({ id: "p", companyId: "c", name: "Forge", repositoryPath, worktreeRoot: "/tmp/worktrees", repository: "acme/forge", baseBranch: "main", setupCommand: "true", verificationCommand: "true", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 const pull = (value: Partial<GithubPullRequest> = {}): GithubPullRequest => ({ number: 7, url: "https://github.com/acme/forge/pull/7", repository: "acme/forge", headBranch: "feature", baseBranch: "main", headSha: sha, baseSha: sha, isDraft: false, state: "open", mergedAt: null, title: "Feature", body: "Body", author: "octo", ...value });
 const github = (row = pull()): Pick<GithubReleasePort, "listOpenPullRequests" | "getPullRequest"> => ({ async listOpenPullRequests() { return [row]; }, async getPullRequest() { return row; } });
 
@@ -55,62 +54,19 @@ function fixture(): { repo: string; worktrees: string; base: string; head: strin
   return { repo, worktrees, base, head };
 }
 
-function commit(cwd: string, filename: string, content: string, message: string): string {
-  writeFileSync(join(cwd, filename), content); git(cwd, "add", filename); git(cwd, "commit", "-m", message); return git(cwd, "rev-parse", "HEAD");
-}
-
-function advanceRemote(value: { repo: string }, filename = "remote.txt"): string {
-  const clone = join(roots[roots.length - 1]!, `clone-${filename.replace(/\W/g, "-")}`);
-  git(roots[roots.length - 1]!, "clone", value.repo.replace(/\/repo$/, "/remote.git"), clone); git(clone, "config", "user.name", "Remote"); git(clone, "config", "user.email", "remote@example.invalid"); git(clone, "switch", "feature");
-  const head = commit(clone, filename, "remote\n", `remote ${filename}`); git(clone, "push", "origin", "feature"); return head;
-}
-
-test("adoption checks out remote head while recording the merge-base and is idempotent", async () => {
-  process.env.FORGE_MIN_FREE_DISK_GB = "0";
-  const value = fixture(); const manager = new WorktreeManager();
-  const adopted = await manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main" });
-  expect(adopted.targetBaseSha).toBe(value.base); expect(git(adopted.worktreePath, "rev-parse", "HEAD")).toBe(value.head);
-  await expect(manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main" })).resolves.toEqual(adopted);
+test("branch discovery reads remote refs without changing the repository checkout", async () => {
+  const value = fixture();
+  const service = new TaskSourceService(github());
+  const result = await service.discover(project(value.repo), "branch");
+  expect(result).toMatchObject({ available: true, sources: [{ kind: "branch", branch: "feature", headSha: value.head }] });
+  expect(git(value.repo, "branch", "--show-current")).toBe("main");
+  expect(git(value.repo, "rev-parse", "HEAD")).toBe(value.base);
 });
 
-test("adoption reports another checkout with the branch ownership code", async () => {
-  process.env.FORGE_MIN_FREE_DISK_GB = "0";
-  const value = fixture(); git(value.repo, "switch", "feature");
-  await expect(new WorktreeManager().adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main" })).rejects.toMatchObject({ code: "branch_checked_out", message: expect.stringContaining(value.repo) });
-});
-
-test("adoption safely follows remote movement", async () => {
-  process.env.FORGE_MIN_FREE_DISK_GB = "0"; const value = fixture(); const remoteHead = advanceRemote(value); const manager = new WorktreeManager();
-  const adopted = await manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main" });
-  expect(git(adopted.worktreePath, "rev-parse", "HEAD")).toBe(remoteHead);
-});
-
-test("adoption reports a deleted remote source", async () => {
-  process.env.FORGE_MIN_FREE_DISK_GB = "0"; const value = fixture(); git(value.repo, "push", "origin", "--delete", "feature");
-  await expect(new WorktreeManager().adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main" })).rejects.toMatchObject({ code: "source-branch-deleted" });
-});
-
-test("a same-task retry preserves a local-ahead registered source worktree", async () => {
-  process.env.FORGE_MIN_FREE_DISK_GB = "0"; const value = fixture(); const manager = new WorktreeManager();
-  const adopted = await manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main" });
-  const localHead = commit(adopted.worktreePath, "local.txt", "local\n", "local work");
-  const retried = await manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main", preserveLocal: true });
-  expect(git(retried.worktreePath, "rev-parse", "HEAD")).toBe(localHead);
-});
-
-test("a missing-worktree retry recreates from the local source head without losing commits", async () => {
-  process.env.FORGE_MIN_FREE_DISK_GB = "0"; const value = fixture(); const manager = new WorktreeManager();
-  const adopted = await manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main" });
-  const localHead = commit(adopted.worktreePath, "local.txt", "local\n", "local work"); rmSync(adopted.worktreePath, { recursive: true, force: true });
-  const retried = await manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main", preserveLocal: true });
-  expect(git(retried.worktreePath, "rev-parse", "HEAD")).toBe(localHead);
-});
-
-test("adoption rebases local source work onto remote movement on retry", async () => {
-  process.env.FORGE_MIN_FREE_DISK_GB = "0"; const value = fixture(); const manager = new WorktreeManager();
-  const adopted = await manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main" });
-  commit(adopted.worktreePath, "local.txt", "local\n", "local work"); advanceRemote(value, "other.txt");
-  const retried = await manager.adopt({ repositoryPath: value.repo, worktreeRoot: value.worktrees, taskId: "task_source", branchName: "feature", baseBranch: "main", preserveLocal: true });
-  expect(readFileSync(join(retried.worktreePath, "local.txt"), "utf8")).toBe("local\n");
-  expect(readFileSync(join(retried.worktreePath, "other.txt"), "utf8")).toBe("remote\n");
+test("source capture reads the current remote branch head", async () => {
+  const value = fixture();
+  const service = new TaskSourceService(github());
+  expect(await service.resolve(project(value.repo), { kind: "branch", branch: "feature" })).toEqual({ kind: "branch", branch: "feature", headSha: value.head });
+  git(value.repo, "push", "origin", "--delete", "feature");
+  await expect(service.resolve(project(value.repo), { kind: "branch", branch: "feature" })).rejects.toMatchObject({ code: "source-provider-unavailable" });
 });

@@ -21,11 +21,9 @@ test("mobile health page shows separate healthy and unhealthy states", { timeout
   const app = createApp({
     config: createTestConfig("/tmp/forge-browser-test"),
     health: {
-      engine: async () => snapshot.checks[0]!,
       database: async () => snapshot.checks[0]!,
       artifactRoot: async () => snapshot.checks[0]!,
-      worker: async () => snapshot.checks[0]!,
-      codexAuth: async () => snapshot.checks[0]!,
+      opencode: async () => snapshot.checks[0]!,
       ghAuth: async () => snapshot.checks[1]!,
     },
     getHealth: async () => currentSnapshot,
@@ -76,7 +74,7 @@ test("mobile health page shows separate healthy and unhealthy states", { timeout
       ...snapshot,
       ready: false,
       checks: [
-        { id: "worker", label: "Worker and task queue", status: "unhealthy", summary: "No current worker registration was found", details: {} },
+        { id: "database", label: "Database", status: "unhealthy", summary: "Database is not available", details: {} },
         { ...snapshot.checks[1]!, status: "healthy", summary: "Ready" },
       ],
     };
@@ -86,13 +84,13 @@ test("mobile health page shows separate healthy and unhealthy states", { timeout
     await unavailable.waitFor();
     expect(await unavailable.getAttribute("data-status")).toBe("red");
     const workerAlert = page.getByRole("alert");
-    await workerAlert.getByText("Worker and task queue unavailable", { exact: true }).waitFor();
-    expect(await workerAlert.getByRole("link", { name: "View system health", exact: true }).getAttribute("href")).toBe("/health");
+    await workerAlert.getByText("Database not available", { exact: true }).waitFor();
+    expect(await workerAlert.getByRole("link", { name: "Open host health", exact: true }).getAttribute("href")).toBe("/health");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     const desktop = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await desktop.goto(`http://127.0.0.1:${address.port}/health`);
-    await desktop.getByRole("alert").getByText("Worker and task queue unavailable", { exact: true }).waitFor();
+    await desktop.getByRole("alert").getByText("Database not available", { exact: true }).waitFor();
     expect(await desktop.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     currentSnapshot = { ...snapshot, checks: snapshot.checks.map((check) => ({ ...check, status: "healthy" as const, summary: "Ready" })) };
@@ -126,11 +124,9 @@ test("health makes a failed refresh visibly stale while retaining the last succe
   const app = createApp({
     config: createTestConfig("/tmp/forge-health-stale-browser-test"),
     health: {
-      engine: async () => snapshot.checks[0]!,
       database: async () => snapshot.checks[0]!,
       artifactRoot: async () => snapshot.checks[0]!,
-      worker: async () => snapshot.checks[0]!,
-      codexAuth: async () => snapshot.checks[0]!,
+      opencode: async () => snapshot.checks[0]!,
       ghAuth: async () => snapshot.checks[0]!,
     },
     getHealth: async () => snapshot,
@@ -170,11 +166,9 @@ test("legacy cached user and company records never render before the current ses
   const app = createApp({
     config: createTestConfig("/tmp/forge-health-cache-browser-test"),
     health: {
-      engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }),
       database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
       artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
-      worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }),
-      codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }),
+      opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy", summary: "Ready", details: {} }),
       ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
     },
     getHealth: async () => snapshot,

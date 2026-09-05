@@ -6,25 +6,27 @@ import { describe, expect, test } from "vitest";
 import Database from "better-sqlite3";
 
 import { formatDoctor } from "../src/diagnostics/doctor.js";
-import { formatTaskDiagnostic } from "../src/diagnostics/task.js";
+import { inspectTask, formatTaskDiagnostic } from "../src/diagnostics/task.js";
 import { ForgeDatabase } from "../src/database.js";
+import { nativeApp } from "./helpers/native-app.js";
+import { createTestConfig } from "../src/config.js";
 
 describe("operator diagnostics formatting", () => {
-  test("makes a projection/live disagreement conspicuous", () => {
-    const output = formatTaskDiagnostic({
-      taskId: "task-1",
-      projection: { title: "Repair build", phase: "planning", revision: 3, owner: "human", pendingAction: "Approve", allowedCommands: ["approve"] },
-      live: { phase: "development", revision: 4, allowedCommands: ["retry_development"], differences: [{ field: "phase" }] },
-      workflow: { status: "RUNNING", buildId: "build-old", pendingWorkflowTaskAgeSeconds: 61, lastFailure: "worker lost" },
-      executions: [], capacity: [], commands: [], history: [],
-    });
-    expect(output).toContain("DIFF");
-    expect(output).toContain("build-old");
-    expect(output).toContain("worker lost");
+  test("reports the native task intent and question without a phase projection", async () => {
+    const value = await nativeApp();
+    try {
+      const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, idempotencyKey: "diagnostic-task", title: "Repair build", description: "Repair the build", startImmediately: false });
+      const diagnostic = await inspectTask(value.config, value.database, task.id);
+      const output = formatTaskDiagnostic(diagnostic);
+      expect(output).toContain("Repair build");
+      expect(output).toContain("backlog");
+      expect(diagnostic.sessions).toEqual([]);
+      expect(diagnostic).not.toHaveProperty("projection");
+    } finally { await value.close(); }
   });
 
   test("keeps doctor status at the front of every line", () => {
-    expect(formatDoctor([{ status: "PASS", name: "sqlite WAL", detail: "wal" }, { status: "FAIL", name: "replay open workflows", detail: "task-1: nondeterministic" }])).toBe("PASS sqlite WAL: wal\nFAIL replay open workflows: task-1: nondeterministic\n");
+    expect(formatDoctor([{ status: "PASS", name: "sqlite WAL", detail: "wal" }, { status: "FAIL", name: "database references", detail: "1 invalid reference" }])).toBe("PASS sqlite WAL: wal\nFAIL database references: 1 invalid reference\n");
   });
 });
 
@@ -49,7 +51,7 @@ test("read-only diagnostics open never creates or migrates the database", async 
   }
 });
 
-test("doctor --fix refuses a database behind this build", async () => {
+test("doctor reports a database behind this build without migrating it", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-diagnostics-fix-"));
   const filename = join(root, "forge.sqlite");
   try {
@@ -59,7 +61,8 @@ test("doctor --fix refuses a database behind this build", async () => {
 
     const diagnostic = new ForgeDatabase(filename, { migrate: false });
     const { runDoctor } = await import("../src/diagnostics/doctor.js");
-    await expect(runDoctor({} as never, diagnostic, { fix: true })).rejects.toThrow("database is behind this build — restart the stack to migrate");
+    expect(await runDoctor(createTestConfig(root), diagnostic)).toEqual([expect.objectContaining({ status: "FAIL", name: "database schema" })]);
+    expect(diagnostic.schemaStatus().state).toBe("behind");
     diagnostic.close();
   } finally {
     await rm(root, { recursive: true, force: true });

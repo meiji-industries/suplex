@@ -8,11 +8,9 @@ import { ProjectFailure } from "../src/projects.js";
 import { jsonRequired } from "../src/task-utils.js";
 
 const health: HostHealthDependencies = {
-  engine: async () => ({ id: "engine", label: "Engine", status: "healthy" as const, summary: "Ready", details: {} }),
   database: async () => ({ id: "database", label: "Database", status: "healthy" as const, summary: "Ready", details: {} }),
   artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy" as const, summary: "Ready", details: {} }),
-  worker: async () => ({ id: "worker", label: "Worker", status: "healthy" as const, summary: "Ready", details: {} }),
-  codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy" as const, summary: "Ready", details: {} }),
+  opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy" as const, summary: "Ready", details: {} }),
   ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy" as const, summary: "Ready", details: {} }),
 };
 

@@ -24,13 +24,9 @@ export interface HealthSnapshot {
 }
 
 export interface HostHealthDependencies {
-  engine: () => Promise<HealthCheck>;
   database: () => Promise<HealthCheck>;
   artifactRoot: () => Promise<HealthCheck>;
-  worker: () => Promise<HealthCheck>;
-  codexAuth: () => Promise<HealthCheck>;
-  claudeAuth?: () => Promise<HealthCheck>;
-  openrouterAuth?: () => Promise<HealthCheck>;
+  opencode: () => Promise<HealthCheck>;
   herdrReadiness?: () => Promise<HealthCheck>;
   ghAuth: () => Promise<HealthCheck>;
   backup?: () => Promise<HealthCheck>;
@@ -52,13 +48,9 @@ async function safelyCheck(id: HealthCheckId, label: string, check: () => Promis
 
 export async function inspectHostHealth(config: ForgeConfig, dependencies: HostHealthDependencies): Promise<HealthSnapshot> {
   const checks = await Promise.all([
-    safelyCheck("engine", "Engine", dependencies.engine),
     safelyCheck("database", "SQLite database", dependencies.database),
     safelyCheck("artifact-root", "Artifact root", dependencies.artifactRoot),
-    safelyCheck("worker", "Worker and task queue", dependencies.worker),
-    safelyCheck("codex-auth", "Codex authentication", dependencies.codexAuth),
-    ...(dependencies.claudeAuth ? [safelyCheck("claude-auth", "Claude Code authentication", dependencies.claudeAuth)] : []),
-    ...(dependencies.openrouterAuth ? [safelyCheck("openrouter-auth", "OpenRouter readiness", dependencies.openrouterAuth)] : []),
+    safelyCheck("opencode", "OpenCode", dependencies.opencode),
     ...(dependencies.herdrReadiness ? [safelyCheck("herdr-readiness", "Herdr readiness", dependencies.herdrReadiness)] : []),
     safelyCheck("gh-auth", "GitHub CLI authentication", dependencies.ghAuth),
     ...(dependencies.backup ? [safelyCheck("backup", "Backup verification", dependencies.backup)] : []),

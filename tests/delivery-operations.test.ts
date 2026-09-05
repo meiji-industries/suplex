@@ -1,3 +1,4 @@
+import { insertNativeTaskRow } from "./helpers/native-task-row.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ForgeDatabase } from "../src/database.js";
 import { DeliveryOperations, type DeliveryGithubPort } from "../src/delivery-operations.js";
-import type { GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation, LocalRevision } from "../src/github-release.js";
+import type { GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation, LocalRevision } from "../src/github-delivery.js";
 import { RootController } from "../src/root-controller.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { TaskControlStore } from "../src/root-session-store.js";
@@ -37,9 +38,9 @@ async function fixture() {
   const stamp = new Date().toISOString();
   database.authTransaction((db) => {
     db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', 'main', '', '', '[]', '{}', 'active', ?, ?)").run(directory, directory, stamp, stamp);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', '', ?, ?)").run(directory, directory, stamp, stamp);
     db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief', 'text/plain', 1, ?, 'brief', ?)").run("a".repeat(64), stamp);
-    db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES ('task', 'company', 'project', 'Task', 'brief', '[]', '{}', 0, 'workflow', 'revision', 'key', ?, ?, ?)").run("b".repeat(64), stamp, stamp);
+      insertNativeTaskRow(db);
   });
   const profile = { profileId: "profile", provider: "codex" as const, model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
   const store = new TaskControlStore(database);
@@ -52,7 +53,7 @@ async function fixture() {
 
 function github(local: LocalRevision) {
   const calls: string[] = [];
-  let observed: GithubPullRequestObservation = { exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "open", isDraft: false, headSha: local.headSha, baseSha: "base", mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: "APPROVED" };
+  let observed: GithubPullRequestObservation = { exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "open", isDraft: false, headSha: local.headSha, baseSha: "base", mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1, runs: [] }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: "APPROVED" };
   const pull = (): GithubPullRequest => ({ number: 7, url: "https://github.com/owner/repo/pull/7", repository: "owner/repo", headBranch: local.branch, baseBranch: "main", headSha: observed.headSha!, baseSha: "base", isDraft: observed.isDraft ?? false, state: observed.state!, mergedAt: observed.state === "merged" ? new Date().toISOString() : null });
   const port: GithubReleaseAdapter & DeliveryGithubPort = {
     markReadyForReview: async () => { calls.push("ready"); observed = { ...observed, isDraft: false }; },
@@ -66,6 +67,45 @@ afterEach(async () => {
 });
 
 describe("Root delivery operations", () => {
+  it.each(["fork", "other_base"])("does not adopt an unrelated %s pull request", async mismatch => {
+    const value = await fixture();
+    const fake = github(value.local);
+    const pull = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
+    fake.port.listPullRequests = async () => [{ ...pull, ...(mismatch === "fork" ? { isCrossRepository: true } : { baseBranch: "release" }) }];
+    expect(await new DeliveryOperations(value.store, fake.port).observe("task")).toBeNull();
+    expect(value.store.get("task").pullRequest).toBeNull();
+    expect(value.store.get("task").status).toBe("active");
+    value.database.close();
+  });
+  it("completes a reviewed local worktree without requiring GitHub", async () => {
+    const value = await fixture();
+    const fake = github(value.local);
+    fake.port.listPullRequests = async () => { throw new Error("GitHub offline"); };
+    fake.port.getRemoteRepository = async () => { throw new Error("GitHub must not be consulted"); };
+    value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_target = 'local_worktree' WHERE task_id = 'task'").run());
+    expect(await new DeliveryOperations(value.store, fake.port).observe("task")).toBeNull();
+    await new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "complete_local_work", value.local.headSha);
+    expect(value.store.get("task").status).toBe("delivered");
+    expect(fake.calls).not.toContain("push");
+  });
+
+  it("adopts an already-pushed exact head for a remote-branch target", async () => {
+    const value = await fixture();
+    const fake = github(value.local);
+    fake.port.getBranchHead = async () => value.local.headSha;
+    value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_target = 'remote_branch' WHERE task_id = 'task'").run());
+    await new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", value.local.headSha);
+    expect(value.store.get("task").status).toBe("delivered");
+    expect(fake.calls).not.toContain("push");
+  });
+
+  it("does not push after cancellation during a remote-head read", async () => {
+    const value = await fixture();
+    const fake = github(value.local);
+    fake.port.getBranchHead = async () => { value.store.cancel("task"); return null; };
+    await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch")).rejects.toThrow();
+    expect(fake.calls).not.toContain("push");
+  });
   it("marks a draft ready and confirms GitHub state for a ready target", async () => {
     const value = await fixture();
     const fake = github(value.local);
@@ -81,8 +121,8 @@ describe("Root delivery operations", () => {
     const value = await fixture();
     const fake = github(value.local);
     const observed = await fake.port.observePullRequest!({ repository: "owner/repo", branch: value.local.branch });
-    fake.setObserved({ ...observed, checks: { total: 3, pending: 1, failing: 1, successful: 1 } });
-    await new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_after_approval", value.local.headSha);
+    fake.setObserved({ ...observed, checks: { total: 3, pending: 1, failing: 1, successful: 1, runs: [] } });
+    await new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha);
     expect(fake.calls).toContain("merge");
     expect(value.store.get("task").status).toBe("delivered");
   });
@@ -146,10 +186,10 @@ describe("Root delivery operations", () => {
     const controller = new RootController(value.store, new FakeTaskHarness(), new DeliveryOperations(value.store, fake.port));
     const receipt = await controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "request_review", value.local.headSha);
     expect(receipt).toMatchObject({ headSha: value.local.headSha });
-    fake.setObserved({ exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "open", isDraft: false, headSha: "c".repeat(40), baseSha: "base", mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: "APPROVED" });
-    await expect(controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_after_approval", value.local.headSha)).rejects.toMatchObject({ code: "head_diverged" });
+    fake.setObserved({ exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "open", isDraft: false, headSha: "c".repeat(40), baseSha: "base", mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1, runs: [] }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: "APPROVED" });
+    await expect(controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha)).rejects.toMatchObject({ code: "head_diverged" });
     expect(fake.calls).not.toContain("merge");
-    fake.setObserved({ exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "merged", isDraft: false, headSha: value.local.headSha, baseSha: "base", mergeable: "MERGEABLE", checks: { total: 0, pending: 0, failing: 0, successful: 0 }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: null });
+    fake.setObserved({ exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "merged", isDraft: false, headSha: value.local.headSha, baseSha: "base", mergeable: "MERGEABLE", checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: null });
     value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET worktree_json = NULL, pull_request_json = NULL WHERE task_id = 'task'").run());
     const inspections = fake.calls.filter((call) => call === "inspect").length;
     await controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "observe_pull_request");
@@ -161,9 +201,9 @@ describe("Root delivery operations", () => {
   it("requests an exact-head merge without a Forge or GitHub review mirror", async () => {
     const value = await fixture();
     const fake = github(value.local);
-    fake.setObserved({ exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "open", isDraft: false, headSha: value.local.headSha, baseSha: "base", mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1 }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: null });
+    fake.setObserved({ exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "open", isDraft: false, headSha: value.local.headSha, baseSha: "base", mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1, runs: [] }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: null });
     const controller = new RootController(value.store, new FakeTaskHarness(), new DeliveryOperations(value.store, fake.port));
-    await controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_after_approval", value.local.headSha);
+    await controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha);
     expect(fake.calls).toContain("merge");
     expect(value.store.get("task").status).toBe("delivered");
   });

@@ -1,5 +1,6 @@
+import { insertNativeTaskRow } from "./helpers/native-task-row.js";
 import { PassThrough } from "node:stream";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +13,37 @@ import { RootController } from "../src/root-controller.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { TaskControlStore } from "../src/root-session-store.js";
 import { runCommand } from "../src/command-runner.js";
+import { nativeApp } from "./helpers/native-app.js";
+import { ArtifactStore } from "../src/artifacts.js";
+
+test("Root image reads enforce task ownership and content integrity and return MCP image content", async () => {
+  const value = await nativeApp();
+  try {
+    const image = { filename: "design.png", mimeType: "image/png" as const, base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64") };
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Inspect image", description: "Use the attachment", idempotencyKey: "root-image-proof", startImmediately: true, images: [image] });
+    const controller = new RootController(value.tasks.repository.controls, new FakeTaskHarness(), undefined, new ArtifactStore(value.config.artifactRoot));
+    const session = controller.prepareRoot(task.id);
+    const bridge = new RootBridge({ taskId: task.id, sessionId: session.id, generation: session.generation }, controller);
+    const id = task.images[0]!.artifactId;
+    await expect(bridge.call({ kind: "read_image", artifactId: id })).resolves.toEqual({ kind: "image", filename: image.filename, mimeType: image.mimeType, data: image.base64 });
+    const foreign = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Other task", description: "Other image", idempotencyKey: "foreign-image-proof", startImmediately: true, images: [image] });
+    await expect(bridge.call({ kind: "read_image", artifactId: foreign.task.images[0]!.artifactId })).rejects.toThrow();
+    const input = new PassThrough();
+    const replies: unknown[] = [];
+    const transport = startRootBridgeTransport({ bridge, stdin: input, stdout: { write(line) { replies.push(JSON.parse(line)); return true; } } });
+    try {
+      const call = mcpClient(input, replies);
+      await call({ method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "proof", version: "1" } } });
+      const response = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "read_image", artifactId: id } } });
+      expect(response.result).toEqual({ content: [{ type: "text", text: image.filename }, { type: "image", data: image.base64, mimeType: image.mimeType }] });
+    } finally { transport.close(); input.destroy(); }
+    const artifact = value.tasks.repository.controls.image(task.id, id);
+    await writeFile(join(value.config.artifactRoot, artifact.storagePath), "changed");
+    await expect(bridge.call({ kind: "read_image", artifactId: id })).rejects.toThrow("changed in storage");
+    value.tasks.cancelTask(value.userId, task.id);
+    await expect(bridge.call({ kind: "read_image", artifactId: id })).rejects.toThrow();
+  } finally { await value.close(); }
+});
 
 const run = (command: string, args: string[]) => runCommand({ taskId: null, stepId: null, command, args });
 
@@ -20,6 +52,7 @@ const root: RootIdentity = { taskId: "task_1", sessionId: "session_1", generatio
 class ForgeAdapterFake implements RootBridgeAdapter {
   readonly calls: string[] = [];
   current = true;
+  async readImage(): Promise<never> { throw new Error("No image in this fixture"); }
 
   async assertCurrentRoot(identity: RootIdentity): Promise<void> {
     this.calls.push(`assert:${identity.taskId}:${identity.sessionId}:${identity.generation}`);
@@ -50,7 +83,7 @@ function mcpClient(transport: { write(chunk: string): boolean }, responses: unkn
   return async (request: Record<string, unknown>) => {
     const requestId = ++id;
     transport.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, ...request })}\n`);
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await expect.poll(() => responses.length, { timeout: 5000 }).toBeGreaterThan(0);
     const response = responses.shift();
     if (!response || typeof response !== "object") throw new Error("MCP server did not respond");
     return response as Record<string, unknown>;
@@ -103,9 +136,9 @@ test("stdio bridge invokes the production controller against a durable task cont
   try {
     database.authTransaction((db) => {
       db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
-      db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', 'main', '', '', '[]', '{}', 'active', ?, ?)").run(repository, directory, stamp, stamp);
+      db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', '', ?, ?)").run(repository, directory, stamp, stamp);
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief', 'text/plain', 1, ?, 'brief', ?)").run("a".repeat(64), stamp);
-      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES ('task', 'company', 'project', 'Task', 'brief', '[]', '{}', 0, 'workflow', 'revision', 'key', ?, ?, ?)").run("b".repeat(64), stamp, stamp);
+      insertNativeTaskRow(db);
     });
     const store = new TaskControlStore(database);
     const profile = { profileId: "profile", provider: "openai", model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
@@ -120,7 +153,7 @@ test("stdio bridge invokes the production controller against a durable task cont
     const call = mcpClient(stdin, responses);
     await call({ method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } } });
     const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", instruction: "Inspect the worktree." } } });
-    expect(delegated).toMatchObject({ result: { structuredContent: { kind: "worker", lifecycle: "live" } } });
+    expect(delegated).toMatchObject({ result: { structuredContent: { worker: { kind: "worker", lifecycle: "live" }, next: expect.stringContaining("End this Root turn now") } } });
     expect(store.currentSession("task", "worker")).toMatchObject({ lifecycle: "live", nativeSessionId: expect.stringMatching(/^ses_/) });
     reader.close();
   } finally { database.close(); await rm(directory, { recursive: true, force: true }); }

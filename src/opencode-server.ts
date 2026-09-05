@@ -42,8 +42,8 @@ export function openCodeRoleConfig(input: {
   const { role, profile } = input;
   const model = `${profile.providerID}/${profile.modelID}`;
   const permission = role === "root"
-    ? { edit: "deny", bash: "deny", task: "deny", external_directory: "deny" }
-    : { task: "deny" };
+    ? { read: "allow", edit: "deny", bash: "deny", task: "deny", question: "deny", external_directory: "deny", doom_loop: "allow" }
+    : { read: "allow", edit: "allow", bash: "allow", external_directory: "allow", doom_loop: "allow", task: "deny", question: "deny", "forge_root_*": "deny" };
   return {
     model,
     default_agent: `forge-${role}`,
@@ -51,8 +51,8 @@ export function openCodeRoleConfig(input: {
       [`forge-${role}`]: {
         mode: "primary", model, variant: profile.reasoningEffort, permission,
         tools: role === "root"
-          ? { bash: false, edit: false, write: false, apply_patch: false, task: false }
-          : { task: false, "forge_root_*": false },
+          ? { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false }
+          : { task: false, question: false, "forge_root_*": false },
         reasoningEffort: profile.reasoningEffort,
         serviceTier: profile.serviceTier,
       },
@@ -88,8 +88,15 @@ function ownedProcess(reference: OpenCodeServerReference) {
   return { ...reference.processIdentity, pid: reference.pid, name: `opencode-${reference.generation}`, startedAt: reference.processIdentity.startTime };
 }
 
-export async function stopOpenCodeServer(reference: OpenCodeServerReference, controller: ProcessController = { ...defaultProcessController, inspect: inspectProcessOnce }): Promise<void> {
+export async function stopOpenCodeServer(reference: OpenCodeServerReference, controller: ProcessController = { ...defaultProcessController, inspect: inspectOpenCodeProcess }): Promise<void> {
   await stopOwnedProcesses({ version: 1, processes: [ownedProcess(reference)] }, controller);
+}
+
+export async function inspectOpenCodeProcess(pid: number) {
+  const inspection = await inspectProcessOnce(pid);
+  if (inspection) return inspection;
+  if (openCodeProcessAlive(pid)) throw new Error("OpenCode process identity could not be inspected");
+  return undefined;
 }
 
 async function unusedPort(): Promise<number> {
@@ -161,5 +168,5 @@ export async function openCodeAttachCommand(input: { reference: OpenCodeServerRe
   const envFile = join(input.runtimeDirectory, "attach.env");
   await writeFile(envFile, `export OPENCODE_SERVER_PASSWORD=${quote(input.reference.password)}\n`, { mode: 0o600 });
   await chmod(envFile, 0o600);
-  return `source ${quote(envFile)}; exec ${quote(input.reference.executable)} attach ${quote(input.reference.baseUrl)} --dir ${quote(input.reference.directory)} --session ${quote(input.sessionID)}`;
+  return `source ${quote(envFile)}; ${quote(input.reference.executable)} attach ${quote(input.reference.baseUrl)} --dir ${quote(input.reference.directory)} --session ${quote(input.sessionID)}`;
 }

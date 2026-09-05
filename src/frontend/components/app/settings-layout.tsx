@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, Building2, Cpu, HardDrive, KeyRound, Mail, MessageSquareText, Plug, ShieldCheck, UserRound, Users, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Building2, Cpu, HardDrive, KeyRound, Mail, Plug, ShieldCheck, UserRound, Users, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInput, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarTrigger, useSidebar } from "../ui/sidebar.js";
@@ -25,7 +25,6 @@ function useSettingsGroups(companyId: string, user?: ApiUser): SettingsNavGroup[
         { label: "Providers", href: withCompany("/admin/providers", companyId), icon: Plug },
         { label: "Agents", href: withCompany("/admin/agents", companyId), icon: Users },
         { label: "Models", href: withCompany("/admin/models", companyId), icon: Cpu },
-        { label: "Prompts", href: withCompany("/admin/prompts", companyId), icon: MessageSquareText },
         { label: "Environment", href: withCompany("/admin/environment", companyId), icon: HardDrive },
       ]}] : []),
       { title: "System", items: [

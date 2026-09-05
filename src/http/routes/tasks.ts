@@ -1,176 +1,57 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import type { TaskService } from "../../tasks.js";
+import type { TaskHost } from "../../task-host.js";
+import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
+import { MAX_TASK_REQUEST_BYTES, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
 
-import type { TaskEvent } from "../../tasks.js";
-import { TaskFailure, type TaskService } from "../../tasks.js";
-import { GithubReleaseFailure, type ReleaseService } from "../../github-release.js";
-import { routedIssueCommands, type IssueCommand } from "../../commands/registry.js";
-import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, HttpPlanDecisionBodySchema, ResolveDecisionBlockerBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
-import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, DuplicateTaskBodySchema, MAX_TASK_REQUEST_BYTES, PlanRevisionBodySchema, TaskActivityResponseSchema, TaskAgentsBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskDeveloperDiffResponseSchema, TaskDiagnosticsResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskRescueResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
-import { TaskRescueService } from "../../task-rescue.js";
-import type { ForgeDatabase } from "../../database.js";
-import type { ForgeConfig } from "../../config.js";
-import { signalIssueGithubPullRequestSync } from "../../engine/service.js";
+export interface TaskRoutesOptions { tasks: TaskService; host?: Pick<TaskHost, "recover"> }
 
-export interface TaskRoutesOptions {
-  tasks: TaskService;
-  release?: ReleaseService;
-  database?: ForgeDatabase;
-  config?: ForgeConfig;
-}
-
-const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
+const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host }) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const { tasks } = options;
-  const rescue = options.database && options.config ? new TaskRescueService(tasks, options.database, options.config) : undefined;
-  const taskResponse = { response: { 200: TaskResponseSchema } };
-  typed.get("/api/tasks", { schema: { querystring: z.object({ archived: z.coerce.boolean().optional() }), response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: await tasks.listTasksWithLiveStatus(request.forgeUser.id, undefined, request.query.archived === true) }));
-  typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, querystring: z.object({ archived: z.coerce.boolean().optional() }), response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: await tasks.listTasksWithLiveStatus(request.forgeUser.id, request.params.companyId, request.query.archived === true) }));
+  const taskResponse = { params: TaskIdParamsSchema, response: { 200: TaskResponseSchema } };
+  const listQuery = z.object({ archived: z.enum(["true", "false"]).optional() });
+  const wake = (taskId: string): void => { if (host) void host.recover(taskId).catch(error => app.log.warn({ taskId, err: error }, "Task recovery will be retried")); };
+  typed.get("/api/tasks", { schema: { querystring: listQuery, response: { 200: TaskListResponseSchema } } }, async request => ({ tasks: tasks.listTasks(request.forgeUser.id, undefined, request.query.archived === "true") }));
+  typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, querystring: listQuery, response: { 200: TaskListResponseSchema } } }, async request => ({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId, request.query.archived === "true") }));
   typed.post("/api/companies/:companyId/tasks", { bodyLimit: MAX_TASK_REQUEST_BYTES, schema: { params: CompanyIdParamsSchema, body: TaskBodySchema, response: { 200: TaskResponseSchema, 201: TaskResponseSchema } } }, async (request, reply) => {
-    const { roleAgents: rawRoleAgents, startImmediately, ...body } = request.body;
-    const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, { ...body, ...(rawRoleAgents ? { roleAgents: rawRoleAgents } : {}), ...(startImmediately !== undefined ? { startImmediately } : {}) });
+    const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, request.body);
+    if (result.task.status === "active") wake(result.task.id);
     return reply.code(result.created ? 201 : 200).send(result.task);
   });
-  typed.get("/api/tasks/:taskId", { schema: { params: TaskIdParamsSchema, querystring: z.object({ refresh: z.coerce.boolean().optional() }), ...taskResponse } }, async (request, reply) => { const task = await tasks.getTaskWithLiveStatus(request.forgeUser.id, request.params.taskId); if (request.query.refresh && options.config) void signalIssueGithubPullRequestSync(options.config, task.workflowId).catch(() => undefined); return reply.header("Cache-Control", "private, no-store").send(task); });
-  typed.get("/api/tasks/:taskId/diagnostics", { schema: { params: TaskIdParamsSchema, response: { 200: TaskDiagnosticsResponseSchema } } }, async (request, reply) => {
-    if (!rescue) throw new TaskFailure("Task diagnostics are unavailable", [], 503);
-    return reply.header("Cache-Control", "private, no-store").send(await rescue.diagnostics(request.forgeUser.id, request.params.taskId));
+  typed.get("/api/tasks/:taskId", { schema: taskResponse }, async (request, reply) => reply.header("Cache-Control", "private, no-store").send(tasks.getTask(request.forgeUser.id, request.params.taskId)));
+  typed.patch("/api/tasks/:taskId", { schema: { ...taskResponse, body: TaskDetailsBodySchema } }, async request => tasks.updateTaskDetails(request.forgeUser.id, request.params.taskId, request.body));
+  typed.post("/api/tasks/:taskId/start", { schema: taskResponse }, async request => {
+    const task = tasks.startTask(request.forgeUser.id, request.params.taskId);
+    wake(task.id);
+    return task;
   });
-  typed.post("/api/tasks/:taskId/rescue", { schema: { params: TaskIdParamsSchema, response: { 200: TaskRescueResponseSchema } } }, async (request, reply) => {
-    if (!rescue) throw new TaskFailure("Task rescue is unavailable", [], 503);
-    return reply.send(await rescue.rescue(request.forgeUser.id, request.params.taskId));
+  typed.post("/api/tasks/:taskId/answer", { schema: { ...taskResponse, body: TaskAnswerBodySchema } }, async request => {
+    const task = tasks.answerTask(request.forgeUser.id, request.params.taskId, request.body.questionId, request.body.answer, request.body.confirmCommandsStopped);
+    wake(task.id);
+    return task;
   });
+  typed.post("/api/tasks/:taskId/note", { schema: { ...taskResponse, body: TaskNoteBodySchema } }, async request => {
+    const task = tasks.sendNote(request.forgeUser.id, request.params.taskId, request.body.note);
+    wake(task.id);
+    return task;
+  });
+  typed.post("/api/tasks/:taskId/cancel", { schema: taskResponse }, async request => {
+    const task = tasks.cancelTask(request.forgeUser.id, request.params.taskId);
+    wake(task.id);
+    return task;
+  });
+  typed.post("/api/tasks/:taskId/refresh", { schema: taskResponse }, async request => {
+    const task = tasks.getTask(request.forgeUser.id, request.params.taskId);
+    wake(task.id);
+    return task;
+  });
+  for (const action of ["archive", "unarchive"] as const) typed.post(`/api/tasks/:taskId/${action}`, { schema: taskResponse }, async request => tasks.archiveTask(request.forgeUser.id, request.params.taskId, action === "archive"));
   typed.get("/api/tasks/:taskId/activity", { schema: { params: TaskIdParamsSchema, response: { 200: TaskActivityResponseSchema } } }, async (request, reply) => reply.header("Cache-Control", "private, no-store").send(tasks.getTaskActivity(request.forgeUser.id, request.params.taskId)));
-  typed.get("/api/tasks/:taskId/activity/stream", { schema: { params: TaskIdParamsSchema } }, async (request, reply) => {
-    let closed = false, known = new Set<string>(), knownCommands = new Set<string>();
-    const key = (event: { at: string; kind: string; text: string; exitCode?: number }): string => JSON.stringify(event);
-    const send = (initial = false): void => {
-      if (closed || reply.raw.destroyed) return;
-      try {
-        const feed = tasks.getTaskActivity(request.forgeUser.id, request.params.taskId, 300);
-        const events = initial ? [...feed.events.filter((event) => event.kind === "status").slice(-1), ...feed.events.filter((event) => event.kind !== "status").slice(-49)] : feed.events.filter((event) => !known.has(key(event)));
-        for (const event of events) reply.raw.write(`event: activity\ndata: ${JSON.stringify(event)}\n\n`);
-        const commands = initial ? feed.commands : feed.commands.filter((command) => !knownCommands.has(command.id));
-        for (const command of commands) reply.raw.write(`event: command\ndata: ${JSON.stringify(command)}\n\n`);
-        known = new Set(feed.events.map(key));
-        knownCommands = new Set(feed.commands.map((command) => command.id));
-      } catch { close(true); }
-    };
-    let timer: NodeJS.Timeout | undefined;
-    let keepalive: NodeJS.Timeout | undefined;
-    const close = (destroy = false): void => { if (closed) return; closed = true; if (timer) clearInterval(timer); if (keepalive) clearInterval(keepalive); if (destroy && !reply.raw.destroyed) reply.raw.destroy(); };
-    reply.hijack();
-    reply.raw.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-store", Connection: "keep-alive" });
-    send(true);
-    if (!closed) timer = setInterval(() => send(), 1_000);
-    if (!closed) keepalive = setInterval(() => { if (!closed && reply.raw.writable) reply.raw.write(": keepalive\n\n"); }, 15_000);
-    request.raw.on("close", close);
-    return reply;
-  });
-  typed.post("/api/tasks/:taskId/duplicate", { schema: { params: TaskIdParamsSchema, body: DuplicateTaskBodySchema, response: { 201: TaskResponseSchema } } }, async (request, reply) => reply.code(201).send(await tasks.duplicateTask(request.forgeUser.id, request.params.taskId, request.body.idempotencyKey)));
-  typed.patch("/api/tasks/:taskId", { schema: { params: TaskIdParamsSchema, body: TaskDetailsBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.updateTaskDetails(request.forgeUser.id, request.params.taskId, request.body)));
-  typed.patch("/api/tasks/:taskId/agents", { schema: { params: TaskIdParamsSchema, body: TaskAgentsBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(tasks.updateTaskAgents(request.forgeUser.id, request.params.taskId, request.body)));
-  typed.get("/api/tasks/:taskId/release", { schema: { params: TaskIdParamsSchema, response: { 200: TaskReleaseResponseSchema, 404: z.object({ error: z.string() }) } } }, async (request, reply) => {
-    const release = tasks.getRelease(request.forgeUser.id, request.params.taskId);
-    if (!release) return reply.code(404).send({ error: "Not found" });
-    return reply.header("Cache-Control", "private, no-store").send(release);
-  });
-  if (options.release) typed.post("/api/tasks/:taskId/mark-ready", { schema: { params: TaskIdParamsSchema, body: ExpectedRevisionBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => {
-    const task = tasks.getTask(request.forgeUser.id, request.params.taskId);
-    if (request.body.expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [], 409, task);
-    const release = task.release;
-    if (!release?.pullRequestUrl || release.pullRequestNumber === null || !release.isDraft) return reply.send(task);
-    try {
-      await options.release!.markReadyForReview({ taskId: task.id, companyId: task.companyId, workflowId: task.workflowId, releaseId: release.id, repository: release.repository, pullRequestNumber: release.pullRequestNumber });
-    } catch (error) {
-      if (error instanceof GithubReleaseFailure) throw new TaskFailure(error.summary, [], error.code === "provider-unavailable" || error.code === "provider-rate-limited" ? 503 : 409, task);
-      throw error;
-    }
-    const updated = tasks.getTask(request.forgeUser.id, task.id);
-    if (updated.allowedCommands.includes("reconcile_ci")) return reply.send(await tasks.executeCommand(request.forgeUser.id, task.id, "reconcile_ci", { expectedRevision: updated.revision }));
-    return reply.send(updated);
-  });
-  if (options.release) typed.post("/api/tasks/:taskId/merge-pull-request", { schema: { params: TaskIdParamsSchema, body: ExpectedRevisionBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => {
-    const task = tasks.getTask(request.forgeUser.id, request.params.taskId);
-    if (request.body.expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [], 409, task);
-    const release = task.release;
-    if (!release?.pullRequestUrl || release.pullRequestNumber === null || !task.allowedCommands.includes("reconcile_merge")) return reply.send(task);
-    try {
-      await options.release!.mergePullRequest({ taskId: task.id, companyId: task.companyId, workflowId: task.workflowId, releaseId: release.id, repository: release.repository, pullRequestNumber: release.pullRequestNumber });
-      const updated = tasks.getTask(request.forgeUser.id, task.id);
-      return reply.send(await tasks.executeCommand(request.forgeUser.id, task.id, "reconcile_merge", { expectedRevision: updated.revision }));
-    } catch (error) {
-      if (error instanceof GithubReleaseFailure) throw new TaskFailure(error.summary, [], error.code === "provider-unavailable" || error.code === "provider-rate-limited" ? 503 : 409, task);
-      throw error;
-    }
-  });
-  typed.get("/api/tasks/:taskId/developer-diff", { schema: { params: TaskIdParamsSchema, response: { 200: TaskDeveloperDiffResponseSchema, 304: z.null() } } }, async (request, reply) => {
-    const result = await tasks.getDeveloperDiff(request.forgeUser.id, request.params.taskId);
-    const etag = `\"${result.etag}\"`;
-    if (request.headers["if-none-match"] === etag) return reply.code(304).header("ETag", etag).header("Cache-Control", "private, no-cache").send(null);
-    return reply.header("ETag", etag).header("Cache-Control", "private, no-cache").send(result.diff);
-  });
-  for (const descriptor of routedIssueCommands) {
-    typed.post(`/api/tasks/:taskId/${descriptor.slug!}`, { schema: { params: TaskIdParamsSchema, body: descriptor.body!, response: { 200: TaskResponseSchema } } }, async (request, reply) => {
-      const body = request.body as Record<string, unknown>;
-      return reply.send(await tasks.executeCommand(request.forgeUser.id, request.params.taskId, descriptor.name as IssueCommand, {
-        expectedRevision: (body.expectedRevision ?? body.expectedWorkflowRevision) as number,
-        // Human-issued commands always get a unique durable ID. Never allow
-        // them to inherit the workflow schema's legacy sentinel.
-        commandId: (body.commandId as string | undefined) ?? randomUUID(),
-        ...(body.automatic === true ? { automatic: true } : {}),
-        ...(body.note !== undefined ? { note: body.note as string } : {}),
-        ...(body.answer !== undefined ? { note: body.answer as string } : {}),
-        ...(body.idempotencyKey !== undefined ? { idempotencyKey: body.idempotencyKey as string } : {}),
-      }));
-    });
-  }
-  typed.post("/api/tasks/:taskId/resolve-decision-blocker", { schema: { params: TaskIdParamsSchema, body: ResolveDecisionBlockerBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.resolveDecisionBlocker(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.answer)));
-  typed.post("/api/tasks/:taskId/reject-plan", { schema: { params: TaskIdParamsSchema, body: HttpPlanDecisionBodySchema.extend({ expectedRevision: ExpectedRevisionBodySchema.shape.expectedRevision }), response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.requestPlanRevision(request.forgeUser.id, request.params.taskId, { expectedRevision: request.body.expectedRevision, actorUserId: request.forgeUser.id, note: request.body.note, idempotencyKey: request.body.idempotencyKey })));
-  typed.post("/api/tasks/:taskId/revise-plan", { schema: { params: TaskIdParamsSchema, body: PlanRevisionBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.revisePlan(request.forgeUser.id, request.params.taskId, { ...request.body, actorUserId: request.forgeUser.id })));
-  typed.post("/api/tasks/:taskId/continue-work", { schema: { params: TaskIdParamsSchema, body: ContinueWorkBodySchema, response: { 200: ContinueWorkResponseSchema } } }, async (request, reply) => reply.send(await tasks.continueWork(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.reason)));
-
-  typed.get("/api/tasks/:taskId/images/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
-    const image = await tasks.getTaskImage(request.forgeUser.id, request.params.taskId, request.params.artifactId);
-    return reply.header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").type(image.artifact.mimeType).send(image.bytes);
-  });
-  typed.get("/api/tasks/:taskId/developer-artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
-    const artifact = await tasks.getDeveloperArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
-    return reply.header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").type(artifact.artifact.mimeType).send(artifact.bytes);
-  });
-  typed.get("/api/tasks/:taskId/developer-executions/:executionId/events", { schema: { params: TaskExecutionParamsSchema, response: { 200: DeveloperExecutionEventsResponseSchema } } }, async (request, reply) => {
-    const events = tasks.getDeveloperExecutionEvents(request.forgeUser.id, request.params.taskId, request.params.executionId);
-    return reply.header("Cache-Control", "private, no-store").send(events);
-  });
-  typed.get("/api/tasks/:taskId/review-artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
-    const artifact = await tasks.getTaskReviewArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
-    return reply.header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").type(artifact.artifact.mimeType).send(artifact.bytes);
-  });
-  typed.get("/api/tasks/:taskId/artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
-    const artifact = await tasks.getTaskArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
-    reply.header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff");
-    if (artifact.artifact.kind === "browser-proof-image" || artifact.artifact.kind === "browser-proof-manifest") reply.header("Content-Disposition", `${artifact.artifact.kind === "browser-proof-image" ? "inline" : "attachment"}; filename="${artifact.artifact.filename.replace(/["\\\r\n]/g, "-")}"`);
-    return reply.type(artifact.artifact.mimeType).send(artifact.bytes);
-  });
-  typed.get("/api/tasks/:taskId/release/artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
-    const artifact = await tasks.getReleaseArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
-    return reply.header("Cache-Control", "private, no-store").type(artifact.mimeType).send(artifact.bytes);
-  });
-  typed.get("/api/tasks/:taskId/reconciliation-artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
-    const artifact = await tasks.getTargetBaseArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
-    return reply.header("Cache-Control", "private, no-store").type(artifact.artifact.mimeType).send(artifact.bytes);
-  });
-  typed.get("/api/tasks/events", async (request, reply) => {
-    reply.hijack();
-    reply.raw.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-store", Connection: "keep-alive" });
-    const cursor = tasks.taskEventCursor();
-    const send = (event: TaskEvent, eventCursor: number): void => { reply.raw.write(`id: ${eventCursor}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`); };
-    const unsubscribe = tasks.subscribe(request.forgeUser.id, send, cursor);
-    reply.raw.write(`id: ${cursor}\nevent: ready\ndata: {}\n\n`);
-    request.raw.on("close", unsubscribe);
-    return reply;
+  for (const kind of ["artifacts", "images"] as const) typed.get(`/api/tasks/:taskId/${kind}/:artifactId`, { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
+    const result = await tasks.getTaskArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
+    return reply.header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").type(result.artifact.mimeType).send(result.bytes);
   });
 };
 

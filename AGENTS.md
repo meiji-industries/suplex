@@ -39,10 +39,10 @@ with the Playwright browser proof at desktop and narrow viewport sizes.
 
 ## Dev workflow
 
-`mise run dev` runs Temporal, the Forge API, and the worker as one foreground
+`mise run dev` runs the Forge API and task host as one foreground
 command; Vite is embedded in Fastify. Frontend changes use Vite HMR and React
 Fast Refresh. Backend changes do NOT hot-reload under `mise run dev` — Ctrl-C
-and rerun it (this keeps live Developer turns intact while `src/` is being
+and rerun it (this keeps native OpenCode sessions intact while `src/` is being
 edited). `mise run dev:watch` is the same stack with `tsx watch`, which restarts
 the API/worker on every save. Before runtime or browser
 verification, run `mise run dev:status` and reuse a stack that is already
@@ -68,11 +68,11 @@ Need a change? Create a new migration.
 
 ## Where new code goes
 
-- A new issue command = one `defineIssueCommand` in `src/commands/definitions/<domain>.ts` + one `setHandler` in `src/engine/workflow/register-<domain>.ts`. Routes, service wrappers, and frontend action types derive from the registry.
-- A new workflow state field goes in its owning `src/engine/contracts/state/<domain>.ts` fragment.
-- A new activity = one signature in `src/engine/contracts/activities/<domain>.ts` + one implementation in `src/engine/activities/<domain>.ts`.
-- A new phase goes in `src/issue-phases.ts` only.
-- There is no Temporal and no replay. Nothing about command names, field order, or handler order is frozen. Delete dead code when you find it.
+- Task HTTP contracts and routes belong in `src/http/contracts/tasks.ts` and `src/http/routes/tasks.ts`. `src/tasks.ts` owns user authorization and task commands.
+- Task metadata belongs in `src/task-repository.ts`. Durable task intent, assignments, and prompt ownership belong in `src/root-session-store.ts`.
+- `src/root-controller.ts` coordinates Root and Worker. `src/opencode-task-runtime.ts` owns native runtime calls and Herdr attachments.
+- `src/delivery-operations.ts` observes Git and GitHub before deterministic delivery operations. Native and external evidence must not depend on a second progress receipt.
+- There is no phase engine or Temporal. Preserve admitted native messages across restart instead of replaying them. Delete dead code when you find it.
 - If `tests/architecture-guardrails.test.ts` line budgets fail, move code into the per-domain modules instead of raising the budget.
 
 ## Agent skills

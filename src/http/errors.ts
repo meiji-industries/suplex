@@ -6,6 +6,8 @@ import { ProjectFailure } from "../projects.js";
 import { TaskFailure } from "../tasks.js";
 import { redact } from "../logging.js";
 import { HermesAgentFailure } from "../hermes-agents.js";
+import { ArtifactFailure } from "../artifacts.js";
+import { TaskSourceFailure } from "../task-sources.js";
 
 interface ValidationIssue {
   instancePath?: string;
@@ -40,23 +42,10 @@ function bodyParserMessage(code: string): string {
    return Boolean(error && typeof error === "object" && "validation" in error);
  }
 
-function conflictSnapshot(task: TaskFailure["current"]): unknown {
-  if (!task) return undefined;
-  return {
-    id: task.id,
-    revision: task.revision,
-    phase: task.phase,
-    owner: task.owner,
-    allowedCommands: task.allowedCommands,
-    pendingAction: task.pendingAction,
-    projection: task.projection,
-  };
-}
-
 function sendDomainFailure(reply: FastifyReply, error: AuthFailure | ProjectFailure | TaskFailure | HermesAgentFailure): void {
   const body = error instanceof AuthFailure || error instanceof HermesAgentFailure
     ? { error: error.publicMessage, ...(error.code !== "auth_failure" ? { code: error.code } : {}) }
-    : { error: error.publicMessage, findings: error.findings, ...(error instanceof TaskFailure && error.current ? { current: conflictSnapshot(error.current) } : {}), ...(error instanceof TaskFailure && error.ownerTaskId ? { ownerTaskId: error.ownerTaskId } : {}) };
+    : { error: error.publicMessage, ...(error instanceof ProjectFailure ? { findings: error.findings } : {}) };
   reply.code(error.statusCode).send(body);
 }
 
@@ -69,9 +58,13 @@ export function installHttpErrorHandlers(app: FastifyInstance): void {
       return;
     }
     if (error instanceof AuthFailure || error instanceof ProjectFailure || error instanceof TaskFailure || error instanceof HermesAgentFailure) {
-      const fields = { requestId: request.id, method: request.method, url: request.url, statusCode: error.statusCode, error: redact(error.publicMessage), ...(error instanceof ProjectFailure || error instanceof TaskFailure ? { findings: redact(error.findings) } : {}) };
+      const fields = { requestId: request.id, method: request.method, url: request.url, statusCode: error.statusCode, error: redact(error.publicMessage), ...(error instanceof ProjectFailure ? { findings: redact(error.findings) } : {}) };
       if (error.statusCode >= 500) request.log.error({ ...fields, err: error }, "Request failed"); else request.log.warn(fields, "Request rejected");
       sendDomainFailure(reply, error);
+      return;
+    }
+    if (error instanceof ArtifactFailure || error instanceof TaskSourceFailure) {
+      reply.code(error instanceof TaskSourceFailure ? error.statusCode : 422).send({ error: error.message, code: error.code });
       return;
     }
     if (isBodyParserFailure(error)) {

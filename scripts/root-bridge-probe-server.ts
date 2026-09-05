@@ -11,6 +11,7 @@ const config = RootBridgeConfigSchema.parse(JSON.parse(await readFile(bindingPat
 const record = async (value: unknown): Promise<void> => appendFile(callsPath, `${JSON.stringify(value)}\n`);
 
 const adapter: RootBridgeAdapter = {
+  async readImage(): Promise<never> { throw new Error("No image in this probe"); },
   async assertCurrentRoot(root: RootIdentity): Promise<void> {
     if (root.taskId !== config.root.taskId || root.sessionId !== config.root.sessionId || root.generation !== config.root.generation)
       throw new Error("probe Root binding did not match");

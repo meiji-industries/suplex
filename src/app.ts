@@ -5,20 +5,16 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import type { Logger } from "pino";
 
 import type { AuthService } from "./auth.js";
-import type { AttentionService } from "./attention.js";
-import type { AcceptanceService } from "./acceptance.js";
-import type { CiService } from "./ci.js";
-import type { ReleaseService } from "./github-release.js";
 import type { ForgeDatabase } from "./database.js";
 import type { ForgeConfig } from "./config.js";
-import type { CapacityManager } from "./capacity.js";
+import type { TaskHost } from "./task-host.js";
 import type { HermesAgentService } from "./hermes-agents.js";
 import type { ReadOpenCodeProviders } from "./opencode-providers.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
+import type { AgentProfileService } from "./agent-profiles.js";
 import type { ProjectService } from "./projects.js";
 import type { TaskService } from "./tasks.js";
 import type { TaskTemplateService } from "./task-templates.js";
-import type { ProjectionRebuildService } from "./projection-rebuild.js";
 import { HealthSnapshotSchema } from "./schemas.js";
 import {
   CSRF_COOKIE_NAME,
@@ -34,8 +30,6 @@ import health from "./http/routes/health.js";
 import pages from "./http/routes/pages.js";
 import hermesPairing from "./http/routes/hermes-pairing.js";
 import { registerHermesTaskRoutes } from "./http/routes/hermes-tasks.js";
-import prompts from "./http/routes/prompts.js";
-import taskPrompts from "./http/routes/task-prompts.js";
 import taskTemplates from "./http/routes/task-templates.js";
 
 export interface AppDependencies {
@@ -46,16 +40,12 @@ export interface AppDependencies {
   healthNow?: () => number;
   auth?: AuthService;
   projects?: ProjectService;
+  profiles?: AgentProfileService;
   tasks?: TaskService;
   taskTemplates?: TaskTemplateService;
-  attention?: AttentionService;
-  release?: ReleaseService;
-  ci?: CiService;
-  acceptance?: AcceptanceService;
+  host?: Pick<TaskHost, "recover">;
   database?: ForgeDatabase;
-  rebuild?: ProjectionRebuildService;
   logger?: Logger | false;
-  capacity?: CapacityManager;
   hermes?: HermesAgentService;
   readProviders?: ReadOpenCodeProviders;
   https?: { key: Buffer; cert: Buffer };
@@ -110,7 +100,7 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
 export function registerAppRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
   const getHealth = dependencies.getHealth ?? (() => inspectHostHealth(dependencies.config, dependencies.health));
   const readHealth = async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth());
-  const { auth, projects: projectService, tasks: taskService, taskTemplates: templateService, attention: attentionService, release: releaseService, database, rebuild } = dependencies;
+  const { auth, projects: projectService, tasks: taskService, taskTemplates: templateService, database } = dependencies;
 
   void app.register(pages, {
     readHealth,
@@ -123,9 +113,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
     if (dependencies.hermes) void app.register(hermesPairing, { hermes: dependencies.hermes });
     if (dependencies.hermes && taskService) registerHermesTaskRoutes(app, { hermes: dependencies.hermes, tasks: taskService });
-    void app.register(authenticated, { auth, config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(releaseService ? { release: releaseService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}), ...(rebuild ? { rebuild } : {}), ...(dependencies.capacity ? { capacity: dependencies.capacity } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
-    if (projectService && database) void app.register(prompts, { auth, config: dependencies.config, database, projects: projectService });
-    if (taskService && database) void app.register(taskPrompts, { auth, config: dependencies.config, database, tasks: taskService });
+    void app.register(authenticated, { auth, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(dependencies.host ? { host: dependencies.host } : {}), ...(database ? { database } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
     if (templateService) void app.register(taskTemplates, { auth, config: dependencies.config, templates: templateService });
   }
   if (!dependencies.frontendDevelopment) void app.register(assets, { prefix: "/assets" });

@@ -97,7 +97,7 @@ export class HermesAgentService {
         const projects = db.prepare(`SELECT id FROM forge_projects WHERE company_id = ? AND id IN (${projectIds.map(() => "?").join(",")})`).all(companyId.data, ...projectIds) as Array<{ id: string }>;
         if (!company || projects.length !== projectIds.length) throw new HermesAgentFailure("Not found", 404, "scope_not_found");
         if (db.prepare("SELECT 1 FROM forge_agents WHERE name = ?").get(name.data)) throw new HermesAgentFailure("An agent with this name already exists", 409, "configuration_conflict");
-        db.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES (?, 'hermes', ?, NULL, ?, NULL, ?, ?)").run(agentId, name.data, avatarSeed, nowIso, nowIso);
+        db.prepare("INSERT INTO forge_agents (id, name, avatar_seed, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(agentId, name.data, avatarSeed, nowIso, nowIso);
         db.prepare("INSERT INTO forge_external_agents (id, company_id, status, created_at, updated_at) VALUES (?, ?, 'pending', ?, ?)").run(agentId, companyId.data, nowIso, nowIso);
         const grant = db.prepare("INSERT INTO forge_external_agent_project_grants (agent_id, company_id, project_id, created_at) VALUES (?, ?, ?, ?)");
         for (const projectId of projectIds) grant.run(agentId, companyId.data, projectId, nowIso);

@@ -7,6 +7,7 @@ import { chromium } from "playwright";
 import { expect, test } from "vitest";
 
 import { createApp } from "../src/app.js";
+import { AgentProfileService } from "../src/agent-profiles.js";
 import { AuthService, type WebAuthnAdapter } from "../src/auth.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
@@ -36,11 +37,9 @@ const github: GithubAdapter = {
 };
 
 const health = {
-  engine: async () => ({ id: "engine" as const, label: "Engine", status: "healthy" as const, summary: "Ready", details: {} }),
   database: async () => ({ id: "database" as const, label: "Database", status: "healthy" as const, summary: "Ready", details: {} }),
   artifactRoot: async () => ({ id: "artifact-root" as const, label: "Artifacts", status: "healthy" as const, summary: "Ready", details: {} }),
-  worker: async () => ({ id: "worker" as const, label: "Worker", status: "healthy" as const, summary: "Ready", details: {} }),
-  codexAuth: async () => ({ id: "codex-auth" as const, label: "Codex", status: "healthy" as const, summary: "Ready", details: {} }),
+  opencode: async () => ({ id: "opencode" as const, label: "OpenCode", status: "healthy" as const, summary: "Ready", details: {} }),
   ghAuth: async () => ({ id: "gh-auth" as const, label: "GitHub", status: "healthy" as const, summary: "Ready", details: {} }),
 };
 
@@ -64,7 +63,7 @@ test("switching company never renders the previous company's projects under the 
   const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111", repositoryRoot, worktreeRoot });
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
   const projects = new ProjectService(database, auth, config, { github });
-  const app = createApp({ config, auth, projects, health });
+  const app = createApp({ config, auth, projects, profiles: new AgentProfileService(database, auth), health });
   await app.listen({ host: "127.0.0.1", port: 0 });
   const address = app.server.address();
   if (!address || typeof address !== "object") throw new Error("Test server did not expose a TCP address");
@@ -77,11 +76,7 @@ test("switching company never renders the previous company's projects under the 
   const admin = (await auth.getUserBySession(cookie.value))!;
   const alpha = auth.createCompany(admin.id, "Alpha Company");
   const beta = auth.createCompany(admin.id, "Beta Company");
-  const profile = projects.createProfile(admin.id, { name: "Switch profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const planner = projects.createAgent(admin.id, { name: "Planner", role: "planner", profileId: profile.id });
-  const builder = projects.createAgent(admin.id, { name: "Builder", role: "builder", profileId: profile.id });
-  const reviewer = projects.createAgent(admin.id, { name: "Reviewer", role: "reviewer", profileId: profile.id });
-  const projectInput = (name: string, repositoryPath: string, projectWorktreeRoot: string, repository: string) => ({ name, repositoryPath, worktreeRoot: projectWorktreeRoot, repository, baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, builder: builder.id, reviewer: reviewer.id } });
+  const projectInput = (name: string, repositoryPath: string, projectWorktreeRoot: string, repository: string) => ({ name, repositoryPath, worktreeRoot: projectWorktreeRoot, repository, baseBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" });
   await projects.createProject(admin.id, alpha.id, projectInput("Alpha-only project", alphaRepository, alphaWorktrees, "acme/alpha"));
   await projects.createProject(admin.id, beta.id, projectInput("Beta-only project", betaRepository, betaWorktrees, "acme/beta"));
 
@@ -135,7 +130,7 @@ test("a scoped not-found after membership removal selects another authorized com
   const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111", repositoryRoot, worktreeRoot });
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
   const projects = new ProjectService(database, auth, config, { github });
-  const app = createApp({ config, auth, projects, health });
+  const app = createApp({ config, auth, projects, profiles: new AgentProfileService(database, auth), health });
   await app.listen({ host: "127.0.0.1", port: 0 });
   const address = app.server.address();
   if (!address || typeof address !== "object") throw new Error("Test server did not expose a TCP address");
@@ -148,11 +143,7 @@ test("a scoped not-found after membership removal selects another authorized com
   const admin = (await auth.getUserBySession(adminCookie.value))!;
   const alpha = auth.createCompany(admin.id, "Alpha Company");
   const beta = auth.createCompany(admin.id, "Beta Company");
-  const profile = projects.createProfile(admin.id, { name: "Reconcile profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const planner = projects.createAgent(admin.id, { name: "Planner", role: "planner", profileId: profile.id });
-  const builder = projects.createAgent(admin.id, { name: "Builder", role: "builder", profileId: profile.id });
-  const reviewer = projects.createAgent(admin.id, { name: "Reviewer", role: "reviewer", profileId: profile.id });
-  const projectInput = (name: string, repositoryPath: string, projectWorktreeRoot: string, repository: string) => ({ name, repositoryPath, worktreeRoot: projectWorktreeRoot, repository, baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, builder: builder.id, reviewer: reviewer.id } });
+  const projectInput = (name: string, repositoryPath: string, projectWorktreeRoot: string, repository: string) => ({ name, repositoryPath, worktreeRoot: projectWorktreeRoot, repository, baseBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" });
   await projects.createProject(admin.id, alpha.id, projectInput("Alpha member project", alphaRepository, alphaWorktrees, "acme/member-alpha"));
   await projects.createProject(admin.id, beta.id, projectInput("Beta member project", betaRepository, betaWorktrees, "acme/member-beta"));
 

@@ -137,39 +137,16 @@ describe("timestamp migrations", () => {
     try {
       applyMigrations(database, folder);
 
-      expect(database.prepare("PRAGMA index_list('forge_issue_timeline')").all()).toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: "forge_issue_timeline_task_idx" }),
-      ]));
       expect(database.pragma("foreign_keys", { simple: true })).toBe(1);
-
-      // Verify internal agent constraint check
-      const profile = database.prepare("SELECT id FROM forge_profiles LIMIT 1").get() as { id: string };
-      expect(profile).toBeDefined();
-
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(database.prepare("SELECT role, provider, model, reasoning_level, service_tier FROM forge_profiles ORDER BY role").all()).toEqual([
+        { role: "root", provider: "openai", model: "gpt-5.6-sol", reasoning_level: "medium", service_tier: "default" },
+        { role: "worker", provider: "openai", model: "gpt-5.6-luna", reasoning_level: "max", service_tier: "priority" },
+      ]);
+      expect(database.prepare("SELECT name FROM sqlite_master WHERE name IN ('forge_issue_projections', 'forge_herdr_role_sessions', 'forge_model_catalog', 'forge_releases')").all()).toEqual([]);
       const now = new Date().toISOString();
-      // Valid internal agent
-      database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_int_1', 'internal', 'Planner 1', 'planner', 'seed1', ?, ?, ?)").run(profile.id, now, now);
-
-      // Invalid internal agent (missing profile)
-      expect(() => {
-        database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_bad_1', 'internal', 'Bad 1', 'planner', 'seed2', NULL, ?, ?)").run(now, now);
-      }).toThrow(/CHECK constraint/i);
-
-      // Invalid internal agent (invalid role)
-      expect(() => {
-        database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_bad_2', 'internal', 'Bad 2', 'invalid', 'seed2', ?, ?, ?)").run(profile.id, now, now);
-      }).toThrow(/CHECK constraint/i);
-
-      // Valid hermes agent
-      database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_herm_1', 'hermes', 'Hermes 1', NULL, 'seed3', NULL, ?, ?)").run(now, now);
-
-      // Invalid hermes agent (has role or profile)
-      expect(() => {
-        database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_bad_3', 'hermes', 'Bad 3', 'planner', 'seed4', NULL, ?, ?)").run(now, now);
-      }).toThrow(/CHECK constraint/i);
-      expect(() => {
-        database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_bad_4', 'hermes', 'Bad 4', NULL, 'seed4', ?, ?, ?)").run(profile.id, now, now);
-      }).toThrow(/CHECK constraint/i);
+      database.prepare("INSERT INTO forge_agents (id, name, avatar_seed, created_at, updated_at) VALUES ('agent_herm_1', 'Hermes 1', 'seed3', ?, ?)").run(now, now);
+      expect(() => database.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('bad', 'Bad', 'planner', 'seed', 'openai', 'model', 'medium', 'default', ?, ?)").run(now, now)).toThrow(/CHECK constraint/i);
 
       // Audit event constraints: cannot have both actor_user_id and actor_agent_id
       const user = database.prepare("SELECT id FROM forge_users LIMIT 1").get() as { id: string } | undefined;
@@ -219,7 +196,11 @@ describe("timestamp migrations", () => {
 
       database.prepare("INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, codex_session_id, agent_name, pane_id, rollout_path, launch_fingerprint, guard_directory, status, last_agent_status, attention_excerpt, attention_activated_at, ensure_token, ensure_expires_at, created_at, updated_at, last_seen_at) VALUES ('session', 'task', 'lead', 1, 1, 'codex', 'codex-session', 'lead-agent', 'pane-1', 'rollout.jsonl', 'fingerprint', '/worktree', 'blocked', 'waiting', 'Needs approval', '2026-08-28T00:00:00.000Z', 'token', '2026-08-29T00:00:00.000Z', '2026-08-27T00:00:00.000Z', '2026-08-28T00:00:00.000Z', '2026-08-28T01:00:00.000Z')").run();
 
-      applyMigrations(database, folder);
+      const isolated = mkdtempSync(join(tmpdir(), "forge-openrouter-migration-"));
+      try {
+        writeFileSync(join(isolated, `${openrouterMigration.tag}.sql`), readFileSync(`${folder}/${openrouterMigration.tag}.sql`));
+        applyMigrations(database, isolated);
+      } finally { rmSync(isolated, { recursive: true, force: true }); }
 
       expect(database.prepare("SELECT provider_kind, codex_session_id, agent_name, pane_id, rollout_path, launch_fingerprint, guard_directory, status, last_agent_status, attention_excerpt, attention_activated_at, ensure_token, ensure_expires_at, created_at, updated_at, last_seen_at FROM forge_herdr_role_sessions WHERE id = 'session'").get()).toEqual({ provider_kind: "codex", codex_session_id: "codex-session", agent_name: "lead-agent", pane_id: "pane-1", rollout_path: "rollout.jsonl", launch_fingerprint: "fingerprint", guard_directory: "/worktree", status: "blocked", last_agent_status: "waiting", attention_excerpt: "Needs approval", attention_activated_at: "2026-08-28T00:00:00.000Z", ensure_token: "token", ensure_expires_at: "2026-08-29T00:00:00.000Z", created_at: "2026-08-27T00:00:00.000Z", updated_at: "2026-08-28T00:00:00.000Z", last_seen_at: "2026-08-28T01:00:00.000Z" });
     } finally {

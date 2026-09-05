@@ -20,16 +20,6 @@ test("loads a Tailscale-only configuration and exposes the reachable address", (
   expect(config.worktreeRoot).toBe(join(homedir(), "forge", "worktrees"));
 });
 
-test("loads independent capacity defaults for every agent provider", () => {
-  const config = loadConfig({
-    ...baseEnvironment,
-    FORGE_CODEX_CAPACITY: "3",
-    FORGE_CLAUDE_CAPACITY: "4",
-    FORGE_OPENROUTER_CAPACITY: "5",
-  });
-
-  expect(config.externalTurnCapacityByProvider).toEqual({ codex: 3, claude: 4, openrouter: 5 });
-});
 
 for (const address of [
   "0.0.0.0",

@@ -1,6 +1,6 @@
 import type { TaskHarness } from "../../src/root-controller.js";
 import type { OpenCodeTaskScope } from "../../src/opencode-task-runtime.js";
-import type { OpenCodePromptClaim, OpenCodePromptIntent, OpenCodePromptObservation } from "../../src/opencode-session.js";
+import type { OpenCodePromptIntent, OpenCodePromptObservation } from "../../src/opencode-session.js";
 
 export class FakeTaskHarness implements TaskHarness {
   readonly dispatched: OpenCodePromptIntent[] = [];
@@ -10,6 +10,15 @@ export class FakeTaskHarness implements TaskHarness {
   loseAcknowledgement = false;
   failStop = false;
   readonly stopped: string[] = [];
+  readonly fenced: string[] = [];
+  serverGeneration = "b775df17-718a-4cb2-8e23-6912b8aa0d39";
+
+  async recoverDispatch(...[scope, intent, attempt]: Parameters<TaskHarness["recoverDispatch"]>): Promise<OpenCodePromptObservation> {
+    if (this.failStop) throw new Error("Dispatch server stop could not be verified");
+    this.fenced.push(attempt.serverGeneration);
+    this.serverGeneration = "c775df17-718a-4cb2-8e23-6912b8aa0d39";
+    return this.observe(scope, { ...intent, dispatch: "not_submitted" });
+  }
 
   async stop(_scope: Pick<OpenCodeTaskScope, "id">, nativeSessionId: string | null): Promise<void> {
     if (this.failStop) throw new Error("Abort unavailable");
@@ -30,8 +39,8 @@ export class FakeTaskHarness implements TaskHarness {
   async observe(_scope: OpenCodeTaskScope, intent: OpenCodePromptIntent): Promise<OpenCodePromptObservation> {
     return this.observations.get(intent.messageID) ?? { sessionID: intent.sessionID, messageID: intent.messageID, state: "unknown", admission: "not_observed", retry: intent.dispatch === "not_submitted" ? "allowed" : "forbidden", assistantMessageIDs: [] };
   }
-  async dispatch(scope: OpenCodeTaskScope, intent: OpenCodePromptIntent, claim: OpenCodePromptClaim): Promise<OpenCodePromptObservation> {
-    if (!await claim(intent)) return this.observe(scope, { ...intent, dispatch: "ambiguous" });
+  async dispatch(scope: OpenCodeTaskScope, intent: OpenCodePromptIntent, claim: Parameters<TaskHarness["dispatch"]>[2]): Promise<OpenCodePromptObservation> {
+    if (!await claim(this.serverGeneration)) return this.observe(scope, { ...intent, dispatch: "ambiguous" });
     this.dispatched.push(intent);
     const observed: OpenCodePromptObservation = { sessionID: intent.sessionID, messageID: intent.messageID, state: "running", admission: "observed", retry: "forbidden", assistantMessageIDs: [] };
     this.observations.set(intent.messageID, observed);

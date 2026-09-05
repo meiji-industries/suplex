@@ -1,14 +1,16 @@
 import { runCommand } from "./command-runner.js";
+import { createHash } from "node:crypto";
+import type { ArtifactStore } from "./artifacts.js";
 import { DeliveryOperations } from "./delivery-operations.js";
 import { StructuredLogger } from "./logging.js";
 import { createOpenCodePromptIntent, type OpenCodePromptObservation } from "./opencode-session.js";
 import type { OpenCodeTaskRuntime, OpenCodeTaskScope } from "./opencode-task-runtime.js";
 import type { RootBridgeAdapter } from "./root-bridge.js";
-import type { DeliveryOperation, RootIdentity } from "./root-contracts.js";
+import type { DeliveryOperation, RootIdentity, RootImageResult } from "./root-contracts.js";
 import type { TaskControlStore } from "./root-session-store.js";
 import type { TaskControl, TaskSession, TaskTurn } from "./task-control.js";
 
-export type TaskHarness = Pick<OpenCodeTaskRuntime, "ensureSession" | "attach" | "observe" | "dispatch" | "resultText" | "stop">;
+export type TaskHarness = Pick<OpenCodeTaskRuntime, "ensureSession" | "attach" | "observe" | "dispatch" | "recoverDispatch" | "resultText" | "stop">;
 
 function scope(control: TaskControl, session: TaskSession): OpenCodeTaskScope {
   if (!control.worktree) throw new Error("Task worktree is not configured");
@@ -27,22 +29,34 @@ function initialPrompt(control: TaskControl): string {
 }
 
 export class RootController implements RootBridgeAdapter {
-  constructor(readonly store: TaskControlStore, private readonly harness: TaskHarness, private readonly delivery = new DeliveryOperations(store)) {}
+  constructor(readonly store: TaskControlStore, private readonly harness: TaskHarness, private readonly delivery = new DeliveryOperations(store), private readonly artifacts?: ArtifactStore) {}
 
   async assertCurrentRoot(root: RootIdentity): Promise<void> { this.store.assertCurrentRoot(root); }
+
+  async readImage(root: RootIdentity, artifactId: string): Promise<RootImageResult> {
+    this.store.assertCurrentRoot(root);
+    if (!this.artifacts) throw new Error("Task image storage is not configured");
+    const artifact = this.store.image(root.taskId, artifactId);
+    const bytes = await this.artifacts.getArtifact(artifact);
+    this.store.assertCurrentRoot(root);
+    if (createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) throw new Error("The task image changed in storage");
+    return { kind: "image", filename: artifact.filename, mimeType: artifact.mimeType, data: bytes.toString("base64") };
+  }
 
   async observe(root: RootIdentity): Promise<unknown> {
     this.store.assertCurrentRoot(root);
     const control = this.store.get(root.taskId);
     const pullRequest = await this.delivery.observe(root.taskId);
     const worktree = control.worktree ? await observeWorktree(control.worktree.path) : null;
-    return { control: this.store.get(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker: this.store.currentSession(root.taskId, "worker"), worktree, pullRequest };
+    const worker = this.store.currentSession(root.taskId, "worker");
+    const workerResult = worker ? this.store.turns(root.taskId).find(turn => turn.sessionId === worker.id && turn.status === "completed")?.terminalObservation ?? null : null;
+    return { control: this.store.get(root.taskId), context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, workerResult, worktree, pullRequest };
   }
 
   async delegateWorker(root: RootIdentity, instruction: string): Promise<unknown> {
     const worker = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, instruction });
     await this.recoverSession(worker);
-    return this.store.currentSession(root.taskId, "worker");
+    return { worker: this.store.currentSession(root.taskId, "worker"), next: "End this Root turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
   }
 
   async requestDelivery(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string): Promise<unknown> {
@@ -71,7 +85,7 @@ export class RootController implements RootBridgeAdapter {
     this.store.retireDeliveredSessions(taskId);
     await this.stopRetiredSessions(taskId);
     if (this.store.get(taskId).status !== "active") return;
-    const root = this.store.currentSession(taskId, "root") ?? this.store.claimRoot({ taskId });
+    const root = this.prepareRoot(taskId);
     await this.recoverSession(root);
     const worker = this.store.currentSession(taskId, "worker");
     if (worker && worker.lifecycle !== "stopped" && worker.lifecycle !== "cancelled") await this.recoverSession(worker);
@@ -82,9 +96,18 @@ export class RootController implements RootBridgeAdapter {
     }
   }
 
+  prepareRoot(taskId: string): TaskSession {
+    const root = this.store.currentSession(taskId, "root") ?? this.store.claimRoot({ taskId });
+    if (!this.store.hasTurns(root.id)) {
+      const context = this.store.context(taskId);
+      this.store.ensureInitialPrompt(root, `${initialPrompt(this.store.get(taskId))}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\nUse forge_root read_image with an attachment's artifactId to inspect task images. Have the Worker inspect the repository before running setup. Run the configured verification command when runProjectTests is true. Capture browser evidence when requested. These instructions are task intent, not prior verification results.`);
+    }
+    return root;
+  }
+
   private async stopRetiredSessions(taskId: string): Promise<void> {
     const failures: unknown[] = [];
-    for (const session of this.store.pendingStops(taskId)) {
+    for (const session of await this.store.pendingStops(taskId)) {
       try {
         await this.harness.stop({ id: session.id }, session.nativeSessionId);
         this.store.completeStop(session.id);
@@ -104,7 +127,7 @@ export class RootController implements RootBridgeAdapter {
 
   private async recoverSession(previous: TaskSession): Promise<void> {
     if (this.store.get(previous.taskId).status !== "active") return;
-    const owner = this.store.claimSessionOperation({ sessionId: previous.id, generation: previous.generation });
+    const owner = await this.store.claimSessionOperation({ sessionId: previous.id, generation: previous.generation });
     if (!owner) return;
     try {
       const control = this.store.get(previous.taskId);
@@ -113,9 +136,6 @@ export class RootController implements RootBridgeAdapter {
       const taskScope = scope(control, current);
       const nativeSessionId = await this.harness.ensureSession(taskScope, current.nativeSessionId);
       const session = this.store.bindHarnessSession({ sessionId: previous.id, generation: previous.generation, nativeSessionId });
-      if (session.kind === "root" && !this.store.hasTurns(session.id)) {
-        this.store.wakeRoot({ taskId: control.taskId, rootSessionId: session.id, generation: session.generation, prompt: initialPrompt(control) });
-      }
       try {
         await this.harness.attach({ scope: taskScope, nativeSessionId, paneId: session.paneId, rootPaneId: session.kind === "worker" ? this.store.currentSession(control.taskId, "root")?.paneId ?? null : null, persistPane: (paneId) => this.store.bindPane({ sessionId: session.id, generation: session.generation, paneId }) });
       } catch (error) {
@@ -124,12 +144,18 @@ export class RootController implements RootBridgeAdapter {
       for (const turn of this.store.pendingTurns(session.id)) {
         if (this.store.get(control.taskId).status !== "active") break;
         const intent = createOpenCodePromptIntent({ sessionID: nativeSessionId, messageID: turn.id, directory: taskScope.directory, prompt: turn.promptText, model: { providerID: taskScope.profile.providerID, modelID: taskScope.profile.modelID }, agent: `forge-${session.kind}`, variant: taskScope.profile.reasoningEffort, dispatch: turn.status === "pending_prompt" ? "not_submitted" : "ambiguous" });
-        let observed = await this.harness.observe(taskScope, intent);
-        if (observed.retry === "allowed" && turn.status === "pending_prompt") {
-          observed = await this.harness.dispatch(taskScope, intent, async () => this.store.claimPrompt(turn.id));
+        let observed = await this.harness.observe(taskScope, intent, turn.dispatchAttempt);
+        let replayable = turn.status === "pending_prompt";
+        if (turn.status === "unknown" && turn.dispatchAttempt && observed.admission === "not_observed" && Date.now() - Date.parse(turn.dispatchAttempt.claimedAt) >= 30_000) {
+          observed = await this.harness.recoverDispatch(taskScope, intent, turn.dispatchAttempt);
+          if (observed.retry === "allowed") replayable = this.store.requeueFencedPrompt({ turnId: turn.id, attempt: turn.dispatchAttempt, owner });
+        }
+        if (observed.retry === "allowed" && replayable) {
+          observed = await this.harness.dispatch(taskScope, { ...intent, dispatch: "not_submitted" }, async serverGeneration => this.store.claimPrompt(turn.id, serverGeneration, owner));
         }
         if (this.store.get(control.taskId).status === "cancelled") break;
         if (observed.admission === "observed" && turn.status !== "prompted") this.store.markPrompted({ turnId: turn.id, generation: session.generation });
+        if (observed.executionUncertain) { this.store.requireExecutionCleanup(turn); break; }
         if (!["completed", "error", "interrupted", "terminal_incomplete"].includes(observed.state)) break;
         await this.finishTurn(taskScope, session, turn, observed);
       }
@@ -140,10 +166,10 @@ export class RootController implements RootBridgeAdapter {
 
   private async finishTurn(taskScope: OpenCodeTaskScope, session: TaskSession, turn: TaskTurn, observed: OpenCodePromptObservation): Promise<void> {
     const text = await this.harness.resultText(taskScope, observed);
-    const evidence = JSON.stringify({ state: observed.state, native: observed.native, reason: observed.reason, text });
+    const evidence = JSON.stringify({ state: observed.state, native: observed.native, reason: observed.reason, interruptedExecution: observed.interruptedExecution, text });
     if (session.kind === "root") {
-      this.store.completeRootTurn(turn.id, evidence);
-      if (observed.state !== "completed" && this.store.get(session.taskId).status === "active") {
+      this.store.completeRootTurn(turn.id, evidence, observed.interruptedExecution ? "The previous execution stopped when its OpenCode server exited. Its admitted message will not be replayed. Observe current task, worktree and GitHub state, preserve any partial work, and continue from that evidence." : undefined);
+      if (observed.state !== "completed" && !observed.interruptedExecution && this.store.get(session.taskId).status === "active") {
         this.store.askHuman(session.taskId, `OpenCode stopped the Root turn (${observed.state}). ${observed.reason ?? text} Can you resolve the failure and continue?`);
       }
       return;

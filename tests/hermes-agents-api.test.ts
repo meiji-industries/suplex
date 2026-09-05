@@ -12,11 +12,9 @@ import { ForgeDatabase } from "../src/database.js";
 import { HermesAgentService } from "../src/hermes-agents.js";
 
 const health = {
-  engine: async () => ({ id: "engine" as const, label: "Engine", status: "healthy" as const, summary: "Reachable", details: {} }),
   database: async () => ({ id: "database" as const, label: "Database", status: "healthy" as const, summary: "Reachable", details: {} }),
   artifactRoot: async () => ({ id: "artifact-root" as const, label: "Artifacts", status: "healthy" as const, summary: "Reachable", details: {} }),
-  worker: async () => ({ id: "worker" as const, label: "Worker", status: "healthy" as const, summary: "Reachable", details: {} }),
-  codexAuth: async () => ({ id: "codex-auth" as const, label: "Codex", status: "healthy" as const, summary: "Ready", details: {} }),
+  opencode: async () => ({ id: "opencode" as const, label: "OpenCode", status: "healthy" as const, summary: "Ready", details: {} }),
   ghAuth: async () => ({ id: "gh-auth" as const, label: "GitHub", status: "healthy" as const, summary: "Ready", details: {} }),
 };
 
@@ -75,8 +73,8 @@ beforeEach(async () => {
   companyId = auth.createCompany(adminId, "Hermes API Company").id;
   const now = new Date().toISOString();
   database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project_api', ?, 'API Project', ?, ?, 'meiji/api', 'main', 'main', '', '', '[]', '{}', 'draft', ?, ?)").run(companyId, join(root, "repo"), join(root, "worktrees"), now, now);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project_api_2', ?, 'API Project 2', ?, ?, 'meiji/api-2', 'main', 'main', '', '', '[]', '{}', 'draft', ?, ?)").run(companyId, join(root, "repo2"), join(root, "worktrees2"), now, now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_api', ?, 'API Project', ?, ?, 'meiji/api', 'main', '', '', ?, ?)").run(companyId, join(root, "repo"), join(root, "worktrees"), now, now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_api_2', ?, 'API Project 2', ?, ?, 'meiji/api-2', 'main', '', '', ?, ?)").run(companyId, join(root, "repo2"), join(root, "worktrees2"), now, now);
   });
 
   const memberInvitation = auth.inviteUser(adminId, { displayName: "Member User" });

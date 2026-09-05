@@ -30,11 +30,9 @@ function fakeWebAuthn(): WebAuthnAdapter {
 }
 
 const health = {
-  engine: async () => ({ id: "engine" as const, label: "Engine", status: "healthy" as const, summary: "Ready", details: {} }),
   database: async () => ({ id: "database" as const, label: "Database", status: "healthy" as const, summary: "Ready", details: {} }),
   artifactRoot: async () => ({ id: "artifact-root" as const, label: "Artifacts", status: "healthy" as const, summary: "Ready", details: {} }),
-  worker: async () => ({ id: "worker" as const, label: "Worker", status: "healthy" as const, summary: "Ready", details: {} }),
-  codexAuth: async () => ({ id: "codex-auth" as const, label: "Codex", status: "healthy" as const, summary: "Ready", details: {} }),
+  opencode: async () => ({ id: "opencode" as const, label: "OpenCode", status: "healthy" as const, summary: "Ready", details: {} }),
   ghAuth: async () => ({ id: "gh-auth" as const, label: "GitHub", status: "healthy" as const, summary: "Ready", details: {} }),
 };
 

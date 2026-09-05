@@ -7,7 +7,7 @@ const scripts = z.object({ scripts: z.record(z.string(), z.string()) }).parse(JS
 
 test("package scripts have one comprehensive gate authority", () => {
   expect(scripts.check).toBe("pnpm run typecheck && pnpm run lint && pnpm run test");
-  expect(scripts["check:full"]).toBe("pnpm run check && pnpm run test:engine && pnpm run test:browser");
+  expect(scripts["check:full"]).toBe("pnpm run check && pnpm run test:browser");
   expect(scripts.verify).toBe("pnpm run check:full");
   expect(scripts["test:all"]).toBe("pnpm run check:full");
 });

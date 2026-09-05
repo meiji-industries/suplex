@@ -6,11 +6,9 @@ import { expect, test } from "vitest";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { checkArtifactRoot, checkDatabase, checkWorker } from "../src/host-health.js";
+import { checkArtifactRoot, checkDatabase } from "../src/host-health.js";
 import { inspectHostHealth, type HealthCheck } from "../src/health.js";
-import { checkGithubAuthentication, CodexReadinessProbe } from "../src/provider-readiness.js";
-import { EngineHealthProbe } from "../src/engine/service.js";
-import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
+import { checkGithubAuthentication } from "../src/provider-readiness.js";
 
 const check = (id: HealthCheck["id"], status: "healthy" | "unhealthy"): HealthCheck => ({
   id,
@@ -22,11 +20,9 @@ const check = (id: HealthCheck["id"], status: "healthy" | "unhealthy"): HealthCh
 
 test("host readiness reports owned-service health separately from provider authentication", async () => {
   const snapshot = await inspectHostHealth(createTestConfig("/tmp/forge-health-test"), {
-    engine: async () => check("engine", "healthy"),
     database: async () => check("database", "healthy"),
     artifactRoot: async () => check("artifact-root", "healthy"),
-    worker: async () => check("worker", "healthy"),
-    codexAuth: async () => check("codex-auth", "unhealthy"),
+    opencode: async () => check("opencode", "unhealthy"),
     ghAuth: async () => check("gh-auth", "healthy"),
   });
 
@@ -34,11 +30,9 @@ test("host readiness reports owned-service health separately from provider authe
   expect(
     snapshot.checks.map(({ id, status }) => ({ id, status })),
   ).toEqual([
-      { id: "engine", status: "healthy" },
       { id: "database", status: "healthy" },
       { id: "artifact-root", status: "healthy" },
-      { id: "worker", status: "healthy" },
-      { id: "codex-auth", status: "unhealthy" },
+      { id: "opencode", status: "unhealthy" },
       { id: "gh-auth", status: "healthy" },
     ],
   );
@@ -46,11 +40,9 @@ test("host readiness reports owned-service health separately from provider authe
 
 test("host readiness is false when an owned service is unavailable", async () => {
   const snapshot = await inspectHostHealth(createTestConfig("/tmp/forge-health-test"), {
-    engine: async () => check("engine", "unhealthy"),
-    database: async () => check("database", "healthy"),
+    database: async () => check("database", "unhealthy"),
     artifactRoot: async () => check("artifact-root", "healthy"),
-    worker: async () => check("worker", "healthy"),
-    codexAuth: async () => check("codex-auth", "healthy"),
+    opencode: async () => check("opencode", "healthy"),
     ghAuth: async () => check("gh-auth", "healthy"),
   });
 
@@ -63,11 +55,9 @@ test("the API health probe is cached for ten seconds", async () => {
   const app = createApp({
     config: createTestConfig("/tmp/forge-health-route-cache-test"),
     health: {
-      engine: async () => check("engine", "healthy"),
       database: async () => check("database", "healthy"),
       artifactRoot: async () => check("artifact-root", "healthy"),
-      worker: async () => check("worker", "healthy"),
-      codexAuth: async () => check("codex-auth", "healthy"),
+      opencode: async () => check("opencode", "healthy"),
       ghAuth: async () => check("gh-auth", "healthy"),
     },
     getHealth: async () => {
@@ -90,20 +80,11 @@ test("health snapshot does not expose host paths or credentials", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-health-redaction-test-"));
   const config = createTestConfig(root);
   const database = new ForgeDatabase(config.databasePath);
-  const identifiers = runtimeIdentifiers(config.installationId);
   try {
-    database.registerWorker({
-      workerId: `${identifiers.workerPrefix}-live`,
-      taskQueue: identifiers.taskQueue,
-      buildId: identifiers.buildId,
-    });
-    const codexProbe = new CodexReadinessProbe("codex");
     const snapshot = await inspectHostHealth(config, {
-      engine: new EngineHealthProbe(config).check,
       database: async () => checkDatabase(database),
       artifactRoot: async () => checkArtifactRoot(config.artifactRoot),
-      worker: async () => checkWorker(database, identifiers.taskQueue, config.installationId),
-      codexAuth: async () => codexProbe.check(),
+      opencode: async () => check("opencode", "healthy"),
       ghAuth: checkGithubAuthentication("gh"),
     });
     const json = JSON.stringify(snapshot);

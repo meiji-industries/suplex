@@ -1,4 +1,3 @@
-import { Context } from "./engine/activity-context.js";
 import { appendFileSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import pino, { type DestinationStream, type Logger } from "pino";
@@ -235,11 +234,18 @@ function infoConsoleDestination(): DestinationStream {
   };
 }
 
+let processLogSink: ((line: string) => void) | undefined;
+
+export function configureProcessLogSink(sink: (line: string) => void): void {
+  processLogSink = sink;
+}
+
 function developmentDestination(component: "api" | "worker"): DestinationStream {
   const fileSink = createDevLogFileSink(component);
   const consoleSink = usePrettyLogs() ? prettyDestination() : infoConsoleDestination();
   return {
     write(raw: string): void {
+      if (processLogSink) { processLogSink(raw); return; }
       fileSink(raw);
       consoleSink.write(raw);
     },
@@ -289,14 +295,5 @@ export class StructuredLogger {
       message,
       ...context,
     }));
-  }
-}
-
-export function activityLogContext(): LogContext {
-  try {
-    Context.current();
-    return {};
-  } catch {
-    return {};
   }
 }

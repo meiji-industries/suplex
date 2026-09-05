@@ -1,12 +1,12 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 
-const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 
 export const TaskControlStatusSchema = z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]);
 export const TaskSessionKindSchema = z.enum(["root", "worker"]);
 export const TaskSessionLifecycleSchema = z.enum(["reserved", "live", "stopped", "unknown", "cancelled"]);
 export const TaskTurnStatusSchema = z.enum(["pending_prompt", "prompted", "unknown", "completed", "cancelled"]);
+export const PromptDispatchAttemptSchema = z.object({ serverGeneration: z.string().uuid(), claimedAt: z.string().datetime() }).strict();
+export type PromptDispatchAttempt = z.infer<typeof PromptDispatchAttemptSchema>;
 export const TaskProfileSchema = z.object({ profileId: z.string().min(1), provider: z.string().min(1), model: z.string().min(1), reasoningLevel: z.enum(["low", "medium", "high", "xhigh", "max"]), serviceTier: z.enum(["default", "priority"]) }).strict();
 
 export const WorktreeReferenceSchema = z.object({
@@ -41,6 +41,7 @@ export interface TaskControl {
   wakeAt: string | null;
   humanQuestion: string | null;
   humanQuestionId: string | null;
+  recoveryTurnId: string | null;
   worktree: WorktreeReference | null;
   pullRequest: PullRequestReference | null;
   rootSessionId: string | null;
@@ -56,14 +57,12 @@ export interface TaskSession {
   generation: number;
   current: boolean;
   paneId: string | null;
-  agentName: string | null;
   nativeSessionId: string | null;
   lifecycle: TaskSessionLifecycle;
   assignmentHash: string | null;
-  promptHash: string | null;
-  resultReceiptId: string | null;
   launchOwner: string | null;
   launchOwnerPid: number | null;
+  launchOwnerStartTime: string | null;
   stopRequestedAt: string | null;
   stoppedAt: string | null;
 }
@@ -80,8 +79,5 @@ export interface TaskTurn {
   resultReceiptId: string | null;
   terminalObservation: string | null;
   nativeTurnId: string | null;
-}
-
-export function taskPromptHash(value: string): string {
-  return sha256.parse(createHash("sha256").update(value).digest("hex"));
+  dispatchAttempt: PromptDispatchAttempt | null;
 }

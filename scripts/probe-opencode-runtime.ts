@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { z } from "zod";
 import { ensureOpenCodeServer, openCodeRoleConfig, openCodeServerClient, stopOpenCodeServer, type OpenCodeServerReference } from "../src/opencode-server.js";
 import { createOpenCodePromptIntent, reconcileOpenCodePrompt, replayOpenCodePrompt } from "../src/opencode-session.js";
-import { createGitCommandGuard } from "../src/worktrees.js";
+import { createGitCommandGuard } from "../src/worker-environment.js";
 
 const executable = process.argv[2];
 if (!executable) throw new Error("Usage: tsx scripts/probe-opencode-runtime.ts <absolute-opencode-executable>");
@@ -22,6 +22,7 @@ let activeRole: "root" | "worker" = "root";
 let turn = 0;
 let holdModelRequest = false;
 let modelRequestHeld = false;
+let crashTool = false;
 const advertised = new Map<string, string[]>();
 const provider = createServer(async (request, response) => {
   const chunks: Buffer[] = [];
@@ -41,7 +42,7 @@ const provider = createServer(async (request, response) => {
     const step = turn++;
     if (step === 0 || activeRole === "worker" && step === 1) {
       delta = { tool_calls: [{ index: 0, id: `call_${activeRole}`, type: "function", function: {
-        name: "bash", arguments: JSON.stringify({ command: step === 1 ? "git push" : `touch ${activeRole === "root" ? "forbidden" : "allowed"}.txt`, description: "Disposable permission probe" }),
+        name: "bash", arguments: JSON.stringify({ command: crashTool ? "echo $$ > crash-tool.pid; sleep 120" : step === 1 ? "git push" : `touch ${activeRole === "root" ? "forbidden" : "allowed"}.txt`, description: "Disposable permission probe" }),
       } }] };
       finish = "tool_calls";
     }
@@ -122,6 +123,27 @@ try {
     }
     assert.equal((await ensureOpenCodeServer(input)).pid, reference.pid);
     await assert.rejects(ensureOpenCodeServer({ ...input, config: { ...config, default_agent: "changed" } }), /runtime scope changed/);
+    if (role === "worker") {
+      crashTool = true;
+      turn = 0;
+      const intent = createOpenCodePromptIntent({ sessionID: session.id, directory, model: { providerID: profile.providerID, modelID: profile.modelID }, agent: "forge-worker", variant: "max", prompt: "Run the disposable crash probe." });
+      await replayOpenCodePrompt(client, intent, async () => true);
+      const deadline = Date.now() + 15_000;
+      let toolPid: number | undefined;
+      while (!toolPid) {
+        toolPid = await readFile(join(directory, "crash-tool.pid"), "utf8").then(Number, () => undefined);
+        assert.ok(Date.now() < deadline, "The native shell tool must start");
+        await delay(50);
+      }
+      process.kill(reference.pid, "SIGKILL");
+      await delay(200);
+      const survivedServerCrash = (() => { try { process.kill(toolPid, 0); return true; } catch { return false; } })();
+      await stop(reference);
+      const survivedRecovery = (() => { try { process.kill(toolPid, 0); return true; } catch { return false; } })();
+      if (survivedRecovery) process.kill(-toolPid, "SIGKILL");
+      checks.push({ role, toolPid, survivedServerCrash, survivedRecovery });
+      assert.equal(survivedRecovery, true, "Server cleanup alone must not be treated as tool quiescence");
+    }
     await stop(reference);
     const restarted = await ensureOpenCodeServer(input);
     live.add(restarted);

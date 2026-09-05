@@ -1,4 +1,4 @@
-import { Activity, ChevronRight, CircleHelp, Database, GitBranch, HardDrive, Plug, RefreshCw, Terminal, Workflow, type LucideIcon } from "lucide-react";
+import { Activity, ChevronRight, CircleHelp, Database, GitBranch, HardDrive, RefreshCw, Terminal, type LucideIcon } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import type { HealthCheck, HealthSnapshot } from "../../../health.js";
@@ -25,13 +25,9 @@ type SystemHealthContextValue = {
 const SystemHealthContext = createContext<SystemHealthContextValue | undefined>(undefined);
 
 const icons: Record<string, LucideIcon> = {
-  engine: Workflow,
   database: Database,
   "artifact-root": HardDrive,
-  worker: Activity,
-  "codex-auth": Terminal,
-  "claude-auth": Terminal,
-  "openrouter-auth": Plug,
+  opencode: Terminal,
   "gh-auth": GitBranch,
 };
 
@@ -83,20 +79,16 @@ export function useSystemHealth(): SystemHealthContextValue {
   return value;
 }
 
-export function getWorkerHealthFailure(snapshot: HealthSnapshot | undefined): HealthCheck | undefined {
-  return snapshot?.checks.find((check) => check.id === "worker" && check.status === "unhealthy");
-}
-
 export function SystemHealthAlert(): ReactElement | null {
   const health = useContext(SystemHealthContext);
-  const worker = getWorkerHealthFailure(health?.snapshot);
-  if (!worker) return null;
+  const failed = health?.snapshot?.checks.find(check => isOwnedHealthCheck(check.id) && check.status === "unhealthy");
+  if (!failed) return null;
   return (
     <div data-system-health-alert className="border-b px-4 py-3 lg:px-6">
       <Alert variant="destructive">
         <Activity />
-        <AlertTitle>{worker.label} unavailable</AlertTitle>
-        <AlertDescription>{worker.summary}. Planning is paused until it recovers. <a href="/health">View system health</a>.</AlertDescription>
+        <AlertTitle>{failed.label} not available</AlertTitle>
+        <AlertDescription>{failed.summary} <a href="/health">Open host health</a>.</AlertDescription>
       </Alert>
     </div>
   );

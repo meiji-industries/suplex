@@ -2,21 +2,19 @@ import { Alert, AlertDescription } from ".././components/ui/alert.js";
 import { Avatar, AvatarFallback, AvatarImage } from ".././components/ui/avatar.js";
 import { Button } from ".././components/ui/button.js";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from ".././components/ui/card.js";
-import { Checkbox } from ".././components/ui/checkbox.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from ".././components/ui/dropdown-menu.js";
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from ".././components/ui/field.js";
 import { Input } from ".././components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".././components/ui/select.js";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from ".././components/ui/dialog.js";
 import { CreateButton } from ".././components/ui/create-button.js";
-import { Badge as ReuiBadge } from ".././components/reui/badge.js";
 import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { Ellipsis } from "lucide-react";
-import { reconcileScopedNotFound, type ApiAgent, type ApiCheck, type ApiProject } from "../lib/view-shared.js";
+import { reconcileScopedNotFound, type ApiProfile, type ApiProject } from "../lib/view-shared.js";
 
 function CreateProjectDialog({
   open,
@@ -71,7 +69,7 @@ function CreateProjectDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(92vw,460px)]" showCloseButton>
+      <DialogContent showCloseButton>
         <DialogHeader><DialogTitle>New project</DialogTitle></DialogHeader>
           {companyStatus !== "active" ? (
             <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p>
@@ -82,7 +80,7 @@ function CreateProjectDialog({
                 <Input id="project-repository-url" name="repositoryUrl" autoFocus autoComplete="off" spellCheck={false} placeholder="https://github.com/owner/repository" aria-describedby="project-repository-hint" value={repositoryUrl} onChange={(event) => setRepositoryUrl(event.target.value)} />
                 <FieldDescription id="project-repository-hint">HTTPS and SSH URLs are supported. Forge clones into <span className="font-mono">~/forge/repos</span> and creates worktrees in <span className="font-mono">~/forge/worktrees</span>.</FieldDescription>
               </Field>
-              <DialogFooter className="mt-1"><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || !companyId || !repositoryUrl.trim()}>{busy ? "Cloning…" : "Create project"}</Button></DialogFooter>
+              <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || !companyId || !repositoryUrl.trim()}>{busy ? "Forge copies the repository" : "Create project"}</Button></DialogFooter>
             </form>
           )}
           {error ? <div className="mt-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
@@ -95,47 +93,30 @@ function CreateProjectDialog({
 type ProjectSettingsForm = {
   name: string;
   baseBranch: string;
-  targetBranch: string;
   setupCommand: string;
   verificationCommand: string;
-  requiredChecks: string;
-  plannerAgent: string;
-  builderAgent: string;
-  reviewerAgent: string;
-  integratorAgent: string;
+  rootProfileId: string;
+  workerProfileId: string;
 };
-
-type ActivationRequirement = { key: string; label: string; complete: boolean };
-
-function activationRequirements(input: { requiredChecks: string[]; builderAgent: string | undefined }): ActivationRequirement[] {
-  return [
-    { key: "checks", label: "Add at least one required GitHub check", complete: input.requiredChecks.length > 0 },
-    { key: "builder", label: "Choose a Builder default", complete: Boolean(input.builderAgent) },
-  ];
-}
 
 function settingsForm(project: ApiProject): ProjectSettingsForm {
   return {
     name: project.name,
     baseBranch: project.baseBranch,
-    targetBranch: project.targetBranch,
     setupCommand: project.setupCommand,
     verificationCommand: project.verificationCommand,
-    requiredChecks: project.requiredChecks.join(", "),
-    plannerAgent: project.roleDefaults.planner ?? "",
-    builderAgent: project.roleDefaults.builder ?? "",
-    reviewerAgent: project.roleDefaults.reviewer ?? "",
-    integratorAgent: project.roleDefaults.integrator ?? "",
+    rootProfileId: project.rootProfileId,
+    workerProfileId: project.workerProfileId,
   };
 }
 
-const projectRoles = ["planner", "builder", "reviewer", "integrator"] as const;
+const projectRoles = ["root", "worker"] as const;
 
-function ProjectDefaultAgents({ project, agents }: { project: ApiProject; agents: ApiAgent[] }): ReactElement {
+function ProjectDefaultAgents({ project, agents }: { project: ApiProject; agents: ApiProfile[] }): ReactElement {
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-1.5" aria-label="Default agents">
       {projectRoles.map((role) => {
-        const agent = agents.find((candidate) => candidate.id === project.roleDefaults[role]);
+        const agent = agents.find((candidate) => candidate.id === project[`${role}ProfileId`]);
         const label = role.slice(0, 1).toUpperCase() + role.slice(1);
         return (
           <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground" key={role} title={`${label}: ${agent?.name ?? "Unassigned"}`}>
@@ -165,7 +146,7 @@ function ProjectSettingsDialog({
   onSaved,
 }: {
   project: ApiProject | undefined;
-  agents: ApiAgent[];
+  agents: ApiProfile[];
   onOpenChange: (open: boolean) => void;
   onSaved: () => Promise<void>;
 }): ReactElement {
@@ -173,56 +154,15 @@ function ProjectSettingsDialog({
   const [findings, setFindings] = useState<Array<{ field: string; message: string }>>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [manualCheck, setManualCheck] = useState("");
-  const [checkOptions, setCheckOptions] = useState<ApiCheck[]>([]);
-  const [checksLoading, setChecksLoading] = useState(false);
-
   useEffect(() => {
-    let cancelled = false;
     setForm(project ? settingsForm(project) : undefined);
     setFindings([]);
     setError("");
     setBusy(false);
-    setManualCheck("");
-    setCheckOptions([]);
-    if (project) {
-      setChecksLoading(true);
-      void readJson<{ checks: ApiCheck[] }>(`/api/projects/${project.id}/checks`)
-        .then((result) => {
-          if (cancelled) return;
-          setCheckOptions(result.checks);
-          setForm((current) => current && current.requiredChecks.trim().length === 0
-            ? { ...current, requiredChecks: result.checks.map((check) => check.name).join(", ") }
-            : current);
-        })
-        .catch(() => { if (!cancelled) setCheckOptions([]); })
-        .finally(() => { if (!cancelled) setChecksLoading(false); });
-      if (project.setupCommand === "pnpm install" && project.verificationCommand === "pnpm test") {
-        void readJson<{ setupCommand: string; verificationCommand: string }>(`/api/projects/${project.id}/repository-defaults`)
-          .then((defaults) => {
-            if (!cancelled) setForm((current) => current ? { ...current, ...defaults } : current);
-          })
-          .catch(() => undefined);
-      }
-    }
-    return () => { cancelled = true; };
-  }, [project, agents]);
+  }, [project]);
 
   const setField = <Key extends keyof ProjectSettingsForm>(key: Key, value: ProjectSettingsForm[Key]): void => {
     setForm((current) => current ? { ...current, [key]: value } : current);
-  };
-
-  const toggleCheck = (checkName: string): void => {
-    if (!form) return;
-    const checks = form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean);
-    setField("requiredChecks", (checks.includes(checkName) ? checks.filter((name) => name !== checkName) : [...checks, checkName]).join(", "));
-  };
-
-  const addManualCheck = (): void => {
-    if (!form || !manualCheck.trim()) return;
-    const checks = form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean);
-    setField("requiredChecks", [...new Set([...checks, manualCheck.trim()])].join(", "));
-    setManualCheck("");
   };
 
   const submit = async (event: FormEvent): Promise<void> => {
@@ -240,11 +180,10 @@ function ProjectSettingsDialog({
           worktreeRoot: project.worktreeRoot,
           repository: project.repository ?? "",
           baseBranch: form.baseBranch,
-          targetBranch: form.targetBranch,
           setupCommand: form.setupCommand,
           verificationCommand: form.verificationCommand,
-          requiredChecks: form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean),
-          roleDefaults: { planner: form.plannerAgent, builder: form.builderAgent, reviewer: form.reviewerAgent, integrator: form.integratorAgent },
+          rootProfileId: form.rootProfileId,
+          workerProfileId: form.workerProfileId,
         }),
       });
       await onSaved();
@@ -257,45 +196,27 @@ function ProjectSettingsDialog({
     }
   };
 
-  const requirements = form ? activationRequirements({
-    requiredChecks: form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean),
-    builderAgent: form.builderAgent,
-  }) : [];
-  const missingRequirements = requirements.filter((requirement) => !requirement.complete);
-  const selectedChecks = form?.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean) ?? [];
-  const availableChecks: ApiCheck[] = [...new Map([...checkOptions, ...selectedChecks.map((name) => ({ name, status: "configured" } satisfies ApiCheck))].map((check) => [check.name, check])).values()];
   return (
     <Dialog open={Boolean(project)} onOpenChange={(open) => { if (!open) onOpenChange(false); }}>
-      <DialogContent className="max-h-[85vh] w-[min(92vw,936px)] max-w-none overflow-y-auto sm:max-w-[936px]" showCloseButton>
+      <DialogContent showCloseButton>
         <DialogHeader><DialogTitle>Project settings</DialogTitle><DialogDescription>{project?.repository}</DialogDescription></DialogHeader>
-          {project && form ? <form onSubmit={(event) => void submit(event)}>
+          {project && form ? <form className="max-h-[70dvh] overflow-y-auto" onSubmit={(event) => void submit(event)}>
             <FieldGroup>
-              <div className={`grid gap-2 px-3 py-2 ${missingRequirements.length ? "bg-amber-50/70" : "bg-emerald-50/70"}`}>
-                <div className="flex items-center justify-between gap-2"><span className="text-xs font-medium">Activation requirements</span><span className={missingRequirements.length ? "text-[11px] font-medium text-amber-800" : "text-[11px] font-medium text-emerald-700"}>{missingRequirements.length ? `${missingRequirements.length} missing` : "Ready"}</span></div>
-                <ul className="grid gap-x-4 gap-y-1 sm:grid-cols-2">{requirements.map((requirement) => <li className={`flex items-center gap-1.5 text-[11px] ${requirement.complete ? "text-muted-foreground" : "font-medium text-amber-800"}`} key={requirement.key}><span className={`size-1.5 rounded-full ${requirement.complete ? "bg-emerald-500" : "bg-amber-500"}`} />{requirement.label}</li>)}</ul>
-              </div>
               <Field><FieldLabel htmlFor="project-name">Project name</FieldLabel><Input id="project-name" autoFocus value={form.name} onChange={(event) => setField("name", event.target.value)} /></Field>
               <Field><FieldLabel htmlFor="project-base-branch">Base branch</FieldLabel><Input id="project-base-branch" value={form.baseBranch} onChange={(event) => setField("baseBranch", event.target.value)} /></Field>
-              <Field><FieldLabel htmlFor="project-target-branch">Target branch</FieldLabel><Input id="project-target-branch" value={form.targetBranch} onChange={(event) => setField("targetBranch", event.target.value)} /></Field>
               <Field><FieldLabel htmlFor="project-setup-command">Setup command</FieldLabel><Input id="project-setup-command" value={form.setupCommand} onChange={(event) => setField("setupCommand", event.target.value)} /></Field>
               <Field><FieldLabel htmlFor="project-verification-command">Verification command</FieldLabel><Input id="project-verification-command" value={form.verificationCommand} onChange={(event) => setField("verificationCommand", event.target.value)} /></Field>
               <FieldSet>
-                <FieldLegend variant="label">Required GitHub checks</FieldLegend>
-                {checksLoading ? <FieldDescription>Loading checks from {project.targetBranch}…</FieldDescription> : availableChecks.length ? <FieldGroup data-slot="checkbox-group">{availableChecks.map((check, index) => <Field orientation="horizontal" key={check.name}><Checkbox id={`project-check-${index}`} checked={selectedChecks.includes(check.name)} onCheckedChange={() => toggleCheck(check.name)} /><FieldLabel htmlFor={`project-check-${index}`}>{check.name}{check.conclusion ? ` · ${check.conclusion}` : ""}</FieldLabel></Field>)}</FieldGroup> : <FieldDescription>No check runs were found on {project.targetBranch}. Run the repository workflows once, then reopen settings.</FieldDescription>}
-                <div className="flex gap-2"><Input aria-label="Add required check" placeholder="Exact check name" value={manualCheck} onChange={(event) => setManualCheck(event.target.value)} /><Button type="button" size="sm" variant="outline" disabled={!manualCheck.trim()} onClick={addManualCheck}>Add</Button></div>
-                <FieldDescription>The exact check names from GitHub for the target branch.</FieldDescription>
-              </FieldSet>
-              <FieldSet>
                 <FieldLegend variant="label">Default agents</FieldLegend>
-                {(["plannerAgent", "reviewerAgent", "builderAgent", "integratorAgent"] as const).map((key) => {
-                  const role = key === "plannerAgent" ? "planner" : key === "builderAgent" ? "builder" : key === "integratorAgent" ? "integrator" : "reviewer";
+                {(["rootProfileId", "workerProfileId"] as const).map((key) => {
+                  const role = key === "rootProfileId" ? "root" : "worker";
                   const options = agents.filter((agent) => agent.role === role);
                   const selected = options.find((agent) => agent.id === form[key]);
-                  return <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{role.slice(0, 1).toUpperCase() + role.slice(1)} default</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><ProfileAvatar name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent><SelectItem value={null}>None</SelectItem>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select></Field>;
+                  return <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{role.slice(0, 1).toUpperCase() + role.slice(1)} default</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><ProfileAvatar name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select></Field>;
                 })}
-                {agents.length === 0 ? <FieldDescription>No agents configured. <a href={withCompany("/admin/agents", project.companyId)}>Create an agent</a> before activating this project.</FieldDescription> : null}
+                {agents.length === 0 ? <FieldDescription>No agents configured. <a href={withCompany("/admin/agents", project.companyId)}>Create an agent</a> before saving this project.</FieldDescription> : null}
               </FieldSet>
-              <DialogFooter>{missingRequirements.length ? <span className="mr-auto text-[11px] text-amber-800">Complete the missing requirements to save.</span> : null}<a href={withCompany(`/projects/${encodeURIComponent(project.id)}/prompts`, project.companyId)}>Prompts</a><a href={withCompany(`/projects/${encodeURIComponent(project.id)}/templates`, project.companyId)}>Templates</a><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || missingRequirements.length > 0}>{busy ? "Forge saves" : "Save settings"}</Button></DialogFooter>
+              <DialogFooter><a href={withCompany(`/projects/${encodeURIComponent(project.id)}/templates`, project.companyId)}>Templates</a><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || !form.rootProfileId || !form.workerProfileId}>{busy ? "Forge saves" : "Save settings"}</Button></DialogFooter>
             </FieldGroup>
           </form> : null}
           {error ? <div className="mt-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
@@ -307,7 +228,7 @@ function ProjectSettingsDialog({
 
 export function ProjectsView(): ReactElement {
   const { currentCompany, loading, user, error: companyError, reloadCompanies } = useCompanyContext();
-  const [agents, setAgents] = useState<ApiAgent[]>([]);
+  const [agents, setAgents] = useState<ApiProfile[]>([]);
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [loadError, setLoadError] = useState("");
@@ -329,12 +250,12 @@ export function ProjectsView(): ReactElement {
     if (!companyId || loading) return;
     try {
       const [agentResult, projectResult] = await Promise.all([
-        readJson<{ agents: ApiAgent[] }>("/api/agents"),
+        readJson<{ profiles: ApiProfile[] }>("/api/profiles"),
         readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
       ]);
       if (token !== requestToken.current) return;
       loadedCompanyIdRef.current = companyId;
-      setAgents(agentResult.agents); setProjects(projectResult.projects); setLoadedCompanyId(companyId);
+      setAgents(agentResult.profiles); setProjects(projectResult.projects); setLoadedCompanyId(companyId);
     } catch (reason) {
       if (token !== requestToken.current) return;
       if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
@@ -379,9 +300,6 @@ export function ProjectsView(): ReactElement {
                         </div>
                         <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                           <span>Base <span className="font-mono text-foreground">{project.baseBranch}</span></span>
-                          <span aria-hidden="true">→</span>
-                          <span>Target <span className="font-mono text-foreground">{project.targetBranch}</span></span>
-                          <ReuiBadge variant="secondary" size="sm">{project.requiredChecks.length} {project.requiredChecks.length === 1 ? "check" : "checks"}</ReuiBadge>
                         </div>
                         <ProjectDefaultAgents project={project} agents={agents} />
                       </div>

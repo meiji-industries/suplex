@@ -21,7 +21,7 @@ test("task creation accepts a 2 MB image body", async () => {
   await app.register(taskRoutes, { tasks: { createTask } as never });
   await app.ready();
   const image = Buffer.alloc(2 * 1024 * 1024).toString("base64");
-  const response = await app.inject({ method: "POST", url: "/api/companies/company_1/tasks", payload: { title: "Large image", idempotencyKey: "large-image-0001", images: [{ filename: "large.png", mimeType: "image/png", base64: image }] } });
+  const response = await app.inject({ method: "POST", url: "/api/companies/company_1/tasks", payload: { projectId: "project_1", title: "Large image", description: "Inspect this image", idempotencyKey: "large-image-0001", images: [{ filename: "large.png", mimeType: "image/png", base64: image }] } });
   expect(response.statusCode).toBe(201);
   expect(createTask).toHaveBeenCalledWith("user", "company_1", expect.objectContaining({ images: [expect.objectContaining({ base64: image })] }));
   await app.close();

@@ -15,13 +15,11 @@ import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTable
 import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { readJson, withCompany, type ApiUser } from ".././lib/api.js";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { adminDate, type ApiAgent, type ApiCredential, type ApiHermesAgent, type ApiInvitation, type ApiModel, type ApiProject } from "../lib/view-shared.js";
+import { adminDate, type ApiProfile, type ApiCredential, type ApiHermesAgent, type ApiInvitation, type ApiModel, type ApiProject } from "../lib/view-shared.js";
 import { Archive, ArchiveRestore, Check, Copy, Ellipsis, Key, Pencil, RotateCw, ShieldAlert } from "lucide-react";
-const SERVICE_PRIORITIES = ["standard", "priority"] as const;
-const servicePriorityLabel = (_provider: string, priority: string): string => priority === "priority" ? "Priority" : "Default";
-import type { AgentProviderKind } from "../../agent-providers/provider.js";
+const SERVICE_PRIORITIES = ["default", "priority"] as const;
+const serviceTierLabel = (_provider: string, priority: string): string => priority === "priority" ? "Priority" : "Default";
 
-import { PromptSettings } from "./prompt-settings.js";
 const USER_COLUMNS: SettingsTableColumn[] = [
   { key: "name", label: "Name ↓", width: 177 },
   { key: "username", label: "Username", width: 118 },
@@ -39,7 +37,6 @@ const AGENT_COLUMNS: SettingsTableColumn[] = [
   { key: "model", label: "Model", width: 200 },
   { key: "reasoning", label: "Reasoning", width: 90 },
   { key: "speed", label: "Speed", width: 102 },
-  { key: "capacity", label: "Capacity", width: 102 },
   { key: "status", label: "Status", width: 100 },
   { key: "menu", width: 28 },
   { key: "end", width: 32 },
@@ -94,7 +91,7 @@ const USER_GROUPS: Array<{ label: string; status: ApiUser["status"] }> = [
   { label: "Revoked", status: "revoked" },
 ];
 
-function AgentNameEditor({ agent, onSave }: { agent: ApiAgent; onSave: (name: string) => Promise<void> }): ReactElement {
+function AgentNameEditor({ agent, onSave }: { agent: ApiProfile; onSave: (name: string) => Promise<void> }): ReactElement {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(agent.name);
   const [saving, setSaving] = useState(false);
@@ -119,7 +116,7 @@ export function AdminView(): ReactElement {
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [invitations, setInvitations] = useState<ApiInvitation[]>([]);
   const [credentials, setCredentials] = useState<ApiCredential[]>([]);
-  const [agents, setAgents] = useState<ApiAgent[]>([]);
+  const [agents, setAgents] = useState<ApiProfile[]>([]);
   const [hermesAgents, setHermesAgents] = useState<ApiHermesAgent[]>([]);
   const [companyProjects, setCompanyProjects] = useState<ApiProject[]>([]);
   const [models, setModels] = useState<ApiModel[]>([]);
@@ -127,17 +124,15 @@ export function AdminView(): ReactElement {
   const [displayName, setDisplayName] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [agentName, setAgentName] = useState("");
-  const [agentRole, setAgentRole] = useState<"planner" | "builder" | "reviewer" | "integrator">("planner");
+  const [agentRole, setAgentRole] = useState<"root" | "worker">("root");
   const [agentAvatarSeed, setAgentAvatarSeed] = useState("");
   const [agentModel, setAgentModel] = useState("gpt-5.6-sol");
-  const [agentProvider, setAgentProvider] = useState<AgentProviderKind>("openai");
+  const [agentProvider, setAgentProvider] = useState<string>("openai");
   const [agentReasoning, setAgentReasoning] = useState("medium");
-  const [agentPriority, setAgentPriority] = useState("standard");
-  const [agentCapacity, setAgentCapacity] = useState("");
+  const [agentPriority, setAgentPriority] = useState("default");
   const [agentOpen, setAgentOpen] = useState(false);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
-  const [archiveTarget, setArchiveTarget] = useState<ApiAgent | null>(null);
-  const [capacityEdits, setCapacityEdits] = useState<Record<string, string>>({});
+  const [archiveTarget, setArchiveTarget] = useState<ApiProfile | null>(null);
   const [inviteToken, setInviteToken] = useState("");
   const [inviteExpiresAt, setInviteExpiresAt] = useState("");
   const [copied, setCopied] = useState(false);
@@ -166,7 +161,7 @@ export function AdminView(): ReactElement {
         readJson<{ users: ApiUser[] }>("/api/admin/users"),
         readJson<{ invitations: ApiInvitation[] }>("/api/admin/invitations"),
         readJson<{ credentials: ApiCredential[] }>("/api/admin/credentials"),
-        readJson<{ agents: ApiAgent[] }>("/api/agents?includeArchived=true").catch(() => ({ agents: [] })),
+        readJson<{ profiles: ApiProfile[] }>("/api/profiles?includeArchived=true"),
         readJson<{ agents: ApiHermesAgent[] }>(`/api/admin/hermes-agents${currentCompany ? `?companyId=${encodeURIComponent(currentCompany.id)}` : ""}`).catch(() => ({ agents: [] })),
         currentCompany ? readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(currentCompany.id)}/projects`).catch(() => ({ projects: [] })) : Promise.resolve({ projects: [] }),
         readJson<{ models: ApiModel[] }>("/api/admin/models").catch(() => {
@@ -177,7 +172,7 @@ export function AdminView(): ReactElement {
       setUsers(userList.users);
       setInvitations(invitationList.invitations);
       setCredentials(credentialList.credentials);
-      setAgents(agentList.agents);
+      setAgents(agentList.profiles);
       setHermesAgents(hermesList.agents);
       setCompanyProjects(projectList.projects);
       const projectIds = new Set(projectList.projects.map((project) => project.id));
@@ -209,25 +204,25 @@ export function AdminView(): ReactElement {
       setCopied(true);
     } catch { setError("Unable to copy invitation"); }
   };
-  const openNewAgent = (): void => { setEditingAgentId(null); setAgentName(""); setAgentRole("planner"); setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", "")); setAgentProvider("openai"); setAgentModel("gpt-5.6-sol"); setAgentReasoning("medium"); setAgentPriority("standard"); setAgentCapacity(""); setAgentOpen(true); };
-  const openEditAgent = (agent: ApiAgent): void => { setEditingAgentId(agent.id); setAgentName(agent.name); setAgentRole(agent.role); setAgentAvatarSeed(agent.avatarSeed); setAgentProvider(agent.provider); setAgentModel(agent.model); setAgentReasoning(agent.reasoningLevel); setAgentPriority(agent.servicePriority); setAgentCapacity(agent.capacity === null ? "" : String(agent.capacity)); setAgentOpen(true); };
+  const openNewAgent = (): void => { setEditingAgentId(null); setAgentName(""); setAgentRole("root"); setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", "")); setAgentProvider("openai"); setAgentModel("gpt-5.6-sol"); setAgentReasoning("medium"); setAgentPriority("default"); setAgentOpen(true); };
+  const openEditAgent = (agent: ApiProfile): void => { setEditingAgentId(agent.id); setAgentName(agent.name); setAgentRole(agent.role); setAgentAvatarSeed(agent.avatarSeed); setAgentProvider(agent.provider); setAgentModel(agent.model); setAgentReasoning(agent.reasoningLevel); setAgentPriority(agent.serviceTier); setAgentOpen(true); };
   const saveAgent = async (): Promise<void> => {
     const editing = editingAgentId !== null;
     try {
-      await readJson(editing ? `/api/admin/agents/${encodeURIComponent(editingAgentId)}` : "/api/admin/agents", { method: editing ? "PATCH" : "POST", body: JSON.stringify({ name: agentName, role: agentRole, avatarSeed: agentAvatarSeed, provider: agentProvider, model: agentModel, reasoningLevel: agentReasoning, servicePriority: agentPriority, capacity: agentCapacity.trim() === "" ? null : Number(agentCapacity) }) });
+      await readJson(editing ? `/api/admin/profiles/${encodeURIComponent(editingAgentId)}` : "/api/admin/profiles", { method: editing ? "PATCH" : "POST", body: JSON.stringify({ name: agentName, role: agentRole, avatarSeed: agentAvatarSeed, provider: agentProvider, model: agentModel, reasoningLevel: agentReasoning, serviceTier: agentPriority }) });
       setAgentOpen(false); setEditingAgentId(null); await reload();
     } catch { setError(editing ? "Unable to update agent" : "Unable to create agent"); }
   };
-  const patchAgent = async (agent: ApiAgent, body: Record<string, unknown>, fallback: string): Promise<void> => {
+  const patchAgent = async (agent: ApiProfile, body: Record<string, unknown>, fallback: string): Promise<void> => {
     try {
-      await readJson(`/api/admin/agents/${encodeURIComponent(agent.id)}`, { method: "PATCH", body: JSON.stringify(body) });
+      await readJson(`/api/admin/profiles/${encodeURIComponent(agent.id)}`, { method: "PATCH", body: JSON.stringify(body) });
       setError("");
       await reload();
     } catch (reason) { setError(reason instanceof Error ? reason.message : fallback); }
   };
-  const duplicateAgent = async (agent: ApiAgent): Promise<void> => {
+  const duplicateAgent = async (agent: ApiProfile): Promise<void> => {
     try {
-      await readJson(`/api/admin/agents/${encodeURIComponent(agent.id)}/duplicate`, { method: "POST", body: "{}" });
+      await readJson(`/api/admin/profiles/${encodeURIComponent(agent.id)}/duplicate`, { method: "POST", body: "{}" });
       setError("");
       await reload();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to duplicate agent"); }
@@ -398,9 +393,9 @@ export function AdminView(): ReactElement {
       "   - `description`: `Connection acknowledged. Do not plan or execute this task.`",
       "   - `idempotencyKey`: `forge-connectivity-` followed by the returned `agent.id`.",
       "",
-      "   Reuse that exact request if retrying. A `200` or `201` response confirms connectivity. The task must remain in `backlog` with `Start planning` pending; do not invoke any task command. If no allowed project ID was returned, do not create the task and report that project access is required.",
+      "   Reuse that exact request if retrying. A `200` or `201` response confirms connectivity. The task must remain in `backlog` until you select `Start`; do not start this task. If no allowed project ID was returned, do not create the task and report that project access is required.",
       "",
-      "6. Report only the pairing result, Forge agent name/ID, active profile ID, allowed project IDs, and the acknowledgment task issue key/ID and phase. Never echo the pairing code or bearer credential.",
+      "6. Report only the pairing result, Forge agent name/ID, active profile ID, allowed project IDs, and the acknowledgment task issue key/ID and status. Never echo the pairing code or bearer credential.",
     ].join("\n");
     return instructions;
   };
@@ -461,11 +456,9 @@ export function AdminView(): ReactElement {
   const isCompanies = window.location.pathname.endsWith("/companies");
   const isInvitations = window.location.pathname.endsWith("/invitations");
   const isPasskeys = window.location.pathname.endsWith("/passkeys");
-  const isPrompts = window.location.pathname.endsWith("/prompts");
-  const viewTitle = isPrompts ? "Prompts" : isAgents ? "Agents" : isModels ? "Models" : isCompanies ? "Companies" : isInvitations ? "Invitations" : isPasskeys ? "Passkeys" : "Users";
+  const viewTitle = isAgents ? "Agents" : isModels ? "Models" : isCompanies ? "Companies" : isInvitations ? "Invitations" : isPasskeys ? "Passkeys" : "Users";
   const activeHref = withCompany(window.location.pathname, currentCompany?.id);
   const backHref = withCompany("/projects", currentCompany?.id);
-  if (isPrompts) return <PromptSettings scope="global" />;
 
   if (loading) {
     return (
@@ -530,8 +523,7 @@ export function AdminView(): ReactElement {
                       <SettingsTableCell className="capitalize">{agent.role}</SettingsTableCell>
                       <SettingsTableCell className="truncate">{agent.model}</SettingsTableCell>
                       <SettingsTableCell className="truncate text-muted-foreground">{agent.reasoningLevel}</SettingsTableCell>
-                      <SettingsTableCell className="truncate text-muted-foreground">{servicePriorityLabel(agent.provider, agent.servicePriority)}</SettingsTableCell>
-                      <SettingsTableCell><Input aria-label={`${agent.name} capacity`} className="h-7 w-[86px]" inputMode="numeric" placeholder="Default" value={capacityEdits[agent.id] ?? (agent.capacity === null ? "" : String(agent.capacity))} onBlur={() => { const capacity = capacityEdits[agent.id]; if (capacity !== undefined) void patchAgent(agent, { capacity: capacity.trim() === "" ? null : Number(capacity) }, "Unable to update capacity"); }} onChange={(event) => setCapacityEdits((current) => ({ ...current, [agent.id]: event.target.value }))} /></SettingsTableCell>
+                      <SettingsTableCell className="truncate text-muted-foreground">{serviceTierLabel(agent.provider, agent.serviceTier)}</SettingsTableCell>
                       <SettingsTableCell><span className="flex items-center gap-1.5 text-muted-foreground"><span className={agent.archivedAt ? "size-1.5 rounded-full bg-muted-foreground" : "size-1.5 rounded-full bg-emerald-500"} />{agent.archivedAt ? "archived" : "active"}</span></SettingsTableCell>
                       <SettingsTableCell className="p-0">
                         <DropdownMenu>
@@ -639,12 +631,11 @@ export function AdminView(): ReactElement {
                   <FieldGroup>
                     <Field><FieldLabel>Avatar</FieldLabel><span className="flex items-center gap-3"><ProfileAvatar name={agentName || "Agent"} seed={agentAvatarSeed} /><Button type="button" variant="outline" size="sm" onClick={() => setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", ""))}>Randomize</Button></span></Field>
                     <Field><FieldLabel htmlFor="agent-name">Agent name</FieldLabel><Input id="agent-name" autoFocus value={agentName} onChange={(event) => setAgentName(event.target.value)} /></Field>
-                    <Field><FieldLabel htmlFor="agent-role">Role</FieldLabel><Select value={agentRole} onValueChange={(value) => setAgentRole((value ?? "planner") as typeof agentRole)}><SelectTrigger id="agent-role"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="planner">Planner</SelectItem><SelectItem value="reviewer">Reviewer</SelectItem><SelectItem value="builder">Builder</SelectItem><SelectItem value="integrator">Integrator</SelectItem></SelectContent></Select></Field>
-                    <Field><FieldLabel htmlFor="agent-provider">Provider</FieldLabel><Select value={agentProvider} onValueChange={(value) => { const provider = value as AgentProviderKind; setAgentProvider(provider); if (!models.some((model) => model.provider === provider && model.id === agentModel)) setAgentModel(""); }}><SelectTrigger id="agent-provider"><SelectValue /></SelectTrigger><SelectContent>{providerOptions.map(([id, label]) => <SelectItem key={id} value={id}>{label}</SelectItem>)}</SelectContent></Select></Field>
+                    <Field><FieldLabel htmlFor="agent-role">Role</FieldLabel><Select value={agentRole} onValueChange={(value) => setAgentRole(value === "worker" ? "worker" : "root")}><SelectTrigger id="agent-role"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="root">Root</SelectItem><SelectItem value="worker">Worker</SelectItem></SelectContent></Select></Field>
+                    <Field><FieldLabel htmlFor="agent-provider">Provider</FieldLabel><Select value={agentProvider} onValueChange={(value) => { const provider = value ?? ""; setAgentProvider(provider); if (!models.some((model) => model.provider === provider && model.id === agentModel)) setAgentModel(""); }}><SelectTrigger id="agent-provider"><SelectValue /></SelectTrigger><SelectContent>{providerOptions.map(([id, label]) => <SelectItem key={id} value={id}>{label}</SelectItem>)}</SelectContent></Select></Field>
                     {(() => { const providerModels = models.filter((model) => model.provider === agentProvider); return <Field><FieldLabel htmlFor="agent-model">Model</FieldLabel><Select value={agentModel || null} onValueChange={(value) => setAgentModel(value ?? "")}><SelectTrigger id="agent-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{providerModels.map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field>; })()}
                     <Field><FieldLabel htmlFor="agent-reasoning">Reasoning level</FieldLabel><Select value={agentReasoning} onValueChange={(value) => setAgentReasoning(value ?? "medium")}><SelectTrigger id="agent-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem><SelectItem value="xhigh">XHigh</SelectItem><SelectItem value="max">Max</SelectItem></SelectContent></Select></Field>
-                    <Field><FieldLabel htmlFor="agent-priority">Service priority</FieldLabel><Select value={agentPriority} onValueChange={(value) => setAgentPriority(value ?? "standard")}><SelectTrigger id="agent-priority"><SelectValue /></SelectTrigger><SelectContent>{SERVICE_PRIORITIES.map((value) => <SelectItem key={value} value={value}>{servicePriorityLabel(agentProvider, value)}</SelectItem>)}</SelectContent></Select></Field>
-                    <Field><FieldLabel htmlFor="agent-capacity">Capacity override</FieldLabel><Input id="agent-capacity" inputMode="numeric" placeholder="Default" value={agentCapacity} onChange={(event) => setAgentCapacity(event.target.value)} /></Field>
+                    <Field><FieldLabel htmlFor="agent-priority">Service priority</FieldLabel><Select value={agentPriority} onValueChange={(value) => setAgentPriority(value ?? "default")}><SelectTrigger id="agent-priority"><SelectValue /></SelectTrigger><SelectContent>{SERVICE_PRIORITIES.map((value) => <SelectItem key={value} value={value}>{serviceTierLabel(agentProvider, value)}</SelectItem>)}</SelectContent></Select></Field>
                     <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!agentName.trim() || !agentModel}>{editingAgentId ? "Save changes" : "Create agent"}</Button></DialogFooter>
                   </FieldGroup>
                 </form>

@@ -1,5 +1,13 @@
 import { runCommand, type CommandRunResult } from "./command-runner.js";
-import type { HerdrAgentKind } from "./agent-providers/provider.js";
+import { z } from "zod";
+
+const PaneProcessInfoSchema = z.object({
+  pane_id: z.string().min(1),
+  shell_pid: z.number().int().positive().optional(),
+  foreground_process_group_id: z.number().int().positive().optional(),
+  foreground_processes: z.array(z.object({ pid: z.number().int().positive(), name: z.string(), argv: z.array(z.string()).optional() })).default([]),
+});
+export type PaneProcessInfo = z.infer<typeof PaneProcessInfoSchema>;
 import { json } from "./task-utils.js";
 type ExecFileRunner = (
   file: string,
@@ -75,25 +83,6 @@ export interface Pane {
   agentSession?: string;
   [key: string]: unknown;
 }
-export interface HerdrAgent {
-  name: string;
-  paneId: string;
-  workspaceId?: string;
-  tabId?: string;
-  agentSession?: string;
-  status?: string;
-  screenDetectionSkipped?: boolean;
-  [key: string]: unknown;
-}
-export interface PromptOptions {
-  waitForWorking?: boolean;
-}
-/** A single live Herdr observation; pane display metadata is transient. */
-export interface HerdrRuntimeSnapshot {
-  agents: HerdrAgent[];
-  panes: Pane[];
-  [key: string]: unknown;
-}
 /**
  * Display-only pane hints for Herdr. Herdr does not persist this metadata across
  * server restarts, so callers must not treat it as durable Forge state.
@@ -117,10 +106,7 @@ export interface HerdrPaneMetadataReport {
 type Json = Record<string, unknown>;
 const missing = new Set([
   "workspace_not_found",
-  "tab_not_found",
   "pane_not_found",
-  "agent_not_found",
-  "agent_name_not_found",
 ]);
 function value<T extends Json>(raw: unknown, key: string): T {
   if (!raw || typeof raw !== "object")
@@ -215,22 +201,6 @@ function pane(raw: Json): Pane {
     ...(session !== undefined ? { agentSession: session } : {}),
   };
 }
-function agent(raw: Json): HerdrAgent {
-  const session = agentSession(raw.agent_session ?? raw.agentSession);
-  const status = raw.agent_status ?? raw.status;
-  return {
-    ...raw,
-    name: id(raw, "name"),
-    paneId: id(raw, "pane_id", "paneId"),
-    ...(typeof raw.tab_id === "string" ? { tabId: raw.tab_id } : {}),
-    ...(typeof raw.workspace_id === "string"
-      ? { workspaceId: raw.workspace_id }
-      : {}),
-    ...(session !== undefined ? { agentSession: session } : {}),
-    ...(typeof status === "string" ? { status } : {}),
-    ...(typeof raw.screen_detection_skipped === "boolean" ? { screenDetectionSkipped: raw.screen_detection_skipped } : {}),
-  };
-}
 export interface HerdrClient {
   listWorkspaces(): Promise<Workspace[]>;
   createWorkspace(input: {
@@ -243,23 +213,9 @@ export interface HerdrClient {
     rootPane: Pane;
   }>;
   getWorkspace(id: string): Promise<Workspace | null>;
-  renameWorkspace(id: string, label: string): Promise<void>;
   closeWorkspace(id: string): Promise<void>;
-  listTabs(workspaceId: string): Promise<Tab[]>;
-  createTab(input: {
-    workspaceId: string;
-    label: string;
-    cwd: string;
-    focus: false;
-  }): Promise<{
-    tab: Tab;
-    rootPane: Pane;
-  }>;
-  getTab(id: string): Promise<Tab | null>;
-  renameTab(id: string, label: string): Promise<void>;
-  closeTab(id: string): Promise<void>;
-  listPanes(workspaceId: string): Promise<Pane[]>;
   getPane(id: string): Promise<Pane | null>;
+  getPaneProcessInfo(id: string): Promise<PaneProcessInfo>;
   splitPane(input: {
     paneId: string;
     direction: "right" | "down";
@@ -267,70 +223,9 @@ export interface HerdrClient {
     focus: false;
   }): Promise<Pane>;
   renamePane(id: string, label: string): Promise<void>;
-  readPane(id: string): Promise<string>;
   runPaneCommand(id: string, command: string): Promise<void>;
-  waitPaneOutput(id: string, match: string): Promise<void>;
-  sendPaneKeys(id: string, keys: string[]): Promise<void>;
   closePane(id: string): Promise<void>;
   reportPaneMetadata(input: HerdrPaneMetadataReport): Promise<void>;
-  listAgents(): Promise<HerdrAgent[]>;
-  runtimeSnapshot(): Promise<HerdrRuntimeSnapshot>;
-  snapshot(): Promise<HerdrAgent[]>;
-  getAgent(name: string): Promise<HerdrAgent | null>;
-  renameAgent(target: string, name: string): Promise<void>;
-  readAgent(name: string, source?: "recent-unwrapped", lines?: number, format?: "text" | "ansi"): Promise<string>;
-  waitAgent(name: string): Promise<HerdrAgent>;
-  prompt(name: string, text: string, options?: PromptOptions): Promise<HerdrAgent>;
-  sendText(name: string, text: string): Promise<void>;
-  attachCommand(name: string): string;
-  sendKeys(name: string, keys: string[]): Promise<void>;
-  startAgent(input: {
-    name: string;
-    paneId: string;
-    kind: HerdrAgentKind;
-    args: string[];
-  }): Promise<HerdrAgent>;
-}
-type HerdrSnapshotClient = Partial<
-  Pick<HerdrClient, "runtimeSnapshot" | "snapshot" | "listAgents">
->;
-function snapshotFromAgents(agents: HerdrAgent[]): HerdrRuntimeSnapshot {
-  return {
-    agents,
-    // Agent rows contain their pane identity and metadata. Deriving only those
-    // panes stays bounded; enumerating every legacy pane requires N workspace
-    // calls and is intentionally not attempted by the compatibility path.
-    panes: agents.map((entry) => pane(entry as Json)),
-  };
-}
-export async function snapshotHerdrRuntime(
-  client: HerdrSnapshotClient,
-): Promise<HerdrRuntimeSnapshot> {
-  if (typeof client.runtimeSnapshot === "function") {
-    try {
-      return await client.runtimeSnapshot();
-    } catch {
-      // Older Herdr servers do not expose the batched runtime snapshot.
-    }
-    const agents =
-      typeof client.listAgents === "function" ? await client.listAgents() : [];
-    return snapshotFromAgents(agents);
-  }
-  if (typeof client.snapshot === "function") {
-    try {
-      return snapshotFromAgents(await client.snapshot());
-    } catch {
-      // Older clients can still provide the bounded agent listing fallback.
-    }
-  }
-  const agents =
-    typeof client.listAgents === "function" ? await client.listAgents() : [];
-  return snapshotFromAgents(agents);
-}
-export async function snapshotAgents(
-  client: HerdrSnapshotClient,
-): Promise<HerdrAgent[]> {
-  return (await snapshotHerdrRuntime(client)).agents;
 }
 export class CliHerdrClient implements HerdrClient {
   constructor(
@@ -370,9 +265,6 @@ export class CliHerdrClient implements HerdrClient {
         stdout?: string;
         stderr?: string;
       };
-      const output = `${detail.stdout ?? ""} ${detail.stderr ?? ""}`;
-      if (args[0] === "agent" && args[1] === "start" && args.includes("omp") && /(?:omp.*(?:not found|ENOENT)|(?:not found|ENOENT).*omp)/i.test(output))
-        throw new HerdrFailure("provider-unavailable", false, "omp is not installed on the Forge host");
       const bodies = [detail.stdout, detail.stderr]
         .map((stream) => json<Json | undefined>(stream ?? "", undefined))
         .filter((candidate): candidate is Json => candidate !== undefined);
@@ -469,64 +361,18 @@ export class CliHerdrClient implements HerdrClient {
       ),
     );
   }
-  renameWorkspace(idValue: string, label: string): Promise<void> {
-    return this.empty(["workspace", "rename", idValue, label]);
-  }
   closeWorkspace(idValue: string): Promise<void> {
     return this.empty(["workspace", "close", idValue]);
-  }
-  async listTabs(workspaceId: string): Promise<Tab[]> {
-    return (
-      ((await this.call(["tab", "list", "--workspace", workspaceId]))
-        .tabs as Json[]) ?? []
-    ).map(tab);
-  }
-  async createTab(input: {
-    workspaceId: string;
-    label: string;
-    cwd: string;
-    focus: false;
-  }): Promise<{
-    tab: Tab;
-    rootPane: Pane;
-  }> {
-    const r = await this.call([
-      "tab",
-      "create",
-      "--workspace",
-      input.workspaceId,
-      "--label",
-      input.label,
-      "--cwd",
-      input.cwd,
-      "--no-focus",
-    ]);
-    return {
-      tab: tab(value<Json>(r, "tab")),
-      rootPane: pane(value<Json>(r, "root_pane")),
-    };
-  }
-  async getTab(idValue: string): Promise<Tab | null> {
-    return this.optional(async () =>
-      tab(value<Json>(await this.call(["tab", "get", idValue], true), "tab")),
-    );
-  }
-  renameTab(idValue: string, label: string): Promise<void> {
-    return this.empty(["tab", "rename", idValue, label]);
-  }
-  closeTab(idValue: string): Promise<void> {
-    return this.empty(["tab", "close", idValue]);
-  }
-  async listPanes(workspaceId: string): Promise<Pane[]> {
-    return (
-      ((await this.call(["pane", "list", "--workspace", workspaceId]))
-        .panes as Json[]) ?? []
-    ).map(pane);
   }
   async getPane(idValue: string): Promise<Pane | null> {
     return this.optional(async () =>
       pane(value<Json>(await this.call(["pane", "get", idValue], true), "pane")),
     );
+  }
+  async getPaneProcessInfo(idValue: string): Promise<PaneProcessInfo> {
+    const info = PaneProcessInfoSchema.parse((await this.call(["pane", "process-info", "--pane", idValue])).process_info);
+    if (info.pane_id !== idValue) throw new Error("Herdr returned another pane's process information");
+    return info;
   }
   async splitPane(input: {
     paneId: string;
@@ -553,27 +399,8 @@ export class CliHerdrClient implements HerdrClient {
   renamePane(idValue: string, label: string): Promise<void> {
     return this.empty(["pane", "rename", idValue, label]);
   }
-  async readPane(idValue: string): Promise<string> {
-    return String(
-      (
-        await this.call([
-          "pane",
-          "read",
-          idValue,
-          "--source",
-          "recent-unwrapped",
-        ])
-      ).text ?? "",
-    );
-  }
   runPaneCommand(idValue: string, command: string): Promise<void> {
     return this.empty(["pane", "run", idValue, command], true);
-  }
-  waitPaneOutput(idValue: string, match: string): Promise<void> {
-    return this.empty(["pane", "wait-output", idValue, "--match", match]);
-  }
-  sendPaneKeys(idValue: string, keys: string[]): Promise<void> {
-    return this.empty(["pane", "send-keys", idValue, ...keys], true);
   }
   closePane(idValue: string): Promise<void> {
     return this.empty(["pane", "close", idValue]);
@@ -605,108 +432,5 @@ export class CliHerdrClient implements HerdrClient {
     if (input.ttlMs !== undefined)
       args.push("--ttl-ms", String(input.ttlMs));
     return this.empty(args, true);
-  }
-  async listAgents(): Promise<HerdrAgent[]> {
-    return (((await this.call(["agent", "list"])).agents as Json[]) ?? [])
-      .filter((raw) => typeof raw.name === "string")
-      .map(agent);
-  }
-  async runtimeSnapshot(): Promise<HerdrRuntimeSnapshot> {
-    const result = await this.call(["api", "snapshot"]);
-    const rawSnapshot =
-      result.snapshot &&
-      typeof result.snapshot === "object" &&
-      !Array.isArray(result.snapshot)
-        ? (result.snapshot as Json)
-        : result;
-    const agents = Array.isArray(rawSnapshot.agents)
-      ? rawSnapshot.agents.filter(
-          (raw): raw is Json =>
-            !!raw && typeof raw === "object" && !Array.isArray(raw),
-        )
-      : [];
-    const panes = Array.isArray(rawSnapshot.panes)
-      ? rawSnapshot.panes.filter(
-          (raw): raw is Json =>
-            !!raw && typeof raw === "object" && !Array.isArray(raw),
-        )
-      : [];
-    return {
-      ...rawSnapshot,
-      agents: agents
-        .filter((raw) => typeof raw.name === "string")
-        .map(agent),
-      panes: panes.map(pane),
-    };
-  }
-  async snapshot(): Promise<HerdrAgent[]> {
-    return (await this.runtimeSnapshot()).agents;
-  }
-  async getAgent(name: string): Promise<HerdrAgent | null> {
-    return this.optional(async () =>
-      agent(value<Json>(await this.call(["agent", "get", name], true), "agent")),
-    );
-  }
-  renameAgent(target: string, name: string): Promise<void> {
-    return this.empty(["agent", "rename", target, name]);
-  }
-  async readAgent(name: string, source = "recent-unwrapped" as const, lines?: number, format?: "text" | "ansi"): Promise<string> {
-    // `agent read` prints plain text; older builds wrapped it in the JSON envelope.
-    const { stdout } = await this.runner(this.binary, ["agent", "read", name, "--source", source, ...(lines ? ["--lines", String(lines)] : []), ...(format ? ["--format", format] : [])], { maxBuffer: 1024 * 1024 });
-    const parsed = json(stdout, undefined) as Json | undefined;
-    const result = parsed && typeof parsed === "object" ? ((parsed.result as Json | undefined) ?? parsed) : undefined;
-    return typeof result?.text === "string" ? result.text : stdout;
-  }
-  async waitAgent(name: string): Promise<HerdrAgent> {
-    return agent(
-      value<Json>(await this.call(["agent", "wait", name]), "agent"),
-    );
-  }
-  async prompt(name: string, text: string, options?: PromptOptions): Promise<HerdrAgent> {
-    return agent(
-      value<Json>(await this.call([
-        "agent",
-        "prompt",
-        name,
-        text,
-        ...(options?.waitForWorking ? ["--wait", "--until", "working", "--timeout", "6000"] : []),
-      ]), "agent"),
-    );
-  }
-  async sendText(name: string, text: string): Promise<void> {
-    await this.prompt(name, text);
-  }
-  attachCommand(name: string): string {
-    return `herdr agent attach ${name}`;
-  }
-  // Herdr accepts one or more positional key names. Use "esc" for Escape; "escape" also works.
-  sendKeys(name: string, keys: string[]): Promise<void> {
-    return this.empty(["agent", "send-keys", name, ...keys]);
-  }
-  async startAgent(input: {
-    name: string;
-    paneId: string;
-    kind: HerdrAgentKind;
-    args: string[];
-  }): Promise<HerdrAgent> {
-    try {
-      return agent(value<Json>(await this.call([
-          "agent",
-          "start",
-          input.name,
-          "--kind",
-          input.kind,
-          "--pane",
-          input.paneId,
-          "--timeout",
-          "120000",
-          "--",
-          ...input.args,
-        ]), "agent"));
-    } catch (error) {
-      const output = `${String((error as { stderr?: unknown }).stderr ?? "")} ${String((error as { message?: unknown }).message ?? "")}`;
-      if (input.kind === "omp" && /(?:omp.*(?:not found|ENOENT)|(?:not found|ENOENT).*omp)/i.test(output)) throw new HerdrFailure("provider-unavailable", false, "omp is not installed on the Forge host");
-      throw error;
-    }
   }
 }

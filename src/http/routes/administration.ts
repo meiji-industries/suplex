@@ -2,37 +2,33 @@ import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 
-import type { AttentionService } from "../../attention.js";
+import type { AgentProfileService } from "../../agent-profiles.js";
 import type { AuthService } from "../../auth.js";
 import type { ForgeDatabase } from "../../database.js";
-import type { CapacityManager } from "../../capacity.js";
 import type { ProjectService } from "../../projects.js";
 import type { ForgeConfig } from "../../config.js";
-import { ProjectionRebuildFailure, ProjectionRebuildService } from "../../projection-rebuild.js";
 import { AuditEventListResponseSchema, CredentialIdParamsSchema, CredentialListResponseSchema, ErrorResponseSchema, InvitationResponseSchema, InvitationSummaryListResponseSchema, UserIdParamsSchema, UserListResponseSchema } from "../contracts/common.js";
 import { DisplayNameBodySchema } from "../contracts/auth.js";
-import { AdminCapacityListResponseSchema, AgentBodySchema, AgentPatchBodySchema, AgentResponseSchema, ModelListResponseSchema } from "../contracts/projects.js";
+import { ProfileBodySchema, ProfilePatchBodySchema, ProfileResponseSchema, ProfileListQuerySchema, ProfileListResponseSchema, ModelListResponseSchema } from "../contracts/projects.js";
 import { ProviderListResponseSchema, type ProviderListResponse } from "../contracts/providers.js";
 import { readOpenCodeProviders, type ReadOpenCodeProviders } from "../../opencode-providers.js";
 import { MAX_MIN_FREE_DISK_GB, readEnvironmentSettings, updateEnvironmentSettings } from "../../environment-settings.js";
 
-const ProjectionRebuildBodySchema = z.object({ companyId: z.string().optional(), taskId: z.string().optional() }).default({});
 const EnvironmentSettingsSchema = z.object({ minFreeDiskGb: z.number() });
 const EnvironmentSettingsBodySchema = z.object({ minFreeDiskGb: z.number().finite().min(0).max(MAX_MIN_FREE_DISK_GB) });
 
 export interface AdministrationRoutesOptions {
   auth: AuthService;
   projects?: ProjectService;
+  profiles?: AgentProfileService;
   database?: ForgeDatabase;
-  attention?: AttentionService;
   config?: ForgeConfig;
-  capacity?: CapacityManager;
   readProviders?: ReadOpenCodeProviders;
 }
 
 const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (app, options) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const { auth, projects, database, attention, config, capacity } = options;
+  const { auth, projects, profiles, database } = options;
   const requireAdmin = (role: string, reply: FastifyReply): boolean => {
     if (role === "admin") return true;
     reply.code(403).send({ error: "Administrator access required" });
@@ -77,32 +73,14 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     return reply.code(204).send();
   });
   typed.get("/api/admin/audit", { schema: { response: { 200: AuditEventListResponseSchema } } }, async (request, reply) => reply.send({ events: auth.listAuditEvents(request.forgeUser.id) }));
-  if (projects) {
-    typed.post("/api/admin/agents", { schema: { body: AgentBodySchema, response: { 201: AgentResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.createAgent(request.forgeUser.id, { ...request.body, capacity: request.body.capacity ?? null })));
-    typed.patch("/api/admin/agents/:agentId", { schema: { params: z.object({ agentId: z.string() }), body: AgentPatchBodySchema, response: { 200: AgentResponseSchema } } }, async (request, reply) => reply.send(projects.updateAgent(request.forgeUser.id, request.params.agentId, request.body)));
-    typed.post("/api/admin/agents/:agentId/duplicate", { schema: { params: z.object({ agentId: z.string() }), response: { 201: AgentResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.duplicateAgent(request.forgeUser.id, request.params.agentId)));
-    typed.get("/api/admin/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: await projects.listModels(request.forgeUser.id) }));
+  if (profiles) {
+    typed.get("/api/profiles", { schema: { querystring: ProfileListQuerySchema, response: { 200: ProfileListResponseSchema } } }, async (request, reply) => reply.send({ profiles: profiles.list(request.forgeUser.id, request.query.includeArchived === "true") }));
+    typed.post("/api/admin/profiles", { schema: { body: ProfileBodySchema, response: { 201: ProfileResponseSchema } } }, async (request, reply) => reply.code(201).send(profiles.create(request.forgeUser.id, request.body)));
+    typed.patch("/api/admin/profiles/:agentId", { schema: { params: z.object({ agentId: z.string() }), body: ProfilePatchBodySchema, response: { 200: ProfileResponseSchema } } }, async (request, reply) => reply.send(profiles.update(request.forgeUser.id, request.params.agentId, request.body)));
+    typed.post("/api/admin/profiles/:agentId/duplicate", { schema: { params: z.object({ agentId: z.string() }), response: { 201: ProfileResponseSchema } } }, async (request, reply) => reply.code(201).send(profiles.duplicate(request.forgeUser.id, request.params.agentId)));
   }
-  if (capacity) typed.get("/api/admin/capacity", { schema: { response: { 200: AdminCapacityListResponseSchema, 403: ErrorResponseSchema } } }, async (request, reply) => {
-    if (request.forgeUser.role !== "admin") return reply.code(403).send({ error: "Administrator access required" });
-    return reply.send({ lanes: capacity.listAdminLanes() });
-  });
-  if (database && attention) {
-    typed.post("/api/admin/rebuild-projections", { schema: { body: ProjectionRebuildBodySchema, response: { 200: z.object({ source: z.literal("engine"), rebuilt: z.number(), findings: z.array(z.object({ taskId: z.string(), code: z.string(), summary: z.string() })) }), 403: ErrorResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
-      if (request.forgeUser.role !== "admin") return reply.code(403).send({ error: "Administrator access required" });
-      if (!config) return reply.code(503).send({ error: "Engine rebuild is unavailable" });
-      let result;
-      try {
-        result = await new ProjectionRebuildService(database, config).rebuild({
-          ...(request.body.companyId ? { companyId: request.body.companyId } : {}),
-          ...(request.body.taskId ? { taskId: request.body.taskId } : {}),
-        });
-      } catch (error) {
-        if (error instanceof ProjectionRebuildFailure) return reply.code(503).send({ error: error.message, code: error.code });
-        throw error;
-      }
-      return reply.send({ source: "engine" as const, ...result });
-    });
+  if (projects) {
+    typed.get("/api/admin/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: await projects.listModels(request.forgeUser.id) }));
   }
 };
 

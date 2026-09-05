@@ -3,12 +3,21 @@ import { expect, test } from "vitest";
 import { createAppServer } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";
 import type { HostHealthDependencies } from "../src/health.js";
-import { createFastifyLogger, formatDevLogLine } from "../src/logging.js";
+import { configureProcessLogSink, createFastifyLogger, formatDevLogLine, StructuredLogger } from "../src/logging.js";
 import { jsonRequired } from "../src/task-utils.js";
 
 function records(lines: string[]): Array<Record<string, unknown>> {
   return lines.map((line) => jsonRequired(line) as Record<string, unknown>);
 }
+
+test("bridge logging redirects loggers created before and after bridge initialization", () => {
+  const early = new StructuredLogger();
+  const lines: string[] = [];
+  configureProcessLogSink(line => lines.push(line));
+  early.info("early logger");
+  new StructuredLogger().info("late logger");
+  expect(records(lines).map(record => record.message)).toEqual(["early logger", "late logger"]);
+});
 
 function createLoggingApp(lines: string[]) {
   return createAppServer({

@@ -10,11 +10,7 @@ import { readProcessRegistry, stopOwnedProcesses } from "./process-manager.js";
 import { startForge } from "./runtime.js";
 import { StructuredLogger } from "./logging.js";
 import { runSetup } from "./setup.js";
-import { BackupService, reconcileRestoredState } from "./backup.js";
-import { CapacityManager } from "./capacity.js";
-import { createGithubReleasePort } from "./github-release.js";
-import { ProjectionRebuildFailure, ProjectionRebuildService } from "./projection-rebuild.js";
-import { reconcileHerdrSessions } from "./herdr-recovery.js";
+import { BackupService } from "./backup.js";
 import { formatDoctor, runDoctor } from "./diagnostics/doctor.js";
 import { formatTaskDiagnostic, inspectTask, writeTaskBundle } from "./diagnostics/task.js";
 import { runLogViewer } from "./log-viewer.js";
@@ -24,8 +20,8 @@ const commandArgs = process.argv.slice(process.argv[2] === "--" ? 4 : 3);
 const foreground = process.argv.includes("--foreground");
 const verbose = process.argv.includes("--verbose");
 
-function openDiagnosticDatabase(filename: string, options: { fix?: boolean } = {}): ForgeDatabase {
-  const database = new ForgeDatabase(filename, options.fix ? { migrate: false } : { readOnly: true });
+function openDiagnosticDatabase(filename: string): ForgeDatabase {
+  const database = new ForgeDatabase(filename, { readOnly: true });
   const schema = database.schemaStatus();
   if (database.openMode() === "read-only" && schema.state === "behind") {
     process.stderr.write("database is behind this build — restart the stack to migrate\n");
@@ -69,7 +65,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "help") {
-    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|rebuild-projections|migrate|task|doctor|start|stop|restart|logs> [--foreground]\n");
+    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|migrate|task|doctor|start|stop|restart|logs> [--foreground]\n");
     return;
   }
   const config = loadConfig();
@@ -85,10 +81,10 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "doctor") {
-    const fix = process.argv.includes("--fix");
-    const database = openDiagnosticDatabase(config.databasePath, { fix });
+    if (process.argv.includes("--fix")) throw new Error("doctor is read-only. Restart Forge to apply pending migrations.");
+    const database = openDiagnosticDatabase(config.databasePath);
     try {
-      const checks = await runDoctor(config, database, { fix });
+      const checks = await runDoctor(config, database);
       process.stdout.write(formatDoctor(checks));
       if (checks.some((check) => check.status === "FAIL")) process.exitCode = 1;
     } finally { database.close(); }
@@ -125,19 +121,6 @@ async function main(): Promise<void> {
       const result = await service.restore(archive, destination);
       const restoredDatabase = new ForgeDatabase(`${destination}/forge-backup/app/forge.sqlite`);
       try {
-        let rebuild: Awaited<ReturnType<ProjectionRebuildService["rebuild"]>> | undefined;
-        let rebuildFailure: { code: string; summary: string } | undefined;
-        try {
-          rebuild = await new ProjectionRebuildService(restoredDatabase, config).rebuild();
-        } catch (error) {
-          if (!(error instanceof ProjectionRebuildFailure)) throw error;
-          rebuildFailure = { code: error.code, summary: error.message };
-        }
-        const restoredAuth = new AuthService(restoredDatabase, config);
-        const companies = restoredAuth.listVisibleCompanies("admin").length;
-        await reconcileHerdrSessions(restoredDatabase);
-        new CapacityManager(restoredDatabase, config).reconcileFromLedgers();
-        const reconciliation = await reconcileRestoredState(restoredDatabase, createGithubReleasePort());
         const handoff = {
           version: 1,
           restoredAt: new Date().toISOString(),
@@ -146,30 +129,13 @@ async function main(): Promise<void> {
           backupDurationMs: result.durationMs,
           restoreDurationMs: result.restoreDurationMs,
           verification: { valid: result.valid, verifiedAt: result.verifiedAt, errors: result.errors },
-          projectionRebuild: rebuild ? { status: "rebuilt", rebuilt: rebuild.rebuilt, findings: rebuild.findings } : { status: "blocked", ...rebuildFailure },
-          projectionsRebuilt: rebuild?.rebuilt ?? 0,
-          projectionIntegrityFindings: rebuild?.findings ?? [],
-          companiesRebuilt: companies,
-          reconciliation,
           requiresReauthentication: true,
-          nextSteps: ["Recreate the restored Cloud configuration without copying secrets; preserve installationId, engineNamespace, and taskQueue", "Create a new Engine Cloud API key for the restored host", "Reauthenticate the restored host integrations", "Start Forge against the existing Engine Cloud namespace", "Inspect interrupted Developer turns before explicitly retrying or cancelling them"],
+          nextSteps: ["Restore repository and worktree paths before starting Forge", "Sign in to OpenCode and GitHub on the restored host", "Preserve OpenCode session storage to continue existing tasks", "Start Forge and review any specific recovery question"],
         };
         await writeFile(join(destination, "forge-backup", "restore-handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`, { mode: 0o600 });
-        process.stdout.write(rebuild ? `Restored projection state (${rebuild.rebuilt} issue snapshots, ${companies} companies); ` : `Restored database; projection rebuild blocked (${rebuildFailure?.code}), ${companies} companies reconciled; `);
-        process.stdout.write(`reconciled ${reconciliation.developerExecutions.length} builds and ${reconciliation.providers.length} provider releases; `);
       } finally { restoredDatabase.close(); }
       process.stdout.write(`backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"} (${result.restoreDurationMs}ms); see forge-backup/restore-handoff.json\n`);
     }
-    return;
-  }
-  if (command === "rebuild-projections") {
-    const database = new ForgeDatabase(config.databasePath);
-    try {
-      const rebuild = await new ProjectionRebuildService(database, config).rebuild();
-      await reconcileHerdrSessions(database);
-      new CapacityManager(database, config).reconcileFromLedgers();
-      process.stdout.write(`Rebuilt ${rebuild.rebuilt} issue projections (${rebuild.findings.length} findings) and reconciled operator ledgers\n`);
-    } finally { database.close(); }
     return;
   }
   if (command === "recover") {

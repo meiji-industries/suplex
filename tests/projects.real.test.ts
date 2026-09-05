@@ -24,7 +24,7 @@ async function gitSnapshot(repositoryPath: string): Promise<{ refs: string; stat
   return { refs, status };
 }
 
-test.skipIf(!runRealGithubProof)("activates through the production GitHub adapter without mutating GitHub or the local repository", async () => {
+test.skipIf(!runRealGithubProof)("captures a base through the production GitHub adapter without mutating GitHub or the local repository", async () => {
   const realRepository = repositoryIdentity;
   if (!realRepository) return;
   const root = await mkdtemp(join(tmpdir(), "forge-real-github-proof-"));
@@ -47,38 +47,29 @@ test.skipIf(!runRealGithubProof)("activates through the production GitHub adapte
     const auth = new AuthService(database, config);
     const projects = new ProjectService(database, auth, config);
     const company = auth.createCompany("real-gh-admin", "Real GitHub proof");
-    const model = (await projects.listModels("real-gh-admin"))[0]?.id;
-    if (!model) throw new Error("No active model is available for the real GitHub proof");
-    const profile = projects.createProfile("real-gh-admin", { name: "Real GitHub proof", model, reasoningLevel: "medium", servicePriority: "standard", capacity: 1 });
-    const planner = projects.createAgent("real-gh-admin", { name: "Planner", role: "planner", profileId: profile.id });
-    const builder = projects.createAgent("real-gh-admin", { name: "Builder", role: "builder", profileId: profile.id });
-    const reviewer = projects.createAgent("real-gh-admin", { name: "Reviewer", role: "reviewer", profileId: profile.id });
     const project = await projects.createProject("real-gh-admin", company.id, {
       name: "Real GitHub proof",
       repositoryPath,
       worktreeRoot: projectWorktreeRoot,
       repository: realRepository,
       baseBranch: "main",
-      targetBranch: "main",
       setupCommand: "pnpm install",
       verificationCommand: "pnpm test",
-      requiredChecks: ["Tests / unit"],
-      roleDefaults: { planner: planner.id, builder: builder.id, reviewer: reviewer.id },
+      rootProfileId: "profile_native_root",
+      workerProfileId: "profile_native_worker",
     });
     const github = createGithubAdapter();
     const before = {
       repository: await github.getRepository({ cwd: repositoryPath, nameWithOwner: realRepository }),
       git: await gitSnapshot(repositoryPath),
     };
-    const activated = await projects.activateProject("real-gh-admin", project.id);
+    const { baseSha } = await projects.captureTaskConfiguration(project);
     const after = {
       repository: await github.getRepository({ cwd: repositoryPath, nameWithOwner: realRepository }),
       git: await gitSnapshot(repositoryPath),
     };
 
-    expect(activated.status).toBe("active");
-    expect(activated.baseSha).toMatch(/^[a-f0-9]{40,64}$/i);
-    expect(activated.targetSha).toMatch(/^[a-f0-9]{40,64}$/i);
+    expect(baseSha).toMatch(/^[a-f0-9]{40,64}$/i);
     expect(after).toEqual(before);
   } finally {
     database.close();

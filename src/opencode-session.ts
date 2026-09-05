@@ -75,6 +75,7 @@ export interface OpenCodeNativeEvidence {
   cwd: string;
   root: string;
   finish?: string;
+  error?: OpenCodeAssistantMessage["error"];
 }
 
 export interface OpenCodePromptObservation {
@@ -87,6 +88,9 @@ export interface OpenCodePromptObservation {
   assistantMessageID?: string;
   status?: OpenCodeSessionStatus;
   native?: OpenCodeNativeEvidence;
+  interruptedExecution?: { stoppedServerGeneration: string };
+  executionUncertain?: { stoppedServerGeneration: string };
+  unsettledTools?: boolean;
   reason?: string;
 }
 
@@ -154,6 +158,7 @@ function assistantEvidence(message: OpenCodeAssistantMessage): OpenCodeNativeEvi
     cwd: message.path.cwd,
     root: message.path.root,
     ...(message.finish === undefined ? {} : { finish: message.finish }),
+    ...(message.error === undefined ? {} : { error: message.error }),
   };
 }
 
@@ -248,7 +253,7 @@ function classify(
   const assistantMessageIDs = assistantMessages.map((message) => message.info.id);
   const last = latest(assistantMessages);
   const activeTool = hasActiveTool(assistantMessages);
-  const common = { admission: "observed" as const, retry: "forbidden" as const, assistantMessageIDs, ...(status === undefined ? {} : { status }) };
+  const common = { admission: "observed" as const, retry: "forbidden" as const, assistantMessageIDs, unsettledTools: assistantMessages.some(message => message.parts.some(part => part.type === "tool" && property(part.state, "status") !== "completed")), ...(status === undefined ? {} : { status }) };
   if (activeTool || assistantMessages.some((message) => message.info.time.completed === undefined && !message.info.error)) {
     return { ...baseObservation(intent, { state: "running", ...common, reason: activeTool ? "tool_pending_or_running" : "assistant_not_terminal" }), ...(last?.info.role === "assistant" ? { assistantMessageID: last.info.id, native: assistantEvidence(last.info) } : {}) };
   }
@@ -295,9 +300,7 @@ export async function reconcileOpenCodePrompt(client: OpenCodePromptReadPort, in
     let statusKnown = false;
     try {
       const statuses = OpenCodeSessionStatusMapSchema.parse(await client.getStatus(intent.directory));
-      if (statuses[intent.sessionID] !== undefined) {
-        parsedStatus = OpenCodeSessionStatusSchema.parse(statuses[intent.sessionID]);
-      }
+      parsedStatus = OpenCodeSessionStatusSchema.parse(statuses[intent.sessionID] ?? { type: "idle" });
       statusKnown = true;
     } catch {
       // Status only supplies liveness. Message evidence remains authoritative.

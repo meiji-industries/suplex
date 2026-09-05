@@ -4,10 +4,6 @@ import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 
 import { createApp } from "./app.js";
-import { AttentionService } from "./attention.js";
-import { ArtifactStore } from "./artifacts.js";
-import { AcceptanceService } from "./acceptance.js";
-import { CiService, createGithubCiProvider } from "./ci.js";
 import { AuthService } from "./auth.js";
 import { loadConfig, type ForgeConfig } from "./config.js";
 import { ForgeDatabase } from "./database.js";
@@ -15,65 +11,42 @@ import { seedDevelopmentData } from "./development.js";
 import { createHostHealthDependencies } from "./host-health.js";
 import { TaskTemplateService } from "./task-templates.js";
 import { createFastifyLogger, StructuredLogger } from "./logging.js";
+import { AgentProfileService } from "./agent-profiles.js";
 import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
-import { CapacityManager } from "./capacity.js";
-import { createGithubReleasePort, ReleaseService } from "./github-release.js";
-import { ProjectionRebuildService } from "./projection-rebuild.js";
 import { HermesAgentService } from "./hermes-agents.js";
-import { backfillDefaultTaskTemplates } from "./default-task-templates.js";
-import { startEngineHost } from "./engine/host.js";
-import type { IssueEngine } from "./engine/runs.js";
-import { startHerdrEventSubscriber } from "./herdr-events.js";
-import { herdrSocketPath } from "./herdr-socket.js";
-import { inspectHostHealth } from "./health.js";
+import { TaskHost } from "./task-host.js";
 
 export interface ForgeServer {
   app: FastifyInstance;
   database: ForgeDatabase;
-  engine: IssueEngine;
-  herdrEvents: ReturnType<typeof startHerdrEventSubscriber>;
+  host: TaskHost;
 }
 
 export async function createForgeServer(config: ForgeConfig = loadConfig(), options: { logSink?: (line: string) => void } = {}): Promise<ForgeServer> {
   await mkdir(config.artifactRoot, { recursive: true });
   await mkdir(config.worktreeRoot, { recursive: true });
   const database = new ForgeDatabase(config.databasePath);
-  const engine = await startEngineHost(config, database);
-  const herdrEvents = startHerdrEventSubscriber(database);
+  const host = new TaskHost(database, { artifactRoot: config.artifactRoot });
   const auth = new AuthService(database, config);
   const hermes = new HermesAgentService(database, auth);
   const projects = new ProjectService(database, auth, config);
-  await seedDevelopmentData(auth, projects, config);
-  const seededTemplates = backfillDefaultTaskTemplates(database);
-  if (seededTemplates > 0) new StructuredLogger().info("Default task templates backfilled", { inserted: seededTemplates } as never);
-  const artifactStore = new ArtifactStore(config.artifactRoot);
-  const capacity = new CapacityManager(database, config);
-  const tasks = new TaskService(database, auth, projects, config, { capacity });
+  await seedDevelopmentData(auth, config);
+  const profiles = new AgentProfileService(database, auth);
+  const tasks = new TaskService(database, auth, projects, config);
   const taskTemplates = new TaskTemplateService(database, auth, tasks);
-  const attention = new AttentionService(database, auth);
-  const githubRelease = createGithubReleasePort();
-  const release = new ReleaseService(database, artifactStore, githubRelease);
-  const ci = new CiService(database, createGithubCiProvider());
-  const acceptance = new AcceptanceService(database, githubRelease);
-  const rebuild = new ProjectionRebuildService(database, config);
   const dependencies = {
     config,
     health: createHostHealthDependencies(config, database),
-    getHealth: async () => ({ ...(await inspectHostHealth(config, createHostHealthDependencies(config, database))), herdr: { reachable: herdrEvents.reachable(), socketPath: herdrSocketPath() } }),
     auth,
     hermes,
     projects,
+    profiles,
     tasks,
     taskTemplates,
-    attention,
     database,
-    release,
-    ci,
-    acceptance,
-    rebuild,
+    host,
     logger: createFastifyLogger(options.logSink),
-    capacity,
   } satisfies Parameters<typeof createApp>[0];
   let app: FastifyInstance;
   try {
@@ -84,10 +57,11 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
       app = createApp(dependencies);
     }
   } catch (error) {
-    herdrEvents.stop(); database.close();
+    database.close();
     throw error;
   }
-  return { app, database, engine, herdrEvents };
+  host.start();
+  return { app, database, host };
 }
 
 export async function startServer(config: ForgeConfig = loadConfig()): Promise<void> {
@@ -102,8 +76,7 @@ export async function startServer(config: ForgeConfig = loadConfig()): Promise<v
         }
         closed = true;
         await server.app.close();
-        server.herdrEvents.stop();
-        server.engine.dispose();
+        await server.host.stop();
         server.database.close();
         resolve();
       };
@@ -114,7 +87,7 @@ export async function startServer(config: ForgeConfig = loadConfig()): Promise<v
     if (!closed) {
       closed = true;
       await server.app.close().catch(() => undefined);
-      server.herdrEvents.stop();
+      await server.host.stop();
       server.database.close();
     }
   }

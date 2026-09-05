@@ -21,11 +21,6 @@ export interface ForgeConfig {
   runtimeRoot: string;
   repositoryRoot: string;
   worktreeRoot: string;
-  deliveryRepairCycleLimit: number;
-  externalTurnCapacity: number;
-  externalTurnCapacityByProvider: Record<string, number>;
-  externalTurnWaitLimitMs: number;
-  externalTurnRateLimitAttempts: number;
   installationId: string;
   developmentAutoLogin: boolean;
 }
@@ -168,15 +163,6 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
   const reachableHost = configuredAddress ?? bindAddress;
   const scheme = tailscaleExposure === "serve" ? "https" : "http";
   const stableInstallationId = installationId(dataRoot, parsedEnvironment.data, environment === process.env);
-  const deliveryRepairCycleLimit = Number(parsedEnvironment.data.FORGE_DELIVERY_REPAIR_LIMIT ?? "2");
-  const externalTurnCapacity = Number(parsedEnvironment.data.FORGE_CODEX_CAPACITY ?? "2");
-  const externalTurnCapacityByProvider = {
-    codex: externalTurnCapacity,
-    claude: Number(parsedEnvironment.data.FORGE_CLAUDE_CAPACITY ?? "2"),
-    openrouter: Number(parsedEnvironment.data.FORGE_OPENROUTER_CAPACITY ?? "2"),
-  };
-  const externalTurnWaitLimitMs = Number(parsedEnvironment.data.FORGE_CODEX_WAIT_LIMIT_MS ?? "7200000");
-  const externalTurnRateLimitAttempts = Number(parsedEnvironment.data.FORGE_CODEX_RATE_LIMIT_ATTEMPTS ?? "5");
   return ForgeConfigSchema.parse({
     accessMode,
     tailscaleExposure,
@@ -189,11 +175,6 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
     runtimeRoot: parsedEnvironment.data.FORGE_RUNTIME_ROOT ? resolve(parsedEnvironment.data.FORGE_RUNTIME_ROOT) : resolve(dataRoot, "runtime"),
     repositoryRoot: resolve(parsedEnvironment.data.FORGE_REPOSITORY_ROOT ?? resolve(homedir(), "forge", "repos")),
     worktreeRoot: resolve(parsedEnvironment.data.FORGE_WORKTREE_ROOT ?? resolve(homedir(), "forge", "worktrees")),
-    deliveryRepairCycleLimit,
-    externalTurnCapacity,
-    externalTurnCapacityByProvider,
-    externalTurnWaitLimitMs,
-    externalTurnRateLimitAttempts,
     installationId: stableInstallationId,
     developmentAutoLogin: parsedEnvironment.data.FORGE_DEVELOPMENT_AUTO_LOGIN === "1",
   });
@@ -215,11 +196,6 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     runtimeRoot: overrides.runtimeRoot ?? resolve(dataRoot, "runtime"),
     repositoryRoot: overrides.repositoryRoot ?? resolve(dataRoot, "repositories"),
     worktreeRoot: overrides.worktreeRoot ?? resolve(dataRoot, "worktrees"),
-    deliveryRepairCycleLimit: overrides.deliveryRepairCycleLimit ?? 2,
-    externalTurnCapacity: overrides.externalTurnCapacity ?? 2,
-    externalTurnCapacityByProvider: overrides.externalTurnCapacityByProvider ?? { codex: overrides.externalTurnCapacity ?? 2, claude: 2, openrouter: 2 },
-    externalTurnWaitLimitMs: overrides.externalTurnWaitLimitMs ?? 7_200_000,
-    externalTurnRateLimitAttempts: overrides.externalTurnRateLimitAttempts ?? 5,
     installationId: overrides.installationId ?? "test-installation",
     developmentAutoLogin: overrides.developmentAutoLogin ?? false,
   };

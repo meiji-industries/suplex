@@ -1,5 +1,5 @@
-import { ChartNoAxesGantt, CircleHelp, CirclePlus, Columns3, ClipboardList, EllipsisVertical, FolderGit2, Inbox, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import { CircleHelp, CirclePlus, Columns3, ClipboardList, EllipsisVertical, FolderGit2, Inbox, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
 
 import { buttonVariants } from "../ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog.js";
@@ -10,11 +10,9 @@ import { companySettingsPath, withCompany } from "../../lib/api.js";
 import { navigate } from "../../lib/navigation.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 import { CompanySwitcher } from "./company-switcher.js";
-import { AgentsLeaderboard } from "./agents-leaderboard.js";
 import { ProfileAvatar } from "./profile-avatar.js";
 import { RecentTasks } from "./recent-tasks.js";
 import { SystemHealthIndicator } from "./system-health.js";
-import { useAgentStatus } from "./use-agent-status.js";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 
@@ -31,7 +29,6 @@ function MainNavigation({ close }: { close?: () => void }): ReactElement {
     return [
       { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList },
       { href: withCompany("/board", companyId), label: "Board", icon: Columns3 },
-      { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
       { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 },
     ];
   }, [companyId]);
@@ -62,7 +59,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
   const [query, setQuery] = useState("");
   const companyId = context?.currentCompany?.id;
   const items: NavItem[] = [
-    { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 }, { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList }, { href: withCompany("/board", companyId), label: "Board", icon: Columns3 }, { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt }, { href: withCompany("/attention", companyId), label: "Attention", icon: Inbox }, { href: withCompany("/health", companyId), label: "Host health", icon: Shield },
+    { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 }, { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList }, { href: withCompany("/board", companyId), label: "Board", icon: Columns3 }, { href: withCompany("/attention", companyId), label: "Attention", icon: Inbox }, { href: withCompany("/health", companyId), label: "Host health", icon: Shield },
   ];
   const visible = items.filter((item) => item.label.toLowerCase().includes(query.trim().toLowerCase()));
   useEffect(() => {
@@ -70,7 +67,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
     window.addEventListener("forge:command-menu", openMenu);
     return () => window.removeEventListener("forge:command-menu", openMenu);
   }, []);
-  return <><SidebarMenuButton render={<button type="button" onClick={() => { setQuery(""); setOpen(true); }} title="Search Forge (⌘K)"><Search />Search</button>} /><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Forge" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(companyId); }}><CirclePlus />New task <kbd className="ml-auto text-[11px] text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-[11px] text-muted-foreground">⌘K or / search. G then T, B, or L navigates. C creates a task.</p></DialogContent></Dialog></>;
+  return <><SidebarMenuButton render={<button type="button" onClick={() => { setQuery(""); setOpen(true); }} title="Search Forge (⌘K)"><Search />Search</button>} /><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Forge" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(companyId); }}><CirclePlus />New task <kbd className="ml-auto text-[11px] text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-[11px] text-muted-foreground">⌘K or / search. G then T or B navigates. C creates a task.</p></DialogContent></Dialog></>;
 }
 
 function SecondaryNavigation({ close }: { close?: () => void }): ReactElement {
@@ -95,13 +92,6 @@ export function AppSidebar(): ReactElement {
   const context = useOptionalCompanyContext();
   const { setOpenMobile } = useSidebar();
   const close = (): void => setOpenMobile(false);
-  const onAuthenticationRequired = useCallback(() => window.location.assign("/auth"), []);
-  const { agents, runtime } = useAgentStatus({
-    ...(context?.currentCompany?.id ? { companyId: context.currentCompany.id } : {}),
-    authenticated: Boolean(context?.user),
-    loading: context?.loading ?? true,
-    onAuthenticationRequired,
-  });
   useEffect(() => {
     let goPending = false;
     let goTimer: number | undefined;
@@ -119,7 +109,7 @@ export function AppSidebar(): ReactElement {
         goPending = true; window.clearTimeout(goTimer); goTimer = window.setTimeout(() => { goPending = false; }, 750); return;
       }
       if (goPending && !event.metaKey && !event.ctrlKey && !event.altKey) {
-        const path = key === "t" ? "/tasks" : key === "b" ? "/board" : key === "l" ? "/timeline" : undefined;
+        const path = key === "t" ? "/tasks" : key === "b" ? "/board" : undefined;
         goPending = false; window.clearTimeout(goTimer);
         if (path) { event.preventDefault(); navigate(withCompany(path, context?.currentCompany?.id)); }
       }
@@ -130,7 +120,7 @@ export function AppSidebar(): ReactElement {
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
       <SidebarHeader><div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div></SidebarHeader>
-      <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} runtime={runtime} /><AgentsLeaderboard agents={agents} runtime={runtime} /><SecondaryNavigation close={close} /></SidebarContent>
+      <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} /><SecondaryNavigation close={close} /></SidebarContent>
       <SidebarFooter><UserMenu /></SidebarFooter>
     </Sidebar>
   );

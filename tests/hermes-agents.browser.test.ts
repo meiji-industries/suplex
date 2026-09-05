@@ -15,9 +15,8 @@ import { ForgeDatabase } from "../src/database.js";
 import { HermesAgentService } from "../src/hermes-agents.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import { TaskService } from "../src/tasks.js";
-import { IssueProjectionEventSchema } from "../src/engine/issue-contracts.js";
+import { AgentProfileService } from "../src/agent-profiles.js";
 import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
-import { createWorkflowPortFake } from "./fakes/workflow-port.js";
 import type { GithubAdapter } from "../src/github.js";
 
 const execFileAsync = promisify(execFile);
@@ -119,12 +118,9 @@ beforeEach(async () => {
   companyId = company.id;
   auth.setCompanyIssueCode(adminId, companyId, "HPC");
 
-  const profile = projects.createProfile(adminId, { name: "Hermes profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const planner = projects.createAgent(adminId, { name: "Planner", role: "planner", profileId: profile.id });
-  const builder = projects.createAgent(adminId, { name: "Builder", role: "builder", profileId: profile.id });
-  const reviewer = projects.createAgent(adminId, { name: "Reviewer", role: "reviewer", profileId: profile.id });
-  const archived = projects.createAgent(adminId, { name: "Archived planner", role: "planner", profileId: profile.id });
-  projects.updateAgent(adminId, archived.id, { archived: true });
+  const profiles = new AgentProfileService(database, auth);
+  const archived = profiles.create(adminId, { name: "Archived Root", role: "root", avatarSeed: "a".repeat(32), provider: "openai", model: "gpt-5.6-sol", reasoningLevel: "medium", serviceTier: "default" });
+  profiles.update(adminId, archived.id, { archived: true });
 
   const project = await projects.createProject(adminId, companyId, {
     name: "Proof Project",
@@ -132,39 +128,26 @@ beforeEach(async () => {
     worktreeRoot: project1Worktrees,
     repository: "meiji/browser-hermes",
     baseBranch: "main",
-    targetBranch: "main",
     setupCommand: "pnpm install",
     verificationCommand: "pnpm test",
-    requiredChecks: ["Tests / unit"],
-    roleDefaults: { planner: planner.id, reviewer: reviewer.id, builder: builder.id },
+    rootProfileId: "profile_native_root",
+    workerProfileId: "profile_native_worker",
   });
-  const active = await projects.activateProject(adminId, project.id);
-  projectId = active.id;
-
-  const workflow = createWorkflowPortFake({
-    companyId,
-    projectId,
-    projectRevisionId: active.activeRevisionId!,
-    projectState: (state) => {
-      database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state }));
-      return state;
-    },
-  });
-  tasks = new TaskService(database, auth, projects, config, { workflow });
+  projectId = project.id;
+  tasks = new TaskService(database, auth, projects, config);
   hermes = new HermesAgentService(database, auth);
 
   app = createApp({
     config,
     auth,
     projects,
+    profiles,
     tasks,
     hermes,
     health: {
-      engine: async () => ({ id: "engine", label: "Engine", status: "healthy", summary: "Ready", details: {} }),
       database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
       artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
-      worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }),
-      codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }),
+      opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy", summary: "Configured", details: {} }),
       ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
     },
   });
@@ -210,9 +193,9 @@ test("Hermes external agent full browser lifecycle at desktop and narrow viewpor
     const internalTable = page.getByRole("table", { name: "Internal Agents" });
     expect(await internalTable.getByText("Internal agents", { exact: true }).isVisible()).toBe(true);
     const internalRows = await internalTable.locator("tbody tr").allTextContents();
-    expect(internalRows.findIndex((text) => text.includes("Planner"))).toBeLessThan(internalRows.findIndex((text) => text.includes("Archived planner")));
-    expect(await internalTable.getByRole("row", { name: /Edit Planner/i }).getByText("active", { exact: true }).isVisible()).toBe(true);
-    expect(await internalTable.getByRole("row", { name: /Edit Archived planner/i }).getByText("archived", { exact: true }).isVisible()).toBe(true);
+    expect(internalRows.findIndex((text) => text.includes("Root"))).toBeLessThan(internalRows.findIndex((text) => text.includes("Archived Root")));
+    expect(await internalTable.getByRole("row", { name: /Edit Root/i }).getByText("active", { exact: true }).isVisible()).toBe(true);
+    expect(await internalTable.getByRole("row", { name: /Edit Archived Root/i }).getByText("archived", { exact: true }).isVisible()).toBe(true);
     const hermesTable = page.getByRole("table", { name: "Hermes Agents" });
     expect(await hermesTable.getByText("Hermes agents", { exact: true }).isVisible()).toBe(true);
     expect(await page.getByRole("row", { name: /Hermes agent SRE Hermes Bot/i }).count()).toBe(0);
@@ -262,7 +245,7 @@ test("Hermes external agent full browser lifecycle at desktop and narrow viewpor
     expect(copiedInstructions.includes("GET /api/hermes/tasks/{taskId}")).toBe(true);
     expect(copiedInstructions.includes("Hermes connectivity confirmed")).toBe(true);
     expect(copiedInstructions.includes("forge-connectivity-")).toBe(true);
-    expect(copiedInstructions.includes("do not invoke any task command")).toBe(true);
+    expect(copiedInstructions.includes("do not start this task")).toBe(true);
     expect(copiedInstructions.includes("forge-pairing-check")).toBe(false);
     expect(copiedInstructions.includes("Never echo the pairing code or bearer credential")).toBe(true);
 
@@ -395,7 +378,7 @@ test("Hermes external agent full browser lifecycle at desktop and narrow viewpor
     const heading = page.getByRole("button", { name: "Edit task title", exact: true });
     await heading.waitFor();
     expect(await heading.innerText()).toBe("Autonomous SRE Task from Hermes");
-    await page.getByRole("button", { name: "Edit task description", exact: true }).getByText("Investigated high memory usage and proposing fix.", { exact: true }).waitFor();
+    await page.getByText("Investigated high memory usage and proposing fix.", { exact: true }).waitFor();
 
     await page.screenshot({ path: join(receiptsDir, "06-task-history-attribution-desktop.png") });
 

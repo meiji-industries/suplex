@@ -4,7 +4,6 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 // eslint-disable-next-line no-restricted-imports -- this module owns the legacy local repository adapter.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { z } from "zod";
 import type { Database } from "better-sqlite3";
 
 import type { AuthUser } from "./auth.js";
@@ -12,21 +11,11 @@ import { AuthFailure, type AuthService } from "./auth.js";
 import type { ForgeConfig } from "./config.js";
 import { GithubFailure, createGithubAdapter, type GithubAdapter } from "./github.js";
 import type { ForgeDatabase } from "./database.js";
-import { jsonRequired } from "./task-utils.js";
-import { createGithubReleasePort, type GithubReleasePort } from "./github-release.js";
+import { createGithubReleasePort, type GithubReleasePort } from "./github-delivery.js";
 import { TaskSourceService, type TaskSourceSelector } from "./task-sources.js";
-import type { AgentProviderKind } from "./agent-providers/provider.js";
 import { readOpenCodeProviders, type ReadOpenCodeProviders } from "./opencode-providers.js";
-import { seedDefaultTaskTemplates } from "./default-task-templates.js";
-import type { ServicePriority } from "./agent-providers/kinds.js";
-
-export type ProjectRole = "planner" | "builder" | "reviewer" | "integrator";
-export type { ServicePriority };
 
 const execFileAsync = promisify(execFile);
-
-export type RoleAssignments = Partial<Record<ProjectRole, string | undefined>>;
-export type ReasoningLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ProjectFinding {
   code: string;
@@ -48,55 +37,11 @@ export class ProjectFailure extends Error {
   }
 }
 
-export interface CodexProfile {
-  id: string;
-  name: string;
-  provider: AgentProviderKind;
-  model: string;
-  reasoningLevel: ReasoningLevel;
-  servicePriority: ServicePriority;
-  capacity: number | null;
-  effectiveCapacity: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-type ProfileInput = { name: string; provider?: AgentProviderKind; model: string; reasoningLevel: ReasoningLevel; servicePriority: ServicePriority; capacity?: number | null };
-
-export interface Agent {
-  id: string;
-  name: string;
-  role: ProjectRole;
-  avatarSeed: string;
-  profileId: string;
-  provider: AgentProviderKind;
-  model: string;
-  reasoningLevel: ReasoningLevel;
-  servicePriority: ServicePriority;
-  capacity: number | null;
-  effectiveCapacity: number;
-  archivedAt: string | null;
-  activeCount: number;
-  lastSeenAt: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export type AgentInput = { name: string; role: ProjectRole; avatarSeed?: string | undefined; provider?: AgentProviderKind | undefined; model?: string | undefined; reasoningLevel?: ReasoningLevel | undefined; servicePriority?: ServicePriority | undefined; capacity?: number | null | undefined; profileId?: string | undefined };
-export type AgentUpdate = { name?: string | undefined; role?: ProjectRole | undefined; avatarSeed?: string | undefined; provider?: AgentProviderKind | undefined; model?: string | undefined; reasoningLevel?: ReasoningLevel | undefined; servicePriority?: ServicePriority | undefined; capacity?: number | null | undefined; archived?: boolean | undefined };
-
-
 export interface OpenCodeModelOption {
   id: string;
   provider: string;
   providerLabel: string;
   displayName: string;
-}
-
-export interface ProjectCheckOption {
-  name: string;
-  status: string;
-  conclusion?: string;
 }
 
 export interface ProjectInput {
@@ -105,11 +50,10 @@ export interface ProjectInput {
   worktreeRoot: string;
   repository: string;
   baseBranch: string;
-  targetBranch: string;
   setupCommand: string;
   verificationCommand: string;
-  requiredChecks: string[];
-  roleDefaults: RoleAssignments;
+  rootProfileId: string;
+  workerProfileId: string;
 }
 
 export interface Project {
@@ -120,11 +64,10 @@ export interface Project {
   worktreeRoot: string;
   repository: string | undefined;
   baseBranch: string;
-  targetBranch: string;
   setupCommand: string;
   verificationCommand: string;
-  requiredChecks: string[];
-  roleDefaults: RoleAssignments;
+  rootProfileId: string;
+  workerProfileId: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -134,11 +77,10 @@ export interface LocalRepositoryInspection {
   remoteRepository: string;
   clean: boolean;
   baseSha: string;
-  targetSha: string;
 }
 
 export interface LocalRepositoryAdapter {
-  inspect(input: { repositoryPath: string; baseBranch: string; targetBranch: string }): Promise<LocalRepositoryInspection>;
+  inspect(input: { repositoryPath: string; baseBranch: string }): Promise<LocalRepositoryInspection>;
 }
 
 export interface RepositoryProvisioner {
@@ -169,43 +111,12 @@ interface ProjectRow {
   worktree_root: string;
   repository_identity: string | null;
   base_branch: string;
-  target_branch: string;
   setup_command: string;
   verification_command: string;
-  required_checks_json: string;
-  role_defaults_json: string;
+  root_profile_id: string;
+  worker_profile_id: string;
   created_at: string;
   updated_at: string;
-}
-
-interface ProfileRow {
-  id: string;
-  name: string;
-  provider: AgentProviderKind;
-  model: string;
-  reasoning_level: ReasoningLevel;
-  service_priority: ServicePriority;
-  capacity: number | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface AgentRow {
-  id: string;
-  name: string;
-  role: ProjectRole;
-  avatar_seed: string;
-  profile_id: string;
-  archived_at: string | null;
-  active_count?: number;
-  last_seen_at?: string;
-  created_at: string;
-  updated_at: string;
-  provider: AgentProviderKind;
-  model: string;
-  reasoning_level: ReasoningLevel;
-  service_priority: ServicePriority;
-  capacity: number | null;
 }
 
 const projectColumns = "p.*";
@@ -213,33 +124,8 @@ const projectColumns = "p.*";
 const namePattern = /^[\p{L}\p{N}](?:[\p{L}\p{N} ._'-]{0,78}[\p{L}\p{N}])?$/u;
 const repositoryPattern = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})\/[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})$/;
 const branchPattern = /^(?![./])(?!.*(?:\.\.|\.$|\.lock$|\/\/|\s|[~^:?*\[\\]))[A-Za-z0-9._/-]+$/;
-const checkPattern = /^[\p{L}\p{N}][\p{L}\p{N} ._:/()\[\]-]{0,119}$/u;
 const secretPattern = /(?:gh[pousr]_|github_pat_|token\s*=|password\s*=|secret\s*=|BEGIN [A-Z ]+ PRIVATE KEY|sk-[A-Za-z0-9])/i;
-const modelIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,119})?$/;
-const avatarSeedPattern = /^[a-f0-9]{32}$/;
-// Agent names also carry duplication suffixes such as "Planner (copy 2)".
-const agentNamePattern = /^[\p{L}\p{N}](?:[\p{L}\p{N} ._'()-]{0,78}[\p{L}\p{N})])?$/u;
 
-
-
-export const AcceptedProjectRevisionSchema = z.object({
-  repositoryPath: z.string().min(1).max(1_000),
-  worktreeRoot: z.string().min(1).max(1_000),
-  repository: z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,99}\/[a-z0-9][a-z0-9_.-]{0,99}$/),
-  baseBranch: z.string().min(1).max(256),
-  targetBranch: z.string().min(1).max(256),
-  baseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  targetSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  setupCommand: z.string().refine(isUsableCommand, "Command must be a single non-empty line without secrets"),
-  verificationCommand: z.string().refine(isUsableCommand, "Command must be a single non-empty line without secrets"),
-  requiredChecks: z.array(z.string().min(1).max(120)).max(32),
-});
-export type AcceptedProjectRevision = z.infer<typeof AcceptedProjectRevisionSchema>;
-
-export function parseAcceptedProjectRevision(raw: string): AcceptedProjectRevision {
-  try { return AcceptedProjectRevisionSchema.parse(jsonRequired(raw)); }
-  catch { throw new ProjectFailure("Pinned project revision is unavailable", [], 409); }
-}
 function identifier(prefix: string): string {
   return `${prefix}_${randomBytes(12).toString("hex")}`;
 }
@@ -260,14 +146,6 @@ async function containsSymlink(root: string, candidate: string): Promise<boolean
   return false;
 }
 
-function asJson<T>(value: string, fallback: T): T {
-  try {
-    return jsonRequired(value) as T;
-  } catch {
-    return fallback;
-  }
-}
-
 function normalizedInput(input: ProjectInput, paths: { repositoryPath: string; worktreeRoot: string }): ProjectInput {
   const normalized: ProjectInput = {
     name: input.name.trim(),
@@ -275,48 +153,12 @@ function normalizedInput(input: ProjectInput, paths: { repositoryPath: string; w
     worktreeRoot: paths.worktreeRoot,
     repository: input.repository.trim().toLowerCase(),
     baseBranch: input.baseBranch.trim(),
-    targetBranch: input.targetBranch.trim(),
     setupCommand: input.setupCommand.trim(),
     verificationCommand: input.verificationCommand.trim(),
-    requiredChecks: [...new Set(input.requiredChecks.map((check) => check.trim()).filter(Boolean))].sort(),
-    roleDefaults: Object.fromEntries(Object.entries(input.roleDefaults).flatMap(([role, profileId]) => typeof profileId === "string" && profileId.trim().length > 0 ? [[role, profileId.trim()] as [string, string]] : []).sort(([left], [right]) => left.localeCompare(right))) as RoleAssignments,
+    rootProfileId: input.rootProfileId.trim(),
+    workerProfileId: input.workerProfileId.trim(),
   };
   return normalized;
-}
-
-
-
-export function effectiveProfileCapacity(profile: Pick<CodexProfile, "capacity" | "provider">, config: Pick<ForgeConfig, "externalTurnCapacity" | "externalTurnCapacityByProvider">): number {
-  return profile.capacity ?? config.externalTurnCapacityByProvider[profile.provider] ?? config.externalTurnCapacity;
-}
-
-function publicProfile(row: ProfileRow, config: Pick<ForgeConfig, "externalTurnCapacity" | "externalTurnCapacityByProvider">): CodexProfile {
-  return {
-    id: row.id,
-    name: row.name,
-    provider: row.provider,
-    model: row.model,
-    reasoningLevel: row.reasoning_level,
-    servicePriority: row.service_priority,
-    capacity: row.capacity,
-    effectiveCapacity: effectiveProfileCapacity(row, config),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-export function publicAgent(row: AgentRow, config: Pick<ForgeConfig, "externalTurnCapacity" | "externalTurnCapacityByProvider">): Agent {
-  return { id: row.id, name: row.name, role: row.role, avatarSeed: row.avatar_seed, profileId: row.profile_id, provider: row.provider, model: row.model, reasoningLevel: row.reasoning_level, servicePriority: row.service_priority, capacity: row.capacity, effectiveCapacity: effectiveProfileCapacity(row, config), archivedAt: row.archived_at ?? null, activeCount: row.active_count ?? 0, lastSeenAt: row.last_seen_at ?? row.created_at, createdAt: row.created_at, updatedAt: row.updated_at };
-}
-
-export function resolveAgentProfiles(db: Database, roleAgents: RoleAssignments): RoleAssignments {
-  const resolved: RoleAssignments = {};
-  for (const [role, agentId] of Object.entries(roleAgents)) {
-    if (!agentId) continue;
-    const agent = db.prepare("SELECT profile_id FROM forge_agents WHERE id = ? AND role = ?").get(agentId, role) as { profile_id: string } | undefined;
-    if (agent) resolved[role as ProjectRole] = agent.profile_id;
-  }
-  return resolved;
 }
 
 function publicProject(row: ProjectRow): Project {
@@ -328,11 +170,10 @@ function publicProject(row: ProjectRow): Project {
     worktreeRoot: row.worktree_root,
     repository: row.repository_identity ?? undefined,
     baseBranch: row.base_branch,
-    targetBranch: row.target_branch,
     setupCommand: row.setup_command,
     verificationCommand: row.verification_command,
-    requiredChecks: asJson<string[]>(row.required_checks_json, []),
-    roleDefaults: asJson<RoleAssignments>(row.role_defaults_json, {}),
+    rootProfileId: row.root_profile_id,
+    workerProfileId: row.worker_profile_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -373,7 +214,7 @@ export async function inferRepositoryCommands(repositoryPath: string): Promise<{
   const packageText = await readableFile(join(repositoryPath, "package.json"));
   let packageJson: { packageManager?: string; scripts?: Record<string, string> } | undefined;
   try {
-    packageJson = packageText ? jsonRequired(packageText) as typeof packageJson : undefined;
+    packageJson = packageText ? JSON.parse(packageText) as typeof packageJson : undefined;
   } catch {}
 
   let packageManager: "pnpm" | "npm" | "yarn" | "bun" | undefined;
@@ -546,12 +387,8 @@ async function defaultLocalRepositoryAdapter(): Promise<LocalRepositoryAdapter> 
         throw new ProjectFailure("Repository validation failed", [finding("repository-identity", "repository", "Origin must identify a canonical GitHub repository")], 422);
       }
       await run(["fetch", "--no-tags", "origin", `refs/heads/${input.baseBranch}:refs/remotes/origin/${input.baseBranch}`], input.repositoryPath, 30_000);
-      if (input.targetBranch !== input.baseBranch) {
-        await run(["fetch", "--no-tags", "origin", `refs/heads/${input.targetBranch}:refs/remotes/origin/${input.targetBranch}`], input.repositoryPath, 30_000);
-      }
       const baseSha = await run(["rev-parse", "--verify", `refs/remotes/origin/${input.baseBranch}`], input.repositoryPath);
-      const targetSha = await run(["rev-parse", "--verify", `refs/remotes/origin/${input.targetBranch}`], input.repositoryPath);
-      return { canonicalPath, remoteRepository: remote.identity, clean: status.length === 0, baseSha, targetSha };
+      return { canonicalPath, remoteRepository: remote.identity, clean: status.length === 0, baseSha };
     },
   };
 }
@@ -583,189 +420,10 @@ export class ProjectService {
     this.readProviders = options.readProviders ?? (() => readOpenCodeProviders({ directory: process.cwd() }));
   }
 
-  private validateProfileInput(input: ProfileInput): Required<ProfileInput> {
-    const name = input.name.trim();
-    const model = input.model.trim();
-    const capacity = input.capacity ?? null;
-    const provider = input.provider ?? "openai";
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(provider) || ["codex", "claude"].includes(provider)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-provider", "provider", "Select an OpenCode provider")]);
-    if (!modelIdPattern.test(model) || secretPattern.test(model)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-model", "model", "Select an OpenCode model")]);
-    if (!["low", "medium", "high", "xhigh", "max"].includes(input.reasoningLevel)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-reasoning", "reasoningLevel", "Reasoning level is invalid")]);
-    if (!["standard", "priority", "fast"].includes(input.servicePriority)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-priority", "servicePriority", "Service priority is invalid")]);
-    if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 32)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-capacity", "capacity", "Capacity must be an integer from 1 to 32")]);
-    return { name, provider, model, reasoningLevel: input.reasoningLevel, servicePriority: input.servicePriority, capacity };
-  }
-
-  createProfile(actorUserId: string, input: ProfileInput): CodexProfile {
-    const actor = this.requireAdmin(actorUserId);
-    void actor;
-    const profileInput = this.validateProfileInput(input);
-    const now = this.now().toISOString();
-    const profile = { id: identifier("profile"), name: profileInput.name, provider: profileInput.provider, model: profileInput.model, reasoningLevel: profileInput.reasoningLevel, capacity: profileInput.capacity, servicePriority: profileInput.servicePriority, effectiveCapacity: profileInput.capacity ?? this.config.externalTurnCapacity, createdAt: now, updatedAt: now };
-    try {
-      this.database.authTransaction((db) => {
-        db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(profile.id, profile.name, profile.provider, profile.model, profile.reasoningLevel, profile.servicePriority, profile.capacity, now, now);
-        this.auth.recordAuditEventInTransaction(db, actorUserId, "profile_created", undefined, undefined, { profileId: profile.id });
-      });
-    } catch {
-      throw new ProjectFailure("Profile configuration is invalid", [finding("duplicate-name", "name", "Profile name is already in use")]);
-    }
-    return profile;
-  }
-
-  updateProfile(actorUserId: string, profileId: string, input: ProfileInput): CodexProfile {
-    this.requireAdmin(actorUserId);
-    const profileInput = this.validateProfileInput(input);
-    const now = this.now().toISOString();
-    try {
-      const changed = this.database.authTransaction((db) => {
-        const result = db.prepare("UPDATE forge_profiles SET name = ?, provider = ?, model = ?, reasoning_level = ?, service_priority = ?, capacity = ?, updated_at = ? WHERE id = ?").run(profileInput.name, profileInput.provider, profileInput.model, profileInput.reasoningLevel, profileInput.servicePriority, profileInput.capacity, now, profileId);
-        if (result.changes !== 1) throw new ProjectFailure("Profile not found", [], 404);
-        this.auth.recordAuditEventInTransaction(db, actorUserId, "profile_updated", undefined, undefined, { profileId });
-        return db.prepare("SELECT * FROM forge_profiles WHERE id = ?").get(profileId) as ProfileRow;
-      });
-      return publicProfile(changed, this.config);
-    } catch (error) {
-      if (error instanceof ProjectFailure) throw error;
-      throw new ProjectFailure("Profile configuration is invalid", [finding("duplicate-name", "name", "Profile name is already in use")], 409);
-    }
-  }
-
-  listProfiles(actorUserId: string): CodexProfile[] {
-    this.user(actorUserId);
-    return this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_profiles ORDER BY name").all() as ProfileRow[]).map((row) => publicProfile(row, this.config)));
-  }
-
-  private validateAgentInput(input: AgentInput, skipName = false): Required<AgentInput> {
-    const name = input.name.trim();
-    if (!skipName && !agentNamePattern.test(name)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-name", "name", "Agent name is invalid")]);
-    if (!(["planner", "builder", "reviewer", "integrator"] as ProjectRole[]).includes(input.role)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-role", "role", "Agent role is invalid")]);
-    if (input.avatarSeed !== undefined && !avatarSeedPattern.test(input.avatarSeed)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-avatar", "avatarSeed", "Avatar seed is invalid")]);
-    const legacyProfile = input.profileId ? this.database.authQuery((db) => db.prepare("SELECT * FROM forge_profiles WHERE id = ?").get(input.profileId) as ProfileRow | undefined) : undefined;
-    const profile = this.validateProfileInput({ name, provider: input.provider ?? legacyProfile?.provider ?? "openai", model: input.model ?? legacyProfile?.model ?? (input.role === "builder" ? "gpt-5.6-luna" : "gpt-5.6-sol"), reasoningLevel: input.reasoningLevel ?? legacyProfile?.reasoning_level ?? (input.role === "builder" ? "max" : "medium"), servicePriority: input.servicePriority ?? legacyProfile?.service_priority ?? (input.role === "builder" ? "priority" : "standard"), capacity: input.capacity ?? legacyProfile?.capacity ?? null });
-    return { name, role: input.role, avatarSeed: input.avatarSeed ?? randomBytes(16).toString("hex"), provider: profile.provider, model: profile.model, reasoningLevel: profile.reasoningLevel, servicePriority: profile.servicePriority, capacity: profile.capacity, profileId: input.profileId ?? "" };
-  }
-
-  createAgent(actorUserId: string, input: AgentInput): Agent {
-    this.requireAdmin(actorUserId);
-    const agentInput = this.validateAgentInput(input);
-    const now = this.now().toISOString();
-    const id = identifier("agent");
-    const profileId = identifier("profile");
-    try {
-      this.database.authTransaction((db) => {
-        db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(profileId, agentInput.name, agentInput.provider, agentInput.model, agentInput.reasoningLevel, agentInput.servicePriority, agentInput.capacity, now, now);
-        db.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES (?, 'internal', ?, ?, ?, ?, ?, ?)").run(id, agentInput.name, agentInput.role, agentInput.avatarSeed, profileId, now, now);
-        this.auth.recordAuditEventInTransaction(db, actorUserId, "agent_created", undefined, undefined, { agentId: id });
-      });
-    } catch {
-      throw new ProjectFailure("Agent configuration is invalid", [finding("duplicate-name", "name", "Agent name is already in use")], 409);
-    }
-    return this.database.authQuery((db) => publicAgent(db.prepare("SELECT a.*, p.provider, p.model, p.reasoning_level, p.service_priority, p.capacity FROM forge_agents a JOIN forge_profiles p ON p.id = a.profile_id WHERE a.id = ?").get(id) as AgentRow, this.config));
-  }
-
-  private internalAgentRow(agentId: string): AgentRow {
-    const row = this.database.authQuery((db) => db.prepare("SELECT a.*, p.provider, p.model, p.reasoning_level, p.service_priority, p.capacity FROM forge_agents a JOIN forge_profiles p ON p.id = a.profile_id WHERE a.id = ? AND a.kind = 'internal'").get(agentId) as AgentRow | undefined);
-    if (!row) throw new ProjectFailure("Agent not found", [], 404);
-    return row;
-  }
-
-  /** Archiving must not strand a project on a default it can no longer replace. */
-  private assertArchivable(agent: AgentRow): void {
-    const { projects: dependents, replacement } = this.database.authQuery((db) => ({
-      projects: (db.prepare("SELECT name FROM forge_projects WHERE json_extract(role_defaults_json, '$.' || ?) = ? ORDER BY name").all(agent.role, agent.id) as Array<{ name: string }>).map((row) => row.name),
-      replacement: db.prepare("SELECT id FROM forge_agents WHERE kind = 'internal' AND role = ? AND id != ? AND archived_at IS NULL").get(agent.role, agent.id) as { id: string } | undefined,
-    }));
-    if (dependents.length === 0) return;
-    const where = dependents.join(", ");
-    if (agent.role === "builder") throw new ProjectFailure(`${agent.name} is the builder default for ${where}. Every project needs a builder, so assign a different builder default first.`, [finding("builder-default", "archived", "Reassign the project builder default before archiving")], 409);
-    if (!replacement) throw new ProjectFailure(`${agent.name} is the ${agent.role} default for ${where} and is the only ${agent.role} agent left. Create another ${agent.role} agent first.`, [finding("last-of-role", "archived", `Another ${agent.role} agent is required before archiving`)], 409);
-  }
-
-  updateAgent(actorUserId: string, agentId: string, input: AgentUpdate): Agent {
-    this.requireAdmin(actorUserId);
-    const existing = this.internalAgentRow(agentId);
-    const agentInput = this.validateAgentInput({ name: input.name ?? existing.name, role: input.role ?? existing.role, avatarSeed: input.avatarSeed ?? existing.avatar_seed, provider: input.provider ?? existing.provider, model: input.model ?? existing.model, reasoningLevel: input.reasoningLevel ?? existing.reasoning_level, servicePriority: input.servicePriority ?? existing.service_priority, capacity: input.capacity === undefined ? existing.capacity : input.capacity }, input.name === undefined);
-    if (input.archived === true && !existing.archived_at) this.assertArchivable(existing);
-    const now = this.now().toISOString();
-    const archivedAt = input.archived === undefined ? existing.archived_at : input.archived ? existing.archived_at ?? now : null;
-    try {
-      return this.database.authTransaction((db) => {
-        db.prepare("UPDATE forge_profiles SET name = ?, provider = ?, model = ?, reasoning_level = ?, service_priority = ?, capacity = ?, updated_at = ? WHERE id = ?").run(agentInput.name, agentInput.provider, agentInput.model, agentInput.reasoningLevel, agentInput.servicePriority, agentInput.capacity, now, existing.profile_id);
-        db.prepare("UPDATE forge_agents SET name = ?, role = ?, avatar_seed = ?, archived_at = ?, updated_at = ? WHERE id = ? AND kind = 'internal'").run(agentInput.name, agentInput.role, agentInput.avatarSeed, archivedAt, now, agentId);
-        this.auth.recordAuditEventInTransaction(db, actorUserId, input.archived === undefined ? "agent_updated" : input.archived ? "agent_archived" : "agent_unarchived", undefined, undefined, { agentId });
-        return publicAgent(db.prepare("SELECT a.*, p.provider, p.model, p.reasoning_level, p.service_priority, p.capacity FROM forge_agents a JOIN forge_profiles p ON p.id = a.profile_id WHERE a.id = ?").get(agentId) as AgentRow, this.config);
-      });
-    } catch (error) {
-      if (error instanceof ProjectFailure) throw error;
-      throw new ProjectFailure("Agent configuration is invalid", [finding("duplicate-name", "name", "Agent name is already in use")], 409);
-    }
-  }
-
-  duplicateAgent(actorUserId: string, agentId: string): Agent {
-    this.requireAdmin(actorUserId);
-    const existing = this.internalAgentRow(agentId);
-    const now = this.now().toISOString();
-    const id = identifier("agent");
-    const profileId = identifier("profile");
-    this.database.authTransaction((db) => {
-      const taken = new Set((db.prepare("SELECT name FROM forge_agents WHERE kind = 'internal'").all() as Array<{ name: string }>).map((row) => row.name));
-      const base = existing.name.slice(0, 60);
-      let name = `${base} (copy)`;
-      for (let copy = 2; taken.has(name); copy += 1) name = `${base} (copy ${copy})`;
-      db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(profileId, name, existing.provider, existing.model, existing.reasoning_level, existing.service_priority, existing.capacity, now, now);
-      db.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES (?, 'internal', ?, ?, ?, ?, ?, ?)").run(id, name, existing.role, randomBytes(16).toString("hex"), profileId, now, now);
-      this.auth.recordAuditEventInTransaction(db, actorUserId, "agent_duplicated", undefined, undefined, { agentId: id, sourceAgentId: agentId });
-    });
-    return this.database.authQuery((db) => publicAgent(db.prepare("SELECT a.*, p.provider, p.model, p.reasoning_level, p.service_priority, p.capacity FROM forge_agents a JOIN forge_profiles p ON p.id = a.profile_id WHERE a.id = ?").get(id) as AgentRow, this.config));
-  }
-
-  listAgents(actorUserId: string, companyId?: string, includeArchived = false): Agent[] {
-    const user = this.user(actorUserId);
-    if (companyId) this.auth.requireCompanyAccess(actorUserId, companyId);
-    const scope = companyId ? " AND t.company_id = ?" : user.role === "admin" ? "" : " AND EXISTS (SELECT 1 FROM forge_memberships m WHERE m.user_id = ? AND m.company_id = t.company_id)";
-    const params = companyId ? [companyId, companyId, companyId, companyId] : user.role === "admin" ? [] : [actorUserId, actorUserId, actorUserId, actorUserId];
-    return this.database.authQuery((db) => (db.prepare(`SELECT a.*, p.provider, p.model, p.reasoning_level, p.service_priority, p.capacity,
-      (SELECT COUNT(*) FROM forge_agent_executions e JOIN forge_tasks t ON t.id = e.task_id WHERE e.status IN ('starting', 'running', 'cancelling') AND json_extract(t.role_agents_json, '$.' || e.role) = a.id${scope})
-      + (SELECT COUNT(*) FROM forge_developer_executions d JOIN forge_tasks t ON t.id = d.task_id WHERE d.status IN ('starting', 'running', 'cancelling') AND json_extract(t.role_agents_json, '$.builder') = a.id${scope}) AS active_count,
-      COALESCE(NULLIF(MAX(
-        COALESCE((SELECT MAX(COALESCE(e.heartbeat_at, e.finished_at, e.started_at)) FROM forge_agent_executions e JOIN forge_tasks t ON t.id = e.task_id WHERE json_extract(t.role_agents_json, '$.' || e.role) = a.id${scope}), ''),
-        COALESCE((SELECT MAX(COALESCE(d.heartbeat_at, d.finished_at, d.started_at)) FROM forge_developer_executions d JOIN forge_tasks t ON t.id = d.task_id WHERE json_extract(t.role_agents_json, '$.builder') = a.id${scope}), '')
-      ), ''), a.created_at) AS last_seen_at
-      FROM forge_agents a JOIN forge_profiles p ON p.id = a.profile_id WHERE a.kind = 'internal'${includeArchived ? "" : " AND a.archived_at IS NULL"} ORDER BY (a.archived_at IS NOT NULL), active_count DESC, a.name COLLATE NOCASE, a.id`).all(...params) as AgentRow[]).map((row) => publicAgent(row, this.config)));
-  }
-
-  updateProfileCapacity(actorUserId: string, profileId: string, capacity: number | null): CodexProfile {
-    this.requireAdmin(actorUserId);
-    if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 32)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-capacity", "capacity", "Capacity must be an integer from 1 to 32")]);
-    const now = this.now().toISOString();
-    const changed = this.database.authTransaction((db) => {
-      const result = db.prepare("UPDATE forge_profiles SET capacity = ?, updated_at = ? WHERE id = ?").run(capacity, now, profileId);
-      if (result.changes !== 1) throw new ProjectFailure("Profile not found", [], 404);
-      this.auth.recordAuditEventInTransaction(db, actorUserId, "profile_capacity_updated", undefined, undefined, { profileId, capacityMode: capacity === null ? "default" : "override" });
-      return db.prepare("SELECT * FROM forge_profiles WHERE id = ?").get(profileId) as ProfileRow;
-    });
-    return publicProfile(changed, this.config);
-  }
-
   async listModels(actorUserId: string): Promise<OpenCodeModelOption[]> {
     this.user(actorUserId);
     const native = await this.readProviders();
     return native.providers.flatMap((provider) => provider.models.map((model) => ({ id: model.id, provider: provider.id, providerLabel: provider.label, displayName: model.label })));
-  }
-
-  async listProjectChecks(actorUserId: string, projectId: string): Promise<ProjectCheckOption[]> {
-    const project = this.getProject(actorUserId, projectId);
-    if (!project.repository) return [];
-    try {
-      await this.github.checkAuthentication();
-      if (!this.github.listChecks) throw new GithubFailure("command");
-      return await this.github.listChecks({ cwd: project.repositoryPath, nameWithOwner: project.repository, ref: project.targetBranch });
-    } catch (error) {
-      const code = error instanceof GithubFailure && error.code === "authentication" ? "github-auth-unavailable" : "github-checks-unavailable";
-      throw new ProjectFailure("GitHub checks are unavailable", [finding(code, "requiredChecks", code === "github-auth-unavailable" ? "Host GitHub CLI authentication is unavailable" : "GitHub did not return checks for the target branch")], 422);
-    }
   }
 
   async getProjectRepositoryDefaults(actorUserId: string, projectId: string): Promise<{ setupCommand: string; verificationCommand: string }> {
@@ -790,31 +448,16 @@ export class ProjectService {
     }
     await this.repositoryProvisioner.ensure({ cloneUrl: coordinate.cloneUrl, repository: coordinate.repository, repositoryPath, worktreeRoot });
     const commands = await inferRepositoryCommands(repositoryPath);
-    let requiredChecks: string[] = [];
-    try {
-      await this.github.checkAuthentication();
-      requiredChecks = this.github.listChecks
-        ? [...new Set((await this.github.listChecks({ cwd: repositoryPath, nameWithOwner: coordinate.repository, ref: "main" })).map((check) => check.name))]
-        : [];
-    } catch {}
-    const agents = this.listAgents(actorUserId);
-    const roleDefaults = Object.fromEntries(([
-      ["planner", agents.find((agent) => agent.role === "planner")?.id],
-      ["builder", agents.find((agent) => agent.role === "builder")?.id],
-      ["reviewer", agents.find((agent) => agent.role === "reviewer")?.id],
-      ["integrator", agents.find((agent) => agent.role === "integrator")?.id],
-    ] as const).filter((entry) => Boolean(entry[1]))) as RoleAssignments;
     const draft = await this.mutateProject(actorUserId, companyId, {
       name: coordinate.name,
       repositoryPath,
       worktreeRoot,
       repository: coordinate.repository,
       baseBranch: "main",
-      targetBranch: "main",
       setupCommand: commands.setupCommand,
       verificationCommand: commands.verificationCommand,
-      requiredChecks,
-      roleDefaults,
+      rootProfileId: "profile_native_root",
+      workerProfileId: "profile_native_worker",
     }, false);
     return draft;
   }
@@ -824,17 +467,12 @@ export class ProjectService {
     return this.mutateProject(actorUserId, existing.companyId, input, true, projectId);
   }
 
-  /** @deprecated Kept as an inert test and history bridge; saving is the only project transition. */
-  async activateProject(actorUserId: string, projectId: string): Promise<Project> {
-    return this.getProject(actorUserId, projectId);
-  }
-
   /** Resolve the runtime values that a newly-created task owns thereafter. */
-  async captureTaskConfiguration(project: Project): Promise<{ baseSha: string; targetSha: string }> {
+  async captureTaskConfiguration(project: Project): Promise<{ baseSha: string }> {
     try {
-      const inspection = await (this.localRepository ?? await defaultLocalRepositoryAdapter()).inspect({ repositoryPath: project.repositoryPath, baseBranch: project.baseBranch, targetBranch: project.targetBranch });
-      if (!inspection.baseSha || !inspection.targetSha) throw new Error("branch unavailable");
-      return { baseSha: inspection.baseSha, targetSha: inspection.targetSha };
+      const inspection = await (this.localRepository ?? await defaultLocalRepositoryAdapter()).inspect({ repositoryPath: project.repositoryPath, baseBranch: project.baseBranch });
+      if (!inspection.baseSha) throw new Error("branch unavailable");
+      return { baseSha: inspection.baseSha };
     } catch {
       throw new ProjectFailure("Project configuration could not be captured", [finding("repository-unavailable", "projectId", "Forge could not resolve the configured branches for this new task")], 422);
     }
@@ -848,7 +486,6 @@ export class ProjectService {
     return this.taskSources.resolve(project, selector);
   }
 
-
   getProject(actorUserId: string, projectId: string): Project {
     const row = this.database.authQuery((db) => {
       const user = this.user(actorUserId);
@@ -857,6 +494,12 @@ export class ProjectService {
         : db.prepare(`SELECT ${projectColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE p.id = ? AND m.user_id = ?`).get(projectId, actorUserId);
       return result as ProjectRow | undefined;
     });
+    if (!row) throw new ProjectFailure("Not found", [], 404);
+    return publicProject(row);
+  }
+
+  getProjectInCompany(companyId: string, projectId: string): Project {
+    const row = this.database.authQuery(db => db.prepare(`SELECT ${projectColumns} FROM forge_projects p WHERE p.id = ? AND p.company_id = ?`).get(projectId, companyId) as ProjectRow | undefined);
     if (!row) throw new ProjectFailure("Not found", [], 404);
     return publicProject(row);
   }
@@ -902,28 +545,18 @@ export class ProjectService {
     if (!namePattern.test(input.name.trim())) findings.push(finding("invalid-name", "name", "Project name is invalid"));
     if (!repositoryPattern.test(input.repository.trim().toLowerCase())) findings.push(finding("repository-identity", "repository", "Repository must use owner/name identity without credentials"));
     if (!branchPattern.test(input.baseBranch.trim())) findings.push(finding("unsafe-branch", "baseBranch", "Base branch is unsafe"));
-    if (!branchPattern.test(input.targetBranch.trim())) findings.push(finding("unsafe-branch", "targetBranch", "Target branch is unsafe"));
     if (!isUsableCommand(input.setupCommand)) findings.push(finding("unapproved-command", "setupCommand", "Command must be a single non-empty line without secrets"));
     if (!isUsableCommand(input.verificationCommand)) findings.push(finding("unapproved-command", "verificationCommand", "Command must be a single non-empty line without secrets"));
-    if (secretPattern.test(input.repository) || secretPattern.test(input.baseBranch) || secretPattern.test(input.targetBranch)) findings.push(finding("secret-shaped-value", "configuration", "Secret-shaped configuration values are not accepted"));
-    if (input.requiredChecks.length === 0 || input.requiredChecks.length > 32 || input.requiredChecks.some((check) => !checkPattern.test(check.trim()))) findings.push(finding("invalid-check", "requiredChecks", "Select at least one valid required check"));
+    if (secretPattern.test(input.repository) || secretPattern.test(input.baseBranch)) findings.push(finding("secret-shaped-value", "configuration", "Secret-shaped configuration values are not accepted"));
     if (worktree.path) {
       try { await access(worktree.path, constants.W_OK); } catch { findings.push(finding("worktree-unwritable", "worktreeRoot", "Worktree root must be writable")); }
     }
     const normalized = normalizedInput(input, { repositoryPath: repository.path ?? resolve(input.repositoryPath), worktreeRoot: worktree.path ?? resolve(input.worktreeRoot) });
-    const agentRows = this.database.authQuery((db) => db.prepare("SELECT id, role FROM forge_agents WHERE kind = 'internal'").all() as Array<{ id: string; role: ProjectRole }>);
-    const agentRoles = new Map(agentRows.map((agent) => [agent.id, agent.role]));
-    for (const role of ["planner", "builder", "reviewer", "integrator"] as const) {
-      const agentId = normalized.roleDefaults[role];
-      if (updating && !agentId && role === "builder") findings.push(finding("missing-default", `roleDefaults.${role}`, "A builder agent default is required"));
-      else if (agentId && agentRoles.get(agentId) !== role) findings.push(finding("agent-ineligible", `roleDefaults.${role}`, "Role defaults must reference an agent with the matching role"));
-    }
     if (this.validateProjectConfiguration && findings.length === 0) {
       try {
-        const inspection = await (this.localRepository ?? await defaultLocalRepositoryAdapter()).inspect({ repositoryPath: normalized.repositoryPath, baseBranch: normalized.baseBranch, targetBranch: normalized.targetBranch });
+        const inspection = await (this.localRepository ?? await defaultLocalRepositoryAdapter()).inspect({ repositoryPath: normalized.repositoryPath, baseBranch: normalized.baseBranch });
         if (inspection.canonicalPath !== normalized.repositoryPath) findings.push(finding("repository-path-mismatch", "repositoryPath", "Repository path is not canonical"));
-        if (!inspection.clean) findings.push(finding("repository-dirty", "repositoryPath", "Repository must be clean before saving"));
-        if (!inspection.baseSha || !inspection.targetSha) findings.push(finding("branch-unavailable", "baseBranch", "Configured branches must resolve to commits"));
+        if (!inspection.baseSha) findings.push(finding("branch-unavailable", "baseBranch", "Configured branches must resolve to commits"));
         if (inspection.remoteRepository !== normalized.repository) findings.push(finding("repository-mismatch", "repository", "Local origin does not match configured repository identity"));
       } catch (reason) {
         if (reason instanceof ProjectFailure) findings.push(...(reason as ProjectFailure).findings);
@@ -948,14 +581,20 @@ export class ProjectService {
     let row: { id: string };
     try {
       row = this.database.authTransaction((db) => {
+      const currentCompany = this.auth.requireCompanyAccess(actorUserId, companyId);
+      if (currentCompany.status !== "active") throw new ProjectFailure("Company is not active", [], 409);
+      for (const [role, profileId] of [["root", normalized.rootProfileId], ["worker", normalized.workerProfileId]] as const) {
+        if (!db.prepare("SELECT 1 FROM forge_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(profileId, role)) {
+          throw new ProjectFailure("Project configuration is invalid", [finding("profile-ineligible", `${role}ProfileId`, "Select an active profile with the matching role")], 422);
+        }
+      }
       const id = projectId ?? identifier("project");
       if (updating) {
         const existing = this.rowForProject(db, id);
         if (!existing || existing.company_id !== companyId) throw new ProjectFailure("Not found", [], 404);
-        db.prepare("UPDATE forge_projects SET name = ?, repository_path = ?, worktree_root = ?, repository_identity = ?, base_branch = ?, target_branch = ?, setup_command = ?, verification_command = ?, required_checks_json = ?, role_defaults_json = ?, updated_at = ? WHERE id = ?").run(normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, id);
+        db.prepare("UPDATE forge_projects SET name = ?, repository_path = ?, worktree_root = ?, repository_identity = ?, base_branch = ?, setup_command = ?, verification_command = ?, root_profile_id = ?, worker_profile_id = ?, updated_at = ? WHERE id = ?").run(normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.setupCommand, normalized.verificationCommand, normalized.rootProfileId, normalized.workerProfileId, now, id);
       } else {
-        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, now);
-        seedDefaultTaskTemplates(db, { id, companyId, roleAgents: normalized.roleDefaults });
+        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.setupCommand, normalized.verificationCommand, normalized.rootProfileId, normalized.workerProfileId, now, now);
       }
       this.auth.recordAuditEventInTransaction(db, actorUserId, updating ? "project_updated" : "project_created", undefined, companyId, { projectId: id });
       return { id };
@@ -981,9 +620,4 @@ export class ProjectService {
     return user;
   }
 
-  private requireAdmin(userId: string): AuthUser {
-    const user = this.user(userId);
-    if (user.role !== "admin") throw new AuthFailure("Administrator access required", 403);
-    return user;
-  }
 }

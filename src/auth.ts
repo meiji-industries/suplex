@@ -28,7 +28,7 @@ import {
   newSessionToken,
 } from "./auth-identifiers.js";
 import { jsonRequired } from "./task-utils.js";
-import { wipeCompanyData } from "./company-clear.js";
+import { CompanyHasLiveSessions, wipeCompanyData } from "./company-clear.js";
 
 export type UserRole = "admin" | "member";
 export type UserStatus = "pending" | "active" | "revoked";
@@ -660,7 +660,12 @@ export class AuthService {
       this.requireAdminById(actorUserId);
       const company = this.repository.findCompany(companyId);
       if (!company) throw new AuthFailure("Not found", 404);
-      wipeCompanyData(this.database, companyId);
+      try {
+        wipeCompanyData(this.database, companyId);
+      } catch (error) {
+        if (error instanceof CompanyHasLiveSessions) throw new AuthFailure(error.message, 409, "company_has_live_sessions");
+        throw error;
+      }
       this.recordAuditEventInTransaction(undefined, actorUserId, "company_cleared", undefined, companyId, {});
       return this.publicCompany({ ...company, status: "active", issueCode: null });
     });

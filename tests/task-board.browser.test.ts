@@ -55,7 +55,7 @@ test.each([1280, 390])("native task creation preserves start intent and role cho
       }
       await page.screenshot({ path: join(tmpdir(), `forge-native-task-${width}-${immediate}.png`) });
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-      await page.getByRole("link", { name: "Open tasks", exact: true }).click();
+      await page.goto(`${base}/tasks?company=${value.company.id}`);
     }
     await page.goto(`${base}/board?company=${value.company.id}`);
     await page.getByRole("region", { name: "Active", exact: true }).waitFor();

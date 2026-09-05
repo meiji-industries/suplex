@@ -11,6 +11,7 @@ import { navigate } from "../lib/navigation.js";
 import type { Task } from "../../task-contracts.js";
 import { TaskControlStatusSchema } from "../../task-control.js";
 import { NewTaskDialog } from "../components/app/new-task-dialog.js";
+import { TaskOptions } from "../components/app/task-options.js";
 import { TaskDetailsPage } from "./task-details.js";
 import { TaskStatus, TaskStatusIcon, taskStatusLabels } from "../components/app/task-status.js";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs.js";
@@ -72,9 +73,9 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   }, []);
   const visible = tasks.filter(task => (status === "all" || task.status === status || status === "active" && task.status === "waiting_human") && (projectId === "all" || task.projectId === projectId) && `${task.issueKey ?? ""} ${task.title}`.toLowerCase().includes(query.toLowerCase()));
   const groups = ["waiting_human", "active", "backlog", "delivered", "cancelled"] as const;
-  return <ApplicationFrame title={selected ? `${selected.issueKey ? `${selected.issueKey} · ` : ""}${selected.title}` : mode === "board" ? "Board" : "Tasks"} headerRight={<><Button variant="ghost" size="icon-sm" aria-label="Check tasks" onClick={() => void reload().catch(error => setError(String(error)))}><RefreshCw /></Button><Button size="sm" disabled={!companyId || currentCompany?.status !== "active"} onClick={() => setCreateOpen(true)}><Plus />Create task</Button></>}>
+  return <ApplicationFrame title={selected ? `${selected.issueKey ? `${selected.issueKey} · ` : ""}${selected.title}` : mode === "board" ? "Board" : "Tasks"} headerActions={selected ? <TaskOptions key={selected.id} task={selected} onChange={setSelected} onError={setError} /> : null} headerRight={<><Button variant="ghost" size="icon-sm" aria-label="Check tasks" onClick={() => void reload().catch(error => setError(String(error)))}><RefreshCw /></Button><Button size="sm" disabled={!companyId || currentCompany?.status !== "active"} onClick={() => setCreateOpen(true)}><Plus />Create task</Button></>}>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-    {selectedId ? selected ? <TaskDetailsPage key={selected.id} task={selected} project={projects.find(project => project.id === selected.projectId)} returnTo={mode === "board" ? "/board" : "/tasks"} onChange={setSelected} /> : <p className="p-4">{loaded ? "Task not found" : "Forge reads the task"}</p> : <div data-task-list className="min-w-0">
+    {selectedId ? selected ? <TaskDetailsPage key={selected.id} task={selected} project={projects.find(project => project.id === selected.projectId)} onChange={setSelected} /> : <p className="p-4">{loaded ? "Task not found" : "Forge reads the task"}</p> : <div data-task-list className="min-w-0">
       <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b px-3 py-1 sm:px-4">
         <div className="max-w-full overflow-x-auto"><Tabs value={archived ? "archived" : status} onValueChange={value => { setArchived(value === "archived"); setStatus(value === "archived" ? "all" : String(value)); }}><TabsList>
           <TabsTrigger value="active">Active</TabsTrigger><TabsTrigger value="backlog">Backlog</TabsTrigger><TabsTrigger value="all">All tasks</TabsTrigger><TabsTrigger value="archived">Archived</TabsTrigger>

@@ -38,6 +38,8 @@
     "@fastify/cookie": "^11.1.2",
     "@fastify/type-provider-zod": "^1.0.0",
     "@fastify/websocket": "11.3.0",
+    "@pierre/diffs": "^1.4.0",
+    "@pierre/trees": "1.0.0-beta.6",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
     "@xterm/addon-fit": "^0.11.0",

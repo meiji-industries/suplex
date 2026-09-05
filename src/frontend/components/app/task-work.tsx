@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from "../ui/alert.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Markdown } from "./markdown.js";
 import { ProfileAvatar } from "./profile-avatar.js";
+import { DeveloperDiff } from "./developer-diff.js";
 
 export type TaskActivity = z.infer<typeof TaskActivityResponseSchema>;
 const turnLabels = { pending_prompt: "Queued", prompted: "In progress", unknown: "Observation not available", completed: "Turn ended", cancelled: "Cancelled" };
@@ -63,7 +64,7 @@ function TaskDiff({ task }: { task: Task }) {
     const timer = setInterval(() => void read(), 5000);
     return () => { closed = true; clearInterval(timer); };
   }, [task.id, task.updatedAt]);
-  return <div className="min-w-0 space-y-3 pt-3" data-task-diff-panel>{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : !diff ? <p className="text-xs text-muted-foreground">Forge reads the changes.</p> : !diff.available ? <p className="text-xs text-muted-foreground">The worktree is not available.</p> : <><p className="text-xs text-muted-foreground">Changes since the task started. Untracked files are not included.</p>{diff.truncated ? <Alert><AlertDescription>This preview shows the last 8 KiB. Open the worktree for the complete diff.</AlertDescription></Alert> : null}{diff.patch ? <pre className="max-h-[36rem] max-w-full overflow-auto rounded-md border p-3 text-xs leading-5">{diff.patch.split("\n").map((line, index) => <div key={index} className={line.startsWith("+") ? "text-emerald-600" : line.startsWith("-") ? "text-red-500" : line.startsWith("@@") ? "text-blue-500" : "text-muted-foreground"}>{line || " "}</div>)}</pre> : <p className="text-xs text-muted-foreground">No tracked changes.</p>}</>}</div>;
+  return <div className="min-w-0 space-y-3 pt-3" data-task-diff-panel>{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : !diff ? <p className="text-xs text-muted-foreground">Forge reads the changes.</p> : !diff.available ? <p className="text-xs text-muted-foreground">The worktree is not available.</p> : <DeveloperDiff patch={diff.patch} />}</div>;
 }
 
 function TaskChecks({ task }: { task: Task }) {

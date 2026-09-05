@@ -44,11 +44,20 @@ test.each([1280, 390])("restored task layout, filters, board and work tabs at %i
     await page.getByText("The worktree is not available.", { exact: true }).waitFor();
     await page.clock.install();
     let diffReads = 0;
-    await page.route(`**/api/tasks/${delivered.id}/diff`, route => ++diffReads === 1 ? route.fulfill({ status: 503, json: { error: "Git temporarily busy" } }) : route.fulfill({ json: { available: true, patch: "+Out-of-band README change", truncated: false } }));
+    const patch = "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-Before\n+Out-of-band README change\n";
+    await page.route(`**/api/tasks/${delivered.id}/diff`, route => ++diffReads === 1 ? route.fulfill({ status: 503, json: { error: "Git temporarily busy" } }) : route.fulfill({ json: { available: true, patch: diffReads === 2 ? "incomplete patch without file headers" : patch, truncated: false } }));
     await page.clock.fastForward(5000);
     await page.getByText("Git temporarily busy", { exact: true }).waitFor();
     await page.clock.fastForward(5000);
-    await page.getByText("+Out-of-band README change", { exact: true }).waitFor();
+    await page.getByText("The diff could not be displayed.", { exact: true }).waitFor();
+    expect(await page.getByText("No changes from the target base.", { exact: true }).count()).toBe(0);
+    await page.clock.fastForward(5000);
+    await page.getByText("Out-of-band README change", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Show all", exact: true }).click();
+    await page.getByLabel("Changed files", { exact: true }).getByRole("tree").waitFor();
+    await page.screenshot({ path: join(tmpdir(), `forge-restored-diff-tree-${width}.png`), fullPage: true });
+    await page.getByRole("button", { name: "Show all", exact: true }).click();
+    expect(await page.getByLabel("Changed files", { exact: true }).count()).toBe(0);
     expect(await page.getByText("Git temporarily busy", { exact: true }).isVisible()).toBe(false);
     let checkReads = 0;
     await page.route(`**/api/tasks/${delivered.id}/checks`, route => ++checkReads === 1 ? route.fulfill({ status: 503, json: { error: "GitHub temporarily busy" } }) : route.fulfill({ json: { available: true, runs: [{ name: "Project tests", status: checkReads === 2 ? "pending" : "successful", url: "https://github.com/owner/repo/actions/runs/1" }] } }));
@@ -66,7 +75,7 @@ test.each([1280, 390])("restored task layout, filters, board and work tabs at %i
     await page.screenshot({ path: join(tmpdir(), `forge-restored-board-${width}.png`), fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.getByRole("region", { name: "Backlog", exact: true }).getByRole("link").click();
-    await page.getByRole("link", { name: "Open board", exact: true }).waitFor();
+    await page.locator("[data-app-header]").getByRole("button", { name: "Task options", exact: true }).waitFor();
     expect(page.url()).toContain(backlog.id);
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }

@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { Archive, ArchiveRestore, ArrowLeft, Ellipsis, ExternalLink, GitBranch, GitMerge, GitPullRequest, RefreshCw, Square } from "lucide-react";
+import { ExternalLink, GitBranch, GitMerge, GitPullRequest } from "lucide-react";
 import type { Task } from "../../task-contracts.js";
 import { TaskActivityResponseSchema } from "../../http/contracts/tasks.js";
-import { readJson, withCompany } from "../lib/api.js";
+import { readJson } from "../lib/api.js";
 import { adminDate, type ApiProject } from "../lib/view-shared.js";
 import { Button } from "../components/ui/button.js";
 import { Textarea } from "../components/ui/textarea.js";
@@ -10,7 +10,6 @@ import { Input } from "../components/ui/input.js";
 import { Checkbox } from "../components/ui/checkbox.js";
 import { Badge } from "../components/ui/badge.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
 import { Markdown } from "../components/app/markdown.js";
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
@@ -19,7 +18,7 @@ import { TaskWork, type TaskActivity } from "../components/app/task-work.js";
 import { taskDeliveryTargetOptions } from "../components/app/task-delivery-target.js";
 import { LivePaneDock } from "../components/app/task-chat/live-pane-dock.js";
 
-export function TaskDetailsPage({ task, project, returnTo = "/tasks", onChange }: { task: Task; project: ApiProject | undefined; returnTo?: string; onChange: (task: Task) => void }): ReactElement {
+export function TaskDetailsPage({ task, project, onChange }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void }): ReactElement {
   const [activity, setActivity] = useState<TaskActivity>({ sessions: [], turns: [] });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -28,7 +27,6 @@ export function TaskDetailsPage({ task, project, returnTo = "/tasks", onChange }
   const [image, setImage] = useState<Task["images"][number] | null>(null);
   const [edit, setEdit] = useState<{ title: string; description: string } | null>(null);
   const editable = task.status === "backlog" && !task.archivedAt;
-  const terminal = task.status === "cancelled" || task.status === "delivered";
   const saveDetails = async () => {
     if (!edit || busy) return;
     setBusy(true); setError("");
@@ -56,18 +54,8 @@ export function TaskDetailsPage({ task, project, returnTo = "/tasks", onChange }
   };
 
   return <article data-task-detail className="flex min-w-0 flex-1 flex-col">
-    <div className="flex h-10 items-center justify-between border-b px-4 text-xs sm:px-6">
-      <a className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground" href={withCompany(returnTo, task.companyId)}><ArrowLeft className="size-3.5" />{returnTo === "/board" ? "Open board" : "Open tasks"}</a>
-      <div className="flex items-center gap-2"><TaskStatus status={task.status} />{task.archivedAt ? <Badge variant="outline">Archived</Badge> : null}
-        <DropdownMenu><DropdownMenuTrigger render={<Button size="icon-xs" variant="ghost" aria-label="Task options" />}><Ellipsis /></DropdownMenuTrigger><DropdownMenuContent align="end">
-          <DropdownMenuItem disabled={busy} onClick={() => void act("refresh")}><RefreshCw />Check current state</DropdownMenuItem>
-          {!terminal ? <DropdownMenuItem disabled={busy} onClick={() => void act("cancel")}><Square />Cancel task</DropdownMenuItem> : null}
-          {terminal || task.status === "backlog" ? <DropdownMenuItem disabled={busy} onClick={() => void act(task.archivedAt ? "unarchive" : "archive")}>{task.archivedAt ? <ArchiveRestore /> : <Archive />}{task.archivedAt ? "Open from archive" : "Keep in archive"}</DropdownMenuItem> : null}
-        </DropdownMenuContent></DropdownMenu>
-      </div>
-    </div>
     <div data-task-body className="grid min-w-0 flex-1 lg:grid-cols-[minmax(0,1fr)_260px]">
-      <div data-task-main className="flex min-h-[calc(100dvh-var(--header-height)-2.5rem)] min-w-0 flex-col">
+      <div data-task-main className="flex min-h-[calc(100dvh-var(--header-height))] min-w-0 flex-col">
         <header className="px-4 pb-3 pt-4 sm:px-6 lg:px-10"><div className="mx-auto max-w-4xl"><h2 className="text-xl font-semibold leading-8" aria-label={task.title}>{editable ? <button className="text-left hover:text-muted-foreground focus-visible:outline" type="button" aria-label="Edit task title" onClick={() => setEdit({ title: task.title, description: task.description })}>{task.title}</button> : task.title}</h2></div></header>
         <div data-task-content className="min-w-0 px-4 pb-6 pt-4 sm:px-6 lg:px-10"><div data-task-content-inner className="mx-auto max-w-4xl space-y-7">
           {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
@@ -84,7 +72,7 @@ export function TaskDetailsPage({ task, project, returnTo = "/tasks", onChange }
       <aside aria-label="Task properties" className="min-w-0 border-t px-4 py-5 lg:min-h-[calc(100dvh-6rem)] lg:border-l lg:border-t-0">
         <h3 className="mb-4 text-xs font-medium">Properties</h3>
         <dl className="grid grid-cols-1 gap-5 text-xs">
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Status</dt><dd><TaskStatus status={task.status} /></dd></div>
+          <div className="space-y-1.5"><dt className="text-muted-foreground">Status</dt><dd className="flex items-center gap-2"><TaskStatus status={task.status} />{task.archivedAt ? <Badge variant="outline">Archived</Badge> : null}</dd></div>
           <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="break-words">{project?.name ?? task.configuration.repository}</dd></div>
           {(["root", "worker"] as const).map(role => { const profile = role === "root" ? task.rootProfile : task.workerProfile; const label = role === "root" ? "Root" : "Worker"; return <div key={role} className="space-y-1.5"><dt className="text-muted-foreground">{label}</dt><dd className="flex items-center gap-2"><ProfileAvatar name={label} seed={profile.profileId} size="xs" /><span className="min-w-0"><span className="block truncate" title={`${profile.provider}/${profile.model}`}>{profile.model}</span><span className="block text-[11px] text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></dd></div>; })}
           <div className="space-y-1.5"><dt className="text-muted-foreground">Delivery</dt><dd>{taskDeliveryTargetOptions.find(option => option.value === task.deliveryTarget)?.label}</dd></div>

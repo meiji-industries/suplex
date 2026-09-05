@@ -27,8 +27,10 @@ test("task diffs read actual Git changes without changing worktree state", async
     expect((await git(["rev-parse", "HEAD"])).stdout.trim()).toBe(head);
     await writeFile(join(cwd, "README.md"), "Large diff é\n".repeat(2000));
     const large = await readTaskDiff(current);
-    expect(large.truncated).toBe(true);
-    expect(Buffer.byteLength(large.patch)).toBeLessThanOrEqual(8192);
+    expect(large.truncated).toBe(false);
+    expect(Buffer.byteLength(large.patch)).toBeGreaterThan(8192);
+    expect(large.patch).toContain("diff --git a/README.md b/README.md");
+    expect(large.patch.match(/\+Large diff é/g)).toHaveLength(2000);
     expect(large.patch).not.toContain("�");
     const missing = await value.app.inject({ url: "/api/tasks/missing/diff", headers: value.headers });
     expect(missing.statusCode).toBe(404);

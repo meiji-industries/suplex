@@ -1,0 +1,46 @@
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { openCodeAttachCommand, openCodeRoleConfig, readOpenCodeServer, type OpenCodeServerReference } from "../src/opencode-server.js";
+
+const directories: string[] = [];
+afterEach(async () => {
+  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+describe("OpenCode role configuration", () => {
+  const profile = { providerID: "openai", modelID: "gpt-5.6-luna", reasoningEffort: "max", serviceTier: "priority" } as const;
+
+  it("denies Root native mutations without resetting inherited MCP servers", () => {
+    const config = openCodeRoleConfig({ role: "root", profile, bridge: { command: "/node", args: ["/forge/root-bridge.ts"] } });
+    expect(config).toMatchObject({
+      default_agent: "forge-root",
+      agent: { "forge-root": { permission: { edit: "deny", bash: "deny", task: "deny" }, tools: { bash: false, write: false, edit: false, apply_patch: false, task: false } } },
+      mcp: { forge_root: { type: "local", command: ["/node", "/forge/root-bridge.ts"], enabled: true } },
+    });
+    expect(JSON.stringify(config)).not.toContain('"*":"allow"');
+    expect(Object.keys(config.mcp ?? {})).toEqual(["forge_root"]);
+  });
+
+  it("lets Workers edit but not spawn native subagents or call the Root bridge", () => {
+    expect(openCodeRoleConfig({ role: "worker", profile })).toMatchObject({
+      agent: { "forge-worker": { permission: { task: "deny" }, tools: { task: false, "forge_root_*": false } } },
+      provider: { openai: { models: { "gpt-5.6-luna": { options: { reasoningEffort: "max", serviceTier: "priority" } } } } },
+    });
+  });
+});
+
+it("keeps attach credentials out of the pane command", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "forge-attach-test-"));
+  directories.push(directory);
+  const reference: OpenCodeServerReference = { pid: process.pid, baseUrl: "http://127.0.0.1:1234", password: "private-proof-password-not-for-pane-output", directory: "/repo with spaces", executable: "/bin/opencode", generation: "b775df17-718a-4cb2-8e23-6912b8aa0d39" };
+  const command = await openCodeAttachCommand({ reference, runtimeDirectory: directory, sessionID: "ses_proof" });
+  expect(command).not.toContain(reference.password);
+  expect(command).toContain("--session 'ses_proof'");
+  expect(command).toContain("--dir '/repo with spaces'");
+  expect((await stat(join(directory, "attach.env"))).mode & 0o777).toBe(0o600);
+  expect(await readFile(join(directory, "attach.env"), "utf8")).toContain(reference.password);
+  expect(await readOpenCodeServer(directory)).toBeNull();
+  await expect(openCodeAttachCommand({ reference, runtimeDirectory: directory, sessionID: "ses_bad; touch /tmp/no" })).rejects.toThrow("Invalid OpenCode session identity");
+});

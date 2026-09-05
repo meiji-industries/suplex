@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { openCodeRolePrompt } from "./opencode-role-prompt.js";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -157,7 +158,7 @@ export class OpenCodeTaskRuntime {
     await writeFile(pending, JSON.stringify(reference), { mode: 0o600 });
     await rename(pending, filename);
     const client = openCodeServerClient(reference);
-    await replayOpenCodePrompt(client, intent, () => claim(reference.generation));
+    await replayOpenCodePrompt(client, { ...intent, system: openCodeRolePrompt(scope.role) }, () => claim(reference.generation));
     return reconcileOpenCodePrompt(client, { ...intent, dispatch: "ambiguous" });
   }
 

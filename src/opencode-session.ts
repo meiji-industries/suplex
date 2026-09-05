@@ -18,6 +18,7 @@ export interface OpenCodePromptIntent {
   messageID: string;
   directory: string;
   prompt: string;
+  system?: string;
   promptHash: string;
   model: { providerID: string; modelID: string };
   agent: string;
@@ -59,7 +60,7 @@ export interface OpenCodePromptReadPort {
   getSession(sessionID: string, directory?: string): Promise<unknown>;
   getMessages(sessionID: string, query?: { directory?: string }): Promise<unknown[]>;
   getStatus(directory?: string): Promise<Record<string, unknown>>;
-  promptAsync(input: { sessionID: string; messageID: string; text: string; model: { providerID: string; modelID: string }; agent: string; variant: string; directory?: string }): Promise<void>;
+  promptAsync(input: { sessionID: string; messageID: string; text: string; system?: string; model: { providerID: string; modelID: string }; agent: string; variant: string; directory?: string }): Promise<void>;
 }
 
 export type OpenCodePromptClaim = (intent: OpenCodePromptIntent) => Promise<boolean>;
@@ -319,6 +320,7 @@ export async function replayOpenCodePrompt(client: OpenCodePromptReadPort, inten
     sessionID: intent.sessionID,
     messageID: intent.messageID,
     text: intent.prompt,
+    ...(intent.system === undefined ? {} : { system: intent.system }),
     model: intent.model,
     agent: intent.agent,
     variant: intent.variant,

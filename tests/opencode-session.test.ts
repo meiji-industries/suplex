@@ -311,6 +311,14 @@ test("a never-submitted intent can dispatch after a successful absent-message re
   expect(prompts).toEqual(["msg_task"]);
 });
 
+test("dispatch sends role instructions as a system prompt without changing the server scope", async () => {
+  const reader = port({ messages: [], status: { type: "idle" } });
+  let system: string | undefined;
+  reader.promptAsync = async input => { system = input.system; };
+  await replayOpenCodePrompt(reader, { ...intent, system: "Root owns planning and independent review." }, allowClaim);
+  expect(system).toBe("Root owns planning and independent review.");
+});
+
 test("an omitted entry in a successful status map means idle, not an unavailable read", async () => {
   const reader = port({ messages: [] });
   reader.getStatus = async () => ({});

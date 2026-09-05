@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { openCodeRolePrompt } from "../src/opencode-role-prompt.js";
 import { openCodeAttachCommand, openCodeRoleConfig, readOpenCodeServer, stopOpenCodeServer, type OpenCodeServerReference } from "../src/opencode-server.js";
 
 const directories: string[] = [];
@@ -16,16 +17,17 @@ describe("OpenCode role configuration", () => {
     const config = openCodeRoleConfig({ role: "root", profile, bridge: { command: "/node", args: ["/forge/root-bridge.ts"] } });
     expect(config).toMatchObject({
       default_agent: "forge-root",
-      agent: { "forge-root": { prompt: expect.stringContaining("Never delegate planning or the final verification judgment"), permission: { edit: "deny", bash: "deny", task: "deny" }, tools: { bash: false, write: false, edit: false, apply_patch: false, task: false } } },
+      agent: { "forge-root": { permission: { edit: "deny", bash: "deny", task: "deny" }, tools: { bash: false, write: false, edit: false, apply_patch: false, task: false } } },
       mcp: { forge_root: { type: "local", command: ["/node", "/forge/root-bridge.ts"], enabled: true } },
     });
     expect(JSON.stringify(config)).not.toContain('"*":"allow"');
     expect(Object.keys(config.mcp ?? {})).toEqual(["forge_root"]);
+    expect(openCodeRolePrompt("root")).toContain("Never delegate planning or the final verification judgment");
   });
 
   it("lets Workers edit but not spawn native subagents or call the Root bridge", () => {
     expect(openCodeRoleConfig({ role: "worker", profile })).toMatchObject({
-      agent: { "forge-worker": { prompt: expect.stringContaining("Root owns planning and independent review"), permission: { task: "deny" }, tools: { task: false, "forge_root_*": false } } },
+      agent: { "forge-worker": { permission: { task: "deny" }, tools: { task: false, "forge_root_*": false } } },
       provider: { openai: { models: { "gpt-5.6-luna": { options: { reasoningEffort: "max", serviceTier: "priority" } } } } },
     });
   });

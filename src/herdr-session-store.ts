@@ -450,12 +450,11 @@ export class HerdrSessionStore {
     const bindingPath = join(bindingDirectory, `${row.id}.binding.json`);
     const mcpConfigPath = join(bindingDirectory, `${row.id}.mcp.json`);
     const bridgeEntry = join(dirname(currentFile), `root-bridge${extension}`);
-    const command = this.environment.FORGE_ROOT_BRIDGE_COMMAND ?? (extension === ".ts" ? join(packageRoot, "node_modules", ".bin", "tsx") : process.execPath);
     const config: RootBridgeConfig = {
       version: 1,
       root: { taskId: task.taskId, sessionId: String(row.id), generation: Number(row.generation) + 1 },
       databasePath: this.database.filename(),
-      server: { command, args: [bridgeEntry, "--binding", bindingPath] },
+      server: { command: process.execPath, args: [...(extension === ".ts" ? [join(packageRoot, "node_modules", "tsx", "dist", "cli.mjs")] : []), bridgeEntry, "--binding", bindingPath] },
     };
     await writeFile(bindingPath, `${JSON.stringify(config)}\n`, { mode: 0o600 });
     await chmod(bindingPath, 0o600);

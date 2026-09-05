@@ -394,12 +394,16 @@ test("starts a fresh session without waiting for its lazy Codex identity", async
       },
     }]);
     const args = herdr.startInputs[0]?.args ?? [];
-    expect(args).toEqual(expect.arrayContaining(["--sandbox", "read-only", "--ask-for-approval", "never", "mcp_servers={}"]));
+    expect(args).toEqual(expect.arrayContaining(["--sandbox", "read-only", "--ask-for-approval", "never"]));
+    expect(args).not.toContain("mcp_servers={}");
     const bridgeDirectory = join(value.root, "root-bridges");
     const bridgeFiles = await readdir(bridgeDirectory);
     expect(bridgeFiles).toHaveLength(2);
     for (const file of bridgeFiles)
       expect((await stat(join(bridgeDirectory, file))).mode & 0o777).toBe(0o600);
+    const binding = JSON.parse(await readFile(join(bridgeDirectory, bridgeFiles.find((file) => file.endsWith(".binding.json"))!), "utf8"));
+    expect(binding.server.command).toBe(process.execPath);
+    expect(binding.server.args).toContain(join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs"));
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

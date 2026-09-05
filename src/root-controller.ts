@@ -199,8 +199,8 @@ export function productionRootRuntime(databasePath: string, store: TaskControlSt
       await mkdir(bindingDirectory, { recursive: true, mode: 0o700 });
       const bindingPath = join(bindingDirectory, `${input.session.id}.binding.json`);
       const bridgeEntry = join(dirname(currentFile), `root-bridge${extension}`);
-      const command = extension === ".ts" ? join(process.cwd(), "node_modules", ".bin", "tsx") : process.execPath;
-      const bridge = { version: 1 as const, root: { taskId: input.taskId, sessionId: input.session.id, generation: input.session.generation }, databasePath, server: { command, args: [bridgeEntry, "--binding", bindingPath] } };
+      const packageRoot = join(dirname(currentFile), "..");
+      const bridge = { version: 1 as const, root: { taskId: input.taskId, sessionId: input.session.id, generation: input.session.generation }, databasePath, server: { command: process.execPath, args: [...(extension === ".ts" ? [join(packageRoot, "node_modules", "tsx", "dist", "cli.mjs")] : []), bridgeEntry, "--binding", bindingPath] } };
       await writeFile(bindingPath, `${JSON.stringify(bridge)}\n`, { mode: 0o600 }); await chmod(bindingPath, 0o600);
       await writeFile(join(bindingDirectory, `${input.session.id}.mcp.json`), `${JSON.stringify(rootBridgeMcpConfig(bridge))}\n`, { mode: 0o600 });
       const workspace = await herdr.createWorkspace({ label: `forge-${input.taskId.slice(-12)}`, cwd: control.worktree.path, focus: false });

@@ -65,6 +65,10 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated }: { op
     void readJson<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`).then(result => { if (!cancelled) setTemplates(result.templates); }).catch(error => { if (!cancelled) setError(String(error)); });
     return () => { cancelled = true; };
   }, [projectId, open]);
+  useEffect(() => {
+    if (!open || !projects.some(project => project.id === projectId)) return;
+    writeNewTaskMemory({ projectId, rootProfileId: rootProfileId || undefined, workerProfileId: workerProfileId || undefined, startImmediately, deliveryTarget, runProjectTests, visualEvidence });
+  }, [open, projects, projectId, rootProfileId, workerProfileId, startImmediately, deliveryTarget, runProjectTests, visualEvidence]);
   const submit = async () => {
     if (busy || imageRead.current.pending || !projectId || !title.trim() || !description.trim()) return;
     setBusy(true); setError("");
@@ -73,7 +77,6 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated }: { op
       const serialized = JSON.stringify(body);
       if (request.current?.body !== serialized) request.current = { body: serialized, key: crypto.randomUUID() };
       const task = await readJson<Task>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ ...body, idempotencyKey: request.current.key }) });
-      writeNewTaskMemory({ projectId, rootProfileId: rootProfileId || undefined, workerProfileId: workerProfileId || undefined, startImmediately, deliveryTarget, runProjectTests, visualEvidence });
       request.current = null;
       setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined);
       onCreated(task);
@@ -104,7 +107,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated }: { op
         <Breadcrumb><BreadcrumbList className="gap-2 text-sm"><BreadcrumbItem>
           <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" aria-label="Project" disabled={busy || !projects.length} />}>
             {project ? <Avatar size="xs" shape="square"><AvatarImage src={`/api/projects/${project.id}/favicon`} alt="" /><AvatarFallback>{project.name.slice(0, 1).toUpperCase()}</AvatarFallback></Avatar> : <FolderKanban className="size-3.5 text-muted-foreground" />}<span className="max-w-40 truncate">{project?.name ?? "Project"}</span><ChevronDown className="size-3.5" />
-          </DropdownMenuTrigger><DropdownMenuContent align="start">{projects.map(candidate => <DropdownMenuItem key={candidate.id} onClick={() => { setProjectId(candidate.id); setRootProfileId(""); setWorkerProfileId(""); setSource(undefined); setSourceSummary(undefined); }}><Avatar size="xs" shape="square"><AvatarImage src={`/api/projects/${candidate.id}/favicon`} alt="" /><AvatarFallback>{candidate.name.slice(0, 1).toUpperCase()}</AvatarFallback></Avatar><span className="min-w-0 flex-1 truncate">{candidate.name}</span>{candidate.id === projectId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
+          </DropdownMenuTrigger><DropdownMenuContent align="start">{projects.map(candidate => <DropdownMenuItem key={candidate.id} onClick={() => { setProjectId(candidate.id); setSource(undefined); setSourceSummary(undefined); }}><Avatar size="xs" shape="square"><AvatarImage src={`/api/projects/${candidate.id}/favicon`} alt="" /><AvatarFallback>{candidate.name.slice(0, 1).toUpperCase()}</AvatarFallback></Avatar><span className="min-w-0 flex-1 truncate">{candidate.name}</span>{candidate.id === projectId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
         </BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><DialogTitle className="font-normal">New task</DialogTitle></BreadcrumbItem></BreadcrumbList></Breadcrumb>
         <div className="flex items-center gap-1"><TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
           {templates.length ? <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={busy} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.map(template => <DropdownMenuItem key={template.id} onClick={() => { setDescription(template.description); setRootProfileId(template.rootProfileId ?? ""); setWorkerProfileId(template.workerProfileId ?? ""); setDeliveryTarget(template.deliveryTarget); setRunProjectTests(template.runProjectTests); setVisualEvidence(template.visualEvidence); }}>{template.name}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null}

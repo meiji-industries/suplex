@@ -40,6 +40,7 @@ it("keeps attach credentials out of the pane command", async () => {
   const command = await openCodeAttachCommand({ reference, runtimeDirectory: directory, sessionID: "ses_proof" });
   expect(command).not.toContain(reference.password);
   expect(command).toContain("--session 'ses_proof'");
+  expect(command).toContain("--mini");
   expect(command).toContain("--dir '/repo with spaces'");
   expect((await stat(join(directory, "attach.env"))).mode & 0o777).toBe(0o600);
   expect(await readFile(join(directory, "attach.env"), "utf8")).toContain(reference.password);

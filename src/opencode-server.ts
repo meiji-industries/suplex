@@ -168,5 +168,5 @@ export async function openCodeAttachCommand(input: { reference: OpenCodeServerRe
   const envFile = join(input.runtimeDirectory, "attach.env");
   await writeFile(envFile, `export OPENCODE_SERVER_PASSWORD=${quote(input.reference.password)}\n`, { mode: 0o600 });
   await chmod(envFile, 0o600);
-  return `source ${quote(envFile)}; ${quote(input.reference.executable)} attach ${quote(input.reference.baseUrl)} --dir ${quote(input.reference.directory)} --session ${quote(input.sessionID)}`;
+  return `source ${quote(envFile)}; ${quote(input.reference.executable)} attach ${quote(input.reference.baseUrl)} --dir ${quote(input.reference.directory)} --session ${quote(input.sessionID)} --mini`;
 }

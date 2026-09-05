@@ -24,13 +24,14 @@ test.each(["live", "failed_command", "old_server", "unrelated", "unknown"])("nat
     let creates = 0;
     let fail = condition === "failed_command";
     const commands: string[] = [];
+    const paneCommands: string[] = [];
     const herdr: Pick<HerdrClient, "getPane" | "getPaneProcessInfo" | "createWorkspace" | "splitPane" | "renamePane" | "runPaneCommand" | "reportPaneMetadata"> = {
       async getPane(id) { return pane(id); },
       async getPaneProcessInfo(id) { return processes.get(id)!; },
       async createWorkspace() { creates++; processes.set("pane-new", shell("pane-new")); return { workspace: { workspaceId: "workspace", label: "Proof" }, tab: { tabId: "tab", label: "Proof" }, rootPane: pane("pane-new") }; },
       async splitPane() { throw new Error("No split expected"); },
       async renamePane() {}, async reportPaneMetadata() {},
-      async runPaneCommand(id) { commands.push(id); if (fail) { fail = false; throw new Error("Command transport failed"); } processes.set(id, attached(id)); },
+      async runPaneCommand(id, command) { commands.push(id); paneCommands.push(command); if (fail) { fail = false; throw new Error("Command transport failed"); } processes.set(id, attached(id)); },
     };
     const runtime = new OpenCodeTaskRuntime(join(directory, "forge.sqlite"), herdr);
     let paneId = "pane-old";
@@ -46,5 +47,6 @@ test.each(["live", "failed_command", "old_server", "unrelated", "unknown"])("nat
     expect(await attach()).toBe(result);
     expect(creates).toBe(condition === "old_server" || condition === "unrelated" ? 1 : 0);
     expect(commands).toEqual(condition === "live" ? [] : condition === "failed_command" ? ["pane-old", "pane-old"] : ["pane-new"]);
+    expect(paneCommands).toEqual(commands.map(() => expect.stringContaining("--mini")));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

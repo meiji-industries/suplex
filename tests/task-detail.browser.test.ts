@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { expect, test } from "vitest";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
-test.each([1280, 390])("native task detail supports answers, notes, cancellation and archival at %ipx", { timeout: 90_000 }, async width => {
+test.each([1280, 390])("native task detail supports answers, cancellation and archival at %ipx", { timeout: 90_000 }, async width => {
   const value = await nativeBrowser(width);
   try {
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Native task detail", description: "Preserve the existing branch changes.", startImmediately: true, idempotencyKey: "native-detail" });
@@ -17,15 +17,11 @@ test.each([1280, 390])("native task detail supports answers, notes, cancellation
     await page.getByRole("region", { name: "Question" }).getByText("Which base branch should I use?").waitFor();
     await page.getByLabel("Answer", { exact: true }).fill("Use main and preserve local work.");
     await page.getByRole("button", { name: "Answer and continue", exact: true }).click();
-    await page.getByLabel("Note to Root", { exact: true }).waitFor();
+    await page.getByRole("region", { name: "Question" }).waitFor({ state: "hidden" });
     expect(store.get(task.id).status).toBe("active");
     expect(store.pendingTurns(root.id).some(turn => turn.promptText.includes("Use main and preserve local work."))).toBe(true);
-    await page.getByLabel("Note to Root", { exact: true }).fill("Please verify the new behavior.");
-    const sent = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith("/note"));
-    await page.getByRole("button", { name: "Send note", exact: true }).click();
-    expect((await sent).status()).toBe(200);
-    expect(store.pendingTurns(root.id).some(turn => turn.promptText.includes("Please verify the new behavior."))).toBe(true);
-    await page.getByText("Please verify the new behavior.", { exact: true }).waitFor();
+    expect(await page.getByLabel("Note to Root", { exact: true }).count()).toBe(0);
+    expect(await page.getByRole("button", { name: "Send note", exact: true }).count()).toBe(0);
     const uncertain = store.pendingTurns(root.id)[0]!;
     store.requireExecutionCleanup(uncertain);
     await page.reload();
@@ -33,7 +29,7 @@ test.each([1280, 390])("native task detail supports answers, notes, cancellation
     expect(await page.getByRole("button", { name: "Answer and continue", exact: true }).isDisabled()).toBe(true);
     await page.getByRole("checkbox", { name: "All commands from this session have stopped", exact: true }).check();
     await page.getByRole("button", { name: "Answer and continue", exact: true }).click();
-    await page.getByLabel("Note to Root", { exact: true }).waitFor();
+    await page.getByRole("region", { name: "Question" }).waitFor({ state: "hidden" });
     expect(store.get(task.id).recoveryTurnId).toBeNull();
     expect(await page.getByText("ses_browser_root", { exact: true }).isVisible()).toBe(false);
     await page.getByRole("tab", { name: "Other", exact: true }).click();

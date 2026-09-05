@@ -1,0 +1,61 @@
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { expect, test } from "vitest";
+import { nativeBrowser } from "./helpers/native-browser.js";
+
+test.each([1280, 390])("live panes appear automatically, span the task column, and resize at %ipx", { timeout: 90_000 }, async width => {
+  const value = await nativeBrowser(width);
+  try {
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Live pane restoration", description: "Watch the agent work.", startImmediately: true, idempotencyKey: "live-dock" });
+    const store = value.tasks.repository.controls;
+    const root = store.claimRoot({ taskId: task.id });
+    store.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "ses_dock_root" });
+    const { page } = value;
+    page.setDefaultTimeout(10_000);
+    await page.routeWebSocket(/\/pane\/.*\/terminal/, socket => {
+      socket.send(JSON.stringify({ type: "open" }));
+      socket.send(Buffer.from("\x1b[32mLive agent output\x1b[0m\r\nInspecting the task worktree...\r\n"));
+    });
+    await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
+    await page.getByRole("heading", { name: task.title, level: 2, exact: true }).waitFor();
+    const dock = page.getByRole("region", { name: "Live agent output", exact: true });
+    expect(await dock.count()).toBe(0);
+    store.bindPane({ sessionId: root.id, generation: root.generation, paneId: "wProof:p1" });
+    await dock.waitFor();
+    await dock.locator(".xterm-screen").waitFor();
+    expect(await page.getByRole("button", { name: /Open (Root|Worker) terminal/ }).count()).toBe(0);
+    expect(await page.getByLabel("Note to Root", { exact: true }).count()).toBe(0);
+    const main = await page.locator("[data-task-main]").boundingBox();
+    const bounds = await dock.boundingBox();
+    expect(bounds!.x).toBe(main!.x);
+    expect(bounds!.width).toBe(main!.width);
+    expect(Math.abs(bounds!.y + bounds!.height - 844)).toBeLessThanOrEqual(1);
+    expect(await dock.evaluate(element => getComputedStyle(element).position)).toBe("sticky");
+    expect(await dock.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(30, 30, 46)");
+    const slider = dock.getByRole("slider", { name: "Resize live agent output" });
+    await slider.focus();
+    await slider.press("ArrowUp");
+    expect(await slider.getAttribute("aria-valuenow")).toBe("344");
+    await page.reload();
+    await dock.waitFor();
+    expect(await slider.getAttribute("aria-valuenow")).toBe("344");
+    const worker = store.launchWorker({ taskId: task.id, rootSessionId: root.id, rootGeneration: root.generation, instruction: "Verify the dock" });
+    store.bindHarnessSession({ sessionId: worker.id, generation: worker.generation, nativeSessionId: "ses_dock_worker" });
+    store.bindPane({ sessionId: worker.id, generation: worker.generation, paneId: "wProof:p2" });
+    await dock.getByRole("tab", { name: "Worker", exact: true }).click();
+    await dock.getByLabel("Live pane output for worker", { exact: true }).waitFor();
+    await dock.getByRole("tab", { name: "Root", exact: true }).click();
+    await dock.getByLabel("Live pane output for root", { exact: true }).waitFor();
+    await page.getByRole("tab", { name: /^Activity/ }).click();
+    expect(await dock.isVisible()).toBe(true);
+    const handle = await slider.boundingBox();
+    await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + handle!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + handle!.height / 2 - 24);
+    await page.mouse.up();
+    expect(await slider.getAttribute("aria-valuenow")).toBe("368");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: join(tmpdir(), `forge-live-dock-${width}.png`), fullPage: true });
+    expect(value.errors).toEqual([]);
+  } finally { await value.close(); }
+});

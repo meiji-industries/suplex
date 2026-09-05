@@ -1,15 +1,13 @@
 import { useEffect, useState } from "react";
 import { z } from "zod";
-import { CheckCircle2, CircleDashed, CircleX, ExternalLink, Terminal } from "lucide-react";
+import { CheckCircle2, CircleDashed, CircleX, ExternalLink } from "lucide-react";
 import type { Task } from "../../../task-contracts.js";
 import { type TaskActivityResponseSchema, TaskChecksResponseSchema, TaskDiffResponseSchema } from "../../../http/contracts/tasks.js";
 import { readJson } from "../../lib/api.js";
 import { Alert, AlertDescription } from "../ui/alert.js";
-import { Button } from "../ui/button.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Markdown } from "./markdown.js";
 import { ProfileAvatar } from "./profile-avatar.js";
-import { LivePaneTerminal } from "./task-chat/live-pane-terminal.js";
 
 export type TaskActivity = z.infer<typeof TaskActivityResponseSchema>;
 const turnLabels = { pending_prompt: "Queued", prompted: "In progress", unknown: "Observation not available", completed: "Turn ended", cancelled: "Cancelled" };
@@ -29,9 +27,8 @@ function humanMessage(prompt: string): string {
   } catch { return ""; }
 }
 
-export function TaskWork({ task, activity, composer }: { task: Task; activity: TaskActivity; composer: React.ReactNode }) {
+export function TaskWork({ task, activity }: { task: Task; activity: TaskActivity }) {
   const [tab, setTab] = useState("chat");
-  const [pane, setPane] = useState<"root" | "worker" | null>(null);
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
     <div className="max-w-full overflow-x-auto border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
     <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3" aria-label="Conversation">
@@ -41,9 +38,6 @@ export function TaskWork({ task, activity, composer }: { task: Task; activity: T
         return <div key={turn.id} className="grid min-w-0 gap-5">{humanMessage(turn.prompt) ? <article className="space-y-2 border-l-2 pl-3"><header className="text-xs font-medium">You</header><Markdown source={humanMessage(turn.prompt)} /></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><ProfileAvatar name={role} seed={role === "Root" ? task.rootProfile.profileId : task.workerProfile.profileId} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabels[turn.status]}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
       })}
       {!activity.turns.some(turn => resultText(turn.result) || humanMessage(turn.prompt)) ? <p className="text-xs text-muted-foreground">{task.status === "backlog" ? "Start the task to work with Root." : "Agent replies appear here."}</p> : null}
-      {activity.sessions.some(session => session.current && session.paneId) ? <div className="flex flex-wrap gap-2">{activity.sessions.filter(session => session.current && session.paneId).map(session => <Button key={session.id} size="sm" variant="outline" onClick={() => setPane(pane === session.kind ? null : session.kind)}><Terminal />{pane === session.kind ? "Close" : "Open"} {session.kind === "root" ? "Root" : "Worker"} terminal</Button>)}</div> : null}
-      {pane ? <div className="h-96 min-w-0 overflow-hidden rounded-md border"><LivePaneTerminal taskId={task.id} role={pane} paneId={activity.sessions.find(session => session.kind === pane && session.current)?.paneId ?? null} /></div> : null}
-      {composer}
     </div></TabsContent>
     <TabsContent value="activity"><section aria-label="Task activity" className="grid gap-0 pt-3">{activity.turns.map(turn => <div key={turn.id} className="flex gap-3 border-b py-3 text-xs"><CircleDashed className="size-4 shrink-0 text-muted-foreground" /><span className="font-medium">{activity.sessions.find(session => session.id === turn.sessionId)?.kind === "worker" ? "Worker" : "Root"}</span><span className="text-muted-foreground">{turnLabels[turn.status]}</span></div>)}{!activity.turns.length ? <p className="text-xs text-muted-foreground">No activity yet.</p> : null}</section></TabsContent>
     <TabsContent value="diffs">{tab === "diffs" ? <TaskDiff task={task} /> : null}</TabsContent>

@@ -68,7 +68,7 @@ export function LivePaneTerminal({ taskId, role, paneId }: { taskId: string; rol
       socket.onmessage = (event) => {
         if (typeof event.data !== "string") { terminal.write(new Uint8Array(event.data as ArrayBuffer)); return; }
         const message = JSON.parse(event.data) as { type?: string; cols?: number; rows?: number; reason?: string; message?: string };
-        if (message.type === "open") { attempt = 0; setTerminalStatus("live"); if (!document.hidden) terminal.focus(); }
+        if (message.type === "open") { attempt = 0; setTerminalStatus("live"); }
         else if (message.type === "size" && typeof message.cols === "number" && typeof message.rows === "number" && (terminal.cols !== message.cols || terminal.rows !== message.rows)) terminal.resize(message.cols, message.rows);
         else if (message.type === "closed") setTerminalStatus(statusForClosedReason(message.reason ?? ""));
         else if (message.type === "error") console.warn("Herdr terminal bridge error", message.message);

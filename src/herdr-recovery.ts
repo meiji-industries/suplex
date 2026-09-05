@@ -1,4 +1,6 @@
 import type { ForgeDatabase } from "./database.js";
+import { RootController, productionRootRuntime } from "./root-controller.js";
+import { TaskControlStore } from "./root-session-store.js";
 import {
   CliHerdrClient,
   snapshotHerdrRuntime,
@@ -184,4 +186,13 @@ export async function reconcileHerdrSessions(
     outcomes.push({ sessionId: `tab:${tab.taskId}`, taskId: tab.taskId, status: "closed" });
   }
   return outcomes;
+}
+
+/** Recover Root-owned tasks separately from the legacy role-session subsystem. */
+export async function recoverTaskControls(database: ForgeDatabase, herdr: HerdrClient = new CliHerdrClient()): Promise<number> {
+  const taskIds = database.authQuery((db) => db.prepare("SELECT task_id FROM forge_task_controls WHERE status = 'active'").all() as Array<{ task_id: string }>);
+  const store = new TaskControlStore(database);
+  const controller = new RootController(store, herdr, undefined, productionRootRuntime(database.filename(), store, herdr));
+  for (const row of taskIds) await controller.recover(row.task_id);
+  return taskIds.length;
 }

@@ -32,6 +32,7 @@ export type RootTool = z.infer<typeof RootToolSchema>;
 export const RootBridgeConfigSchema = z.object({
   version: z.literal(1),
   root: RootIdentitySchema,
+  databasePath: z.string().min(1).optional(),
   server: z.object({ command: z.string().min(1), args: z.array(z.string()) }).strict(),
 }).strict();
 

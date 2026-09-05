@@ -318,6 +318,10 @@ export class ForgeDatabase {
     return this.mode;
   }
 
+  filename(): string {
+    return this.db.name;
+  }
+
   private ensureModelCatalog(): void {
     this.db.exec(`CREATE TABLE IF NOT EXISTS forge_models (
       model_id TEXT PRIMARY KEY NOT NULL,

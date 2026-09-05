@@ -7,7 +7,7 @@ import { installIssueEngine } from "./index.js";
 import { createRunFromLatestSnapshot, deleteEngineActivities, IssueEngine } from "./runs.js";
 import { reconcile } from "../reconcile.js";
 import { CliHerdrClient, snapshotHerdrRuntime, type HerdrClient } from "../herdr-client.js";
-import { observeHerdrSessions, type HerdrSessionObservation } from "../herdr-recovery.js";
+import { observeHerdrSessions, recoverTaskControls, type HerdrSessionObservation } from "../herdr-recovery.js";
 import { ISSUE_PHASES } from "../issue-phases.js";
 import { ProjectionRebuildService } from "../projection-rebuild.js";
 
@@ -106,6 +106,7 @@ export async function startEngineHost(config: ForgeConfig, database = new ForgeD
   const rebuiltProjections = await rebuildDriftedIssueProjections(database, config);
   logger.info(`Rebuilt ${rebuiltProjections} drifted issue projections`);
   await failOrphanedExecutionsFromHerdr(database, options.herdr ?? new CliHerdrClient(), logger);
+  await recoverTaskControls(database, options.herdr ?? new CliHerdrClient());
   const engine = new IssueEngine(config, database); installIssueEngine(config, engine); await (options.loadRuns ?? loadIssueRuns)(engine);
   const workerId = `${runtimeIdentifiers(config.installationId).workerPrefix}-${process.pid}`;
   const registration = { workerId, taskQueue: runtimeIdentifiers(config.installationId).taskQueue, buildId: runtimeIdentifiers(config.installationId).buildId };

@@ -454,6 +454,7 @@ export class HerdrSessionStore {
     const config: RootBridgeConfig = {
       version: 1,
       root: { taskId: task.taskId, sessionId: String(row.id), generation: Number(row.generation) + 1 },
+      databasePath: this.database.filename(),
       server: { command, args: [bridgeEntry, "--binding", bindingPath] },
     };
     await writeFile(bindingPath, `${JSON.stringify(config)}\n`, { mode: 0o600 });

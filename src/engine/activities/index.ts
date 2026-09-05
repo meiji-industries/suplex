@@ -18,6 +18,10 @@ import { createFinalReviewActivities } from "./final-review.js";
 import { createAcceptanceActivities } from "./acceptance.js";
 import { createMergeConflictActivities } from "./merge-conflict.js";
 import { createWorktreeActivities } from "./worktree.js";
+import { createRootControlActivities } from "./root-control.js";
+import { RootController } from "../../root-controller.js";
+import { TaskControlStore } from "../../root-session-store.js";
+import { CliHerdrClient } from "../../herdr-client.js";
 
 export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): IssueActivities & DeliveryBlockerActivities {
   const ctx = createActivityContext(database, config, options);
@@ -36,6 +40,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     ...createAcceptanceActivities(ctx),
     ...createMergeConflictActivities(ctx),
     ...createWorktreeActivities(ctx),
+    ...createRootControlActivities(new RootController(new TaskControlStore(database), new CliHerdrClient())),
   } as unknown as IssueActivities & DeliveryBlockerActivities;
 }
 

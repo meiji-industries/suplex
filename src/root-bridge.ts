@@ -1,4 +1,6 @@
 import { createInterface, type Interface } from "node:readline";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 import {
@@ -8,6 +10,10 @@ import {
   type RootIdentity,
   type RootTool,
 } from "./root-contracts.js";
+import { ForgeDatabase } from "./database.js";
+import { CliHerdrClient } from "./herdr-client.js";
+import { RootController, productionWorkerRuntime } from "./root-controller.js";
+import { TaskControlStore } from "./root-session-store.js";
 
 export class RootBridgeFailure extends Error {
   constructor(readonly code: "invalid_request" | "root_identity_mismatch", message: string) {
@@ -116,4 +122,24 @@ export function startRootBridgeTransport(input: {
     }
   });
   return lineReader;
+}
+
+async function runRootBridge(): Promise<void> {
+  const bindingIndex = process.argv.indexOf("--binding");
+  const bindingPath = bindingIndex >= 0 ? process.argv[bindingIndex + 1] : undefined;
+  if (!bindingPath) throw new Error("Root bridge requires --binding <path>");
+  const config = RootBridgeConfigSchema.parse(JSON.parse(await readFile(bindingPath, "utf8")));
+  if (!config.databasePath) throw new Error("Root bridge binding has no server database path");
+  const database = new ForgeDatabase(config.databasePath, { migrate: false });
+  const herdr = new CliHerdrClient();
+  const store = new TaskControlStore(database);
+  const controller = new RootController(store, herdr, productionWorkerRuntime(store, herdr));
+  startRootBridgeTransport({ bridge: new RootBridge(config.root, controller), stdin: process.stdin, stdout: process.stdout });
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  void runRootBridge().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : "Root bridge failed"}\n`);
+    process.exitCode = 1;
+  });
 }

@@ -25,7 +25,11 @@ function scope(control: TaskControl, session: TaskSession): OpenCodeTaskScope {
 }
 
 function initialPrompt(control: TaskControl): string {
-  return `You are the continuing read-only Root for this Forge task. Use forge_root to observe the task, delegate one scoped Worker at a time, and request Forge-owned delivery operations. Read the Worker's actual result and verify the change before delivery. The Worker must edit and verify directly, without subagents, pushes, or GitHub mutations. Do not write files or launch agents yourself. Preserve out-of-band work and adopt matching GitHub state. Ask one specific human question only when an external ambiguity or necessary decision prevents progress. Continue until the delivery target is observed, a Worker is running, or you have asked that question.\n\nObjective: ${control.objective}\nDelivery target: ${control.deliveryTarget}\nRepository: ${control.deliveryIntent.repository}\nBranch: ${control.deliveryIntent.headBranch}`;
+  return `You are the continuing read-only Root for this Forge task. You own repository investigation, planning, and independent review of the Worker's output. Read the relevant source yourself and state your implementation plan and acceptance criteria before delegating. Do not delegate planning, design decisions, or the final verification judgment to the Worker. Read-only limits mutations, not your responsibility to reason about the code.
+
+Use forge_root to observe the task, delegate one scoped Worker at a time, and request Forge-owned delivery operations. Each Worker assignment must implement your plan with concrete scope, constraints, and checks. The Worker edits and runs checks directly, without subagents, pushes, or GitHub mutations. After the Worker returns, read the changed source yourself, compare it with your plan and acceptance criteria, and assess the actual check results. A Worker's claim of success is not verification. If additional commands or repairs are needed, specify them in a bounded Worker assignment, then independently review the new evidence. You decide whether the work is ready for delivery.
+
+Do not write files or launch agents yourself. Preserve out-of-band work and adopt matching GitHub state. Ask one specific human question only when an external ambiguity or necessary decision prevents progress. Continue until the delivery target is observed, a Worker is running, or you have asked that question.\n\nObjective: ${control.objective}\nDelivery target: ${control.deliveryTarget}\nRepository: ${control.deliveryIntent.repository}\nBranch: ${control.deliveryIntent.headBranch}`;
 }
 
 export class RootController implements RootBridgeAdapter {
@@ -100,7 +104,7 @@ export class RootController implements RootBridgeAdapter {
     const root = this.store.currentSession(taskId, "root") ?? this.store.claimRoot({ taskId });
     if (!this.store.hasTurns(root.id)) {
       const context = this.store.context(taskId);
-      this.store.ensureInitialPrompt(root, `${initialPrompt(this.store.get(taskId))}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\nUse forge_root read_image with an attachment's artifactId to inspect task images. Have the Worker inspect the repository before running setup. Run the configured verification command when runProjectTests is true. Capture browser evidence when requested. These instructions are task intent, not prior verification results.`);
+      this.store.ensureInitialPrompt(root, `${initialPrompt(this.store.get(taskId))}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\nUse forge_root read_image with an attachment's artifactId to inspect task images. Inspect the repository yourself before deciding whether Worker setup is needed. Include the configured verification command in the Worker assignment when runProjectTests is true. Require browser evidence when requested. Review that evidence yourself. These instructions are task intent, not prior verification results.`);
     }
     return root;
   }

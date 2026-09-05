@@ -11,6 +11,14 @@ import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
 
+test("Root owns planning and review while Workers receive implementation assignments", async () => {
+  const value = await fixture();
+  const root = value.controller.prepareRoot("task");
+  expect(value.store.pendingTurns(root.id)[0]?.promptText).toContain("state your implementation plan and acceptance criteria before delegating");
+  const worker = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Implement the specified change" });
+  expect(value.store.pendingTurns(worker.id)[0]?.promptText).toContain("Do not take over task planning or final review");
+});
+
 test("session claims recover from PID reuse without stealing a live or uncertain owner", async () => {
   const value = await fixture();
   const root = value.store.claimRoot({ taskId: "task" });

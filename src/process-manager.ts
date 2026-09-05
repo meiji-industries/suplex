@@ -87,7 +87,7 @@ function normalizeArgv(command: string): string[] {
 
 async function processField(pid: number, field: string): Promise<string | undefined> {
   try {
-    const result = await execFileAsync("ps", ["-p", String(pid), "-o", field]);
+    const result = await execFileAsync("ps", ["-p", String(pid), "-o", field], { env: { ...process.env, LC_ALL: "C" } });
     return result.stdout.trim() || undefined;
   } catch {
     return undefined;

@@ -35,7 +35,7 @@ test.each([1280, 390])("human questions show recommendations and accept Other at
       expect(response.request().postDataJSON()).toMatchObject({ answer: other ? "Use runtime/native as the base." : "Wait for main: Keep this task paused until its dependency lands." });
       expect(value.tasks.getTask(value.userId, task.id).status).toBe("active");
       const conversation = page.getByRole("tabpanel", { name: "Chat" }).getByRole("article");
-      await expect.poll(() => conversation.getByText("Queued", { exact: true }).count()).toBe(1);
+      await expect.poll(() => conversation.getByText("Queued", { exact: true }).count(), { timeout: 5_000 }).toBe(1);
       await page.screenshot({ path: join(tmpdir(), `forge-answer-queued-${width}.png`), fullPage: true });
       const answer = value.tasks.repository.controls.pendingTurns(root.id)[0];
       if (!answer) throw new Error("The answer was not queued");

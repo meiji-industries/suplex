@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 
 const APP = join(__dirname, "..", "release", "mac-arm64", "Forge.app");
 const BINARY = join(APP, "Contents", "MacOS", "Forge");
@@ -23,7 +23,10 @@ function asarPaths(archive: string): string[] {
   return paths.sort();
 }
 
-describe.skipIf(!existsSync(APP))("packaged Forge.app", () => {
+describe("packaged Forge.app", () => {
+  beforeAll(() => {
+    if (!existsSync(APP)) throw new Error(`Packaged application not found at ${APP}. Run pnpm desktop:dist before pnpm test:packaged.`);
+  });
   test("bundles only the desktop shell", () => {
     const paths = asarPaths(join(APP, "Contents", "Resources", "app.asar"));
     expect(paths).toEqual(["dist/src/connect.html", "dist/src/forge-desktop.js", "dist/src/forge-target.js", "dist/src/main.js", "dist/src/target-store.js", "package.json"]);

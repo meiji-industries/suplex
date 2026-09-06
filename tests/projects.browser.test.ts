@@ -126,7 +126,7 @@ test("projects desktop flow creates native projects and shows actionable validat
       const systemHealth = page.locator('[data-slot="sidebar"]').getByRole("button", { name: "System health: Healthy", exact: true });
       await systemHealth.waitFor();
       expect(await systemHealth.getAttribute("data-status")).toBe("green");
-      expect(await systemHealth.innerText()).toBe("Healthy");
+      expect(await systemHealth.getByText("Healthy", { exact: true }).innerText()).toBe("Healthy");
       await systemHealth.click();
       const healthDialog = page.getByRole("dialog", { name: "System health", exact: true });
       await healthDialog.getByText("OpenCode", { exact: true }).waitFor();

@@ -149,11 +149,25 @@ backup alone cannot restore missing native sessions or repository contents.
 
 ## Verify changes
 
-Run the unit-test project only with:
+Run all unit and Git-backed integration tests with:
 
 ```sh
 pnpm test
 ```
+
+Use the narrower projects when you need them:
+
+```sh
+pnpm test:integration
+pnpm test:real
+pnpm desktop:dist
+pnpm test:packaged
+```
+
+`test:real` runs tests that depend on installed services or credentials.
+`test:packaged` requires the desktop package from `desktop:dist`.
+`pnpm test:guarded` runs the default suite inside the production Worker Git
+guard and confirms that the guard remains active after the suite exits.
 
 ```sh
 pnpm verify

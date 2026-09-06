@@ -13,6 +13,7 @@ import { CompanySwitcher } from "./company-switcher.js";
 import { ProfileAvatar } from "./profile-avatar.js";
 import { RecentTasks } from "./recent-tasks.js";
 import { SystemHealthIndicator } from "./system-health.js";
+import { requestNewTask } from "./global-new-task-dialog.js";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 
@@ -38,19 +39,11 @@ function MainNavigation({ close }: { close?: () => void }): ReactElement {
   );
 }
 
-function requestNewTask(companyId?: string): void {
-  if (window.location.pathname === "/tasks") {
-    window.dispatchEvent(new Event("forge:new-task"));
-    return;
-  }
-  navigate(withCompany("/tasks?new=1", companyId));
-}
-
 function CreateActions({ close }: { close?: () => void }): ReactElement {
   const context = useOptionalCompanyContext();
   const company = context?.currentCompany;
   return (
-    <div className="flex gap-2 p-2"><SidebarMenuButton className="min-w-8 flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(company?.id); }}><CirclePlus />New Task</SidebarMenuButton><a className={buttonVariants({ variant: "outline", size: "icon-sm" })} href={withCompany("/attention", company?.id)} onClick={close} aria-label="Open attention" title="Open attention"><Inbox /></a></div>
+    <div className="flex gap-2 p-2"><SidebarMenuButton className="min-w-8 flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}><CirclePlus />New Task</SidebarMenuButton><a className={buttonVariants({ variant: "outline", size: "icon-sm" })} href={withCompany("/attention", company?.id)} onClick={close} aria-label="Open attention" title="Open attention"><Inbox /></a></div>
   );
 }
 
@@ -69,7 +62,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
     window.addEventListener("forge:command-menu", openMenu);
     return () => window.removeEventListener("forge:command-menu", openMenu);
   }, []);
-  return <><SidebarMenuButton render={<button type="button" onClick={() => { setQuery(""); setOpen(true); }} title="Search Forge (⌘K)"><Search />Search</button>} /><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Forge" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(companyId); }}><CirclePlus />New task <kbd className="ml-auto text-[11px] text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-[11px] text-muted-foreground">⌘K or / search. G then T or B navigates. C creates a task.</p></DialogContent></Dialog></>;
+  return <><SidebarMenuButton render={<button type="button" onClick={() => { setQuery(""); setOpen(true); }} title="Search Forge (⌘K)"><Search />Search</button>} /><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Forge" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><CirclePlus />New task <kbd className="ml-auto text-[11px] text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-[11px] text-muted-foreground">⌘K or / search. G then T or B navigates. C creates a task.</p></DialogContent></Dialog></>;
 }
 
 function SecondaryNavigation({ close }: { close?: () => void }): ReactElement {
@@ -105,7 +98,7 @@ export function AppSidebar(): ReactElement {
         event.preventDefault(); window.dispatchEvent(new Event("forge:command-menu")); return;
       }
       if (!event.metaKey && !event.ctrlKey && !event.altKey && key === "c" && context?.currentCompany?.status === "active") {
-        event.preventDefault(); requestNewTask(context.currentCompany.id); return;
+        event.preventDefault(); requestNewTask(); return;
       }
       if (!event.metaKey && !event.ctrlKey && !event.altKey && key === "g") {
         goPending = true; window.clearTimeout(goTimer); goTimer = window.setTimeout(() => { goPending = false; }, 750); return;

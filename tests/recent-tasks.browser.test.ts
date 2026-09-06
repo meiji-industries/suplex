@@ -20,6 +20,8 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     if (width < 768) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
     const working = page.getByRole("link", { name: "Working task, Active, pull request open", exact: true });
     await working.waitFor();
+    await page.locator('[data-sidebar="group-label"]').filter({ hasText: /^Activity$/ }).waitFor();
+    expect(await page.getByRole("link", { name: "Get Help", exact: true }).count()).toBe(0);
     await page.getByText("Root · Idle", { exact: true }).waitFor();
     await page.getByText("Worker · Working", { exact: true }).waitFor();
     workerStatus = "retrying";

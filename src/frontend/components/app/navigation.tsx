@@ -1,4 +1,4 @@
-import { ChartNoAxesGantt, CircleHelp, CirclePlus, Columns3, ClipboardList, EllipsisVertical, FolderGit2, Inbox, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
+import { ChartNoAxesGantt, CirclePlus, Columns3, ClipboardList, EllipsisVertical, FolderGit2, Inbox, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 
 import { buttonVariants } from "../ui/button.js";
@@ -77,7 +77,7 @@ function SecondaryNavigation({ close }: { close?: () => void }): ReactElement {
   const companyId = context?.currentCompany?.id;
   if (!context?.user) return <></>;
   const settingsHref = context.user.role === "admin" && companyId ? companySettingsPath(companyId) : withCompany("/profile", companyId);
-  return <SidebarGroup className="mt-auto"><SidebarGroupContent><SidebarMenu><SidebarMenuItem><SystemHealthIndicator sidebar /></SidebarMenuItem><SidebarMenuItem><SidebarMenuButton render={<a href={settingsHref} onClick={close}><Settings />Settings</a>} isActive={isActive(settingsHref)} /></SidebarMenuItem><SidebarMenuItem><SidebarMenuButton render={<a href="https://github.com/meiji-industries/forge/issues/new" target="_blank" rel="noreferrer"><CircleHelp />Get Help</a>} /></SidebarMenuItem><SidebarMenuItem><NavigationSearch {...(close ? { close } : {})} /></SidebarMenuItem></SidebarMenu></SidebarGroupContent></SidebarGroup>;
+  return <SidebarGroup className="mt-auto"><SidebarGroupContent><SidebarMenu><SidebarMenuItem><SystemHealthIndicator sidebar /></SidebarMenuItem><SidebarMenuItem><SidebarMenuButton render={<a href={settingsHref} onClick={close}><Settings />Settings</a>} isActive={isActive(settingsHref)} /></SidebarMenuItem><SidebarMenuItem><NavigationSearch {...(close ? { close } : {})} /></SidebarMenuItem></SidebarMenu></SidebarGroupContent></SidebarGroup>;
 }
 
 function UserMenu(): ReactElement | null {

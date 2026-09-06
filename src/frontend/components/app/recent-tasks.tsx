@@ -29,7 +29,7 @@ export function RecentTasks({ close }: { close?: () => void }): ReactElement | n
     return () => { cancelled = true; clearInterval(timer); };
   }, [companyId]);
   if (!tasks.length || !showRecentTasks(window.location.pathname)) return null;
-  return <SidebarGroup><SidebarGroupLabel>Recent</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{tasks.map(task => <SidebarMenuItem key={task.id}>
+  return <SidebarGroup><SidebarGroupLabel>Activity</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>{tasks.map(task => <SidebarMenuItem key={task.id}>
     <SidebarMenuButton render={<a href={withCompany(`/tasks/${task.id}`, companyId)} onClick={close} aria-label={`${task.title}, ${taskStatusLabels[task.status]}${task.pullRequest ? `, pull request ${task.pullRequest.state}` : ""}`}>
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <span data-recent-task-status={task.status} className={`inline-flex shrink-0${task.status === "active" ? " animate-spin" : ""}`}><TaskStatusIcon status={task.status} /></span>

@@ -77,7 +77,6 @@ export function AnalyticsView() {
         <Filter label="Creation period" value={period} onChange={setPeriod} options={[{ value: "7", label: "Created in last 7 days" }, { value: "30", label: "Created in last 30 days" }, { value: "90", label: "Created in last 90 days" }, { value: "all", label: "Created at any time" }]} />
         <Filter label="Project" value={project} onChange={setProject} options={[{ value: "all", label: "All projects" }, ...projects.map(item => ({ value: item.id, label: item.name }))]} />
         <Filter label="Delivery target" value={delivery} onChange={setDelivery} options={[{ value: "all", label: "All delivery targets" }, ...taskDeliveryTargetOptions]} />
-        <span className="ml-auto text-xs text-muted-foreground">Lifetime usage · Includes archived tasks</span>
       </div>
       {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
       {!data && !error ? <p className="p-4 text-sm text-muted-foreground">Load analytics</p> : null}

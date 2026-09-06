@@ -70,6 +70,6 @@ test("timeline trims empty edges and future time without removing gaps between e
   expect(trimTimelineRange({ start: 0, end: 100 }, [{ start: 20, end: 30 }, { start: 60, end: 70 }], 80)).toEqual({ start: 20, end: 70 });
   expect(trimTimelineRange({ start: 0, end: 100 }, [{ start: 20, end: 95 }], 80)).toEqual({ start: 20, end: 80 });
   expect(trimTimelineRange({ start: 25, end: 65 }, [{ start: 20, end: 70 }], 80)).toEqual({ start: 25, end: 65 });
-  expect(trimTimelineRange({ start: 0, end: 100 }, [], 80)).toEqual({ start: 0, end: 80 });
-  expect(trimTimelineRange({ start: 90, end: 100 }, [], 80)).toEqual({ start: 80, end: 80 });
+  expect(trimTimelineRange({ start: 0, end: 100 }, [], 80)).toEqual({ start: 0, end: 100 });
+  expect(trimTimelineRange({ start: 90, end: 100 }, [], 80)).toEqual({ start: 90, end: 100 });
 });

@@ -22,7 +22,7 @@ class FakeWindow extends EventEmitter {
   destroyed = false;
   minimized = false;
   focused = 0;
-  constructor(public options: { webPreferences: Record<string, unknown> }) { super(); FakeWindow.all.push(this); }
+  constructor(public options: Record<string, unknown> & { webPreferences: Record<string, unknown> }) { super(); FakeWindow.all.push(this); }
   isDestroyed(): boolean { return this.destroyed; }
   isMinimized(): boolean { return this.minimized; }
   restore(): void { this.minimized = false; }
@@ -86,6 +86,7 @@ describe("window", () => {
     const [win] = fake.FakeWindow.all;
     expect(fake.FakeWindow.all).toHaveLength(1);
     expect(win?.options.webPreferences).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false });
+    expect(win?.options).toMatchObject({ titleBarStyle: "hidden", titleBarOverlay: true, trafficLightPosition: { x: 16, y: 12 } });
     expect(win?.webContents.url).toBe(`${ORIGIN}/auth?invite=abc`);
     expect(JSON.parse(readFileSync(targetFile, "utf8")), "an argument launch is remembered as an origin").toEqual({ current: `${ORIGIN}/`, targets: [`${ORIGIN}/`] });
   });

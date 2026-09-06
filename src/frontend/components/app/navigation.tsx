@@ -1,4 +1,4 @@
-import { ChartNoAxesGantt, CirclePlus, Columns3, ClipboardList, EllipsisVertical, FolderGit2, Inbox, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
+import { ChartNoAxesGantt, CirclePlus, Columns3, ClipboardList, EllipsisVertical, FolderGit2, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { BarChart3 } from "lucide-react";
 
@@ -45,7 +45,7 @@ function CreateActions({ close }: { close?: () => void }): ReactElement {
   const context = useOptionalCompanyContext();
   const company = context?.currentCompany;
   return (
-    <div className="flex gap-2 p-2"><SidebarMenuButton className="min-w-8 flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}><CirclePlus />New task</SidebarMenuButton><a className={buttonVariants({ variant: "outline", size: "icon-sm" })} href={withCompany("/attention", company?.id)} onClick={close} aria-label="Open attention" title="Open attention"><Inbox /></a></div>
+    <div className="flex gap-2 p-2"><SidebarMenuButton className="min-w-8 flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}><CirclePlus />New task</SidebarMenuButton><button type="button" className={buttonVariants({ variant: "outline", size: "icon-sm" })} onClick={() => window.dispatchEvent(new Event("forge:command-menu"))} aria-label="Search Forge" title="Search Forge (⌘K)"><Search /></button></div>
   );
 }
 
@@ -57,7 +57,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
   const items: NavItem[] = [
     { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
     { href: withCompany("/analytics", companyId), label: "Analytics", icon: BarChart3 },
-    { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 }, { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList }, { href: withCompany("/board", companyId), label: "Board", icon: Columns3 }, { href: withCompany("/attention", companyId), label: "Attention", icon: Inbox }, { href: withCompany("/health", companyId), label: "Host health", icon: Shield },
+    { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 }, { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList }, { href: withCompany("/board", companyId), label: "Board", icon: Columns3 }, { href: withCompany("/health", companyId), label: "Host health", icon: Shield },
   ];
   const visible = items.filter((item) => item.label.toLowerCase().includes(query.trim().toLowerCase()));
   useEffect(() => {
@@ -65,7 +65,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
     window.addEventListener("forge:command-menu", openMenu);
     return () => window.removeEventListener("forge:command-menu", openMenu);
   }, []);
-  return <><SidebarMenuButton render={<button type="button" onClick={() => { setQuery(""); setOpen(true); }} title="Search Forge (⌘K)"><Search />Search</button>} /><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Forge" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><CirclePlus />New task <kbd className="ml-auto text-[11px] text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-[11px] text-muted-foreground">⌘K or / search. G then T or B navigates. C starts a new task.</p></DialogContent></Dialog></>;
+  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Forge" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><CirclePlus />New task <kbd className="ml-auto text-[11px] text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-[11px] text-muted-foreground">⌘K or / search. G then T or B navigates. C starts a new task.</p></DialogContent></Dialog></>;
 }
 
 function SecondaryNavigation({ close }: { close?: () => void }): ReactElement {
@@ -73,7 +73,7 @@ function SecondaryNavigation({ close }: { close?: () => void }): ReactElement {
   const companyId = context?.currentCompany?.id;
   if (!context?.user) return <></>;
   const settingsHref = context.user.role === "admin" && companyId ? companySettingsPath(companyId) : withCompany("/profile", companyId);
-  return <SidebarGroup className="mt-auto"><SidebarGroupContent><SidebarMenu><SidebarMenuItem><SystemHealthIndicator sidebar /></SidebarMenuItem><SidebarMenuItem><SidebarMenuButton render={<a href={settingsHref} onClick={close}><Settings />Settings</a>} isActive={isActive(settingsHref)} /></SidebarMenuItem><SidebarMenuItem><NavigationSearch {...(close ? { close } : {})} /></SidebarMenuItem></SidebarMenu></SidebarGroupContent></SidebarGroup>;
+  return <SidebarGroup className="mt-auto"><SidebarGroupContent><SidebarMenu><SidebarMenuItem><SystemHealthIndicator sidebar /></SidebarMenuItem><SidebarMenuItem><SidebarMenuButton render={<a href={settingsHref} onClick={close}><Settings />Settings</a>} isActive={isActive(settingsHref)} /></SidebarMenuItem></SidebarMenu></SidebarGroupContent></SidebarGroup>;
 }
 
 function UserMenu(): ReactElement | null {
@@ -85,11 +85,6 @@ function UserMenu(): ReactElement | null {
 }
 
 async function signOut(): Promise<void> { try { await fetch("/api/auth/sign-out", { method: "POST" }); } finally { window.localStorage.removeItem("forge.activeCompanyId"); window.location.assign("/auth"); } }
-
-/** The host this page was loaded from, so a desktop window shows which Forge it is on. */
-export function instanceHost(): string {
-  return typeof location === "undefined" ? "" : location.host;
-}
 
 export function AppSidebar(): ReactElement {
   const context = useOptionalCompanyContext();
@@ -122,8 +117,9 @@ export function AppSidebar(): ReactElement {
   }, [context?.currentCompany?.id, context?.currentCompany?.status]);
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
-      <SidebarHeader><div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div><div className="truncate px-2 text-[11px] text-muted-foreground" data-testid="instance-host">{instanceHost()}</div></SidebarHeader>
+      <SidebarHeader className="titlebar-drag titlebar-top"><div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div></SidebarHeader>
       <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} /><SecondaryNavigation close={close} /></SidebarContent>
+      <NavigationSearch close={close} />
       <SidebarFooter><UserMenu /></SidebarFooter>
     </Sidebar>
   );

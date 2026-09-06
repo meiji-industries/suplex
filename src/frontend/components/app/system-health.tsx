@@ -154,6 +154,19 @@ export function HealthCheckSections({ snapshot, compact = false }: { snapshot: H
   );
 }
 
+/** The host this page was loaded from, so a desktop window shows which Forge it is on. */
+const instanceHost = typeof location === "undefined" ? "" : location.host;
+const windowOrigin = typeof location === "undefined" ? "" : location.origin;
+
+/** How this window reaches Forge, derived from the address it loaded. */
+export function connectionRoute(origin: string): string {
+  let url: URL;
+  try { url = new URL(origin); } catch { return "Not available"; }
+  if (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) return "This computer";
+  if (url.hostname.endsWith(".ts.net")) return `Tailscale (${url.protocol === "https:" ? "Serve, HTTPS" : "direct, HTTP"})`;
+  return url.protocol === "https:" ? "HTTPS" : "HTTP";
+}
+
 export function SystemHealthIndicator({ sidebar = false }: { sidebar?: boolean } = {}): ReactElement | null {
   const health = useContext(SystemHealthContext);
   const [open, setOpen] = useState(false);
@@ -169,6 +182,7 @@ export function SystemHealthIndicator({ sidebar = false }: { sidebar?: boolean }
           <StatusLight level={level} label={label} />
         </span>
         {sidebar ? <span>{label}</span> : null}
+        {sidebar && instanceHost ? <span className="ml-auto min-w-0 truncate rounded-[5px] bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground" title={instanceHost} data-testid="instance-host">{instanceHost}</span> : null}
       </DialogTrigger>
       <DialogContent showCloseButton>
         <DialogHeader>
@@ -180,6 +194,11 @@ export function SystemHealthIndicator({ sidebar = false }: { sidebar?: boolean }
           <Button size="icon-xs" variant="ghost" aria-label="Refresh" title="Refresh" onClick={() => void health.refresh()} disabled={health.refreshing}><RefreshCw aria-hidden="true" className={health.refreshing ? "size-3.5 animate-spin" : "size-3.5"} /></Button>
         </div>
         <HealthCheckSections snapshot={health.snapshot} compact />
+        <dl className="divide-y border-t text-xs" data-testid="connection-details">
+          <div className="flex items-center justify-between gap-3 py-1.5"><dt className="text-muted-foreground">This window</dt><dd className="min-w-0 truncate font-mono" title={windowOrigin}>{windowOrigin || "Not available"}</dd></div>
+          <div className="flex items-center justify-between gap-3 py-1.5"><dt className="text-muted-foreground">Forge address</dt><dd className="min-w-0 truncate font-mono" title={health.snapshot?.reachableAddress}>{health.snapshot?.reachableAddress ?? "Not available"}</dd></div>
+          <div className="flex items-center justify-between gap-3 py-1.5"><dt className="text-muted-foreground">Route</dt><dd>{connectionRoute(windowOrigin)}</dd></div>
+        </dl>
       </DialogContent>
     </Dialog>
   );

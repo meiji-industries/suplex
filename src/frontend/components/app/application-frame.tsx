@@ -14,7 +14,7 @@ export function ApplicationFrame({ title, headerActions, headerRight, sidebar, c
       {sidebar ?? <AppSidebar />}
       <GlobalNewTaskDialog />
       <SidebarInset className="min-w-0">
-        <header data-app-header className="flex h-(--header-height) shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-(--header-height)">
+        <header data-app-header className="titlebar-drag titlebar-inset flex h-(--header-height) shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-(--header-height)">
           <div className="flex w-full items-center gap-1 px-4 lg:gap-2 lg:px-6">
             <SidebarTrigger className="-ml-1" aria-label="Open navigation" title="Toggle navigation" />
             <Separator orientation="vertical" className="mx-2 data-[orientation=vertical]:h-4" />

@@ -5,7 +5,6 @@ import { SystemHealthProvider } from "./system-health.js";
 import { isApplicationPath, navigate, shouldNavigate } from "../../lib/navigation.js";
 import { AuthView } from "../../views/auth.js";
 import { AdminView } from "../../views/admin.js";
-import { AttentionView } from "../../views/attention.js";
 import { CompanySettingsView } from "../../views/company-settings.js";
 import { ProfileView } from "../../views/profile.js";
 import { Dashboard } from "../../views/dashboard.js";
@@ -33,7 +32,6 @@ function AppView(): ReactElement {
   if (pathname === "/templates") return <TaskTemplateSettings />;
   if (pathname === "/tasks" || pathname.startsWith("/tasks/")) return <TasksView />;
   if (pathname === "/board" || pathname.startsWith("/board/")) return <TasksView mode="board" />;
-  if (pathname === "/attention") return <AttentionView />;
   if (pathname === "/timeline") return <TimelineView />;
   if (pathname === "/analytics") return <AnalyticsView />;
   return <Dashboard />;

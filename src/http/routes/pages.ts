@@ -131,10 +131,6 @@ const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
     if (!(await requirePageSession(request, reply))) return reply;
     return sendHtml(request, reply, renderApplicationPage("analytics", assetMode));
   });
-  app.get("/attention", async (request, reply) => {
-    if (!(await requirePageSession(request, reply))) return reply;
-    return sendHtml(request, reply, renderApplicationPage("attention", assetMode));
-  });
   app.get("/health", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
     reply.header("Cache-Control", "no-store");

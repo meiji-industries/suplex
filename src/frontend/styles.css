@@ -170,6 +170,20 @@
   }
 }
 
+/*
+ * A desktop window with a hidden title bar draws its traffic lights over the page. Browsers define
+ * none of the titlebar-area-* variables, so the inset is zero and nothing moves there. The main
+ * toolbar only needs the inset when the sidebar is not sitting beside it; the sidebar header keeps
+ * the whole traffic-light row above its own content.
+ */
+.titlebar-drag { -webkit-app-region: drag; }
+.titlebar-drag :is(a, button, input, select, textarea, [role="button"], [role="combobox"], [role="menuitem"]) { -webkit-app-region: no-drag; }
+.titlebar-top { padding-top: max(0.5rem, calc(env(titlebar-area-height, 0px) - 0.625rem)); }
+.titlebar-inset { padding-left: env(titlebar-area-x, 0px); }
+@media (min-width: 768px) {
+  [data-slot="sidebar"][data-state="expanded"] ~ main .titlebar-inset { padding-left: 0; }
+}
+
 .prose-forge {
   overflow-wrap: anywhere;
   font-size: 13px;

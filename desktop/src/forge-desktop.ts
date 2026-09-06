@@ -11,7 +11,7 @@ type Bounds = { width: number; height: number; x?: number; y?: number };
 type Preventable = { preventDefault(): void };
 
 const retryPage = (origin: string): string =>
-  `data:text/html,${encodeURIComponent(`<h1>Forge is not available at ${origin}</h1><p><a href="${origin}">Retry</a></p><script>setTimeout(() => { location.href = ${JSON.stringify(origin)}; }, 5000);</script>`)}`;
+  `data:text/html,${encodeURIComponent(`<style>body{-webkit-app-region:drag;padding-top:env(titlebar-area-height,0px)}a{-webkit-app-region:no-drag}</style><h1>Forge is not available at ${origin}</h1><p><a href="${origin}">Retry</a></p><script>setTimeout(() => { location.href = ${JSON.stringify(origin)}; }, 5000);</script>`)}`;
 
 /**
  * The whole desktop shell: one sandboxed window that attaches to an existing Forge origin.
@@ -111,6 +111,9 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
       minWidth: 900,
       minHeight: 600,
       backgroundColor: "#0a0a0a",
+      titleBarStyle: "hidden", // the page keeps clear of the traffic lights through env(titlebar-area-x)
+      titleBarOverlay: true,
+      trafficLightPosition: { x: 16, y: 12 },
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
     });
     window = win;

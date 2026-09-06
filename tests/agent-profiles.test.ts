@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { nativeApp } from "./helpers/native-app.js";
 
-test("fresh installs have one Root and one Worker with OpenCode settings", async () => {
+test("fresh installs have one Coordinator and one Worker with OpenCode settings", async () => {
   const f = await nativeApp();
   try {
     expect(f.profiles.list(f.userId)).toMatchObject([

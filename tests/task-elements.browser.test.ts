@@ -4,14 +4,14 @@ import { expect, test } from "vitest";
 import type { TaskExecution } from "../src/task-execution-contracts.js";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
-test.each([1280, 390])("task elements show native tools, Root plan and GitHub checks at %ipx", { timeout: 60_000 }, async width => {
+test.each([1280, 390])("task elements show native tools, Coordinator plan and GitHub checks at %ipx", { timeout: 60_000 }, async width => {
   const value = await nativeBrowser(width);
   try {
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Inspect agent work", description: "Preserve the live panes and task controls.", startImmediately: false, idempotencyKey: "elements" });
     let execution: TaskExecution = { sessions: [{ id: "root", role: "root", generation: 1, available: true, limited: false,
       plan: [{ content: "Inspect the requested scope", status: "completed" }, { content: "Verify worker output independently", status: "in_progress" }],
       tools: [{ id: "call_read", name: "read", status: "running", input: { filePath: "README.md" }, output: null, error: null }],
-    }, { id: "worker", role: "worker", generation: 1, available: true, limited: true, plan: [{ content: "Worker plan must not replace Root", status: "pending" }], tools: [{ id: "call_test", name: "bash", status: "error", input: { command: "pnpm test" }, output: null, error: "Expected 2, received 1" }] }] };
+    }, { id: "worker", role: "worker", generation: 1, available: true, limited: true, plan: [{ content: "Worker plan must not replace Coordinator", status: "pending" }], tools: [{ id: "call_test", name: "bash", status: "error", input: { command: "pnpm test" }, output: null, error: "Expected 2, received 1" }] }] };
     const { page } = value;
     await page.route(`**/api/tasks/${task.id}/execution`, route => route.fulfill({ json: execution }));
     await page.route(`**/api/tasks/${task.id}/checks`, route => route.fulfill({ json: { available: true, runs: [
@@ -22,8 +22,8 @@ test.each([1280, 390])("task elements show native tools, Root plan and GitHub ch
       { name: "Informational check", status: "successful", conclusion: "NEUTRAL", url: null },
     ] } }));
     await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
-    await page.getByRole("region", { name: "Root plan", exact: true }).getByText("Verify worker output independently").waitFor();
-    expect(await page.getByText("Worker plan must not replace Root").count()).toBe(0);
+    await page.getByRole("region", { name: "Coordinator plan", exact: true }).getByText("Verify worker output independently").waitFor();
+    expect(await page.getByText("Worker plan must not replace Coordinator").count()).toBe(0);
     await page.getByRole("button", { name: "Toggle plan" }).click();
     await page.getByText("Verify worker output independently").waitFor({ state: "hidden" });
     await page.getByRole("button", { name: "Toggle plan" }).click();

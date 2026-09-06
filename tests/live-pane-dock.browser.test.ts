@@ -23,8 +23,8 @@ test.each([1280, 390])("live panes span the workspace below the scrolling task a
     store.bindPane({ sessionId: root.id, generation: root.generation, paneId: "wProof:p1" });
     await dock.waitFor();
     await dock.locator(".xterm-screen").waitFor();
-    expect(await page.getByRole("button", { name: /Open (Root|Worker) terminal/ }).count()).toBe(0);
-    expect(await page.getByLabel("Note to Root", { exact: true }).count()).toBe(0);
+    expect(await page.getByRole("button", { name: /Open (Coordinator|Worker) terminal/ }).count()).toBe(0);
+    expect(await page.getByLabel("Note to Coordinator", { exact: true }).count()).toBe(0);
     const main = await page.locator("[data-task-detail]").boundingBox();
     const bounds = await dock.boundingBox();
     expect(bounds!.x).toBe(main!.x);
@@ -52,7 +52,7 @@ test.each([1280, 390])("live panes span the workspace below the scrolling task a
     store.bindPane({ sessionId: worker.id, generation: worker.generation, paneId: "wProof:p2" });
     await dock.getByRole("tab", { name: "Worker", exact: true }).click();
     await dock.getByLabel("Live pane output for worker", { exact: true }).waitFor();
-    await dock.getByRole("tab", { name: "Root", exact: true }).click();
+    await dock.getByRole("tab", { name: "Coordinator", exact: true }).click();
     await dock.getByLabel("Live pane output for root", { exact: true }).waitFor();
     await page.getByRole("tab", { name: /^Activity/ }).click();
     expect(await dock.isVisible()).toBe(true);

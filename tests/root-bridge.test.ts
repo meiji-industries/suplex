@@ -16,7 +16,7 @@ import { runCommand } from "../src/command-runner.js";
 import { nativeApp } from "./helpers/native-app.js";
 import { ArtifactStore } from "../src/artifacts.js";
 
-test("Root image reads enforce task ownership and content integrity and return MCP image content", async () => {
+test("Coordinator image reads enforce task ownership and content integrity and return MCP image content", async () => {
   const value = await nativeApp();
   try {
     const image = { filename: "design.png", mimeType: "image/png" as const, base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64") };
@@ -49,6 +49,17 @@ const run = (command: string, args: string[]) => runCommand({ taskId: null, step
 
 const root: RootIdentity = { taskId: "task_1", sessionId: "session_1", generation: 3 };
 
+test("delegation requires the Coordinator's plan and acceptance criteria before dispatch", async () => {
+  const adapter = new ForgeAdapterFake();
+  const bridge = new RootBridge(root, adapter);
+  for (const request of [
+    { kind: "delegate_worker", instruction: "Plan and implement the task" },
+    { kind: "delegate_worker", plan: " ", acceptanceCriteria: ["Checks pass"], instruction: "Edit the file" },
+    { kind: "delegate_worker", plan: "Change the existing handler", acceptanceCriteria: [], instruction: "Edit the file" },
+  ]) await expect(bridge.call(request)).rejects.toMatchObject({ code: "invalid_request" });
+  expect(adapter.calls).toEqual([]);
+});
+
 class ForgeAdapterFake implements RootBridgeAdapter {
   readonly calls: string[] = [];
   current = true;
@@ -56,7 +67,7 @@ class ForgeAdapterFake implements RootBridgeAdapter {
 
   async assertCurrentRoot(identity: RootIdentity): Promise<void> {
     this.calls.push(`assert:${identity.taskId}:${identity.sessionId}:${identity.generation}`);
-    if (!this.current) throw new RootBridgeFailure("root_identity_mismatch", "Root bridge binding no longer matches this task session");
+    if (!this.current) throw new RootBridgeFailure("root_identity_mismatch", "Coordinator bridge binding no longer matches this task session");
   }
 
   async observe(identity: RootIdentity): Promise<unknown> {
@@ -64,8 +75,8 @@ class ForgeAdapterFake implements RootBridgeAdapter {
     return { taskId: identity.taskId, observed: true };
   }
 
-  async delegateWorker(identity: RootIdentity, instruction: string): Promise<unknown> {
-    this.calls.push(`delegate:${identity.sessionId}:${instruction}`);
+  async delegateWorker(identity: RootIdentity, assignment: Parameters<RootBridgeAdapter["delegateWorker"]>[1]): Promise<unknown> {
+    this.calls.push(`delegate:${identity.sessionId}:${assignment.instruction}`);
     return { assignmentId: "worker_1" };
   }
 
@@ -90,12 +101,12 @@ function mcpClient(transport: { write(chunk: string): boolean }, responses: unkn
   };
 }
 
-test("Root bridge rejects stale persisted bindings before every operation", async () => {
+test("Coordinator bridge rejects stale persisted bindings before every operation", async () => {
   const adapter = new ForgeAdapterFake();
   const bridge = new RootBridge(root, adapter);
   await expect(bridge.call({ kind: "observe" })).resolves.toEqual({ taskId: "task_1", observed: true });
   adapter.current = false;
-  await expect(bridge.call({ kind: "delegate_worker", instruction: "Inspect the current diff." })).rejects.toMatchObject({ code: "root_identity_mismatch" });
+  await expect(bridge.call({ kind: "delegate_worker", plan: "Inspect the scoped diff for the requested implementation", acceptanceCriteria: ["The diff contains only requested changes"], instruction: "Inspect the current diff." })).rejects.toMatchObject({ code: "root_identity_mismatch" });
   expect(adapter.calls).toEqual([
     "assert:task_1:session_1:3",
     "observe:task_1",
@@ -103,7 +114,7 @@ test("Root bridge rejects stale persisted bindings before every operation", asyn
   ]);
 });
 
-test("MCP discovery and typed Root calls use the scoped bridge transport", async () => {
+test("MCP discovery and typed Coordinator calls use the scoped bridge transport", async () => {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const responses: unknown[] = [];
@@ -121,7 +132,7 @@ test("MCP discovery and typed Root calls use the scoped bridge transport", async
   expect(listed).toMatchObject({ result: { tools: [expect.objectContaining({ name: "forge_root" })] } });
   const observed = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "observe", _meta: { progressToken: "mcp-client" } }, _meta: { progressToken: "request" } } });
   expect(observed).toMatchObject({ result: { structuredContent: { taskId: "task_1", observed: true } } });
-  const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", instruction: "Inspect the current diff." } } });
+  const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", plan: "Inspect the scoped diff for the requested implementation", acceptanceCriteria: ["The diff contains only requested changes"], instruction: "Inspect the current diff." } } });
   expect(delegated).toMatchObject({ result: { structuredContent: { assignmentId: "worker_1" } } });
   expect(adapter.calls).toContain("delegate:session_1:Inspect the current diff.");
   reader.close();
@@ -152,8 +163,8 @@ test("stdio bridge invokes the production controller against a durable task cont
     const reader = startRootBridgeTransport({ bridge: new RootBridge({ taskId: "task", sessionId: session.id, generation: session.generation }, controller), stdin, stdout });
     const call = mcpClient(stdin, responses);
     await call({ method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } } });
-    const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", instruction: "Inspect the worktree." } } });
-    expect(delegated).toMatchObject({ result: { structuredContent: { worker: { kind: "worker", lifecycle: "live" }, next: expect.stringContaining("End this Root turn now") } } });
+    const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", plan: "Inspect the scoped diff for the requested implementation", acceptanceCriteria: ["The diff contains only requested changes"], instruction: "Inspect the worktree." } } });
+    expect(delegated).toMatchObject({ result: { structuredContent: { worker: { kind: "worker", lifecycle: "live" }, next: expect.stringContaining("End this Coordinator turn now") } } });
     expect(store.currentSession("task", "worker")).toMatchObject({ lifecycle: "live", nativeSessionId: expect.stringMatching(/^ses_/) });
     reader.close();
   } finally { database.close(); await rm(directory, { recursive: true, force: true }); }

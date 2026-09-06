@@ -108,7 +108,7 @@ test("projects desktop flow creates native projects and shows actionable validat
       const forgeProject = page.locator("article").filter({ hasText: "forge" });
       await forgeProject.getByRole("button", { name: "Configure" }).click();
       expect(await page.getByLabel("Base branch").inputValue()).toBe("main");
-      expect(await page.getByLabel("Root default").innerText()).toContain("Root");
+      expect(await page.getByLabel("Coordinator default").innerText()).toContain("Root");
       expect(await page.getByLabel("Worker default").innerText()).toContain("Worker");
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
       await page.locator("[data-app-header]").getByRole("button", { name: "New project", exact: true }).click();

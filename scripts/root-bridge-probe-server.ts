@@ -21,8 +21,8 @@ const adapter: RootBridgeAdapter = {
     await record({ kind: "observe", root });
     return { observedTaskId: root.taskId };
   },
-  async delegateWorker(root: RootIdentity, instruction: string): Promise<unknown> {
-    await record({ kind: "delegate_worker", root, instruction });
+  async delegateWorker(root, assignment): Promise<unknown> {
+    await record({ kind: "delegate_worker", root, ...assignment });
     return { assignmentId: "probe-worker" };
   },
   async requestDelivery(): Promise<unknown> {

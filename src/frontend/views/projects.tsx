@@ -118,7 +118,7 @@ function ProjectDefaultAgents({ project, agents }: { project: ApiProject; agents
     <div className="flex flex-wrap gap-x-3 gap-y-1.5" aria-label="Default agents">
       {projectRoles.map((role) => {
         const agent = agents.find((candidate) => candidate.id === project[`${role}ProfileId`]);
-        const label = role.slice(0, 1).toUpperCase() + role.slice(1);
+        const label = role === "root" ? "Coordinator" : "Worker";
         return (
           <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground" key={role} title={`${label}: ${agent?.name ?? "Unassigned"}`}>
             {agent ? <ProfileAvatar name={agent.name} seed={agent.avatarSeed} size="xs" /> : null}
@@ -213,7 +213,7 @@ function ProjectSettingsDialog({
                   const role = key === "rootProfileId" ? "root" : "worker";
                   const options = agents.filter((agent) => agent.role === role);
                   const selected = options.find((agent) => agent.id === form[key]);
-                  return <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{role.slice(0, 1).toUpperCase() + role.slice(1)} default</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><ProfileAvatar name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select></Field>;
+                  return <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{role === "root" ? "Coordinator" : "Worker"} default</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><ProfileAvatar name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select></Field>;
                 })}
                 {agents.length === 0 ? <FieldDescription>No agents configured. <a href={withCompany("/admin/agents", project.companyId)}>Add an agent</a> before saving this project.</FieldDescription> : null}
               </FieldSet>

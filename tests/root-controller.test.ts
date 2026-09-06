@@ -11,12 +11,28 @@ import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
 
-test("Root owns planning and review while Workers receive implementation assignments", async () => {
+test("Coordinator owns planning and review while Workers receive implementation assignments", async () => {
   const value = await fixture();
   const root = value.controller.prepareRoot("task");
   expect(value.store.pendingTurns(root.id)[0]?.promptText).toContain("state your implementation plan and acceptance criteria before delegating");
   const worker = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Implement the specified change" });
   expect(value.store.pendingTurns(worker.id)[0]?.promptText).toContain("Do not take over task planning or final review");
+});
+
+test("Coordinator handoff preserves its plan and review criteria in the Worker prompt", async () => {
+  const value = await fixture();
+  value.controller.prepareRoot("task");
+  await value.controller.delegateWorker(value.identity(), {
+    plan: "Update the existing README heading; leave runtime code unchanged.",
+    acceptanceCriteria: ["Only README.md changes", "The heading describes the current runtime"],
+    instruction: "Apply the heading change and report the diff.",
+  });
+  const worker = value.store.currentSession("task", "worker");
+  expect(worker).not.toBeNull();
+  const prompt = value.store.turns("task").find(turn => turn.sessionId === worker?.id)?.promptText;
+  expect(prompt).toContain("Coordinator plan:\nUpdate the existing README heading");
+  expect(prompt).toContain("1. Only README.md changes\n2. The heading describes the current runtime");
+  expect(prompt).toContain("Worker instructions:\nApply the heading change");
 });
 
 test("session claims recover from PID reuse without stealing a live or uncertain owner", async () => {
@@ -105,7 +121,7 @@ function ageDispatch(database: ForgeDatabase, turnId: string): void {
   database.authTransaction(db => db.prepare("UPDATE forge_task_turns SET dispatch_attempt_json = json_set(dispatch_attempt_json, '$.claimedAt', '2020-01-01T00:00:00.000Z') WHERE id = ?").run(turnId));
 }
 
-test("a proven stopped Root execution queues one new continuation on the same native session", async () => {
+test("a proven stopped Coordinator execution queues one new continuation on the same native session", async () => {
   const value = await fixture();
   await value.controller.recover("task");
   const original = value.harness.dispatched[0]!;
@@ -143,7 +159,7 @@ async function fixture(startImmediately = true) {
   const controller = new RootController(store, harness);
   const identity = () => {
     const root = store.currentSession("task", "root");
-    if (!root) throw new Error("Root not created");
+    if (!root) throw new Error("Coordinator not created");
     return { taskId: "task", sessionId: root.id, generation: root.generation };
   };
   return { directory, database, store, harness, controller, identity };
@@ -154,7 +170,7 @@ test.each(["root", "worker"] as const)("a crashed %s tool retains its turn until
   await value.controller.recover("task");
   if (kind === "worker") {
     value.harness.finish(value.harness.dispatched[0]!.messageID);
-    await value.controller.delegateWorker(value.identity(), "Make the change");
+    await value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Make the change" });
   }
   const dispatched = value.harness.dispatched.at(-1)!;
   value.harness.observations.set(dispatched.messageID, { ...value.harness.observations.get(dispatched.messageID)!, state: "unknown", executionUncertain: { stoppedServerGeneration: value.harness.serverGeneration } });
@@ -190,7 +206,7 @@ test("backlog waits for a durable start and resumes after reopening the database
   } finally { reopened.close(); }
 });
 
-test("answers wake the same Root atomically and stale answers cannot revive another question", async () => {
+test("answers wake the same Coordinator atomically and stale answers cannot revive another question", async () => {
   const value = await fixture();
   await value.controller.recover("task");
   value.harness.finish(value.harness.dispatched[0]!.messageID);
@@ -222,7 +238,7 @@ test("start immediately survives closing Forge before the first native dispatch"
   } finally { reopened.close(); }
 });
 
-test("Root resumes the same native session without reposting its prompt", async () => {
+test("Coordinator resumes the same native session without reposting its prompt", async () => {
   const value = await fixture();
   await value.controller.recover("task");
   const root = value.store.currentSession("task", "root");
@@ -249,7 +265,7 @@ test("cancellation fences dispatch before native abort and retries abort after r
   expect(value.harness.dispatched).toHaveLength(1);
 });
 
-test("native Root errors ask for a specific intervention instead of consuming repeated turns", async () => {
+test("native Coordinator errors ask for a specific intervention instead of consuming repeated turns", async () => {
   const value = await fixture();
   await value.controller.recover("task");
   value.harness.finish(value.harness.dispatched[0]!.messageID, "error");
@@ -284,7 +300,7 @@ test("cancellation waits for an in-flight dispatch to settle before aborting", a
   expect(value.harness.dispatched).toHaveLength(1);
 });
 
-test("delivery retires the Root server without another model turn", async () => {
+test("delivery retires the Coordinator server without another model turn", async () => {
   const value = await fixture();
   await value.controller.recover("task");
   const root = value.store.currentSession("task", "root")!;
@@ -297,11 +313,11 @@ test("delivery retires the Root server without another model turn", async () => 
   expect(value.harness.dispatched).toHaveLength(1);
 });
 
-test("completed Worker cleanup cannot gate Root progress", async () => {
+test("completed Worker cleanup cannot gate Coordinator progress", async () => {
   const value = await fixture();
   await value.controller.recover("task");
   value.harness.finish(value.harness.dispatched[0]!.messageID);
-  await value.controller.delegateWorker(value.identity(), "Make the change");
+  await value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Make the change" });
   const worker = value.store.currentSession("task", "worker")!;
   value.harness.finish(value.harness.dispatched[1]!.messageID);
   value.harness.failStop = true;
@@ -322,7 +338,7 @@ test("Herdr display failure does not prevent native dispatch", async () => {
   expect(value.store.currentSession("task", "root")).toMatchObject({ lifecycle: "live", paneId: null });
 });
 
-test("a finished Root turn queues one continuation while its objective remains active", async () => {
+test("a finished Coordinator turn queues one continuation while its objective remains active", async () => {
   const value = await fixture();
   await value.controller.recover("task");
   value.harness.finish(value.harness.dispatched[0]!.messageID);
@@ -362,13 +378,13 @@ test("concurrent controllers own only one native launch and prompt", async () =>
   expect(value.harness.dispatched).toHaveLength(1);
 });
 
-test("one completed Worker wakes Root once and allows the next assignment", async () => {
+test("one completed Worker wakes Coordinator once and allows the next assignment", async () => {
   const value = await fixture();
   await value.controller.recover("task");
   value.harness.finish(value.harness.dispatched[0]!.messageID);
   await value.controller.recover("task");
-  await value.controller.delegateWorker(value.identity(), "Make the scoped change");
-  await expect(value.controller.delegateWorker(value.identity(), "Duplicate work")).rejects.toThrow("worker_already_assigned");
+  await value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Make the scoped change" });
+  await expect(value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Duplicate work" })).rejects.toThrow("worker_already_assigned");
   const worker = value.store.currentSession("task", "worker")!;
   value.harness.finish(value.harness.dispatched[1]!.messageID);
   await value.controller.recover("task");
@@ -376,14 +392,14 @@ test("one completed Worker wakes Root once and allows the next assignment", asyn
   await value.controller.recover("task");
   expect(value.store.currentSession("task", "worker")).toMatchObject({ id: worker.id, lifecycle: "stopped" });
   expect(value.harness.dispatched.filter((intent) => intent.agent === "forge-root")).toHaveLength(2);
-  await value.controller.delegateWorker(value.identity(), "Next scoped change");
+  await value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Next scoped change" });
   expect(value.store.currentSession("task", "worker")?.generation).toBe(worker.generation + 1);
 });
 
-test("an interrupted Worker preserves dirty files and reports interruption to Root", async () => {
+test("an interrupted Worker preserves dirty files and reports interruption to Coordinator", async () => {
   const value = await fixture();
   await value.controller.recover("task");
-  await value.controller.delegateWorker(value.identity(), "Edit the file");
+  await value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Edit the file" });
   await writeFile(join(value.directory, "dirty.txt"), "keep this work");
   value.harness.finish(value.harness.dispatched[1]!.messageID, "interrupted");
   await value.controller.recover("task");
@@ -396,7 +412,7 @@ test("an interrupted Worker preserves dirty files and reports interruption to Ro
 test("cancellation prevents recovery and fences late Worker results", async () => {
   const value = await fixture();
   await value.controller.recover("task");
-  await value.controller.delegateWorker(value.identity(), "Edit");
+  await value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Edit" });
   const worker = value.store.currentSession("task", "worker")!;
   value.store.cancel("task");
   await value.controller.recover("task");

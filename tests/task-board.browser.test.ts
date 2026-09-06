@@ -25,9 +25,9 @@ test.each([1280, 390])("native task creation preserves start intent and role cho
     for (const immediate of [true, false]) {
       await page.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true }).click();
       const dialog = page.getByRole("dialog");
-      const rootSelector = dialog.getByRole("button", { name: /^Root assignee:/ });
+      const rootSelector = dialog.getByRole("button", { name: /^Coordinator assignee:/ });
       await rootSelector.click();
-      await page.getByRole("menu").getByText("Root", { exact: true }).waitFor();
+      await page.getByRole("menu").getByText("Coordinator", { exact: true }).waitFor();
       const rootOption = page.getByRole("menuitemradio", { name: /Root · gpt-5.6-sol/ });
       await rootOption.waitFor();
       expect(await rootOption.locator('[data-slot="avatar"]').count()).toBe(1);
@@ -47,7 +47,7 @@ test.each([1280, 390])("native task creation preserves start intent and role cho
       await page.keyboard.press("Escape");
       await page.getByRole("menu").waitFor({ state: "hidden" });
       await dialog.getByLabel("Task title", { exact: true }).fill(`Task ${immediate}`);
-      await dialog.getByLabel("Task description", { exact: true }).fill("Use the native Root and Worker");
+      await dialog.getByLabel("Task description", { exact: true }).fill("Use the native Coordinator and Worker");
       await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).setChecked(immediate);
       await page.screenshot({ path: join(tmpdir(), `forge-native-create-${width}-${immediate}.png`) });
       const response = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/api/companies/${value.company.id}/tasks`));

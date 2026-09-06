@@ -119,7 +119,7 @@ beforeEach(async () => {
   auth.setCompanyIssueCode(adminId, companyId, "HPC");
 
   const profiles = new AgentProfileService(database, auth);
-  const archived = profiles.create(adminId, { name: "Archived Root", role: "root", avatarSeed: "a".repeat(32), provider: "openai", model: "gpt-5.6-sol", reasoningLevel: "medium", serviceTier: "default" });
+  const archived = profiles.create(adminId, { name: "Archived Coordinator", role: "root", avatarSeed: "a".repeat(32), provider: "openai", model: "gpt-5.6-sol", reasoningLevel: "medium", serviceTier: "default" });
   profiles.update(adminId, archived.id, { archived: true });
 
   const project = await projects.createProject(adminId, companyId, {
@@ -193,9 +193,9 @@ test("Hermes external agent full browser lifecycle at desktop and narrow viewpor
     const internalTable = page.getByRole("table", { name: "Internal Agents" });
     expect(await internalTable.getByText("Internal agents", { exact: true }).isVisible()).toBe(true);
     const internalRows = await internalTable.locator("tbody tr").allTextContents();
-    expect(internalRows.findIndex((text) => text.includes("Root"))).toBeLessThan(internalRows.findIndex((text) => text.includes("Archived Root")));
+    expect(internalRows.findIndex((text) => text.includes("Coordinator"))).toBeLessThan(internalRows.findIndex((text) => text.includes("Archived Coordinator")));
     expect(await internalTable.getByRole("row", { name: /Edit Root/i }).getByText("active", { exact: true }).isVisible()).toBe(true);
-    expect(await internalTable.getByRole("row", { name: /Edit Archived Root/i }).getByText("archived", { exact: true }).isVisible()).toBe(true);
+    expect(await internalTable.getByRole("row", { name: /Edit Archived Coordinator/i }).getByText("archived", { exact: true }).isVisible()).toBe(true);
     const hermesTable = page.getByRole("table", { name: "Hermes Agents" });
     expect(await hermesTable.getByText("Hermes agents", { exact: true }).isVisible()).toBe(true);
     expect(await page.getByRole("row", { name: /Hermes agent SRE Hermes Bot/i }).count()).toBe(0);

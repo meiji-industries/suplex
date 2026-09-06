@@ -11,11 +11,11 @@ test.each([1280, 390])("task menu labels stay on one line and Duplicate opens a 
     const { page } = value;
     await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
     await page.getByRole("button", { name: "Task options" }).click();
-    const refresh = page.getByRole("menuitem", { name: "Check current state", exact: true });
+    const refresh = page.getByRole("menuitem", { name: "Refresh", exact: true });
     await refresh.waitFor();
     const lines = await refresh.evaluate(element => {
       const range = document.createRange();
-      const text = Array.from(element.childNodes).find(node => node.nodeType === Node.TEXT_NODE && node.textContent?.includes("Check current state"));
+      const text = Array.from(element.childNodes).find(node => node.nodeType === Node.TEXT_NODE && node.textContent?.includes("Refresh"));
       if (!text) throw new Error("Missing menu text");
       range.selectNodeContents(text);
       return range.getClientRects().length;

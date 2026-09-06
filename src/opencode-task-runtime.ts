@@ -64,11 +64,11 @@ export class OpenCodeTaskRuntime {
     const client = openCodeServerClient(reference);
     if (scope.role === "root") {
       const bridgeStatus = (await client.mcpStatus(scope.directory)).forge_root;
-      if (bridgeStatus?.status !== "connected") throw new Error(`Forge Root bridge is unavailable: ${bridgeStatus?.error ?? bridgeStatus?.status ?? "not configured"}`);
+      if (bridgeStatus?.status !== "connected") throw new Error(`Forge Coordinator bridge is unavailable: ${bridgeStatus?.error ?? bridgeStatus?.status ?? "not configured"}`);
     }
     if (nativeSessionId) return (await client.getSession(nativeSessionId, scope.directory)).id;
     const native = await client.createSession({
-      title: `${scope.taskId} ${scope.role}`, directory: scope.directory,
+      title: `${scope.taskId} ${scope.role === "root" ? "Coordinator" : "Worker"}`, directory: scope.directory,
       model: { providerID: scope.profile.providerID, id: scope.profile.modelID, variant: scope.profile.reasoningEffort },
       agent: `forge-${scope.role}`,
     });
@@ -95,7 +95,7 @@ export class OpenCodeTaskRuntime {
       ? await this.herdr.splitPane({ paneId: input.rootPaneId, direction: "right", cwd: scope.directory, focus: false })
       : (await this.herdr.createWorkspace({ label: `forge-${scope.taskId}`, cwd: scope.directory, focus: false })).rootPane;
     input.persistPane(pane.paneId);
-    const title = `${scope.taskId} ${scope.role}`;
+    const title = `${scope.taskId} ${scope.role === "root" ? "Coordinator" : "Worker"}`;
     await this.herdr.renamePane(pane.paneId, title);
     await this.herdr.reportPaneMetadata({ paneId: pane.paneId, source: "forge", title, tokens: { forge_binding_id: scope.id, forge_task_id: scope.taskId, forge_native_session_id: input.nativeSessionId, forge_server_generation: reference.generation } });
     const deadline = Date.now() + 2_000;

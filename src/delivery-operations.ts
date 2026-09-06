@@ -169,7 +169,7 @@ export class DeliveryOperations {
   private async requestReview(root: RootIdentity, control: TaskControl, repository: string, branch: string, expectedHead?: string): Promise<GithubPullRequestObservation> {
     const observed = await this.checks(control, repository, branch);
     if (observed.headSha !== control.worktree!.headSha) throw new DeliveryOperationFailure("head_diverged", "GitHub returned a pull request for another head");
-    if (!expectedHead || expectedHead !== observed.headSha) throw new DeliveryOperationFailure("head_diverged", "The Root must review the current observed pull request head before requesting merge");
+    if (!expectedHead || expectedHead !== observed.headSha) throw new DeliveryOperationFailure("head_diverged", "The Coordinator must review the current observed pull request head before requesting merge");
     if (observed.state !== "open" || observed.number === null) throw new DeliveryOperationFailure("pull_request_closed", "The pull request is not open for review");
     this.store.assertCurrentRoot(root);
     await this.github.markReadyForReview({ repository, number: observed.number });
@@ -183,7 +183,7 @@ export class DeliveryOperations {
     const observed = await this.checks(control, repository, branch);
     if (observed.state === "merged") return this.completeIfTargetMatches(control, currentPull(repository, observed)!);
     if (observed.headSha !== control.worktree!.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed after review");
-    if (!expectedHead || expectedHead !== observed.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed after the Root reviewed it");
+    if (!expectedHead || expectedHead !== observed.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed after the Coordinator reviewed it");
     this.store.assertCurrentRoot(root);
     await this.github.mergePullRequest({ repository, number: observed.number!, headSha: observed.headSha! });
     const final = await this.github.getPullRequest({ repository, number: observed.number! });

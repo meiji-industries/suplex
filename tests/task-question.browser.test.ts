@@ -41,7 +41,7 @@ test.each([1280, 390])("human questions show recommendations and accept Other at
       if (!answer) throw new Error("The answer was not queued");
       value.tasks.repository.controls.markPrompted({ turnId: answer.id, generation: root.generation });
       await page.reload();
-      await conversation.getByText("Sent to Root", { exact: true }).waitFor();
+      await conversation.getByText("Sent to Coordinator", { exact: true }).waitFor();
       expect(await conversation.getByText("Queued", { exact: true }).count()).toBe(0);
       await page.screenshot({ path: join(tmpdir(), `forge-answer-sent-${width}.png`), fullPage: true });
     }

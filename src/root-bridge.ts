@@ -12,6 +12,7 @@ import {
   type RootBridgeConfig,
   type RootIdentity,
   type RootTool,
+  type WorkerAssignment,
 } from "./root-contracts.js";
 import { ForgeDatabase } from "./database.js";
 import { CliHerdrClient } from "./herdr-client.js";
@@ -32,7 +33,7 @@ export interface RootBridgeAdapter {
   assertCurrentRoot(root: RootIdentity): Promise<void>;
   observe(root: RootIdentity): Promise<unknown>;
   readImage(root: RootIdentity, artifactId: string): Promise<RootImageResult>;
-  delegateWorker(root: RootIdentity, instruction: string): Promise<unknown>;
+  delegateWorker(root: RootIdentity, assignment: WorkerAssignment): Promise<unknown>;
   requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation'], expectedHead?: string, review?: Extract<RootTool, { kind: "request_delivery" }>['review']): Promise<unknown>;
   askHuman(root: RootIdentity, question: string, options: Extract<RootTool, { kind: "ask_human" }>['options']): Promise<unknown>;
 }
@@ -43,7 +44,7 @@ export class RootBridge {
   async call(raw: unknown): Promise<unknown> {
     const parsed = RootToolSchema.safeParse(raw);
     if (!parsed.success)
-      throw new RootBridgeFailure("invalid_request", "Root bridge request is invalid");
+      throw new RootBridgeFailure("invalid_request", "Coordinator bridge request is invalid");
     await this.adapter.assertCurrentRoot(this.root);
     return this.dispatch(parsed.data);
   }
@@ -55,7 +56,7 @@ export class RootBridge {
       case "read_image":
         return this.adapter.readImage(this.root, tool.artifactId);
       case "delegate_worker":
-        return this.adapter.delegateWorker(this.root, tool.instruction);
+        return this.adapter.delegateWorker(this.root, { plan: tool.plan, acceptanceCriteria: tool.acceptanceCriteria, instruction: tool.instruction });
       case "request_delivery":
         return this.adapter.requestDelivery(this.root, tool.operation, tool.expectedHead, tool.review);
       case "ask_human":
@@ -124,11 +125,11 @@ export function startRootBridgeTransport(input: {
         if (image.success) respond(request.id, { content: [{ type: "text", text: image.data.filename }, { type: "image", data: image.data.data, mimeType: image.data.mimeType }] });
         else respond(request.id, { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result });
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Root bridge failed";
+        const message = error instanceof Error ? error.message : "Coordinator bridge failed";
         respond(request.id, { content: [{ type: "text", text: message }], isError: true });
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Root bridge failed";
+      const message = error instanceof Error ? error.message : "Coordinator bridge failed";
       const id = typeof request?.id === "string" || typeof request?.id === "number" ? request.id : null;
       fail(id, -32600, message);
     }
@@ -139,11 +140,11 @@ export function startRootBridgeTransport(input: {
 async function runRootBridge(): Promise<void> {
   const bindingIndex = process.argv.indexOf("--binding");
   const bindingPath = bindingIndex >= 0 ? process.argv[bindingIndex + 1] : undefined;
-  if (!bindingPath) throw new Error("Root bridge requires --binding <path>");
+  if (!bindingPath) throw new Error("Coordinator bridge requires --binding <path>");
   const fileSink = createDevLogFileSink("worker", join(dirname(bindingPath), "logs"));
   configureProcessLogSink(line => { fileSink(line); process.stderr.write(line); });
   const config = RootBridgeConfigSchema.parse(JSON.parse(await readFile(bindingPath, "utf8")));
-  if (!config.databasePath) throw new Error("Root bridge binding has no server database path");
+  if (!config.databasePath) throw new Error("Coordinator bridge binding has no server database path");
   const database = new ForgeDatabase(config.databasePath, { migrate: false });
   const herdr = new CliHerdrClient();
   const store = new TaskControlStore(database);
@@ -153,7 +154,7 @@ async function runRootBridge(): Promise<void> {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   void runRootBridge().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : "Root bridge failed"}\n`);
+    process.stderr.write(`${error instanceof Error ? error.message : "Coordinator bridge failed"}\n`);
     process.exitCode = 1;
   });
 }

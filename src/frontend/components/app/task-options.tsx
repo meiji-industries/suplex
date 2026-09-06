@@ -44,7 +44,7 @@ export function TaskOptions({ task, onChange, onError }: { task: Task; onChange:
     finally { setBusy(false); }
   };
   return <><DropdownMenu><DropdownMenuTrigger render={<Button size="icon-xs" variant="ghost" aria-label="Task options" />}><Ellipsis /></DropdownMenuTrigger><DropdownMenuContent align="start" className="w-max">
-    <DropdownMenuItem disabled={busy} onClick={() => void act("refresh")}><RefreshCw />Check current state</DropdownMenuItem>
+    <DropdownMenuItem disabled={busy} onClick={() => void act("refresh")}><RefreshCw />Refresh</DropdownMenuItem>
     <DropdownMenuItem disabled={busy} onClick={() => void duplicate()}><Copy />Duplicate</DropdownMenuItem>
     {!terminal ? <DropdownMenuItem disabled={busy} onClick={() => void act("cancel")}><Square />Cancel task</DropdownMenuItem> : null}
     {terminal || task.status === "backlog" ? <DropdownMenuItem disabled={busy} onClick={() => task.archivedAt ? void act("unarchive") : setArchive({ kind: "confirm" })}>{task.archivedAt ? <ArchiveRestore /> : <Archive />}{task.archivedAt ? "Open from archive" : "Archive task"}</DropdownMenuItem> : null}

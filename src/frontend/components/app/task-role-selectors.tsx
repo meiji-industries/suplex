@@ -12,7 +12,7 @@ export function TaskRoleSelector({ role, profiles, assignment, defaultProfileId,
   busy: boolean;
   onChange: (profileId: string) => void;
 }) {
-  const label = role === "root" ? "Root" : "Worker";
+  const label = role === "root" ? "Coordinator" : "Worker";
   const available = profiles.filter(profile => profile.role === role && !profile.archivedAt);
   const selected = available.find(profile => profile.id === (assignment || defaultProfileId));
   return <DropdownMenu>

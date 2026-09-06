@@ -6,7 +6,7 @@
 - Keep instructions to 20 words or fewer.
 - Keep descriptions to 25 words or fewer.
 - Use the active voice.
-- Name the actor. Use Forge, Root, Worker, OpenCode, GitHub, or you.
+- Name the actor. Use Forge, Coordinator, Worker, OpenCode, GitHub, or you.
 - Start instructions and buttons with an approved imperative verb.
 - Use the article. Write "Delete the worktree", not "Delete worktree".
 - Do not use the -ing form of a verb for status.
@@ -27,7 +27,7 @@ Approved imperative verbs: Accept, Add, Answer, Approve, Cancel, Check, Continue
 | Term | Use | Do not use |
 | --- | --- | --- |
 | task | task | issue, ticket |
-| Root | Root | Planner, Lead, Integrator |
+| Coordinator | Coordinator | Root, Planner, Lead, Integrator |
 | Worker | Worker | Builder, Developer |
 | you | you | member, human, user |
 | build | build | development, execution |

@@ -9,14 +9,16 @@ A company-scoped objective with a project, description, optional images, and
 delivery target. A task preserves its captured configuration while it runs.
 _Avoid_: Phase execution, issue projection.
 
-**Root**
-The continuing read-only agent that interprets the objective, delegates work,
-reviews results, and requests delivery operations.
+**Coordinator**
+The continuing read-only agent that investigates the source, writes the plan
+and acceptance criteria, independently reviews the Worker's changes and check
+evidence, and requests delivery operations. Each delegation carries its plan,
+acceptance criteria, and bounded implementation instructions.
 _Avoid_: Planner, Lead, Integrator.
 
 **Worker**
-The agent assigned one scoped instruction from Root. It edits, verifies, and
-commits in the task worktree, then returns its result to Root.
+The agent assigned one scoped instruction from Coordinator. It edits, verifies, and
+commits in the task worktree, then returns its result to Coordinator.
 _Avoid_: Builder, Developer, nested agent.
 
 **Native session**
@@ -44,13 +46,13 @@ request, ready pull request, or merged pull request.
 _Avoid_: Universal merge requirement, release phase.
 
 **Delivery operation**
-A Forge-owned Git or GitHub action requested by Root. The operation observes
+A Forge-owned Git or GitHub action requested by Coordinator. The operation observes
 current external state before deciding whether a mutation is necessary.
 _Avoid_: Integrator turn, mirrored release.
 
 **Agent profile**
 A named OpenCode provider, model, reasoning level, and service tier selection.
-Projects choose Root and Worker defaults. Tasks capture the chosen settings.
+Projects choose Coordinator and Worker defaults. Tasks capture the chosen settings.
 _Avoid_: CLI provider, separate Forge model catalog.
 
 **Configured provider**
@@ -60,7 +62,7 @@ _Avoid_: Verified inference, inherited Codex authentication.
 
 **Human question**
 A specific decision or external problem that prevents further safe work.
-An answer addresses that question and returns to the existing Root session.
+An answer addresses that question and returns to the existing Coordinator session.
 _Avoid_: Generic automatic-loop blocker, phase approval.
 
 **Execution cleanup confirmation**
@@ -77,7 +79,7 @@ _Avoid_: Anonymous operator, provider identity.
 **Hermes agent**
 A machine identity limited to its company, granted projects, and tasks it
 created. It uses a revocable credential rather than a Forge user session.
-_Avoid_: Root, Worker, unscoped API key.
+_Avoid_: Coordinator, Worker, unscoped API key.
 
 **Owner-controlled pilot**
 An installation where the owner trusts the repositories and inherited local

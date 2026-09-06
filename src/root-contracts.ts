@@ -31,10 +31,17 @@ export const DeliveryReviewSchema = z.object({
 }).strict();
 export type DeliveryReview = z.infer<typeof DeliveryReviewSchema>;
 
+export const WorkerAssignmentSchema = z.object({
+  plan: z.string().trim().min(1).describe("The Coordinator's implementation plan, based on its own source investigation. Include the chosen approach, affected files, and constraints."),
+  acceptanceCriteria: z.array(z.string().trim().min(1)).min(1).describe("Concrete outcomes and checks the Coordinator will use to review the implementation."),
+  instruction: z.string().trim().min(1).describe("Specific implementation or check commands for the Worker. Planning and final review remain with the Coordinator."),
+}).strict();
+export type WorkerAssignment = z.infer<typeof WorkerAssignmentSchema>;
+
 export const RootToolSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("observe") }).strict(),
   z.object({ kind: z.literal("read_image"), artifactId: opaqueId }).strict(),
-  z.object({ kind: z.literal("delegate_worker"), instruction: z.string().min(1) }).strict(),
+  WorkerAssignmentSchema.extend({ kind: z.literal("delegate_worker") }).strict(),
   z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional(), review: DeliveryReviewSchema.optional() }).strict(),
   z.object({ kind: z.literal("ask_human"), question: z.string().min(1), options: RecommendedQuestionOptionsSchema }).strict(),
 ]);

@@ -17,9 +17,9 @@ test.each([1280, 390])("New task remembers settings before and after creation at
     await page.goto(`${value.base}/tasks?company=${value.company.id}`);
     await page.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true }).click();
     const dialog = page.getByRole("dialog");
-    for (const role of ["Root", "Worker"]) {
+    for (const role of ["Coordinator", "Worker"]) {
       await dialog.getByRole("button", { name: new RegExp(`^${role} assignee:`) }).click();
-      await page.getByRole("menuitemradio", { name: new RegExp(`${role} ·`) }).click();
+      await page.getByRole("menuitemradio", { name: new RegExp(`${role === "Coordinator" ? "Root" : role} ·`) }).click();
       await page.keyboard.press("Escape");
       await page.getByRole("menu").waitFor({ state: "hidden" });
     }
@@ -52,9 +52,9 @@ test.each([1280, 390])("New task remembers settings before and after creation at
       expect(await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).isChecked()).toBe(false);
       expect(await dialog.getByRole("checkbox", { name: "Run project tests", exact: true }).isChecked()).toBe(false);
       expect(await dialog.getByRole("combobox", { name: "Screenshots" }).innerText()).toContain("Capture");
-      for (const role of ["Root", "Worker"]) {
+      for (const role of ["Coordinator", "Worker"]) {
         await dialog.getByRole("button", { name: new RegExp(`^${role} assignee:`) }).click();
-        expect(await page.getByRole("menuitemradio", { name: new RegExp(`${role} ·`) }).getAttribute("aria-checked")).toBe("true");
+        expect(await page.getByRole("menuitemradio", { name: new RegExp(`${role === "Coordinator" ? "Root" : role} ·`) }).getAttribute("aria-checked")).toBe("true");
         await page.keyboard.press("Escape");
         await page.getByRole("menu").waitFor({ state: "hidden" });
       }

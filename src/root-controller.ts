@@ -7,7 +7,7 @@ import { StructuredLogger } from "./logging.js";
 import { createOpenCodePromptIntent, type OpenCodePromptObservation } from "./opencode-session.js";
 import type { OpenCodeTaskRuntime, OpenCodeTaskScope } from "./opencode-task-runtime.js";
 import type { RootBridgeAdapter } from "./root-bridge.js";
-import type { DeliveryOperation, DeliveryReview, RootIdentity, RootImageResult } from "./root-contracts.js";
+import type { DeliveryOperation, DeliveryReview, RootIdentity, RootImageResult, WorkerAssignment } from "./root-contracts.js";
 import type { TaskControlStore } from "./root-session-store.js";
 import type { TaskControl, TaskSession, TaskTurn } from "./task-control.js";
 
@@ -26,9 +26,9 @@ function scope(control: TaskControl, session: TaskSession): OpenCodeTaskScope {
 }
 
 function initialPrompt(control: TaskControl): string {
-  return `You are the continuing read-only Root for this Forge task. You own repository investigation, planning, and independent review of the Worker's output. Read the relevant source yourself and state your implementation plan and acceptance criteria before delegating. Do not delegate planning, design decisions, or the final verification judgment to the Worker. Read-only limits mutations, not your responsibility to reason about the code.
+  return `You are the continuing read-only Coordinator for this Forge task. You own repository investigation, planning, and independent review of the Worker's output. Read the relevant source yourself and state your implementation plan and acceptance criteria before delegating. Do not delegate planning, design decisions, or the final verification judgment to the Worker. Read-only limits mutations, not your responsibility to reason about the code.
 
-Use forge_root to observe the task, delegate one scoped Worker at a time, and request Forge-owned delivery operations. Each Worker assignment must implement your plan with concrete scope, constraints, and checks. The Worker edits and runs checks directly, without subagents, pushes, or GitHub mutations. After the Worker returns, read the changed source yourself, compare it with your plan and acceptance criteria, and assess the actual check results. A Worker's claim of success is not verification. If additional commands or repairs are needed, specify them in a bounded Worker assignment, then independently review the new evidence. You decide whether the work is ready for delivery.
+Use forge_root to observe the task, delegate one scoped Worker at a time, and request Forge-owned delivery operations. Supply your completed plan, acceptanceCriteria, and implementation instruction in delegate_worker. Each Worker assignment must implement your plan with concrete scope, constraints, and checks. The Worker edits and runs checks directly, without subagents, pushes, or GitHub mutations. After the Worker returns, read the changed source yourself, compare it with your plan and acceptance criteria, and assess the actual check results. A Worker's claim of success is not verification. If additional commands or repairs are needed, specify them in a bounded Worker assignment, then independently review the new evidence. You decide whether the work is ready for delivery.
 
 Do not write files or launch agents yourself. Preserve out-of-band work and adopt matching GitHub state. Ask one specific human question only when an external ambiguity or necessary decision prevents progress. Continue until the delivery target is observed, a Worker is running, or you have asked that question.\n\nObjective: ${control.objective}\nDelivery target: ${control.deliveryTarget}\nRepository: ${control.deliveryIntent.repository}\nBranch: ${control.deliveryIntent.headBranch}`;
 }
@@ -58,10 +58,11 @@ export class RootController implements RootBridgeAdapter {
     return { control: this.store.get(root.taskId), context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, workerResult, worktree, pullRequest };
   }
 
-  async delegateWorker(root: RootIdentity, instruction: string): Promise<unknown> {
+  async delegateWorker(root: RootIdentity, assignment: WorkerAssignment): Promise<unknown> {
+    const instruction = `Coordinator plan:\n${assignment.plan}\n\nAcceptance criteria:\n${assignment.acceptanceCriteria.map((criterion, index) => `${index + 1}. ${criterion}`).join("\n")}\n\nWorker instructions:\n${assignment.instruction}`;
     const worker = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, instruction });
     await this.recoverSession(worker);
-    return { worker: this.store.currentSession(root.taskId, "worker"), next: "End this Root turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
+    return { worker: this.store.currentSession(root.taskId, "worker"), next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
   }
 
   async requestDelivery(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string, review?: DeliveryReview): Promise<unknown> {
@@ -175,7 +176,7 @@ export class RootController implements RootBridgeAdapter {
     if (session.kind === "root") {
       this.store.completeRootTurn(turn.id, evidence, observed.interruptedExecution ? "The previous execution stopped when its OpenCode server exited. Its admitted message will not be replayed. Observe current task, worktree and GitHub state, preserve any partial work, and continue from that evidence." : undefined);
       if (observed.state !== "completed" && !observed.interruptedExecution && this.store.get(session.taskId).status === "active") {
-        this.store.askHuman(session.taskId, `OpenCode stopped the Root turn (${observed.state}). ${observed.reason ?? text} Can you resolve the failure and continue?`);
+        this.store.askHuman(session.taskId, `OpenCode stopped the Coordinator turn (${observed.state}). ${observed.reason ?? text} Can you resolve the failure and continue?`);
       }
       return;
     }

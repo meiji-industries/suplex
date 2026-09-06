@@ -57,7 +57,7 @@ test.each([1280, 390])("native templates save, apply, reset defaults, and delete
     expect(await dialog.getByLabel("Name", { exact: true }).inputValue()).toBe("");
     await dialog.getByLabel("Name", { exact: true }).fill("Release");
     await dialog.getByLabel("Description", { exact: true }).fill("Inspect and release the change");
-    await dialog.getByRole("combobox", { name: "Root profile", exact: true }).click();
+    await dialog.getByRole("combobox", { name: "Coordinator profile", exact: true }).click();
     await page.getByRole("option", { name: /Root · openai/ }).click();
     await dialog.getByRole("combobox", { name: "Worker profile", exact: true }).click();
     await page.getByRole("option", { name: /Worker · openai/ }).click();
@@ -107,7 +107,7 @@ test.each([1280, 390])("native templates save, apply, reset defaults, and delete
     await expect.poll(() => dialog.isVisible()).toBe(true);
     await page.screenshot({ path: `/tmp/forge-template-settings-edit-dialog-${width}.png`, fullPage: true, animations: "disabled" });
     await dialog.getByLabel("Description", { exact: true }).fill("Updated release instructions");
-    await dialog.getByRole("combobox", { name: "Root profile", exact: true }).click();
+    await dialog.getByRole("combobox", { name: "Coordinator profile", exact: true }).click();
     await page.getByRole("option", { name: "Project default", exact: true }).click();
     const saved = page.waitForResponse(response => response.request().method() === "PATCH" && response.url().endsWith(`/api/task-templates/${template.id}`));
     await dialog.getByRole("button", { name: "Save template", exact: true }).click();

@@ -187,7 +187,7 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
               <FieldLegend variant="label">Agents</FieldLegend>
               {(["rootProfileId", "workerProfileId"] as const).map((key) => {
                 const role = key === "rootProfileId" ? "root" : "worker";
-                return <Field key={key}><FieldLabel htmlFor={`template-${key}`}>{role === "root" ? "Root profile" : "Worker profile"}</FieldLabel><Select disabled={busy} value={draft[key] ?? "default"} onValueChange={(value) => setDraft(key, value === "default" ? undefined : value ?? undefined)}><SelectTrigger id={`template-${key}`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Project default</SelectItem>{profiles.filter((profile) => profile.role === role).map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name} · {profile.provider}/{profile.model}</SelectItem>)}</SelectContent></Select></Field>;
+                return <Field key={key}><FieldLabel htmlFor={`template-${key}`}>{role === "root" ? "Coordinator profile" : "Worker profile"}</FieldLabel><Select disabled={busy} value={draft[key] ?? "default"} onValueChange={(value) => setDraft(key, value === "default" ? undefined : value ?? undefined)}><SelectTrigger id={`template-${key}`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Project default</SelectItem>{profiles.filter((profile) => profile.role === role).map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name} · {profile.provider}/{profile.model}</SelectItem>)}</SelectContent></Select></Field>;
               })}
             </FieldSet>
             <FieldSet disabled={busy}>

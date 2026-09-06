@@ -40,7 +40,7 @@ async function fixture() {
   return { directory, database, store, harness, controller, delivery, host };
 }
 
-test("native recovery prepares the Git worktree and delivers captured instructions to Root", async () => {
+test("native recovery prepares the Git worktree and delivers captured instructions to Coordinator", async () => {
   const f = await fixture();
   await f.host.recover("task");
   expect(f.store.get("task").worktree?.branch).toBe("task");
@@ -62,7 +62,7 @@ test("restart adopts dirty out-of-band work without replacing the native session
   expect(await readFile(join(worktree.path, "external.txt"), "utf8")).toBe("Preserve me");
 });
 
-test("a preparation failure keeps an answerable Root and its original objective", async () => {
+test("a preparation failure keeps an answerable Coordinator and its original objective", async () => {
   const f = await fixture();
   let fail = true;
   const host = new TaskHost(f.database, { controller: f.controller, delivery: f.delivery, worktree: async input => { if (fail) throw new Error("Disk unavailable"); return prepareTaskWorktree(input); } });
@@ -77,7 +77,7 @@ test("a preparation failure keeps an answerable Root and its original objective"
   } finally { await host.stop(); }
 });
 
-test("a GitHub observation outage does not block native Root startup", async () => {
+test("a GitHub observation outage does not block native Coordinator startup", async () => {
   const f = await fixture();
   const host = new TaskHost(f.database, { controller: f.controller, delivery: { observe: async () => { throw new Error("GitHub offline"); } } });
   try {

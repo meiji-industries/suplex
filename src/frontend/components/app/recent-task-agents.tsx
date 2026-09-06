@@ -23,7 +23,7 @@ export function RecentTaskAgents({ taskId }: { taskId: string }) {
   }, [taskId]);
   if (!agents.length) return null;
   return <ul className="ml-6 min-w-0" aria-label="Task agents">{agents.map(agent => {
-    const role = agent.role === "root" ? "Root" : "Worker";
+    const role = agent.role === "root" ? "Coordinator" : "Worker";
     const color = agent.status === "working" ? "bg-emerald-500" : ["waiting_human", "retrying"].includes(agent.status) ? "bg-amber-500" : "bg-muted-foreground";
     return <li key={agent.id} data-live-pane-row={agent.paneId ?? undefined} data-agent-status={agent.status} title={`${role}: ${labels[agent.status]}`} className="flex h-6 min-w-0 items-center gap-2 px-2 text-xs text-muted-foreground"><span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${color}`} /><span className="min-w-0 truncate">{role} · {labels[agent.status]}</span></li>;
   })}</ul>;

@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { nativeApp } from "./helpers/native-app.js";
 import { TaskSchema } from "../src/task-contracts.js";
 
-test("Start immediately commits active intent and schedules Root without a second command", async () => {
+test("Start immediately commits active intent and schedules Coordinator without a second command", async () => {
   const f = await nativeApp();
   try {
     const payload = { projectId: f.project.id, title: "Immediate task", description: "Do the work", idempotencyKey: "immediate-1", startImmediately: true };

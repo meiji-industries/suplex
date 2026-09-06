@@ -68,7 +68,7 @@ afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-describe("Root delivery operations", () => {
+describe("Coordinator delivery operations", () => {
   it.each(["baseSha", "headSha", "files", "commits"] as const)("rejects a stale or incomplete reviewed %s before publishing", async field => {
     const value = await fixture();
     try {

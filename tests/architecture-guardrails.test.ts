@@ -20,7 +20,7 @@ test("production source does not import the retired phase engine or harness rela
   }
 });
 
-test("native task UI has Root and Worker without old role selectors", () => {
+test("native task UI has Coordinator and Worker without old role selectors", () => {
   const source = readFileSync("src/frontend/components/app/new-task-dialog.tsx", "utf8");
   expect(source).toContain('role="root"');
   expect(source).toContain('role="worker"');

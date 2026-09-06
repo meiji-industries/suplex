@@ -30,7 +30,7 @@ test.each([1280, 390])("task tabs do not capture page scrolling at %ipx", { time
   } finally { await value.close(); }
 });
 
-test.each([1280, 390])("native task detail supports answers, cancellation and archival at %ipx", { timeout: 90_000 }, async width => {
+test.each([1280, 390])("native task detail supports answers, cancellation and safe archive refusal at %ipx", { timeout: 90_000 }, async width => {
   const value = await nativeBrowser(width);
   try {
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Native task detail", description: "Preserve the existing branch changes.", startImmediately: true, idempotencyKey: "native-detail" });
@@ -49,9 +49,9 @@ test.each([1280, 390])("native task detail supports answers, cancellation and ar
     await page.getByRole("region", { name: "Question" }).waitFor({ state: "hidden" });
     expect(store.get(task.id).status).toBe("active");
     expect(await page.locator("[data-task-current]").count()).toBe(0);
-    expect(await page.getByText("Root owns the task. Agent replies appear below.", { exact: true }).count()).toBe(0);
+    expect(await page.getByText("Coordinator owns the task. Agent replies appear below.", { exact: true }).count()).toBe(0);
     expect(store.pendingTurns(root.id).some(turn => turn.promptText.includes("Use main and preserve local work."))).toBe(true);
-    expect(await page.getByLabel("Note to Root", { exact: true }).count()).toBe(0);
+    expect(await page.getByLabel("Note to Coordinator", { exact: true }).count()).toBe(0);
     expect(await page.getByRole("button", { name: "Send note", exact: true }).count()).toBe(0);
     const uncertain = store.pendingTurns(root.id)[0]!;
     store.requireExecutionCleanup(uncertain);
@@ -75,12 +75,9 @@ test.each([1280, 390])("native task detail supports answers, cancellation and ar
     await page.getByText("Cancelled", { exact: true }).first().waitFor();
     expect(store.get(task.id).status).toBe("cancelled");
     await page.getByRole("button", { name: "Task options", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Keep in archive", exact: true }).click();
-    await expect.poll(() => value.tasks.getTask(value.userId, task.id).archivedAt).not.toBeNull();
-    expect(value.tasks.getTask(value.userId, task.id).archivedAt).not.toBeNull();
-    await page.getByRole("button", { name: "Task options", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Open from archive", exact: true }).click();
-    await expect.poll(() => value.tasks.getTask(value.userId, task.id).archivedAt).toBeNull();
+    await page.getByRole("menuitem", { name: "Archive task", exact: true }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Archive task", exact: true }).click();
+    await page.getByText("The task server identity is missing. Confirm that its commands have stopped before cleanup.", { exact: true }).waitFor();
     expect(value.tasks.getTask(value.userId, task.id).archivedAt).toBeNull();
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }

@@ -25,7 +25,7 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     expect(await createButton.evaluate(element => getComputedStyle(element.parentElement!).padding)).toBe("8px");
     await page.locator('[data-sidebar="group-label"]').filter({ hasText: /^Activity$/ }).waitFor();
     expect(await page.getByRole("link", { name: "Get Help", exact: true }).count()).toBe(0);
-    await page.getByText("Root · Idle", { exact: true }).waitFor();
+    await page.getByText("Coordinator · Idle", { exact: true }).waitFor();
     await page.getByText("Worker · Working", { exact: true }).waitFor();
     workerStatus = "retrying";
     await page.getByText("Worker · Retry", { exact: true }).waitFor();

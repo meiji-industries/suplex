@@ -315,8 +315,8 @@ test("dispatch sends role instructions as a system prompt without changing the s
   const reader = port({ messages: [], status: { type: "idle" } });
   let system: string | undefined;
   reader.promptAsync = async input => { system = input.system; };
-  await replayOpenCodePrompt(reader, { ...intent, system: "Root owns planning and independent review." }, allowClaim);
-  expect(system).toBe("Root owns planning and independent review.");
+  await replayOpenCodePrompt(reader, { ...intent, system: "Coordinator owns planning and independent review." }, allowClaim);
+  expect(system).toBe("Coordinator owns planning and independent review.");
 });
 
 test("an omitted entry in a successful status map means idle, not an unavailable read", async () => {

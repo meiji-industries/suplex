@@ -280,7 +280,6 @@ export class AuthService {
   private readonly rpId: string;
   private readonly origin: string;
   private readonly installationId: string;
-  private readonly developmentAutoLogin: boolean;
   private readonly artifactRoot: string;
 
   constructor(private readonly database: ForgeDatabase, config: ForgeConfig, options: AuthServiceOptions = {}) {
@@ -290,7 +289,6 @@ export class AuthService {
     this.sessionTtlMs = options.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000;
     this.webAuthn = options.webAuthn ?? defaultWebAuthn;
     this.installationId = config.installationId;
-    this.developmentAutoLogin = config.developmentAutoLogin;
     this.artifactRoot = config.artifactRoot;
     const reachable = new URL(config.reachableAddress);
     this.rpId = reachable.hostname;
@@ -431,13 +429,12 @@ export class AuthService {
   }
 
   ensureDevelopmentUser(): AuthUser {
-    if (!this.developmentAutoLogin) throw new AuthFailure("Development auto-login is disabled", 403);
     return this.database.authTransaction(() => {
       const userId = "user_development";
       const now = this.now().toISOString();
       let user = this.repository.findUser(userId);
       if (!user) {
-        this.repository.createUser({ id: userId, displayName: "Development Admin", username: "development@forge.local", avatarSeed: "development@forge.local", role: "admin", status: "active", createdAt: now, updatedAt: now, identityVersion: 1 });
+        this.repository.createUser({ id: userId, displayName: "Operator", username: "operator@forge.local", avatarSeed: "operator@forge.local", role: "admin", status: "active", createdAt: now, updatedAt: now, identityVersion: 1 });
         user = this.repository.findUser(userId)!;
       }
       if (user.role !== "admin" || user.status !== "active") throw new AuthFailure("Development user is unavailable", 409);

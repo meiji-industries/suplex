@@ -14,6 +14,7 @@ import { BackupService } from "./backup.js";
 import { formatDoctor, runDoctor } from "./diagnostics/doctor.js";
 import { formatTaskDiagnostic, inspectTask, writeTaskBundle } from "./diagnostics/task.js";
 import { runLogViewer } from "./log-viewer.js";
+import { runCommand } from "./command-runner.js";
 
 const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
 const commandArgs = process.argv.slice(process.argv[2] === "--" ? 4 : 3);
@@ -136,6 +137,13 @@ async function main(): Promise<void> {
       } finally { restoredDatabase.close(); }
       process.stdout.write(`backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"} (${result.restoreDurationMs}ms); see forge-backup/restore-handoff.json\n`);
     }
+    return;
+  }
+  if (command === "desktop") {
+    const url = `http://localhost:${config.port}`;
+    const result = await runCommand({ taskId: null, stepId: null, command: "open", args: ["-na", "Forge", "--args", `--url=${url}`], expectNonZero: true }); // -n: a running Forge.app receives the URL through its single-instance lock
+    if (result.exitCode !== 0) throw new Error(`Forge.app did not open: ${result.stderr.trim() || "install Forge.app from desktop/release first"}`);
+    process.stdout.write(`Forge.app opened at ${url}\n`);
     return;
   }
   if (command === "recover") {

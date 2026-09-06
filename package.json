@@ -31,7 +31,10 @@
     "verify": "pnpm run check:full",
     "test:all": "pnpm run check:full",
     "desktop:dev": "pnpm --filter forge-desktop dev",
-    "desktop:dist": "pnpm --filter forge-desktop dist"
+    "desktop:dist": "pnpm --filter forge-desktop dist",
+    "desktop:build": "pnpm --filter forge-desktop build",
+    "desktop:typecheck": "pnpm --filter forge-desktop typecheck",
+    "desktop:test": "vitest run --project unit desktop/tests"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

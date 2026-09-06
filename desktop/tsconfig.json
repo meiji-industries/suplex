@@ -1,4 +1,20 @@
 {
-  "compilerOptions": { "module": "commonjs", "target": "es2022", "outDir": "dist", "rootDir": "src", "strict": true, "types": ["node"], "esModuleInterop": true, "skipLibCheck": true },
-  "include": ["src/**/*.ts"]
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es2022",
+    "lib": ["es2022"],
+    "outDir": "dist",
+    "rootDir": ".",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "types": ["node"],
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
 }

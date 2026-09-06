@@ -19,8 +19,7 @@ export async function sessionUser(auth: AuthService | undefined, request: Pick<F
   if (!auth) return undefined;
   const current = await auth.getUserBySession(request.cookies[SESSION_COOKIE_NAME] ?? "");
   if (current) return current;
-  const developmentHosts = config ? new Set([`localhost:${config.port}`, `127.0.0.1:${config.port}`, `[::1]:${config.port}`]) : undefined;
-  if (config?.developmentAutoLogin && reply && developmentHosts?.has(request.headers.host?.toLowerCase() ?? "")) {
+  if (config && reply && isTrustedNetworkRequest(config, request.headers)) {
     const result = auth.developmentSignIn();
     setSessionCookie(config, reply, result.sessionToken, false);
     return result.user;
@@ -32,6 +31,22 @@ export async function sessionUser(auth: AuthService | undefined, request: Pick<F
     if (replacement) setSessionCookie(config, reply, replacement);
   }
   return legacy;
+}
+
+export function isLoopbackHost(config: Pick<ForgeConfig, "port">, host: string | undefined): boolean {
+  return [`localhost:${config.port}`, `127.0.0.1:${config.port}`, `[::1]:${config.port}`].includes(host?.toLowerCase() ?? "");
+}
+
+/**
+ * The tailnet is the login boundary (ADR 0009). A request is trusted when Tailscale Serve
+ * stamped it with a tailnet identity, when it comes from the loopback host, or, in direct mode where
+ * Forge binds a Tailscale address that only the tailnet reaches, when it is addressed to that host.
+ * Funnel traffic and tagged devices carry no identity header and are not trusted.
+ */
+export function isTrustedNetworkRequest(config: Pick<ForgeConfig, "port" | "tailscaleExposure" | "reachableAddress">, headers: FastifyRequest["headers"]): boolean {
+  if (headers["tailscale-user-login"] !== undefined) return true;
+  if (isLoopbackHost(config, headers.host)) return true;
+  return config.tailscaleExposure === "direct" && headers.host?.toLowerCase() === new URL(config.reachableAddress).host.toLowerCase();
 }
 
 export function authenticatedUser(request: FastifyRequest): AuthUser {

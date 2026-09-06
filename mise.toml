@@ -75,3 +75,24 @@ run = "pnpm run typecheck"
 run = "pnpm run test"
 [tasks.test-browser]
 run = "pnpm run test:browser"
+
+[tasks."desktop:dev"]
+description = "Build the desktop shell and open it with Electron"
+run = "pnpm run desktop:dev"
+[tasks."desktop:build"]
+description = "Compile the desktop shell"
+run = "pnpm run desktop:build"
+[tasks."desktop:typecheck"]
+run = "pnpm run desktop:typecheck"
+[tasks."desktop:test"]
+run = "pnpm run desktop:test"
+[tasks."desktop:dist"]
+description = "Package the arm64 Forge.app, DMG, and ZIP under desktop/release (local signature, not notarized)"
+run = "pnpm run desktop:dist"
+[tasks."desktop:open"]
+description = "Open the installed Forge.app at this checkout's dev stack (http://localhost:<port>)"
+run = '''
+export PATH="$(dirname "$(mise which node)"):$PATH"
+export FORGE_PORT=${CONDUCTOR_PORT:-4111}
+exec tsx src/cli.ts desktop
+'''

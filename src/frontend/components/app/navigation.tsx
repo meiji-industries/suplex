@@ -86,6 +86,11 @@ function UserMenu(): ReactElement | null {
 
 async function signOut(): Promise<void> { try { await fetch("/api/auth/sign-out", { method: "POST" }); } finally { window.localStorage.removeItem("forge.activeCompanyId"); window.location.assign("/auth"); } }
 
+/** The host this page was loaded from, so a desktop window shows which Forge it is on. */
+export function instanceHost(): string {
+  return typeof location === "undefined" ? "" : location.host;
+}
+
 export function AppSidebar(): ReactElement {
   const context = useOptionalCompanyContext();
   const { setOpenMobile } = useSidebar();
@@ -117,7 +122,7 @@ export function AppSidebar(): ReactElement {
   }, [context?.currentCompany?.id, context?.currentCompany?.status]);
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
-      <SidebarHeader><div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div></SidebarHeader>
+      <SidebarHeader><div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div><div className="truncate px-2 text-[11px] text-muted-foreground" data-testid="instance-host">{instanceHost()}</div></SidebarHeader>
       <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} /><SecondaryNavigation close={close} /></SidebarContent>
       <SidebarFooter><UserMenu /></SidebarFooter>
     </Sidebar>

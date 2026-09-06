@@ -107,10 +107,10 @@ function expandBody(body: Record<string, unknown> | undefined, companyId: string
   return Object.fromEntries(Object.entries(body).map(([key, value]) => [key, typeof value === "string" ? value.replace(":companyId", companyId).replace(":userId", userId) : value]));
 }
 
-async function makeFixture() {
+async function makeFixture(overrides: Parameters<typeof createTestConfig>[1] = {}) {
   const root = await mkdtemp(join(tmpdir(), "forge-auth-routes-test-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
-  const config = createTestConfig(root, { reachableAddress });
+  const config = createTestConfig(root, { reachableAddress, ...overrides });
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
   const app = createApp({ config, auth, health, getHealth: async () => ({ generatedAt: new Date().toISOString(), reachableAddress: config.reachableAddress, ready: true, checks: [] }) });
   return { root, database, config, auth, app };
@@ -222,6 +222,43 @@ test("route matrix is enforced: anonymous, role, company scope, and missing or w
         }
       }
     }
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+test("the tailnet is the login boundary: loopback or a tailnet identity signs in the operator, nothing else does", async () => {
+  const fixture = await makeFixture({ tailscaleExposure: "serve", bindAddress: "127.0.0.1" });
+  try {
+    const port = fixture.config.port;
+    const reachableHost = new URL(reachableAddress).host;
+    const loopback = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: `localhost:${port}` } });
+    expect(loopback.statusCode).toBe(200);
+    expect(loopback.json()).toMatchObject({ user: { role: "admin", displayName: "Operator" } });
+    const tailnet = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: reachableHost, "tailscale-user-login": "alice@example.com" } });
+    expect(tailnet.statusCode).toBe(200);
+    const funnel = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: reachableHost } });
+    expect(funnel.statusCode).toBe(401);
+    const spoofedLoopback = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: `localhost:${port}`, "tailscale-user-login": "alice@example.com" } });
+    expect(spoofedLoopback.statusCode).toBe(200);
+
+    const cookie = `${SESSION_COOKIE_NAME}=${loopback.cookies.find((entry) => entry.name === SESSION_COOKIE_NAME)!.value}`;
+    const remoteLoopbackOrigin = await fixture.app.inject({ method: "POST", url: "/api/auth/sign-out", headers: { cookie, host: reachableHost, origin: `http://localhost:${port}` } });
+    expect(remoteLoopbackOrigin.statusCode).toBe(403);
+    const localMutation = await fixture.app.inject({ method: "POST", url: "/api/auth/sign-out", headers: { cookie, host: `localhost:${port}`, origin: `http://localhost:${port}` } });
+    expect(localMutation.statusCode).not.toBe(403);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+test("direct Tailscale mode trusts requests addressed to the Tailscale host", async () => {
+  const fixture = await makeFixture({ tailscaleExposure: "direct", bindAddress: "100.64.0.1", reachableAddress: "https://forge.tailnet.ts.net:4111" });
+  try {
+    const addressed = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: "forge.tailnet.ts.net:4111" } });
+    expect(addressed.statusCode).toBe(200);
+    const elsewhere = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: "forge.example.com:4111" } });
+    expect(elsewhere.statusCode).toBe(401);
   } finally {
     await closeFixture(fixture);
   }

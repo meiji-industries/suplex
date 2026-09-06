@@ -78,9 +78,9 @@ Reuse an existing stack when `dev:status` reports one. Frontend changes use Vite
 HMR. Backend changes require a restart under `mise run dev`. `mise run dev:watch`
 restarts the backend on changes. `mise run down` stops this checkout's stack.
 
-Loopback development requests receive a development administrator session.
+Loopback and tailnet requests receive the Operator administrator session.
 An empty development database receives a company, native profiles, and a project
-for this checkout. The Tailscale address does not receive development auto-login.
+for this checkout.
 
 ## Set up an installation
 
@@ -101,6 +101,24 @@ Configure companies, projects, and native profiles in the web application.
 Project creation copies a GitHub repository into the configured repository root.
 `FORGE_REPOSITORY_ROOT` and `FORGE_WORKTREE_ROOT` override the default paths.
 `FORGE_EDITOR_COMMAND` selects the editor opened from a task.
+
+The tailnet is the login boundary. A request from the loopback host, a request
+that Tailscale Serve stamped with a `Tailscale-User-Login` identity, or, in
+direct Tailscale mode, a request addressed to the Tailscale hostname receives
+the built-in Operator administrator session. Funnel traffic and tagged devices
+carry no identity header and see the passkey sign-in instead.
+
+### Desktop app
+
+`desktop/` is a sandboxed Electron window that loads an existing Forge server.
+It owns no server, database, or agent process; quitting it changes nothing on
+the host. `mise run desktop:dev` opens it from source, `mise run desktop:dist`
+packages `desktop/release/Forge-<version>-arm64.dmg`, and `mise run desktop:open`
+or `forge desktop` opens the installed app at this host's `http://localhost:<port>`.
+The Navigate menu lists every Forge the app has opened: pick one to switch, use
+"Add a Forge URL" for a new one, and "Forget this Forge" to drop the current one.
+`--url` and `FORGE_DESKTOP_URL` override the remembered choice. The sidebar shows
+the host the window is on.
 
 Create a task with **Start immediately** selected to start Root without another
 click. Clear the option to keep the task in Backlog. Backlog tasks support title

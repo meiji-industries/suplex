@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { clampTimelineRange, summarizeAgentTime, type TimelineTask } from "../src/frontend/views/timeline.js";
+import { clampTimelineRange, trimTimelineRange, summarizeAgentTime, type TimelineTask } from "../src/frontend/views/timeline.js";
 
 function at(day: number, hour: number, minute = 0): string {
   return new Date(2026, 7, day, hour, minute).toISOString();
@@ -64,4 +64,12 @@ test("timeline selections stay inside the source window and keep a usable width"
   expect(clampTimelineRange({ start: 90, end: 100 }, { start: 0, end: 100 }, 20)).toEqual({ start: 80, end: 100 });
   expect(clampTimelineRange({ start: 80, end: 20 }, { start: 0, end: 100 }, 20)).toEqual({ start: 20, end: 80 });
   expect(clampTimelineRange({ start: -10, end: 120 }, { start: 0, end: 100 }, 20)).toEqual({ start: 0, end: 100 });
+});
+
+test("timeline trims empty edges and future time without removing gaps between events", () => {
+  expect(trimTimelineRange({ start: 0, end: 100 }, [{ start: 20, end: 30 }, { start: 60, end: 70 }], 80)).toEqual({ start: 20, end: 70 });
+  expect(trimTimelineRange({ start: 0, end: 100 }, [{ start: 20, end: 95 }], 80)).toEqual({ start: 20, end: 80 });
+  expect(trimTimelineRange({ start: 25, end: 65 }, [{ start: 20, end: 70 }], 80)).toEqual({ start: 25, end: 65 });
+  expect(trimTimelineRange({ start: 0, end: 100 }, [], 80)).toEqual({ start: 0, end: 80 });
+  expect(trimTimelineRange({ start: 90, end: 100 }, [], 80)).toEqual({ start: 80, end: 80 });
 });

@@ -83,6 +83,17 @@ const roleColors: Record<AgentRole, string> = {
 
 const minimumVisibleMs = 15 * 60_000;
 
+export function trimTimelineRange(bounds: TimelineRange, intervals: TimelineRange[], now: number): TimelineRange {
+  const end = Math.min(bounds.end, now);
+  const start = Math.min(bounds.start, end);
+  const active = intervals.filter(interval => interval.end > start && interval.start < end);
+  if (!active.length) return { start, end };
+  return {
+    start: active.reduce((first, interval) => Math.min(first, Math.max(start, interval.start)), end),
+    end: active.reduce((last, interval) => Math.max(last, Math.min(end, interval.end)), start),
+  };
+}
+
 export function clampTimelineRange(range: TimelineRange, bounds: TimelineRange, minimumDurationMs = minimumVisibleMs): TimelineRange {
   const available = Math.max(0, bounds.end - bounds.start);
   const minimum = Math.min(minimumDurationMs, available);
@@ -254,7 +265,7 @@ function formatTimestamp(timestamp: number): string {
 
 function axisLabel(timestamp: number, durationMs: number): string {
   const options: Intl.DateTimeFormatOptions = durationMs <= 86_400_000
-    ? { hour: "numeric" }
+    ? { hour: "numeric", minute: "2-digit", ...(durationMs < 60_000 ? { second: "2-digit" as const } : {}) }
     : durationMs <= 8 * 86_400_000
       ? { weekday: "short", month: "short", day: "numeric" }
       : { month: "short", day: "numeric" };
@@ -414,12 +425,12 @@ function WorkChart({ summary, overview, range, fullRange, companyId, now, onRang
   };
   return (
     <TooltipProvider>
-      <div className="min-w-0 border-t border-border/70" data-work-timeline>
+      <div className="min-w-0 border-t border-border/70" data-work-timeline data-range-start={range.start} data-range-end={range.end}>
         <div ref={chart} aria-label="Timeline chart. Drag across the plot to zoom." className="relative w-full min-w-0 cursor-crosshair touch-pan-y select-none" onPointerDown={startSelection} onPointerMove={moveSelection} onPointerUp={(event) => endSelection(event, true)} onPointerCancel={(event) => endSelection(event, false)}>
           <div className="flex h-9 border-b border-border/70 bg-muted/30 text-[11px] text-muted-foreground">
             <div className="flex w-52 shrink-0 items-center border-r border-border/70 px-3 font-medium sm:px-4">Agent</div>
-            <div className="grid min-w-0 flex-1 grid-cols-6 items-center">
-              {ticks.map((tick) => <time key={tick} dateTime={new Date(tick).toISOString()} className="border-r border-border/55 px-2 last:border-r-0">{axisLabel(tick, durationMs)}</time>)}
+            <div className="grid min-w-0 flex-1 grid-cols-3 items-center sm:grid-cols-6">
+              {ticks.map((tick, index) => <time key={tick} dateTime={new Date(tick).toISOString()} className={`min-w-0 overflow-hidden border-r border-border/55 px-2 last:border-r-0 ${index % 2 ? "hidden sm:block" : ""}`}>{axisLabel(tick, durationMs)}</time>)}
             </div>
           </div>
           {summary.lanes.map((lane) => {
@@ -473,7 +484,8 @@ export function TimelineView(): ReactElement {
   const [preset, setPreset] = useState<RangePreset>("7-days");
   const [customStart, setCustomStart] = useState(() => dateInputValue(addDays(new Date(), -6)));
   const [customEnd, setCustomEnd] = useState(() => dateInputValue(new Date()));
-  const [visibleRange, setVisibleRange] = useState<TimelineRange>(() => presetRange("7-days", new Date()));
+  const [zoomRange, setZoomRange] = useState<TimelineRange | null>(null);
+  const [trimBlankTime, setTrimBlankTime] = useState(true);
   const [groupByProject, setGroupByProject] = useState(false);
   const requestToken = useRef(0);
 
@@ -508,23 +520,26 @@ export function TimelineView(): ReactElement {
 
   const today = dateInputValue(new Date(now));
   const sourceRange = useMemo(() => preset === "custom" ? customRange(customStart, customEnd) : presetRange(preset, dateFromInput(today)), [customEnd, customStart, preset, today]);
-  useEffect(() => setVisibleRange(sourceRange), [sourceRange]);
-  const updateVisibleRange = useCallback((next: TimelineRange): void => setVisibleRange(clampTimelineRange(next, sourceRange)), [sourceRange]);
+  const overview = useMemo(() => summarizeAgentTime(tasks, projects, sourceRange, now), [now, projects, sourceRange, tasks]);
+  const chartRange = useMemo(() => trimBlankTime ? trimTimelineRange(sourceRange, overview.intervals, now) : sourceRange, [trimBlankTime, sourceRange, overview, now]);
+  const visibleRange = zoomRange ? clampTimelineRange(zoomRange, chartRange) : chartRange;
+  useEffect(() => setZoomRange(null), [sourceRange, trimBlankTime, companyId]);
+  const updateVisibleRange = useCallback((next: TimelineRange): void => setZoomRange(clampTimelineRange(next, chartRange)), [chartRange]);
   const scaleVisibleRange = useCallback((factor: number): void => {
-    setVisibleRange((current) => {
+    setZoomRange((selected) => {
+      const current = selected ? clampTimelineRange(selected, chartRange) : chartRange;
       const center = (current.start + current.end) / 2;
       const duration = (current.end - current.start) * factor;
-      return clampTimelineRange({ start: center - duration / 2, end: center + duration / 2 }, sourceRange);
+      return clampTimelineRange({ start: center - duration / 2, end: center + duration / 2 }, chartRange);
     });
-  }, [sourceRange]);
-  const overview = useMemo(() => summarizeAgentTime(tasks, projects, sourceRange, now), [now, projects, sourceRange, tasks]);
+  }, [chartRange]);
   const summary = useMemo(() => summarizeAgentTime(tasks, projects, visibleRange, now), [now, projects, tasks, visibleRange]);
   const scopeLoaded = Boolean(companyId) && loadedCompanyId === companyId;
   const displayedStart = preset === "custom" ? customStart : dateInputValue(new Date(sourceRange.start));
   const displayedEnd = preset === "custom" ? customEnd : dateInputValue(new Date(sourceRange.end - 1));
   const changeStart = (value: string): void => { if (!value) return; setCustomStart(value); setCustomEnd(value > displayedEnd ? value : displayedEnd); setPreset("custom"); };
   const changeEnd = (value: string): void => { if (!value) return; setCustomEnd(value); setCustomStart(value < displayedStart ? value : displayedStart); setPreset("custom"); };
-  const fullRangeVisible = visibleRange.start === sourceRange.start && visibleRange.end === sourceRange.end;
+  const fullRangeVisible = visibleRange.start === chartRange.start && visibleRange.end === chartRange.end;
 
   return (
     <ApplicationFrame title="Timeline" headerActions={<ChartNoAxesGantt className="size-3.5 text-muted-foreground" />} headerRight={<span className="hidden text-[11px] text-muted-foreground sm:inline" title="Concurrent agent invocations are summed">Recorded agent time · <strong className="font-medium text-foreground">{formatDuration(summary.durationMs)}</strong></span>}>
@@ -544,21 +559,22 @@ export function TimelineView(): ReactElement {
             <label className="w-36"><span className="sr-only">Timeline end date</span><Input aria-label="Timeline end date" type="date" min={displayedStart} max={dateInputValue(new Date(now))} value={displayedEnd} onChange={(event) => changeEnd(event.target.value)} /></label>
           </div>
         </div>
-        <div className="flex h-8 items-center gap-4 border-b border-border/70 px-3 text-[11px] text-muted-foreground sm:px-4">
+        <div className="flex min-h-8 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/70 px-3 py-1 text-[11px] text-muted-foreground sm:px-4">
           {(Object.keys(roleColors) as AgentRole[]).map((role) => <span key={role} className="flex items-center gap-1.5"><span className={`size-2 rounded-sm ${roleColors[role]}`} />{titleCase(role)}</span>)}
           <span className="flex items-center gap-1.5"><span className="h-3 w-px bg-emerald-500" />Now</span>
+          <label className="flex items-center gap-2"><Checkbox checked={trimBlankTime} onCheckedChange={checked => setTrimBlankTime(checked === true)} />Trim blank time</label>
           <span className="ml-auto hidden sm:inline">Drag chart to zoom</span>
           <div className="flex items-center gap-1" aria-label="Timeline zoom controls">
             <Button type="button" variant="outline" size="icon-xs" aria-label="Zoom out" title="Zoom out" disabled={fullRangeVisible} onClick={() => scaleVisibleRange(2)}><Minus /></Button>
             <Button type="button" variant="outline" size="icon-xs" aria-label="Zoom in" title="Zoom in" disabled={visibleRange.end - visibleRange.start <= minimumVisibleMs} onClick={() => scaleVisibleRange(0.5)}><Plus /></Button>
-            <Button type="button" variant="outline" size="icon-xs" aria-label="Reset zoom" title="Reset zoom" disabled={fullRangeVisible} onClick={() => updateVisibleRange(sourceRange)}><RotateCcw /></Button>
+            <Button type="button" variant="outline" size="icon-xs" aria-label="Reset zoom" title="Reset zoom" disabled={fullRangeVisible} onClick={() => setZoomRange(null)}><RotateCcw /></Button>
           </div>
         </div>
         {error ? <div className="p-3 sm:p-4"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
         {scopeLoaded && unavailableSessions > 0 ? <p role="status" className="px-4 py-2 text-xs text-muted-foreground">Some session history is not available. Totals include available history only.</p> : null}
         {!scopeLoaded && !error ? <div className="space-y-px p-2" aria-label="Loading timeline" aria-busy="true"><Skeleton className="h-9 w-full" /><Skeleton className="h-14 w-full" /><Skeleton className="h-14 w-full" /></div> : null}
         {scopeLoaded && overview.intervals.length === 0 ? <div className="px-4 py-8 text-xs text-muted-foreground">No agent activity in this range.</div> : null}
-        {scopeLoaded && overview.intervals.length > 0 ? <WorkChart summary={summary} overview={overview} range={visibleRange} fullRange={sourceRange} companyId={companyId} now={now} onRangeChange={updateVisibleRange} /> : null}
+        {scopeLoaded && overview.intervals.length > 0 ? <WorkChart summary={summary} overview={overview} range={visibleRange} fullRange={chartRange} companyId={companyId} now={now} onRangeChange={updateVisibleRange} /> : null}
         {scopeLoaded ? <div className="flex h-8 items-center gap-2 border-b border-border/70 px-3 text-[11px] text-muted-foreground sm:px-4"><label className="flex items-center gap-2"><Checkbox checked={groupByProject} onCheckedChange={(checked) => setGroupByProject(checked === true)} />Group by project</label></div> : null}
         {scopeLoaded ? <TimelineTotals summary={summary} groupByProject={groupByProject} companyId={companyId} /> : null}
       </div>

@@ -19,6 +19,16 @@ test.each([1280, 390])("restored timeline shows native lanes, zoom and grouped t
     await page.locator("[data-work-timeline]").waitFor();
     await page.getByRole("link", { name: /Sol worked on/ }).waitFor();
     await page.getByRole("link", { name: /Luna worked on/ }).waitFor();
+    const trim = page.getByRole("checkbox", { name: "Trim blank time" });
+    expect(await trim.isChecked()).toBe(true);
+    const chart = page.locator("[data-work-timeline]");
+    await expect.poll(() => chart.getAttribute("data-range-start")).toBe(String(now - 3_600_000));
+    expect(await chart.getAttribute("data-range-end")).toBe(String(now - 600_000));
+    await trim.click();
+    await expect.poll(async () => Number(await chart.getAttribute("data-range-start"))).toBeLessThan(now - 3_600_000);
+    expect(Number(await chart.getAttribute("data-range-end"))).toBeGreaterThan(now);
+    await trim.click();
+    await expect.poll(() => chart.getAttribute("data-range-start")).toBe(String(now - 3_600_000));
     await page.getByText("Some session history is not available. Totals include available history only.").waitFor();
     await page.getByRole("region", { name: "Ticket totals" }).getByRole("link", { name: /Timeline task/ }).waitFor();
     const reset = page.getByRole("button", { name: "Reset zoom", exact: true });

@@ -1,11 +1,10 @@
-import { dirname, join, basename } from "node:path";
+import { dirname, join } from "node:path";
 import type { TaskSession } from "./task-control.js";
 import { inspectProcessOnce } from "./process-manager.js";
 import { openCodeProcessAlive, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer } from "./opencode-server.js";
-import { CliHerdrClient } from "./herdr-client.js";
+import { prepareArchiveDisplays } from "./task-archive-displays.js";
 
-export async function stopIdleArchiveSessions(databasePath: string, sessions: TaskSession[]): Promise<void> {
-  const herdr = new CliHerdrClient();
+export async function stopIdleArchiveSessions(databasePath: string, sessions: TaskSession[]): Promise<() => Promise<void>> {
   const servers = [];
   for (const session of sessions) {
     if (session.launchOwnerPid !== null && openCodeProcessAlive(session.launchOwnerPid)) {
@@ -18,15 +17,9 @@ export async function stopIdleArchiveSessions(databasePath: string, sessions: Ta
       const statuses = await openCodeServerClient(server).getStatus(server.directory);
       if (Object.values(statuses).some(status => status.type !== "idle")) throw new Error("An agent is still active. Retry after it stops.");
     }
-    if (session.paneId && await herdr.getPane(session.paneId)) {
-      const info = await herdr.getPaneProcessInfo(session.paneId);
-      if (!info.foreground_processes.length) throw new Error("The task terminal could not be inspected.");
-      const idle = info.foreground_processes.every(process =>
-        process.pid === info.shell_pid && ["zsh", "bash", "sh", "fish", "nu", "pwsh"].includes(basename(process.name))
-        || server && process.argv?.[0] === server.executable && process.argv[1] === "attach" && process.argv[2] === server.baseUrl);
-      if (!idle) throw new Error("A command is still active in the task terminal. Stop it before archiving.");
-    }
-    if (server) servers.push(server);
+    servers.push({ ...session, server });
   }
-  for (const server of servers) await stopOpenCodeServer(server);
+  const closeDisplays = await prepareArchiveDisplays(servers);
+  for (const { server } of servers) if (server) await stopOpenCodeServer(server);
+  return closeDisplays;
 }

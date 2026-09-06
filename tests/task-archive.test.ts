@@ -1,6 +1,7 @@
 import { access, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import * as displays from "../src/task-archive-displays.js";
 import { runCommand } from "../src/command-runner.js";
 import { prepareTaskWorktree } from "../src/task-worktree.js";
 import { nativeApp } from "./helpers/native-app.js";
@@ -47,6 +48,23 @@ test("failed Git cleanup leaves the task visible", async () => {
     expect(f.tasks.getTask(f.userId, f.task.id).archivedAt).toBeNull();
     await expect(access(f.worktree.path)).resolves.toBeUndefined();
   } finally { await f.close(); }
+});
+
+test("display cleanup failure is reported and archive can retry after Git cleanup", async () => {
+  const f = await fixture();
+  const close = vi.spyOn(displays, "prepareArchiveDisplays").mockResolvedValue(async () => {
+    await expect(access(f.worktree.path)).rejects.toThrow();
+    throw new Error("Herdr could not close the workspace");
+  });
+  try {
+    const request = { method: "POST" as const, url: `/api/tasks/${f.task.id}/archive`, headers: f.headers, payload: {} };
+    const failed = await f.app.inject(request);
+    expect(failed.statusCode).toBe(409);
+    expect(f.tasks.getTask(f.userId, f.task.id).archivedAt).toBeNull();
+    close.mockRestore();
+    expect((await f.app.inject(request)).statusCode).toBe(200);
+    expect(f.tasks.getTask(f.userId, f.task.id).worktree).toBeNull();
+  } finally { close.mockRestore(); await f.close(); }
 });
 
 test("archive requires confirmation for untracked changes before hiding the task", async () => {

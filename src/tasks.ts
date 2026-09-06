@@ -146,10 +146,12 @@ export class TaskService {
     this.archives.add(taskId);
     try {
       const sessions = this.repository.controls.sessions(taskId);
-      await stopIdleArchiveSessions(this.database.filename(), sessions);
+      const closeDisplays = await stopIdleArchiveSessions(this.database.filename(), sessions);
       this.getTask(userId, taskId);
       const result = await removeTaskWorktree({ taskId, ...task.configuration }, task.worktree, confirmDiscardDirty, () => { this.getTask(userId, taskId); });
       if (result.status === "confirmation_required") return result;
+      this.getTask(userId, taskId);
+      await closeDisplays();
       this.getTask(userId, taskId);
       this.database.authTransaction(db => {
         db.prepare("UPDATE forge_task_controls SET worktree_json = NULL WHERE task_id = ?").run(taskId);

@@ -369,6 +369,10 @@ export class CliHerdrClient implements HerdrClient {
       pane(value<Json>(await this.call(["pane", "get", idValue], true), "pane")),
     );
   }
+  async listPanes(workspaceId: string): Promise<Pane[]> {
+    const result = await this.call(["pane", "list", "--workspace", workspaceId]);
+    return ((result.panes as Json[]) ?? []).map(pane);
+  }
   async getPaneProcessInfo(idValue: string): Promise<PaneProcessInfo> {
     const info = PaneProcessInfoSchema.parse((await this.call(["pane", "process-info", "--pane", idValue])).process_info);
     if (info.pane_id !== idValue) throw new Error("Herdr returned another pane's process information");

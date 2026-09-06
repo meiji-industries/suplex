@@ -17,6 +17,7 @@ import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
 import { HermesAgentService } from "./hermes-agents.js";
 import { TaskHost } from "./task-host.js";
+import { inspectUpdateAvailability } from "./update.js";
 import { TaskAnalyticsStore } from "./task-analytics-store.js";
 import { AnalyticsHistoryReader, TaskAnalyticsCollector } from "./task-analytics-collector.js";
 
@@ -50,6 +51,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     database,
     host,
     logger: createFastifyLogger(options.logSink),
+    readUpdate: () => inspectUpdateAvailability({ cwd: process.cwd() }),
   } satisfies Parameters<typeof createApp>[0];
   let app: FastifyInstance;
   try {

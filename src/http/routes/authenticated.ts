@@ -9,6 +9,7 @@ import type { TaskService } from "../../tasks.js";
 import type { TaskHost } from "../../task-host.js";
 import type { HermesAgentService } from "../../hermes-agents.js";
 import type { ReadOpenCodeProviders } from "../../opencode-providers.js";
+import type { UpdateAvailability } from "../../update.js";
 import { sessionUser } from "../session.js";
 import administration from "./administration.js";
 import { authMe } from "./auth.js";
@@ -17,6 +18,7 @@ import projects from "./projects.js";
 import tasks from "./tasks.js";
 import taskPane from "./task-pane.js";
 import taskWorktree from "./task-worktree.js";
+import update from "./update.js";
 
 import hermesAdministration from "./hermes-administration.js";
 
@@ -30,6 +32,7 @@ export interface AuthenticatedRoutesOptions {
   database?: ForgeDatabase;
   hermes?: HermesAgentService;
   readProviders?: ReadOpenCodeProviders;
+  readUpdate?: () => Promise<UpdateAvailability>;
 }
 
 const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app, options) => {
@@ -51,6 +54,7 @@ const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app
   if (options.tasks) await app.register(tasks, { tasks: options.tasks, ...(options.config ? { config: options.config } : {}), ...(options.host ? { host: options.host } : {}) });
   if (options.tasks) await app.register(taskPane, { tasks: options.tasks, ...(options.config ? { config: options.config } : {}) });
   if (options.tasks && options.database) await app.register(taskWorktree, { tasks: options.tasks, database: options.database });
+  if (options.readUpdate) await app.register(update, { readUpdate: options.readUpdate });
 };
 
 export default authenticated;

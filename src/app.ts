@@ -11,6 +11,7 @@ import type { TaskHost } from "./task-host.js";
 import type { HermesAgentService } from "./hermes-agents.js";
 import type { ReadOpenCodeProviders } from "./opencode-providers.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
+import { inspectUpdateAvailability, type UpdateAvailability } from "./update.js";
 import type { AgentProfileService } from "./agent-profiles.js";
 import type { ProjectService } from "./projects.js";
 import type { TaskService } from "./tasks.js";
@@ -48,6 +49,7 @@ export interface AppDependencies {
   logger?: Logger | false;
   hermes?: HermesAgentService;
   readProviders?: ReadOpenCodeProviders;
+  readUpdate?: () => Promise<UpdateAvailability>;
   https?: { key: Buffer; cert: Buffer };
   frontendDevelopment?: {
     transformIndexHtml(url: string, html: string): Promise<string>;
@@ -99,6 +101,7 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
 
 export function registerAppRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
   const getHealth = dependencies.getHealth ?? (() => inspectHostHealth(dependencies.config, dependencies.health));
+  const readUpdate = dependencies.readUpdate ?? (() => inspectUpdateAvailability());
   const readHealth = async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth());
   const { auth, projects: projectService, tasks: taskService, taskTemplates: templateService, database } = dependencies;
 
@@ -113,7 +116,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
     if (dependencies.hermes) void app.register(hermesPairing, { hermes: dependencies.hermes });
     if (dependencies.hermes && taskService) registerHermesTaskRoutes(app, { hermes: dependencies.hermes, tasks: taskService });
-    void app.register(authenticated, { auth, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(dependencies.host ? { host: dependencies.host } : {}), ...(database ? { database } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
+    void app.register(authenticated, { auth, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), readUpdate, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(dependencies.host ? { host: dependencies.host } : {}), ...(database ? { database } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
     if (templateService) void app.register(taskTemplates, { auth, config: dependencies.config, templates: templateService });
   }
   if (!dependencies.frontendDevelopment) void app.register(assets, { prefix: "/assets" });

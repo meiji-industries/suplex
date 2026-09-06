@@ -4,6 +4,7 @@ import { Separator } from "../ui/separator.js";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "../ui/sidebar.js";
 import { AppSidebar } from "./navigation.js";
 import { SystemHealthAlert } from "./system-health.js";
+import { UpdateNotice } from "./update-notice.js";
 import { ThemeToggle } from "./theme.js";
 import { GlobalNewTaskDialog } from "./global-new-task-dialog.js";
 
@@ -22,6 +23,7 @@ export function ApplicationFrame({ title, headerActions, headerRight, sidebar, c
             <div className="ml-auto flex shrink-0 items-center gap-2"><ThemeToggle />{headerRight}</div>
           </div>
         </header>
+        <UpdateNotice />
         <SystemHealthAlert />
         {children}
       </SidebarInset>

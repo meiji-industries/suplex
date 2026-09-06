@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { TaskAnalyticsStore } from "./task-analytics-store.js";
+import { taskAnalytics } from "./task-analytics.js";
 import { removeTaskWorktree } from "./task-worktree.js";
 import { stopIdleArchiveSessions } from "./task-archive-sessions.js";
 import { z } from "zod";
@@ -31,6 +33,12 @@ export class TaskService {
 
   getTask(userId: string, taskId: string): Task {
     return this.repository.task(this.requireTask({ kind: "user", userId }, taskId));
+  }
+
+  analytics(userId: string, companyId: string) {
+    const store = new TaskAnalyticsStore(this.database);
+    const tasks = [...this.listTasks(userId, companyId), ...this.listTasks(userId, companyId, true)];
+    return { generatedAt: new Date().toISOString(), tasks: tasks.map(task => taskAnalytics(task, this.repository.controls.sessions(task.id), store.read(task.id))) };
   }
 
   listTasks(userId: string, companyId?: string, archived = false): Task[] {

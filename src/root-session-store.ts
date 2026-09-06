@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { HumanQuestionOptionsSchema, type HumanQuestionOptions } from "./human-question.js";
 import { inspectProcessOnce } from "./process-manager.js";
+import { TaskAnalyticsStore } from "./task-analytics-store.js";
+import { StructuredLogger } from "./logging.js";
 
 import type { ForgeDatabase } from "./database.js";
 import { createOpenCodeMessageID } from "./opencode-session.js";
@@ -53,12 +55,12 @@ export class TaskControlStore {
   create(input: { taskId: string; startImmediately: boolean; objective: string; deliveryTarget: string; deliveryIntent: DeliveryIntent; rootProfile: TaskProfile; workerProfile: TaskProfile; worktree?: WorktreeReference }): TaskControl {
     const time = now();
     this.database.authTransaction((db) => db.prepare("INSERT INTO forge_task_controls (task_id, objective, delivery_target, delivery_intent_json, status, wake_at, human_question, worktree_json, pull_request_json, root_session_id, worker_session_id, root_profile_json, worker_profile_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?)").run(input.taskId, input.objective, input.deliveryTarget, JSON.stringify(DeliveryIntentSchema.parse(input.deliveryIntent)), input.startImmediately ? "active" : "backlog", input.worktree ? JSON.stringify(input.worktree) : null, JSON.stringify(TaskProfileSchema.parse(input.rootProfile)), JSON.stringify(TaskProfileSchema.parse(input.workerProfile)), time, time));
-    return this.get(input.taskId);
+    return this.observeLifecycle(input.taskId);
   }
   start(taskId: string): TaskControl {
     const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET status = 'active', wake_at = ?, updated_at = ? WHERE task_id = ? AND status IN ('backlog', 'active')").run(now(), now(), taskId).changes);
     if (changed !== 1) throw new Error("task_not_startable");
-    return this.get(taskId);
+    return this.observeLifecycle(taskId);
   }
   answerHuman(taskId: string, questionId: string, answer: string, confirmCommandsStopped = false): TaskControl {
     if (!answer.trim()) throw new Error("answer_is_empty");
@@ -81,7 +83,7 @@ export class TaskControlStore {
       db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending_prompt', ?, ?)").run(createOpenCodeMessageID(), taskId, text(root, "id"), integer(root, "generation"), hash(prompt), prompt, time, time);
       db.prepare("UPDATE forge_task_controls SET status = 'active', human_question = NULL, human_question_id = NULL, recovery_turn_id = NULL, wake_at = ?, updated_at = ? WHERE task_id = ?").run(time, time, taskId);
     });
-    return this.get(taskId);
+    return this.observeLifecycle(taskId);
   }
   setWorktree(taskId: string, worktree: WorktreeReference): TaskControl {
     const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET worktree_json = ?, updated_at = ? WHERE task_id = ? AND status = 'active'").run(JSON.stringify(WorktreeReferenceSchema.parse(worktree)), now(), taskId).changes);
@@ -96,7 +98,7 @@ export class TaskControlStore {
   markDelivered(taskId: string): TaskControl {
     const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(now(), taskId).changes);
     if (changed !== 1) throw new Error("task_not_active");
-    return this.get(taskId);
+    return this.observeLifecycle(taskId);
   }
   get(taskId: string): TaskControl {
     return this.database.authQuery((db) => { const row = db.prepare("SELECT * FROM forge_task_controls WHERE task_id = ?").get(taskId) as Row | undefined; if (!row) throw new Error(`Task control ${taskId} does not exist`); return control(row); });
@@ -257,6 +259,7 @@ export class TaskControlStore {
     if (!question.trim()) throw new Error("question_is_empty");
     const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET status = 'waiting_human', human_question = ?, human_question_options_json = ?, human_question_id = ?, wake_at = NULL, updated_at = ? WHERE task_id = ? AND status = 'active'").run(question.trim(), JSON.stringify(HumanQuestionOptionsSchema.parse(options)), randomUUID(), now(), taskId).changes);
     if (changed !== 1) throw new Error("task_not_active");
+    this.observeLifecycle(taskId);
   }
   requireExecutionCleanup(turn: TaskTurn): void {
     this.database.authTransaction(db => {
@@ -271,6 +274,13 @@ export class TaskControlStore {
       db.prepare("UPDATE forge_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = COALESCE(stop_requested_at, ?), updated_at = ? WHERE task_id = ? AND stopped_at IS NULL").run(now(), now(), taskId);
       db.prepare("UPDATE forge_task_turns SET status = 'cancelled', updated_at = ? WHERE task_id = ? AND status IN ('pending_prompt', 'prompted', 'unknown')").run(now(), taskId);
     });
+    this.observeLifecycle(taskId);
+  }
+  private observeLifecycle(taskId: string): TaskControl {
+    const value = this.get(taskId);
+    try { new TaskAnalyticsStore(this.database).observe({ id: taskId, status: value.status, humanQuestion: value.humanQuestionId ? { id: value.humanQuestionId } : null }); }
+    catch (error) { new StructuredLogger().warn("Analytics lifecycle observation failed", { taskId }, { error: error instanceof Error ? error.message : "unknown error" }); }
+    return value;
   }
   assertCurrentRoot(input: { taskId: string; sessionId: string; generation: number }): void { const current = this.currentSession(input.taskId, "root"); const task = this.get(input.taskId); if (!current || task.status !== "active" || current.id !== input.sessionId || current.generation !== input.generation || !current.current || current.lifecycle === "cancelled") throw new Error("root_identity_mismatch"); }
   private byId(id: string): TaskSession { return this.database.authQuery((db) => { const row = db.prepare("SELECT * FROM forge_task_sessions WHERE id = ?").get(id) as Row | undefined; if (!row) throw new Error(`Task session ${id} does not exist`); return session(row); }); }

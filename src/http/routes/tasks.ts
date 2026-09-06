@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
+import { AnalyticsResponseSchema, TaskCostsResponseSchema } from "../../task-analytics-contracts.js";
+import { usageMetrics } from "../../task-analytics-metrics.js";
 import type { TaskService } from "../../tasks.js";
 import type { TaskHost } from "../../task-host.js";
 import type { ForgeConfig } from "../../config.js";
@@ -21,6 +23,13 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const taskResponse = { params: TaskIdParamsSchema, response: { 200: TaskResponseSchema } };
   const listQuery = z.object({ archived: z.enum(["true", "false"]).optional() });
+  typed.get("/api/companies/:companyId/task-costs", { schema: { params: CompanyIdParamsSchema, response: { 200: TaskCostsResponseSchema } } }, async (request, reply) => {
+    const result = tasks.analytics(request.forgeUser.id, request.params.companyId);
+    return reply.header("Cache-Control", "private, no-store").send({ tasks: result.tasks.map(task => { const metrics = usageMetrics(task.usage); return { id: task.id, cost: metrics.cost, unpriced: metrics.unpricedMessages > 0, partial: metrics.unpricedMessages > 0 || task.staleSessions > 0 || task.observedSessions < task.sessions || task.usage.some(entry => entry.completedAt === null) }; }) });
+  });
+  typed.get("/api/companies/:companyId/analytics", { schema: { params: CompanyIdParamsSchema, response: { 200: AnalyticsResponseSchema } } }, async (request, reply) => {
+    return reply.header("Cache-Control", "private, no-store").send(tasks.analytics(request.forgeUser.id, request.params.companyId));
+  });
   typed.get("/api/companies/:companyId/timeline", { schema: { params: CompanyIdParamsSchema, response: { 200: TaskTimelineResponseSchema, 503: z.object({ error: z.string() }) } } }, async (request, reply) => {
     const companyId = request.params.companyId;
     const all = [...tasks.listTasks(request.forgeUser.id, companyId, false), ...tasks.listTasks(request.forgeUser.id, companyId, true)];

@@ -1,0 +1,65 @@
+import type { OpenCodeMessageEnvelope } from "./opencode-contracts.js";
+import { resolveOpenCodeExecutable } from "./opencode-executable.js";
+import { ensureOpenCodeServer, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer } from "./opencode-server.js";
+import type { TaskRepository } from "./task-repository.js";
+import type { TaskAnalyticsStore } from "./task-analytics-store.js";
+import { taskUsage } from "./task-usage.js";
+
+export class TaskAnalyticsCollector {
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private pending: Promise<void> | undefined;
+  private stopped = false;
+  constructor(private readonly repository: TaskRepository, private readonly store: TaskAnalyticsStore,
+    private readonly readMessages: (sessionId: string) => Promise<OpenCodeMessageEnvelope[]>,
+    private readonly reportError: (error: unknown) => void) {}
+
+  start(): void {
+    const tick = (): void => {
+      if (this.stopped) return;
+      this.pending = this.collect().catch(this.reportError).finally(() => {
+        if (!this.stopped) { this.timer = setTimeout(tick, 30_000); this.timer.unref(); }
+      });
+    };
+    tick();
+  }
+
+  async stop(): Promise<void> { this.stopped = true; clearTimeout(this.timer); await this.pending; }
+
+  async collect(): Promise<void> {
+    for (const row of this.repository.rows()) {
+      if (this.stopped) return;
+      try {
+        const task = this.repository.task(row);
+        this.store.observe(task);
+        const observations = this.store.sessionObservations(task.id);
+        for (const session of this.repository.controls.sessions(task.id)) {
+          if (this.stopped) return;
+          if (!session.nativeSessionId) continue;
+          const previous = observations.find(value => value.sessionId === session.id);
+          const lastAttempt = previous?.errorAt ?? previous?.observedAt;
+          const refreshMs = previous?.errorAt ? 300_000 : task.archivedAt || !["active", "waiting_human"].includes(task.status) ? 900_000 : 0;
+          if (lastAttempt && Date.now() - Date.parse(lastAttempt) < refreshMs) continue;
+          try {
+            this.store.record(task.id, session.id, taskUsage(await this.readMessages(session.nativeSessionId), session.kind));
+          } catch (error) {
+            this.store.failed(task.id, session.id);
+            this.reportError(error);
+          }
+        }
+      } catch (error) { this.reportError(error); }
+    }
+  }
+}
+
+/** This server reads shared OpenCode history; it never prompts or resumes a session. */
+export class AnalyticsHistoryReader {
+  constructor(private readonly directory: string) {}
+  async read(sessionId: string): Promise<OpenCodeMessageEnvelope[]> {
+    const server = await ensureOpenCodeServer({ runtimeDirectory: this.directory, executable: await resolveOpenCodeExecutable(), directory: process.cwd(), config: {} });
+    return openCodeServerClient(server).getMessages(sessionId);
+  }
+  async close(): Promise<void> {
+    const server = await readOpenCodeServer(this.directory);
+    if (server) await stopOpenCodeServer(server);
+  }
+}

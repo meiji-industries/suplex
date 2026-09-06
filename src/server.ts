@@ -1,4 +1,5 @@
 import { mkdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { FastifyInstance } from "fastify";
@@ -16,6 +17,8 @@ import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
 import { HermesAgentService } from "./hermes-agents.js";
 import { TaskHost } from "./task-host.js";
+import { TaskAnalyticsStore } from "./task-analytics-store.js";
+import { AnalyticsHistoryReader, TaskAnalyticsCollector } from "./task-analytics-collector.js";
 
 export interface ForgeServer {
   app: FastifyInstance;
@@ -60,6 +63,10 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     database.close();
     throw error;
   }
+  const history = new AnalyticsHistoryReader(join(dirname(config.databasePath), "runtime", "analytics"));
+  const analytics = new TaskAnalyticsCollector(tasks.repository, new TaskAnalyticsStore(database), id => history.read(id), error => app.log.warn({ err: error }, "Analytics observation failed"));
+  app.addHook("onClose", async () => { await analytics.stop(); await history.close(); });
+  analytics.start();
   host.start();
   return { app, database, host };
 }

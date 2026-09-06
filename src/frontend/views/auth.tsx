@@ -17,7 +17,7 @@ export function AuthView(): ReactElement {
 
   useEffect(() => {
     void readJson<{ required: boolean; authenticated: boolean }>("/api/auth/status").then((status) => {
-      if (status.authenticated) window.location.assign("/health");
+      if (status.authenticated) window.location.assign("/tasks");
       setRequired(status.required);
     }).catch(() => setError("Unable to read sign-in state"));
   }, []);
@@ -29,7 +29,7 @@ export function AuthView(): ReactElement {
       const options = await readJson<{ challengeId: string; options: Parameters<typeof startRegistration>[0]["optionsJSON"] }>(`/api/auth/${registrationKind}/options`, { method: "POST", body: JSON.stringify({ token }) });
       const response = await startRegistration({ optionsJSON: options.options });
       await readJson(`/api/auth/${registrationKind}/verify`, { method: "POST", body: JSON.stringify({ token, challengeId: options.challengeId, response }) });
-      window.location.assign("/health");
+      window.location.assign("/tasks");
     } catch {
       setError("Passkey enrollment failed");
     } finally { setBusy(false); }
@@ -41,7 +41,7 @@ export function AuthView(): ReactElement {
       const options = await readJson<{ challengeId: string; options: Parameters<typeof startAuthentication>[0]["optionsJSON"] }>("/api/auth/options", { method: "POST", body: "{}" });
       const response = await startAuthentication({ optionsJSON: options.options });
       await readJson("/api/auth/verify", { method: "POST", body: JSON.stringify({ challengeId: options.challengeId, response }) });
-      window.location.assign("/health");
+      window.location.assign("/tasks");
     } catch {
       setError("Passkey sign-in failed");
     } finally { setBusy(false); }

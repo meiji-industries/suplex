@@ -81,7 +81,8 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       expect(invalidInvitationStatuses).toEqual({ replaced: 400, expired: 400 });
 
       await adminPage.getByRole("button", { name: "Enroll passkey" }).click();
-      await adminPage.locator("h1").filter({ hasText: "Host health" }).waitFor();
+      await adminPage.locator("h1").filter({ hasText: "Tasks" }).waitFor();
+      expect(new URL(adminPage.url()).pathname).toBe("/tasks");
       expect(await adminPage.locator("body").innerText()).not.toMatch(/password/i);
 
       let releaseInitialAdminUsers!: () => void;
@@ -136,7 +137,8 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       await addVirtualAuthenticator(memberPage);
       await memberPage.goto(`${baseUrl}/auth?invite=${encodeURIComponent(invitationToken)}`);
       await memberPage.getByRole("button", { name: "Enroll passkey" }).click();
-      await memberPage.locator("h1").filter({ hasText: "Host health" }).waitFor();
+      await memberPage.locator("h1").filter({ hasText: "Tasks" }).waitFor();
+      expect(new URL(memberPage.url()).pathname).toBe("/tasks");
       expect(await memberPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
       await adminPage.reload();
@@ -160,7 +162,8 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       await adminPage.locator("button", { hasText: "Sign in with passkey" }).waitFor();
 
       await adminPage.getByRole("button", { name: "Sign in with passkey" }).click();
-      await adminPage.locator("h1").filter({ hasText: "Host health" }).waitFor();
+      await adminPage.locator("h1").filter({ hasText: "Tasks" }).waitFor();
+      expect(new URL(adminPage.url()).pathname).toBe("/tasks");
       expect(await adminPage.evaluate(async (token) => (await fetch("/api/auth/bootstrap/options", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) })).status, bootstrap.token)).toBe(400);
 
       const recovery = auth.createRecoveryInvitation({ confirmed: true, initiationMethod: "local-cli", installationId: config.installationId });
@@ -170,7 +173,8 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       await addVirtualAuthenticator(recoveryPage);
       await recoveryPage.goto(`${baseUrl}/auth?mode=recovery&invite=${recovery.token}`);
       await recoveryPage.getByRole("button", { name: "Enroll passkey" }).click();
-      await recoveryPage.locator("h1").filter({ hasText: "Host health" }).waitFor();
+      await recoveryPage.locator("h1").filter({ hasText: "Tasks" }).waitFor();
+      expect(new URL(recoveryPage.url()).pathname).toBe("/tasks");
       expect(await recoveryPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       expect((await recoveryPage.evaluate(async () => (await fetch("/api/auth/me")).status))).toBe(200);
 

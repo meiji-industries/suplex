@@ -42,7 +42,7 @@ export async function nativeApp() {
   const templates = new TaskTemplateService(database, auth, tasks);
   const hermes = new HermesAgentService(database, auth);
   const wakes: string[] = [];
-  const app = createApp({ config, database, auth, profiles, projects, tasks, taskTemplates: templates, hermes, health: healthyHost, host: { async recover(id) { wakes.push(id); } } });
+  const app = createApp({ config, database, auth, profiles, projects, tasks, taskTemplates: templates, hermes, health: healthyHost, readUpdate: async () => ({ available: false }), host: { async recover(id) { wakes.push(id); } } });
   const invitation = auth.ensureBootstrapInvitation();
   if (!invitation) throw new Error("Fresh database did not create an invitation");
   const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });

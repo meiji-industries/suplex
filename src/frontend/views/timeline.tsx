@@ -508,10 +508,6 @@ export function TimelineView(): ReactElement {
 
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  useEffect(() => {
     if (!companyId) return;
     const timer = window.setInterval(() => void reload(), 60_000);
     return () => window.clearInterval(timer);

@@ -10,7 +10,6 @@ import { readTaskAgentStatuses } from "../../task-agent-status.js";
 import { TaskAgentsResponseSchema, TaskArchiveBodySchema, TaskArchiveResponseSchema } from "../contracts/tasks.js";
 import { readTaskChecks, readTaskDiff } from "../../task-inspection.js";
 import { readTaskExecution } from "../../task-execution.js";
-import { readTaskTimeline } from "../../task-timeline.js";
 import { TaskTimelineResponseSchema } from "../../task-timeline-contracts.js";
 import { TaskExecutionResponseSchema } from "../../task-execution-contracts.js";
 import { TaskChecksResponseSchema, TaskDiffResponseSchema } from "../contracts/tasks.js";
@@ -33,8 +32,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   typed.get("/api/companies/:companyId/timeline", { schema: { params: CompanyIdParamsSchema, response: { 200: TaskTimelineResponseSchema, 503: z.object({ error: z.string() }) } } }, async (request, reply) => {
     const companyId = request.params.companyId;
     const all = [...tasks.listTasks(request.forgeUser.id, companyId, false), ...tasks.listTasks(request.forgeUser.id, companyId, true)];
-    if (!config) return reply.code(503).send({ error: "Timeline is not available" });
-    const result = await readTaskTimeline(config.databasePath, all, all.flatMap(task => tasks.repository.controls.sessions(task.id)));
+    const result = await tasks.timeline(request.forgeUser.id, all.map(task => task.id));
     tasks.listTasks(request.forgeUser.id, companyId);
     return reply.header("Cache-Control", "private, no-store").send(result);
   });
@@ -44,6 +42,9 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
     const result = await readTaskExecution(config.databasePath, tasks.repository.controls.sessions(task.id));
     tasks.getTask(request.forgeUser.id, task.id);
     return reply.header("Cache-Control", "private, no-store").send(result);
+  });
+  typed.get("/api/tasks/:taskId/timeline", { schema: { params: TaskIdParamsSchema, response: { 200: TaskTimelineResponseSchema } } }, async (request, reply) => {
+    return reply.header("Cache-Control", "private, no-store").send(await tasks.timeline(request.forgeUser.id, [request.params.taskId]));
   });
   typed.get("/api/tasks/:taskId/agents", { schema: { params: TaskIdParamsSchema, response: { 200: TaskAgentsResponseSchema, 503: z.object({ error: z.string() }) } } }, async (request, reply) => {
     const task = tasks.getTask(request.forgeUser.id, request.params.taskId);

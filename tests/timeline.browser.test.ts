@@ -10,8 +10,8 @@ test.each([1280, 390])("restored timeline shows native lanes, zoom and grouped t
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Timeline task", description: "Recorded work", startImmediately: false, idempotencyKey: "timeline-browser" });
     const now = Date.now();
     const data: TaskTimeline = { unavailableSessions: 1, tasks: [{ id: task.id, projectId: value.project.id, issueKey: task.issueKey ?? null, title: task.title, activity: [
-      { id: "root-turn", role: "root", agentId: "root-profile", agentName: "Sol", avatarSeed: "root", status: "completed", attempt: 1, startedAt: new Date(now - 3_600_000).toISOString(), finishedAt: new Date(now - 1_800_000).toISOString() },
-      { id: "worker-turn", role: "worker", agentId: "worker-profile", agentName: "Luna", avatarSeed: "worker", status: "completed", attempt: 1, startedAt: new Date(now - 1_800_000).toISOString(), finishedAt: new Date(now - 600_000).toISOString() },
+      { id: "root-turn", role: "root", agentId: "root:profile_native_root", agentName: "Sol", avatarSeed: "profile_native_root", status: "completed", attempt: 1, startedAt: new Date(now - 3_600_000).toISOString(), finishedAt: new Date(now - 1_800_000).toISOString() },
+      { id: "worker-turn", role: "worker", agentId: "worker:profile_native_worker", agentName: "Luna", avatarSeed: "profile_native_worker", status: "completed", attempt: 1, startedAt: new Date(now - 1_800_000).toISOString(), finishedAt: new Date(now - 600_000).toISOString() },
     ] }] };
     const { page } = value;
     await page.route(`**/api/companies/${value.company.id}/timeline`, route => route.fulfill({ json: data }));
@@ -19,6 +19,10 @@ test.each([1280, 390])("restored timeline shows native lanes, zoom and grouped t
     await page.locator("[data-work-timeline]").waitFor();
     await page.getByRole("link", { name: /Sol worked on/ }).waitFor();
     await page.getByRole("link", { name: /Luna worked on/ }).waitFor();
+    await page.getByText("Root · 1× · 30m", { exact: true }).waitFor();
+    await page.getByText("Worker · 1× · 20m", { exact: true }).waitFor();
+    expect(await page.getByRole("img", { name: "Sol avatar" }).getAttribute("src")).toContain("/api/avatars/profile_native_root");
+    expect(await page.getByRole("img", { name: "Luna avatar" }).getAttribute("src")).toContain("/api/avatars/profile_native_worker");
     const trim = page.getByRole("checkbox", { name: "Trim blank time" });
     expect(await trim.count()).toBe(0);
     const chart = page.locator("[data-work-timeline]");

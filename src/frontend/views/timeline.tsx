@@ -10,8 +10,8 @@ import { Skeleton } from "../components/ui/skeleton.js";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs.js";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip.js";
 import { ApplicationFrame } from "../components/app/application-frame.js";
-import { EntityAvatar } from "../components/app/entity-avatar.js";
 import { useCompanyContext } from "../components/app/company-context.js";
+import { TimelineAgentLabel } from "../components/app/timeline-agent-label.js";
 import { readJson, withCompany } from "../lib/api.js";
 import { TaskTimelineResponseSchema, type TimelineTask } from "../../task-timeline-contracts.js";
 import type { ApiProject } from "../lib/view-shared.js";
@@ -30,7 +30,7 @@ type WorkInterval = {
   projectName: string;
   agentKey: string;
   agentName: string;
-  avatarSeed?: string;
+  avatarSeed: string;
   role: AgentRole;
   status: string;
   attempt: number;
@@ -43,7 +43,7 @@ type WorkInterval = {
 type WorkLane = {
   key: string;
   name: string;
-  avatarSeed?: string;
+  avatarSeed: string;
   roles: AgentRole[];
   intervals: WorkInterval[];
   durationMs: number;
@@ -181,16 +181,15 @@ export function summarizeAgentTime(tasks: TimelineTask[], projects: Pick<ApiProj
       const end = Math.min(rawEnd, range.end, now);
       if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
 
-      const agentKey = invocation.agentId ?? `role:${invocation.role}`;
       const interval: WorkInterval = {
         id: invocation.id,
         taskId: task.id,
         issueKey: task.issueKey,
         taskTitle: task.title,
         projectName: projectNames.get(task.projectId) ?? "Unknown project",
-        agentKey,
-        agentName: invocation.agentName ?? titleCase(invocation.role),
-        ...(invocation.avatarSeed ? { avatarSeed: invocation.avatarSeed } : {}),
+        agentKey: invocation.agentId,
+        agentName: invocation.agentName,
+        avatarSeed: invocation.avatarSeed,
         role: invocation.role,
         status: invocation.status,
         attempt: invocation.attempt,
@@ -222,7 +221,7 @@ export function summarizeAgentTime(tasks: TimelineTask[], projects: Pick<ApiProj
   intervals.sort((left, right) => left.start - right.start || left.end - right.end || left.id.localeCompare(right.id));
   const laneMap = new Map<string, WorkLane>();
   for (const interval of intervals) {
-    const lane = laneMap.get(interval.agentKey) ?? { key: interval.agentKey, name: interval.agentName, ...(interval.avatarSeed ? { avatarSeed: interval.avatarSeed } : {}), roles: [], intervals: [], durationMs: 0, trackCount: 1 };
+    const lane = laneMap.get(interval.agentKey) ?? { key: interval.agentKey, name: interval.agentName, avatarSeed: interval.avatarSeed, roles: [], intervals: [], durationMs: 0, trackCount: 1 };
     if (!lane.roles.includes(interval.role)) lane.roles.push(interval.role);
     lane.intervals.push(interval);
     lane.durationMs += interval.durationMs;
@@ -438,11 +437,7 @@ function WorkChart({ summary, overview, range, fullRange, companyId, now, onRang
             return (
               <div key={lane.key} className="flex border-b border-border/55 last:border-b-0" style={{ minHeight: laneHeight }}>
                 <div className="flex w-52 shrink-0 items-center gap-2 border-r border-border/70 px-3 sm:px-4">
-                  {lane.avatarSeed ? <EntityAvatar kind="agent" id={lane.avatarSeed} name={lane.name} /> : <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{lane.name[0]?.toUpperCase()}</span>}
-                  <span className="min-w-0">
-                    <span className="block truncate text-xs font-medium">{lane.name}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">{lane.roles.map(titleCase).join(" / ")} · {lane.intervals.length}× · {formatDuration(lane.durationMs)}</span>
-                  </span>
+                  <TimelineAgentLabel avatarSeed={lane.avatarSeed} name={lane.name} role={lane.roles.map(titleCase).join(" / ")} executionCount={lane.intervals.length} duration={formatDuration(lane.durationMs)} />
                 </div>
                 <div className="relative min-w-0 flex-1 overflow-hidden bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px)] bg-[size:16.6667%_100%]">
                   {nowPosition >= 0 && nowPosition <= 100 ? <div aria-label="Now" className="absolute inset-y-0 z-[1] w-px bg-emerald-500" style={{ left: `${nowPosition}%` }} /> : null}

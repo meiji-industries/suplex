@@ -6,7 +6,7 @@ import { TaskUsageSchema } from "../src/task-usage.js";
 import { TaskTimelineResponseSchema } from "../src/task-timeline-contracts.js";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
-test.each([1280, 390])("Activity restores recorded Coordinator and Worker Gantt lanes at %ipx", { timeout: 45_000 }, async width => {
+test.each([1280, 390])("Task detail shows recorded Coordinator and Worker Gantt lanes above tabs at %ipx", { timeout: 45_000 }, async width => {
   const value = await nativeBrowser(width);
   try {
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Agent timeline", description: "Show repeated execution and idle gaps.", startImmediately: true, idempotencyKey: "activity-gantt" });
@@ -22,13 +22,35 @@ test.each([1280, 390])("Activity restores recorded Coordinator and Worker Gantt 
     }
     controls.markDelivered(task.id);
     value.tasks.repository.setArchived(task.id, true);
+    const secondary = value.profiles.create(value.userId, { name: "Secondary Root", role: "root", avatarSeed: "2".repeat(32), provider: "openai", model: "gpt-5.5", reasoningLevel: "medium", serviceTier: "default" });
+    const data = TaskTimelineResponseSchema.parse(await value.tasks.timeline(value.userId, [task.id]));
+    data.tasks[0]?.activity.push({
+      id: "secondary-root-turn", role: "root", agentId: `root:${secondary.id}`, agentName: "gpt-5.5", avatarSeed: secondary.id,
+      status: "completed", attempt: 1, startedAt: new Date(start + 5_000).toISOString(), finishedAt: new Date(start + 10_000).toISOString(),
+    });
     const { page } = value;
+    let offline = false;
+    await page.route(`**/api/tasks/${task.id}/timeline`, route => offline ? route.fulfill({ status: 503, json: { error: "offline" } }) : route.fulfill({ json: data }));
     await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
-    await page.getByRole("tab", { name: /^Activity/ }).click();
     const timeline = page.getByRole("region", { name: "Task timeline", exact: true });
     await timeline.getByText("Elapsed 50s", { exact: true }).waitFor();
-    expect(await timeline.getByRole("list", { name: "Coordinator executions" }).getByRole("listitem").count()).toBe(2);
-    expect(await timeline.getByRole("list", { name: "Worker executions" }).getByRole("listitem").count()).toBe(1);
+    expect(await page.getByRole("tab", { name: "Chat", exact: true }).getAttribute("aria-selected")).toBe("true");
+    expect(await timeline.count()).toBe(1);
+    expect(await timeline.evaluate(element => element.closest('[role="tabpanel"]'))).toBeNull();
+    const timelineBox = await timeline.boundingBox();
+    const tabListBox = await page.getByRole("tablist").boundingBox();
+    if (!timelineBox || !tabListBox) throw new Error("Missing timeline or tab list bounds");
+    expect(timelineBox.y + timelineBox.height).toBeLessThanOrEqual(tabListBox.y);
+    await timeline.getByText("Coordinator · 2× · 20s", { exact: true }).waitFor();
+    await timeline.getByText("Worker · 1× · 10s", { exact: true }).waitFor();
+    await timeline.getByText("Coordinator · 1× · 5s", { exact: true }).waitFor();
+    expect(await timeline.getByRole("list", { name: "gpt-5.6-sol executions" }).getByRole("listitem").count()).toBe(2);
+    expect(await timeline.getByRole("list", { name: "gpt-5.6-luna executions" }).getByRole("listitem").count()).toBe(1);
+    expect(await timeline.getByRole("list", { name: "gpt-5.5 executions" }).getByRole("listitem").count()).toBe(1);
+    expect(await timeline.locator('[data-task-agent-id="root:profile_native_root"]').count()).toBe(2);
+    expect(await timeline.locator(`[data-task-agent-id="root:${secondary.id}"]`).count()).toBe(1);
+    expect(await timeline.getByRole("img", { name: "gpt-5.6-sol avatar" }).getAttribute("src")).toContain("/api/avatars/profile_native_root");
+    expect(await timeline.getByRole("img", { name: "gpt-5.5 avatar" }).getAttribute("src")).toContain(`/api/avatars/${secondary.id}`);
     expect(await timeline.locator("[data-task-timing-active]").count()).toBe(0);
     const first = timeline.locator('[data-task-timing="root"]').first();
     await first.focus();
@@ -39,15 +61,20 @@ test.each([1280, 390])("Activity restores recorded Coordinator and Worker Gantt 
       await scroller.evaluate(element => { element.scrollLeft = 120; });
       expect(await scroller.evaluate(element => element.scrollLeft)).toBe(120);
     }
+    await page.getByRole("tab", { name: /^Activity/ }).click();
+    expect(await timeline.isVisible()).toBe(true);
+    expect(await timeline.count()).toBe(1);
+    expect(await timeline.evaluate(element => element.closest('[role="tabpanel"]'))).toBeNull();
+    await page.getByRole("tab", { name: "Chat", exact: true }).click();
+    expect(await timeline.isVisible()).toBe(true);
+    expect(await timeline.count()).toBe(1);
+    expect(await timeline.evaluate(element => element.closest('[role="tabpanel"]'))).toBeNull();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: join(tmpdir(), `forge-task-activity-timeline-${width}.png`), fullPage: true });
-    const data = TaskTimelineResponseSchema.parse(await (await page.request.get(`${value.base}/api/tasks/${task.id}/timeline`)).json());
+    await page.screenshot({ path: join("/tmp", `forge-task-timeline-agents-${width}.png`), fullPage: true });
     const live = data.tasks[0]?.activity.at(-1);
     if (!live) throw new Error("Missing recorded execution");
     live.finishedAt = null;
     live.status = "running";
-    let offline = false;
-    await page.route(`**/api/tasks/${task.id}/timeline`, route => offline ? route.fulfill({ status: 503, json: { error: "offline" } }) : route.fulfill({ json: data }));
     await timeline.locator("[data-task-timing-active]").waitFor();
     expect(await timeline.locator("[data-task-timing-active]").evaluate(element => getComputedStyle(element).animationName)).toBe("phase-timing-candy-stripes");
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -57,7 +84,7 @@ test.each([1280, 390])("Activity restores recorded Coordinator and Worker Gantt 
     offline = true;
     await timeline.getByText("Timeline is not available.", { exact: true }).waitFor();
     expect(await timeline.locator("[data-task-timing-active]").count()).toBe(0);
-    expect(await timeline.getByRole("listitem").count()).toBe(3);
+    expect(await timeline.getByRole("listitem").count()).toBe(4);
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

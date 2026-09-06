@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { ChevronDown, FileText, FolderKanban } from "lucide-react";
+import { FileText, FolderKanban } from "lucide-react";
 import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../../task-contracts.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate } from "../../lib/view-shared.js";
 import { readJson, withCompany } from "../../lib/api.js";
@@ -107,7 +107,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       <DialogHeader className="px-4 py-3 sm:px-5">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2"><Breadcrumb><BreadcrumbList className="gap-2 text-sm"><BreadcrumbItem>
           <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" aria-label="Project" disabled={busy || !projects.length} />}>
-            {project ? <Avatar size="xs" shape="square"><AvatarImage src={`/api/projects/${project.id}/favicon`} alt="" /><AvatarFallback>{project.name.slice(0, 1).toUpperCase()}</AvatarFallback></Avatar> : <FolderKanban className="size-3.5 text-muted-foreground" />}<span className="max-w-40 truncate">{project?.name ?? "Project"}</span><ChevronDown className="size-3.5" />
+            {project ? <Avatar size="xs" shape="square"><AvatarImage src={`/api/projects/${project.id}/favicon`} alt="" /><AvatarFallback>{project.name.slice(0, 1).toUpperCase()}</AvatarFallback></Avatar> : <FolderKanban className="size-3.5 text-muted-foreground" />}<span className="max-w-40 truncate">{project?.name ?? "Project"}</span>
           </DropdownMenuTrigger><DropdownMenuContent align="start">{projects.map(candidate => <DropdownMenuItem key={candidate.id} onClick={() => { setProjectId(candidate.id); setSource(undefined); setSourceSummary(undefined); }}><Avatar size="xs" shape="square"><AvatarImage src={`/api/projects/${candidate.id}/favicon`} alt="" /><AvatarFallback>{candidate.name.slice(0, 1).toUpperCase()}</AvatarFallback></Avatar><span className="min-w-0 flex-1 truncate">{candidate.name}</span>{candidate.id === projectId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
         </BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><DialogTitle className="font-normal">New task</DialogTitle></BreadcrumbItem></BreadcrumbList></Breadcrumb>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1"><TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />

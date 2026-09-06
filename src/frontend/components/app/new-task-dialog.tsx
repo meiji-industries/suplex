@@ -4,6 +4,7 @@ import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type 
 import type { ApiProfile, ApiProject, ApiTaskTemplate } from "../../lib/view-shared.js";
 import { readJson, withCompany } from "../../lib/api.js";
 import { Button } from "../ui/button.js";
+import { NewButton } from "../ui/new-button.js";
 import { Checkbox } from "../ui/checkbox.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog.js";
 import { Input } from "../ui/input.js";
@@ -81,7 +82,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       request.current = null;
       setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined);
       onCreated(task);
-    } catch (error) { setError(error instanceof Error ? error.message : "Forge could not create the task"); }
+    } catch (error) { setError(error instanceof Error ? error.message : "Forge could not save the task"); }
     finally { setBusy(false); }
   };
   const addImages = async (files: File[]) => {
@@ -124,7 +125,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
           <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} />
           <TaskRoleSelector role="root" profiles={profiles} assignment={rootProfileId} defaultProfileId={project?.rootProfileId} busy={busy} onChange={setRootProfileId} />
           <TaskRoleSelector role="worker" profiles={profiles} assignment={workerProfileId} defaultProfileId={project?.workerProfileId} busy={busy} onChange={setWorkerProfileId} />
-          <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end"><Button type="submit" size="sm" disabled={busy || readingImages || !projectId || !title.trim() || !description.trim()} title="Create task (⌘Enter)">{busy ? "Forge saves" : "Create task"}</Button></DialogFooter>
+          <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end"><NewButton type="submit" disabled={busy || readingImages || !projectId || !title.trim() || !description.trim()} title="New task (⌘Enter)">{busy ? "Forge saves" : "New task"}</NewButton></DialogFooter>
         </div>
         <fieldset className="min-w-0 border-t border-border/70 bg-muted/30 px-5 py-3"><legend className="px-0 text-xs font-medium text-muted-foreground">Delivery &amp; checks</legend>
           <RadioGroup aria-label="Delivery target" value={deliveryTarget} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))} className="mt-2.5 flex flex-wrap gap-x-4 gap-y-2">{taskDeliveryTargetOptions.map(option => <label className="flex items-center gap-1.5 text-xs" key={option.value}><RadioGroupItem value={option.value} />{option.label}</label>)}</RadioGroup>

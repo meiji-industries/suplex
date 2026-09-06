@@ -105,9 +105,10 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       await initialAdminUsersResponse;
       await adminPage.unroute("**/api/admin/users");
       await adminPage.getByRole("button", { name: "Switch company" }).click();
-      await adminPage.getByRole("menuitem", { name: /Create company/ }).click();
+      await adminPage.getByRole("menuitem", { name: /New company/ }).click();
+      await adminPage.screenshot({ path: "/tmp/forge-new-actions-company-dialog-desktop.png", fullPage: true, animations: "disabled" });
       await adminPage.getByLabel("Company name", { exact: true }).fill("Browser Company");
-      await adminPage.getByRole("button", { name: "Create", exact: true }).click();
+      await adminPage.getByRole("dialog", { name: "New company", exact: true }).getByRole("button", { name: "New company", exact: true }).click();
       await adminPage.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
 
       await adminPage.goto(`${baseUrl}/admin`);

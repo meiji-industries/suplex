@@ -3,12 +3,13 @@ import { Pencil } from "lucide-react";
 import type { TaskTemplateInput } from "../../task-templates.js";
 import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../task-contracts.js";
 import { SettingsLayout } from "../components/app/settings-layout.js";
-import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, SettingsToolbarAction, type SettingsTableColumn } from "../components/app/settings-table.js";
+import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, type SettingsTableColumn } from "../components/app/settings-table.js";
 import { useCompanyContext } from "../components/app/company-context.js";
 import { taskDeliveryTargetOptions } from "../components/app/task-delivery-target.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog.js";
 import { Button } from "../components/ui/button.js";
+import { NewButton } from "../components/ui/new-button.js";
 import { Checkbox } from "../components/ui/checkbox.js";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
 import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../components/ui/field.js";
@@ -155,7 +156,7 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
           <SelectTrigger aria-label="Template project"><SelectValue /></SelectTrigger>
           <SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent>
         </Select>
-        <SettingsToolbarAction tone="primary" disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>Create template</SettingsToolbarAction>
+        <NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New template</NewButton>
       </>} />
       {error && editor.kind === "closed" ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       <SettingsDataTable label="Task templates" columns={columns} className="mt-4">
@@ -172,11 +173,11 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
         {templates.length === 0 ? <SettingsTableEmpty columnCount={columns.length}>No templates configured.</SettingsTableEmpty> : null}
         {templates.length > 0 && visibleTemplates.length === 0 ? <SettingsTableEmpty columnCount={columns.length}>No templates match the search.</SettingsTableEmpty> : null}
       </SettingsDataTable>
-    </section> : !loadingProjects && !projectError ? <p className="pt-3 text-xs text-muted-foreground">Create a project before you create a template.</p> : null}
+    </section> : !loadingProjects && !projectError ? <p className="pt-3 text-xs text-muted-foreground">Add a project before you add a template.</p> : null}
 
     <Dialog open={editor.kind !== "closed"} onOpenChange={(open) => { if (!open && !busy) { setEditor({ kind: "closed" }); setDeleteOpen(false); setError(""); } }}>
       <DialogContent showCloseButton={!busy}>
-        <DialogHeader><DialogTitle>{editor.kind === "edit" ? "Edit template" : "Create template"}</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{editor.kind === "edit" ? "Edit template" : "New template"}</DialogTitle></DialogHeader>
         {draft ? <form className="max-h-[70dvh] overflow-y-auto" onSubmit={(event) => { event.preventDefault(); void save(); }}>
           <FieldGroup>
             {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
@@ -198,7 +199,7 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
             <DialogFooter>
               {editor.kind === "edit" ? <Button type="button" variant="destructive" size="sm" disabled={busy} onClick={() => { setDeleteError(""); setDeleteOpen(true); }}>Delete template</Button> : null}
               <DialogClose disabled={busy} render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose>
-              <Button type="submit" size="sm" disabled={busy}>{busy ? "Forge saves" : "Save template"}</Button>
+              {editor.kind === "edit" ? <Button type="submit" size="sm" disabled={busy}>{busy ? "Forge saves" : "Save template"}</Button> : <NewButton type="submit" disabled={busy}>{busy ? "Forge saves" : "New template"}</NewButton>}
             </DialogFooter>
           </FieldGroup>
         </form> : null}

@@ -11,7 +11,7 @@ const branch: TaskSourceSummary = { kind: "branch", branch: "feature/search", he
 
 test("the picker renders its compact source trigger", () => {
   const html = renderToStaticMarkup(createElement(TaskSourcePicker, { projectId: "project-1", onSelect: () => {}, onClear: () => {} }));
-  expect(html).toContain("Create from…"); expect(html).toContain('aria-label="Create from source"');
+  expect(html).toContain("New from…"); expect(html).toContain('aria-label="New from source"'); expect(html).toContain("lucide-circle-plus");
 });
 
 test("picker search covers PR metadata and branch metadata", () => {

@@ -17,7 +17,7 @@ test.each([1280, 390])("native templates save, apply, reset defaults, and delete
     const settingsUrl = `${value.base}/templates?company=${value.company.id}`;
 
     await page.goto(`${value.base}/tasks?company=${value.company.id}`);
-    await page.getByRole("button", { name: "Create task", exact: true }).click();
+    await page.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true }).click();
     let dialog = page.getByRole("dialog");
     const dialogWidth = await dialog.evaluate(element => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }));
     expect(dialogWidth.scrollWidth).toBeLessThanOrEqual(dialogWidth.clientWidth);
@@ -26,7 +26,7 @@ test.each([1280, 390])("native templates save, apply, reset defaults, and delete
     expect(await page.getByRole("menuitem").allTextContents()).toEqual(["Open templates"]);
     await page.getByRole("menuitem", { name: "Open templates", exact: true }).click();
     await expect.poll(() => page.url()).toBe(projectUrl);
-    await page.getByRole("button", { name: "Create template", exact: true }).waitFor();
+    await page.getByRole("button", { name: "New template", exact: true }).waitFor();
 
     await page.goto(`${value.base}/profile?company=${value.company.id}`);
     if (width < 768) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
@@ -37,23 +37,23 @@ test.each([1280, 390])("native templates save, apply, reset defaults, and delete
     await page.getByText("No templates configured.", { exact: true }).waitFor();
     await page.screenshot({ path: `/tmp/forge-template-settings-empty-${width}.png`, fullPage: true });
 
-    await page.getByRole("button", { name: "Create template", exact: true }).click();
-    dialog = page.getByRole("dialog", { name: "Create template", exact: true });
+    await page.getByRole("button", { name: "New template", exact: true }).click();
+    dialog = page.getByRole("dialog", { name: "New template", exact: true });
     await expect.poll(() => dialog.isVisible()).toBe(true);
-    await page.screenshot({ path: `/tmp/forge-template-settings-create-dialog-${width}.png`, fullPage: true, animations: "disabled" });
+    await page.screenshot({ path: `/tmp/forge-new-actions-template-dialog-${width}.png`, fullPage: true, animations: "disabled" });
     await dialog.getByLabel("Name", { exact: true }).fill("Unsaved first draft");
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await projectSelector.click();
     await page.getByRole("option", { name: secondProject.name, exact: true }).click();
-    await page.getByRole("button", { name: "Create template", exact: true }).click();
-    dialog = page.getByRole("dialog", { name: "Create template", exact: true });
+    await page.getByRole("button", { name: "New template", exact: true }).click();
+    dialog = page.getByRole("dialog", { name: "New template", exact: true });
     expect(await dialog.getByLabel("Name", { exact: true }).inputValue()).toBe("");
     await dialog.getByLabel("Name", { exact: true }).fill("Unsaved second draft");
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await projectSelector.click();
     await page.getByRole("option", { name: value.project.name, exact: true }).click();
-    await page.getByRole("button", { name: "Create template", exact: true }).click();
-    dialog = page.getByRole("dialog", { name: "Create template", exact: true });
+    await page.getByRole("button", { name: "New template", exact: true }).click();
+    dialog = page.getByRole("dialog", { name: "New template", exact: true });
     expect(await dialog.getByLabel("Name", { exact: true }).inputValue()).toBe("");
     await dialog.getByLabel("Name", { exact: true }).fill("Release");
     await dialog.getByLabel("Description", { exact: true }).fill("Inspect and release the change");
@@ -75,7 +75,7 @@ test.each([1280, 390])("native templates save, apply, reset defaults, and delete
       await saveGate;
       await route.fulfill({ response });
     });
-    await dialog.getByRole("button", { name: "Save template", exact: true }).click();
+    await dialog.getByRole("button", { name: "New template", exact: true }).click();
     await expect.poll(() => dialog.getByRole("button", { name: "Cancel", exact: true }).isDisabled()).toBe(true);
     expect(await dialog.getByRole("button", { name: "Close", exact: true }).count()).toBe(0);
     releaseSave();
@@ -126,7 +126,7 @@ test.each([1280, 390])("native templates save, apply, reset defaults, and delete
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     await page.goto(`${value.base}/tasks?company=${value.company.id}`);
-    await page.getByRole("button", { name: "Create task", exact: true }).click();
+    await page.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true }).click();
     dialog = page.getByRole("dialog");
     await dialog.getByRole("button", { name: "Template", exact: true }).click();
     await page.getByRole("menuitem", { name: "Release", exact: true }).waitFor();
@@ -138,7 +138,7 @@ test.each([1280, 390])("native templates save, apply, reset defaults, and delete
     expect(await dialog.getByRole("combobox", { name: "Screenshots", exact: true }).innerText()).toContain("Necessary");
     await dialog.getByLabel("Task title", { exact: true }).fill("Apply release template");
     await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).click();
-    await dialog.getByRole("button", { name: "Create task", exact: true }).click();
+    await dialog.getByRole("button", { name: "New task", exact: true }).click();
     await expect.poll(() => value.tasks.listTasks(value.userId, value.company.id).length).toBe(1);
     expect(value.tasks.listTasks(value.userId, value.company.id)[0]).toMatchObject({
       title: "Apply release template",
@@ -192,7 +192,7 @@ test("global templates shows project loading errors", async () => {
     await page.goto(`${value.base}/templates?company=${value.company.id}`);
     await page.getByRole("alert").waitFor();
     expect(await page.getByRole("alert").innerText()).toContain("Projects are not available");
-    expect(await page.getByText("Create a project before you create a template.", { exact: true }).count()).toBe(0);
+    expect(await page.getByText("Add a project before you add a template.", { exact: true }).count()).toBe(0);
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

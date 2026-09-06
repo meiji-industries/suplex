@@ -23,7 +23,7 @@ test.each([1280, 390])("native task creation preserves start intent and role cho
     page.on("pageerror", error => errors.push(error.message));
     await page.goto(`${base}/tasks?company=${value.company.id}`);
     for (const immediate of [true, false]) {
-      await page.getByRole("button", { name: "Create task", exact: true }).click();
+      await page.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true }).click();
       const dialog = page.getByRole("dialog");
       const rootSelector = dialog.getByRole("button", { name: /^Root assignee:/ });
       await rootSelector.click();
@@ -52,7 +52,7 @@ test.each([1280, 390])("native task creation preserves start intent and role cho
       await page.screenshot({ path: join(tmpdir(), `forge-native-create-${width}-${immediate}.png`) });
       const response = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/api/companies/${value.company.id}/tasks`));
       if (immediate) await dialog.getByLabel("Task description", { exact: true }).press("Control+Enter");
-      else await dialog.getByRole("button", { name: "Create task", exact: true }).click();
+      else await dialog.getByRole("button", { name: "New task", exact: true }).click();
       const created = await response;
       expect(created.status(), await created.text()).toBe(201);
       const task = TaskSchema.parse(await created.json());

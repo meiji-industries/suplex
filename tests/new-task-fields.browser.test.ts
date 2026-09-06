@@ -7,13 +7,15 @@ test.each([
   { theme: "light" as const, width: 390 },
   { theme: "dark" as const, width: 1280 },
   { theme: "dark" as const, width: 390 },
-])("New Task fields stay seamless and compact in $theme mode at $width px", { timeout: 45_000 }, async ({ theme, width }) => {
+])("New task fields stay seamless and compact in $theme mode at $width px", { timeout: 45_000 }, async ({ theme, width }) => {
   const value = await nativeBrowser(width);
   const { page } = value;
   try {
     await page.emulateMedia({ colorScheme: theme });
     await page.goto(`${value.base}/tasks?company=${value.company.id}`);
-    await page.getByRole("button", { name: "Create task", exact: true }).click();
+    const headerAction = page.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true });
+    await page.screenshot({ path: `/tmp/forge-new-actions-task-header-${theme}-${width}.png`, fullPage: true, animations: "disabled" });
+    await headerAction.click();
 
     const dialog = page.getByRole("dialog");
     const title = dialog.getByLabel("Task title", { exact: true });
@@ -47,7 +49,7 @@ test.each([
     expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 
-    await page.screenshot({ path: `/tmp/forge-new-task-fields-${theme}-${width}.png`, fullPage: true, animations: "disabled" });
+    await page.screenshot({ path: `/tmp/forge-new-actions-task-dialog-${theme}-${width}.png`, fullPage: true, animations: "disabled" });
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

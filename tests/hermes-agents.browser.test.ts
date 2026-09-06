@@ -201,14 +201,21 @@ test("Hermes external agent full browser lifecycle at desktop and narrow viewpor
     expect(await page.getByRole("row", { name: /Hermes agent SRE Hermes Bot/i }).count()).toBe(0);
     await page.screenshot({ path: join(receiptsDir, "01-agents-admin-desktop.png") });
 
+    await page.getByRole("button", { name: "New agent", exact: true }).click();
+    const newAgentDialog = page.getByRole("dialog", { name: "New agent", exact: true });
+    await newAgentDialog.waitFor();
+    await page.screenshot({ path: "/tmp/forge-new-actions-agent-dialog-desktop.png", fullPage: true, animations: "disabled" });
+    await newAgentDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+
     // Open New Hermes agent modal
     await page.getByRole("button", { name: "New Hermes agent" }).click();
     await page.getByRole("dialog", { name: "New Hermes agent" }).waitFor();
     expect(await page.getByRole("dialog", { name: "New Hermes agent" }).isVisible()).toBe(true);
+    await page.screenshot({ path: "/tmp/forge-new-actions-hermes-agent-dialog-desktop.png", fullPage: true, animations: "disabled" });
 
     await page.getByLabel("Agent name").fill("SRE Hermes Bot");
     await page.getByText("Proof Project").click();
-    await page.getByRole("button", { name: "Create Hermes agent" }).click();
+    await page.getByRole("dialog", { name: "New Hermes agent", exact: true }).getByRole("button", { name: "New Hermes agent", exact: true }).click();
 
     const pairingDialog = page.getByRole("dialog", { name: "Pairing code" });
     await pairingDialog.waitFor();

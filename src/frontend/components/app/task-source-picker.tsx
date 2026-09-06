@@ -1,4 +1,4 @@
-import { GitBranch, GitPullRequest, Search, X } from "lucide-react";
+import { CirclePlus, GitBranch, GitPullRequest, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { Badge } from "../ui/badge.js";
 import { Button } from "../ui/button.js";
@@ -50,12 +50,12 @@ export function TaskSourcePicker({ projectId, value, disabled, onSelect, onClear
   const filtered = useMemo(() => filterTaskSources(rows, query), [query, rows]);
   return <DropdownMenu onOpenChange={(open) => { if (open) void load(); }}>
     {value ? <div className="flex items-center gap-2 text-sm">
-      <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={disabled || !projectId} aria-label="Create from source" />}>
+      <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={disabled || !projectId} aria-label="New from source" />}>
         {value.kind === "pull_request" ? <><Badge variant="outline">PR #{value.number}</Badge><span className="max-w-[24rem] truncate">{value.headBranch}</span></> : <><GitBranch /><span className="max-w-[24rem] truncate">{value.branch}</span></>}
       </DropdownMenuTrigger>
       <Button type="button" variant="ghost" size="icon-sm" aria-label="Clear source" onClick={onClear}><X className="size-3.5" /></Button>
-    </div> : <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={disabled || !projectId} aria-label="Create from source" />}>
-      <GitBranch />Create from…
+    </div> : <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={disabled || !projectId} aria-label="New from source" />}>
+      <CirclePlus />New from…
     </DropdownMenuTrigger>}
     <DropdownMenuContent align="end" className="w-[min(26rem,calc(100vw-2rem))] p-2">
       <Tabs value={kind} onValueChange={(next) => { const selected = next as typeof kind; setKind(selected); setRows([]); void load(selected); }}>

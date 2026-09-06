@@ -1,7 +1,8 @@
-import { Check, CircleAlert, CircleGauge, Plus, RefreshCw, Settings2 } from "lucide-react";
+import { Check, CircleAlert, CircleGauge, CirclePlus, RefreshCw, Settings2 } from "lucide-react";
 import { useState, type FormEvent, type ReactElement } from "react";
 
 import { Button } from "../ui/button.js";
+import { NewButton } from "../ui/new-button.js";
 import { Alert, AlertDescription } from "../ui/alert.js";
 import { Badge } from "../ui/badge.js";
 import { DialogClose, DialogContent, DialogFooter, DialogHeader, Dialog as DialogRoot, DialogTitle } from "../ui/dialog.js";
@@ -38,7 +39,7 @@ function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChan
       onOpenChange(false);
       navigate(withCompany(`/companies/${encodeURIComponent(created.id)}/settings`, created.id));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to create company");
+      setError(reason instanceof Error ? reason.message : "Unable to add company");
     } finally {
       setBusy(false);
     }
@@ -46,14 +47,14 @@ function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   return (
     <DialogRoot open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[min(92vw,360px)]" showCloseButton>
-          <DialogHeader><DialogTitle>Create company</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>New company</DialogTitle></DialogHeader>
           <form className="grid gap-3" onSubmit={(event) => void submit(event)}>
             <Field>
               <FieldLabel htmlFor="create-company-name">Company name</FieldLabel>
               <Input id="create-company-name" autoFocus value={name} onChange={(event) => setName(event.target.value)} />
             </Field>
             {error ? <Alert variant="destructive" className="mt-2"><AlertDescription>{error}</AlertDescription></Alert> : null}
-            <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || !name.trim()}>{busy ? "Forge creates" : "Create"}</Button></DialogFooter>
+            <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><NewButton type="submit" disabled={busy || !name.trim()}>{busy ? "Forge saves" : "New company"}</NewButton></DialogFooter>
           </form>
       </DialogContent>
     </DialogRoot>
@@ -86,7 +87,7 @@ export function CompanySwitcher(): ReactElement {
               <DropdownMenuSeparator />
               {error ? <div className="flex items-center gap-2 px-2 py-2 text-[11px] text-destructive"><CircleAlert className="size-3.5 shrink-0" />Unable to load companies</div> : null}
               {error ? <DropdownMenuItem aria-label="Refresh" title="Refresh" onClick={() => void context.reloadCompanies()}><RefreshCw aria-hidden="true" className="size-3.5 text-muted-foreground" /></DropdownMenuItem> : null}
-              {user?.role === "admin" ? <DropdownMenuItem onClick={() => setCreateOpen(true)}><Plus className="size-3.5 text-muted-foreground" />Create company…</DropdownMenuItem> : null}
+              {user?.role === "admin" ? <DropdownMenuItem onClick={() => setCreateOpen(true)}><CirclePlus className="size-3.5 text-muted-foreground" />New company…</DropdownMenuItem> : null}
               {user?.role === "admin" && currentCompany ? <DropdownMenuItem render={<a href={withCompany(`/companies/${encodeURIComponent(currentCompany.id)}/settings`, currentCompany.id)} />}><Settings2 className="size-3.5 text-muted-foreground" />Company settings</DropdownMenuItem> : null}
         </DropdownMenuContent>
       </DropdownMenu></SidebarMenuItem></SidebarMenu>

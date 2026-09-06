@@ -96,9 +96,14 @@ test("projects desktop flow creates native projects and shows actionable validat
       const page = await context.newPage();
       await page.goto(`${baseUrl}/projects`);
       await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
-      await page.getByRole("button", { name: "New Project", exact: true }).click();
+      const newProject = page.locator("[data-app-header]").getByRole("button", { name: "New project", exact: true });
+      await newProject.locator("svg.lucide-circle-plus").waitFor();
+      expect(await newProject.evaluate(element => getComputedStyle(element).height)).toBe("32px");
+      await page.screenshot({ path: "/tmp/forge-new-actions-project-header-desktop.png", fullPage: true, animations: "disabled" });
+      await newProject.click();
+      await page.screenshot({ path: "/tmp/forge-new-actions-project-dialog-desktop.png", fullPage: true, animations: "disabled" });
       await page.getByLabel("GitHub repository URL", { exact: true }).fill("https://github.com/acme/forge.git");
-      await page.getByRole("button", { name: "Create project" }).click();
+      await page.getByRole("dialog", { name: "New project", exact: true }).getByRole("button", { name: "New project", exact: true }).click();
       await page.getByText("forge", { exact: true }).waitFor();
       const forgeProject = page.locator("article").filter({ hasText: "forge" });
       await forgeProject.getByRole("button", { name: "Configure" }).click();
@@ -106,9 +111,9 @@ test("projects desktop flow creates native projects and shows actionable validat
       expect(await page.getByLabel("Root default").innerText()).toContain("Root");
       expect(await page.getByLabel("Worker default").innerText()).toContain("Worker");
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
-      await page.getByRole("button", { name: "New Project", exact: true }).click();
+      await page.locator("[data-app-header]").getByRole("button", { name: "New project", exact: true }).click();
       await page.getByLabel("GitHub repository URL", { exact: true }).fill("https://token@github.com/acme/unsafe.git");
-      await page.getByRole("button", { name: "Create project" }).click();
+      await page.getByRole("dialog", { name: "New project", exact: true }).getByRole("button", { name: "New project", exact: true }).click();
       await page.getByRole("alert").filter({ hasText: "GitHub repository URL is invalid" }).waitFor();
       await page.getByText(/repositoryUrl: Use an HTTPS or SSH URL for one GitHub repository/).waitFor();
       expect(await page.locator("body").innerText()).not.toMatch(/token@|ghp_/);

@@ -2,6 +2,7 @@ import { Alert, AlertDescription } from ".././components/ui/alert.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from ".././components/ui/alert-dialog.js";
 import { Badge } from ".././components/ui/badge.js";
 import { Button } from ".././components/ui/button.js";
+import { NewButton } from ".././components/ui/new-button.js";
 import { Checkbox } from ".././components/ui/checkbox.js";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from ".././components/ui/dialog.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from ".././components/ui/dropdown-menu.js";
@@ -218,7 +219,7 @@ export function AdminView(): ReactElement {
     try {
       await readJson(editing ? `/api/admin/profiles/${encodeURIComponent(editingAgentId)}` : "/api/admin/profiles", { method: editing ? "PATCH" : "POST", body: JSON.stringify({ name: agentName, role: agentRole, avatarSeed: agentAvatarSeed, provider: agentProvider, model: agentModel, reasoningLevel: agentReasoning, serviceTier: agentPriority }) });
       setAgentOpen(false); setEditingAgentId(null); await reload();
-    } catch { setError(editing ? "Unable to update agent" : "Unable to create agent"); }
+    } catch { setError(editing ? "Unable to update agent" : "Unable to add agent"); }
   };
   const patchAgent = async (agent: ApiProfile, body: Record<string, unknown>, fallback: string): Promise<void> => {
     try {
@@ -265,7 +266,7 @@ export function AdminView(): ReactElement {
       setPairingCodeModalOpen(true);
       await reload();
     } catch (error) {
-      setHermesError(error instanceof Error ? error.message : "Unable to create Hermes agent");
+      setHermesError(error instanceof Error ? error.message : "Unable to add Hermes agent");
     }
   };
 
@@ -521,7 +522,7 @@ export function AdminView(): ReactElement {
         {isAgents ? (
           <div className="space-y-12">
             <section>
-              <SettingsToolbar searchLabel="Filter internal agents by name" searchPlaceholder="Filter by name" filterLabel="All roles" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={openNewAgent}>New internal agent</SettingsToolbarAction>} />
+              <SettingsToolbar searchLabel="Filter internal agents by name" searchPlaceholder="Filter by name" filterLabel="All roles" searchWidth="compact" actions={<NewButton onClick={openNewAgent}>New agent</NewButton>} />
               <SettingsDataTable label="Internal Agents" columns={AGENT_COLUMNS} className="mt-4">
                 <SettingsTableGroup label="Internal agents" count={agents.length} columnCount={AGENT_COLUMNS.length}>
                   {sortedAgents.map((agent) => (
@@ -564,7 +565,7 @@ export function AdminView(): ReactElement {
             </section>
 
             <section>
-              <div className="flex justify-end"><Button size="sm" onClick={openNewHermesAgent}>New Hermes agent</Button></div>
+              <div className="flex justify-end"><NewButton onClick={openNewHermesAgent}>New Hermes agent</NewButton></div>
               <SettingsDataTable label="Hermes Agents" columns={HERMES_AGENT_COLUMNS} className="mt-4">
                 <SettingsTableGroup label="Hermes agents" count={hermesAgents.length} columnCount={HERMES_AGENT_COLUMNS.length}>
                   {hermesAgents.map((agent) => {
@@ -633,7 +634,7 @@ export function AdminView(): ReactElement {
             {/* Internal agent dialog */}
             <Dialog open={agentOpen} onOpenChange={(open) => { setAgentOpen(open); if (!open) setEditingAgentId(null); }}>
               <DialogContent>
-                <DialogHeader><DialogTitle>{editingAgentId ? "Edit agent" : "New internal agent"}</DialogTitle><DialogDescription>Set the role and execution settings for this agent.</DialogDescription></DialogHeader>
+                <DialogHeader><DialogTitle>{editingAgentId ? "Edit agent" : "New agent"}</DialogTitle><DialogDescription>Set the role and execution settings for this agent.</DialogDescription></DialogHeader>
                 <form className="max-h-[calc(100dvh-12rem)] overflow-y-auto" onSubmit={(event) => { event.preventDefault(); void saveAgent(); }}>
                   <FieldGroup>
                     <Field><FieldLabel>Avatar</FieldLabel><span className="flex items-center gap-3"><ProfileAvatar name={agentName || "Agent"} seed={agentAvatarSeed} /><Button type="button" variant="outline" size="sm" onClick={() => setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", ""))}>Randomize</Button></span></Field>
@@ -643,7 +644,7 @@ export function AdminView(): ReactElement {
                     {(() => { const providerModels = models.filter((model) => model.provider === agentProvider); return <Field><FieldLabel htmlFor="agent-model">Model</FieldLabel><Select value={agentModel || null} onValueChange={(value) => setAgentModel(value ?? "")}><SelectTrigger id="agent-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{providerModels.map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field>; })()}
                     <Field><FieldLabel htmlFor="agent-reasoning">Reasoning level</FieldLabel><Select value={agentReasoning} onValueChange={(value) => setAgentReasoning(value ?? "medium")}><SelectTrigger id="agent-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem><SelectItem value="xhigh">XHigh</SelectItem><SelectItem value="max">Max</SelectItem></SelectContent></Select></Field>
                     <Field><FieldLabel htmlFor="agent-priority">Service priority</FieldLabel><Select value={agentPriority} onValueChange={(value) => setAgentPriority(value ?? "default")}><SelectTrigger id="agent-priority"><SelectValue /></SelectTrigger><SelectContent>{SERVICE_PRIORITIES.map((value) => <SelectItem key={value} value={value}>{serviceTierLabel(agentProvider, value)}</SelectItem>)}</SelectContent></Select></Field>
-                    <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!agentName.trim() || !agentModel}>{editingAgentId ? "Save changes" : "Create agent"}</Button></DialogFooter>
+                    <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose>{editingAgentId ? <Button type="submit" size="sm" disabled={!agentName.trim() || !agentModel}>Save changes</Button> : <NewButton type="submit" disabled={!agentName.trim() || !agentModel}>New agent</NewButton>}</DialogFooter>
                   </FieldGroup>
                 </form>
               </DialogContent>
@@ -654,7 +655,7 @@ export function AdminView(): ReactElement {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>New Hermes agent</DialogTitle>
-                  <DialogDescription>Create an external agent that can create and track tasks.</DialogDescription>
+                  <DialogDescription>Add an external agent that can add and track tasks.</DialogDescription>
                 </DialogHeader>
                 <form onSubmit={(event) => { event.preventDefault(); void createHermesAgent(); }}>
                   <FieldGroup>
@@ -691,11 +692,11 @@ export function AdminView(): ReactElement {
                         })}
                         {companyProjects.length === 0 ? <span className="text-xs text-muted-foreground">No projects found in this workspace.</span> : null}
                       </div>
-                      <FieldDescription>The agent can create and read tasks only in the selected projects.</FieldDescription>
+                      <FieldDescription>The agent can add and read tasks only in the selected projects.</FieldDescription>
                     </Field>
                     <DialogFooter>
                       <DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose>
-                      <Button type="submit" size="sm" disabled={!hermesName.trim() || hermesProjectIds.length === 0}>Create Hermes agent</Button>
+                      <NewButton type="submit" disabled={!hermesName.trim() || hermesProjectIds.length === 0}>New Hermes agent</NewButton>
                     </DialogFooter>
                   </FieldGroup>
                 </form>
@@ -825,7 +826,7 @@ export function AdminView(): ReactElement {
                 {invitations.length === 0 ? <SettingsTableEmpty columnCount={INVITATION_COLUMNS.length}>No invitations configured.</SettingsTableEmpty> : null}
               </SettingsDataTable>
             </section>
-            <Dialog open={inviteOpen} onOpenChange={(open) => { setInviteOpen(open); if (!open) { setInviteToken(""); setCopied(false); } }}><DialogContent><DialogHeader><DialogTitle>{inviteToken ? "Invitation ready" : "Invite user"}</DialogTitle><DialogDescription>{inviteToken ? `Shown once · expires ${adminDate(inviteExpiresAt)}` : "Create an invitation for a Forge user."}</DialogDescription></DialogHeader>{inviteToken ? <><code className="break-all text-xs">{inviteToken}</code><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Close</DialogClose><Button type="button" size="sm" onClick={() => void copyInvitation()}>{copied ? "Copied" : "Copy invitation"}</Button></DialogFooter></> : <form onSubmit={(event) => { event.preventDefault(); void invite(); }}><FieldGroup><Field><FieldLabel htmlFor="invite-display-name">Display name</FieldLabel><Input id="invite-display-name" autoFocus placeholder="Forge user" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm">Invite</Button></DialogFooter></FieldGroup></form>}</DialogContent></Dialog>
+            <Dialog open={inviteOpen} onOpenChange={(open) => { setInviteOpen(open); if (!open) { setInviteToken(""); setCopied(false); } }}><DialogContent><DialogHeader><DialogTitle>{inviteToken ? "Invitation ready" : "Invite user"}</DialogTitle><DialogDescription>{inviteToken ? `Shown once · expires ${adminDate(inviteExpiresAt)}` : "Invite a Forge user."}</DialogDescription></DialogHeader>{inviteToken ? <><code className="break-all text-xs">{inviteToken}</code><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Close</DialogClose><Button type="button" size="sm" onClick={() => void copyInvitation()}>{copied ? "Copied" : "Copy invitation"}</Button></DialogFooter></> : <form onSubmit={(event) => { event.preventDefault(); void invite(); }}><FieldGroup><Field><FieldLabel htmlFor="invite-display-name">Display name</FieldLabel><Input id="invite-display-name" autoFocus placeholder="Forge user" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm">Invite</Button></DialogFooter></FieldGroup></form>}</DialogContent></Dialog>
           </>
         ) : null}
 

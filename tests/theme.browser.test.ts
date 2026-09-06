@@ -53,7 +53,7 @@ test.each([1280, 390])("theme follows the OS, persists a keyboard toggle, syncs 
     await page.getByRole("button", { name: "Use light theme", exact: true }).waitFor();
 
     await page.goto(`${value.base}/tasks?company=${value.company.id}`);
-    await page.getByRole("button", { name: "Create task", exact: true }).click();
+    await page.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true }).click();
     const taskDialog = page.getByRole("dialog");
     await taskDialog.waitFor();
     expect(await taskDialog.evaluate(element => getComputedStyle(element).colorScheme)).toBe("dark");

@@ -31,7 +31,7 @@ test.each([1280, 390])("task menu labels stay on one line and Duplicate opens a 
     expect(await dialog.getByRole("checkbox", { name: "Run project tests", exact: true }).isChecked()).toBe(false);
     expect(value.tasks.listTasks(value.userId, value.company.id)).toHaveLength(1);
     await page.screenshot({ path: join(tmpdir(), `forge-task-duplicate-${width}.png`), animations: "disabled" });
-    await dialog.getByRole("button", { name: "Create task", exact: true }).click();
+    await dialog.getByRole("button", { name: "New task", exact: true }).click();
     await expect.poll(() => value.tasks.listTasks(value.userId, value.company.id).length).toBe(2);
     const duplicate = value.tasks.listTasks(value.userId, value.company.id).find(candidate => candidate.id !== task.id)!;
     expect(duplicate).toMatchObject({ title: "Copy this task (2)", projectId: task.projectId, description: task.description, deliveryTarget: task.deliveryTarget, rootProfile: task.rootProfile, workerProfile: task.workerProfile, configuration: { runProjectTests: false, visualEvidence: "capture" } });

@@ -4,7 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { expect, test } from "vitest";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
-test.each([1280, 390])("New Task remembers settings before and after creation at %ipx", async width => {
+test.each([1280, 390])("New task remembers settings before and after creation at %ipx", async width => {
   const value = await nativeBrowser(width);
   const { page } = value;
   try {
@@ -15,7 +15,7 @@ test.each([1280, 390])("New Task remembers settings before and after creation at
     value.database.authTransaction(db => db.prepare("UPDATE forge_projects SET repository_identity = ? WHERE id = ?").run("owner/first", value.project.id));
     await value.projects.createProject(value.userId, value.company.id, { name: "Second repository", repositoryPath, worktreeRoot, repository: "owner/repo", baseBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" });
     await page.goto(`${value.base}/tasks?company=${value.company.id}`);
-    await page.getByRole("button", { name: "Create task", exact: true }).click();
+    await page.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true }).click();
     const dialog = page.getByRole("dialog");
     for (const role of ["Root", "Worker"]) {
       await dialog.getByRole("button", { name: new RegExp(`^${role} assignee:`) }).click();
@@ -34,7 +34,7 @@ test.each([1280, 390])("New Task remembers settings before and after creation at
     await page.keyboard.press("Escape");
     await page.reload();
     for (let index = 0; index < 2; index++) {
-      await page.getByRole("button", { name: "Create task", exact: true }).click();
+      await page.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true }).click();
       await expect.poll(() => dialog.getByRole("button", { name: "Project", exact: true }).innerText()).toContain("Second repository");
       expect(await dialog.getByRole("radio", { name: "Push branch", exact: true }).isChecked()).toBe(true);
       expect(await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).isChecked()).toBe(false);
@@ -49,7 +49,7 @@ test.each([1280, 390])("New Task remembers settings before and after creation at
       await page.screenshot({ path: join(tmpdir(), `forge-remembered-task-${width}.png`) });
       await dialog.getByLabel("Task title", { exact: true }).fill(`Remembered ${index}`);
       await dialog.getByLabel("Task description", { exact: true }).fill("Check remembered settings");
-      await dialog.getByRole("button", { name: "Create task", exact: true }).click();
+      await dialog.getByRole("button", { name: "New task", exact: true }).click();
       await page.getByRole("heading", { name: `Remembered ${index}`, level: 2, exact: true }).waitFor();
       await page.reload();
     }

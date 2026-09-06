@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { expect, test } from "vitest";
 import { nativeBrowser } from "./helpers/native-browser.js";
@@ -40,8 +41,10 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     workerStatus = "working";
     await page.getByText("Worker · Working", { exact: true }).waitFor();
     expect(await working.locator("[data-recent-task-status]").evaluate(element => getComputedStyle(element).animationName)).toBe("spin");
-    await working.locator('[data-recent-pull-request="open"] svg').waitFor();
-    expect(await working.locator("[data-pr-color]").getAttribute("data-pr-color")).toBe("red");
+    const workingItem = page.locator('[data-sidebar="menu-item"]').filter({ has: working });
+    await workingItem.locator('[data-recent-pull-request="open"] svg').waitFor();
+    expect(await workingItem.locator("[data-pr-color]").getAttribute("data-pr-color")).toBe("red");
+    expect(await workingItem.getByRole("button", { name: "Archive task", exact: true }).count()).toBe(0);
     const waitingRow = page.getByRole("link", { name: "Waiting task, Answer necessary", exact: true });
     expect(await waitingRow.locator("[data-recent-task-status]").evaluate(element => getComputedStyle(element).animationName)).toBe("none");
     expect(await waitingRow.locator("[data-recent-pull-request]").count()).toBe(0);
@@ -49,10 +52,56 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     store.markDelivered(active.id);
     const delivered = page.getByRole("link", { name: "Working task, Delivered, pull request merged", exact: true });
     await delivered.waitFor();
+    const deliveredItem = page.locator('[data-sidebar="menu-item"]').filter({ has: delivered });
     expect(await delivered.locator("[data-recent-task-status]").evaluate(element => getComputedStyle(element).animationName)).toBe("none");
-    await delivered.locator('[data-recent-pull-request="merged"] svg').waitFor();
-    await expect.poll(() => delivered.locator("[data-pr-color]").getAttribute("data-pr-color")).toBe("purple");
-    await page.screenshot({ path: join(tmpdir(), `forge-recent-icons-${width}.png`), fullPage: true });
+    await deliveredItem.locator('[data-recent-pull-request="merged"]').waitFor();
+    await expect.poll(() => deliveredItem.locator("[data-pr-color]").getAttribute("data-pr-color")).toBe("purple");
+    const archive = deliveredItem.getByRole("button", { name: "Archive task", exact: true });
+    await archive.waitFor();
+    expect(await archive.evaluate(element => element.closest("a"))).toBe(null);
+    const pullRequestIcon = archive.locator('[data-pr-icon="pull-request"]');
+    const archiveIcon = archive.locator('[data-pr-icon="archive"]');
+    expect(await pullRequestIcon.evaluate(element => getComputedStyle(element).opacity)).toBe("1");
+    expect(await archiveIcon.evaluate(element => getComputedStyle(element).opacity)).toBe("0");
+    const before = await archive.boundingBox();
+    await archive.hover();
+    await expect.poll(() => pullRequestIcon.evaluate(element => getComputedStyle(element).opacity)).toBe("0");
+    await expect.poll(() => archiveIcon.evaluate(element => getComputedStyle(element).opacity)).toBe("1");
+    const afterHover = await archive.boundingBox();
+    expect(afterHover?.width).toBe(before?.width);
+    await archive.focus();
+    await expect.poll(() => pullRequestIcon.evaluate(element => getComputedStyle(element).opacity)).toBe("0");
+    await expect.poll(() => archiveIcon.evaluate(element => getComputedStyle(element).opacity)).toBe("1");
+    await page.screenshot({ path: join(tmpdir(), `forge-recent-icons-${width}.png`), fullPage: true, animations: "disabled" });
+    const beforeUrl = page.url();
+    await archive.click();
+    const dialog = page.getByRole("alertdialog");
+    await dialog.getByRole("heading", { name: "Archive task?" }).waitFor();
+    expect(page.url()).toBe(beforeUrl);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await archive.waitFor();
+    const archiveUrl = `**/api/tasks/${active.id}/archive`;
+    const archiveBodies: Array<{ confirmDiscardDirty?: boolean }> = [];
+    await page.route(archiveUrl, async route => {
+      archiveBodies.push(JSON.parse(route.request().postData() ?? "{}") as { confirmDiscardDirty?: boolean });
+      if (archiveBodies.length === 1) {
+        await route.fulfill({ json: { status: "confirmation_required", dirtyFileCount: 1 } });
+        return;
+      }
+      await route.continue();
+    });
+    await archive.click();
+    await dialog.getByRole("button", { name: "Archive task", exact: true }).click();
+    await dialog.getByRole("heading", { name: "Discard 1 uncommitted change and archive?" }).waitFor();
+    expect(archiveBodies).toEqual([{ confirmDiscardDirty: false }]);
+    await rm(value.project.repositoryPath, { recursive: true, force: true });
+    await dialog.getByRole("button", { name: "Discard changes and archive", exact: true }).click();
+    await expect.poll(() => delivered.count()).toBe(0);
+    await expect.poll(() => value.tasks.getTask(value.userId, active.id).archivedAt).not.toBeNull();
+    expect(archiveBodies).toEqual([{ confirmDiscardDirty: false }, { confirmDiscardDirty: true }]);
+    await page.unroute(archiveUrl);
+    await dialog.waitFor({ state: "hidden" });
+    await page.screenshot({ path: join(tmpdir(), `forge-recent-icons-archived-${width}.png`), fullPage: true, animations: "disabled" });
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

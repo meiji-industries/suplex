@@ -32,7 +32,19 @@ test.each([1280, 390])("New task remembers settings before and after creation at
     await dialog.getByRole("combobox", { name: "Screenshots" }).click();
     await page.getByRole("option", { name: "Capture", exact: true }).click();
     await page.keyboard.press("Escape");
-    await page.reload();
+    const otherPage = await page.context().newPage();
+    await otherPage.goto(`${value.base}/tasks?company=${value.company.id}`);
+    await otherPage.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true }).click();
+    const otherDialog = otherPage.getByRole("dialog");
+    await otherDialog.getByRole("button", { name: "Project", exact: true }).click();
+    await otherPage.getByRole("menuitem", { name: /Repository/ }).click();
+    await otherPage.keyboard.press("Escape");
+    await page.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true }).click();
+    await expect.poll(() => dialog.getByRole("button", { name: "Project", exact: true }).innerText()).toContain("Repository");
+    await dialog.getByRole("button", { name: "Project", exact: true }).click();
+    await page.getByRole("menuitem", { name: /Second repository/ }).click();
+    await page.keyboard.press("Escape");
+    await otherPage.close();
     for (let index = 0; index < 2; index++) {
       await page.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true }).click();
       await expect.poll(() => dialog.getByRole("button", { name: "Project", exact: true }).innerText()).toContain("Second repository");

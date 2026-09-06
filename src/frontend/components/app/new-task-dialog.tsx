@@ -27,7 +27,10 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   const [templates, setTemplates] = useState<ApiTaskTemplate[]>([]);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [projectId, setProjectId] = useState(initialDraft?.projectId ?? remembered.projectId ?? "");
+  const selectedProject = useRef(projectId);
+  selectedProject.current = projectId;
   const [title, setTitle] = useState(initialDraft?.title ?? "");
   const [description, setDescription] = useState(initialDraft?.description ?? "");
   const [rootProfileId, setRootProfileId] = useState(initialDraft?.rootProfileId ?? remembered.rootProfileId ?? "");
@@ -49,7 +52,17 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     setReadingImages(false);
   }, [companyId, open]);
   useEffect(() => {
+    setSettingsLoaded(false);
     if (!open) return;
+    const saved = initialDraft ?? readNewTaskMemory();
+    if (!initialDraft && selectedProject.current !== saved.projectId) { setSource(undefined); setSourceSummary(undefined); }
+    setProjectId(saved.projectId ?? "");
+    setRootProfileId(saved.rootProfileId ?? "");
+    setWorkerProfileId(saved.workerProfileId ?? "");
+    setStartImmediately(saved.startImmediately ?? true);
+    setDeliveryTarget(saved.deliveryTarget ?? "pull_request_draft");
+    setRunProjectTests(saved.runProjectTests ?? true);
+    setVisualEvidence(saved.visualEvidence ?? "off");
     let cancelled = false;
     void Promise.all([readJson<{ projects: ApiProject[] }>(`/api/companies/${companyId}/projects`), readJson<{ profiles: ApiProfile[] }>("/api/profiles")]).then(([projectResult, profileResult]) => {
       if (cancelled) return;
@@ -57,9 +70,10 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       setRootProfileId(current => profileResult.profiles.some(profile => profile.id === current && profile.role === "root") ? current : "");
       setWorkerProfileId(current => profileResult.profiles.some(profile => profile.id === current && profile.role === "worker") ? current : "");
       setProjectId(current => projectResult.projects.some(project => project.id === current) ? current : projectResult.projects[0]?.id ?? "");
+      setSettingsLoaded(true);
     }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : "Task settings are not available"); });
     return () => { cancelled = true; };
-  }, [companyId, open]);
+  }, [companyId, open, initialDraft]);
   useEffect(() => {
     setTemplates([]);
     if (!projectId || !open) return;
@@ -68,9 +82,9 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     return () => { cancelled = true; };
   }, [projectId, open]);
   useEffect(() => {
-    if (!open || !projects.some(project => project.id === projectId)) return;
+    if (!open || !settingsLoaded || !projects.some(project => project.id === projectId)) return;
     writeNewTaskMemory({ projectId, rootProfileId: rootProfileId || undefined, workerProfileId: workerProfileId || undefined, startImmediately, deliveryTarget, runProjectTests, visualEvidence });
-  }, [open, projects, projectId, rootProfileId, workerProfileId, startImmediately, deliveryTarget, runProjectTests, visualEvidence]);
+  }, [open, settingsLoaded, projects, projectId, rootProfileId, workerProfileId, startImmediately, deliveryTarget, runProjectTests, visualEvidence]);
   const submit = async () => {
     if (busy || imageRead.current.pending || !projectId || !title.trim() || !description.trim()) return;
     setBusy(true); setError("");

@@ -1,5 +1,4 @@
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
-import { Avatar, AvatarFallback, AvatarImage } from ".././components/ui/avatar.js";
 import { Button } from ".././components/ui/button.js";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from ".././components/ui/card.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from ".././components/ui/dropdown-menu.js";
@@ -10,7 +9,7 @@ import { Spinner } from ".././components/ui/spinner.js";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from ".././components/ui/dialog.js";
 import { NewButton } from ".././components/ui/new-button.js";
 import { ApplicationFrame } from ".././components/app/application-frame.js";
-import { ProfileAvatar } from ".././components/app/profile-avatar.js";
+import { AvatarEditor, EntityAvatar } from ".././components/app/entity-avatar.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
@@ -121,7 +120,7 @@ function ProjectDefaultAgents({ project, agents }: { project: ApiProject; agents
         const label = role === "root" ? "Coordinator" : "Worker";
         return (
           <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground" key={role} title={`${label}: ${agent?.name ?? "Unassigned"}`}>
-            {agent ? <ProfileAvatar name={agent.name} seed={agent.avatarSeed} size="xs" /> : null}
+            {agent ? <EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} size="xs" /> : null}
             <span>{label}</span>
             <span className="text-foreground">{agent?.name ?? "Unassigned"}</span>
           </span>
@@ -133,10 +132,7 @@ function ProjectDefaultAgents({ project, agents }: { project: ApiProject; agents
 
 function ProjectIcon({ project }: { project: ApiProject }): ReactElement {
   return (
-    <Avatar size="sm" shape="square">
-      <AvatarImage src={`/api/projects/${project.id}/favicon`} alt="" />
-      <AvatarFallback aria-label={`${project.name} icon`}>{project.name.slice(0, 1).toUpperCase()}</AvatarFallback>
-    </Avatar>
+    <EntityAvatar kind="project" id={project.id} name={project.name} size="sm" />
   );
 }
 
@@ -203,6 +199,7 @@ function ProjectSettingsDialog({
         <DialogHeader><DialogTitle>Project settings</DialogTitle><DialogDescription>{project?.repository}</DialogDescription></DialogHeader>
           {project && form ? <form className="max-h-[70dvh] overflow-y-auto" onSubmit={(event) => void submit(event)}>
             <FieldGroup>
+              <Field><FieldLabel>Avatar</FieldLabel><AvatarEditor kind="project" id={project.id} name={form.name || project.name} /></Field>
               <Field><FieldLabel htmlFor="project-name">Project name</FieldLabel><Input id="project-name" autoFocus value={form.name} onChange={(event) => setField("name", event.target.value)} /></Field>
               <Field><FieldLabel htmlFor="project-base-branch">Base branch</FieldLabel><Input id="project-base-branch" value={form.baseBranch} onChange={(event) => setField("baseBranch", event.target.value)} /></Field>
               <Field><FieldLabel htmlFor="project-setup-command">Setup command</FieldLabel><Input id="project-setup-command" value={form.setupCommand} onChange={(event) => setField("setupCommand", event.target.value)} /></Field>
@@ -213,7 +210,7 @@ function ProjectSettingsDialog({
                   const role = key === "rootProfileId" ? "root" : "worker";
                   const options = agents.filter((agent) => agent.role === role);
                   const selected = options.find((agent) => agent.id === form[key]);
-                  return <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{role === "root" ? "Coordinator" : "Worker"} default</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><ProfileAvatar name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select></Field>;
+                  return <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{role === "root" ? "Coordinator" : "Worker"} default</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><EntityAvatar kind="agent" id={selected.id} name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select></Field>;
                 })}
                 {agents.length === 0 ? <FieldDescription>No agents configured. <a href={withCompany("/admin/agents", project.companyId)}>Add an agent</a> before saving this project.</FieldDescription> : null}
               </FieldSet>

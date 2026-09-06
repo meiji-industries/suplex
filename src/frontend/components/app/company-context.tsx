@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { flushSync } from "react-dom";
 
 import { companySettingsPath, readJson, withCompany, type ApiCompany, type ApiUser, type CompanyStatus } from "../../lib/api.js";
+import type { AvatarRecord, AvatarUpdateBody } from "../../../http/contracts/avatars.js";
 import { navigate } from "../../lib/navigation.js";
 
 const activeCompanyStorageKey = "forge.activeCompanyId";
@@ -21,6 +22,8 @@ export type CompanyContextValue = {
   setCompanyStatus: (companyId: string, status: CompanyStatus) => Promise<ApiCompany>;
   clearCompany: (companyId: string) => Promise<ApiCompany>;
   updateProfile: (profile: { displayName: string; username: string; avatarSeed: string }) => Promise<ApiUser>;
+  avatars: Record<string, AvatarRecord>;
+  saveAvatar: (ownerId: string, patch: AvatarUpdateBody) => Promise<AvatarRecord>;
   reloadCompanies: () => Promise<void>;
 };
 
@@ -50,6 +53,7 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
   const [user, setUser] = useState<ApiUser>();
   const [companies, setCompanies] = useState<ApiCompany[]>([]);
   const [currentCompany, setCurrentCompany] = useState<ApiCompany>();
+  const [avatars, setAvatars] = useState<Record<string, AvatarRecord>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
 
@@ -101,9 +105,11 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     void Promise.all([
       readJson<{ user: ApiUser }>("/api/auth/me"),
       readJson<{ companies: ApiCompany[] }>("/api/companies"),
-    ]).then(([me, result]) => {
+      readJson<{ avatars: Record<string, AvatarRecord> }>("/api/avatars").catch(() => ({ avatars: {} })),
+    ]).then(([me, result, directory]) => {
       if (cancelled) return;
       setUser(me.user);
+      setAvatars(directory.avatars);
       const sorted = sortCompanies(result.companies);
       setCompanies(sorted);
       resolveSelection(result.companies);
@@ -171,6 +177,16 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     return result.user;
   }, []);
 
+  const saveAvatar = useCallback(async (ownerId: string, patch: AvatarUpdateBody): Promise<AvatarRecord> => {
+    const record = await readJson<AvatarRecord>(`/api/avatars/${encodeURIComponent(ownerId)}`, { method: "PUT", body: JSON.stringify(patch) });
+    setAvatars((current) => {
+      const next = { ...current };
+      if (record.shape || record.imageVersion) next[ownerId] = record; else delete next[ownerId];
+      return next;
+    });
+    return record;
+  }, []);
+
   const value = useMemo<CompanyContextValue>(() => ({
     ...(user ? { user } : {}),
     companies,
@@ -184,8 +200,10 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     setCompanyStatus,
     clearCompany,
     updateProfile,
+    avatars,
+    saveAvatar,
     reloadCompanies,
-  }), [clearCompany, companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, selectCompany, setCompanyIssueCode, setCompanyStatus, updateProfile, user]);
+  }), [avatars, clearCompany, companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, saveAvatar, selectCompany, setCompanyIssueCode, setCompanyStatus, updateProfile, user]);
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;
 }
 

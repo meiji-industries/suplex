@@ -8,7 +8,7 @@ import { Alert, AlertDescription } from "../ui/alert.js";
 import { Spinner } from "../ui/spinner.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Markdown } from "./markdown.js";
-import { ProfileAvatar } from "./profile-avatar.js";
+import { EntityAvatar } from "./entity-avatar.js";
 import { RootPlan, TaskTools, useTaskExecution } from "./task-execution.js";
 import { TaskCheckResults } from "./task-check-results.js";
 import { DeveloperDiff } from "./developer-diff.js";
@@ -43,7 +43,7 @@ export function TaskWork({ task, activity }: { task: Task; activity: TaskActivit
       {activity.turns.filter(turn => resultText(turn.result) || humanMessage(turn.prompt)).map(turn => {
         const session = activity.sessions.find(session => session.id === turn.sessionId);
         const role = session?.kind === "worker" ? "Worker" : "Coordinator";
-        return <div key={turn.id} className="grid min-w-0 gap-5">{humanMessage(turn.prompt) ? <article className="space-y-2 border-l-2 pl-3"><header className="flex items-center gap-2 text-xs"><span className="font-medium">You</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={humanMessage(turn.prompt)} /></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><ProfileAvatar name={role} seed={role === "Coordinator" ? task.rootProfile.profileId : task.workerProfile.profileId} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabels[turn.status]}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
+        return <div key={turn.id} className="grid min-w-0 gap-5">{humanMessage(turn.prompt) ? <article className="space-y-2 border-l-2 pl-3"><header className="flex items-center gap-2 text-xs"><span className="font-medium">You</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={humanMessage(turn.prompt)} /></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={role === "Coordinator" ? task.rootProfile.profileId : task.workerProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabels[turn.status]}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
       })}
       {!activity.turns.some(turn => resultText(turn.result) || humanMessage(turn.prompt)) ? <p className="text-xs text-muted-foreground">{task.status === "backlog" ? "Start the task to work with Coordinator." : "Agent replies appear here."}</p> : null}
     </div></TabsContent>

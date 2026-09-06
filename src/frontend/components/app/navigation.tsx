@@ -11,7 +11,7 @@ import { companySettingsPath, withCompany } from "../../lib/api.js";
 import { navigate } from "../../lib/navigation.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 import { CompanySwitcher } from "./company-switcher.js";
-import { ProfileAvatar } from "./profile-avatar.js";
+import { EntityAvatar } from "./entity-avatar.js";
 import { RecentTasks } from "./recent-tasks.js";
 import { SystemHealthIndicator } from "./system-health.js";
 import { requestNewTask } from "./global-new-task-dialog.js";
@@ -81,7 +81,7 @@ function UserMenu(): ReactElement | null {
   const { isMobile } = useSidebar();
   const user = context?.user;
   if (!user) return null;
-  return <SidebarMenu><SidebarMenuItem><DropdownMenu><DropdownMenuTrigger render={<SidebarMenuButton size="lg"><ProfileAvatar name={user.displayName} seed={user.avatarSeed} collection="pixel-art-neutral" /><span className="grid min-w-0 flex-1 text-left leading-tight"><span className="truncate font-medium">{user.displayName}</span><span className="truncate text-xs text-muted-foreground">{user.username}</span></span><EllipsisVertical className="ml-auto" /></SidebarMenuButton>} /><DropdownMenuContent className="min-w-56" side={isMobile ? "bottom" : "right"} align="end" sideOffset={4}><DropdownMenuItem render={<a href={withCompany("/profile", context.currentCompany?.id)} />}><UserRound />Profile</DropdownMenuItem><DropdownMenuItem onClick={() => void signOut()}><LogOut />Sign out</DropdownMenuItem></DropdownMenuContent></DropdownMenu></SidebarMenuItem></SidebarMenu>;
+  return <SidebarMenu><SidebarMenuItem><DropdownMenu><DropdownMenuTrigger render={<SidebarMenuButton size="lg"><EntityAvatar kind="user" id={user.id} name={user.displayName} seed={user.avatarSeed} /><span className="grid min-w-0 flex-1 text-left leading-tight"><span className="truncate font-medium">{user.displayName}</span><span className="truncate text-xs text-muted-foreground">{user.username}</span></span><EllipsisVertical className="ml-auto" /></SidebarMenuButton>} /><DropdownMenuContent className="min-w-56" side={isMobile ? "bottom" : "right"} align="end" sideOffset={4}><DropdownMenuItem render={<a href={withCompany("/profile", context.currentCompany?.id)} />}><UserRound />Profile</DropdownMenuItem><DropdownMenuItem onClick={() => void signOut()}><LogOut />Sign out</DropdownMenuItem></DropdownMenuContent></DropdownMenu></SidebarMenuItem></SidebarMenu>;
 }
 
 async function signOut(): Promise<void> { try { await fetch("/api/auth/sign-out", { method: "POST" }); } finally { window.localStorage.removeItem("forge.activeCompanyId"); window.location.assign("/auth"); } }

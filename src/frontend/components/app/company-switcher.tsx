@@ -10,9 +10,10 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem,
 import { Field, FieldLabel } from "../ui/field.js";
 import { Input } from "../ui/input.js";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar.js";
-import { companyInitials, withCompany } from "../../lib/api.js";
+import { withCompany } from "../../lib/api.js";
 import { navigate } from "../../lib/navigation.js";
 import { useOptionalCompanyContext } from "./company-context.js";
+import { EntityAvatar } from "./entity-avatar.js";
 
 function ForgeMark(): ReactElement {
   return <span className="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-foreground text-[10px] font-bold text-background">F</span>;
@@ -71,14 +72,14 @@ export function CompanySwitcher(): ReactElement {
     <>
       <SidebarMenu><SidebarMenuItem><DropdownMenu>
         <DropdownMenuTrigger aria-label="Switch company" title="Switch company" render={<SidebarMenuButton className="data-[slot=sidebar-menu-button]:p-1.5!" />}>
-          <CircleGauge className="size-5!" />
+          {currentCompany ? <EntityAvatar kind="company" id={currentCompany.id} name={currentCompany.name} seed={currentCompany.name} size="sm" /> : <CircleGauge className="size-5!" />}
           <span className="min-w-0 flex-1 truncate text-base font-semibold">{label}</span>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-64" align="start">
               <DropdownMenuGroup>
                 <DropdownMenuLabel>Switch company</DropdownMenuLabel>
                   {companies.length ? companies.map((company, index) => <span className="block" key={company.id}>{company.status === "archived" && companies[index - 1]?.status !== "archived" ? <div className="px-2 pb-1 pt-2 text-[10px] font-medium text-muted-foreground">Archived</div> : null}<DropdownMenuItem onClick={() => context.selectCompany(company.id)}>
-                    <span className="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-muted text-[10px] font-semibold text-muted-foreground">{companyInitials(company.name)}</span>
+                    <EntityAvatar kind="company" id={company.id} name={company.name} seed={company.name} size="sm" />
                     <span className="min-w-0 flex-1 truncate">{company.name}</span>
                     <StatusBadge status={company.status} />
                     {company.id === currentCompany?.id ? <Check className="ml-1 size-3.5 shrink-0 text-primary" /> : null}

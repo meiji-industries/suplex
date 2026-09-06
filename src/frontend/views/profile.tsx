@@ -4,7 +4,7 @@ import { Input } from "../components/ui/input.js";
 import { Spinner } from "../components/ui/spinner.js";
 import { ApplicationFrame } from "../components/app/application-frame.js";
 import { useCompanyContext } from "../components/app/company-context.js";
-import { ProfileAvatar } from "../components/app/profile-avatar.js";
+import { AvatarEditor } from "../components/app/entity-avatar.js";
 import { SettingsLayout, SettingsSection, SettingRow } from "../components/app/settings-layout.js";
 import { readTaskAgentExpiry, saveTaskAgentExpiry, taskAgentExpiryOptions } from "../components/app/task-agent-expiry.js";
 import { withCompany } from "../lib/api.js";
@@ -46,8 +46,8 @@ export function ProfileView(): ReactElement {
         <SettingRow label="Username" description="2–64 characters: letters, numbers, dots, hyphens, underscores, or @.">
           <Input id="username" value={username} onChange={(event) => { setUsername(event.target.value); setSaved(false); }} />
         </SettingRow>
-        <SettingRow label="Avatar" description="Used anywhere your account appears.">
-          <div className="flex items-center gap-2"><ProfileAvatar name={displayName || user.displayName} seed={avatarSeed || user.username} size="lg" collection="pixel-art-neutral" /><Button type="button" variant="ghost" size="icon-xs" aria-label="Regenerate avatar" title="Regenerate avatar" onClick={() => { setAvatarSeed(crypto.randomUUID()); setSaved(false); }}><RefreshCw aria-hidden="true" /></Button><Button type="submit" size="sm" disabled={busy || !displayName.trim() || !username.trim() || (displayName.trim() === user.displayName && username.trim() === user.username && avatarSeed === user.avatarSeed)}><Save className="size-3.5" />{busy ? "Forge saves" : saved ? "Saved" : "Save"}</Button></div>
+        <SettingRow label="Avatar" description="Used anywhere your account appears. Regenerate changes the default image.">
+          <div className="flex flex-wrap items-center gap-2"><AvatarEditor kind="user" id={user.id} name={displayName || user.displayName} seed={avatarSeed || user.username} /><Button type="button" variant="ghost" size="icon-xs" aria-label="Regenerate avatar" title="Regenerate avatar" onClick={() => { setAvatarSeed(crypto.randomUUID()); setSaved(false); }}><RefreshCw aria-hidden="true" /></Button><Button type="submit" size="sm" disabled={busy || !displayName.trim() || !username.trim() || (displayName.trim() === user.displayName && username.trim() === user.username && avatarSeed === user.avatarSeed)}><Save className="size-3.5" />{busy ? "Forge saves" : saved ? "Saved" : "Save"}</Button></div>
         </SettingRow>
       </form>
       <SettingRow label="Inactive task agents" description="Keep idle and stopped agents visible for this long.">

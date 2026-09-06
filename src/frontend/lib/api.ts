@@ -67,9 +67,3 @@ export function withCompany(path: string, companyId?: string): string {
 export function companySettingsPath(companyId: string): string {
   return withCompany(`/companies/${encodeURIComponent(companyId)}/settings`, companyId);
 }
-
-export function companyInitials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return "C";
-  return words.slice(0, 2).map((word) => word[0]).join("").toUpperCase() || "C";
-}

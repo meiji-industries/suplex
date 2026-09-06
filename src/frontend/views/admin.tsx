@@ -14,7 +14,7 @@ import { Spinner } from ".././components/ui/spinner.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { SettingsLayout } from ".././components/app/settings-layout.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, SettingsToolbarAction, type SettingsTableColumn } from ".././components/app/settings-table.js";
-import { ProfileAvatar } from ".././components/app/profile-avatar.js";
+import { AvatarEditor, EntityAvatar } from ".././components/app/entity-avatar.js";
 import { readJson, withCompany, type ApiUser } from ".././lib/api.js";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { adminDate, type ApiProfile, type ApiCredential, type ApiHermesAgent, type ApiInvitation, type ApiModel, type ApiProject } from "../lib/view-shared.js";
@@ -148,6 +148,7 @@ export function AdminView(): ReactElement {
   const [hermesError, setHermesError] = useState("");
   const [hermesProjectIds, setHermesProjectIds] = useState<string[]>([]);
   const [hermesAvatarSeed, setHermesAvatarSeed] = useState("");
+  const [hermesAvatarTarget, setHermesAvatarTarget] = useState<ApiHermesAgent | null>(null);
   const [pairingCodeModalOpen, setPairingCodeModalOpen] = useState(false);
   const [pairingCodeData, setPairingCodeData] = useState<{ code: string; expiresAt: string; agentName: string } | null>(null);
   const [hermesProfileName, setHermesProfileName] = useState("default");
@@ -500,7 +501,7 @@ export function AdminView(): ReactElement {
                       const passkeyCount = credentials.filter((credential) => credential.userId === candidate.id && !credential.revokedAt).length;
                       return (
                         <SettingsTableRow key={candidate.id} size="member">
-                          <SettingsTableCell><span className="flex min-w-0 items-center gap-2"><ProfileAvatar name={candidate.displayName} seed={candidate.avatarSeed} collection="pixel-art-neutral" /><span className="truncate">{candidate.displayName}</span></span></SettingsTableCell>
+                          <SettingsTableCell><span className="flex min-w-0 items-center gap-2"><EntityAvatar kind="user" id={candidate.id} name={candidate.displayName} seed={candidate.avatarSeed} /><span className="truncate">{candidate.displayName}</span></span></SettingsTableCell>
                           <SettingsTableCell className="truncate text-muted-foreground">@{candidate.username}</SettingsTableCell>
                           <SettingsTableCell><span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">{candidate.role}</span></SettingsTableCell>
                           <SettingsTableCell className="text-muted-foreground">{candidate.companyIds.length}</SettingsTableCell>
@@ -527,7 +528,7 @@ export function AdminView(): ReactElement {
                 <SettingsTableGroup label="Internal agents" count={agents.length} columnCount={AGENT_COLUMNS.length}>
                   {sortedAgents.map((agent) => (
                     <SettingsTableRow aria-label={`Edit ${agent.name}`} key={agent.id} onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input, label, [data-base-ui-portal]")) openEditAgent(agent); }} tabIndex={0}>
-                      <SettingsTableCell><span className="flex min-w-0 items-center gap-3"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><AgentNameEditor agent={agent} onSave={(name) => patchAgent(agent, { name }, "Unable to rename agent")} />{agent.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}</span></SettingsTableCell>
+                      <SettingsTableCell><span className="flex min-w-0 items-center gap-3"><EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} /><AgentNameEditor agent={agent} onSave={(name) => patchAgent(agent, { name }, "Unable to rename agent")} />{agent.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}</span></SettingsTableCell>
                       <SettingsTableCell>{agent.role === "root" ? "Coordinator" : "Worker"}</SettingsTableCell>
                       <SettingsTableCell className="truncate">{agent.model}</SettingsTableCell>
                       <SettingsTableCell className="truncate text-muted-foreground">{agent.reasoningLevel}</SettingsTableCell>
@@ -574,7 +575,7 @@ export function AdminView(): ReactElement {
                       <SettingsTableRow aria-label={`Hermes agent ${agent.name}`} key={agent.id}>
                         <SettingsTableCell>
                           <span className="flex items-center gap-3">
-                            <ProfileAvatar name={agent.name} seed={agent.avatarSeed} collection="bottts-neutral" />
+                            <EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} />
                             <span className="truncate font-medium">{agent.name}</span>
                           </span>
                         </SettingsTableCell>
@@ -614,6 +615,9 @@ export function AdminView(): ReactElement {
                                 <DropdownMenuItem onClick={() => openEditHermesProjects(agent)}>
                                   <Pencil className="mr-2 size-3.5" /> Edit project scope
                                 </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setHermesAvatarTarget(agent)}>
+                                  <Pencil className="mr-2 size-3.5" /> Edit avatar
+                                </DropdownMenuItem>
                                 <DropdownMenuItem variant="destructive" onClick={() => void revokeHermesAgent(agent)}>
                                   <ShieldAlert className="mr-2 size-3.5" /> {pendingAction === action ? "Confirm revoke" : "Revoke agent"}
                                 </DropdownMenuItem>
@@ -637,7 +641,7 @@ export function AdminView(): ReactElement {
                 <DialogHeader><DialogTitle>{editingAgentId ? "Edit agent" : "New agent"}</DialogTitle><DialogDescription>Set the role and execution settings for this agent.</DialogDescription></DialogHeader>
                 <form className="max-h-[calc(100dvh-12rem)] overflow-y-auto" onSubmit={(event) => { event.preventDefault(); void saveAgent(); }}>
                   <FieldGroup>
-                    <Field><FieldLabel>Avatar</FieldLabel><span className="flex items-center gap-3"><ProfileAvatar name={agentName || "Agent"} seed={agentAvatarSeed} /><Button type="button" variant="outline" size="sm" onClick={() => setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", ""))}>Randomize</Button></span></Field>
+                    <Field><FieldLabel>Avatar</FieldLabel><span className="flex flex-wrap items-center gap-2">{editingAgentId ? <AvatarEditor kind="agent" id={editingAgentId} name={agentName || "Agent"} seed={agentAvatarSeed} /> : <EntityAvatar kind="agent" id="" name={agentName || "Agent"} seed={agentAvatarSeed} size="lg" />}<Button type="button" variant="outline" size="sm" onClick={() => setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", ""))}>Randomize</Button></span></Field>
                     <Field><FieldLabel htmlFor="agent-name">Agent name</FieldLabel><Input id="agent-name" autoFocus value={agentName} onChange={(event) => setAgentName(event.target.value)} /></Field>
                     <Field><FieldLabel htmlFor="agent-role">Role</FieldLabel><Select value={agentRole} onValueChange={(value) => setAgentRole(value === "worker" ? "worker" : "root")}><SelectTrigger id="agent-role"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="root">Coordinator</SelectItem><SelectItem value="worker">Worker</SelectItem></SelectContent></Select></Field>
                     <Field><FieldLabel htmlFor="agent-provider">Provider</FieldLabel><Select value={agentProvider} onValueChange={(value) => { const provider = value ?? ""; setAgentProvider(provider); if (!models.some((model) => model.provider === provider && model.id === agentModel)) setAgentModel(""); }}><SelectTrigger id="agent-provider"><SelectValue /></SelectTrigger><SelectContent>{providerOptions.map(([id, label]) => <SelectItem key={id} value={id}>{label}</SelectItem>)}</SelectContent></Select></Field>
@@ -647,6 +651,13 @@ export function AdminView(): ReactElement {
                     <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose>{editingAgentId ? <Button type="submit" size="sm" disabled={!agentName.trim() || !agentModel}>Save changes</Button> : <NewButton type="submit" disabled={!agentName.trim() || !agentModel}>New agent</NewButton>}</DialogFooter>
                   </FieldGroup>
                 </form>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={hermesAvatarTarget !== null} onOpenChange={(open) => { if (!open) setHermesAvatarTarget(null); }}>
+              <DialogContent>
+                <DialogHeader><DialogTitle>Edit avatar</DialogTitle><DialogDescription>{hermesAvatarTarget?.name}</DialogDescription></DialogHeader>
+                {hermesAvatarTarget ? <AvatarEditor kind="agent" id={hermesAvatarTarget.id} name={hermesAvatarTarget.name} seed={hermesAvatarTarget.avatarSeed} /> : null}
               </DialogContent>
             </Dialog>
 
@@ -662,7 +673,7 @@ export function AdminView(): ReactElement {
                     <Field>
                       <FieldLabel>Avatar</FieldLabel>
                       <span className="flex items-center gap-3">
-                        <ProfileAvatar name={hermesName || "Hermes"} seed={hermesAvatarSeed} collection="bottts-neutral" />
+                        <EntityAvatar kind="agent" id="" name={hermesName || "Hermes"} seed={hermesAvatarSeed} size="lg" />
                         <Button type="button" variant="outline" size="sm" onClick={() => setHermesAvatarSeed(crypto.randomUUID().replaceAll("-", ""))}>Randomize</Button>
                       </span>
                     </Field>

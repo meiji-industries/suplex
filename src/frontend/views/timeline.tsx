@@ -10,7 +10,7 @@ import { Skeleton } from "../components/ui/skeleton.js";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs.js";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip.js";
 import { ApplicationFrame } from "../components/app/application-frame.js";
-import { ProfileAvatar } from "../components/app/profile-avatar.js";
+import { EntityAvatar } from "../components/app/entity-avatar.js";
 import { useCompanyContext } from "../components/app/company-context.js";
 import { readJson, withCompany } from "../lib/api.js";
 import { TaskTimelineResponseSchema, type TimelineTask } from "../../task-timeline-contracts.js";
@@ -438,7 +438,7 @@ function WorkChart({ summary, overview, range, fullRange, companyId, now, onRang
             return (
               <div key={lane.key} className="flex border-b border-border/55 last:border-b-0" style={{ minHeight: laneHeight }}>
                 <div className="flex w-52 shrink-0 items-center gap-2 border-r border-border/70 px-3 sm:px-4">
-                  {lane.avatarSeed ? <ProfileAvatar name={lane.name} seed={lane.avatarSeed} /> : <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{lane.name[0]?.toUpperCase()}</span>}
+                  {lane.avatarSeed ? <EntityAvatar kind="agent" id={lane.avatarSeed} name={lane.name} /> : <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{lane.name[0]?.toUpperCase()}</span>}
                   <span className="min-w-0">
                     <span className="block truncate text-xs font-medium">{lane.name}</span>
                     <span className="block truncate text-[11px] text-muted-foreground">{lane.roles.map(titleCase).join(" / ")} · {lane.intervals.length}× · {formatDuration(lane.durationMs)}</span>

@@ -6,6 +6,7 @@ import { Spinner } from ".././components/ui/spinner.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from ".././components/ui/alert-dialog.js";
 import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
+import { AvatarEditor } from ".././components/app/entity-avatar.js";
 import { SettingsLayout, SettingsSection, SettingRow } from ".././components/app/settings-layout.js";
 import { companySettingsPath, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { Archive, RotateCcw, Save, Pause, Trash2 } from "lucide-react";
@@ -82,6 +83,9 @@ export function CompanySettingsView(): ReactElement {
             <Input id="company-name" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} />
             <Button type="submit" size="sm" disabled={busy !== "" || !name.trim() || name.trim() === company.name}><Save className="size-3.5" />{busy === "rename" ? "Forge saves" : saved ? "Saved" : "Save"}</Button>
           </form>
+        </SettingRow>
+        <SettingRow label="Avatar" description="Shown in the company switcher.">
+          <AvatarEditor kind="company" id={company.id} name={company.name} seed={company.name} />
         </SettingRow>
         <SettingRow label="Issue code" description="2–10 letters or numbers, beginning with a letter. Once set, it locks after the company has an issue.">
           <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void saveIssueCode(); }}>

@@ -6,7 +6,9 @@ import { ApplicationFrame } from "../components/app/application-frame.js";
 import { useCompanyContext } from "../components/app/company-context.js";
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import { SettingsLayout, SettingsSection, SettingRow } from "../components/app/settings-layout.js";
+import { readTaskAgentExpiry, saveTaskAgentExpiry, taskAgentExpiryOptions } from "../components/app/task-agent-expiry.js";
 import { withCompany } from "../lib/api.js";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select.js";
 import { RefreshCw, Save } from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
 
@@ -18,6 +20,7 @@ export function ProfileView(): ReactElement {
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [taskAgentExpiry, setTaskAgentExpiry] = useState(readTaskAgentExpiry);
 
   useEffect(() => { setDisplayName(user?.displayName ?? ""); setUsername(user?.username ?? ""); setAvatarSeed(user?.avatarSeed ?? ""); setSaved(false); }, [user?.avatarSeed, user?.displayName, user?.username]);
 
@@ -47,6 +50,12 @@ export function ProfileView(): ReactElement {
           <div className="flex items-center gap-2"><ProfileAvatar name={displayName || user.displayName} seed={avatarSeed || user.username} size="lg" collection="pixel-art-neutral" /><Button type="button" variant="ghost" size="icon-xs" aria-label="Regenerate avatar" title="Regenerate avatar" onClick={() => { setAvatarSeed(crypto.randomUUID()); setSaved(false); }}><RefreshCw aria-hidden="true" /></Button><Button type="submit" size="sm" disabled={busy || !displayName.trim() || !username.trim() || (displayName.trim() === user.displayName && username.trim() === user.username && avatarSeed === user.avatarSeed)}><Save className="size-3.5" />{busy ? "Forge saves" : saved ? "Saved" : "Save"}</Button></div>
         </SettingRow>
       </form>
+      <SettingRow label="Inactive task agents" description="Keep idle and stopped agents visible for this long.">
+        <Select value={String(taskAgentExpiry)} onValueChange={value => { if (value !== null) setTaskAgentExpiry(saveTaskAgentExpiry(Number(value))); }}>
+          <SelectTrigger size="sm" aria-label="Inactive task agents"><SelectValue /></SelectTrigger>
+          <SelectContent>{taskAgentExpiryOptions.map(option => <SelectItem key={option.value} value={String(option.value)}>{option.label}</SelectItem>)}</SelectContent>
+        </Select>
+      </SettingRow>
     </SettingsSection>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
   </SettingsLayout>;

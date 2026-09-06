@@ -37,8 +37,8 @@ export function terminalCloseStatus(code: number, reason: string): "taken_over" 
   return null;
 }
 
-export function terminalTheme(): ITheme {
-  const styles = getComputedStyle(document.documentElement);
+export function terminalTheme(host: HTMLElement): ITheme {
+  const styles = getComputedStyle(host);
   const color = (name: string): string => styles.getPropertyValue(name).trim();
   return { background: color("--background"), foreground: color("--foreground"), cursor: color("--foreground"), cursorAccent: color("--background"), selectionBackground: color("--muted") };
 }
@@ -57,7 +57,7 @@ export function LivePaneTerminal({ taskId, role, paneId }: { taskId: string; rol
     let attempt = 0;
     let retry: number | undefined;
     let resizeTimer: number | undefined;
-    const terminal = new Terminal({ allowProposedApi: true, cursorBlink: false, cursorStyle: "block", disableStdin: true, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: 12, lineHeight: 1.2, scrollback: 0, macOptionIsMeta: true, theme: terminalTheme() });
+    const terminal = new Terminal({ allowProposedApi: true, cursorBlink: false, cursorStyle: "block", disableStdin: true, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: 12, lineHeight: 1.2, scrollback: 0, macOptionIsMeta: true, theme: terminalTheme(host) });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.loadAddon(new Unicode11Addon());
@@ -110,10 +110,8 @@ export function LivePaneTerminal({ taskId, role, paneId }: { taskId: string; rol
     });
     const observer = new ResizeObserver(() => { window.clearTimeout(resizeTimer); resizeTimer = window.setTimeout(() => { const before = { cols: terminal.cols, rows: terminal.rows }; const next = dimensions(); if (before.cols !== terminal.cols || before.rows !== terminal.rows) send(JSON.stringify({ type: "resize", cols: next.cols, rows: next.rows })); }, 100); });
     observer.observe(host);
-    const themeObserver = new MutationObserver(() => { terminal.options.theme = terminalTheme(); });
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
     connect();
-    return () => { disposed = true; window.clearTimeout(retry); window.clearTimeout(resizeTimer); observer.disconnect(); themeObserver.disconnect(); socketRef.current?.close(1000); socketRef.current = null; terminal.dispose(); };
+    return () => { disposed = true; window.clearTimeout(retry); window.clearTimeout(resizeTimer); observer.disconnect(); socketRef.current?.close(1000); socketRef.current = null; terminal.dispose(); };
   }, [connection, paneId, role, taskId]);
   const overlay = status === "connecting" ? "Forge connects" : status === "reconnecting" ? <ReconnectingStatus /> : status === "taken_over" ? "Another viewer took control" : status === "ended" ? (paneId ? "Pane ended" : "No live pane") : null;
   return <div className="flex h-full min-h-0 flex-col"><div className="relative mt-1 min-h-0 flex-1 overflow-hidden bg-background p-2"><div aria-label={`Live pane output for ${role}`} className="h-full" ref={hostRef} />{overlay ? <div className="absolute inset-0 flex items-center justify-center gap-2 bg-background/85 text-sm text-foreground">{overlay}{status === "taken_over" ? <Button size="xs" onClick={() => { setConnection((value) => value + 1); statusRef.current = "connecting"; setStatus("connecting"); }}>Take control</Button> : null}</div> : null}{showJump ? <Button className="absolute bottom-2 right-2" size="xs" onClick={() => { if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: "scroll", direction: "down", lines: 65_535 })); setShowJump(false); }}>Jump to bottom</Button> : null}</div></div>;

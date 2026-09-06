@@ -46,7 +46,7 @@ export function LivePaneDock({ taskId, activity }: { taskId: string; activity: T
     setHeight(next); saveHeight(next);
   };
   if (!selected) return null;
-  return <section data-live-pane-dock className="sticky bottom-0 z-10 mt-auto flex w-full shrink-0 flex-col bg-background" aria-label="Live agent output" style={{ height, maxHeight: "75dvh" }}>
+  return <section data-live-pane-dock className="dark sticky bottom-0 z-10 mt-auto flex w-full shrink-0 flex-col bg-background text-foreground" aria-label="Live agent output" style={{ height, maxHeight: "75dvh", colorScheme: "dark" }}>
     <div role="slider" tabIndex={0} aria-label="Resize live agent output" aria-orientation="vertical" aria-valuemin={160} aria-valuemax={720} aria-valuenow={height} aria-valuetext={`${height} pixels`} className="flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center border-t focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" title="Drag to resize live output" onKeyDown={adjustResize} onPointerDown={startResize} onPointerMove={updateResize} onPointerUp={endResize} onPointerCancel={endResize}><span aria-hidden="true" className="h-px w-8 bg-muted-foreground" /></div>
     <Tabs className="min-h-0 flex-1" value={selected.kind} onValueChange={value => setSelectedRole(String(value))}>
       <div className="shrink-0 overflow-x-auto px-1" aria-label="Live pane tabs"><TabsList variant="line">{panes.map(session => {

@@ -72,16 +72,16 @@ test("revoked scope during external capture prevents creation", async () => {
   expect(f.database.authQuery(db => db.prepare("SELECT * FROM forge_tasks").all())).toEqual([]);
 });
 
-test("backlog starts explicitly and archived tasks preserve worktree references", async () => {
+test("backlog starts explicitly and active tasks cannot be archived", async () => {
   const f = await fixture();
   const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false });
   expect(task.status).toBe("backlog");
   expect(f.tasks.startTask("alice", task.id).status).toBe("active");
   const worktree = { path: join(f.directory, "work"), branch: "task", baseSha: "a", headSha: "b", dirty: true };
   f.tasks.repository.controls.setWorktree(task.id, worktree);
-  expect(() => f.tasks.archiveTask("alice", task.id, true)).toThrow("Cancel the task");
+  await expect(f.tasks.archiveTask("alice", task.id)).rejects.toThrow("Cancel the task");
   f.tasks.cancelTask("alice", task.id);
-  expect(f.tasks.archiveTask("alice", task.id, true)).toMatchObject({ worktree, status: "cancelled" });
+  f.tasks.repository.setArchived(task.id, true);
   expect(f.tasks.listTasks("alice")).toEqual([]);
   expect(f.tasks.listTasks("alice", "company", true)).toHaveLength(1);
 });
@@ -120,9 +120,9 @@ test("editing the objective checks backlog ownership in the same transaction as 
   const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false });
   expect(f.tasks.updateTaskDetails("alice", task.id, { title: "Updated title" })).toMatchObject({ title: "Updated title", description: f.input.description });
   expect(f.tasks.repository.controls.get(task.id).objective).toBe(`Updated title\n\n${f.input.description}`);
-  f.tasks.archiveTask("alice", task.id, true);
+  f.tasks.repository.setArchived(task.id, true);
   expect(f.tasks.repository.updateDetails(task.id, { title: "Archived edit" })).toBe(false);
-  f.tasks.archiveTask("alice", task.id, false);
+  f.tasks.unarchiveTask("alice", task.id);
   f.tasks.startTask("alice", task.id);
   expect(f.tasks.repository.updateDetails(task.id, { title: "Late edit" })).toBe(false);
   expect(() => f.tasks.updateTaskDetails("alice", task.id, { description: "Late edit" })).toThrow("Only tasks in the backlog");

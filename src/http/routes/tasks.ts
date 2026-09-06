@@ -5,7 +5,7 @@ import type { TaskService } from "../../tasks.js";
 import type { TaskHost } from "../../task-host.js";
 import type { ForgeConfig } from "../../config.js";
 import { readTaskAgentStatuses } from "../../task-agent-status.js";
-import { TaskAgentsResponseSchema } from "../contracts/tasks.js";
+import { TaskAgentsResponseSchema, TaskArchiveBodySchema, TaskArchiveResponseSchema } from "../contracts/tasks.js";
 import { readTaskChecks, readTaskDiff } from "../../task-inspection.js";
 import { readTaskExecution } from "../../task-execution.js";
 import { readTaskTimeline } from "../../task-timeline.js";
@@ -78,7 +78,8 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
     wake(task.id);
     return task;
   });
-  for (const action of ["archive", "unarchive"] as const) typed.post(`/api/tasks/:taskId/${action}`, { schema: taskResponse }, async request => tasks.archiveTask(request.forgeUser.id, request.params.taskId, action === "archive"));
+  typed.post("/api/tasks/:taskId/archive", { schema: { params: TaskIdParamsSchema, body: TaskArchiveBodySchema.optional(), response: { 200: TaskArchiveResponseSchema } } }, async request => tasks.archiveTask(request.forgeUser.id, request.params.taskId, request.body?.confirmDiscardDirty));
+  typed.post("/api/tasks/:taskId/unarchive", { schema: taskResponse }, async request => tasks.unarchiveTask(request.forgeUser.id, request.params.taskId));
   typed.get("/api/tasks/:taskId/activity", { schema: { params: TaskIdParamsSchema, response: { 200: TaskActivityResponseSchema } } }, async (request, reply) => reply.header("Cache-Control", "private, no-store").send(tasks.getTaskActivity(request.forgeUser.id, request.params.taskId)));
   typed.get("/api/tasks/:taskId/diff", { schema: { params: TaskIdParamsSchema, response: { 200: TaskDiffResponseSchema } } }, async (request, reply) => {
     const result = await readTaskDiff(tasks.getTask(request.forgeUser.id, request.params.taskId));

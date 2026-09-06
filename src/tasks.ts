@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { removeTaskWorktree } from "./task-worktree.js";
+import { stopIdleArchiveSessions } from "./task-archive-sessions.js";
 import { z } from "zod";
 import { AuthFailure, type AuthService } from "./auth.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
@@ -19,6 +21,7 @@ type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "res
 const DetailsSchema = TaskInputSchema.pick({ title: true, description: true }).partial().strict().refine(input => input.title !== undefined || input.description !== undefined);
 
 export class TaskService {
+  private readonly archives = new Set<string>();
   readonly repository: TaskRepository;
   private readonly artifacts: ArtifactStore;
   constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService, private readonly projects: Projects, config: Pick<ForgeConfig, "artifactRoot">) {
@@ -88,6 +91,7 @@ export class TaskService {
   }
 
   startTask(userId: string, taskId: string): Task {
+    if (this.archives.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
     const task = this.getTask(userId, taskId);
     if (task.archivedAt || !["backlog", "active"].includes(task.status)) throw new TaskFailure("This task cannot be started", 409);
     this.repository.controls.start(taskId);
@@ -128,11 +132,34 @@ export class TaskService {
     return this.getTask(userId, taskId);
   }
 
-  archiveTask(userId: string, taskId: string, archived: boolean): Task {
-    const task = this.getTask(userId, taskId);
-    if (archived && !["backlog", "cancelled", "delivered"].includes(task.status)) throw new TaskFailure("Cancel the task before archiving it", 409);
-    this.repository.setArchived(taskId, archived);
+  unarchiveTask(userId: string, taskId: string): Task {
+    this.getTask(userId, taskId);
+    if (this.archives.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
+    this.repository.setArchived(taskId, false);
     return this.getTask(userId, taskId);
+  }
+
+  async archiveTask(userId: string, taskId: string, confirmDiscardDirty = false): Promise<Task | { status: "confirmation_required"; dirtyFileCount: number }> {
+    const task = this.getTask(userId, taskId);
+    if (this.archives.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
+    if (!["backlog", "cancelled", "delivered"].includes(task.status)) throw new TaskFailure("Cancel the task before archiving it", 409);
+    this.archives.add(taskId);
+    try {
+      const sessions = this.repository.controls.sessions(taskId);
+      await stopIdleArchiveSessions(this.database.filename(), sessions);
+      this.getTask(userId, taskId);
+      const result = await removeTaskWorktree({ taskId, ...task.configuration }, task.worktree, confirmDiscardDirty, () => { this.getTask(userId, taskId); });
+      if (result.status === "confirmation_required") return result;
+      this.getTask(userId, taskId);
+      this.database.authTransaction(db => {
+        db.prepare("UPDATE forge_task_controls SET worktree_json = NULL WHERE task_id = ?").run(taskId);
+        this.repository.setArchived(taskId, true);
+      });
+      return this.getTask(userId, taskId);
+    } catch (error) {
+      if (error instanceof TaskFailure) throw error;
+      throw new TaskFailure(error instanceof Error ? error.message : "Worktree cleanup failed", 409);
+    } finally { this.archives.delete(taskId); }
   }
 
   async getTaskArtifact(userId: string, taskId: string, artifactId: string): Promise<{ artifact: StoredArtifact; bytes: Buffer }> {

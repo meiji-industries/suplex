@@ -13,6 +13,10 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     store.askHuman(waiting.id, "Which branch?");
     store.setPullRequest(active.id, { repository: "owner/repo", number: 10, url: "https://github.com/owner/repo/pull/10", headSha: "a".repeat(40), state: "open", mergedAt: null });
     const { page } = value;
+    await page.route(`**/api/companies/${value.company.id}/task-costs`, route => route.fulfill({ json: { tasks: [
+      { id: active.id, cost: 0.12, unpriced: false, partial: false },
+      { id: waiting.id, cost: null, unpriced: true, partial: true },
+    ] } }));
     await page.route(`**/api/tasks/${active.id}/checks`, route => route.fulfill({ json: { available: true, pullRequestState: "ready", runs: [{ name: "Failed", status: "failing", url: null }, { name: "Running", status: "pending", url: null }] } }));
     let workerStatus = "working";
     await page.route(`**/api/tasks/${active.id}/agents`, route => route.fulfill({ json: { agents: [{ id: "root", role: "root", paneId: "wProof:p1", status: "idle" }, { id: "worker", role: "worker", paneId: "wProof:p2", status: workerStatus }] } }));
@@ -20,6 +24,8 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     if (width < 768) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
     const working = page.getByRole("link", { name: "Working task, Active, pull request open", exact: true });
     await working.waitFor();
+    await working.getByText("$0.12", { exact: true }).waitFor();
+    expect(await page.locator('[data-slot="sidebar"]').getByText("Unpriced", { exact: true }).count()).toBe(0);
     const createButton = page.locator('[data-slot="sidebar"]').getByRole("button", { name: "New task", exact: true });
     expect(await createButton.evaluate(element => element.closest('[data-sidebar="menu"]') === null)).toBe(true);
     expect(await createButton.evaluate(element => getComputedStyle(element.parentElement!).padding)).toBe("8px");

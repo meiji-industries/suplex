@@ -1,5 +1,6 @@
 import { ChartNoAxesGantt, CirclePlus, Columns3, ClipboardList, EllipsisVertical, FolderGit2, Inbox, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { BarChart3 } from "lucide-react";
 
 import { buttonVariants } from "../ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog.js";
@@ -31,6 +32,7 @@ function MainNavigation({ close }: { close?: () => void }): ReactElement {
       { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList },
       { href: withCompany("/board", companyId), label: "Board", icon: Columns3 },
       { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
+      { href: withCompany("/analytics", companyId), label: "Analytics", icon: BarChart3 },
       { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 },
     ];
   }, [companyId]);
@@ -54,6 +56,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
   const companyId = context?.currentCompany?.id;
   const items: NavItem[] = [
     { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
+    { href: withCompany("/analytics", companyId), label: "Analytics", icon: BarChart3 },
     { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 }, { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList }, { href: withCompany("/board", companyId), label: "Board", icon: Columns3 }, { href: withCompany("/attention", companyId), label: "Attention", icon: Inbox }, { href: withCompany("/health", companyId), label: "Host health", icon: Shield },
   ];
   const visible = items.filter((item) => item.label.toLowerCase().includes(query.trim().toLowerCase()));

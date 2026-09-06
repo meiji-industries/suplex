@@ -51,7 +51,7 @@ ${frontendEntry(assetMode)}
 </html>`;
 }
 
-export function renderApplicationPage(view: "auth" | "admin" | "projects" | "project-prompts" | "project-templates" | "tasks" | "board" | "timeline" | "attention" | "company-settings" | "profile", assetMode: FrontendAssetMode = "built"): string {
+export function renderApplicationPage(view: "auth" | "admin" | "projects" | "project-prompts" | "project-templates" | "tasks" | "board" | "timeline" | "analytics" | "attention" | "company-settings" | "profile", assetMode: FrontendAssetMode = "built"): string {
   return `<!doctype html>
 <html lang="en">
   <head>

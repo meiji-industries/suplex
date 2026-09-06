@@ -1,5 +1,9 @@
 import { addTokens, emptyTokens, type TaskUsage } from "./task-usage.js";
 
+export function usageIsUnpriced(entry: TaskUsage): boolean {
+  return entry.cost === 0 && entry.tokens.input + entry.tokens.output + entry.tokens.reasoning + entry.tokens.cache.read + entry.tokens.cache.write > 0;
+}
+
 export function usageMetrics(usage: TaskUsage[]) {
   const tokens = emptyTokens();
   const root = new Set<string>();
@@ -11,7 +15,7 @@ export function usageMetrics(usage: TaskUsage[]) {
   let unpricedMessages = 0;
   for (const entry of usage) {
     addTokens(tokens, entry.tokens); cost += entry.cost; steps += entry.steps;
-    if (entry.cost === 0 && entry.tokens.input + entry.tokens.output + entry.tokens.reasoning + entry.tokens.cache.read + entry.tokens.cache.write > 0) unpricedMessages += 1;
+    if (usageIsUnpriced(entry)) unpricedMessages += 1;
     const turn = `${entry.sessionId}:${entry.turnId}`;
     (entry.role === "root" ? root : worker).add(turn);
     if (entry.failed) failed.add(turn);

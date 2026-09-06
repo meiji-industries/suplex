@@ -12,6 +12,7 @@ import { Dashboard } from "../../views/dashboard.js";
 import { ProjectsView } from "../../views/projects.js";
 import { TasksView } from "../../views/tasks.js";
 import { TimelineView } from "../../views/timeline.js";
+import { AnalyticsView } from "../../views/analytics.js";
 import { TaskTemplateSettings } from "../../views/task-template-settings.js";
 import { ProviderSettingsView } from "../../views/provider-settings.js";
 import { EnvironmentSettingsView } from "../../views/environment-settings.js";
@@ -34,6 +35,7 @@ function AppView(): ReactElement {
   if (pathname === "/board" || pathname.startsWith("/board/")) return <TasksView mode="board" />;
   if (pathname === "/attention") return <AttentionView />;
   if (pathname === "/timeline") return <TimelineView />;
+  if (pathname === "/analytics") return <AnalyticsView />;
   return <Dashboard />;
 }
 

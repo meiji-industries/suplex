@@ -1,4 +1,4 @@
-import { CircleHelp, CirclePlus, Columns3, ClipboardList, EllipsisVertical, FolderGit2, Inbox, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
+import { ChartNoAxesGantt, CircleHelp, CirclePlus, Columns3, ClipboardList, EllipsisVertical, FolderGit2, Inbox, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 
 import { buttonVariants } from "../ui/button.js";
@@ -29,6 +29,7 @@ function MainNavigation({ close }: { close?: () => void }): ReactElement {
     return [
       { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList },
       { href: withCompany("/board", companyId), label: "Board", icon: Columns3 },
+      { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
       { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 },
     ];
   }, [companyId]);
@@ -59,6 +60,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
   const [query, setQuery] = useState("");
   const companyId = context?.currentCompany?.id;
   const items: NavItem[] = [
+    { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
     { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 }, { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList }, { href: withCompany("/board", companyId), label: "Board", icon: Columns3 }, { href: withCompany("/attention", companyId), label: "Attention", icon: Inbox }, { href: withCompany("/health", companyId), label: "Host health", icon: Shield },
   ];
   const visible = items.filter((item) => item.label.toLowerCase().includes(query.trim().toLowerCase()));
@@ -109,7 +111,7 @@ export function AppSidebar(): ReactElement {
         goPending = true; window.clearTimeout(goTimer); goTimer = window.setTimeout(() => { goPending = false; }, 750); return;
       }
       if (goPending && !event.metaKey && !event.ctrlKey && !event.altKey) {
-        const path = key === "t" ? "/tasks" : key === "b" ? "/board" : undefined;
+        const path = key === "t" ? "/tasks" : key === "b" ? "/board" : key === "l" ? "/timeline" : undefined;
         goPending = false; window.clearTimeout(goTimer);
         if (path) { event.preventDefault(); navigate(withCompany(path, context?.currentCompany?.id)); }
       }

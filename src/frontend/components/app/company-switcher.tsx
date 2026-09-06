@@ -84,7 +84,7 @@ export function CompanySwitcher(): ReactElement {
                   </DropdownMenuItem></span>) : <div className="px-2 py-2 text-[11px] text-muted-foreground">{user?.role === "admin" ? "No companies yet" : "No company access"}</div>}
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
-              {error ? <div className="flex items-center gap-2 px-2 py-2 text-[11px] text-rose-700"><CircleAlert className="size-3.5 shrink-0" />Unable to load companies</div> : null}
+              {error ? <div className="flex items-center gap-2 px-2 py-2 text-[11px] text-destructive"><CircleAlert className="size-3.5 shrink-0" />Unable to load companies</div> : null}
               {error ? <DropdownMenuItem aria-label="Refresh" title="Refresh" onClick={() => void context.reloadCompanies()}><RefreshCw aria-hidden="true" className="size-3.5 text-muted-foreground" /></DropdownMenuItem> : null}
               {user?.role === "admin" ? <DropdownMenuItem onClick={() => setCreateOpen(true)}><Plus className="size-3.5 text-muted-foreground" />Create company…</DropdownMenuItem> : null}
               {user?.role === "admin" && currentCompany ? <DropdownMenuItem render={<a href={withCompany(`/companies/${encodeURIComponent(currentCompany.id)}/settings`, currentCompany.id)} />}><Settings2 className="size-3.5 text-muted-foreground" />Company settings</DropdownMenuItem> : null}

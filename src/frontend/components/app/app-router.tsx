@@ -29,6 +29,7 @@ function AppView(): ReactElement {
   if (pathname === "/profile") return <ProfileView />;
   if (pathname === "/projects") return <ProjectsView />;
   if (/^\/projects\/[^/]+\/templates$/.test(pathname)) return <TaskTemplateSettings key={pathname} projectId={pathname.split("/")[2]!} />;
+  if (pathname === "/templates") return <TaskTemplateSettings />;
   if (pathname === "/tasks" || pathname.startsWith("/tasks/")) return <TasksView />;
   if (pathname === "/board" || pathname.startsWith("/board/")) return <TasksView mode="board" />;
   if (pathname === "/attention") return <AttentionView />;

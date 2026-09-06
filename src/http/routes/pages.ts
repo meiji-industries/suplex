@@ -91,6 +91,10 @@ const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
     if (!(await requirePageSession(request, reply))) return reply;
     return sendHtml(request, reply, renderApplicationPage("profile", assetMode));
   });
+  app.get("/templates", async (request, reply) => {
+    if (!(await requirePageSession(request, reply))) return reply;
+    return sendHtml(request, reply, renderApplicationPage("project-templates", assetMode));
+  });
   app.get<{ Params: { projectId: string } }>("/projects/:projectId/prompts", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
     return sendHtml(request, reply, renderApplicationPage("project-prompts", assetMode));

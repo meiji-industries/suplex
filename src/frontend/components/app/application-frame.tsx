@@ -4,6 +4,7 @@ import { Separator } from "../ui/separator.js";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "../ui/sidebar.js";
 import { AppSidebar } from "./navigation.js";
 import { SystemHealthAlert } from "./system-health.js";
+import { ThemeToggle } from "./theme.js";
 
 export function ApplicationFrame({ title, headerActions, headerRight, sidebar, children }: { title: string; headerActions?: ReactElement | null | undefined; headerRight?: ReactElement | null | undefined; sidebar?: ReactElement; children: ReactNode }): ReactElement {
   return (
@@ -16,7 +17,7 @@ export function ApplicationFrame({ title, headerActions, headerRight, sidebar, c
             <Separator orientation="vertical" className="mx-2 data-[orientation=vertical]:h-4" />
             <h1 className="min-w-0 truncate text-base font-medium" title={title}>{title}</h1>
             {headerActions}
-            <div className="ml-auto flex shrink-0 items-center gap-2">{headerRight}</div>
+            <div className="ml-auto flex shrink-0 items-center gap-2"><ThemeToggle />{headerRight}</div>
           </div>
         </header>
         <SystemHealthAlert />

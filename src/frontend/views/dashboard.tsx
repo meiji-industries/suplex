@@ -24,13 +24,13 @@ export function Dashboard(): ReactElement {
         <div className="flex items-center gap-4 text-xs">
           <span className="font-medium text-foreground">Health</span>
           <span className="text-muted-foreground">{checkCount} checks</span>
-          <span className="text-emerald-700">{healthyCount} healthy</span>
-          <span className={failingCount > 0 ? "text-rose-700" : "text-muted-foreground"}>{failingCount} issues</span>
+          <span className="text-emerald-700 dark:text-emerald-400">{healthyCount} healthy</span>
+          <span className={failingCount > 0 ? "text-destructive" : "text-muted-foreground"}>{failingCount} issues</span>
         </div>
         <div className="flex min-w-0 items-center gap-2">
           {snapshot ? <a className="max-w-48 truncate text-[11px] text-muted-foreground hover:text-foreground" href={snapshot.reachableAddress}>{snapshot.reachableAddress.replace(/^https?:\/\//, "")}</a> : null}
-          <span aria-live="polite" data-health-freshness={freshness} title={checked} className={freshness === "stale" ? "flex items-center gap-1.5 text-[11px] text-amber-700 sm:hidden" : "flex items-center gap-1.5 text-[11px] text-muted-foreground sm:hidden"}><Clock3 className="size-3" />{compactChecked}</span>
-          <span aria-live="polite" data-health-freshness={freshness} className={freshness === "stale" ? "hidden items-center gap-1.5 text-[11px] text-amber-700 sm:flex" : "hidden items-center gap-1.5 text-[11px] text-muted-foreground sm:flex"}><Clock3 className="size-3" />{checked}</span>
+          <span aria-live="polite" data-health-freshness={freshness} title={checked} className={freshness === "stale" ? "flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400 sm:hidden" : "flex items-center gap-1.5 text-[11px] text-muted-foreground sm:hidden"}><Clock3 className="size-3" />{compactChecked}</span>
+          <span aria-live="polite" data-health-freshness={freshness} className={freshness === "stale" ? "hidden items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400 sm:flex" : "hidden items-center gap-1.5 text-[11px] text-muted-foreground sm:flex"}><Clock3 className="size-3" />{checked}</span>
           <Button aria-label="Refresh" title="Refresh" variant="ghost" size="icon-xs" onClick={() => void refresh()} disabled={refreshing}><RefreshCw aria-hidden="true" className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /></Button>
         </div>
       </div>

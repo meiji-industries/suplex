@@ -98,7 +98,7 @@ function CheckStatusIndicator({ check }: { check: HealthCheck }): ReactElement {
   const healthy = check.status === "healthy";
   const degraded = check.status === "warning" || (!healthy && !isOwnedHealthCheck(check.id));
   return (
-    <span className={healthy ? "flex items-center gap-1.5 text-xs text-emerald-700" : degraded ? "flex items-center gap-1.5 text-xs text-amber-700" : "flex items-center gap-1.5 text-xs text-rose-700"}>
+    <span className={healthy ? "flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400" : degraded ? "flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400" : "flex items-center gap-1.5 text-xs text-destructive"}>
       <span className={healthy ? "size-1.5 rounded-full bg-emerald-500" : degraded ? "size-1.5 rounded-full bg-amber-500" : "size-1.5 rounded-full bg-rose-500"} />
       {healthy ? "Healthy" : degraded ? "Degraded" : "Unavailable"}
     </span>

@@ -46,13 +46,13 @@ export function LivePaneDock({ taskId, activity }: { taskId: string; activity: T
     setHeight(next); saveHeight(next);
   };
   if (!selected) return null;
-  return <section data-live-pane-dock className="sticky bottom-0 z-10 mt-auto flex w-full shrink-0 flex-col bg-[#1e1e2e]" aria-label="Live agent output" style={{ height, maxHeight: "75dvh" }}>
-    <div role="slider" tabIndex={0} aria-label="Resize live agent output" aria-orientation="vertical" aria-valuemin={160} aria-valuemax={720} aria-valuenow={height} aria-valuetext={`${height} pixels`} className="flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[#cdd6f4]" title="Drag to resize live output" onKeyDown={adjustResize} onPointerDown={startResize} onPointerMove={updateResize} onPointerUp={endResize} onPointerCancel={endResize}><span aria-hidden="true" className="h-px w-8 bg-[#6c7086]" /></div>
-    <Tabs className="min-h-0 flex-1 gap-0" value={selected.kind} onValueChange={value => setSelectedRole(String(value))}>
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto bg-[#1e1e2e] px-1 pt-1" aria-label="Live pane tabs"><TabsList className="h-8 gap-1 rounded-none bg-transparent p-0">{panes.map(session => {
+  return <section data-live-pane-dock className="sticky bottom-0 z-10 mt-auto flex w-full shrink-0 flex-col bg-background" aria-label="Live agent output" style={{ height, maxHeight: "75dvh" }}>
+    <div role="slider" tabIndex={0} aria-label="Resize live agent output" aria-orientation="vertical" aria-valuemin={160} aria-valuemax={720} aria-valuenow={height} aria-valuetext={`${height} pixels`} className="flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center border-t focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" title="Drag to resize live output" onKeyDown={adjustResize} onPointerDown={startResize} onPointerMove={updateResize} onPointerUp={endResize} onPointerCancel={endResize}><span aria-hidden="true" className="h-px w-8 bg-muted-foreground" /></div>
+    <Tabs className="min-h-0 flex-1" value={selected.kind} onValueChange={value => setSelectedRole(String(value))}>
+      <div className="shrink-0 overflow-x-auto px-1" aria-label="Live pane tabs"><TabsList variant="line">{panes.map(session => {
         const pending = activity.turns.find(turn => turn.sessionId === session.id && !["completed", "cancelled"].includes(turn.status));
-        const dot = pending?.status === "prompted" ? "animate-pulse bg-emerald-500" : pending ? "bg-amber-500" : "bg-[#6c7086]";
-        return <TabsTrigger className="group h-7 flex-none gap-1.5 rounded-md px-2 text-[13px] font-medium text-[#a6adc8] hover:bg-[#313244] hover:text-[#cdd6f4] data-active:bg-[#313244] data-active:text-[#cdd6f4] data-active:shadow-[inset_0_1px_0_rgb(255_255_255_/_0.08)]" key={session.id} value={session.kind}><span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${dot}`} />{session.kind === "root" ? "Root" : "Worker"}</TabsTrigger>;
+        const dot = pending?.status === "prompted" ? "animate-pulse bg-emerald-500" : pending ? "bg-amber-500" : "bg-muted-foreground";
+        return <TabsTrigger key={session.id} value={session.kind}><span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${dot}`} />{session.kind === "root" ? "Root" : "Worker"}</TabsTrigger>;
       })}</TabsList></div>
       <TabsContent className="mt-0 min-h-0" value={selected.kind}><LivePaneTerminal key={selected.id} taskId={taskId} role={selected.kind} paneId={selected.paneId} /></TabsContent>
     </Tabs>

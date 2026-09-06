@@ -11,6 +11,10 @@ function frontendEntry(mode: FrontendAssetMode): string {
   return `    <script type="module" src="${source}"></script>`;
 }
 
+function themeBootstrap(): string {
+  return `    <script>(() => { let saved = null; try { saved = localStorage.getItem("forge.theme"); } catch {} const dark = saved === "dark" || saved !== "light" && matchMedia("(prefers-color-scheme: dark)").matches; const root = document.documentElement; root.classList.toggle("dark", dark); root.style.colorScheme = dark ? "dark" : "light"; document.querySelector('meta[name="theme-color"]').content = dark ? "#0a0a0a" : "#ffffff"; })();</script>`;
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
 }
@@ -26,7 +30,8 @@ export function renderHealthPage(snapshot: HealthSnapshot, assetMode: FrontendAs
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#f8f8fa">
+    <meta name="theme-color" content="#ffffff">
+${themeBootstrap()}
     <title>Forge · Host health</title>
 ${frontendHead(assetMode)}  </head>
   <body>
@@ -52,7 +57,8 @@ export function renderApplicationPage(view: "auth" | "admin" | "projects" | "pro
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#f8f8fa">
+    <meta name="theme-color" content="#ffffff">
+${themeBootstrap()}
     <title>Forge · ${view === "auth" ? "Sign in" : view === "admin" ? "Administration" : view === "projects" ? "Projects" : view === "project-prompts" ? "Project prompts" : view === "project-templates" ? "Project templates" : view === "tasks" ? "Tasks" : view === "board" ? "Board" : view === "timeline" ? "Timeline" : view === "attention" ? "Attention" : view === "profile" ? "Profile" : "Company settings"}</title>
 ${frontendHead(assetMode)}  </head>
   <body>

@@ -1,57 +1,219 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { Pencil } from "lucide-react";
 import type { TaskTemplateInput } from "../../task-templates.js";
 import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../task-contracts.js";
 import { SettingsLayout } from "../components/app/settings-layout.js";
+import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, SettingsToolbarAction, type SettingsTableColumn } from "../components/app/settings-table.js";
 import { useCompanyContext } from "../components/app/company-context.js";
 import { taskDeliveryTargetOptions } from "../components/app/task-delivery-target.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog.js";
 import { Button } from "../components/ui/button.js";
 import { Checkbox } from "../components/ui/checkbox.js";
+import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
+import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { Textarea } from "../components/ui/textarea.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select.js";
 import { readJson, withCompany } from "../lib/api.js";
-import type { ApiProfile, ApiTaskTemplate } from "../lib/view-shared.js";
+import type { ApiProfile, ApiProject, ApiTaskTemplate } from "../lib/view-shared.js";
 
-const empty = (): TaskTemplateInput => ({ name: "", description: "", deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
+const columns: SettingsTableColumn[] = [
+  { key: "name", label: "Name", width: 180 },
+  { key: "description", label: "Description", width: 300 },
+  { key: "delivery", label: "Delivery", width: 150 },
+  { key: "tests", label: "Tests", width: 80 },
+  { key: "evidence", label: "Evidence", width: 100 },
+  { key: "edit", width: 36 },
+];
 
-export function TaskTemplateSettings({ projectId }: { projectId: string }): ReactElement {
+type EditorState =
+  | { kind: "closed" }
+  | { kind: "create"; draft: TaskTemplateInput }
+  | { kind: "edit"; templateId: string; draft: TaskTemplateInput };
+
+const emptyDraft = (): TaskTemplateInput => ({ name: "", description: "", deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
+
+const templateDraft = (template: ApiTaskTemplate): TaskTemplateInput => ({
+  name: template.name,
+  description: template.description,
+  deliveryTarget: template.deliveryTarget,
+  runProjectTests: template.runProjectTests,
+  visualEvidence: template.visualEvidence,
+  ...(template.rootProfileId ? { rootProfileId: template.rootProfileId } : {}),
+  ...(template.workerProfileId ? { workerProfileId: template.workerProfileId } : {}),
+});
+
+const deliveryLabel = (value: ApiTaskTemplate["deliveryTarget"]): string => taskDeliveryTargetOptions.find((option) => option.value === value)?.label ?? value;
+const evidenceLabel = (value: ApiTaskTemplate["visualEvidence"]): string => value === "required" ? "Necessary" : value === "capture" ? "Capture" : "Off";
+
+export function TaskTemplateSettings({ projectId: initialProjectId }: { projectId?: string }): ReactElement {
   const companyId = useCompanyContext().currentCompany?.id ?? "";
+  const [projects, setProjects] = useState<ApiProject[]>([]);
+  const [projectId, setProjectId] = useState(initialProjectId ?? "");
   const [templates, setTemplates] = useState<ApiTaskTemplate[]>([]);
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [draft, setDraft] = useState<TaskTemplateInput>(empty);
+  const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const [search, setSearch] = useState("");
+  const [projectError, setProjectError] = useState("");
+  const [loadingProjects, setLoadingProjects] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!companyId) return;
+    let closed = false;
+    setLoadingProjects(true);
+    setProjectError("");
+    void Promise.all([
+      readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
+      readJson<{ profiles: ApiProfile[] }>("/api/profiles"),
+    ]).then(([projectResult, profileResult]) => {
+      if (closed) return;
+      setProjects(projectResult.projects);
+      setProfiles(profileResult.profiles);
+      setProjectId((current) => projectResult.projects.some((project) => project.id === current) ? current : projectResult.projects[0]?.id ?? "");
+    }).catch((reason) => { if (!closed) setProjectError(String(reason)); })
+      .finally(() => { if (!closed) setLoadingProjects(false); });
+    return () => { closed = true; };
+  }, [companyId]);
+
   useEffect(() => {
     let closed = false;
-    setTemplates([]); setSelected(null); setDraft(empty()); setError("");
-    void Promise.all([readJson<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`), readJson<{ profiles: ApiProfile[] }>("/api/profiles")]).then(([result, models]) => { if (!closed) { setTemplates(result.templates); setProfiles(models.profiles); } }).catch(error => { if (!closed) setError(String(error)); });
+    setTemplates([]);
+    setEditor({ kind: "closed" });
+    setDeleteOpen(false);
+    setDeleteError("");
+    setSearch("");
+    setError("");
+    if (!projectId) return () => { closed = true; };
+    void readJson<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`)
+      .then((result) => { if (!closed) setTemplates(result.templates); })
+      .catch((reason) => { if (!closed) setError(String(reason)); });
     return () => { closed = true; };
   }, [projectId]);
-  const save = async () => {
-    setBusy(true); setError("");
-    try {
-      const result = await readJson<ApiTaskTemplate>(selected ? `/api/task-templates/${selected}` : `/api/projects/${projectId}/task-templates`, { method: selected ? "PATCH" : "POST", body: JSON.stringify(selected ? { ...draft, rootProfileId: draft.rootProfileId ?? null, workerProfileId: draft.workerProfileId ?? null } : draft) });
-      setTemplates(current => [...current.filter(template => template.id !== result.id), result]); setSelected(result.id);
-    } catch (error) { setError(String(error)); } finally { setBusy(false); }
+
+  const visibleTemplates = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return term ? templates.filter((template) => `${template.name} ${template.description}`.toLowerCase().includes(term)) : templates;
+  }, [search, templates]);
+
+  const edit = (template: ApiTaskTemplate): void => {
+    setError("");
+    setEditor({ kind: "edit", templateId: template.id, draft: templateDraft(template) });
   };
-  const remove = async () => {
-    if (!selected) return;
+
+  const setDraft = <Key extends keyof TaskTemplateInput>(key: Key, value: TaskTemplateInput[Key]): void => {
+    setEditor((current) => current.kind === "closed" ? current : { ...current, draft: { ...current.draft, [key]: value } });
+  };
+
+  const save = async (): Promise<void> => {
+    if (editor.kind === "closed") return;
     setBusy(true);
-    try { await readJson(`/api/task-templates/${selected}`, { method: "DELETE" }); setTemplates(current => current.filter(template => template.id !== selected)); setSelected(null); setDraft(empty()); }
-    catch (error) { setError(String(error)); } finally { setBusy(false); }
+    setError("");
+    try {
+      const editing = editor.kind === "edit";
+      const result = await readJson<ApiTaskTemplate>(editing ? `/api/task-templates/${editor.templateId}` : `/api/projects/${projectId}/task-templates`, {
+        method: editing ? "PATCH" : "POST",
+        body: JSON.stringify(editing ? { ...editor.draft, rootProfileId: editor.draft.rootProfileId ?? null, workerProfileId: editor.draft.workerProfileId ?? null } : editor.draft),
+      });
+      setTemplates((current) => [...current.filter((template) => template.id !== result.id), result].sort((left, right) => left.name.localeCompare(right.name)));
+      setEditor({ kind: "closed" });
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
   };
-  return <SettingsLayout title="Task templates" companyId={companyId} backHref={withCompany("/projects", companyId)} activeHref={withCompany(`/projects/${projectId}/templates`, companyId)}>
-    <div className="grid min-w-0 gap-4 p-3 md:grid-cols-[16rem_minmax(0,1fr)]"><section className="grid content-start gap-2"><Button variant="outline" onClick={() => { setSelected(null); setDraft(empty()); }}>Create template</Button>{templates.map(template => <Button key={template.id} variant={selected === template.id ? "secondary" : "ghost"} onClick={() => { setSelected(template.id); setDraft({ name: template.name, description: template.description, deliveryTarget: template.deliveryTarget, runProjectTests: template.runProjectTests, visualEvidence: template.visualEvidence, ...(template.rootProfileId ? { rootProfileId: template.rootProfileId } : {}), ...(template.workerProfileId ? { workerProfileId: template.workerProfileId } : {}) }); }}>{template.name}</Button>)}</section>
-    <form className="grid min-w-0 content-start gap-3" onSubmit={event => { event.preventDefault(); void save(); }}>{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-      <label className="grid gap-1 text-xs">Name<Input aria-label="Template name" value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} required /></label>
-      <label className="grid gap-1 text-xs">Description<Textarea aria-label="Template description" value={draft.description} onChange={event => setDraft(current => ({ ...current, description: event.target.value }))} rows={8} required /></label>
-      {(["rootProfileId", "workerProfileId"] as const).map(key => <label key={key} className="grid gap-1 text-xs">{key === "rootProfileId" ? "Root" : "Worker"}<Select value={draft[key] ?? "default"} onValueChange={value => setDraft(current => ({ ...current, [key]: value === "default" ? undefined : value ?? undefined }))}><SelectTrigger aria-label={key === "rootProfileId" ? "Root profile" : "Worker profile"}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Project default</SelectItem>{profiles.filter(profile => profile.role === (key === "rootProfileId" ? "root" : "worker")).map(profile => <SelectItem key={profile.id} value={profile.id}>{profile.name} · {profile.provider}/{profile.model}</SelectItem>)}</SelectContent></Select></label>)}
-      <label className="grid gap-1 text-xs">Delivery target<Select value={draft.deliveryTarget} onValueChange={value => setDraft(current => ({ ...current, deliveryTarget: DeliveryTargetSchema.parse(value) }))}><SelectTrigger aria-label="Delivery target"><SelectValue /></SelectTrigger><SelectContent>{taskDeliveryTargetOptions.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></label>
-      <label className="grid gap-1 text-xs">Browser evidence<Select value={draft.visualEvidence} onValueChange={value => setDraft(current => ({ ...current, visualEvidence: VisualEvidenceSchema.parse(value) }))}><SelectTrigger aria-label="Browser evidence"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="off">Off</SelectItem><SelectItem value="capture">Capture</SelectItem><SelectItem value="required">Necessary</SelectItem></SelectContent></Select></label>
-      <label className="flex items-center gap-2 text-xs"><Checkbox checked={draft.runProjectTests ?? true} onCheckedChange={value => setDraft(current => ({ ...current, runProjectTests: value === true }))} />Run project tests</label>
-      <div className="flex gap-2"><Button type="submit" disabled={busy}>Save template</Button>{selected ? <Button type="button" variant="outline" disabled={busy} onClick={() => void remove()}>Delete template</Button> : null}</div>
-    </form></div>
+
+  const remove = async (): Promise<void> => {
+    if (editor.kind !== "edit") return;
+    setBusy(true);
+    setDeleteError("");
+    try {
+      await readJson(`/api/task-templates/${editor.templateId}`, { method: "DELETE" });
+      setTemplates((current) => current.filter((template) => template.id !== editor.templateId));
+      setDeleteOpen(false);
+      setEditor({ kind: "closed" });
+    } catch (reason) {
+      setDeleteError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const draft = editor.kind === "closed" ? null : editor.draft;
+  const editingTemplate = editor.kind === "edit" ? templates.find((template) => template.id === editor.templateId) : undefined;
+
+  return <SettingsLayout title="Task templates" companyId={companyId} backHref={withCompany("/projects", companyId)} activeHref={withCompany("/templates", companyId)}>
+    {projectError ? <div className="pt-3"><Alert variant="destructive"><AlertDescription>{projectError}</AlertDescription></Alert></div> : null}
+    {projectId ? <section className="min-w-0 pt-3 lg:px-8">
+      <SettingsToolbar searchLabel="Search templates" searchPlaceholder="Search templates" filterLabel="All templates" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={<>
+        <Select value={projectId} disabled={busy} onValueChange={(value) => setProjectId(value ?? "")}>
+          <SelectTrigger aria-label="Template project"><SelectValue /></SelectTrigger>
+          <SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent>
+        </Select>
+        <SettingsToolbarAction tone="primary" disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>Create template</SettingsToolbarAction>
+      </>} />
+      {error && editor.kind === "closed" ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
+      <SettingsDataTable label="Task templates" columns={columns} className="mt-4">
+        {templates.length > 0 ? <SettingsTableGroup label="Templates" count={visibleTemplates.length} columnCount={columns.length}>
+          {visibleTemplates.map((template) => <SettingsTableRow key={template.id}>
+            <SettingsTableCell className="truncate font-medium"><Button variant="link" size="sm" aria-label={`Edit ${template.name}`} onClick={() => edit(template)}>{template.name}</Button></SettingsTableCell>
+            <SettingsTableCell className="truncate text-muted-foreground">{template.description}</SettingsTableCell>
+            <SettingsTableCell className="truncate text-muted-foreground">{deliveryLabel(template.deliveryTarget)}</SettingsTableCell>
+            <SettingsTableCell className="text-muted-foreground">{template.runProjectTests ? "Run" : "Skip"}</SettingsTableCell>
+            <SettingsTableCell className="text-muted-foreground">{evidenceLabel(template.visualEvidence)}</SettingsTableCell>
+            <SettingsTableCell className="p-0"><Button variant="ghost" size="icon-xs" aria-label={`Edit ${template.name} details`} title={`Edit ${template.name}`} onClick={() => edit(template)}><Pencil /></Button></SettingsTableCell>
+          </SettingsTableRow>)}
+        </SettingsTableGroup> : null}
+        {templates.length === 0 ? <SettingsTableEmpty columnCount={columns.length}>No templates configured.</SettingsTableEmpty> : null}
+        {templates.length > 0 && visibleTemplates.length === 0 ? <SettingsTableEmpty columnCount={columns.length}>No templates match the search.</SettingsTableEmpty> : null}
+      </SettingsDataTable>
+    </section> : !loadingProjects && !projectError ? <p className="pt-3 text-xs text-muted-foreground">Create a project before you create a template.</p> : null}
+
+    <Dialog open={editor.kind !== "closed"} onOpenChange={(open) => { if (!open && !busy) { setEditor({ kind: "closed" }); setDeleteOpen(false); setError(""); } }}>
+      <DialogContent showCloseButton={!busy}>
+        <DialogHeader><DialogTitle>{editor.kind === "edit" ? "Edit template" : "Create template"}</DialogTitle></DialogHeader>
+        {draft ? <form className="max-h-[70dvh] overflow-y-auto" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+          <FieldGroup>
+            {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+            <Field><FieldLabel htmlFor="template-name">Name</FieldLabel><Input id="template-name" autoFocus disabled={busy} value={draft.name} onChange={(event) => setDraft("name", event.target.value)} required /></Field>
+            <Field><FieldLabel htmlFor="template-description">Description</FieldLabel><Textarea id="template-description" disabled={busy} value={draft.description} onChange={(event) => setDraft("description", event.target.value)} rows={5} required /></Field>
+            <FieldSet disabled={busy}>
+              <FieldLegend variant="label">Agents</FieldLegend>
+              {(["rootProfileId", "workerProfileId"] as const).map((key) => {
+                const role = key === "rootProfileId" ? "root" : "worker";
+                return <Field key={key}><FieldLabel htmlFor={`template-${key}`}>{role === "root" ? "Root profile" : "Worker profile"}</FieldLabel><Select disabled={busy} value={draft[key] ?? "default"} onValueChange={(value) => setDraft(key, value === "default" ? undefined : value ?? undefined)}><SelectTrigger id={`template-${key}`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Project default</SelectItem>{profiles.filter((profile) => profile.role === role).map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name} · {profile.provider}/{profile.model}</SelectItem>)}</SelectContent></Select></Field>;
+              })}
+            </FieldSet>
+            <FieldSet disabled={busy}>
+              <FieldLegend variant="label">Configuration</FieldLegend>
+              <Field><FieldLabel htmlFor="template-delivery-target">Delivery target</FieldLabel><Select disabled={busy} value={draft.deliveryTarget} onValueChange={(value) => setDraft("deliveryTarget", DeliveryTargetSchema.parse(value))}><SelectTrigger id="template-delivery-target"><SelectValue /></SelectTrigger><SelectContent>{taskDeliveryTargetOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></Field>
+              <Field><FieldLabel htmlFor="template-browser-evidence">Browser evidence</FieldLabel><Select disabled={busy} value={draft.visualEvidence} onValueChange={(value) => setDraft("visualEvidence", VisualEvidenceSchema.parse(value))}><SelectTrigger id="template-browser-evidence"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="off">Off</SelectItem><SelectItem value="capture">Capture</SelectItem><SelectItem value="required">Necessary</SelectItem></SelectContent></Select></Field>
+              <Field orientation="horizontal"><Checkbox id="template-run-project-tests" disabled={busy} checked={draft.runProjectTests ?? true} onCheckedChange={(value) => setDraft("runProjectTests", value === true)} /><FieldLabel htmlFor="template-run-project-tests">Run project tests</FieldLabel></Field>
+            </FieldSet>
+            <DialogFooter>
+              {editor.kind === "edit" ? <Button type="button" variant="destructive" size="sm" disabled={busy} onClick={() => { setDeleteError(""); setDeleteOpen(true); }}>Delete template</Button> : null}
+              <DialogClose disabled={busy} render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose>
+              <Button type="submit" size="sm" disabled={busy}>{busy ? "Forge saves" : "Save template"}</Button>
+            </DialogFooter>
+          </FieldGroup>
+        </form> : null}
+      </DialogContent>
+    </Dialog>
+
+    <AlertDialog open={deleteOpen} onOpenChange={(open) => { if (!busy) { setDeleteOpen(open); if (!open) setDeleteError(""); } }}>
+      <AlertDialogContent>
+        <AlertDialogHeader><AlertDialogTitle>Delete {editingTemplate?.name}?</AlertDialogTitle><AlertDialogDescription>Forge permanently deletes this template. Existing tasks do not change.</AlertDialogDescription></AlertDialogHeader>
+        {deleteError ? <Alert variant="destructive"><AlertDescription>{deleteError}</AlertDescription></Alert> : null}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" disabled={busy} onClick={(event) => { event.preventDefault(); void remove(); }}>{busy ? "Forge deletes" : "Delete"}</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </SettingsLayout>;
 }

@@ -31,7 +31,7 @@ test.each([1280, 390])("live panes span the workspace below the scrolling task a
     expect(bounds!.width).toBe(main!.width);
     expect(Math.abs(bounds!.y + bounds!.height - (width >= 768 ? 836 : 844))).toBeLessThanOrEqual(1);
     expect(await dock.evaluate(element => getComputedStyle(element).position)).toBe("sticky");
-    expect(await dock.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(30, 30, 46)");
+    expect(await dock.evaluate(element => getComputedStyle(element).backgroundColor)).toBe(await page.locator("body").evaluate(element => getComputedStyle(element).backgroundColor));
     const body = page.locator("[data-task-body]");
     expect(await body.evaluate(element => getComputedStyle(element).overflowY)).toBe("auto");
     await body.evaluate(element => { element.scrollTop = element.scrollHeight; });

@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, Building2, Cpu, HardDrive, KeyRound, Mail, Plug, ShieldCheck, UserRound, Users, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Building2, Cpu, FileText, HardDrive, KeyRound, Mail, Plug, ShieldCheck, UserRound, Users, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInput, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarTrigger, useSidebar } from "../ui/sidebar.js";
@@ -14,7 +14,11 @@ type SettingsNavGroup = { title: string; items: SettingsNavItem[] };
 
 function useSettingsGroups(companyId: string, user?: ApiUser): SettingsNavGroup[] {
   return useMemo<SettingsNavGroup[]>(() => {
-    const companyItems: SettingsNavItem[] = [{ label: "Profile", href: withCompany("/profile", companyId), icon: UserRound }, ...(user?.role === "admin" && companyId ? [{ label: "Workspace", href: companySettingsPath(companyId), icon: Building2 }] : [])];
+    const companyItems: SettingsNavItem[] = [
+      { label: "Profile", href: withCompany("/profile", companyId), icon: UserRound },
+      { label: "Templates", href: withCompany("/templates", companyId), icon: FileText },
+      ...(user?.role === "admin" && companyId ? [{ label: "Workspace", href: companySettingsPath(companyId), icon: Building2 }] : []),
+    ];
     return [
       ...(user && companyItems.length ? [{ title: "Company", items: companyItems }] : []),
       ...(user?.role === "admin" ? [{ title: "Administration", items: [
@@ -108,7 +112,7 @@ export function SettingRow({ label, description, children, destructive }: { labe
   return (
     <div className="flex flex-col gap-2 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <div className="min-w-0 flex-1">
-        <div className={destructive ? "text-[13px] font-medium text-rose-700" : "text-[13px] font-medium"}>{label}</div>
+        <div className={destructive ? "text-[13px] font-medium text-destructive" : "text-[13px] font-medium"}>{label}</div>
         {description ? <div className="mt-0.5 text-xs text-muted-foreground">{description}</div> : null}
       </div>
       <div className="shrink-0">{children}</div>

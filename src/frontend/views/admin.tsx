@@ -870,7 +870,7 @@ export function AdminView(): ReactElement {
           </SettingsDataTable>
         </section> : null}
 
-        {error ? <div className="px-4 py-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
+        {error ? <div className="px-4 py-3 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       </div>
     </SettingsLayout>
   );

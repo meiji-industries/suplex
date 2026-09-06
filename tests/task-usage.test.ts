@@ -65,6 +65,26 @@ test("old usage snapshots default to non-subsidized", () => {
   expect(TaskUsageSchema.parse(oldSnapshot).subsidized).toBe(false);
 });
 
+test("collector captures final timings promptly after delivery instead of applying the historical refresh delay", async () => {
+  const value = await nativeApp();
+  try {
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Final timing", description: "Finish collection", startImmediately: true, idempotencyKey: "final-timing" });
+    const root = value.tasks.repository.controls.claimRoot({ taskId: task.id });
+    value.tasks.repository.controls.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "ses" });
+    const store = new TaskAnalyticsStore(value.database);
+    store.record(task.id, root.id, taskUsage([message(false)], "root"), new Date(Date.now() - 1000).toISOString());
+    value.tasks.repository.controls.markDelivered(task.id);
+    let reads = 0;
+    const collector = new TaskAnalyticsCollector(value.tasks.repository, store, async () => { reads += 1; return [message()]; }, error => { throw error; });
+    await collector.collect();
+    expect(reads).toBe(1);
+    expect(store.read(task.id).usage[0]?.completedAt).toBe(200);
+    await collector.collect();
+    expect(reads).toBe(1);
+    await collector.stop();
+  } finally { await value.close(); }
+});
+
 test("metrics count correlated turns once and union overlapping time in each session", () => {
   const first = taskUsage([message()], "root")[0];
   if (!first) throw new Error("Missing fixture");

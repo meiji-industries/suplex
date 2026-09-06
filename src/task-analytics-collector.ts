@@ -48,11 +48,13 @@ export class TaskAnalyticsCollector {
           if (!session.nativeSessionId) continue;
           const previous = observations.find(value => value.sessionId === session.id);
           const lastAttempt = previous?.errorAt ?? previous?.observedAt;
-          const refreshMs = previous?.errorAt ? 300_000 : task.archivedAt || !["active", "waiting_human"].includes(task.status) ? 900_000 : 0;
+          const changedSinceObservation = previous?.observedAt && task.updatedAt > previous.observedAt;
+          const refreshMs = previous?.errorAt ? 300_000 : !changedSinceObservation && (task.archivedAt || !["active", "waiting_human"].includes(task.status)) ? 900_000 : 0;
           if (lastAttempt && Date.now() - Date.parse(lastAttempt) < refreshMs) continue;
           try {
+            const readStartedAt = new Date().toISOString();
             const messages = await this.readMessages(session.nativeSessionId);
-            this.store.record(task.id, session.id, taskUsage(messages, session.kind, await optionalPricing()));
+            this.store.record(task.id, session.id, taskUsage(messages, session.kind, await optionalPricing()), readStartedAt);
           } catch (error) {
             this.store.failed(task.id, session.id);
             this.reportError(error);

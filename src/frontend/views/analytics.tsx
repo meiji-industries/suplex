@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowDownToLine, BarChart3, RefreshCw } from "lucide-react";
 import { AnalyticsResponseSchema, type AnalyticsResponse } from "../../task-analytics-contracts.js";
 import { percentile, usageMetrics } from "../../task-analytics-metrics.js";
 import { ApplicationFrame } from "../components/app/application-frame.js";
 import { useCompanyContext } from "../components/app/company-context.js";
+import { CostValue } from "../components/app/cost-value.js";
 import { TaskStatus } from "../components/app/task-status.js";
 import { taskDeliveryTargetOptions } from "../components/app/task-delivery-target.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
@@ -12,7 +13,7 @@ import { Input } from "../components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
 import { readJson, withCompany } from "../lib/api.js";
-import { compact, duration, money } from "../lib/analytics.js";
+import { compact, duration } from "../lib/analytics.js";
 import type { ApiProject } from "../lib/view-shared.js";
 import { OutcomeChart, SpendChart } from "./analytics-charts.js";
 import { AnalyticsProjects } from "./analytics-projects.js";
@@ -20,8 +21,11 @@ import { AnalyticsProjects } from "./analytics-projects.js";
 function Filter({ label, value, options, onChange }: { label: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void }) {
   return <Select value={value} onValueChange={value => { if (value !== null) onChange(value); }}><SelectTrigger aria-label={label} size="sm"><SelectValue /></SelectTrigger><SelectContent>{options.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select>;
 }
-function Metric({ label, value, detail }: { label: string; value: string; detail: string }) {
+function Metric({ label, value, detail }: { label: string; value: ReactNode; detail: string }) {
   return <div className="min-w-0 border-b border-r px-4 py-4"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{value}</dd><p className="mt-1 text-[11px] text-muted-foreground">{detail}</p></div>;
+}
+function taskUsageIsPartial(task: AnalyticsResponse["tasks"][number]): boolean {
+  return task.staleSessions > 0 || task.observedSessions < task.sessions || task.usage.some(entry => entry.completedAt === null);
 }
 
 export function AnalyticsView() {
@@ -57,15 +61,29 @@ export function AnalyticsView() {
   const usage = tasks.flatMap(task => task.usage);
   const totals = usageMetrics(usage);
   const delivered = tasks.filter(task => task.status === "delivered");
-  const pricedDelivered = delivered.map(task => usageMetrics(task.usage)).filter(value => value.cost !== null && value.unpricedMessages === 0);
+  const pricedDelivered = delivered.map(task => ({ task, metrics: usageMetrics(task.usage) })).filter(value => value.metrics.cost !== null && value.metrics.unpricedMessages === 0);
+  const deliveredCost = pricedDelivered.length ? pricedDelivered.reduce((sum, value) => sum + (value.metrics.cost ?? 0), 0) / pricedDelivered.length : null;
+  const deliveredSubsidized = pricedDelivered.some(value => value.metrics.subsidized);
+  const deliveredPartial = pricedDelivered.some(value => taskUsageIsPartial(value.task) || value.metrics.incompleteMessages > 0);
   const measuredDelivery = delivered.flatMap(task => task.deliveryMs === null ? [] : [task.deliveryMs]);
   const measured = tasks.filter(task => task.usage.length);
   const models = [...new Set(usage.map(entry => `${entry.provider}/${entry.model}`))].map(name => ({ name, ...usageMetrics(usage.filter(entry => `${entry.provider}/${entry.model}` === name)) })).sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0));
   const rows = tasks.map(task => ({ task, metrics: usageMetrics(task.usage) })).filter(row => `${row.task.title} ${row.task.issueKey ?? ""}`.toLowerCase().includes(query.toLowerCase())).sort((a, b) => sort === "turns" ? b.metrics.turns - a.metrics.turns : sort === "duration" ? b.metrics.durationMs - a.metrics.durationMs : sort === "newest" ? b.task.createdAt.localeCompare(a.task.createdAt) : (b.metrics.cost ?? -1) - (a.metrics.cost ?? -1));
-  const pendingSpend = tasks.filter(task => task.status !== "delivered").reduce((sum, task) => sum + (usageMetrics(task.usage).cost ?? 0), 0);
+  const pendingTasks = tasks.filter(task => task.status !== "delivered");
+  const pendingMetrics = usageMetrics(pendingTasks.flatMap(task => task.usage));
+  const pendingSpend = pendingTasks.reduce((sum, task) => sum + (usageMetrics(task.usage).cost ?? 0), 0);
+  const pendingPartial = pendingTasks.some(taskUsageIsPartial) || pendingMetrics.incompleteMessages > 0;
+  const totalsPartial = tasks.some(taskUsageIsPartial) || totals.incompleteMessages > 0;
   const coverage = tasks.reduce((sum, task) => sum + task.observedSessions, 0);
   const sessions = tasks.reduce((sum, task) => sum + task.sessions, 0);
   const stale = tasks.reduce((sum, task) => sum + task.staleSessions, 0);
+  const attention: Array<[string, ReactNode]> = [
+    ["Spend on tasks not delivered", <CostValue value={totals.cost === null ? null : pendingSpend} subsidized={pendingMetrics.subsidized} partial={pendingPartial} />],
+    ["Turns with an error", String(totals.failedTurns)], ["Messages without completion", String(totals.incompleteMessages)],
+    ["Questions observed", String(tasks.reduce((sum, task) => sum + task.questions, 0))],
+    ["Observed wait for answers", duration(tasks.reduce((sum, task) => sum + task.observedWaitMs, 0))],
+    ["Context summaries", String(totals.summaries)],
+  ];
   const exportRows = () => {
     const cell = (value: string | number) => `"${String(value).replace(/^[=+@-]/, "'$&").replaceAll('"', '""')}"`;
     const csv = ["Task,Status,Estimated USD,Coordinator turns,Worker turns,Tokens,Agent seconds", ...rows.map(({ task, metrics }) => [task.title, task.status, metrics.cost ?? "", metrics.rootTurns, metrics.workerTurns, metrics.totalTokens, metrics.durationMs / 1000].map(cell).join(","))].join("\r\n");
@@ -82,7 +100,7 @@ export function AnalyticsView() {
       {!data && !error ? <p className="p-4 text-sm text-muted-foreground">Load analytics</p> : null}
       {data ? <>
       <dl className="grid grid-cols-2 xl:grid-cols-4">
-        <Metric label="Estimated spend" value={money(totals.cost)} detail={`${measured.length} of ${tasks.length} tasks with usage · USD`} />
+        <Metric label="Estimated spend" value={<CostValue value={totals.cost} subsidized={totals.subsidized} partial={totalsPartial} />} detail={`${measured.length} of ${tasks.length} tasks with usage · USD`} />
         <Metric label="Delivered" value={`${tasks.length ? Math.round(delivered.length / tasks.length * 100) : 0}%`} detail={`${delivered.length} delivered / ${tasks.length} total tasks`} />
         <Metric label="Agent turns" value={compact(totals.turns)} detail={`${totals.rootTurns} Coordinator · ${totals.workerTurns} Worker · ${totals.steps} model steps`} />
         <Metric label="Agent time" value={duration(totals.durationMs)} detail="Summed measured time, not wall-clock time" />
@@ -92,21 +110,15 @@ export function AnalyticsView() {
         <Metric label="Tokens" value={compact(totals.totalTokens)} detail={`${compact(totals.tokens.input)} input · ${compact(totals.tokens.output)} output · ${compact(totals.tokens.reasoning)} reasoning`} />
         <Metric label="Cache tokens" value={compact(totals.tokens.cache.read)} detail={`${compact(totals.tokens.cache.write)} written · ${totals.tokens.input + totals.tokens.cache.read + totals.tokens.cache.write ? Math.round(totals.tokens.cache.read / (totals.tokens.input + totals.tokens.cache.read + totals.tokens.cache.write) * 100) : 0}% input cache reads`} />
         <Metric label="Median delivery time" value={duration(percentile(measuredDelivery, 0.5))} detail={`P90 ${duration(percentile(measuredDelivery, 0.9))} · ${measuredDelivery.length} measured deliveries`} />
-        <Metric label="Cost per delivered task" value={money(pricedDelivered.length ? pricedDelivered.reduce((sum, value) => sum + (value.cost ?? 0), 0) / pricedDelivered.length : null)} detail={`Mean cost · ${pricedDelivered.length} priced delivered tasks`} />
+        <Metric label="Cost per delivered task" value={<CostValue value={deliveredCost} subsidized={deliveredSubsidized} partial={deliveredPartial} />} detail={`Mean cost · ${pricedDelivered.length} priced delivered tasks`} />
       </dl>
       <div className="grid min-w-0 border-b lg:grid-cols-2">
-        <section className="min-w-0 border-b p-4 lg:border-b-0 lg:border-r"><h2 className="mb-3 text-sm font-medium">Models</h2><Table><TableHeader><TableRow><TableHead>Model</TableHead><TableHead>Steps</TableHead><TableHead>Tokens</TableHead><TableHead>Est. USD</TableHead></TableRow></TableHeader><TableBody>{models.map(model => <TableRow key={model.name}><TableCell>{model.name}</TableCell><TableCell>{model.steps}</TableCell><TableCell>{compact(model.totalTokens)}</TableCell><TableCell>{money(model.cost)}</TableCell></TableRow>)}{!models.length ? <TableRow><TableCell colSpan={4}>No measured model usage</TableCell></TableRow> : null}</TableBody></Table></section>
-        <section className="min-w-0 p-4"><h2 className="mb-3 text-sm font-medium">Attention and recovery</h2><dl className="divide-y text-sm">{[
-          ["Spend on tasks not delivered", money(totals.cost === null ? null : pendingSpend)],
-          ["Turns with an error", String(totals.failedTurns)], ["Messages without completion", String(totals.incompleteMessages)],
-          ["Questions observed", String(tasks.reduce((sum, task) => sum + task.questions, 0))],
-          ["Observed wait for answers", duration(tasks.reduce((sum, task) => sum + task.observedWaitMs, 0))],
-          ["Context summaries", String(totals.summaries)],
-        ].map(([label, value]) => <div key={label} className="flex justify-between gap-4 py-2"><dt className="text-muted-foreground">{label}</dt><dd className="tabular-nums">{value}</dd></div>)}</dl></section>
+        <section className="min-w-0 border-b p-4 lg:border-b-0 lg:border-r"><h2 className="mb-3 text-sm font-medium">Models</h2><Table><TableHeader><TableRow><TableHead>Model</TableHead><TableHead>Steps</TableHead><TableHead>Tokens</TableHead><TableHead>Est. USD</TableHead></TableRow></TableHeader><TableBody>{models.map(model => <TableRow key={model.name}><TableCell>{model.name}</TableCell><TableCell>{model.steps}</TableCell><TableCell>{compact(model.totalTokens)}</TableCell><TableCell><CostValue value={model.cost} subsidized={model.subsidized} partial={model.unpricedMessages > 0 || model.incompleteMessages > 0} /></TableCell></TableRow>)}{!models.length ? <TableRow><TableCell colSpan={4}>No measured model usage</TableCell></TableRow> : null}</TableBody></Table></section>
+         <section className="min-w-0 p-4"><h2 className="mb-3 text-sm font-medium">Attention and recovery</h2><dl className="divide-y text-sm">{attention.map(([label, value]) => <div key={label} className="flex justify-between gap-4 py-2"><dt className="text-muted-foreground">{label}</dt><dd className="tabular-nums">{value}</dd></div>)}</dl></section>
       </div>
       <AnalyticsProjects tasks={tasks} projects={projects} onSelect={setProject} />
       <section className="min-w-0 p-4" aria-label="Task analytics"><div className="mb-3 flex flex-wrap items-center gap-3"><h2 className="mr-auto text-sm font-medium">Task ledger <span className="text-muted-foreground">{rows.length}</span></h2><div className="w-52"><Input aria-label="Search analytics tasks" placeholder="Search the tasks" value={query} onChange={event => setQuery(event.target.value)} /></div><Filter label="Sort tasks" value={sort} onChange={setSort} options={[{ value: "cost", label: "Highest cost" }, { value: "turns", label: "Most turns" }, { value: "duration", label: "Longest agent time" }, { value: "newest", label: "Newest tasks" }]} /></div>
-        <Table><TableHeader><TableRow><TableHead>Task</TableHead><TableHead>Status</TableHead><TableHead>Coordinator / Worker</TableHead><TableHead>Tokens</TableHead><TableHead>Agent time</TableHead><TableHead>Est. USD</TableHead><TableHead>Coverage</TableHead></TableRow></TableHeader><TableBody>{rows.map(({ task, metrics }) => <TableRow key={task.id}><TableCell><a className="block max-w-72 truncate font-medium hover:underline" href={withCompany(`/tasks/${task.id}`, companyId)}>{task.issueKey ? `${task.issueKey} · ` : ""}{task.title}</a><span className="text-xs text-muted-foreground">{projects.find(project => project.id === task.projectId)?.name}{task.archived ? " · Archived" : ""}</span></TableCell><TableCell><TaskStatus status={task.status} /></TableCell><TableCell>{metrics.rootTurns} / {metrics.workerTurns}</TableCell><TableCell>{!metrics.measuredMessages ? "Not available" : compact(metrics.totalTokens)}</TableCell><TableCell>{duration(!metrics.measuredMessages ? null : metrics.durationMs)}</TableCell><TableCell>{money(metrics.cost)}</TableCell><TableCell>{task.staleSessions ? "Stale" : task.observedSessions < task.sessions || metrics.incompleteMessages ? "Partial" : task.observedSessions ? "Measured" : "No usage"}</TableCell></TableRow>)}{!rows.length ? <TableRow><TableCell colSpan={7}>No tasks match these filters.</TableCell></TableRow> : null}</TableBody></Table>
+        <Table><TableHeader><TableRow><TableHead>Task</TableHead><TableHead>Status</TableHead><TableHead>Coordinator / Worker</TableHead><TableHead>Tokens</TableHead><TableHead>Agent time</TableHead><TableHead>Est. USD</TableHead><TableHead>Coverage</TableHead></TableRow></TableHeader><TableBody>{rows.map(({ task, metrics }) => <TableRow key={task.id}><TableCell><a className="block max-w-72 truncate font-medium hover:underline" href={withCompany(`/tasks/${task.id}`, companyId)}>{task.issueKey ? `${task.issueKey} · ` : ""}{task.title}</a><span className="text-xs text-muted-foreground">{projects.find(project => project.id === task.projectId)?.name}{task.archived ? " · Archived" : ""}</span></TableCell><TableCell><TaskStatus status={task.status} /></TableCell><TableCell>{metrics.rootTurns} / {metrics.workerTurns}</TableCell><TableCell>{!metrics.measuredMessages ? "Not available" : compact(metrics.totalTokens)}</TableCell><TableCell>{duration(!metrics.measuredMessages ? null : metrics.durationMs)}</TableCell><TableCell><CostValue value={metrics.cost} subsidized={metrics.subsidized} partial={taskUsageIsPartial(task) || metrics.incompleteMessages > 0} /></TableCell><TableCell>{task.staleSessions ? "Stale" : task.observedSessions < task.sessions || metrics.incompleteMessages ? "Partial" : task.observedSessions ? "Measured" : "No usage"}</TableCell></TableRow>)}{!rows.length ? <TableRow><TableCell colSpan={7}>No tasks match these filters.</TableCell></TableRow> : null}</TableBody></Table>
       </section>
       <footer className="space-y-1 border-t px-4 py-3 text-xs text-muted-foreground"><p>{coverage} / {sessions} native sessions observed{stale ? ` · ${stale} could not be refreshed` : ""}.</p><p>Active usage refreshes every 30 seconds. Completed history refreshes every 15 minutes.</p><p>One turn groups assistant replies to one prompt. Model steps are counted separately.</p><p>OpenCode cost estimates are not bills. Missing history and unpriced usage are excluded from spend.</p><p>Lifecycle durations use observations from this installation. Old delivery and wait times cannot be reconstructed.</p></footer>
       </> : null}

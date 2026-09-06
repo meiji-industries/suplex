@@ -15,7 +15,7 @@ test.each([1280, 390])("analytics reads durable costs, filters tasks and links t
         sessionId: `ses-${index}`, messageId: `msg-${step}`, turnId: `user-${step}`, role: step % 2 ? "worker" : "root",
         provider: "openai", model: step % 2 ? "gpt-5.6-luna" : "gpt-5.6-sol", startedAt: Date.now() - (step + 1) * 86_400_000,
         completedAt: Date.now() - (step + 1) * 86_400_000 + 300_000, failed: index === 4 && step === 0,
-        summary: false, steps: 3, cost: (index + 1) * 0.1, tokens: { input: 2000, output: 500, reasoning: 1000, cache: { read: 8000, write: 500 } }, source: "steps",
+        summary: false, steps: 3, cost: (index + 1) * 0.1, subsidized: index === 0, tokens: { input: 2000, output: 500, reasoning: 1000, cache: { read: 8000, write: 500 } }, source: "steps",
       })]);
       if (index < 3) { value.tasks.repository.controls.start(task.id); value.tasks.repository.controls.markDelivered(task.id); }
     }
@@ -26,18 +26,34 @@ test.each([1280, 390])("analytics reads durable costs, filters tasks and links t
     expect(await page.getByText("50%", { exact: true }).count()).toBeGreaterThan(0);
     await page.screenshot({ path: join(tmpdir(), `forge-analytics-${width}.png`), fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const estimatedSpend = page.locator("[data-analytics] > dl").first().getByText("$8.40", { exact: true });
+    expect(await estimatedSpend.evaluate(element => getComputedStyle(element).textDecorationLine)).not.toBe("line-through");
+    expect(await estimatedSpend.getAttribute("title")).toContain("Estimated cost (USD)");
+    expect(await estimatedSpend.getAttribute("title")).not.toContain("models.dev list price");
+    const projectCost = page.getByRole("region", { name: "Project analytics" }).getByText("$8.40", { exact: true });
+    expect(await projectCost.evaluate(element => getComputedStyle(element).textDecorationLine)).not.toBe("line-through");
+    const ledger = page.getByRole("region", { name: "Task analytics" });
+    const estimatedLedger = ledger.getByText("$0.40", { exact: true });
+    expect(await estimatedLedger.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe("line-through");
+    expect(await estimatedLedger.getAttribute("title")).toContain("OpenCode reported zero cost");
+    expect(await estimatedLedger.getAttribute("aria-label")).toContain("models.dev list price");
+    const billedCost = ledger.getByText("$0.80", { exact: true });
+    expect(await billedCost.evaluate(element => getComputedStyle(element).textDecorationLine)).not.toBe("line-through");
     await page.getByRole("combobox", { name: "Creation period" }).click();
     await page.getByRole("option", { name: "Created at any time" }).click();
     await page.getByRole("textbox", { name: "Search analytics tasks" }).fill("no-match");
     await page.getByText("No tasks match these filters.").waitFor();
     await page.getByRole("textbox", { name: "Search analytics tasks" }).fill("task 1");
-    const ledger = page.getByRole("region", { name: "Task analytics" });
     expect(await ledger.getByRole("link").count()).toBe(1);
     const download = page.waitForEvent("download");
     await page.getByRole("button", { name: "Export CSV" }).click();
     expect((await download).suggestedFilename()).toBe("forge-task-analytics.csv");
     await ledger.getByRole("link", { name: /Analytics task 1/ }).click();
-    await page.getByRole("complementary", { name: "Task properties" }).getByText("$0.40", { exact: true }).waitFor();
+    const estimated = page.getByRole("complementary", { name: "Task properties" }).getByText("$0.40", { exact: true });
+    await estimated.waitFor();
+    expect(await estimated.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe("line-through");
+    expect(await estimated.getAttribute("title")).toContain("OpenCode reported zero cost");
+    expect(await estimated.getAttribute("aria-label")).toContain("models.dev list price");
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

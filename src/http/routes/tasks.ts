@@ -25,7 +25,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   const listQuery = z.object({ archived: z.enum(["true", "false"]).optional() });
   typed.get("/api/companies/:companyId/task-costs", { schema: { params: CompanyIdParamsSchema, response: { 200: TaskCostsResponseSchema } } }, async (request, reply) => {
     const result = tasks.analytics(request.forgeUser.id, request.params.companyId);
-    return reply.header("Cache-Control", "private, no-store").send({ tasks: result.tasks.map(task => { const metrics = usageMetrics(task.usage); return { id: task.id, cost: metrics.cost, unpriced: metrics.unpricedMessages > 0, partial: metrics.unpricedMessages > 0 || task.staleSessions > 0 || task.observedSessions < task.sessions || task.usage.some(entry => entry.completedAt === null) }; }) });
+    return reply.header("Cache-Control", "private, no-store").send({ tasks: result.tasks.map(task => { const metrics = usageMetrics(task.usage); return { id: task.id, cost: metrics.cost, unpriced: metrics.unpricedMessages > 0, subsidized: metrics.subsidized, partial: metrics.unpricedMessages > 0 || task.staleSessions > 0 || task.observedSessions < task.sessions || task.usage.some(entry => entry.completedAt === null) }; }) });
   });
   typed.get("/api/companies/:companyId/analytics", { schema: { params: CompanyIdParamsSchema, response: { 200: AnalyticsResponseSchema } } }, async (request, reply) => {
     return reply.header("Cache-Control", "private, no-store").send(tasks.analytics(request.forgeUser.id, request.params.companyId));

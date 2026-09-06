@@ -12,4 +12,4 @@ export const TaskAnalyticsSchema = z.object({
 export const AnalyticsResponseSchema = z.object({ tasks: z.array(TaskAnalyticsSchema), generatedAt: z.string() });
 export type TaskAnalytics = z.infer<typeof TaskAnalyticsSchema>;
 export type AnalyticsResponse = z.infer<typeof AnalyticsResponseSchema>;
-export const TaskCostsResponseSchema = z.object({ tasks: z.array(z.object({ id: z.string(), cost: z.number().nullable(), partial: z.boolean(), unpriced: z.boolean() })) });
+export const TaskCostsResponseSchema = z.object({ tasks: z.array(z.object({ id: z.string(), cost: z.number().nullable(), partial: z.boolean(), unpriced: z.boolean(), subsidized: z.boolean() })) });

@@ -10,14 +10,16 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     const create = (title: string) => value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title, description: "Check sidebar indicators.", startImmediately: true, idempotencyKey: title.replaceAll(" ", "-") });
     const { task: active } = await create("Working task");
     const { task: waiting } = await create("Waiting task");
+    const { task: billed } = await create("Billed task");
     const store = value.tasks.repository.controls;
     store.askHuman(waiting.id, "Which branch?");
     store.setPullRequest(active.id, { repository: "owner/repo", number: 10, url: "https://github.com/owner/repo/pull/10", headSha: "a".repeat(40), state: "open", mergedAt: null });
     const { page } = value;
     const oldStatusChangedAt = new Date(Date.now() - 300_001).toISOString();
     await page.route(`**/api/companies/${value.company.id}/task-costs`, route => route.fulfill({ json: { tasks: [
-      { id: active.id, cost: 0.12, unpriced: false, partial: false },
-      { id: waiting.id, cost: null, unpriced: true, partial: true },
+      { id: active.id, cost: 0.12, unpriced: false, subsidized: true, partial: false },
+      { id: waiting.id, cost: null, unpriced: true, subsidized: false, partial: true },
+      { id: billed.id, cost: 0.34, unpriced: false, subsidized: false, partial: false },
     ] } }));
     await page.route(`**/api/tasks/${active.id}/checks`, route => route.fulfill({ json: { available: true, pullRequestState: "ready", runs: [{ name: "Failed", status: "failing", url: null }, { name: "Running", status: "pending", url: null }] } }));
     let workerStatus = "working";
@@ -32,7 +34,15 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     if (width < 768) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
     const working = page.getByRole("link", { name: "Working task, Active, pull request open", exact: true });
     await working.waitFor();
-    await working.getByText("$0.12", { exact: true }).waitFor();
+    const estimated = working.getByText("$0.12", { exact: true });
+    await estimated.waitFor();
+    expect(await estimated.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe("line-through");
+    expect(await estimated.getAttribute("title")).toContain("OpenCode reported zero cost");
+    expect(await estimated.getAttribute("aria-label")).toContain("models.dev list price");
+    const billedRow = page.getByRole("link", { name: "Billed task, Active", exact: true });
+    const billedCost = billedRow.getByText("$0.34", { exact: true });
+    await billedCost.waitFor();
+    expect(await billedCost.evaluate(element => getComputedStyle(element).textDecorationLine)).not.toBe("line-through");
     expect(await page.locator('[data-slot="sidebar"]').getByText("Unpriced", { exact: true }).count()).toBe(0);
     const createButton = page.locator('[data-slot="sidebar"]').getByRole("button", { name: "New task", exact: true });
     expect(await createButton.evaluate(element => element.closest('[data-sidebar="menu"]') === null)).toBe(true);

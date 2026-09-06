@@ -13,9 +13,11 @@ export function usageMetrics(usage: TaskUsage[]) {
   let cost = 0;
   let steps = 0;
   let unpricedMessages = 0;
+  let subsidizedMessages = 0;
   for (const entry of usage) {
     addTokens(tokens, entry.tokens); cost += entry.cost; steps += entry.steps;
     if (usageIsUnpriced(entry)) unpricedMessages += 1;
+    if (entry.subsidized) subsidizedMessages += 1;
     const turn = `${entry.sessionId}:${entry.turnId}`;
     (entry.role === "root" ? root : worker).add(turn);
     if (entry.failed) failed.add(turn);
@@ -33,7 +35,7 @@ export function usageMetrics(usage: TaskUsage[]) {
       end = Math.max(end, finish);
     }
   }
-  return { cost: usage.length && (cost > 0 || unpricedMessages === 0) ? cost : null, measuredMessages: usage.length, unpricedMessages, tokens, totalTokens: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,
+  return { cost: usage.length && (cost > 0 || unpricedMessages === 0) ? cost : null, measuredMessages: usage.length, unpricedMessages, subsidized: subsidizedMessages > 0 && usage.every(entry => entry.subsidized || entry.cost <= 0), subsidizedMessages, tokens, totalTokens: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,
     turns: root.size + worker.size, rootTurns: root.size, workerTurns: worker.size, steps, failedTurns: failed.size,
     incompleteMessages: usage.filter(entry => entry.completedAt === null).length,
     summaries: usage.filter(entry => entry.summary).length, durationMs };

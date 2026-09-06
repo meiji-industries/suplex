@@ -17,10 +17,12 @@ import { TaskStatus } from "../components/app/task-status.js";
 import { TaskWork, type TaskActivity } from "../components/app/task-work.js";
 import { taskDeliveryTargetOptions } from "../components/app/task-delivery-target.js";
 import { LivePaneDock } from "../components/app/task-chat/live-pane-dock.js";
-import { money, useTaskCosts } from "../lib/analytics.js";
+import { useTaskCosts } from "../lib/analytics.js";
+import { CostValue } from "../components/app/cost-value.js";
 
 export function TaskDetailsPage({ task, project, onChange }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void }): ReactElement {
   const cost = useTaskCosts(task.companyId).get(task.id);
+  const costTitle = cost ? undefined : "OpenCode estimates are not bills. Zero does not verify free usage.";
   const [activity, setActivity] = useState<TaskActivity>({ sessions: [], turns: [] });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -71,7 +73,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
       <aside aria-label="Task properties" className="min-w-0 border-t px-4 py-5 lg:border-l lg:border-t-0">
         <h3 className="mb-4 text-xs font-medium">Properties</h3>
         <dl className="grid grid-cols-1 gap-5 text-xs">
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Estimated cost (USD)</dt><dd title="OpenCode estimates are not bills. Zero does not verify free usage.">{money(cost?.cost ?? null)}{cost?.partial ? " · Partial usage" : ""}</dd></div>
+          <div className="space-y-1.5"><dt className="text-muted-foreground">Estimated cost (USD)</dt><dd title={costTitle}>{cost ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} /> : <span title={costTitle}>Not available</span>}{cost?.partial ? " · Partial usage" : ""}</dd></div>
           <div className="space-y-1.5"><dt className="text-muted-foreground">Status</dt><dd className="flex items-center gap-2"><TaskStatus status={task.status} />{task.archivedAt ? <Badge variant="outline">Archived</Badge> : null}</dd></div>
           <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="break-words">{project?.name ?? task.configuration.repository}</dd></div>
           {(["root", "worker"] as const).map(role => { const profile = role === "root" ? task.rootProfile : task.workerProfile; const label = role === "root" ? "Coordinator" : "Worker"; return <div key={role} className="space-y-1.5"><dt className="text-muted-foreground">{label}</dt><dd className="flex items-center gap-2"><ProfileAvatar name={label} seed={profile.profileId} size="xs" /><span className="min-w-0"><span className="block truncate" title={`${profile.provider}/${profile.model}`}>{profile.model}</span><span className="block text-[11px] text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></dd></div>; })}

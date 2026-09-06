@@ -66,7 +66,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     throw error;
   }
   const history = new AnalyticsHistoryReader(join(dirname(config.databasePath), "runtime", "analytics"));
-  const analytics = new TaskAnalyticsCollector(tasks.repository, new TaskAnalyticsStore(database), id => history.read(id), error => app.log.warn({ err: error }, "Analytics observation failed"));
+  const analytics = new TaskAnalyticsCollector(tasks.repository, new TaskAnalyticsStore(database), id => history.read(id), error => app.log.warn({ err: error }, "Analytics observation failed"), () => history.readPricing());
   app.addHook("onClose", async () => { await analytics.stop(); await history.close(); });
   analytics.start();
   host.start();

@@ -80,7 +80,6 @@ export function AnalyticsView() {
         <span className="ml-auto text-xs text-muted-foreground">Lifetime usage · Includes archived tasks</span>
       </div>
       {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-      {totals.unpricedMessages > 0 ? <div className="border-b px-4 py-2 text-xs text-muted-foreground">{totals.unpricedMessages} messages have no usable price. Spend excludes these messages.</div> : null}
       {!data && !error ? <p className="p-4 text-sm text-muted-foreground">Load analytics</p> : null}
       {data ? <>
       <dl className="grid grid-cols-2 xl:grid-cols-4">

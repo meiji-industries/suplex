@@ -34,7 +34,7 @@ function MainNavigation({ close }: { close?: () => void }): ReactElement {
     ];
   }, [companyId]);
   return (
-    <SidebarGroup><SidebarGroupContent><SidebarMenu><CreateActions {...(close ? { close } : {})} />{items.map(({ href, label, icon: Icon }) => { const active = isActive(href); return <SidebarMenuItem key={href}><SidebarMenuButton render={<a aria-current={active ? "page" : undefined} href={href} onClick={close}><Icon />{label}</a>} isActive={active} tooltip={label} /></SidebarMenuItem>; })}</SidebarMenu></SidebarGroupContent></SidebarGroup>
+    <><CreateActions {...(close ? { close } : {})} /><SidebarGroup><SidebarGroupContent><SidebarMenu>{items.map(({ href, label, icon: Icon }) => { const active = isActive(href); return <SidebarMenuItem key={href}><SidebarMenuButton render={<a aria-current={active ? "page" : undefined} href={href} onClick={close}><Icon />{label}</a>} isActive={active} tooltip={label} /></SidebarMenuItem>; })}</SidebarMenu></SidebarGroupContent></SidebarGroup></>
   );
 }
 
@@ -50,7 +50,7 @@ function CreateActions({ close }: { close?: () => void }): ReactElement {
   const context = useOptionalCompanyContext();
   const company = context?.currentCompany;
   return (
-    <SidebarMenuItem className="flex gap-2"><SidebarMenuButton className="min-w-8 flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(company?.id); }}><CirclePlus />New Task</SidebarMenuButton><a className={buttonVariants({ variant: "outline", size: "icon-sm" })} href={withCompany("/attention", company?.id)} onClick={close} aria-label="Open attention" title="Open attention"><Inbox /></a></SidebarMenuItem>
+    <div className="flex gap-2 p-2"><SidebarMenuButton className="min-w-8 flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(company?.id); }}><CirclePlus />New Task</SidebarMenuButton><a className={buttonVariants({ variant: "outline", size: "icon-sm" })} href={withCompany("/attention", company?.id)} onClick={close} aria-label="Open attention" title="Open attention"><Inbox /></a></div>
   );
 }
 

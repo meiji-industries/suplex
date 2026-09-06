@@ -2,6 +2,7 @@ import { Alert, AlertDescription } from ".././components/ui/alert.js";
 import { Button } from ".././components/ui/button.js";
 import { Input } from ".././components/ui/input.js";
 import { Skeleton } from ".././components/ui/skeleton.js";
+import { Spinner } from ".././components/ui/spinner.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from ".././components/ui/alert-dialog.js";
 import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
@@ -34,7 +35,7 @@ export function CompanySettingsView(): ReactElement {
 
   const notFound = !loading && (user?.role !== "admin" || !company);
   if (loading) {
-    return <ApplicationFrame title="Company settings"><div className="space-y-2 p-4" aria-busy="true" aria-label="Loading company settings"><Skeleton className="h-4 w-40" /><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-3/4" /></div></ApplicationFrame>;
+    return <ApplicationFrame title="Company settings"><div className="space-y-2 p-4" aria-busy="true" aria-label="Loading company settings"><div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /><span>Forge loads company settings.</span></div><Skeleton className="h-4 w-40" /><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-3/4" /></div></ApplicationFrame>;
   }
   if (notFound) {
     return <ApplicationFrame title="Company settings"><div className="p-4"><p className="text-xs text-muted-foreground">Company not found.</p><a className="mt-3 inline-flex text-xs text-primary underline underline-offset-2" href={withCompany("/projects", currentCompany?.id)}>Back to Projects</a></div></ApplicationFrame>;

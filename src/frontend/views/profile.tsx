@@ -1,6 +1,7 @@
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
+import { Spinner } from "../components/ui/spinner.js";
 import { ApplicationFrame } from "../components/app/application-frame.js";
 import { useCompanyContext } from "../components/app/company-context.js";
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
@@ -20,7 +21,7 @@ export function ProfileView(): ReactElement {
 
   useEffect(() => { setDisplayName(user?.displayName ?? ""); setUsername(user?.username ?? ""); setAvatarSeed(user?.avatarSeed ?? ""); setSaved(false); }, [user?.avatarSeed, user?.displayName, user?.username]);
 
-  if (loading || !user) return <ApplicationFrame title="Profile"><div className="p-4 text-xs text-muted-foreground">Loading profile…</div></ApplicationFrame>;
+  if (loading || !user) return <ApplicationFrame title="Profile"><div className="flex items-center gap-2 p-4 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Forge loads the profile.</span></div></ApplicationFrame>;
 
   const save = async (): Promise<void> => {
     const nextName = displayName.trim();

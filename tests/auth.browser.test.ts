@@ -84,7 +84,25 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       await adminPage.locator("h1").filter({ hasText: "Host health" }).waitFor();
       expect(await adminPage.locator("body").innerText()).not.toMatch(/password/i);
 
+      let releaseInitialAdminUsers!: () => void;
+      let initialAdminUsersStarted!: () => void;
+      let initialAdminUsersFinished!: () => void;
+      const initialAdminUsersReleased = new Promise<void>((resolve) => { releaseInitialAdminUsers = resolve; });
+      const initialAdminUsersRequest = new Promise<void>((resolve) => { initialAdminUsersStarted = resolve; });
+      const initialAdminUsersResponse = new Promise<void>((resolve) => { initialAdminUsersFinished = resolve; });
+      await adminPage.route("**/api/admin/users", async (route) => {
+        initialAdminUsersStarted();
+        await initialAdminUsersReleased;
+        await route.continue();
+        initialAdminUsersFinished();
+      });
       await adminPage.goto(`${baseUrl}/admin`);
+      await initialAdminUsersRequest;
+      await adminPage.getByLabel("Loading administration", { exact: true }).waitFor();
+      expect(await adminPage.getByText("No users configured.", { exact: true }).count()).toBe(0);
+      releaseInitialAdminUsers();
+      await initialAdminUsersResponse;
+      await adminPage.unroute("**/api/admin/users");
       await adminPage.getByRole("button", { name: "Switch company" }).click();
       await adminPage.getByRole("menuitem", { name: /Create company/ }).click();
       await adminPage.getByLabel("Company name", { exact: true }).fill("Browser Company");

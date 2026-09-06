@@ -9,6 +9,7 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "../
 import { Input } from ".././components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".././components/ui/select.js";
 import { Skeleton } from ".././components/ui/skeleton.js";
+import { Spinner } from ".././components/ui/spinner.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { SettingsLayout } from ".././components/app/settings-layout.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, SettingsToolbarAction, type SettingsTableColumn } from ".././components/app/settings-table.js";
@@ -138,6 +139,7 @@ export function AdminView(): ReactElement {
   const [copied, setCopied] = useState(false);
   const [pendingAction, setPendingAction] = useState("");
   const [error, setError] = useState("");
+  const [initialReloading, setInitialReloading] = useState(true);
 
   // Hermes agent administration state
   const [newHermesOpen, setNewHermesOpen] = useState(false);
@@ -185,7 +187,12 @@ export function AdminView(): ReactElement {
     }
   }, [currentCompany]);
 
-  useEffect(() => { if (!loading && user?.role === "admin") void reload(); }, [loading, reload, user?.role]);
+  useEffect(() => {
+    if (loading || user?.role !== "admin") return;
+    let active = true;
+    void reload().finally(() => { if (active) setInitialReloading(false); });
+    return () => { active = false; };
+  }, [loading, reload, user?.role]);
 
   const invite = async (): Promise<void> => {
     try {
@@ -460,10 +467,10 @@ export function AdminView(): ReactElement {
   const activeHref = withCompany(window.location.pathname, currentCompany?.id);
   const backHref = withCompany("/projects", currentCompany?.id);
 
-  if (loading) {
+  if (loading || (user?.role === "admin" && initialReloading)) {
     return (
       <SettingsLayout title={viewTitle} companyId={currentCompany?.id ?? ""} backHref={backHref} activeHref={activeHref} contentClassName="">
-        <div className="space-y-2 p-4" aria-busy="true" aria-label="Loading administration"><Skeleton className="h-4 w-40" /><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-3/4" /></div>
+        <div className="space-y-2 p-4" aria-busy="true" aria-label="Loading administration"><div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /><span>Forge loads administration.</span></div><Skeleton className="h-4 w-40" /><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-3/4" /></div>
       </SettingsLayout>
     );
   }

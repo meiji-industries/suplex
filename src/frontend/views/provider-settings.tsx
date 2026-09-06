@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import type { ProviderListResponse } from "../../http/contracts/providers.js";
 import { Button } from "../components/ui/button.js";
+import { Spinner } from "../components/ui/spinner.js";
 import { SettingsLayout } from "../components/app/settings-layout.js";
 import { StatusLight } from "../components/app/status-light.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableGroup, SettingsTableRow, type SettingsTableColumn } from "../components/app/settings-table.js";
@@ -47,8 +48,8 @@ export function ProviderSettingsView(): ReactElement {
         </SettingsTableRow>)}
       </SettingsTableGroup>
     </SettingsDataTable>
-    <div className="pt-2" role="status">
-      {view.status === "loading" ? "Forge checks OpenCode configuration." : null}
+    <div className="pt-2" role="status" aria-busy={view.status === "loading"}>
+      {view.status === "loading" ? <span className="inline-flex items-center gap-2"><Spinner /><span>Forge checks OpenCode configuration.</span></span> : null}
       {view.status === "failed" ? view.message : null}
       {view.status === "loaded" && providers.length === 0 ? "OpenCode reports no configured providers." : null}
       {view.status === "loaded" ? <p className="break-all">Host directory: <code>{view.data.directory}</code></p> : null}

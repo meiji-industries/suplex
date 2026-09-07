@@ -12,6 +12,7 @@ import { ForgeDatabase } from "./database.js";
 import { seedDevelopmentData } from "./development.js";
 import { createHostHealthDependencies } from "./host-health.js";
 import { TaskTemplateService } from "./task-templates.js";
+import { WorkflowRecordService } from "./workflow-records.js";
 import { createFastifyLogger, StructuredLogger } from "./logging.js";
 import { AgentProfileService } from "./agent-profiles.js";
 import { ProjectService } from "./projects.js";
@@ -42,6 +43,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   const profiles = new AgentProfileService(database, auth);
   const tasks = new TaskService(database, auth, projects, config);
   const taskTemplates = new TaskTemplateService(database, auth, tasks);
+  const workflows = new WorkflowRecordService(database, auth);
   const instanceId = randomUUID();
   const selfUpdate = createSelfUpdateService({ config, instanceId, workingDirectory: process.cwd() });
   await selfUpdate.initialize();
@@ -54,6 +56,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     profiles,
     tasks,
     taskTemplates,
+    workflows,
     database,
     host,
     logger: createFastifyLogger(options.logSink),

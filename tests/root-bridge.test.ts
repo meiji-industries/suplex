@@ -65,6 +65,9 @@ class ForgeAdapterFake implements RootBridgeAdapter {
   current = true;
   async readImage(): Promise<never> { throw new Error("No image in this fixture"); }
 
+  async claimToolOwner(): Promise<string | null> { return "token"; }
+  async releaseToolOwner(): Promise<void> {}
+
   async assertCurrentRoot(identity: RootIdentity): Promise<void> {
     this.calls.push(`assert:${identity.taskId}:${identity.sessionId}:${identity.generation}`);
     if (!this.current) throw new RootBridgeFailure("root_identity_mismatch", "Coordinator bridge binding no longer matches this task session");
@@ -78,6 +81,11 @@ class ForgeAdapterFake implements RootBridgeAdapter {
   async delegateWorker(identity: RootIdentity, assignment: Parameters<RootBridgeAdapter["delegateWorker"]>[1]): Promise<unknown> {
     this.calls.push(`delegate:${identity.sessionId}:${assignment.instruction}`);
     return { assignmentId: "worker_1" };
+  }
+
+  async delegateAdvisor(identity: RootIdentity, request: Parameters<RootBridgeAdapter["delegateAdvisor"]>[1]): Promise<unknown> {
+    this.calls.push(`advisor:${identity.sessionId}:${request.role}`);
+    return { advisorId: "advisor_1" };
   }
 
   async requestDelivery(_identity: RootIdentity, operation: "inspect_delivery_diff" | "complete_local_work" | "push_branch" | "create_or_adopt_pull_request" | "observe_pull_request" | "observe_checks" | "request_review" | "merge_pull_request", _expectedHead?: string, _review?: unknown, pullRequestTitle?: string): Promise<unknown> {
@@ -131,6 +139,9 @@ test("MCP discovery and typed Coordinator calls use the scoped bridge transport"
   const listed = await call({ method: "tools/list", params: {} });
   expect(listed).toMatchObject({ result: { tools: [{ inputSchema: { type: "object" } }] } });
   expect(listed).toMatchObject({ result: { tools: [expect.objectContaining({ name: "forge_root" })] } });
+  const inputSchema = (listed as { result: { tools: Array<{ inputSchema: Record<string, unknown> }> } }).result.tools[0]!.inputSchema;
+  expect(["oneOf", "anyOf", "allOf"].filter(key => key in inputSchema)).toEqual([]);
+  expect(inputSchema).toMatchObject({ required: ["kind"], properties: { kind: { enum: ["observe", "read_image", "delegate_worker", "delegate_advisor", "request_delivery", "ask_human"] }, plan: expect.anything(), role: expect.anything(), operation: expect.anything(), question: expect.anything() } });
   const observed = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "observe", _meta: { progressToken: "mcp-client" } }, _meta: { progressToken: "request" } } });
   expect(observed).toMatchObject({ result: { structuredContent: { taskId: "task_1", observed: true } } });
   const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", plan: "Inspect the scoped diff for the requested implementation", acceptanceCriteria: ["The diff contains only requested changes"], instruction: "Inspect the current diff." } } });

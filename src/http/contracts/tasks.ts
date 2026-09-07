@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TaskInputSchema, TaskSchema } from "../../task-contracts.js";
 import { TaskSessionKindSchema, TaskTurnStatusSchema } from "../../task-control.js";
+import { AdvisorRoleSchema } from "../../workflows.js";
 
 export { DeliveryTargetSchema, VisualEvidenceSchema } from "../../task-contracts.js";
 export { MAX_TASK_REQUEST_BYTES } from "../../task-attachment-limits.js";
@@ -19,13 +20,13 @@ export const TaskArchiveResponseSchema = z.union([TaskResponseSchema, z.object({
 export const TaskAnswerBodySchema = z.object({ questionId: z.string().min(1), answer: z.string().trim().min(1), confirmCommandsStopped: z.boolean().optional() }).strict();
 export const TaskNoteBodySchema = z.object({ note: z.string().trim().min(1) }).strict();
 export const TaskActivityResponseSchema = z.object({
-  sessions: z.array(z.object({ id: z.string(), kind: TaskSessionKindSchema, generation: z.number(), nativeSessionId: z.string().nullable(), paneId: z.string().nullable(), current: z.boolean() })),
+  sessions: z.array(z.object({ id: z.string(), kind: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable(), label: z.string(), profileId: z.string(), generation: z.number(), nativeSessionId: z.string().nullable(), paneId: z.string().nullable(), current: z.boolean() })),
   turns: z.array(z.object({ id: z.string(), sessionId: z.string(), prompt: z.string(), status: TaskTurnStatusSchema, result: z.string().nullable() })),
 });
 
 export const TaskDiffResponseSchema = z.object({ available: z.boolean(), patch: z.string(), truncated: z.boolean() });
 export const TaskAgentStatusSchema = z.enum(["queued", "working", "retrying", "idle", "waiting_human", "stopped", "unknown"]);
-export const TaskAgentsResponseSchema = z.object({ agents: z.array(z.object({ id: z.string(), role: TaskSessionKindSchema, paneId: z.string().nullable(), status: TaskAgentStatusSchema, statusChangedAt: z.string().datetime().nullable() })) });
+export const TaskAgentsResponseSchema = z.object({ agents: z.array(z.object({ id: z.string(), role: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable().optional(), label: z.string().optional(), paneId: z.string().nullable(), status: TaskAgentStatusSchema, statusChangedAt: z.string().datetime().nullable() })) });
 export const TaskChecksResponseSchema = z.object({
   available: z.boolean(),
   pullRequestState: z.enum(["draft", "ready", "closed", "merged"]).nullable().optional(),

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AdvisorRoleSchema } from "./workflows.js";
 
 export const TaskToolSchema = z.object({
   id: z.string(),
@@ -16,6 +17,8 @@ export const TaskExecutionResponseSchema = z.object({
   sessions: z.array(z.object({
     id: z.string(),
     role: z.enum(["root", "worker"]),
+    advisorRole: AdvisorRoleSchema.nullable().optional(),
+    label: z.string().optional(),
     generation: z.number(),
     available: z.boolean(),
     limited: z.boolean(),

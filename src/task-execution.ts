@@ -5,6 +5,7 @@ import { OpenCodeToolPartSchema, type OpenCodeMessageEnvelope } from "./opencode
 import { readOpenCodeServer } from "./opencode-server.js";
 import type { TaskSession } from "./task-control.js";
 import { TaskPlanItemSchema, type TaskExecution } from "./task-execution-contracts.js";
+import { roleLabel } from "./workflows.js";
 
 const messageLimit = 100;
 const ToolDetailsSchema = z.object({
@@ -43,7 +44,7 @@ async function observeMessages(databasePath: string, session: TaskSession) {
 
 export async function readTaskExecution(databasePath: string, sessions: TaskSession[], observe = observeMessages): Promise<TaskExecution> {
   return { sessions: await Promise.all(sessions.filter(session => session.nativeSessionId).map(async session => {
-    const identity = { id: session.id, role: session.kind, generation: session.generation };
+    const identity = { id: session.id, role: session.kind, advisorRole: session.advisorRole, label: roleLabel(session), generation: session.generation };
     try {
       const messages = await observe(databasePath, session);
       return { ...identity, available: true, limited: messages.length >= messageLimit, ...executionFromMessages(messages) };

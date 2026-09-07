@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { Pencil } from "lucide-react";
 import type { TaskTemplateInput } from "../../task-templates.js";
 import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../task-contracts.js";
+import { ADVISOR_LABELS, WORKFLOWS, WorkflowIdSchema, workflowDefinition, type AdvisorRole } from "../../workflows.js";
 import { SettingsLayout } from "../components/app/settings-layout.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, type SettingsTableColumn } from "../components/app/settings-table.js";
 import { useCompanyContext } from "../components/app/company-context.js";
@@ -22,6 +23,7 @@ import type { ApiProfile, ApiProject, ApiTaskTemplate } from "../lib/view-shared
 const columns: SettingsTableColumn[] = [
   { key: "name", label: "Name", width: 180 },
   { key: "description", label: "Description", width: 300 },
+  { key: "workflow", label: "Workflow", width: 140 },
   { key: "delivery", label: "Delivery", width: 150 },
   { key: "tests", label: "Tests", width: 80 },
   { key: "evidence", label: "Evidence", width: 100 },
@@ -33,7 +35,7 @@ type EditorState =
   | { kind: "create"; draft: TaskTemplateInput }
   | { kind: "edit"; templateId: string; draft: TaskTemplateInput };
 
-const emptyDraft = (): TaskTemplateInput => ({ name: "", description: "", deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
+const emptyDraft = (): TaskTemplateInput => ({ name: "", description: "", deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off", workflow: "standard", advisorProfileIds: {} });
 
 const templateDraft = (template: ApiTaskTemplate): TaskTemplateInput => ({
   name: template.name,
@@ -41,6 +43,8 @@ const templateDraft = (template: ApiTaskTemplate): TaskTemplateInput => ({
   deliveryTarget: template.deliveryTarget,
   runProjectTests: template.runProjectTests,
   visualEvidence: template.visualEvidence,
+  workflow: template.workflow,
+  advisorProfileIds: template.advisorProfileIds,
   ...(template.rootProfileId ? { rootProfileId: template.rootProfileId } : {}),
   ...(template.workerProfileId ? { workerProfileId: template.workerProfileId } : {}),
 });
@@ -164,6 +168,7 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
           {visibleTemplates.map((template) => <SettingsTableRow key={template.id}>
             <SettingsTableCell className="truncate font-medium"><Button variant="link" size="sm" aria-label={`Edit ${template.name}`} onClick={() => edit(template)}>{template.name}</Button></SettingsTableCell>
             <SettingsTableCell className="truncate text-muted-foreground">{template.description}</SettingsTableCell>
+            <SettingsTableCell className="truncate text-muted-foreground">{workflowDefinition(template.workflow).name}</SettingsTableCell>
             <SettingsTableCell className="truncate text-muted-foreground">{deliveryLabel(template.deliveryTarget)}</SettingsTableCell>
             <SettingsTableCell className="text-muted-foreground">{template.runProjectTests ? "Run" : "Skip"}</SettingsTableCell>
             <SettingsTableCell className="text-muted-foreground">{evidenceLabel(template.visualEvidence)}</SettingsTableCell>
@@ -183,8 +188,10 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
             {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
             <Field><FieldLabel htmlFor="template-name">Name</FieldLabel><Input id="template-name" autoFocus disabled={busy} value={draft.name} onChange={(event) => setDraft("name", event.target.value)} required /></Field>
             <Field><FieldLabel htmlFor="template-description">Description</FieldLabel><Textarea id="template-description" disabled={busy} value={draft.description} onChange={(event) => setDraft("description", event.target.value)} rows={5} required /></Field>
+            <Field><FieldLabel htmlFor="template-workflow">Workflow</FieldLabel><Select disabled={busy} value={draft.workflow ?? "standard"} onValueChange={(value) => { const workflow = WorkflowIdSchema.parse(value); setEditor((current) => current.kind === "closed" ? current : { ...current, draft: { ...current.draft, workflow, advisorProfileIds: Object.fromEntries(Object.entries(current.draft.advisorProfileIds ?? {}).filter(([role]) => workflowDefinition(workflow).advisorRoles.includes(role as AdvisorRole))), ...(workflow === "refine_pull_request" ? { deliveryTarget: "merged" as const, runProjectTests: true } : {}) } }); }}><SelectTrigger id="template-workflow"><SelectValue /></SelectTrigger><SelectContent>{WORKFLOWS.map((workflow) => <SelectItem key={workflow.id} value={workflow.id}>{workflow.name}</SelectItem>)}</SelectContent></Select></Field>
             <FieldSet disabled={busy}>
               <FieldLegend variant="label">Agents</FieldLegend>
+              {workflowDefinition(draft.workflow ?? "standard").advisorRoles.map((role) => <Field key={role}><FieldLabel htmlFor={`template-advisor-${role}`}>{ADVISOR_LABELS[role]} profile</FieldLabel><Select disabled={busy} value={draft.advisorProfileIds?.[role] ?? "default"} onValueChange={(value) => setDraft("advisorProfileIds", { ...draft.advisorProfileIds, [role]: value === "default" ? undefined : value ?? undefined })}><SelectTrigger id={`template-advisor-${role}`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Same as Coordinator</SelectItem>{profiles.filter((profile) => profile.role === "root").map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name} · {profile.provider}/{profile.model}</SelectItem>)}</SelectContent></Select></Field>)}
               {(["rootProfileId", "workerProfileId"] as const).map((key) => {
                 const role = key === "rootProfileId" ? "root" : "worker";
                 return <Field key={key}><FieldLabel htmlFor={`template-${key}`}>{role === "root" ? "Coordinator profile" : "Worker profile"}</FieldLabel><Select disabled={busy} value={draft[key] ?? "default"} onValueChange={(value) => setDraft(key, value === "default" ? undefined : value ?? undefined)}><SelectTrigger id={`template-${key}`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">Project default</SelectItem>{profiles.filter((profile) => profile.role === role).map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name} · {profile.provider}/{profile.model}</SelectItem>)}</SelectContent></Select></Field>;
@@ -192,9 +199,9 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
             </FieldSet>
             <FieldSet disabled={busy}>
               <FieldLegend variant="label">Configuration</FieldLegend>
-              <Field><FieldLabel htmlFor="template-delivery-target">Delivery target</FieldLabel><Select disabled={busy} value={draft.deliveryTarget} onValueChange={(value) => setDraft("deliveryTarget", DeliveryTargetSchema.parse(value))}><SelectTrigger id="template-delivery-target"><SelectValue /></SelectTrigger><SelectContent>{taskDeliveryTargetOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></Field>
+              <Field><FieldLabel htmlFor="template-delivery-target">Delivery target</FieldLabel><Select disabled={busy || draft.workflow === "refine_pull_request"} value={draft.deliveryTarget} onValueChange={(value) => setDraft("deliveryTarget", DeliveryTargetSchema.parse(value))}><SelectTrigger id="template-delivery-target"><SelectValue /></SelectTrigger><SelectContent>{taskDeliveryTargetOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></Field>
               <Field><FieldLabel htmlFor="template-browser-evidence">Browser evidence</FieldLabel><Select disabled={busy} value={draft.visualEvidence} onValueChange={(value) => setDraft("visualEvidence", VisualEvidenceSchema.parse(value))}><SelectTrigger id="template-browser-evidence"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="off">Off</SelectItem><SelectItem value="capture">Capture</SelectItem><SelectItem value="required">Necessary</SelectItem></SelectContent></Select></Field>
-              <Field orientation="horizontal"><Checkbox id="template-run-project-tests" disabled={busy} checked={draft.runProjectTests ?? true} onCheckedChange={(value) => setDraft("runProjectTests", value === true)} /><FieldLabel htmlFor="template-run-project-tests">Run project tests</FieldLabel></Field>
+              <Field orientation="horizontal"><Checkbox id="template-run-project-tests" disabled={busy || draft.workflow === "refine_pull_request"} checked={draft.runProjectTests ?? true} onCheckedChange={(value) => setDraft("runProjectTests", value === true)} /><FieldLabel htmlFor="template-run-project-tests">Run project tests</FieldLabel></Field>
             </FieldSet>
             <DialogFooter>
               {editor.kind === "edit" ? <Button type="button" variant="destructive" size="sm" disabled={busy} onClick={() => { setDeleteError(""); setDeleteOpen(true); }}>Delete template</Button> : null}

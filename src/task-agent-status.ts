@@ -5,6 +5,7 @@ import { readOpenCodeServer } from "./opencode-server.js";
 import type { Task } from "./task-contracts.js";
 import type { TaskSession } from "./task-control.js";
 import type { TaskAgentStatusSchema } from "./http/contracts/tasks.js";
+import { roleLabel } from "./workflows.js";
 
 type AgentStatus = z.infer<typeof TaskAgentStatusSchema>;
 type NativeAgentStatus = "busy" | "retry" | "idle";
@@ -39,6 +40,6 @@ export async function readTaskAgentStatuses(databasePath: string, task: Pick<Tas
         if (status === "idle") statusChangedAt = isoTimestamp(native.updatedAt);
       } catch { status = "unknown"; }
     }
-    return { id: session.id, role: session.kind, paneId: session.paneId, status, statusChangedAt };
+    return { id: session.id, role: session.kind, advisorRole: session.advisorRole, label: roleLabel(session), paneId: session.paneId, status, statusChangedAt };
   })) };
 }

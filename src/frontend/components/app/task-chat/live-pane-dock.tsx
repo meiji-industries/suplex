@@ -2,6 +2,7 @@ import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import type { TaskActivity } from "../task-work.js";
 import { LivePaneTerminal } from "./live-pane-terminal.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs.js";
+import { roleLabel } from "../../../../workflows.js";
 
 const storageKey = "forge.live-pane-height";
 const clampHeight = (height: number) => Math.min(720, Math.max(160, height));
@@ -52,7 +53,7 @@ export function LivePaneDock({ taskId, activity }: { taskId: string; activity: T
       <div className="shrink-0 overflow-x-auto px-1" aria-label="Live pane tabs"><TabsList variant="line">{panes.map(session => {
         const pending = activity.turns.find(turn => turn.sessionId === session.id && !["completed", "cancelled"].includes(turn.status));
         const dot = pending?.status === "prompted" ? "animate-pulse bg-emerald-500" : pending ? "bg-amber-500" : "bg-muted-foreground";
-        return <TabsTrigger key={session.id} value={session.kind}><span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${dot}`} />{session.kind === "root" ? "Coordinator" : "Worker"}</TabsTrigger>;
+        return <TabsTrigger key={session.id} value={session.kind}><span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${dot}`} />{roleLabel(session)}</TabsTrigger>;
       })}</TabsList></div>
       <TabsContent className="mt-0 min-h-0" value={selected.kind}><LivePaneTerminal key={selected.id} taskId={taskId} role={selected.kind} paneId={selected.paneId} /></TabsContent>
     </Tabs>

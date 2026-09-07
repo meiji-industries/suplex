@@ -7,12 +7,14 @@ import { z } from "zod";
 import {
   RootBridgeConfigSchema,
   RootToolSchema,
+  rootToolInputSchema,
   RootImageResultSchema,
   type RootImageResult,
   type RootBridgeConfig,
   type RootIdentity,
   type RootTool,
   type WorkerAssignment,
+  type AdvisorRequest,
 } from "./root-contracts.js";
 import { ForgeDatabase } from "./database.js";
 import { CliHerdrClient } from "./herdr-client.js";
@@ -21,9 +23,10 @@ import { OpenCodeTaskRuntime } from "./opencode-task-runtime.js";
 import { TaskControlStore } from "./root-session-store.js";
 import { ArtifactStore } from "./artifacts.js";
 import { configureProcessLogSink, createDevLogFileSink } from "./logging.js";
+import { taskEvidenceRoot } from "./workflow-evidence.js";
 
 export class RootBridgeFailure extends Error {
-  constructor(readonly code: "invalid_request" | "root_identity_mismatch", message: string) {
+  constructor(readonly code: "invalid_request" | "root_identity_mismatch" | "task_tool_busy", message: string) {
     super(message);
     this.name = "RootBridgeFailure";
   }
@@ -31,9 +34,14 @@ export class RootBridgeFailure extends Error {
 
 export interface RootBridgeAdapter {
   assertCurrentRoot(root: RootIdentity): Promise<void>;
+  /** Claims the task's tool-owner token for this bridge process, or null while another live bridge owns it. */
+  claimToolOwner(root: RootIdentity): Promise<string | null>;
+  releaseToolOwner(root: RootIdentity, token: string): Promise<void>;
   observe(root: RootIdentity): Promise<unknown>;
   readImage(root: RootIdentity, artifactId: string): Promise<RootImageResult>;
   delegateWorker(root: RootIdentity, assignment: WorkerAssignment): Promise<unknown>;
+  delegateAdvisor(root: RootIdentity, request: AdvisorRequest): Promise<unknown>;
+  requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation'], expectedHead?: string, review?: Extract<RootTool, { kind: "request_delivery" }>['review']): Promise<unknown>;
   requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation'], expectedHead?: string, review?: Extract<RootTool, { kind: "request_delivery" }>['review'], pullRequestTitle?: Extract<RootTool, { kind: "request_delivery" }>['pullRequestTitle']): Promise<unknown>;
   askHuman(root: RootIdentity, question: string, options: Extract<RootTool, { kind: "ask_human" }>['options']): Promise<unknown>;
 }
@@ -44,9 +52,12 @@ export class RootBridge {
   async call(raw: unknown): Promise<unknown> {
     const parsed = RootToolSchema.safeParse(raw);
     if (!parsed.success)
-      throw new RootBridgeFailure("invalid_request", "Coordinator bridge request is invalid");
+      throw new RootBridgeFailure("invalid_request", `Coordinator bridge request is invalid: ${parsed.error.issues.map(issue => `${issue.path.join(".") || "request"}: ${issue.message}`).join("; ")}`);
     await this.adapter.assertCurrentRoot(this.root);
-    return this.dispatch(parsed.data);
+    const token = await this.adapter.claimToolOwner(this.root);
+    if (token === null) throw new RootBridgeFailure("task_tool_busy", "Another Forge tool call for this task is still in progress. Retry after it finishes.");
+    try { return await this.dispatch(parsed.data); }
+    finally { await this.adapter.releaseToolOwner(this.root, token); }
   }
 
   private async dispatch(tool: RootTool): Promise<unknown> {
@@ -56,7 +67,9 @@ export class RootBridge {
       case "read_image":
         return this.adapter.readImage(this.root, tool.artifactId);
       case "delegate_worker":
-        return this.adapter.delegateWorker(this.root, { plan: tool.plan, acceptanceCriteria: tool.acceptanceCriteria, instruction: tool.instruction });
+        return this.adapter.delegateWorker(this.root, { plan: tool.plan, acceptanceCriteria: tool.acceptanceCriteria, instruction: tool.instruction, mode: tool.mode, purpose: tool.purpose, advisorSessionId: tool.advisorSessionId, candidateSessionIds: tool.candidateSessionIds });
+      case "delegate_advisor":
+        return this.adapter.delegateAdvisor(this.root, { role: tool.role, ...(tool.brief === undefined ? {} : { brief: tool.brief }) });
       case "request_delivery":
         return this.adapter.requestDelivery(this.root, tool.operation, tool.expectedHead, tool.review, tool.pullRequestTitle);
       case "ask_human":
@@ -109,7 +122,7 @@ export function startRootBridgeTransport(input: {
       }
       if (!initialized) throw new Error("MCP client must initialize before calling tools");
       if (request.method === "tools/list") {
-        respond(request.id, { tools: [{ name: "forge_root", description: "Observe this task or request a Forge-owned delivery action.", inputSchema: { ...z.toJSONSchema(RootToolSchema), type: "object" } }] });
+        respond(request.id, { tools: [{ name: "forge_root", description: "Observe this task or request a Forge-owned delivery action.", inputSchema: rootToolInputSchema() }] });
         return;
       }
       if (request.method !== "tools/call") {
@@ -148,7 +161,7 @@ async function runRootBridge(): Promise<void> {
   const database = new ForgeDatabase(config.databasePath, { migrate: false });
   const herdr = new CliHerdrClient();
   const store = new TaskControlStore(database);
-  const controller = new RootController(store, new OpenCodeTaskRuntime(config.databasePath, herdr, { artifactRoot: config.artifactRoot }), undefined, new ArtifactStore(config.artifactRoot));
+  const controller = new RootController(store, new OpenCodeTaskRuntime(config.databasePath, herdr, { artifactRoot: config.artifactRoot }), undefined, new ArtifactStore(config.artifactRoot), { root: taskEvidenceRoot(config.databasePath) });
   startRootBridgeTransport({ bridge: new RootBridge(config.root, controller), stdin: process.stdin, stdout: process.stdout });
 }
 

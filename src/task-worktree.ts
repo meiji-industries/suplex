@@ -69,7 +69,12 @@ export async function prepareTaskWorktree(intent: TaskWorktreeIntent): Promise<W
   }
   const branch = await runCommand({ taskId: null, stepId: null, command: "git", cwd: repository, args: ["show-ref", "--verify", "--quiet", `refs/heads/${intent.branch}`], expectNonZero: true });
   if (branch.exitCode !== 0 && branch.exitCode !== 1) throw new Error("Git could not inspect the task branch");
-  if (branch.exitCode === 1) await git(repository, ["cat-file", "-e", `${intent.startingSha}^{commit}`]);
+  if (branch.exitCode === 1) {
+    // A pull request source pins a commit that GitHub metadata alone does not make local.
+    const present = await runCommand({ taskId: null, stepId: null, command: "git", cwd: repository, args: ["cat-file", "-e", `${intent.startingSha}^{commit}`], expectNonZero: true });
+    if (present.exitCode !== 0) await runCommand({ taskId: null, stepId: null, command: "git", cwd: repository, args: ["fetch", "--no-tags", "origin", intent.startingSha], timeout: 120_000, expectNonZero: true });
+    await git(repository, ["cat-file", "-e", `${intent.startingSha}^{commit}`]);
+  }
   const staleRegistration = registry.find(entry => entry.path === path);
   if (staleRegistration && staleRegistration.branch !== intent.branch) throw new Error("Task worktree registry has a conflicting owner");
   const args = ["worktree", "add", ...(staleRegistration ? ["--force"] : []), ...(branch.exitCode === 1 ? ["-b", intent.branch] : []), path, branch.exitCode === 1 ? intent.startingSha : intent.branch];

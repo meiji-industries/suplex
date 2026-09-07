@@ -4,6 +4,8 @@ import { isApplicationPath } from "../src/frontend/lib/navigation.js";
 
 test("only Forge views are eligible for client-side navigation", () => {
   expect(isApplicationPath("/tasks/task-1")).toBe(true);
+  expect(isApplicationPath("/admin/workflows")).toBe(true);
+  expect(isApplicationPath("/workflows")).toBe(false);
   expect(isApplicationPath("/companies/company-1/settings")).toBe(true);
   expect(isApplicationPath("/templates")).toBe(true);
   expect(isApplicationPath("/projects/project-1/templates")).toBe(true);

@@ -7,6 +7,8 @@ const expiryMs = 300_000;
 const agent = (status: "queued" | "working" | "retrying" | "idle" | "waiting_human" | "stopped" | "unknown", statusChangedAt: string | null = null) => ({
   id: status,
   role: "worker" as const,
+  advisorRole: null,
+  label: "Worker",
   paneId: null,
   status,
   statusChangedAt,

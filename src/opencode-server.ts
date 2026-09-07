@@ -35,15 +35,23 @@ export interface OpenCodeProfile {
 }
 
 export function openCodeRoleConfig(input: {
-  role: "root" | "worker";
+  role: "root" | "worker" | "advisor";
   profile: OpenCodeProfile;
   bridge?: { command: string; args: string[] };
+  /** The one external directory a read-only role can read: the task's evidence directory. Everything else stays denied. */
+  evidenceDirectory?: string;
+  /** The task worktree; listed so an alias of the working directory (macOS /var vs /private/var) is not treated as external. */
+  directory?: string;
 }): Record<string, unknown> {
   const { role, profile } = input;
   const model = `${profile.providerID}/${profile.modelID}`;
+  const allowed = input.evidenceDirectory ? [input.evidenceDirectory, ...(input.directory ? [input.directory] : [])] : [];
+  const readOnlyExternal = allowed.length ? { "*": "deny", ...Object.fromEntries(allowed.flatMap(path => [[path, "allow"], [`${path}/**`, "allow"]])) } : "deny";
   const permission = role === "root"
-    ? { read: "allow", edit: "deny", bash: "deny", task: "deny", question: "deny", external_directory: "deny", doom_loop: "allow" }
-    : { read: "allow", edit: "allow", bash: "allow", external_directory: "allow", doom_loop: "allow", task: "deny", question: "deny", "forge_root_*": "deny" };
+    ? { read: "allow", edit: "deny", bash: "deny", task: "deny", question: "deny", external_directory: readOnlyExternal, doom_loop: "allow" }
+    : role === "advisor"
+      ? { read: "allow", edit: "deny", bash: "deny", task: "deny", question: "deny", external_directory: readOnlyExternal, doom_loop: "allow", "forge_root_*": "deny" }
+      : { read: "allow", edit: "allow", bash: "allow", external_directory: "allow", doom_loop: "allow", task: "deny", question: "deny", "forge_root_*": "deny" };
   return {
     model,
     default_agent: `forge-${role}`,
@@ -52,7 +60,9 @@ export function openCodeRoleConfig(input: {
         mode: "primary", model, variant: profile.reasoningEffort, permission,
         tools: role === "root"
           ? { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false }
-          : { task: false, question: false, "forge_root_*": false },
+          : role === "advisor"
+            ? { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false, "forge_root_*": false }
+            : { task: false, question: false, "forge_root_*": false },
         reasoningEffort: profile.reasoningEffort,
         serviceTier: profile.serviceTier,
       },
@@ -62,7 +72,7 @@ export function openCodeRoleConfig(input: {
         [profile.modelID]: { options: { reasoningEffort: profile.reasoningEffort, serviceTier: profile.serviceTier } },
       } },
     },
-    ...(input.bridge ? { mcp: { forge_root: { type: "local", command: [input.bridge.command, ...input.bridge.args], enabled: true } } } : {}),
+    ...(input.bridge && role === "root" ? { mcp: { forge_root: { type: "local", command: [input.bridge.command, ...input.bridge.args], enabled: true } } } : {}),
   };
 }
 

@@ -14,6 +14,7 @@ import { TaskTimelineResponseSchema } from "../../task-timeline-contracts.js";
 import { TaskExecutionResponseSchema } from "../../task-execution-contracts.js";
 import { TaskChecksResponseSchema, TaskDiffResponseSchema } from "../contracts/tasks.js";
 import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
+import { normalizeWorkflowInput, WorkflowInputFailure } from "../../workflows.js";
 import { MAX_TASK_REQUEST_BYTES, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions { tasks: TaskService; host?: Pick<TaskHost, "recover">; config?: Pick<ForgeConfig, "databasePath"> }
@@ -56,7 +57,12 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   const wake = (taskId: string): void => { if (host) void host.recover(taskId).catch(error => app.log.warn({ taskId, err: error }, "Task recovery will be retried")); };
   typed.get("/api/tasks", { schema: { querystring: listQuery, response: { 200: TaskListResponseSchema } } }, async request => ({ tasks: tasks.listTasks(request.forgeUser.id, undefined, request.query.archived === "true") }));
   typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, querystring: listQuery, response: { 200: TaskListResponseSchema } } }, async request => ({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId, request.query.archived === "true") }));
-  typed.post("/api/companies/:companyId/tasks", { bodyLimit: MAX_TASK_REQUEST_BYTES, schema: { params: CompanyIdParamsSchema, body: TaskBodySchema, response: { 200: TaskResponseSchema, 201: TaskResponseSchema } } }, async (request, reply) => {
+  // Workflow defaults apply before schema defaults can erase whether the caller supplied a field.
+  const normalizeWorkflow = async (request: { body: unknown }, reply: { code(status: number): { send(body: unknown): unknown } }): Promise<void> => {
+    try { if (request.body && typeof request.body === "object") request.body = normalizeWorkflowInput(request.body as Record<string, unknown>, { requireSource: true }); }
+    catch (error) { if (error instanceof WorkflowInputFailure) { reply.code(error.statusCode).send({ error: error.message }); return; } throw error; }
+  };
+  typed.post("/api/companies/:companyId/tasks", { bodyLimit: MAX_TASK_REQUEST_BYTES, preValidation: normalizeWorkflow, schema: { params: CompanyIdParamsSchema, body: TaskBodySchema, response: { 200: TaskResponseSchema, 201: TaskResponseSchema } } }, async (request, reply) => {
     const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, request.body);
     if (result.task.status === "active") wake(result.task.id);
     return reply.code(result.created ? 201 : 200).send(result.task);

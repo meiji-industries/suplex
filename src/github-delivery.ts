@@ -2,6 +2,7 @@
 import { z } from "zod";
 
 import { runCommand } from "./command-runner.js";
+import { redact } from "./logging.js";
 
 type GithubFailureCode = "authentication-required" | "invalid-provider-response" | "wrong-remote" | "local-revision-unavailable" | "provider-rate-limited" | "provider-unavailable";
 
@@ -45,6 +46,8 @@ export interface GithubPullRequestObservation {
   headSha: string | null;
   baseSha: string | null;
   mergeable: string | null;
+  /** GitHub's merge-state rollup (CLEAN, BLOCKED, BEHIND, DIRTY, DRAFT, HAS_HOOKS, UNKNOWN, UNSTABLE). Unknown never means ready. */
+  mergeStateStatus: string | null;
   checks: { total: number; pending: number; failing: number; successful: number; runs: Array<{ name: string; status: "pending" | "failing" | "successful"; url: string | null; conclusion?: string }> };
   author?: { login: string; avatarUrl: string } | null;
   changedFiles?: number | null;
@@ -159,6 +162,7 @@ const PullViewResponseSchema = z.object({
   headRefOid: z.string().regex(shaPattern),
   baseRefOid: z.string().regex(shaPattern),
   mergeable: z.string().nullable(),
+  mergeStateStatus: z.string().nullable().optional(),
   autoMergeRequest: z.object({}).nullable(),
   reviewDecision: z.string().nullable(),
   author: z.object({ login: z.string().min(1), avatarUrl: z.string().url().nullable().optional() }).nullable(),
@@ -245,6 +249,7 @@ export function mapGithubPullRequestObservation(value: unknown): GithubPullReque
     headSha: pull.headRefOid,
     baseSha: pull.baseRefOid,
     mergeable: pull.mergeable,
+    mergeStateStatus: pull.mergeStateStatus ?? null,
     checks: summarizeChecks(pull.statusCheckRollup),
     author: pull.author && { login: pull.author.login, avatarUrl: pull.author.avatarUrl ?? `https://avatars.githubusercontent.com/${pull.author.login}` },
     changedFiles: pull.changedFiles,
@@ -268,11 +273,37 @@ function parseJson(value: string): unknown {
   try { return JSON.parse(value) as unknown; } catch { throw providerFailure("invalid-provider-response", "GitHub returned invalid JSON"); }
 }
 
+function diagnostic(error: GithubCommandFailure): string {
+  const parsed = restError(error.result.stdout);
+  const text = (parsed?.message ?? error.result.stderr.trim() ?? "").split("\n")[0] ?? "";
+  // Provider messages can echo a token; never carry one into a question or log.
+  return String(redact(text.slice(0, 200))).replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{6,}|github_pat_[A-Za-z0-9_]{6,})\b/g, "[redacted]");
+}
+
+/** Rate limiting needs evidence: HTTP 429, or a 403 whose message says so. A bare 403 is an access problem. */
+function isRateLimited(error: GithubCommandFailure): boolean {
+  const parsed = restError(error.result.stdout);
+  const text = `${error.result.stdout}\n${error.result.stderr}`;
+  if (parsed?.status === 429 || /\bHTTP 429\b/.test(text)) return true;
+  return (parsed?.status === 403 || /\bHTTP 403\b/.test(text)) && /rate limit|secondary rate|abuse/i.test(text);
+}
+
+function isUnauthenticated(error: GithubCommandFailure): boolean {
+  const parsed = restError(error.result.stdout);
+  const text = `${error.result.stdout}\n${error.result.stderr}`;
+  return parsed?.status === 401 || /\bHTTP 401\b|Bad credentials|gh auth login|not logged in|authentication token|token is invalid|token has expired|GH_TOKEN/i.test(text);
+}
+
+function isForbidden(error: GithubCommandFailure): boolean {
+  const parsed = restError(error.result.stdout);
+  return parsed?.status === 403 || /\bHTTP 403\b/.test(`${error.result.stdout}\n${error.result.stderr}`);
+}
+
 function classifyCommandFailure(error: unknown, operation: string): GithubReleaseFailure {
   if (!(error instanceof GithubCommandFailure)) return providerFailure("provider-unavailable", operation);
-  const parsed = restError(error.result.stdout);
-  if (parsed?.status === 403 || parsed?.status === 429) return providerFailure("provider-rate-limited", parsed.message);
-  if (operation === "authentication") return providerFailure("authentication-required", "GitHub CLI authentication is unavailable");
+  if (isRateLimited(error)) return providerFailure("provider-rate-limited", diagnostic(error) || "GitHub limited requests");
+  if (operation === "authentication" || isUnauthenticated(error)) return providerFailure("authentication-required", `GitHub CLI authentication is unavailable: ${diagnostic(error) || "sign in with gh auth login"}`);
+  if (isForbidden(error)) return providerFailure("authentication-required", `GitHub denied access to this repository or token permission: ${diagnostic(error) || "HTTP 403"}`);
   if (error.timedOut) return providerFailure("provider-unavailable", `${operation} timed out`);
   return new GithubReleaseFailure("provider-unavailable", error.result.stderr || error.result.stdout || operation);
 }
@@ -327,10 +358,10 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
         // observation; the next operation will adopt what GitHub reports.
         if (allowNotFound && !parsed && /\bHTTP 404\b/.test(error.result.stderr)) return null;
         if (parsed?.status === 404) throw providerFailure("provider-unavailable", notFoundSummary ?? "GitHub resource was not found or is inaccessible");
-        if (parsed?.status === 403 || parsed?.status === 429) {
+        if (isRateLimited(error)) {
           const retryAt = await retryAtFromRateLimit();
-          if (retryAt) throw providerFailure("provider-rate-limited", parsed.message, retryAt);
-          throw providerFailure("provider-unavailable", "GitHub rate-limit reset is unavailable");
+          if (retryAt) throw providerFailure("provider-rate-limited", diagnostic(error), retryAt);
+          throw providerFailure("provider-rate-limited", diagnostic(error) || "GitHub limited requests");
         }
       }
       throw classifyCommandFailure(error, operation);
@@ -425,12 +456,12 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
         const candidates = await this.listPullRequests({ repository: input.repository, owner: input.repository.split("/")[0]!, headBranch: input.branch, baseBranch: "" });
         number = candidates[0]?.number ?? null;
       }
-      if (number === null) return { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }, author: null, changedFiles: null, additions: null, deletions: null, autoMergeEnabled: null, reviewDecision: null };
+      if (number === null) return { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, mergeStateStatus: null, checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }, author: null, changedFiles: null, additions: null, deletions: null, autoMergeEnabled: null, reviewDecision: null };
       try {
-        const raw = parseJson((await runGh(["pr", "view", String(number), "--repo", input.repository, "--json", "number,url,state,isDraft,headRefOid,baseRefOid,mergeable,autoMergeRequest,reviewDecision,author,changedFiles,additions,deletions,statusCheckRollup"])).stdout);
+        const raw = parseJson((await runGh(["pr", "view", String(number), "--repo", input.repository, "--json", "number,url,state,isDraft,headRefOid,baseRefOid,mergeable,mergeStateStatus,autoMergeRequest,reviewDecision,author,changedFiles,additions,deletions,statusCheckRollup"])).stdout);
         return mapGithubPullRequestObservation(raw);
       } catch (error) {
-        if (error instanceof GithubCommandFailure && /not found/i.test(`${error.result.stdout}\n${error.result.stderr}`)) return { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }, author: null, changedFiles: null, additions: null, deletions: null, autoMergeEnabled: null, reviewDecision: null };
+        if (error instanceof GithubCommandFailure && /not found/i.test(`${error.result.stdout}\n${error.result.stderr}`)) return { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, mergeStateStatus: null, checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }, author: null, changedFiles: null, additions: null, deletions: null, autoMergeEnabled: null, reviewDecision: null };
         throw error instanceof GithubReleaseFailure ? error : classifyCommandFailure(error, "pull request observation");
       }
     },

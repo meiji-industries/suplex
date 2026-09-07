@@ -5,9 +5,13 @@ import { OpenCodeClient } from "./opencode-client.js";
 import { readOpenCodeServer } from "./opencode-server.js";
 import type { TaskTimeline, TimelineTask } from "./task-timeline-contracts.js";
 import { taskUsage, type TaskUsage } from "./task-usage.js";
+import { roleLabel } from "./workflows.js";
 
-export function timelineActivity(task: Pick<Task, "rootProfile" | "workerProfile">, session: Pick<TaskSession, "id" | "kind" | "generation">, usage: TaskUsage[], liveMessageId: string | null): TimelineTask["activity"] {
-  const profile = session.kind === "root" ? task.rootProfile : task.workerProfile;
+export function timelineActivity(task: Pick<Task, "rootProfile" | "workerProfile"> & Partial<Pick<Task, "advisorProfiles">>, session: Pick<TaskSession, "id" | "kind" | "generation"> & Partial<Pick<TaskSession, "advisorRole">>, usage: TaskUsage[], liveMessageId: string | null): TimelineTask["activity"] {
+  const advisorRole = session.advisorRole ?? null;
+  // Advisors keep the worker slot for usage totals but show their actual role and captured profile.
+  const profile = session.kind === "root" ? task.rootProfile : advisorRole ? task.advisorProfiles?.[advisorRole] ?? task.rootProfile : task.workerProfile;
+  const roleKey = advisorRole ?? session.kind;
   const turns = new Map<string, TimelineTask["activity"][number]>();
   const ordered = [...usage].sort((left, right) => left.startedAt - right.startedAt);
   for (const entry of ordered) {
@@ -21,7 +25,7 @@ export function timelineActivity(task: Pick<Task, "rootProfile" | "workerProfile
     const end = live ? null : new Date(Math.max(entry.startedAt, entry.completedAt ?? entry.startedAt)).toISOString();
     const previous = turns.get(entry.turnId);
     turns.set(entry.turnId, {
-      id: `${session.id}:${entry.turnId}`, role: session.kind, agentId: `${session.kind}:${profile.profileId}`,
+      id: `${session.id}:${entry.turnId}`, role: session.kind, advisorRole, label: roleLabel({ kind: session.kind, advisorRole }), agentId: `${roleKey}:${profile.profileId}`,
       agentName: profile.model, avatarSeed: profile.profileId,
       status: entry.failed || previous?.status === "failed" ? "failed" : live ? "running" : "completed",
       attempt: session.generation,

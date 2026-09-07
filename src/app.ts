@@ -18,6 +18,7 @@ import type { AgentProfileService } from "./agent-profiles.js";
 import type { ProjectService } from "./projects.js";
 import type { TaskService } from "./tasks.js";
 import type { TaskTemplateService } from "./task-templates.js";
+import type { WorkflowRecordService } from "./workflow-records.js";
 import { HealthSnapshotSchema } from "./schemas.js";
 import {
   CSRF_COOKIE_NAME,
@@ -35,6 +36,7 @@ import pages from "./http/routes/pages.js";
 import hermesPairing from "./http/routes/hermes-pairing.js";
 import { registerHermesTaskRoutes } from "./http/routes/hermes-tasks.js";
 import taskTemplates from "./http/routes/task-templates.js";
+import workflowRoutes from "./http/routes/workflows.js";
 
 export interface AppDependencies {
   fullApp?: boolean;
@@ -47,6 +49,7 @@ export interface AppDependencies {
   profiles?: AgentProfileService;
   tasks?: TaskService;
   taskTemplates?: TaskTemplateService;
+  workflows?: WorkflowRecordService;
   host?: Pick<TaskHost, "recover">;
   database?: ForgeDatabase;
   logger?: Logger | false;
@@ -124,6 +127,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
     if (dependencies.hermes && taskService) registerHermesTaskRoutes(app, { hermes: dependencies.hermes, tasks: taskService });
     void app.register(authenticated, { auth, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), readUpdate, ...(dependencies.requestUpdateRestart ? { requestUpdateRestart: dependencies.requestUpdateRestart } : {}), ...(dependencies.launchUpdateRestart ? { launchUpdateRestart: dependencies.launchUpdateRestart } : {}), ...(dependencies.instanceId ? { instanceId: dependencies.instanceId } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(dependencies.host ? { host: dependencies.host } : {}), ...(database ? { database } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
     if (templateService) void app.register(taskTemplates, { auth, config: dependencies.config, templates: templateService });
+    if (dependencies.workflows) void app.register(workflowRoutes, { auth, config: dependencies.config, workflows: dependencies.workflows });
   }
   if (!dependencies.frontendDevelopment) void app.register(assets, { prefix: "/assets" });
 }

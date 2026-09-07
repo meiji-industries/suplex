@@ -103,6 +103,7 @@ export default tseslint.config({
     "src/self-update.ts",
     "src/tailscale.ts",
     "src/task-sources.ts",
+    "src/workflow-evidence.ts",
     "tests/ci-repair-rollback.test.ts",
     "tests/github-release.real.test.ts",
     "tests/hermes-agents.browser.test.ts",

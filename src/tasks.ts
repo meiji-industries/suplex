@@ -15,6 +15,7 @@ import { TaskProfileSchema, type TaskProfile } from "./task-control.js";
 import { TaskConfigurationSchema, TaskInputSchema, type Task, type TaskInput } from "./task-contracts.js";
 import { decodeTaskImage } from "./task-images.js";
 import { newTaskId, TaskConflict, TaskRepository, taskRequestHash, type TaskCreator, type TaskRow } from "./task-repository.js";
+import { normalizeWorkflowInput, roleLabel, workflowDefinition, WorkflowInputFailure, type AdvisorRole } from "./workflows.js";
 
 export class TaskFailure extends Error {
   constructor(readonly publicMessage: string, readonly statusCode = 400) { super(publicMessage); }
@@ -71,7 +72,10 @@ export class TaskService {
   }
 
   private async create(authority: Authority, companyId: string, raw: TaskInput): Promise<{ task: Task; created: boolean }> {
-    const request = TaskInputSchema.parse(raw);
+    let normalized: TaskInput;
+    try { normalized = normalizeWorkflowInput(raw, { requireSource: true }); }
+    catch (error) { if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode); throw error; }
+    const request = TaskInputSchema.parse(normalized);
     this.requireScope(authority, companyId, request.projectId, true);
     const creator: TaskCreator = authority.kind === "user" ? { kind: "user", id: authority.userId } : { kind: "agent", id: authority.principal.agentId };
     const requestHash = taskRequestHash(request, creator);
@@ -83,6 +87,8 @@ export class TaskService {
       const defaults = this.database.authQuery(db => z.object({ root: z.string(), worker: z.string() }).parse(db.prepare("SELECT root_profile_id AS root, worker_profile_id AS worker FROM forge_projects WHERE id = ? AND company_id = ?").get(project.id, companyId)));
       const rootProfile = this.profile(request.rootProfileId ?? defaults.root, "root");
       const workerProfile = this.profile(request.workerProfileId ?? defaults.worker, "worker");
+      const advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>> = {};
+      for (const role of workflowDefinition(request.workflow).advisorRoles) advisorProfiles[role] = this.profile(request.advisorProfileIds[role] ?? rootProfile.profileId, "root");
       const images = request.images.map(image => ({ filename: image.filename, mimeType: image.mimeType, bytes: decodeTaskImage(image) }));
       const source = request.source ? await this.projects.resolveTaskSource(project, request.source) : null;
       const heads = await this.projects.captureTaskConfiguration(project);
@@ -97,7 +103,7 @@ export class TaskService {
       });
       return this.database.authTransaction(() => {
         this.requireScope(authority, companyId, request.projectId, true);
-        const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, images });
+        const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images });
         if (result.created) this.audit(authority, companyId, "task_created", result.task.id);
         return result;
       });
@@ -192,11 +198,16 @@ export class TaskService {
   }
 
   getTaskActivity(userId: string, taskId: string) {
-    this.getTask(userId, taskId);
+    const task = this.getTask(userId, taskId);
     return {
-      sessions: this.repository.controls.sessions(taskId).map(session => ({ id: session.id, kind: session.kind, generation: session.generation, nativeSessionId: session.nativeSessionId, paneId: session.paneId, current: session.current })),
+      sessions: this.repository.controls.sessions(taskId).map(session => ({ id: session.id, kind: session.kind, advisorRole: session.advisorRole, label: roleLabel(session), profileId: this.sessionProfile(task, session).profileId, generation: session.generation, nativeSessionId: session.nativeSessionId, paneId: session.paneId, current: session.current })),
       turns: this.repository.controls.turns(taskId).map(turn => ({ id: turn.id, sessionId: turn.sessionId, prompt: turn.promptText, status: turn.status, result: turn.terminalObservation })),
     };
+  }
+
+  private sessionProfile(task: Task, session: { kind: "root" | "worker"; advisorRole: AdvisorRole | null }): TaskProfile {
+    if (session.kind === "root") return task.rootProfile;
+    return (session.advisorRole && task.advisorProfiles[session.advisorRole]) || (session.advisorRole ? task.rootProfile : task.workerProfile);
   }
 
   private profile(profileId: string, role: "root" | "worker"): TaskProfile {

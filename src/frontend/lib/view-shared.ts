@@ -4,8 +4,10 @@ import type { ModelResponse, ProfileResponse, ProjectResponse } from "../../http
 import type { HermesAdminAgent } from "../../http/contracts/hermes.js";
 import type { TaskListTask, TaskResponse } from "../../http/contracts/tasks.js";
 import type { TaskTemplateResponse } from "../../http/contracts/task-templates.js";
+import type { WorkflowRecord } from "../../http/contracts/workflows.js";
 
 export type ApiProfile = ProfileResponse;
+export type ApiWorkflow = WorkflowRecord;
 export type ApiHermesAgent = HermesAdminAgent;
 export type ApiModel = ModelResponse;
 export type ApiInvitation = InvitationSummaryResponse;

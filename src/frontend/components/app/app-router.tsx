@@ -15,6 +15,7 @@ import { AnalyticsView } from "../../views/analytics.js";
 import { TaskTemplateSettings } from "../../views/task-template-settings.js";
 import { ProviderSettingsView } from "../../views/provider-settings.js";
 import { EnvironmentSettingsView } from "../../views/environment-settings.js";
+import { WorkflowSettingsView } from "../../views/workflow-settings.js";
 
 function AppView(): ReactElement {
   const pathname = window.location.pathname;
@@ -24,6 +25,7 @@ function AppView(): ReactElement {
   }
   if (pathname === "/admin/providers") return <ProviderSettingsView />;
   if (pathname === "/admin/environment") return <EnvironmentSettingsView />;
+  if (pathname === "/admin/workflows") return <WorkflowSettingsView />;
   if (pathname === "/admin" || pathname === "/admin/agents" || pathname === "/admin/models" || pathname === "/admin/companies" || pathname === "/admin/invitations" || pathname === "/admin/passkeys") return <AdminView />;
   if (/^\/companies\/[^/]+\/settings$/.test(pathname)) return <CompanySettingsView />;
   if (pathname === "/profile") return <ProfileView />;

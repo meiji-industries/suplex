@@ -5,6 +5,7 @@ import type { ForgeDatabase } from "./database.js";
 import { TaskControlStore } from "./root-session-store.js";
 import { TaskConfigurationSchema, TaskImageSchema, TaskSchema, type Task, type TaskConfiguration, type TaskInput, type TaskRequest } from "./task-contracts.js";
 import type { TaskProfile } from "./task-control.js";
+import { advisorKeysSorted, publicWorkflowState, type AdvisorRole } from "./workflows.js";
 
 export type TaskCreator = { kind: "user"; id: string } | { kind: "agent"; id: string };
 const RowSchema = z.object({
@@ -22,7 +23,11 @@ const select = "SELECT t.*, MAX(t.updated_at, COALESCE(control.updated_at, t.upd
 export class TaskConflict extends Error {}
 
 export function taskRequestHash(input: TaskInput, creator: TaskCreator): string {
-  return createHash("sha256").update(JSON.stringify({ input, creator })).digest("hex");
+  // A Standard request with no Advisor selections hashes exactly like a pre-workflow request.
+  const { workflow, advisorProfileIds, ...legacy } = input;
+  const advisors = advisorKeysSorted(advisorProfileIds ?? {});
+  const hashed = (workflow ?? "standard") === "standard" && Object.keys(advisors).length === 0 ? legacy : { ...legacy, workflow, advisorProfileIds: advisors };
+  return createHash("sha256").update(JSON.stringify({ input: hashed, creator })).digest("hex");
 }
 
 export class TaskRepository {
@@ -52,7 +57,7 @@ export class TaskRepository {
 
   create(input: {
     taskId: string; companyId: string; creator: TaskCreator; request: TaskRequest;
-    requestHash: string; configuration: TaskConfiguration; rootProfile: TaskProfile; workerProfile: TaskProfile;
+    requestHash: string; configuration: TaskConfiguration; rootProfile: TaskProfile; workerProfile: TaskProfile; advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>>;
     images: Array<{ filename: string; mimeType: string; bytes: Buffer }>;
   }): { task: Task; created: boolean } {
     const written: StoredArtifact[] = [];
@@ -68,7 +73,7 @@ export class TaskRepository {
         this.controls.create({
           taskId: input.taskId, startImmediately: input.request.startImmediately, objective: `${input.request.title}\n\n${input.request.description}`, deliveryTarget: input.request.deliveryTarget,
           deliveryIntent: { repository: configuration.repository, headBranch: configuration.branch, baseBranch: configuration.baseBranch, baselineSha: configuration.baselineSha, pullRequestNumber: configuration.source?.kind === "pull_request" ? configuration.source.number : null },
-          rootProfile: input.rootProfile, workerProfile: input.workerProfile,
+          rootProfile: input.rootProfile, workerProfile: input.workerProfile, workflow: input.request.workflow, advisorProfiles: input.advisorProfiles,
         });
         const row = this.row(input.taskId);
         if (!row) throw new Error("Task insert did not persist");
@@ -88,7 +93,7 @@ export class TaskRepository {
       id: row.id, companyId: row.company_id, projectId: row.project_id,
       issueKey: row.issue_code && row.issue_number ? `${row.issue_code}-${row.issue_number}` : null,
       title: row.title, description: row.description, status: control.status, deliveryTarget: control.deliveryTarget,
-      rootProfile: control.rootProfile, workerProfile: control.workerProfile, configuration: JSON.parse(row.configuration_json),
+      rootProfile: control.rootProfile, workerProfile: control.workerProfile, workflow: control.workflow, advisorProfiles: control.advisorProfiles, workflowState: publicWorkflowState(control.workflowState), configuration: JSON.parse(row.configuration_json),
       worktree: control.worktree, pullRequest: control.pullRequest,
       humanQuestion: control.humanQuestion && control.humanQuestionId ? { id: control.humanQuestionId, text: control.humanQuestion, options: control.humanQuestionOptions ?? [], requiresCommandCleanup: control.recoveryTurnId !== null } : null,
       wakeAt: control.wakeAt, images, createdAt: row.created_at, updatedAt: row.activity_updated_at, archivedAt: row.archived_at,

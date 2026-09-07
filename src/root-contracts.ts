@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { RecommendedQuestionOptionsSchema } from "./human-question.js";
+import { AdvisorRoleSchema } from "./workflows.js";
 
 const opaqueId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
@@ -37,22 +38,50 @@ export const PullRequestTitleSchema = z.string().refine(
 ).trim().min(1).max(120);
 export type PullRequestTitle = z.infer<typeof PullRequestTitleSchema>;
 
-export const WorkerAssignmentSchema = z.object({
-  plan: z.string().trim().min(1).describe("The Coordinator's implementation plan, based on its own source investigation. Include the chosen approach, affected files, and constraints."),
+const WorkerAssignmentShape = z.object({
+  plan: z.string().trim().min(1).optional().describe("The Coordinator's implementation plan, based on its own source investigation. Include the chosen approach, affected files, and constraints. Mandatory in planned mode; omitted in direct mode."),
   acceptanceCriteria: z.array(z.string().trim().min(1)).min(1).describe("Concrete outcomes and checks the Coordinator will use to review the implementation."),
   instruction: z.string().trim().min(1).describe("Specific implementation or check commands for the Worker. Planning and final review remain with the Coordinator."),
+  mode: z.enum(["planned", "direct"]).optional().describe("planned (default) requires a plan. direct is legal only for the Direct build workflow."),
+  purpose: z.enum(["implementation", "verification"]).optional().describe("verification runs the specified checks on the pinned revision without intentional source edits."),
+  advisorSessionId: opaqueId.optional().describe("Pull request repair: the latest valid current-range Rater session whose report the Worker implements."),
+  candidateSessionIds: z.tuple([opaqueId, opaqueId]).optional().describe("Combined planning: the Plan A and Plan B sessions, in that order, that the combined plan resolves."),
 }).strict();
+const plannedNeedsPlan = (assignment: { mode?: "planned" | "direct" | undefined; plan?: string | undefined }) => assignment.mode === "direct" || (assignment.plan?.length ?? 0) > 0;
+export const WorkerAssignmentSchema = WorkerAssignmentShape.refine(plannedNeedsPlan, "A planned assignment requires the Coordinator's plan");
 export type WorkerAssignment = z.infer<typeof WorkerAssignmentSchema>;
+
+export const AdvisorRequestSchema = z.object({
+  role: AdvisorRoleSchema,
+  brief: z.string().trim().min(1).max(20_000).optional().describe("Reviewer only: Coordinator's plan and acceptance criteria. Forge composes every other Advisor input."), // bound: 20,000 characters keeps the brief inside one native prompt
+}).strict();
+export type AdvisorRequest = z.infer<typeof AdvisorRequestSchema>;
 
 export const RootToolSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("observe") }).strict(),
   z.object({ kind: z.literal("read_image"), artifactId: opaqueId }).strict(),
-  WorkerAssignmentSchema.extend({ kind: z.literal("delegate_worker") }).strict(),
+  WorkerAssignmentShape.extend({ kind: z.literal("delegate_worker") }).strict().refine(plannedNeedsPlan, "A planned assignment requires the Coordinator's plan"),
+  AdvisorRequestSchema.extend({ kind: z.literal("delegate_advisor") }).strict(),
   z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional(), review: DeliveryReviewSchema.optional(), pullRequestTitle: PullRequestTitleSchema.optional().describe("For pull request creation, use concise action-oriented wording based on the final reviewed diff. Do not copy task prose or a commit message.") }).strict(),
   z.object({ kind: z.literal("ask_human"), question: z.string().min(1), options: RecommendedQuestionOptionsSchema }).strict(),
 ]);
 
 export type RootTool = z.infer<typeof RootToolSchema>;
+
+/** Anthropic rejects a top-level oneOf in tool input, so the tool advertises one flat object; RootToolSchema still validates every call. */
+export function rootToolInputSchema(): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  const kinds: string[] = [];
+  const guide: string[] = [];
+  for (const variant of RootToolSchema.options) {
+    const schema = z.toJSONSchema(variant) as { properties?: Record<string, Record<string, unknown>> };
+    const fields = Object.keys(schema.properties ?? {}).filter(name => name !== "kind");
+    kinds.push(String(schema.properties?.kind?.const));
+    guide.push(`${String(schema.properties?.kind?.const)}: ${fields.join(", ") || "no other fields"}`);
+    for (const name of fields) properties[name] ??= schema.properties?.[name];
+  }
+  return { type: "object", properties: { kind: { type: "string", enum: kinds, description: `The request kind. Fields per kind. ${guide.join(". ")}.` }, ...properties }, required: ["kind"], additionalProperties: false };
+}
 
 export const RootImageResultSchema = z.object({ kind: z.literal("image"), filename: z.string(), mimeType: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]), data: z.string() }).strict();
 export type RootImageResult = z.infer<typeof RootImageResultSchema>;

@@ -7,7 +7,7 @@ import { TaskControlStatusSchema } from "../../task-control.js";
 import { usageIsUnpriced } from "../../task-analytics-metrics.js";
 
 const colors = { delivered: "#10b981", active: "#3b82f6", waiting_human: "#f59e0b", cancelled: "#ef4444", backlog: "#94a3b8" };
-const config = { root: { label: "Coordinator", color: "#3b82f6" }, worker: { label: "Worker", color: "#8b5cf6" } };
+const config = { root: { label: "Coordinator", color: "#3b82f6" }, worker: { label: "Delegated", color: "#8b5cf6" } };
 
 export function OutcomeChart({ tasks }: { tasks: TaskAnalytics[] }) {
   const data = TaskControlStatusSchema.options.map(status => ({ name: taskStatusLabels[status], value: tasks.filter(task => task.status === status).length, fill: colors[status] }));
@@ -34,8 +34,8 @@ export function SpendChart({ tasks }: { tasks: TaskAnalytics[] }) {
   return <section className="min-w-0 p-4" aria-label="Estimated spend over time"><div className="flex items-center justify-between gap-2"><h2 className="text-sm font-medium">Estimated spend over time</h2><span className="text-xs text-muted-foreground">USD · UTC days</span></div>
     <ChartContainer config={config} className="h-48 w-full"><AreaChart data={data} accessibilityLayer margin={{ top: 16, right: 8, left: 0, bottom: 0 }}>
       <CartesianGrid vertical={false} /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={30} tickFormatter={value => String(value).slice(5)} /><YAxis width={45} tickLine={false} axisLine={false} tickFormatter={value => `$${compact(Number(value))}`} />
-      <ChartTooltip content={<ChartTooltipContent formatter={(value, name) => <span>{name === "root" ? "Coordinator" : "Worker"}: {money(Number(value))}</span>} />} />
+      <ChartTooltip content={<ChartTooltipContent formatter={(value, name) => <span>{name === "root" ? "Coordinator" : "Delegated"}: {money(Number(value))}</span>} />} />
       <Area type="monotone" dataKey="root" stackId="cost" stroke="var(--color-root)" fill="var(--color-root)" fillOpacity={0.15} isAnimationActive={false} /><Area type="monotone" dataKey="worker" stackId="cost" stroke="var(--color-worker)" fill="var(--color-worker)" fillOpacity={0.15} isAnimationActive={false} />
-    </AreaChart></ChartContainer><div className="flex gap-4 text-xs text-muted-foreground"><span><span className="text-blue-500">●</span> Coordinator</span><span><span className="text-violet-500">●</span> Worker</span>{!data.length ? <span>No measured spend</span> : null}</div>
+    </AreaChart></ChartContainer><div className="flex gap-4 text-xs text-muted-foreground"><span><span className="text-blue-500">●</span> Coordinator</span><span><span className="text-violet-500">●</span> Delegated</span>{!data.length ? <span>No measured spend</span> : null}</div>
   </section>;
 }

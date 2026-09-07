@@ -11,6 +11,9 @@ export class FakeTaskHarness implements TaskHarness {
   failStop = false;
   readonly stopped: string[] = [];
   readonly fenced: string[] = [];
+  /** Per-message native answers; unmapped messages answer with a generic result. */
+  readonly results = new Map<string, string>();
+  readonly evidence = new Map<string, { tools: Array<{ id: string; name: string; status: "pending" | "running" | "completed" | "error"; input: Record<string, unknown>; output: string | null; error: string | null }>; limit: string | null }>();
   serverGeneration = "b775df17-718a-4cb2-8e23-6912b8aa0d39";
 
   async recoverDispatch(...[scope, intent, attempt]: Parameters<TaskHarness["recoverDispatch"]>): Promise<OpenCodePromptObservation> {
@@ -47,10 +50,12 @@ export class FakeTaskHarness implements TaskHarness {
     if (this.loseAcknowledgement) throw new Error("Lost prompt acknowledgement");
     return observed;
   }
-  async resultText(): Promise<string> { return "Verified native result"; }
-  finish(messageID: string, state: "completed" | "interrupted" | "error" = "completed"): void {
+  async resultText(_scope: OpenCodeTaskScope, observation: OpenCodePromptObservation): Promise<string> { return this.results.get(observation.messageID) ?? "Verified native result"; }
+  async turnEvidence(_scope: OpenCodeTaskScope, observation: OpenCodePromptObservation) { return this.evidence.get(observation.messageID) ?? { tools: [], limit: null }; }
+  finish(messageID: string, state: "completed" | "interrupted" | "error" = "completed", text?: string): void {
     const current = this.observations.get(messageID);
     if (!current) throw new Error("Prompt was not dispatched");
+    if (text !== undefined) this.results.set(messageID, text);
     this.observations.set(messageID, { ...current, state, assistantMessageID: `assistant-${messageID}` });
   }
 }

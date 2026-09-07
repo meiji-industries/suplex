@@ -127,7 +127,7 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     await page.route(archiveUrl, async route => {
       archiveBodies.push(JSON.parse(route.request().postData() ?? "{}") as { confirmDiscardDirty?: boolean });
       if (archiveBodies.length === 1) {
-        await route.fulfill({ json: { status: "confirmation_required", dirtyFileCount: 1 } });
+        await route.fulfill({ json: { status: "confirmation_required", dirtyFileCount: 1, dirtyFilePaths: ["src/app.ts"] } });
         return;
       }
       await route.continue();

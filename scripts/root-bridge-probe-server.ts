@@ -12,6 +12,8 @@ const record = async (value: unknown): Promise<void> => appendFile(callsPath, `$
 
 const adapter: RootBridgeAdapter = {
   async readImage(): Promise<never> { throw new Error("No image in this probe"); },
+  async claimToolOwner(): Promise<string | null> { return "probe-token"; },
+  async releaseToolOwner(): Promise<void> {},
   async assertCurrentRoot(root: RootIdentity): Promise<void> {
     if (root.taskId !== config.root.taskId || root.sessionId !== config.root.sessionId || root.generation !== config.root.generation)
       throw new Error("probe Root binding did not match");
@@ -24,6 +26,10 @@ const adapter: RootBridgeAdapter = {
   async delegateWorker(root, assignment): Promise<unknown> {
     await record({ kind: "delegate_worker", root, ...assignment });
     return { assignmentId: "probe-worker" };
+  },
+  async delegateAdvisor(root, request): Promise<unknown> {
+    await record({ kind: "delegate_advisor", root, ...request });
+    return { assignmentId: "probe-advisor" };
   },
   async requestDelivery(): Promise<unknown> {
     throw new Error("probe does not permit delivery");

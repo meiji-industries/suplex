@@ -7,6 +7,7 @@ const integrationTests = [
   "tests/task-host.test.ts",
   "tests/task-sources.test.ts",
   "tests/task-worktree.test.ts",
+  "tests/worker-environment.test.ts",
 ];
 const packagedTests = ["desktop/tests/packaged-smoke.test.ts"];
 

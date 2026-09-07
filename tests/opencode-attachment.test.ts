@@ -9,7 +9,7 @@ import type { OpenCodeServerReference } from "../src/opencode-server.js";
 test.each(["live", "failed_command", "old_server", "unrelated", "unknown"])("native attachment recovers from %s without treating pane existence as liveness", async condition => {
   const directory = await mkdtemp(join(tmpdir(), "forge-attachment-"));
   try {
-    const scope: OpenCodeTaskScope = { id: "session", taskId: "task", role: "worker", directory, profile: { providerID: "openai", modelID: "test", reasoningEffort: "medium", serviceTier: "default" } };
+    const scope: OpenCodeTaskScope = { id: "session", taskId: "task", role: "worker", workerMode: "planned", purpose: "implementation", workflow: "standard", evidenceRoot: null, directory, profile: { providerID: "openai", modelID: "test", reasoningEffort: "medium", serviceTier: "default" } };
     const reference: OpenCodeServerReference = { pid: process.pid, baseUrl: "http://127.0.0.1:1234", password: "a".repeat(64), directory, executable: "/bin/opencode", generation: "b775df17-718a-4cb2-8e23-6912b8aa0d39", configHash: "a".repeat(64), processIdentity: { command: "opencode serve", executable: "/bin/opencode", argv: ["opencode", "serve"], processGroup: process.pid, startTime: "start", ownerUid: 501 } };
     const runtimeDirectory = join(directory, "runtime", "task-sessions", scope.id);
     await mkdir(runtimeDirectory, { recursive: true });

@@ -5,12 +5,10 @@ import { taskTimelineDuration } from "../../lib/task-timeline-duration.js";
 import { Alert, AlertDescription } from "../ui/alert.js";
 import { TimelineAgentLabel } from "./timeline-agent-label.js";
 
+import { roleLabel } from "../../../workflows.js";
+
 const statuses = { completed: "Completed", running: "In progress", failed: "Failed", interrupted: "Stopped" };
 const freshnessMs = 10_000;
-
-function roleLabel(role: TimelineTask["activity"][number]["role"]): string {
-  return role === "root" ? "Coordinator" : "Worker";
-}
 
 function timestamp(value: number): string {
   return new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
@@ -53,10 +51,10 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
   const worked = intervals.reduce((total, entry) => total + entry.end - entry.start, 0);
   const span = Math.max(1, end - start);
   const ticks = Array.from({ length: 5 }, (_, index) => start + span * index / 4);
-  const laneMap = new Map<string, { agentId: string; avatarSeed: string; name: string; roles: Set<TimelineTask["activity"][number]["role"]>; entries: typeof intervals }>();
+  const laneMap = new Map<string, { agentId: string; avatarSeed: string; name: string; roles: Set<string>; entries: typeof intervals }>();
   for (const entry of intervals) {
     const lane = laneMap.get(entry.agentId) ?? { agentId: entry.agentId, avatarSeed: entry.avatarSeed, name: entry.agentName, roles: new Set(), entries: [] };
-    lane.roles.add(entry.role);
+    lane.roles.add(entry.label ?? roleLabel({ kind: entry.role, advisorRole: entry.advisorRole ?? null }));
     lane.entries.push(entry);
     laneMap.set(entry.agentId, lane);
   }
@@ -73,14 +71,14 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
         </div>
         {lanes.map(lane => <div className="contents" key={lane.agentId}>
           <div className="sticky left-0 z-10 flex min-h-11 items-center border-b border-border bg-background px-3">
-            <TimelineAgentLabel avatarSeed={lane.avatarSeed} name={lane.name} role={[...lane.roles].map(roleLabel).join(" / ")} executionCount={lane.entries.length} duration={taskTimelineDuration(lane.entries.reduce((total, entry) => total + entry.end - entry.start, 0))} />
+            <TimelineAgentLabel avatarSeed={lane.avatarSeed} name={lane.name} role={[...lane.roles].join(" / ")} executionCount={lane.entries.length} duration={taskTimelineDuration(lane.entries.reduce((total, entry) => total + entry.end - entry.start, 0))} />
           </div>
           <div className="relative min-h-11 border-b border-border/70" role="list" aria-label={`${lane.name} executions`}>
             {lane.entries.map(entry => {
               const left = Math.min(99.5, (entry.start - start) / span * 100);
               const width = Math.min(100 - left, Math.max(0.5, (entry.end - entry.start) / span * 100));
               const status = entry.status === "running" && !entry.live ? "Observation not available" : statuses[entry.status];
-              const role = roleLabel(entry.role);
+              const role = entry.label ?? roleLabel({ kind: entry.role, advisorRole: entry.advisorRole ?? null });
               const label = `${lane.name}, ${role}, session ${entry.attempt}: ${timestamp(entry.start)} to ${timestamp(entry.end)}, ${taskTimelineDuration(entry.end - entry.start)}. ${status}.`;
               return <div role="listitem" tabIndex={0} key={entry.id} data-task-timing={entry.role} data-task-agent-id={entry.agentId} data-task-timing-active={entry.live || undefined} aria-label={label} title={label} className={`absolute top-3 flex h-5 items-center overflow-hidden rounded-sm px-1 text-left text-[10px] leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${entry.live ? "phase-timing-active text-emerald-950 motion-reduce:animate-none" : entry.status === "failed" ? "bg-destructive/20 text-destructive" : "bg-primary/15 text-foreground"}`} style={{ left: `${left}%`, width: `${width}%` }}><span className="truncate">{role}</span></div>;
             })}

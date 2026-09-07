@@ -5,17 +5,21 @@ import { inspectProcessOnce } from "./process-manager.js";
 import { TaskAnalyticsStore } from "./task-analytics-store.js";
 import { StructuredLogger } from "./logging.js";
 
+import type Database from "better-sqlite3";
 import type { ForgeDatabase } from "./database.js";
 import { createOpenCodeMessageID } from "./opencode-session.js";
 import { TaskConfigurationSchema } from "./task-contracts.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt, type PullRequestReference } from "./task-control.js";
 import { DeliveryIntentSchema, PullRequestReferenceSchema, TaskControlStatusSchema, TaskProfileSchema, TaskSessionKindSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, WorktreeReferenceSchema, type DeliveryIntent, type TaskControl, type TaskProfile, type TaskSession, type TaskSessionKind, type TaskTurn, type WorktreeReference } from "./task-control.js";
+import { AdvisorRoleSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
+import { STANDARD_WORKER_RESULT_WAKE, workerAssignmentPreamble } from "./workflow-prompts.js";
 
 const now = (): string => new Date().toISOString();
 const hash = (value: string): string => createHash("sha256").update(value).digest("hex");
 type Row = Record<string, unknown>;
 
 export type ProcessOwnerObservation = { kind: "running"; startTime: string } | { kind: "absent" } | { kind: "unknown" };
+export type WorkflowCompletionResult = { kind: "completed" } | { kind: "already" } | { kind: "cancelled" } | { kind: "declined"; code: DeliveryFailureCode; reason: string };
 
 async function observeProcessOwner(pid: number): Promise<ProcessOwnerObservation> {
   const inspection = await inspectProcessOnce(pid);
@@ -36,13 +40,16 @@ function control(row: Row): TaskControl {
   if (!taskId || !objective || !deliveryTarget) throw new Error("Invalid persisted task control");
   const rootProfile = parseJson(text(row, "root_profile_json"), TaskProfileSchema); const workerProfile = parseJson(text(row, "worker_profile_json"), TaskProfileSchema); const deliveryIntent = parseJson(text(row, "delivery_intent_json"), DeliveryIntentSchema);
   if (!rootProfile || !workerProfile || !deliveryIntent) throw new Error("Task control configuration is missing");
-  return { humanQuestionOptions: HumanQuestionOptionsSchema.parse(JSON.parse(text(row, "human_question_options_json") ?? "[]")), taskId, objective, deliveryTarget, deliveryIntent, status, wakeAt: text(row, "wake_at"), humanQuestion: text(row, "human_question"), humanQuestionId: text(row, "human_question_id"), recoveryTurnId: text(row, "recovery_turn_id"), worktree: parseJson(text(row, "worktree_json"), WorktreeReferenceSchema), pullRequest: parseJson(text(row, "pull_request_json"), PullRequestReferenceSchema), rootSessionId: text(row, "root_session_id"), workerSessionId: text(row, "worker_session_id"), rootProfile, workerProfile };
+  const workflow = WorkflowIdSchema.parse(text(row, "workflow") ?? "standard");
+  const advisorProfiles = z.partialRecord(AdvisorRoleSchema, TaskProfileSchema).parse(JSON.parse(text(row, "advisor_profiles_json") ?? "{}"));
+  const workflowState = parseJson(text(row, "workflow_state_json"), WorkflowStateSchema) ?? emptyWorkflowState();
+  return { workflow, advisorProfiles, workflowState, humanQuestionOptions: HumanQuestionOptionsSchema.parse(JSON.parse(text(row, "human_question_options_json") ?? "[]")), taskId, objective, deliveryTarget, deliveryIntent, status, wakeAt: text(row, "wake_at"), humanQuestion: text(row, "human_question"), humanQuestionId: text(row, "human_question_id"), recoveryTurnId: text(row, "recovery_turn_id"), worktree: parseJson(text(row, "worktree_json"), WorktreeReferenceSchema), pullRequest: parseJson(text(row, "pull_request_json"), PullRequestReferenceSchema), rootSessionId: text(row, "root_session_id"), workerSessionId: text(row, "worker_session_id"), rootProfile, workerProfile };
 }
 function session(row: Row): TaskSession {
   const id = text(row, "id"); const taskId = text(row, "task_id");
   if (!id || !taskId) throw new Error("Invalid persisted task session");
   const launchOwnerPid = row.launch_owner_pid === null || row.launch_owner_pid === undefined ? null : integer(row, "launch_owner_pid");
-  return { id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), launchOwner: text(row, "launch_owner"), launchOwnerPid, launchOwnerStartTime: text(row, "launch_owner_start_time"), stopRequestedAt: text(row, "stop_requested_at"), stoppedAt: text(row, "stopped_at") };
+  return { id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), launchOwner: text(row, "launch_owner"), launchOwnerPid, launchOwnerStartTime: text(row, "launch_owner_start_time"), stopRequestedAt: text(row, "stop_requested_at"), stoppedAt: text(row, "stopped_at"), advisorRole: text(row, "advisor_role") === null ? null : AdvisorRoleSchema.parse(text(row, "advisor_role")), workflowInput: parseJson(text(row, "workflow_input_json"), WorkflowInputSchema) };
 }
 function turn(row: Row): TaskTurn {
   const id = text(row, "id"); const taskId = text(row, "task_id"); const sessionId = text(row, "session_id"); const promptHash = text(row, "prompt_hash"); const promptText = text(row, "prompt_text");
@@ -52,9 +59,10 @@ function turn(row: Row): TaskTurn {
 
 export class TaskControlStore {
   constructor(private readonly database: ForgeDatabase, private readonly inspectOwner: (pid: number) => Promise<ProcessOwnerObservation> = observeProcessOwner) {}
-  create(input: { taskId: string; startImmediately: boolean; objective: string; deliveryTarget: string; deliveryIntent: DeliveryIntent; rootProfile: TaskProfile; workerProfile: TaskProfile; worktree?: WorktreeReference }): TaskControl {
+  create(input: { taskId: string; startImmediately: boolean; objective: string; deliveryTarget: string; deliveryIntent: DeliveryIntent; rootProfile: TaskProfile; workerProfile: TaskProfile; worktree?: WorktreeReference; workflow?: WorkflowId; advisorProfiles?: Partial<Record<AdvisorRole, TaskProfile>> }): TaskControl {
     const time = now();
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_task_controls (task_id, objective, delivery_target, delivery_intent_json, status, wake_at, human_question, worktree_json, pull_request_json, root_session_id, worker_session_id, root_profile_json, worker_profile_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?)").run(input.taskId, input.objective, input.deliveryTarget, JSON.stringify(DeliveryIntentSchema.parse(input.deliveryIntent)), input.startImmediately ? "active" : "backlog", input.worktree ? JSON.stringify(input.worktree) : null, JSON.stringify(TaskProfileSchema.parse(input.rootProfile)), JSON.stringify(TaskProfileSchema.parse(input.workerProfile)), time, time));
+    const advisorProfiles = Object.fromEntries(Object.entries(input.advisorProfiles ?? {}).map(([role, profile]) => [AdvisorRoleSchema.parse(role), TaskProfileSchema.parse(profile)]));
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_task_controls (task_id, objective, delivery_target, delivery_intent_json, status, wake_at, human_question, worktree_json, pull_request_json, root_session_id, worker_session_id, root_profile_json, worker_profile_json, workflow, advisor_profiles_json, workflow_state_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)").run(input.taskId, input.objective, input.deliveryTarget, JSON.stringify(DeliveryIntentSchema.parse(input.deliveryIntent)), input.startImmediately ? "active" : "backlog", input.worktree ? JSON.stringify(input.worktree) : null, JSON.stringify(TaskProfileSchema.parse(input.rootProfile)), JSON.stringify(TaskProfileSchema.parse(input.workerProfile)), WorkflowIdSchema.parse(input.workflow ?? "standard"), JSON.stringify(advisorProfiles), JSON.stringify(emptyWorkflowState()), time, time));
     return this.observeLifecycle(input.taskId);
   }
   start(taskId: string): TaskControl {
@@ -91,8 +99,9 @@ export class TaskControlStore {
     return this.get(taskId);
   }
   setPullRequest(taskId: string, pullRequest: PullRequestReference | null): TaskControl {
+    // A cancelled task still records what GitHub reports; it never resumes because of it.
     const value = pullRequest === null ? null : JSON.stringify(PullRequestReferenceSchema.parse(pullRequest));
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET pull_request_json = ?, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(value, now(), taskId).changes);
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET pull_request_json = ?, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered', 'cancelled')").run(value, now(), taskId).changes);
     if (changed !== 1) throw new Error("task_not_active");
     return this.get(taskId);
   }
@@ -179,7 +188,7 @@ export class TaskControlStore {
   wakeIdleRoot(taskId: string): void {
     const time = now();
     const prompt = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) SELECT ?, c.task_id, s.id, s.generation, ?, ?, 'pending_prompt', ?, ? FROM forge_task_controls c JOIN forge_task_sessions s ON s.id = c.root_session_id WHERE c.task_id = ? AND c.status = 'active' AND s.is_current = 1 AND s.lifecycle = 'live' AND s.native_session_id IS NOT NULL AND s.launch_owner IS NULL AND NOT EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = s.id AND t.status IN ('pending_prompt', 'prompted', 'unknown')) AND NOT EXISTS (SELECT 1 FROM forge_task_sessions w JOIN forge_task_turns wt ON wt.session_id = w.id AND wt.generation = w.generation WHERE w.task_id = c.task_id AND w.kind = 'worker' AND w.is_current = 1 AND wt.status IN ('pending_prompt', 'prompted', 'unknown'))").run(createOpenCodeMessageID(), hash(prompt), prompt, time, time, taskId));
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) SELECT ?, c.task_id, s.id, s.generation, ?, ?, 'pending_prompt', ?, ? FROM forge_task_controls c JOIN forge_task_sessions s ON s.id = c.root_session_id WHERE c.task_id = ? AND c.status = 'active' AND json_extract(c.workflow_state_json, '$.deliveryWait') IS NULL AND s.is_current = 1 AND s.lifecycle = 'live' AND s.native_session_id IS NOT NULL AND s.launch_owner IS NULL AND NOT EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = s.id AND t.status IN ('pending_prompt', 'prompted', 'unknown')) AND NOT EXISTS (SELECT 1 FROM forge_task_sessions w JOIN forge_task_turns wt ON wt.session_id = w.id AND wt.generation = w.generation WHERE w.task_id = c.task_id AND w.kind = 'worker' AND w.is_current = 1 AND wt.status IN ('pending_prompt', 'prompted', 'unknown'))").run(createOpenCodeMessageID(), hash(prompt), prompt, time, time, taskId));
   }
   claimPrompt(turnId: string, serverGeneration: string, owner: string): boolean {
     const attempt = PromptDispatchAttemptSchema.parse({ serverGeneration, claimedAt: now() });
@@ -200,21 +209,33 @@ export class TaskControlStore {
   claimRoot(input: { taskId: string }): TaskSession {
     return this.claim(input.taskId);
   }
-  launchWorker(input: { taskId: string; rootSessionId: string; rootGeneration: number; instruction: string }): TaskSession {
-    const assignmentHash = hash(input.instruction); const time = now();
-    const promptText = `You are the scoped implementation Worker for this Forge task. Coordinator owns planning, design decisions, and independent review. Implement Coordinator's bounded assignment and run its specified checks. Do not take over task planning or final review, and do not decide whether the task is ready for delivery. If the assignment lacks a necessary design decision, report the specific question to Coordinator. Do not delegate or launch subagents. Do not push, create or merge pull requests, or run GitHub mutations. Preserve existing work. Report the files changed, exact verification commands and results, and any blocker to Coordinator.\n\nAssignment:\n${input.instruction}`;
+  /** Launches the one delegated session: a Worker assignment, or an Advisor with its Forge-composed prompt and input. */
+  launchWorker(input: { taskId: string; rootSessionId: string; rootGeneration: number } & ({ instruction: string; workflowInput?: Extract<WorkflowInput, { kind: "worker" }> } | { advisor: { role: AdvisorRole; prompt: string; input: Extract<WorkflowInput, { kind: "advisor" }> } })): TaskSession {
+    const time = now();
+    const advisor = "advisor" in input ? input.advisor : null;
+    const worker = "advisor" in input ? null : input;
+    const workflowInput: WorkflowInput | null = advisor ? advisor.input : worker?.workflowInput ?? null;
+    const promptText = advisor ? advisor.prompt : `${workerAssignmentPreamble(worker?.workflowInput?.mode ?? "planned", worker?.workflowInput?.purpose ?? "implementation")}\n\nAssignment:\n${worker?.instruction ?? ""}`;
+    const assignmentHash = hash(advisor ? advisor.prompt : worker?.instruction ?? "");
+    if (workflowInput) WorkflowInputSchema.parse(workflowInput);
     return this.database.authTransaction((db) => {
       const task = db.prepare("SELECT status FROM forge_task_controls WHERE task_id = ?").get(input.taskId) as Row | undefined;
       const root = db.prepare("SELECT * FROM forge_task_sessions WHERE id = ? AND task_id = ? AND kind = 'root' AND is_current = 1 AND generation = ?").get(input.rootSessionId, input.taskId, input.rootGeneration) as Row | undefined;
       if (!task || TaskControlStatusSchema.parse(text(task, "status")) !== "active" || !root || TaskSessionLifecycleSchema.parse(text(root, "lifecycle")) === "cancelled") throw new Error("root_identity_mismatch");
       const current = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND is_current = 1").get(input.taskId) as Row | undefined;
       const generation = (current ? integer(current, "generation") : 0) + 1;
-      const id = current ? text(current, "id") : randomUUID();
+      // A Standard-workflow Worker keeps one native session across assignments; Advisors and workflow Workers pin per-session input, so they get a fresh session.
+      const reuse = Boolean(current) && !advisor && !workflowInput && text(current!, "advisor_role") === null && text(current!, "workflow_input_json") === null;
+      const id = reuse ? text(current!, "id") : randomUUID();
       if (!id) throw new Error("Invalid persisted task session");
-      if (current) {
-        const changed = db.prepare("UPDATE forge_task_sessions SET generation = ?, lifecycle = CASE WHEN lifecycle = 'stopped' THEN 'reserved' ELSE lifecycle END, assignment_hash = ?, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, stop_requested_at = NULL, stopped_at = NULL, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle IN ('reserved', 'live', 'stopped') AND (launch_owner IS NULL OR (lifecycle = 'stopped' AND stopped_at IS NOT NULL)) AND (stop_requested_at IS NULL OR stopped_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = forge_task_sessions.id AND t.generation = forge_task_sessions.generation AND t.status IN ('pending_prompt', 'prompted', 'unknown'))").run(generation, assignmentHash, time, id, integer(current, "generation")).changes;
+      if (reuse) {
+        const changed = db.prepare("UPDATE forge_task_sessions SET generation = ?, lifecycle = CASE WHEN lifecycle = 'stopped' THEN 'reserved' ELSE lifecycle END, assignment_hash = ?, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, stop_requested_at = NULL, stopped_at = NULL, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle IN ('reserved', 'live', 'stopped') AND (launch_owner IS NULL OR (lifecycle = 'stopped' AND stopped_at IS NOT NULL)) AND (stop_requested_at IS NULL OR stopped_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = forge_task_sessions.id AND t.generation = forge_task_sessions.generation AND t.status IN ('pending_prompt', 'prompted', 'unknown'))").run(generation, assignmentHash, time, id, integer(current!, "generation")).changes;
         if (changed !== 1) throw new Error("worker_already_assigned");
-      } else db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, native_session_id, lifecycle, assignment_hash, created_at, updated_at) VALUES (?, ?, 'worker', ?, 1, NULL, NULL, 'reserved', ?, ?, ?)").run(id, input.taskId, generation, assignmentHash, time, time);
+      } else {
+        if (current && ["reserved", "live", "unknown"].includes(TaskSessionLifecycleSchema.parse(text(current, "lifecycle")))) throw new Error("worker_already_assigned");
+        if (current) db.prepare("UPDATE forge_task_sessions SET is_current = 0, lifecycle = 'stopped', updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1").run(time, text(current, "id"), integer(current, "generation"));
+        db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, native_session_id, lifecycle, assignment_hash, advisor_role, workflow_input_json, created_at, updated_at) VALUES (?, ?, 'worker', ?, 1, NULL, NULL, 'reserved', ?, ?, ?, ?, ?)").run(id, input.taskId, generation, assignmentHash, advisor?.role ?? null, workflowInput ? JSON.stringify(workflowInput) : null, time, time);
+      }
       db.prepare("UPDATE forge_task_controls SET worker_session_id = ?, updated_at = ? WHERE task_id = ? AND status = 'active'").run(id, time, input.taskId);
       db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_prompt', NULL, NULL, ?, NULL, NULL, ?)").run(createOpenCodeMessageID(), input.taskId, id, generation, assignmentHash, hash(promptText), promptText, time, time);
       return session(db.prepare("SELECT * FROM forge_task_sessions WHERE id = ?").get(id) as Row);
@@ -242,25 +263,139 @@ export class TaskControlStore {
   }
   markPrompted(input: { turnId: string; generation: number }): void { if (this.database.authTransaction((db) => db.prepare("UPDATE forge_task_turns SET status = 'prompted', prompted_at = ?, updated_at = ? WHERE id = ? AND generation = ? AND status IN ('pending_prompt', 'unknown') AND EXISTS (SELECT 1 FROM forge_task_sessions session WHERE session.id = forge_task_turns.session_id AND session.is_current = 1 AND session.generation = forge_task_turns.generation)").run(now(), now(), input.turnId, input.generation).changes) !== 1) throw new Error("stale_turn"); }
   pendingTurns(sessionId: string): TaskTurn[] { return this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_task_turns WHERE session_id = ? AND status IN ('pending_prompt', 'unknown', 'prompted') ORDER BY created_at, id").all(sessionId) as Row[]).map(turn)); }
-  recordWorkerResultAndWake(input: { taskId: string; sessionId: string; generation: number; receiptId: string; observation: string; nativeTurnId?: string }): { kind: "recorded"; wake: TaskTurn } | { kind: "duplicate" } {
+  /** Completes the delegate turn, appends a Reviewer/Rater record from the session's stored input, retires the delegate, and wakes Coordinator once, all in one transaction. */
+  recordWorkerResultAndWake(input: { taskId: string; sessionId: string; generation: number; receiptId: string; observation: string; nativeTurnId?: string; review?: { result: ReviewerResult | RaterResult | null; invalidReason: string | null }; wakePrompt?: string }): { kind: "recorded"; wake: TaskTurn } | { kind: "duplicate" } {
     return this.database.authTransaction((db) => {
       const workerTurn = db.prepare("SELECT * FROM forge_task_turns WHERE task_id = ? AND session_id = ? AND generation = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.sessionId, input.generation) as Row | undefined;
-      const worker = db.prepare("SELECT id FROM forge_task_sessions WHERE id = ? AND kind = 'worker' AND is_current = 1 AND generation = ? AND lifecycle <> 'cancelled'").get(input.sessionId, input.generation);
-      if (!workerTurn || !worker || TaskTurnStatusSchema.parse(text(workerTurn, "status")) === "cancelled") throw new Error("stale_generation");
+      const workerRow = db.prepare("SELECT * FROM forge_task_sessions WHERE id = ? AND kind = 'worker' AND is_current = 1 AND generation = ? AND lifecycle <> 'cancelled'").get(input.sessionId, input.generation) as Row | undefined;
+      if (!workerTurn || !workerRow || TaskTurnStatusSchema.parse(text(workerTurn, "status")) === "cancelled") throw new Error("stale_generation");
       if (TaskTurnStatusSchema.parse(text(workerTurn, "status")) === "completed") { if (text(workerTurn, "result_receipt_id") === input.receiptId) return { kind: "duplicate" }; throw new Error("stale_receipt"); }
+      const worker = session(workerRow);
       const root = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'root' AND is_current = 1").get(input.taskId) as Row | undefined;
       if (!root) throw new Error("root_notification_unavailable");
-      const time = now(); const wakeId = createOpenCodeMessageID(); const promptText = `Worker result receipt ${input.receiptId}. You own independent review. Read the changed source yourself, compare it with your plan and acceptance criteria, and assess the reported check evidence. Do not delegate final review or the delivery recommendation to another Worker. Delegate only specific repairs or additional check commands, then review their results yourself. Observe current state and decide the next action.\n\n${input.observation}`; const promptHash = hash(promptText);
+      const time = now(); const wakeId = createOpenCodeMessageID(); const promptText = input.wakePrompt ?? `Worker result receipt ${input.receiptId}. ${STANDARD_WORKER_RESULT_WAKE}\n\n${input.observation}`; const promptHash = hash(promptText);
       db.prepare("UPDATE forge_task_turns SET status = 'completed', result_receipt_id = ?, terminal_observation = ?, native_turn_id = ?, completed_at = ?, updated_at = ? WHERE id = ?").run(input.receiptId, input.observation, input.nativeTurnId ?? null, time, time, text(workerTurn, "id"));
+      if ((worker.advisorRole === "reviewer" || worker.advisorRole === "rater") && worker.workflowInput?.kind === "advisor") {
+        const role = worker.advisorRole;
+        const review = input.review ?? { result: null, invalidReason: "The Advisor turn did not complete" };
+        const result = review.result && review.result.role === role ? review.result : null;
+        const state = this.workflowStateRow(db, input.taskId);
+        state.reviews.push({ sessionId: worker.id, turnId: text(workerTurn, "id")!, role, range: worker.workflowInput.range, result, invalidReason: result ? null : review.invalidReason ?? "The Advisor result does not match its role", recordedAt: time } as WorkflowState["reviews"][number]);
+        this.writeWorkflowState(db, input.taskId, state);
+      }
+      // Advisors and workflow Workers are one-shot; a Standard Worker stays live so the next assignment reuses its context.
+      if (worker.advisorRole || worker.workflowInput) db.prepare("UPDATE forge_task_sessions SET lifecycle = 'stopped', stop_requested_at = ?, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1").run(time, time, input.sessionId, input.generation);
       db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending_prompt', NULL, NULL, ?, NULL, NULL, ?)").run(wakeId, input.taskId, text(root, "id"), integer(root, "generation"), promptHash, promptText, time, time);
       db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ?").run(time, time, input.taskId);
       return { kind: "recorded", wake: turn(db.prepare("SELECT * FROM forge_task_turns WHERE id = ?").get(wakeId) as Row) };
     });
   }
+  private workflowStateRow(db: Database.Database, taskId: string): WorkflowState {
+    const row = db.prepare("SELECT workflow_state_json FROM forge_task_controls WHERE task_id = ?").get(taskId) as Row | undefined;
+    return parseJson(row ? text(row, "workflow_state_json") : null, WorkflowStateSchema) ?? emptyWorkflowState();
+  }
+  private writeWorkflowState(db: Database.Database, taskId: string, state: WorkflowState): void {
+    db.prepare("UPDATE forge_task_controls SET workflow_state_json = ?, updated_at = ? WHERE task_id = ?").run(JSON.stringify(WorkflowStateSchema.parse(state)), now(), taskId);
+  }
+  /**
+   * The completion commit boundary for non-Standard workflows. One short transaction reloads the task, its reviews, and its delegate sessions,
+   * applies the delivery policy to the validated range against the caller's freshly observed local facts, rechecks ownership, and records the
+   * workflow completion and the delivered status together. No filesystem or network I/O runs inside it, so nothing can change between the decision and the write.
+   */
+  completeWorkflowDelivery(input: { taskId: string; range: ReviewRange; local: { branch: string; headSha: string; clean: boolean }; pullRequestNumber: number | null; requireAccepted: boolean; recheck?: (() => void) | undefined }): WorkflowCompletionResult {
+    return this.database.authTransaction((db) => {
+      const control = this.get(input.taskId);
+      if (control.status === "cancelled") return { kind: "cancelled" };
+      if (control.workflowState.completion || control.status === "delivered") {
+        if (control.status !== "delivered" && control.workflowState.completion) this.markDelivered(input.taskId);
+        return { kind: "already" };
+      }
+      const accepted = control.workflowState.acceptedDelivery;
+      if (input.requireAccepted && (!accepted || !sameRange(accepted, input.range))) return { kind: "declined", code: "workflow_review_required", reason: "No accepted delivery decision matches this range. Complete the workflow's review and request delivery." };
+      const decision = deliveryDecision(control, this.sessions(input.taskId), this.turns(input.taskId), input.range, input.local);
+      if (!decision.ok) return { kind: "declined", code: decision.code, reason: decision.reason };
+      input.recheck?.();
+      this.writeWorkflowState(db, input.taskId, { ...control.workflowState, acceptedDelivery: input.range, deliveryWait: null, completion: { kind: "workflow", reviewedHead: input.range.headSha, pullRequestNumber: input.pullRequestNumber, observedAt: now() } });
+      this.markDelivered(input.taskId);
+      return { kind: "completed" };
+    });
+  }
+  /** Records a terminal outcome that carries no workflow proof: an external merge, or what GitHub reports after cancellation. An existing completion is preserved; an unfinished task becomes delivered, a cancelled one stays cancelled. */
+  recordWorkflowOutcome(taskId: string, completion: WorkflowCompletion): boolean {
+    return this.database.authTransaction((db) => {
+      const control = this.get(taskId);
+      if (control.workflowState.completion) return false;
+      this.writeWorkflowState(db, taskId, { ...control.workflowState, deliveryWait: null, completion });
+      if (control.status === "active" || control.status === "waiting_human") this.markDelivered(taskId);
+      return true;
+    });
+  }
+  /** Applies one change to the task's workflow state inside its own short transaction. */
+  updateWorkflowState(taskId: string, mutate: (state: WorkflowState) => WorkflowState | void): WorkflowState {
+    return this.database.authTransaction((db) => {
+      const state = this.workflowStateRow(db, taskId);
+      const next = mutate(state) ?? state;
+      this.writeWorkflowState(db, taskId, next);
+      return next;
+    });
+  }
+  private sameWait(current: DeliveryWait | null, expected: DeliveryWait): boolean {
+    return current !== null && current.headSha === expected.headSha && current.fingerprint === expected.fingerprint && current.since === expected.since && current.reason === expected.reason;
+  }
+  /** Consumes one persisted delivery wait: clears exactly the expected wait and inserts one Coordinator continuation in the same short transaction. */
+  resumeDeliveryWait(taskId: string, expectedWait: DeliveryWait, prompt: string): boolean {
+    return this.database.authTransaction((db) => {
+      const control = this.get(taskId);
+      const root = this.currentSession(taskId, "root");
+      if (control.status !== "active" || !root || root.lifecycle === "cancelled" || !this.sameWait(control.workflowState.deliveryWait, expectedWait)) return false;
+      this.writeWorkflowState(db, taskId, { ...this.workflowStateRow(db, taskId), deliveryWait: null });
+      this.wakeRoot({ taskId, rootSessionId: root.id, generation: root.generation, prompt });
+      db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ?").run(now(), now(), taskId);
+      return true;
+    });
+  }
+  /** Clears exactly the expected wait without a continuation (a terminal observation finished it). */
+  clearDeliveryWait(taskId: string, expectedWait: DeliveryWait): boolean {
+    return this.database.authTransaction((db) => {
+      const state = this.workflowStateRow(db, taskId);
+      if (!this.sameWait(state.deliveryWait, expectedWait)) return false;
+      this.writeWorkflowState(db, taskId, { ...state, deliveryWait: null });
+      return true;
+    });
+  }
+  /** Turns exactly the expected wait into one human question; overlapping failures cannot ask twice. */
+  failDeliveryWait(taskId: string, expectedWait: DeliveryWait, question: string, options: HumanQuestionOptions = []): boolean {
+    return this.database.authTransaction(() => {
+      const control = this.get(taskId);
+      if (control.status !== "active" || !this.sameWait(control.workflowState.deliveryWait, expectedWait)) return false;
+      this.askHuman(taskId, question, options);
+      return true;
+    });
+  }
+  /** Serializes Coordinator tool calls per task. A live owner returns null; a dead or reused PID is replaced; an unknown owner is retained. */
+  async claimToolOwner(taskId: string): Promise<string | null> {
+    const current = this.get(taskId).workflowState.toolOwner;
+    if (current) {
+      const previous = await this.inspectOwner(current.pid);
+      if (previous.kind === "unknown") return null;
+      if (previous.kind === "running" && previous.startTime === current.processStartTime) return null;
+    }
+    const self = await this.inspectOwner(process.pid);
+    if (self.kind !== "running") return null;
+    const token = randomUUID();
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.toolOwner', json(?)), updated_at = ? WHERE task_id = ? AND json_extract(workflow_state_json, '$.toolOwner.token') IS ?").run(JSON.stringify({ token, pid: process.pid, processStartTime: self.startTime }), now(), taskId, current?.token ?? null).changes);
+    return changed === 1 ? token : null;
+  }
+  releaseToolOwner(taskId: string, token: string): void {
+    this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.toolOwner', json('null')) WHERE task_id = ? AND json_extract(workflow_state_json, '$.toolOwner.token') = ?").run(taskId, token));
+  }
+  assertToolOwner(taskId: string, token: string): void {
+    if (this.get(taskId).workflowState.toolOwner?.token !== token) throw new Error("task_tool_owner_lost");
+  }
   scheduleWake(taskId: string, wakeAt: string | null): void { this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ?").run(wakeAt, now(), taskId)); }
   askHuman(taskId: string, question: string, options: HumanQuestionOptions = []): void {
     if (!question.trim()) throw new Error("question_is_empty");
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET status = 'waiting_human', human_question = ?, human_question_options_json = ?, human_question_id = ?, wake_at = NULL, updated_at = ? WHERE task_id = ? AND status = 'active'").run(question.trim(), JSON.stringify(HumanQuestionOptionsSchema.parse(options)), randomUUID(), now(), taskId).changes);
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET status = 'waiting_human', human_question = ?, human_question_options_json = ?, human_question_id = ?, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ? WHERE task_id = ? AND status = 'active'").run(question.trim(), JSON.stringify(HumanQuestionOptionsSchema.parse(options)), randomUUID(), now(), taskId).changes);
     if (changed !== 1) throw new Error("task_not_active");
     this.observeLifecycle(taskId);
   }
@@ -272,7 +407,7 @@ export class TaskControlStore {
   }
   cancel(taskId: string): void {
     this.database.authTransaction((db) => {
-      const changed = db.prepare("UPDATE forge_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, updated_at = ? WHERE task_id = ? AND status <> 'delivered'").run(now(), taskId).changes;
+      const changed = db.prepare("UPDATE forge_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ? WHERE task_id = ? AND status <> 'delivered'").run(now(), taskId).changes;
       if (changed !== 1) throw new Error("task_not_cancellable");
       db.prepare("UPDATE forge_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = COALESCE(stop_requested_at, ?), updated_at = ? WHERE task_id = ? AND stopped_at IS NULL").run(now(), now(), taskId);
       db.prepare("UPDATE forge_task_turns SET status = 'cancelled', updated_at = ? WHERE task_id = ? AND status IN ('pending_prompt', 'prompted', 'unknown')").run(now(), taskId);

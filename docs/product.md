@@ -16,6 +16,24 @@ commit where appropriate. GitHub owns pull request and merge policy. A matching
 external push, pull request, or merge can satisfy the task without an extra
 Forge receipt.
 
+## Workflows
+
+Every task selects one workflow at creation. Standard is the default and keeps the
+Coordinator-plans, Worker-builds, Coordinator-reviews sequence above. Direct build
+lets Worker choose the approach from your instructions; Coordinator still reviews.
+Second opinion adds a read-only Reviewer that must approve the complete current
+change before delivery. Combined planning asks Plan A and Plan B for separate
+plans, which Coordinator combines before Worker builds. Pull request repair takes
+an existing open pull request: Rater scores it from 1 to 10 with a surgical repair
+plan, Worker repairs it, and a fresh Rater scores the result until a valid rating
+is at least 9 with no blocking findings. Forge then pushes, waits for the checks,
+and merges the same pull request when GitHub reports it ready. The 9 threshold is
+fixed and cannot be waived.
+
+Advisors are read-only sessions that reuse Coordinator profiles. The task captures
+each Advisor profile at creation. Review history in the task shows every Reviewer
+or Rater round with its reviewed revision, including invalid reports.
+
 ## Task controls
 
 **Start immediately** starts Root when the task is created. Otherwise, the task

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { FileText, FolderKanban } from "lucide-react";
 import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../../task-contracts.js";
-import type { ApiProfile, ApiProject, ApiTaskTemplate } from "../../lib/view-shared.js";
+import { ADVISOR_LABELS, workflowDefinition, type AdvisorProfileIds, type AdvisorRole, type WorkflowId } from "../../../workflows.js";
+import type { ApiProfile, ApiProject, ApiTaskTemplate, ApiWorkflow } from "../../lib/view-shared.js";
 import { readJson, withCompany } from "../../lib/api.js";
 import { Button } from "../ui/button.js";
 import { NewButton } from "../ui/new-button.js";
@@ -22,7 +23,23 @@ import { readNewTaskMemory, writeNewTaskMemory } from "./new-task-memory.js";
 import { TaskRoleSelector } from "./task-role-selectors.js";
 import type { NewTaskDraft } from "../../lib/duplicate-task-prefill.js";
 
-export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initialDraft }: { open: boolean; onOpenChange: (open: boolean) => void; companyId: string; onCreated: (task: Task) => void; initialDraft?: NewTaskDraft }): ReactElement {
+type Delivery = { deliveryTarget: NonNullable<TaskInput["deliveryTarget"]>; runProjectTests: boolean };
+type RecordFallback = { rootProfileId?: string | undefined; workerProfileId?: string | undefined; advisorProfileIds?: AdvisorProfileIds | undefined; deliveryTarget?: Delivery["deliveryTarget"] | undefined; runProjectTests?: boolean | undefined; visualEvidence?: NonNullable<TaskInput["visualEvidence"]> | undefined };
+const REPAIR: WorkflowId = "refine_pull_request";
+const repairNote = "Forge repairs this pull request, then pushes and merges it after the checks pass.";
+
+/** Keeps only the Advisor selections the selected workflow admits, so hidden or old choices never reach the request. */
+function admittedAdvisors(workflow: WorkflowId, ids: AdvisorProfileIds): AdvisorProfileIds {
+  const allowed = workflowDefinition(workflow).advisorRoles;
+  return Object.fromEntries(Object.entries(ids).filter(([role, id]) => id && allowed.includes(role as AdvisorRole))) as AdvisorProfileIds;
+}
+
+/** The record a draft names, else the first live record on its engine, preferring the built-in one. */
+function findRecord(records: ApiWorkflow[], id: string | undefined, engine: WorkflowId): ApiWorkflow | undefined {
+  return records.find(record => record.id === id) ?? records.find(record => record.id === `workflow_native_${engine}`) ?? records.find(record => record.engine === engine && !record.archivedAt);
+}
+
+export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initialDraft }: { open: boolean; onOpenChange: (open: boolean) => void; companyId: string; onCreated: (task: Task) => void; initialDraft?: Partial<NewTaskDraft> | undefined }): ReactElement {
   const [remembered] = useState(readNewTaskMemory);
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
@@ -36,9 +53,15 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const [rootProfileId, setRootProfileId] = useState(initialDraft?.rootProfileId ?? remembered.rootProfileId ?? "");
   const [workerProfileId, setWorkerProfileId] = useState(initialDraft?.workerProfileId ?? remembered.workerProfileId ?? "");
   const [startImmediately, setStartImmediately] = useState(initialDraft?.startImmediately ?? remembered.startImmediately ?? true);
-  const [deliveryTarget, setDeliveryTarget] = useState<NonNullable<TaskInput["deliveryTarget"]>>(initialDraft?.deliveryTarget ?? remembered.deliveryTarget ?? "pull_request_draft");
+  const [deliveryTarget, setDeliveryTarget] = useState<Delivery["deliveryTarget"]>(initialDraft?.deliveryTarget ?? remembered.deliveryTarget ?? "pull_request_draft");
   const [runProjectTests, setRunProjectTests] = useState(initialDraft?.runProjectTests ?? remembered.runProjectTests ?? true);
   const [visualEvidence, setVisualEvidence] = useState<NonNullable<TaskInput["visualEvidence"]>>(initialDraft?.visualEvidence ?? remembered.visualEvidence ?? "off");
+  const [workflow, setWorkflow] = useState<WorkflowId>(initialDraft?.workflow ?? "standard");
+  const [workflows, setWorkflows] = useState<ApiWorkflow[]>([]);
+  const [workflowId, setWorkflowId] = useState("");
+  const [advisorProfileIds, setAdvisorProfileIds] = useState<AdvisorProfileIds>(initialDraft?.advisorProfileIds ?? {});
+  // The non-repair target/tests this draft had before switching to repair, restored when switching away.
+  const previousDelivery = useRef<Delivery | null>(null);
   const [source, setSource] = useState<TaskSourceSelector | undefined>(initialDraft?.source);
   const [sourceSummary, setSourceSummary] = useState<TaskSourceSummary | undefined>(initialDraft?.sourceSummary);
   const [images, setImages] = useState<NonNullable<TaskInput["images"]>>(initialDraft?.images ?? []);
@@ -47,6 +70,17 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const imageRead = useRef({ generation: 0, pending: false });
   const [error, setError] = useState("");
   const request = useRef<{ body: string; key: string } | null>(null);
+  const repair = workflow === REPAIR;
+  /** Explicit draft fields win, then the record's default agents and settings, then the fallback; repair always merges with tests. */
+  const applyRecord = (record: ApiWorkflow, explicit: RecordFallback, fallback: RecordFallback) => {
+    setRootProfileId(explicit.rootProfileId ?? record.rootProfileId ?? fallback.rootProfileId ?? "");
+    setWorkerProfileId(explicit.workerProfileId ?? record.workerProfileId ?? fallback.workerProfileId ?? "");
+    setAdvisorProfileIds(admittedAdvisors(record.engine, explicit.advisorProfileIds ?? { ...fallback.advisorProfileIds, ...record.advisorProfileIds }));
+    setVisualEvidence(explicit.visualEvidence ?? record.visualEvidence ?? fallback.visualEvidence ?? "off");
+    if (record.engine === REPAIR) { setDeliveryTarget("merged"); setRunProjectTests(true); return; }
+    setDeliveryTarget(explicit.deliveryTarget ?? record.deliveryTarget ?? fallback.deliveryTarget ?? "pull_request_draft");
+    setRunProjectTests(explicit.runProjectTests ?? record.runProjectTests ?? fallback.runProjectTests ?? true);
+  };
   useEffect(() => {
     imageRead.current = { generation: imageRead.current.generation + 1, pending: false };
     setReadingImages(false);
@@ -54,21 +88,37 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   useEffect(() => {
     setSettingsLoaded(false);
     if (!open) return;
-    const saved = initialDraft ?? readNewTaskMemory();
+    // Explicit draft fields apply over the remembered general settings; workflow selections are never remembered.
+    const saved = { ...readNewTaskMemory(), ...initialDraft };
     if (!initialDraft && selectedProject.current !== saved.projectId) { setSource(undefined); setSourceSummary(undefined); }
     setProjectId(saved.projectId ?? "");
+    setStartImmediately(saved.startImmediately ?? true);
+    setVisualEvidence(saved.visualEvidence ?? "off");
+    const nextWorkflow = initialDraft?.workflow ?? "standard";
     setRootProfileId(saved.rootProfileId ?? "");
     setWorkerProfileId(saved.workerProfileId ?? "");
-    setStartImmediately(saved.startImmediately ?? true);
-    setDeliveryTarget(saved.deliveryTarget ?? "pull_request_draft");
-    setRunProjectTests(saved.runProjectTests ?? true);
-    setVisualEvidence(saved.visualEvidence ?? "off");
+    setWorkflow(nextWorkflow);
+    setWorkflowId(initialDraft?.workflowId ?? "");
+    setAdvisorProfileIds(admittedAdvisors(nextWorkflow, initialDraft?.advisorProfileIds ?? {}));
+    previousDelivery.current = null;
+    if (nextWorkflow === REPAIR) {
+      previousDelivery.current = { deliveryTarget: readNewTaskMemory().deliveryTarget ?? "pull_request_draft", runProjectTests: readNewTaskMemory().runProjectTests ?? true };
+      setDeliveryTarget("merged"); setRunProjectTests(true);
+      if (initialDraft?.source?.kind !== "pull_request") { setSource(undefined); setSourceSummary(undefined); }
+    } else {
+      setDeliveryTarget(saved.deliveryTarget ?? "pull_request_draft");
+      setRunProjectTests(saved.runProjectTests ?? true);
+    }
     let cancelled = false;
-    void Promise.all([readJson<{ projects: ApiProject[] }>(`/api/companies/${companyId}/projects`), readJson<{ profiles: ApiProfile[] }>("/api/profiles")]).then(([projectResult, profileResult]) => {
+    void Promise.all([readJson<{ projects: ApiProject[] }>(`/api/companies/${companyId}/projects`), readJson<{ profiles: ApiProfile[] }>("/api/profiles"), readJson<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true")]).then(([projectResult, profileResult, workflowResult]) => {
       if (cancelled) return;
-      setProjects(projectResult.projects); setProfiles(profileResult.profiles);
+      setProjects(projectResult.projects); setProfiles(profileResult.profiles); setWorkflows(workflowResult.workflows);
+      // The workflow record supplies its engine and defaults once it is known; explicit draft fields still win.
+      const record = findRecord(workflowResult.workflows, initialDraft?.workflowId, nextWorkflow);
+      if (record) { setWorkflow(record.engine); setWorkflowId(record.id); applyRecord(record, initialDraft ?? {}, readNewTaskMemory()); }
       setRootProfileId(current => profileResult.profiles.some(profile => profile.id === current && profile.role === "root") ? current : "");
       setWorkerProfileId(current => profileResult.profiles.some(profile => profile.id === current && profile.role === "worker") ? current : "");
+      setAdvisorProfileIds(current => Object.fromEntries(Object.entries(current).filter(([, id]) => profileResult.profiles.some(profile => profile.id === id && profile.role === "root"))) as AdvisorProfileIds);
       setProjectId(current => projectResult.projects.some(project => project.id === current) ? current : projectResult.projects[0]?.id ?? "");
       setSettingsLoaded(true);
     }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : "Task settings are not available"); });
@@ -83,13 +133,44 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   }, [projectId, open]);
   useEffect(() => {
     if (!open || !settingsLoaded || !projects.some(project => project.id === projectId)) return;
-    writeNewTaskMemory({ projectId, rootProfileId: rootProfileId || undefined, workerProfileId: workerProfileId || undefined, startImmediately, deliveryTarget, runProjectTests, visualEvidence });
-  }, [open, settingsLoaded, projects, projectId, rootProfileId, workerProfileId, startImmediately, deliveryTarget, runProjectTests, visualEvidence]);
+    // Repair forces target/tests; remember the draft's own general settings instead of the forced values.
+    const general = repair && previousDelivery.current ? previousDelivery.current : { deliveryTarget, runProjectTests };
+    // A workflow's default agent is not a general preference: keep the earlier remembered profile instead.
+    const defaults: { rootProfileId?: string | undefined; workerProfileId?: string | undefined } = workflows.find(record => record.id === workflowId) ?? {};
+    const remembered = readNewTaskMemory();
+    const rootProfile = rootProfileId && rootProfileId === defaults.rootProfileId ? remembered.rootProfileId : rootProfileId || undefined;
+    const workerProfile = workerProfileId && workerProfileId === defaults.workerProfileId ? remembered.workerProfileId : workerProfileId || undefined;
+    writeNewTaskMemory({ projectId, rootProfileId: rootProfile, workerProfileId: workerProfile, startImmediately, deliveryTarget: general.deliveryTarget, runProjectTests: general.runProjectTests, visualEvidence });
+  }, [open, settingsLoaded, projects, projectId, rootProfileId, workerProfileId, startImmediately, deliveryTarget, runProjectTests, visualEvidence, repair, workflows, workflowId]);
+  const selectRecord = (record: ApiWorkflow) => {
+    if (record.id === workflowId) return;
+    const next = record.engine;
+    let fallback: Delivery = { deliveryTarget, runProjectTests };
+    if (next === REPAIR && workflow !== REPAIR) {
+      previousDelivery.current = { deliveryTarget, runProjectTests };
+      if (source?.kind !== "pull_request") { setSource(undefined); setSourceSummary(undefined); }
+    } else if (workflow === REPAIR && next !== REPAIR && previousDelivery.current) {
+      fallback = previousDelivery.current;
+      previousDelivery.current = null;
+    }
+    setWorkflow(next);
+    setWorkflowId(record.id);
+    applyRecord(record, {}, { rootProfileId: rootProfileId || undefined, workerProfileId: workerProfileId || undefined, advisorProfileIds, visualEvidence, ...fallback });
+  };
+  const applyTemplate = (template: ApiTaskTemplate) => {
+    setDescription(template.description); setRootProfileId(template.rootProfileId ?? ""); setWorkerProfileId(template.workerProfileId ?? "");
+    setVisualEvidence(template.visualEvidence);
+    if (template.workflow === REPAIR) { if (workflow !== REPAIR) previousDelivery.current = { deliveryTarget, runProjectTests }; if (source?.kind !== "pull_request") { setSource(undefined); setSourceSummary(undefined); } }
+    else previousDelivery.current = null;
+    setDeliveryTarget(template.deliveryTarget); setRunProjectTests(template.runProjectTests);
+    setWorkflow(template.workflow); setWorkflowId(findRecord(workflows, undefined, template.workflow)?.id ?? ""); setAdvisorProfileIds(admittedAdvisors(template.workflow, template.advisorProfileIds));
+  };
+  const missingSource = repair && source?.kind !== "pull_request";
   const submit = async () => {
-    if (busy || imageRead.current.pending || !projectId || !title.trim() || !description.trim()) return;
+    if (busy || imageRead.current.pending || !projectId || !title.trim() || !description.trim() || missingSource) return;
     setBusy(true); setError("");
     try {
-      const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(source ? { source } : {}) };
+      const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(source ? { source } : {}) };
       const serialized = JSON.stringify(body);
       if (request.current?.body !== serialized) request.current = { body: serialized, key: crypto.randomUUID() };
       const task = await readJson<Task>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ ...body, idempotencyKey: request.current.key }) });
@@ -117,16 +198,19 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     finally { if (imageRead.current.generation === generation) { imageRead.current.pending = false; setReadingImages(false); } }
   };
   const project = projects.find(project => project.id === projectId);
+  const definition = workflowDefinition(workflow);
   return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}>
-    <DialogContent className="max-h-[min(85vh,420px)] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto rounded-xl p-0 shadow-2xl sm:max-w-[936px]" showCloseButton={false}>
+    <DialogContent className="max-h-[min(85vh,460px)] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto rounded-xl p-0 shadow-2xl sm:max-w-[936px]" showCloseButton={false}>
       <DialogHeader className="px-4 py-3 sm:px-5">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2"><Breadcrumb><BreadcrumbList className="gap-2 text-sm"><BreadcrumbItem>
           <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" aria-label="Project" disabled={busy || !projects.length} />}>
             {project ? <EntityAvatar kind="project" id={project.id} name={project.name} size="xs" /> : <FolderKanban className="size-3.5 text-muted-foreground" />}<span className="max-w-40 truncate">{project?.name ?? "Project"}</span>
           </DropdownMenuTrigger><DropdownMenuContent align="start">{projects.map(candidate => <DropdownMenuItem key={candidate.id} onClick={() => { setProjectId(candidate.id); setSource(undefined); setSourceSummary(undefined); }}><EntityAvatar kind="project" id={candidate.id} name={candidate.name} size="xs" /><span className="min-w-0 flex-1 truncate">{candidate.name}</span>{candidate.id === projectId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
         </BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><DialogTitle className="font-normal">New task</DialogTitle></BreadcrumbItem></BreadcrumbList></Breadcrumb>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-1"><TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
-          <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={busy || !projectId} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.length ? templates.map(template => <DropdownMenuItem key={template.id} onClick={() => { setDescription(template.description); setRootProfileId(template.rootProfileId ?? ""); setWorkerProfileId(template.workerProfileId ?? ""); setDeliveryTarget(template.deliveryTarget); setRunProjectTests(template.runProjectTests); setVisualEvidence(template.visualEvidence); }}>{template.name}</DropdownMenuItem>) : <DropdownMenuItem render={<a href={withCompany(`/projects/${encodeURIComponent(projectId)}/templates`, companyId)} />}>Open templates</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu>
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
+          <TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy} pullRequestsOnly={repair} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
+          <label className="flex items-center gap-1.5 text-xs"><span className="text-muted-foreground">Workflow</span><Select value={workflowId} onValueChange={value => { const record = workflows.find(candidate => candidate.id === value); if (record) selectRecord(record); }}><SelectTrigger aria-label="Workflow" size="sm" disabled={busy}><SelectValue /></SelectTrigger><SelectContent>{workflows.filter(record => !record.archivedAt || record.id === workflowId).map(record => <SelectItem key={record.id} value={record.id}>{record.name}</SelectItem>)}</SelectContent></Select></label>
+          <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={busy || !projectId} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.length ? templates.map(template => <DropdownMenuItem key={template.id} onClick={() => applyTemplate(template)}>{template.name}</DropdownMenuItem>) : <DropdownMenuItem render={<a href={withCompany(`/projects/${encodeURIComponent(projectId)}/templates`, companyId)} />}>Open templates</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu>
         </div></div>
       </DialogHeader>
       <form className="flex min-h-[310px] min-w-0 flex-col" onPaste={event => { const files = Array.from(event.clipboardData.files); if (files.length && !busy) { event.preventDefault(); void addImages(files); } }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.requestSubmit(); } }} onSubmit={event => { event.preventDefault(); void submit(); }}>
@@ -139,13 +223,14 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
           <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} />
           <TaskRoleSelector role="root" profiles={profiles} assignment={rootProfileId} defaultProfileId={project?.rootProfileId} busy={busy} onChange={setRootProfileId} />
           <TaskRoleSelector role="worker" profiles={profiles} assignment={workerProfileId} defaultProfileId={project?.workerProfileId} busy={busy} onChange={setWorkerProfileId} />
-          <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end"><NewButton type="submit" disabled={busy || readingImages || !projectId || !title.trim() || !description.trim()} title="New task (⌘Enter)">{busy ? "Creating…" : "New task"}</NewButton></DialogFooter>
+          {definition.advisorRoles.map(role => <TaskRoleSelector key={role} role="root" label={ADVISOR_LABELS[role]} profiles={profiles} assignment={advisorProfileIds[role] ?? ""} defaultProfileId={rootProfileId || project?.rootProfileId} busy={busy} onChange={profileId => setAdvisorProfileIds(current => ({ ...current, [role]: profileId || undefined }))} />)}
+          <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">{repair ? <span className="text-xs text-muted-foreground" data-repair-note>{missingSource ? "Select a pull request source." : repairNote}</span> : null}<NewButton type="submit" disabled={busy || readingImages || !projectId || !title.trim() || !description.trim() || missingSource} title="New task (⌘Enter)">{busy ? "Forge saves" : "New task"}</NewButton></DialogFooter>
         </div>
         <fieldset className="min-w-0 border-t border-border/70 bg-muted/30 px-5 py-3"><legend className="px-0 text-xs font-medium text-muted-foreground">Delivery &amp; checks</legend>
-          <RadioGroup aria-label="Delivery target" value={deliveryTarget} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))} className="mt-2.5 flex flex-wrap gap-x-4 gap-y-2">{taskDeliveryTargetOptions.map(option => <label className="flex items-center gap-1.5 text-xs" key={option.value}><RadioGroupItem value={option.value} />{option.label}</label>)}</RadioGroup>
+          <RadioGroup aria-label="Delivery target" value={deliveryTarget} disabled={repair} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))} className="mt-2.5 flex flex-wrap gap-x-4 gap-y-2">{taskDeliveryTargetOptions.map(option => <label className="flex items-center gap-1.5 text-xs" key={option.value}><RadioGroupItem value={option.value} disabled={repair} />{option.label}</label>)}</RadioGroup>
           <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border/60 pt-2.5 text-xs">
             <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={startImmediately} onCheckedChange={value => setStartImmediately(value === true)} />Start immediately</label>
-            {project?.verificationCommand.trim() ? <label className="flex items-center gap-2"><Checkbox checked={runProjectTests} onCheckedChange={value => setRunProjectTests(value === true)} />Run project tests</label> : <span className="text-muted-foreground">No project test command configured.</span>}
+            {project?.verificationCommand.trim() || repair ? <label className="flex items-center gap-2"><Checkbox checked={runProjectTests} disabled={repair} onCheckedChange={value => setRunProjectTests(value === true)} />Run project tests</label> : <span className="text-muted-foreground">No project test command configured.</span>}
             <label className="flex items-center gap-2">Screenshots<Select value={visualEvidence} onValueChange={value => setVisualEvidence(VisualEvidenceSchema.parse(value))}><SelectTrigger aria-label="Screenshots" size="sm"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="off">Off</SelectItem><SelectItem value="capture">Capture</SelectItem><SelectItem value="required">Necessary</SelectItem></SelectContent></Select></label>
           </div>
         </fieldset>

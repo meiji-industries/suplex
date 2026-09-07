@@ -29,6 +29,9 @@ Approved imperative verbs: Accept, Add, Answer, Approve, Cancel, Check, Continue
 | task | task | issue, ticket |
 | Coordinator | Coordinator | Root, Planner, Lead, Integrator |
 | Worker | Worker | Builder, Developer |
+| workflow | workflow | pipeline, phase |
+| Advisor | Advisor | second Worker |
+| Reviewer, Plan A, Plan B, Rater | Reviewer, Plan A, Plan B, Rater | judge, critic, scorer |
 | you | you | member, human, user |
 | build | build | development, execution |
 | worktree, branch, base branch, pull request, CI | worktree, branch, base branch, pull request, CI | PR, target base |

@@ -21,6 +21,32 @@ The agent assigned one scoped instruction from Coordinator. It edits, verifies, 
 commits in the task worktree, then returns its result to Coordinator.
 _Avoid_: Builder, Developer, nested agent.
 
+**Workflow**
+The selected sequence of agents and gates for one task: Standard, Direct build,
+Second opinion, Combined planning, or Pull request repair. A task captures its
+workflow and Advisor profiles at creation.
+_Avoid_: Phase engine, custom pipeline.
+
+**Advisor**
+A read-only delegated session that reports to Coordinator and shares the one
+delegated slot with Worker. Its product label is Reviewer, Plan A, Plan B, or Rater.
+_Avoid_: Second Worker, writable reviewer.
+
+**Reviewer**
+The Advisor that independently inspects the complete current change in Second
+opinion and approves or lists blocking findings.
+_Avoid_: Integrator, approver relay.
+
+**Plan A and Plan B**
+The two Advisors in Combined planning that write separate plans from the same
+objective and pinned input. Neither sees the other's report.
+_Avoid_: Competing Workers.
+
+**Rater**
+The Advisor in Pull request repair that rates the current pull request from 1 to
+10 and writes a surgical repair plan. Delivery needs a valid current-range 9.
+_Avoid_: Score oracle, automatic approval.
+
 **Native session**
 The OpenCode conversation that owns admitted messages, tool calls, and results.
 _Avoid_: Herdr session, completion receipt file.

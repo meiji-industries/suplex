@@ -11,7 +11,7 @@ assert.equal(process.env.HERDR_ENV, "1", "Run this probe inside Herdr");
 const directory = await mkdtemp(join(tmpdir(), "forge-native-attachment-"));
 const herdr = new CliHerdrClient();
 const runtime = new OpenCodeTaskRuntime(join(directory, "forge.sqlite"), herdr);
-const scope: OpenCodeTaskScope = { id: "attachment-proof", taskId: "attachment-proof", role: "worker", directory, profile: { providerID: "openai", modelID: "gpt-5.6-luna", reasoningEffort: "max", serviceTier: "priority" } };
+const scope: OpenCodeTaskScope = { id: "attachment-proof", taskId: "attachment-proof", role: "worker", workerMode: "planned", purpose: "implementation", workflow: "standard", evidenceRoot: null, directory, profile: { providerID: "openai", modelID: "gpt-5.6-luna", reasoningEffort: "max", serviceTier: "priority" } };
 const panes = new Set<string>();
 const workspaces = new Set<string>();
 let paneId: string | null = null;

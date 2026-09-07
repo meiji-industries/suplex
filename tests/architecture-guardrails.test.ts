@@ -20,10 +20,12 @@ test("production source does not import the retired phase engine or harness rela
   }
 });
 
-test("native task UI has Coordinator and Worker without old role selectors", () => {
+test("native task UI has Coordinator, Worker, and workflow Advisors without the old role selectors", () => {
   const source = readFileSync("src/frontend/components/app/new-task-dialog.tsx", "utf8");
   expect(source).toContain('role="root"');
   expect(source).toContain('role="worker"');
   expect(source).toContain("startImmediately");
-  expect(source).not.toMatch(/planner|builder|reviewer|integrator/);
+  // Advisors (Reviewer, Plan A, Plan B, Rater) reuse root profiles; the retired builder/integrator roles stay out.
+  expect(source).not.toMatch(/builder|integrator|role="planner"|role="reviewer"/);
+  expect(source).toContain("advisorRoles");
 });

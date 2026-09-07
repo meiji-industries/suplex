@@ -3,7 +3,8 @@ import { TaskImageInputSchema, type Task, type TaskInput } from "../../task-cont
 import type { TaskSourceSummary } from "../components/app/task-source-picker.js";
 import { readJson } from "./api.js";
 
-export type NewTaskDraft = Omit<TaskInput, "idempotencyKey"> & { sourceSummary?: TaskSourceSummary };
+/** workflowId names a workflow record whose engine and defaults the dialog applies; workflow alone names an engine. */
+export type NewTaskDraft = Omit<TaskInput, "idempotencyKey"> & { sourceSummary?: TaskSourceSummary; workflowId?: string };
 
 export async function duplicateTaskDraft(task: Task): Promise<NewTaskDraft> {
   const { tasks } = await readJson<{ tasks: Task[] }>(`/api/companies/${task.companyId}/tasks`);
@@ -30,6 +31,7 @@ export async function duplicateTaskDraft(task: Task): Promise<NewTaskDraft> {
     projectId: task.projectId, title: duplicateTitle(task.title, new Set(tasks.filter(candidate => candidate.projectId === task.projectId).map(candidate => candidate.title))), description: task.description,
     rootProfileId: task.rootProfile.profileId, workerProfileId: task.workerProfile.profileId,
     deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence,
+    workflow: task.workflow, advisorProfileIds: Object.fromEntries(Object.entries(task.advisorProfiles).map(([role, profile]) => [role, profile.profileId])),
     startImmediately: false, images, ...(source && sourceSummary ? { source, sourceSummary } : {}),
   };
 }

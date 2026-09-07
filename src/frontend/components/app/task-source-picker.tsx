@@ -33,8 +33,9 @@ export function preserveEditedPrefill(current: { title: string; description: str
   return { title: !current.title || current.title === previous.title ? next.title : current.title, description: !current.description || current.description === previous.description ? next.description : current.description };
 }
 
-export function TaskSourcePicker({ projectId, value, disabled, onSelect, onClear }: { projectId: string; value?: TaskSourceSummary | undefined; disabled?: boolean; onSelect: (source: TaskSourceSummary, selector: TaskSourceSelector) => void; onClear: () => void }): ReactElement {
-  const [kind, setKind] = useState<"pull_request" | "branch">("pull_request");
+export function TaskSourcePicker({ projectId, value, disabled, pullRequestsOnly = false, onSelect, onClear }: { projectId: string; value?: TaskSourceSummary | undefined; disabled?: boolean; pullRequestsOnly?: boolean; onSelect: (source: TaskSourceSummary, selector: TaskSourceSelector) => void; onClear: () => void }): ReactElement {
+  const [selectedKind, setKind] = useState<"pull_request" | "branch">("pull_request");
+  const kind = pullRequestsOnly ? "pull_request" : selectedKind;
   const [query, setQuery] = useState("");
   const [rows, setRows] = useState<TaskSourceSummary[]>([]);
   const [available, setAvailable] = useState(true);
@@ -55,12 +56,12 @@ export function TaskSourcePicker({ projectId, value, disabled, onSelect, onClear
       </DropdownMenuTrigger>
       <Button type="button" variant="ghost" size="icon-sm" aria-label="Clear source" onClick={onClear}><X className="size-3.5" /></Button>
     </div> : <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={disabled || !projectId} aria-label="New from source" />}>
-      <CirclePlus />New from…
+      <CirclePlus />{pullRequestsOnly ? "Select a pull request" : "New from…"}
     </DropdownMenuTrigger>}
     <DropdownMenuContent align="end" className="w-[min(26rem,calc(100vw-2rem))] p-2">
-      <Tabs value={kind} onValueChange={(next) => { const selected = next as typeof kind; setKind(selected); setRows([]); void load(selected); }}>
+      {pullRequestsOnly ? <p className="px-1 text-xs text-muted-foreground">Open pull requests</p> : <Tabs value={kind} onValueChange={(next) => { const selected = next as typeof kind; setKind(selected); setRows([]); void load(selected); }}>
         <TabsList>{taskSourceTabs.map((tab) => <TabsTrigger key={tab.value} value={tab.value}>{tab.label}</TabsTrigger>)}</TabsList>
-      </Tabs>
+      </Tabs>}
       <div className="relative mt-2"><Search className="absolute left-2 top-2 size-3.5 text-muted-foreground" /><Input aria-label="Search task sources" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" className="pl-7" /></div>
       <div className="mt-2 max-h-64 overflow-y-auto" aria-live="polite">
          {loading ? <p className="flex items-center gap-2 p-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading task sources…</span></p> : !available ? <p className="p-2 text-xs text-muted-foreground">{kind === "pull_request" ? "Pull requests are not available." : "Branches are not available."}</p> : filtered.length === 0 ? <p className="p-2 text-xs text-muted-foreground">No {kind === "pull_request" ? "pull requests" : "branches"} found.</p> : filtered.map((row) => <DropdownMenuItem key={row.kind === "pull_request" ? row.number : row.branch} onClick={() => onSelect(row, selectorForTaskSource(row))}>

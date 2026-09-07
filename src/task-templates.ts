@@ -4,10 +4,16 @@ import type { AuthService } from "./auth.js";
 import type { ForgeDatabase } from "./database.js";
 import { TaskFailure, type TaskService } from "./tasks.js";
 import { CreateTaskTemplateBodySchema, TaskTemplateResponseSchema, UpdateTaskTemplateBodySchema } from "./http/contracts/task-templates.js";
+import { normalizeWorkflowInput, WorkflowInputFailure, type RawWorkflowInput } from "./workflows.js";
 
 export type TaskTemplateInput = z.input<typeof CreateTaskTemplateBodySchema>;
 export type TaskTemplate = z.infer<typeof TaskTemplateResponseSchema>;
 const Row = z.object({ id: z.string(), project_id: z.string(), configuration_json: z.string(), created_at: z.string(), updated_at: z.string() });
+function normalized<T extends RawWorkflowInput>(input: T): ReturnType<typeof normalizeWorkflowInput<T>> {
+  try { return normalizeWorkflowInput(input, { requireSource: false }); }
+  catch (error) { if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode); throw error; }
+}
+
 function template(raw: unknown): TaskTemplate {
   const row = Row.parse(raw);
   return TaskTemplateResponseSchema.parse({ ...CreateTaskTemplateBodySchema.parse(JSON.parse(row.configuration_json)), id: row.id, projectId: row.project_id, createdAt: row.created_at, updatedAt: row.updated_at });
@@ -23,7 +29,7 @@ export class TaskTemplateService {
 
   create(userId: string, projectId: string, input: TaskTemplateInput): TaskTemplate {
     this.requireProject(userId, projectId);
-    const configuration = CreateTaskTemplateBodySchema.parse(input);
+    const configuration = CreateTaskTemplateBodySchema.parse(normalized(input));
     const id = `template_${randomUUID().replaceAll("-", "")}`;
     const now = new Date().toISOString();
     this.database.authTransaction(db => {
@@ -35,13 +41,21 @@ export class TaskTemplateService {
 
   createFromTask(userId: string, taskId: string, name: string): TaskTemplate {
     const task = this.tasks.getTask(userId, taskId);
-    return this.create(userId, task.projectId, { name, description: task.description, rootProfileId: task.rootProfile.profileId, workerProfileId: task.workerProfile.profileId, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence });
+    const advisorProfileIds = Object.fromEntries(Object.entries(task.advisorProfiles).map(([role, profile]) => [role, profile.profileId]));
+    return this.create(userId, task.projectId, { name, description: task.description, rootProfileId: task.rootProfile.profileId, workerProfileId: task.workerProfile.profileId, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, workflow: task.workflow, advisorProfileIds });
   }
 
   update(userId: string, templateId: string, patch: z.input<typeof UpdateTaskTemplateBodySchema>): TaskTemplate {
     const current = this.get(userId, templateId);
-    const values = { ...current, ...UpdateTaskTemplateBodySchema.parse(patch) };
-    const configuration = CreateTaskTemplateBodySchema.strip().parse({ ...values, rootProfileId: values.rootProfileId ?? undefined, workerProfileId: values.workerProfileId ?? undefined });
+    const changes = UpdateTaskTemplateBodySchema.parse(patch);
+    const values: Record<string, unknown> = { ...current, ...changes };
+    // Switching to repair replaces inherited target/tests with the repair defaults; explicit contradictions still fail.
+    if (changes.workflow === "refine_pull_request" && current.workflow !== "refine_pull_request") {
+      if (changes.deliveryTarget === undefined) values.deliveryTarget = "merged";
+      if (changes.runProjectTests === undefined) values.runProjectTests = true;
+    }
+    if (changes.workflow !== undefined && changes.workflow !== current.workflow && changes.advisorProfileIds === undefined) values.advisorProfileIds = {};
+    const configuration = CreateTaskTemplateBodySchema.strip().parse(normalized({ ...values, rootProfileId: values.rootProfileId ?? undefined, workerProfileId: values.workerProfileId ?? undefined }));
     const updatedAt = new Date().toISOString();
     this.database.authTransaction(db => {
       this.assertName(current.projectId, configuration.name, templateId);

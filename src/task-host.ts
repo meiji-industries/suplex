@@ -9,23 +9,24 @@ import { OpenCodeTaskRuntime } from "./opencode-task-runtime.js";
 import { RootController } from "./root-controller.js";
 import { TaskControlStore } from "./root-session-store.js";
 import { prepareTaskWorktree } from "./task-worktree.js";
+import { taskEvidenceRoot } from "./workflow-evidence.js";
 
 type Controller = Pick<RootController, "prepareRoot" | "recover">;
 
 export class TaskHost {
   private readonly store: TaskControlStore;
   private readonly controller: Controller;
-  private readonly delivery: Pick<DeliveryOperations, "observe">;
+  private readonly delivery: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>;
   private readonly worktree: typeof prepareTaskWorktree;
   private readonly running = new Map<string, Promise<void>>();
   private timer: NodeJS.Timeout | undefined;
   private stopping = false;
 
-  constructor(private readonly database: ForgeDatabase, options: { artifactRoot?: string; controller?: Controller; delivery?: Pick<DeliveryOperations, "observe">; worktree?: typeof prepareTaskWorktree } = {}) {
+  constructor(private readonly database: ForgeDatabase, options: { artifactRoot?: string; controller?: Controller; delivery?: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>; worktree?: typeof prepareTaskWorktree } = {}) {
     this.store = new TaskControlStore(database);
     this.delivery = options.delivery ?? new DeliveryOperations(this.store);
     const artifactRoot = options.artifactRoot ?? join(dirname(database.filename()), "artifacts");
-    this.controller = options.controller ?? new RootController(this.store, new OpenCodeTaskRuntime(database.filename(), new CliHerdrClient(), { artifactRoot }), undefined, new ArtifactStore(artifactRoot));
+    this.controller = options.controller ?? new RootController(this.store, new OpenCodeTaskRuntime(database.filename(), new CliHerdrClient(), { artifactRoot }), undefined, new ArtifactStore(artifactRoot), { root: taskEvidenceRoot(database.filename()) });
     this.worktree = options.worktree ?? prepareTaskWorktree;
   }
 
@@ -73,13 +74,18 @@ export class TaskHost {
         if (this.store.get(taskId).status === "active") this.store.askHuman(taskId, `Forge could not prepare this task. ${error instanceof Error ? error.message : "Worktree preparation failed"}. Resolve the problem, then answer to retry.`);
       }
     }
+    // A delivery wait re-observes GitHub at its own interval; unchanged state schedules only the next observation.
+    if (this.store.get(taskId).status === "active" && this.store.get(taskId).workflowState.deliveryWait && this.delivery.observeDeliveryWait) {
+      try { await this.delivery.observeDeliveryWait(taskId); }
+      catch (error) { new StructuredLogger().warn("Delivery wait observation will be retried", { taskId }, { error: error instanceof Error ? error.message : String(error) }); }
+    }
     try { await this.controller.recover(taskId); }
     catch (error) {
       if (this.store.get(taskId).status !== "active") throw error;
       new StructuredLogger().warn("OpenCode recovery will be retried from native state", { taskId }, { error: error instanceof Error ? error.message : String(error) });
     }
-    const status = this.store.get(taskId).status;
-    if (status === "active" || status === "waiting_human") this.store.scheduleWake(taskId, new Date(Date.now() + 15_000).toISOString());
+    const control = this.store.get(taskId);
+    if (control.status === "active" || control.status === "waiting_human") this.store.scheduleWake(taskId, new Date(Date.now() + (control.workflowState.deliveryWait ? 30_000 : 15_000)).toISOString());
     if (observationError) throw observationError;
   }
 

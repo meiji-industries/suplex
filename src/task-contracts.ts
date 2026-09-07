@@ -2,6 +2,7 @@ import { z } from "zod";
 import { HumanQuestionOptionsSchema } from "./human-question.js";
 import { TaskControlStatusSchema, TaskProfileSchema, WorktreeReferenceSchema, PullRequestReferenceSchema } from "./task-control.js";
 import { MAX_TASK_IMAGES, MAX_TASK_IMAGE_BASE64_LENGTH } from "./task-attachment-limits.js";
+import { AdvisorProfileIdsSchema, AdvisorRoleSchema, PublicWorkflowStateSchema, WorkflowIdSchema } from "./workflows.js";
 
 const id = z.string().min(1).max(256);
 const commit = z.string().regex(/^[a-f0-9]{40,64}$/i);
@@ -31,6 +32,8 @@ export const TaskInputSchema = z.object({
   runProjectTests: z.boolean().default(true),
   visualEvidence: VisualEvidenceSchema.default("off"),
   source: TaskSourceInputSchema.optional(),
+  workflow: WorkflowIdSchema.default("standard"),
+  advisorProfileIds: AdvisorProfileIdsSchema.default({}),
 }).strict();
 export type TaskInput = z.input<typeof TaskInputSchema>;
 export type TaskRequest = z.output<typeof TaskInputSchema>;
@@ -61,6 +64,9 @@ export const TaskSchema = z.object({
   deliveryTarget: DeliveryTargetSchema,
   rootProfile: TaskProfileSchema,
   workerProfile: TaskProfileSchema,
+  workflow: WorkflowIdSchema,
+  advisorProfiles: z.partialRecord(AdvisorRoleSchema, TaskProfileSchema),
+  workflowState: PublicWorkflowStateSchema,
   configuration: TaskConfigurationSchema,
   worktree: WorktreeReferenceSchema.nullable(),
   pullRequest: PullRequestReferenceSchema.nullable(),

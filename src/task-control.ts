@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { HumanQuestionOptions } from "./human-question.js";
+import type { AdvisorRole, WorkflowId, WorkflowInput, WorkflowState } from "./workflows.js";
 
 
 export const TaskControlStatusSchema = z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]);
@@ -50,6 +51,9 @@ export interface TaskControl {
   workerSessionId: string | null;
   rootProfile: TaskProfile;
   workerProfile: TaskProfile;
+  workflow: WorkflowId;
+  advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>>;
+  workflowState: WorkflowState;
 }
 
 export interface TaskSession {
@@ -67,6 +71,8 @@ export interface TaskSession {
   launchOwnerStartTime: string | null;
   stopRequestedAt: string | null;
   stoppedAt: string | null;
+  advisorRole: AdvisorRole | null;
+  workflowInput: WorkflowInput | null;
 }
 
 export interface TaskTurn {

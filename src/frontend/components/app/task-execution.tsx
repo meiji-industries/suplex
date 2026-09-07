@@ -5,6 +5,7 @@ import { readJson } from "../../lib/api.js";
 import { Plan, PlanHeader, PlanTitle, PlanDescription, PlanAction, PlanTrigger, PlanContent } from "../ai-elements/plan.js";
 import { Tool, ToolHeader, ToolContent, ToolInput, ToolOutput, type ToolPart } from "../ai-elements/tool.js";
 import { Alert, AlertDescription } from "../ui/alert.js";
+import { roleLabel } from "../../../workflows.js";
 
 const toolStates = { pending: "input-streaming", running: "input-available", completed: "output-available", error: "output-error" } satisfies Record<TaskExecution["sessions"][number]["tools"][number]["status"], ToolPart["state"]>;
 const planStates = { pending: "Pending", in_progress: "In progress", completed: "Completed", cancelled: "Cancelled" };
@@ -49,8 +50,8 @@ export function RootPlan({ execution }: { execution: TaskExecution | null }) {
 export function TaskTools({ execution, error }: { execution: TaskExecution | null; error: string }) {
   return <section aria-label="Tool activity" className="grid min-w-0 gap-3 pt-3">
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-    {execution?.sessions.map(session => <section key={session.id} aria-label={`${session.role === "root" ? "Coordinator" : "Worker"} ${session.generation} tools`} className="min-w-0">
-      <h3 className="mb-2 text-xs font-medium">{session.role === "root" ? "Coordinator" : "Worker"} {session.generation}</h3>
+    {execution?.sessions.map(session => <section key={session.id} aria-label={`${session.label ?? roleLabel({ kind: session.role, advisorRole: session.advisorRole ?? null })} ${session.generation} tools`} className="min-w-0">
+      <h3 className="mb-2 text-xs font-medium">{session.label ?? roleLabel({ kind: session.role, advisorRole: session.advisorRole ?? null })} {session.generation}</h3>
       {!session.available ? <p className="text-xs text-muted-foreground">OpenCode activity is not available for this session.</p> : !session.tools.length ? <p className="text-xs text-muted-foreground">No tool calls yet.</p> : null}
       {session.limited ? <p className="mb-2 text-xs text-muted-foreground">This view includes the latest 100 messages. Open the live pane for the full session.</p> : null}
       {session.tools.map(tool => <Tool key={tool.id} defaultOpen={tool.status === "error"}>

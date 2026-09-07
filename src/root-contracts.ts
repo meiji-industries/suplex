@@ -31,6 +31,12 @@ export const DeliveryReviewSchema = z.object({
 }).strict();
 export type DeliveryReview = z.infer<typeof DeliveryReviewSchema>;
 
+export const PullRequestTitleSchema = z.string().refine(
+  value => !/[\x00-\x1f\x7f]/.test(value),
+  "Pull request titles cannot contain line breaks or control characters",
+).trim().min(1).max(120);
+export type PullRequestTitle = z.infer<typeof PullRequestTitleSchema>;
+
 export const WorkerAssignmentSchema = z.object({
   plan: z.string().trim().min(1).describe("The Coordinator's implementation plan, based on its own source investigation. Include the chosen approach, affected files, and constraints."),
   acceptanceCriteria: z.array(z.string().trim().min(1)).min(1).describe("Concrete outcomes and checks the Coordinator will use to review the implementation."),
@@ -42,7 +48,7 @@ export const RootToolSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("observe") }).strict(),
   z.object({ kind: z.literal("read_image"), artifactId: opaqueId }).strict(),
   WorkerAssignmentSchema.extend({ kind: z.literal("delegate_worker") }).strict(),
-  z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional(), review: DeliveryReviewSchema.optional() }).strict(),
+  z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional(), review: DeliveryReviewSchema.optional(), pullRequestTitle: PullRequestTitleSchema.optional().describe("For pull request creation, use concise action-oriented wording based on the final reviewed diff. Do not copy task prose or a commit message.") }).strict(),
   z.object({ kind: z.literal("ask_human"), question: z.string().min(1), options: RecommendedQuestionOptionsSchema }).strict(),
 ]);
 

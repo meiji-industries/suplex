@@ -7,7 +7,7 @@ import { StructuredLogger } from "./logging.js";
 import { createOpenCodePromptIntent, type OpenCodePromptObservation } from "./opencode-session.js";
 import type { OpenCodeTaskRuntime, OpenCodeTaskScope } from "./opencode-task-runtime.js";
 import type { RootBridgeAdapter } from "./root-bridge.js";
-import type { DeliveryOperation, DeliveryReview, RootIdentity, RootImageResult, WorkerAssignment } from "./root-contracts.js";
+import type { DeliveryOperation, DeliveryReview, PullRequestTitle, RootIdentity, RootImageResult, WorkerAssignment } from "./root-contracts.js";
 import type { TaskControlStore } from "./root-session-store.js";
 import type { TaskControl, TaskSession, TaskTurn } from "./task-control.js";
 
@@ -65,8 +65,8 @@ export class RootController implements RootBridgeAdapter {
     return { worker: this.store.currentSession(root.taskId, "worker"), next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
   }
 
-  async requestDelivery(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string, review?: DeliveryReview): Promise<unknown> {
-    return this.delivery.execute(root, operation, expectedHead, review);
+  async requestDelivery(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string, review?: DeliveryReview, pullRequestTitle?: PullRequestTitle): Promise<unknown> {
+    return this.delivery.execute(root, operation, expectedHead, review, pullRequestTitle);
   }
 
   async askHuman(root: RootIdentity, question: string, options: HumanQuestionOptions): Promise<unknown> {

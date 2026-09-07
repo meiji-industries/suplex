@@ -1,4 +1,4 @@
-import type { DeliveryOperation, DeliveryReview } from "./root-contracts.js";
+import { PullRequestTitleSchema, type DeliveryOperation, type DeliveryReview, type PullRequestTitle } from "./root-contracts.js";
 import { inspectDeliveryDiff, matchesDeliveryReview } from "./delivery-review.js";
 import type { RootIdentity } from "./root-contracts.js";
 import type { GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation } from "./github-delivery.js";
@@ -7,7 +7,7 @@ import type { PullRequestReference, TaskControl } from "./task-control.js";
 import type { TaskControlStore } from "./root-session-store.js";
 
 export class DeliveryOperationFailure extends Error {
-  constructor(readonly code: "worktree_missing" | "pull_request_ambiguous" | "pull_request_closed" | "head_diverged" | "delivery_target_mismatch" | "delivery_review_required", message: string) {
+  constructor(readonly code: "worktree_missing" | "pull_request_ambiguous" | "pull_request_closed" | "head_diverged" | "delivery_target_mismatch" | "delivery_review_required" | "pull_request_title_required", message: string) {
     super(message);
     this.name = "DeliveryOperationFailure";
   }
@@ -42,7 +42,7 @@ export class DeliveryOperations {
     return this.observeKnownPull(control);
   }
 
-  async execute(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string, review?: DeliveryReview): Promise<unknown> {
+  async execute(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string, review?: DeliveryReview, pullRequestTitle?: PullRequestTitle): Promise<unknown> {
     this.store.assertCurrentRoot(root);
     const control = this.store.get(root.taskId);
     if (operation === "inspect_delivery_diff") {
@@ -76,7 +76,7 @@ export class DeliveryOperations {
       case "push_branch":
         return this.push(root, refreshed, repository, local);
       case "create_or_adopt_pull_request":
-        return this.createOrAdopt(root, refreshed, repository, local, pull);
+        return this.createOrAdopt(root, refreshed, repository, local, pull, pullRequestTitle);
       case "observe_checks":
         return this.checks(refreshed, repository, local.branch);
       case "request_review":
@@ -144,7 +144,7 @@ export class DeliveryOperations {
     return { kind: "pushed", headSha: observed };
   }
 
-  private async createOrAdopt(root: RootIdentity, control: TaskControl, repository: string, local: { branch: string; headSha: string }, pull: PullRequestReference | null): Promise<PullRequestReference> {
+  private async createOrAdopt(root: RootIdentity, control: TaskControl, repository: string, local: { branch: string; headSha: string }, pull: PullRequestReference | null, pullRequestTitle?: PullRequestTitle): Promise<PullRequestReference> {
     if (pull) {
       if (pull.state === "closed") throw new DeliveryOperationFailure("pull_request_closed", "The matching pull request is closed and was not merged");
       if (pull.headSha !== local.headSha && pull.state !== "merged") throw new DeliveryOperationFailure("head_diverged", "The pull request head does not match the observed worktree head");
@@ -155,7 +155,10 @@ export class DeliveryOperations {
     const candidates = matches.filter((candidate) => matchesIntent(control, candidate) && candidate.headSha === local.headSha);
     if (candidates.length > 1) throw new DeliveryOperationFailure("pull_request_ambiguous", "GitHub returned more than one matching pull request");
     this.store.assertCurrentRoot(root);
-    const created = candidates[0] ?? await this.github.createDraftPullRequest({ repository, owner: repository.split("/")[0]!, headBranch: local.branch, baseBranch: control.deliveryIntent.baseBranch, title: control.objective.slice(0, 120), body: control.objective });
+    if (candidates[0]) return this.adoptKnownPull(control, candidates[0]);
+    const title = PullRequestTitleSchema.safeParse(pullRequestTitle);
+    if (!title.success) throw new DeliveryOperationFailure("pull_request_title_required", "Supply a concise title that describes the final solution before you create a pull request.");
+    const created = await this.github.createDraftPullRequest({ repository, owner: repository.split("/")[0]!, headBranch: local.branch, baseBranch: control.deliveryIntent.baseBranch, title: title.data, body: control.objective });
     return this.adoptKnownPull(control, created);
   }
 

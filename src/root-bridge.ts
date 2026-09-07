@@ -34,7 +34,7 @@ export interface RootBridgeAdapter {
   observe(root: RootIdentity): Promise<unknown>;
   readImage(root: RootIdentity, artifactId: string): Promise<RootImageResult>;
   delegateWorker(root: RootIdentity, assignment: WorkerAssignment): Promise<unknown>;
-  requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation'], expectedHead?: string, review?: Extract<RootTool, { kind: "request_delivery" }>['review']): Promise<unknown>;
+  requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation'], expectedHead?: string, review?: Extract<RootTool, { kind: "request_delivery" }>['review'], pullRequestTitle?: Extract<RootTool, { kind: "request_delivery" }>['pullRequestTitle']): Promise<unknown>;
   askHuman(root: RootIdentity, question: string, options: Extract<RootTool, { kind: "ask_human" }>['options']): Promise<unknown>;
 }
 
@@ -58,7 +58,7 @@ export class RootBridge {
       case "delegate_worker":
         return this.adapter.delegateWorker(this.root, { plan: tool.plan, acceptanceCriteria: tool.acceptanceCriteria, instruction: tool.instruction });
       case "request_delivery":
-        return this.adapter.requestDelivery(this.root, tool.operation, tool.expectedHead, tool.review);
+        return this.adapter.requestDelivery(this.root, tool.operation, tool.expectedHead, tool.review, tool.pullRequestTitle);
       case "ask_human":
         return this.adapter.askHuman(this.root, tool.question, tool.options);
     }

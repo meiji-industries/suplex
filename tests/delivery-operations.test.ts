@@ -70,13 +70,14 @@ async function fixture() {
 
 function github(local: LocalRevision) {
   const calls: string[] = [];
+  const createdTitles: string[] = [];
   let observed: GithubPullRequestObservation = { exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "open", isDraft: false, headSha: local.headSha, baseSha: "base", mergeable: "MERGEABLE", checks: { total: 1, pending: 0, failing: 0, successful: 1, runs: [] }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: "APPROVED" };
   const pull = (): GithubPullRequest => ({ number: 7, url: "https://github.com/owner/repo/pull/7", repository: "owner/repo", headBranch: local.branch, baseBranch: "main", headSha: observed.headSha!, baseSha: "base", isDraft: observed.isDraft ?? false, state: observed.state!, mergedAt: observed.state === "merged" ? new Date().toISOString() : null });
   const port: GithubReleaseAdapter & DeliveryGithubPort = {
     markReadyForReview: async () => { calls.push("ready"); observed = { ...observed, isDraft: false }; },
-    checkAuthentication: async () => {}, getRemoteRepository: async () => { calls.push("remote"); return "owner/repo"; }, getBranchHead: async () => local.headSha, inspectLocalRevision: async () => { calls.push("inspect"); return local; }, pushNormal: async () => { calls.push("push"); }, listPullRequests: async () => [pull()], createDraftPullRequest: async () => pull(), updateDraftPullRequest: async () => pull(), getPullRequest: async () => { calls.push("get"); return pull(); }, observePullRequest: async () => { calls.push("observe"); return observed; }, mergePullRequest: async () => { calls.push("merge"); observed = { ...observed, state: "merged" }; },
+    checkAuthentication: async () => {}, getRemoteRepository: async () => { calls.push("remote"); return "owner/repo"; }, getBranchHead: async () => local.headSha, inspectLocalRevision: async () => { calls.push("inspect"); return local; }, pushNormal: async () => { calls.push("push"); }, listPullRequests: async () => [pull()], createDraftPullRequest: async input => { calls.push("create"); createdTitles.push(input.title); return pull(); }, updateDraftPullRequest: async () => pull(), getPullRequest: async () => { calls.push("get"); return pull(); }, observePullRequest: async () => { calls.push("observe"); return observed; }, mergePullRequest: async () => { calls.push("merge"); observed = { ...observed, state: "merged" }; },
   };
-  return { calls, port, setObserved: (value: GithubPullRequestObservation) => { observed = value; } };
+  return { calls, createdTitles, port, setObserved: (value: GithubPullRequestObservation) => { observed = value; } };
 }
 
 afterEach(async () => {
@@ -88,6 +89,41 @@ afterAll(async () => {
 });
 
 describe("Coordinator delivery operations", () => {
+  it("creates a pull request with the Coordinator's normalized final-solution title", async () => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      fake.port.listPullRequests = async () => [];
+      value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET objective = ? WHERE task_id = 'task'").run("Auto Restart\n\nRight now the \"Update Forge\" notification does not have a call to action.  I want it to have the ability to self-reload itself somehow.. Please make it happen somehow.  \"Restart Now\"."));
+      const controller = new RootController(value.store, new FakeTaskHarness(), new DeliveryOperations(value.store, fake.port));
+      await controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "create_or_adopt_pull_request", value.local.headSha, value.review, "  Add a restart action to the Forge update notification  ");
+      expect(fake.createdTitles).toEqual(["Add a restart action to the Forge update notification"]);
+    } finally { value.database.close(); }
+  });
+
+  it("requires a valid title before creating a pull request", async () => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      fake.port.listPullRequests = async () => [];
+      const delivery = new DeliveryOperations(value.store, fake.port);
+      for (const title of [undefined, " ", "\nCreate a pull request", "Create\na pull request", `Create${String.fromCharCode(1)} a pull request`, "a".repeat(121)]) {
+        await expect(delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "create_or_adopt_pull_request", value.local.headSha, value.review, title)).rejects.toMatchObject({ code: "pull_request_title_required" });
+      }
+      expect(fake.calls).not.toContain("create");
+    } finally { value.database.close(); }
+  });
+
+  it("adopts an existing matching pull request without a title or update", async () => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      await new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "create_or_adopt_pull_request", value.local.headSha, value.review);
+      expect(fake.calls).not.toContain("create");
+      expect(value.store.get("task").pullRequest).toMatchObject({ number: 7 });
+    } finally { value.database.close(); }
+  });
+
   it.each(["baseSha", "headSha", "files", "commits"] as const)("rejects a stale or incomplete reviewed %s before publishing", async field => {
     const value = await fixture();
     try {

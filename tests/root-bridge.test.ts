@@ -80,7 +80,8 @@ class ForgeAdapterFake implements RootBridgeAdapter {
     return { assignmentId: "worker_1" };
   }
 
-  async requestDelivery(): Promise<unknown> {
+  async requestDelivery(_identity: RootIdentity, operation: "inspect_delivery_diff" | "complete_local_work" | "push_branch" | "create_or_adopt_pull_request" | "observe_pull_request" | "observe_checks" | "request_review" | "merge_pull_request", _expectedHead?: string, _review?: unknown, pullRequestTitle?: string): Promise<unknown> {
+    this.calls.push(`delivery:${operation}:${pullRequestTitle ?? "none"}`);
     return { delivered: true };
   }
 
@@ -135,7 +136,16 @@ test("MCP discovery and typed Coordinator calls use the scoped bridge transport"
   const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", plan: "Inspect the scoped diff for the requested implementation", acceptanceCriteria: ["The diff contains only requested changes"], instruction: "Inspect the current diff." } } });
   expect(delegated).toMatchObject({ result: { structuredContent: { assignmentId: "worker_1" } } });
   expect(adapter.calls).toContain("delegate:session_1:Inspect the current diff.");
+  await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "request_delivery", operation: "create_or_adopt_pull_request", pullRequestTitle: "  Create reviewed delivery flow  " } } });
+  expect(adapter.calls).toContain("delivery:create_or_adopt_pull_request:Create reviewed delivery flow");
   reader.close();
+});
+
+test("Coordinator bridge rejects invalid pull request titles", async () => {
+  const bridge = new RootBridge(root, new ForgeAdapterFake());
+  for (const pullRequestTitle of [" ", "\nCreate a pull request", "Create\na pull request", `Create${String.fromCharCode(1)} a pull request`, "a".repeat(121)]) {
+    await expect(bridge.call({ kind: "request_delivery", operation: "create_or_adopt_pull_request", pullRequestTitle })).rejects.toMatchObject({ code: "invalid_request" });
+  }
 });
 
 test("stdio bridge invokes the production controller against a durable task control", async () => {

@@ -23,6 +23,8 @@ describe("OpenCode role configuration", () => {
     expect(JSON.stringify(config)).not.toContain('"*":"allow"');
     expect(Object.keys(config.mcp ?? {})).toEqual(["forge_root"]);
     expect(openCodeRolePrompt("root")).toContain("Never delegate planning or the final verification judgment");
+    expect(openCodeRolePrompt("root")).toContain("generate a concise action-oriented title from the final reviewed solution");
+    expect(openCodeRolePrompt("root")).toContain("Supply it as pullRequestTitle");
   });
 
   it("lets Workers edit but not spawn native subagents or call the Coordinator bridge", () => {

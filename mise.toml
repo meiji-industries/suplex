@@ -32,7 +32,7 @@ exec tsx src/server.ts
 
 [tasks."dev:watch"]
 description = "Run the single-process stack with backend reloads"
-env = { FORGE_PRETTY_LOGS = "1", FORGE_FRONTEND_DEV_SERVER = "1", FORGE_DEVELOPMENT_AUTO_LOGIN = "1" }
+env = { FORGE_PRETTY_LOGS = "1", FORGE_FRONTEND_DEV_SERVER = "1", FORGE_DEVELOPMENT_AUTO_LOGIN = "1", FORGE_WATCH_MODE = "1" }
 run = '''
 export PATH="$(dirname "$(mise which node)"):$PATH"
 [ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS

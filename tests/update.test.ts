@@ -10,10 +10,12 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import type { HostHealthDependencies } from "../src/health.js";
 import { UpdateResponseSchema } from "../src/http/contracts/update.js";
+import { SelfUpdateService, SelfUpdateStore } from "../src/self-update.js";
 import { inspectUpdateAvailability, type GitCommand } from "../src/update.js";
 
 const headRevision = "a".repeat(40);
 const remoteRevision = "b".repeat(40);
+const newerRevision = "c".repeat(40);
 
 const health: HostHealthDependencies = {
   database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
@@ -114,7 +116,45 @@ test("the update API requires authentication and returns the typed injected obse
     const authenticated = await app.inject({ method: "GET", url: "/api/update", headers: { host: `127.0.0.1:${config.port}` } });
     expect(authenticated.statusCode).toBe(200);
     expect(authenticated.headers["cache-control"]).toBe("private, no-store");
-    expect(UpdateResponseSchema.parse(authenticated.json())).toEqual({ available: true, revision: remoteRevision });
+    expect(UpdateResponseSchema.parse(authenticated.json())).toEqual({ available: true, revision: remoteRevision, canRestart: true });
+  } finally {
+    await app.close();
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the update API advertises a newer remote revision after a failed target", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-update-api-failed-target-test-"));
+  const config = createTestConfig(root, { developmentAutoLogin: true });
+  const database = new ForgeDatabase(config.databasePath);
+  const auth = new AuthService(database, config);
+  const store = new SelfUpdateStore(config.runtimeRoot);
+  await store.writeStatus({ operationId: "77777777-7777-4777-8777-777777777777", status: "failed", targetRevision: remoteRevision, acceptedAt: "2026-09-06T00:00:00.000Z", updatedAt: "2026-09-06T00:00:01.000Z", error: "build failed" });
+  const service = new SelfUpdateService({
+    config,
+    store,
+    runningRevision: headRevision,
+    runGit: async (args) => {
+      switch ([...args].join(" ")) {
+        case "symbolic-ref --short HEAD": return "main\n";
+        case "remote": return "origin\n";
+        case "remote get-url origin": return "https://github.com/meiji-industries/forge.git\n";
+        case "rev-parse --verify HEAD^{commit}": return `${remoteRevision}\n`;
+        case "fetch --no-tags origin refs/heads/main:refs/remotes/origin/main": return "";
+        case "rev-parse --verify refs/remotes/origin/main^{commit}": return `${newerRevision}\n`;
+        case "rev-list --count HEAD..refs/remotes/origin/main": return "1\n";
+        default: throw new Error(`unexpected Git observation: ${[...args].join(" ")}`);
+      }
+    },
+    argv: ["node", "src/server.ts"],
+    environment: {},
+  });
+  const app = createApp({ config, auth, health, readUpdate: async () => service.readUpdate() });
+  try {
+    const response = await app.inject({ method: "GET", url: "/api/update", headers: { host: `127.0.0.1:${config.port}` } });
+    expect(response.statusCode).toBe(200);
+    expect(UpdateResponseSchema.parse(response.json())).toMatchObject({ available: true, revision: newerRevision, currentRevision: headRevision, operation: { status: "failed", targetRevision: remoteRevision } });
   } finally {
     await app.close();
     database.close();
@@ -131,7 +171,7 @@ test("the update API fails closed when its observation fails", async () => {
   try {
     const response = await app.inject({ method: "GET", url: "/api/update", headers: { host: `127.0.0.1:${config.port}` } });
     expect(response.statusCode).toBe(200);
-    expect(UpdateResponseSchema.parse(response.json())).toEqual({ available: false });
+    expect(UpdateResponseSchema.parse(response.json())).toEqual({ available: false, canRestart: true });
   } finally {
     await app.close();
     database.close();

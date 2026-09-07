@@ -1,4 +1,5 @@
 import { mkdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,7 +18,7 @@ import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
 import { HermesAgentService } from "./hermes-agents.js";
 import { TaskHost } from "./task-host.js";
-import { inspectUpdateAvailability } from "./update.js";
+import { createSelfUpdateService } from "./self-update.js";
 import { TaskAnalyticsStore } from "./task-analytics-store.js";
 import { AnalyticsHistoryReader, TaskAnalyticsCollector } from "./task-analytics-collector.js";
 
@@ -25,11 +26,13 @@ export interface ForgeServer {
   app: FastifyInstance;
   database: ForgeDatabase;
   host: TaskHost;
+  instanceId: string;
 }
 
 export async function createForgeServer(config: ForgeConfig = loadConfig(), options: { logSink?: (line: string) => void } = {}): Promise<ForgeServer> {
   await mkdir(config.artifactRoot, { recursive: true });
   await mkdir(config.worktreeRoot, { recursive: true });
+  await mkdir(config.runtimeRoot, { recursive: true });
   const database = new ForgeDatabase(config.databasePath);
   const host = new TaskHost(database, { artifactRoot: config.artifactRoot });
   const auth = new AuthService(database, config);
@@ -39,6 +42,9 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   const profiles = new AgentProfileService(database, auth);
   const tasks = new TaskService(database, auth, projects, config);
   const taskTemplates = new TaskTemplateService(database, auth, tasks);
+  const instanceId = randomUUID();
+  const selfUpdate = createSelfUpdateService({ config, instanceId, workingDirectory: process.cwd() });
+  await selfUpdate.initialize();
   const dependencies = {
     config,
     health: createHostHealthDependencies(config, database),
@@ -51,7 +57,10 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     database,
     host,
     logger: createFastifyLogger(options.logSink),
-    readUpdate: () => inspectUpdateAvailability({ cwd: process.cwd() }),
+    readUpdate: () => selfUpdate.readUpdate(),
+    requestUpdateRestart: (revision: string) => selfUpdate.acceptRestart(revision),
+    launchUpdateRestart: (operationId: string) => selfUpdate.launchRestart(operationId),
+    instanceId,
   } satisfies Parameters<typeof createApp>[0];
   let app: FastifyInstance;
   try {
@@ -70,7 +79,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   app.addHook("onClose", async () => { await analytics.stop(); await history.close(); });
   analytics.start();
   host.start();
-  return { app, database, host };
+  return { app, database, host, instanceId };
 }
 
 export async function startServer(config: ForgeConfig = loadConfig()): Promise<void> {

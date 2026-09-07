@@ -1,8 +1,8 @@
 import { runCommand } from "./command-runner.js";
 
-const FORGE_REPOSITORY = "meiji-industries/forge";
-const REMOTE_BRANCH = "main";
-const GIT_TIMEOUT_MS = 30_000;
+export const FORGE_REPOSITORY = "meiji-industries/forge";
+export const REMOTE_BRANCH = "main";
+export const GIT_TIMEOUT_MS = 30_000;
 
 export interface UpdateAvailability {
   available: boolean;
@@ -30,7 +30,7 @@ function repositoryPath(pathname: string): string | undefined {
   return match?.[1] && match[2] ? `${match[1]}/${match[2]}`.toLowerCase() : undefined;
 }
 
-function canonicalRepository(rawUrl: string): string | undefined {
+export function canonicalRepository(rawUrl: string): string | undefined {
   const trimmed = rawUrl.trim();
   const scp = /^git@github\.com:([^\s]+)$/i.exec(trimmed);
   if (scp?.[1]) {
@@ -58,6 +58,12 @@ function requiredOutput(output: string): string {
   return value;
 }
 
+export function requiredCommitRevision(output: string): string {
+  const value = requiredOutput(output).toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(value)) throw new Error("git returned an invalid commit revision");
+  return value;
+}
+
 function commitCount(output: string): number {
   const value = output.trim();
   if (!/^\d+$/.test(value)) throw new Error("git returned an invalid commit count");
@@ -66,13 +72,21 @@ function commitCount(output: string): number {
   return count;
 }
 
-async function matchingRemote(runGit: GitCommand, cwd: string): Promise<string | undefined> {
+export async function matchingRemote(runGit: GitCommand, cwd: string): Promise<string | undefined> {
   const remotes = (await runGit(["remote"], cwd)).split(/\r?\n/).map((remote) => remote.trim()).filter(Boolean);
+  const matches: string[] = [];
   for (const remote of remotes) {
     const url = await runGit(["remote", "get-url", remote], cwd);
-    if (canonicalRepository(url)) return remote;
+    if (canonicalRepository(url)) matches.push(remote);
   }
-  return undefined;
+  if (matches.length > 1) throw new Error("git has multiple remotes for the pinned Forge repository");
+  return matches[0];
+}
+
+export async function readCurrentRevision(options: UpdateDetectorOptions = {}): Promise<string> {
+  const cwd = options.cwd ?? process.cwd();
+  const runGit = options.runGit ?? defaultGitCommand;
+  return requiredCommitRevision(await runGit(["rev-parse", "--verify", "HEAD^{commit}"], cwd));
 }
 
 export async function inspectUpdateAvailability(options: UpdateDetectorOptions = {}): Promise<UpdateAvailability> {
@@ -82,9 +96,9 @@ export async function inspectUpdateAvailability(options: UpdateDetectorOptions =
     if ((await runGit(["symbolic-ref", "--short", "HEAD"], cwd)).trim() !== REMOTE_BRANCH) return { available: false };
     const remote = await matchingRemote(runGit, cwd);
     if (!remote) return { available: false };
-    requiredOutput(await runGit(["rev-parse", "--verify", "HEAD^{commit}"], cwd));
+    requiredCommitRevision(await runGit(["rev-parse", "--verify", "HEAD^{commit}"], cwd));
     await runGit(["fetch", "--no-tags", remote, `refs/heads/${REMOTE_BRANCH}:refs/remotes/${remote}/${REMOTE_BRANCH}`], cwd);
-    const revision = requiredOutput(await runGit(["rev-parse", "--verify", `refs/remotes/${remote}/${REMOTE_BRANCH}^{commit}`], cwd));
+    const revision = requiredCommitRevision(await runGit(["rev-parse", "--verify", `refs/remotes/${remote}/${REMOTE_BRANCH}^{commit}`], cwd));
     const count = commitCount(await runGit(["rev-list", "--count", `HEAD..refs/remotes/${remote}/${REMOTE_BRANCH}`], cwd));
     return count > 0 ? { available: true, revision } : { available: false };
   } catch {

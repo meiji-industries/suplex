@@ -100,6 +100,7 @@ export default tseslint.config({
     "src/process-manager.ts",
     "src/provider-readiness.ts",
     "src/runtime.ts",
+    "src/self-update.ts",
     "src/tailscale.ts",
     "src/task-sources.ts",
     "tests/ci-repair-rollback.test.ts",

@@ -61,6 +61,7 @@ interface RoutePolicy {
   body?: Record<string, unknown>;
   successStatus?: number;
   authenticatedSuccessStatus?: number;
+  memberFailureStatus?: number;
 }
 
 const reachableAddress = "https://forge.tailnet.ts.net:4111";
@@ -87,6 +88,7 @@ const policies: RoutePolicy[] = [
   { method: "GET", path: "/api/admin/credentials", kind: "read", allowed: ["admin"], scope: "none" },
   { method: "GET", path: "/api/admin/audit", kind: "read", allowed: ["admin"], scope: "none" },
   { method: "GET", path: "/api/health", kind: "read", allowed: ["admin", "member"], scope: "none" },
+  { method: "POST", path: "/api/update/restart", kind: "mutation", allowed: ["admin"], scope: "none", body: { revision: "b".repeat(40) }, successStatus: 202, memberFailureStatus: 403 },
 
   { method: "POST", path: "/api/admin/companies", kind: "mutation", allowed: ["admin"], scope: "none", body: { name: "Policy Company" }, successStatus: 201 },
   { method: "PATCH", path: "/api/admin/companies/:companyId", kind: "mutation", allowed: ["admin"], scope: "admin", body: { name: "Renamed" }, successStatus: 200 },
@@ -112,7 +114,7 @@ async function makeFixture(overrides: Parameters<typeof createTestConfig>[1] = {
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   const config = createTestConfig(root, { reachableAddress, ...overrides });
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
-  const app = createApp({ config, auth, health, getHealth: async () => ({ generatedAt: new Date().toISOString(), reachableAddress: config.reachableAddress, ready: true, checks: [] }) });
+  const app = createApp({ config, auth, health, getHealth: async () => ({ generatedAt: new Date().toISOString(), reachableAddress: config.reachableAddress, ready: true, checks: [] }), requestUpdateRestart: async (revision) => ({ accepted: true, operation: { operationId: "update-policy-operation", status: "pending", targetRevision: revision, acceptedAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }), launchUpdateRestart: async () => undefined });
   return { root, database, config, auth, app };
 }
 
@@ -205,7 +207,7 @@ test("route matrix is enforced: anonymous, role, company scope, and missing or w
       if (policy.kind === "mutation") {
         const memberResult = await fixture.app.inject(injectOptions(policy.method, target, memberCookie, reachableAddress, body));
         if (!policy.allowed.includes("member")) {
-          expect(memberResult.statusCode).toBe(404);
+          expect(memberResult.statusCode).toBe(policy.memberFailureStatus ?? 404);
         } else {
           expect([200, 201, 204]).toContain(memberResult.statusCode);
         }
@@ -218,7 +220,7 @@ test("route matrix is enforced: anonymous, role, company scope, and missing or w
           expect(wrongOrigin.json()).toEqual({ error: "request_origin_invalid" });
 
           const withOrigin = await fixture.app.inject(injectOptions(policy.method, target, adminCookie, reachableAddress, body));
-          expect([200, 201, 204]).toContain(withOrigin.statusCode);
+          expect(withOrigin.statusCode).toBe(authSuccess);
         }
       }
     }

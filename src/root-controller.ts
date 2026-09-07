@@ -54,7 +54,7 @@ export class RootController implements RootBridgeAdapter {
     const pullRequest = await this.delivery.observe(root.taskId);
     const worktree = control.worktree ? await observeWorktree(control.worktree.path) : null;
     const worker = this.store.currentSession(root.taskId, "worker");
-    const workerResult = worker ? this.store.turns(root.taskId).find(turn => turn.sessionId === worker.id && turn.status === "completed")?.terminalObservation ?? null : null;
+    const workerResult = worker ? this.store.turns(root.taskId).filter(turn => turn.sessionId === worker.id && turn.status === "completed").at(-1)?.terminalObservation ?? null : null;
     return { control: this.store.get(root.taskId), context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, workerResult, worktree, pullRequest };
   }
 

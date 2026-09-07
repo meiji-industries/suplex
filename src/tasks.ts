@@ -156,7 +156,7 @@ export class TaskService {
     return this.getTask(userId, taskId);
   }
 
-  async archiveTask(userId: string, taskId: string, confirmDiscardDirty = false): Promise<Task | { status: "confirmation_required"; dirtyFileCount: number }> {
+  async archiveTask(userId: string, taskId: string, confirmDiscardDirty = false): Promise<Task | { status: "confirmation_required"; dirtyFileCount: number; dirtyFilePaths: string[] }> {
     const task = this.getTask(userId, taskId);
     if (this.archives.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
     if (!["backlog", "cancelled", "delivered"].includes(task.status)) throw new TaskFailure("Cancel the task before archiving it", 409);

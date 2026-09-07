@@ -1,4 +1,4 @@
-import { access, writeFile, readFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 import * as displays from "../src/task-archive-displays.js";
@@ -67,16 +67,28 @@ test("display cleanup failure is reported and archive can retry after Git cleanu
   } finally { close.mockRestore(); await f.close(); }
 });
 
-test("archive requires confirmation for untracked changes before hiding the task", async () => {
+test("archive lists tracked and untracked changes before hiding the task", async () => {
   const f = await fixture();
   try {
-    await writeFile(join(f.worktree.path, "draft.txt"), "unsaved draft");
+    await mkdir(join(f.worktree.path, "nested"));
+    await writeFile(join(f.worktree.path, "modified file.txt"), "original");
+    await writeFile(join(f.worktree.path, "deleted.txt"), "delete me");
+    await git(f.worktree.path, ["add", "."]);
+    await git(f.worktree.path, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "tracked files"]);
+    await writeFile(join(f.worktree.path, "modified file.txt"), "changed");
+    await rm(join(f.worktree.path, "deleted.txt"));
+    await writeFile(join(f.worktree.path, "nested", "untracked draft.txt"), "unsaved draft");
+    await writeFile(join(f.worktree.path, "nested", "résumé 🧪.txt"), "unicode draft");
     const request = { method: "POST" as const, url: `/api/tasks/${f.task.id}/archive`, headers: f.headers };
     const first = await f.app.inject({ ...request, payload: {} });
     expect(first.statusCode, first.body).toBe(200);
-    expect(first.json()).toMatchObject({ status: "confirmation_required", dirtyFileCount: 1 });
+    expect(first.json()).toEqual({
+      status: "confirmation_required",
+      dirtyFileCount: 4,
+      dirtyFilePaths: ["deleted.txt", "modified file.txt", "nested/résumé 🧪.txt", "nested/untracked draft.txt"],
+    });
     expect(f.tasks.getTask(f.userId, f.task.id).archivedAt).toBeNull();
-    expect(await readFile(join(f.worktree.path, "draft.txt"), "utf8")).toBe("unsaved draft");
+    expect(await readFile(join(f.worktree.path, "nested", "untracked draft.txt"), "utf8")).toBe("unsaved draft");
     const second = await f.app.inject({ ...request, payload: { confirmDiscardDirty: true } });
     expect(second.statusCode, second.body).toBe(200);
     await expect(access(f.worktree.path)).rejects.toThrow();

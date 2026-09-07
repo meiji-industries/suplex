@@ -81,7 +81,7 @@ export async function prepareTaskWorktree(intent: TaskWorktreeIntent): Promise<W
   return observe(path, repository, intent);
 }
 
-export type WorktreeCleanup = { status: "cleaned" | "already_absent" } | { status: "confirmation_required"; dirtyFileCount: number };
+export type WorktreeCleanup = { status: "cleaned" | "already_absent" } | { status: "confirmation_required"; dirtyFileCount: number; dirtyFilePaths: string[] };
 
 export async function removeTaskWorktree(intent: TaskWorktreeIntent, reference: WorktreeReference | null, confirmDiscardDirty: boolean, authorize: () => void): Promise<WorktreeCleanup> {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(intent.taskId) || !isAbsolute(intent.repositoryPath) || !isAbsolute(intent.worktreeRoot)) throw new Error("Invalid task worktree identity");
@@ -100,7 +100,11 @@ export async function removeTaskWorktree(intent: TaskWorktreeIntent, reference: 
   if (existing) {
     await observe(path, repository, intent);
     const changes = (await git(path, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"])).stdout.split("\0").filter(Boolean);
-    if (changes.length && !confirmDiscardDirty) return { status: "confirmation_required", dirtyFileCount: changes.length };
+    if (changes.length && !confirmDiscardDirty) return {
+      status: "confirmation_required",
+      dirtyFileCount: changes.length,
+      dirtyFilePaths: changes.map(change => change.slice(3)),
+    };
   }
   authorize();
   await git(repository, ["worktree", "remove", ...(confirmDiscardDirty ? ["--force"] : []), path]);

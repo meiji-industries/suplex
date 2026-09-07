@@ -11,7 +11,11 @@ export const TaskListResponseSchema = z.object({ tasks: z.array(TaskResponseSche
 export type TaskListTask = TaskResponse;
 export const TaskDetailsBodySchema = TaskInputSchema.pick({ title: true, description: true }).partial().strict();
 export const TaskArchiveBodySchema = z.object({ confirmDiscardDirty: z.boolean().optional() }).strict();
-export const TaskArchiveResponseSchema = z.union([TaskResponseSchema, z.object({ status: z.literal("confirmation_required"), dirtyFileCount: z.number().int().nonnegative() })]);
+export const TaskArchiveResponseSchema = z.union([TaskResponseSchema, z.object({
+  status: z.literal("confirmation_required"),
+  dirtyFileCount: z.number().int().nonnegative(),
+  dirtyFilePaths: z.array(z.string()),
+})]);
 export const TaskAnswerBodySchema = z.object({ questionId: z.string().min(1), answer: z.string().trim().min(1), confirmCommandsStopped: z.boolean().optional() }).strict();
 export const TaskNoteBodySchema = z.object({ note: z.string().trim().min(1) }).strict();
 export const TaskActivityResponseSchema = z.object({

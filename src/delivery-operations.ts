@@ -27,6 +27,13 @@ function matchesIntent(control: TaskControl, pull: GithubPullRequest): boolean {
   return pull.repository === control.deliveryIntent.repository && pull.headBranch === control.deliveryIntent.headBranch && pull.baseBranch === control.deliveryIntent.baseBranch && !pull.isCrossRepository;
 }
 
+function selectDiscoveredPull(control: TaskControl, pulls: GithubPullRequest[]): GithubPullRequest | null {
+  const matches = pulls.filter((pull) => matchesIntent(control, pull));
+  const eligible = matches.filter((pull) => pull.state !== "closed");
+  if (eligible.length > 1) throw new DeliveryOperationFailure("pull_request_ambiguous", "GitHub returned more than one pull request for this task intent");
+  return eligible[0] ?? matches[0] ?? null;
+}
+
 function currentPull(repository: string, observed: GithubPullRequestObservation): PullRequestReference | null {
   if (!observed.exists || observed.number === null || observed.url === null || observed.headSha === null || observed.state === null) return null;
   return { repository, number: observed.number, url: observed.url, headSha: observed.headSha, state: observed.state, mergedAt: null };
@@ -105,14 +112,15 @@ export class DeliveryOperations {
   }
 
   private async observeKnownPull(control: TaskControl): Promise<PullRequestReference | null> {
-    const number = control.pullRequest?.number ?? control.deliveryIntent.pullRequestNumber;
-    if (number !== null) {
-      const pull = await this.github.getPullRequest({ repository: control.deliveryIntent.repository, number });
+    const pinnedNumber = control.deliveryIntent.pullRequestNumber;
+    if (pinnedNumber !== null) {
+      const pull = await this.github.getPullRequest({ repository: control.deliveryIntent.repository, number: pinnedNumber });
       return this.adoptKnownPull(control, pull);
     }
-    const candidates = (await this.github.listPullRequests({ repository: control.deliveryIntent.repository, owner: control.deliveryIntent.repository.split("/")[0]!, headBranch: control.deliveryIntent.headBranch, baseBranch: control.deliveryIntent.baseBranch })).filter(pull => matchesIntent(control, pull));
-    if (candidates.length > 1) throw new DeliveryOperationFailure("pull_request_ambiguous", "GitHub returned more than one pull request for this task intent");
-    return candidates[0] ? this.adoptKnownPull(control, candidates[0]) : null;
+    const pull = selectDiscoveredPull(control, await this.github.listPullRequests({ repository: control.deliveryIntent.repository, owner: control.deliveryIntent.repository.split("/")[0]!, headBranch: control.deliveryIntent.headBranch, baseBranch: control.deliveryIntent.baseBranch }));
+    if (pull) return this.adoptKnownPull(control, pull);
+    if (control.pullRequest) this.store.setPullRequest(control.taskId, null);
+    return null;
   }
 
   private adoptKnownPull(control: TaskControl, pull: GithubPullRequest): PullRequestReference {
@@ -150,12 +158,13 @@ export class DeliveryOperations {
       if (pull.headSha !== local.headSha && pull.state !== "merged") throw new DeliveryOperationFailure("head_diverged", "The pull request head does not match the observed worktree head");
       return pull;
     }
+    if (control.deliveryIntent.pullRequestNumber !== null) throw new DeliveryOperationFailure("pull_request_closed", "GitHub did not return the pinned pull request");
     if (local.branch !== control.deliveryIntent.headBranch) throw new DeliveryOperationFailure("head_diverged", "The worktree branch does not match this task intent");
-    const matches = await this.github.listPullRequests({ repository, owner: repository.split("/")[0]!, headBranch: local.branch, baseBranch: control.deliveryIntent.baseBranch });
-    const candidates = matches.filter((candidate) => matchesIntent(control, candidate) && candidate.headSha === local.headSha);
-    if (candidates.length > 1) throw new DeliveryOperationFailure("pull_request_ambiguous", "GitHub returned more than one matching pull request");
+    const candidate = selectDiscoveredPull(control, await this.github.listPullRequests({ repository, owner: repository.split("/")[0]!, headBranch: local.branch, baseBranch: control.deliveryIntent.baseBranch }));
+    if (candidate?.state === "closed") throw new DeliveryOperationFailure("pull_request_closed", "The matching pull request is closed and was not merged");
+    if (candidate && candidate.state !== "merged" && candidate.headSha !== local.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head does not match the observed worktree head");
     this.store.assertCurrentRoot(root);
-    if (candidates[0]) return this.adoptKnownPull(control, candidates[0]);
+    if (candidate) return this.adoptKnownPull(control, candidate);
     const title = PullRequestTitleSchema.safeParse(pullRequestTitle);
     if (!title.success) throw new DeliveryOperationFailure("pull_request_title_required", "Supply a concise title that describes the final solution before you create a pull request.");
     const created = await this.github.createDraftPullRequest({ repository, owner: repository.split("/")[0]!, headBranch: local.branch, baseBranch: control.deliveryIntent.baseBranch, title: title.data, body: control.objective });

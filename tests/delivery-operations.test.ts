@@ -80,6 +80,10 @@ function github(local: LocalRevision) {
   return { calls, createdTitles, port, setObserved: (value: GithubPullRequestObservation) => { observed = value; } };
 }
 
+function cachePull(store: TaskControlStore, pull: GithubPullRequest, number: number): void {
+  store.setPullRequest("task", { repository: pull.repository, number, url: pull.url, headSha: pull.headSha, state: pull.state, mergedAt: pull.mergedAt });
+}
+
 afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -165,6 +169,173 @@ describe("Coordinator delivery operations", () => {
     expect(value.store.get("task").pullRequest).toBeNull();
     expect(value.store.get("task").status).toBe("active");
     value.database.close();
+  });
+  it("replaces a cached retargeted pull request with the current intent match", async () => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      const pull = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
+      cachePull(value.store, pull, 41);
+      fake.port.getPullRequest = async () => { throw new Error("The cached receipt must not drive discovery"); };
+      fake.port.listPullRequests = async () => [
+        { ...pull, number: 41, baseBranch: "release" },
+        { ...pull, number: 42 },
+      ];
+
+      await expect(new DeliveryOperations(value.store, fake.port).observe("task")).resolves.toMatchObject({ number: 42 });
+      expect(value.store.get("task").pullRequest).toMatchObject({ number: 42 });
+    } finally { value.database.close(); }
+  });
+
+  it("ignores closed history when one eligible pull request matches", async () => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      const pull = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
+      fake.port.listPullRequests = async () => [
+        { ...pull, number: 41, state: "closed" },
+        { ...pull, number: 42 },
+      ];
+
+      await expect(new DeliveryOperations(value.store, fake.port).observe("task")).resolves.toMatchObject({ number: 42 });
+      expect(value.store.get("task").pullRequest).toMatchObject({ number: 42 });
+    } finally { value.database.close(); }
+  });
+
+  it("uses an explicitly pinned pull request instead of a conflicting cached receipt", async () => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      const pull = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
+      cachePull(value.store, pull, 42);
+      value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 41) WHERE task_id = 'task'").run());
+      const requested: number[] = [];
+      fake.port.getPullRequest = async ({ number }) => {
+        requested.push(number);
+        return { ...pull, number };
+      };
+      fake.port.listPullRequests = async () => { throw new Error("Pinned pull requests must not use discovery"); };
+
+      await expect(new DeliveryOperations(value.store, fake.port).observe("task")).resolves.toMatchObject({ number: 41 });
+      expect(requested).toEqual([41]);
+      expect(value.store.get("task").pullRequest).toMatchObject({ number: 41 });
+    } finally { value.database.close(); }
+  });
+
+  it("does not mutate the cached receipt when discovery is ambiguous", async () => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      const pull = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
+      cachePull(value.store, pull, 41);
+      fake.port.listPullRequests = async () => [
+        { ...pull, number: 42 },
+        { ...pull, number: 43 },
+      ];
+
+      await expect(new DeliveryOperations(value.store, fake.port).observe("task")).rejects.toMatchObject({ code: "pull_request_ambiguous" });
+      expect(value.store.get("task").pullRequest).toMatchObject({ number: 41 });
+    } finally { value.database.close(); }
+  });
+
+  it("clears a cached receipt when discovery finds no current match", async () => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      const pull = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
+      cachePull(value.store, pull, 41);
+      fake.port.getPullRequest = async () => { throw new Error("The cached receipt must not be observed"); };
+      fake.port.listPullRequests = async () => [];
+
+      await expect(new DeliveryOperations(value.store, fake.port).observe("task")).resolves.toBeNull();
+      expect(value.store.get("task").pullRequest).toBeNull();
+    } finally { value.database.close(); }
+  });
+
+  it("propagates discovery failures without mutating the cached receipt", async () => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      const pull = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
+      cachePull(value.store, pull, 41);
+      fake.port.listPullRequests = async () => { throw new Error("GitHub offline"); };
+
+      await expect(new DeliveryOperations(value.store, fake.port).observe("task")).rejects.toThrow("GitHub offline");
+      expect(value.store.get("task").pullRequest).toMatchObject({ number: 41 });
+    } finally { value.database.close(); }
+  });
+
+  it("does not adopt a closed pull request that appears during creation", async () => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      const pull = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
+      let lists = 0;
+      let creates = 0;
+      fake.port.listPullRequests = async () => ++lists === 1 ? [] : [{ ...pull, number: 41, state: "closed" }];
+      fake.port.createDraftPullRequest = async () => {
+        creates += 1;
+        return pull;
+      };
+
+      await expect(new DeliveryOperations(value.store, fake.port).execute(
+        { taskId: "task", sessionId: value.root.id, generation: value.root.generation },
+        "create_or_adopt_pull_request",
+        value.local.headSha,
+        value.review,
+      )).rejects.toMatchObject({ code: "pull_request_closed" });
+      expect(creates).toBe(0);
+      expect(value.store.get("task").pullRequest).toBeNull();
+    } finally { value.database.close(); }
+  });
+
+  it("does not replace a pinned pull request that disappears during creation", async () => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      const pinned = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
+      value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 7) WHERE task_id = 'task'").run());
+      fake.setObserved({ exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }, author: null, changedFiles: null, additions: null, deletions: null, autoMergeEnabled: null, reviewDecision: null });
+      fake.port.getPullRequest = async () => pinned;
+      let lists = 0;
+      let creates = 0;
+      fake.port.listPullRequests = async () => {
+        lists += 1;
+        return [];
+      };
+      fake.port.createDraftPullRequest = async () => {
+        creates += 1;
+        return fake.port.getPullRequest({ repository: "owner/repo", number: 8 });
+      };
+
+      await expect(new DeliveryOperations(value.store, fake.port).execute(
+        { taskId: "task", sessionId: value.root.id, generation: value.root.generation },
+        "create_or_adopt_pull_request",
+        value.local.headSha,
+        value.review,
+      )).rejects.toMatchObject({ code: "pull_request_closed" });
+      expect(lists).toBe(0);
+      expect(creates).toBe(0);
+      expect(value.store.get("task").pullRequest).toMatchObject({ number: 7 });
+    } finally { value.database.close(); }
+  });
+
+  it("adopts a merged pull request that appears during creation despite a different head", async () => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      const pull = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
+      let lists = 0;
+      fake.port.listPullRequests = async () => ++lists === 1 ? [] : [{ ...pull, number: 42, state: "merged", headSha: "b".repeat(40), mergedAt: new Date().toISOString() }];
+
+      await expect(new DeliveryOperations(value.store, fake.port).execute(
+        { taskId: "task", sessionId: value.root.id, generation: value.root.generation },
+        "create_or_adopt_pull_request",
+        value.local.headSha,
+        value.review,
+      )).resolves.toMatchObject({ number: 42, state: "merged" });
+      expect(value.store.get("task")).toMatchObject({ status: "delivered", pullRequest: { number: 42, state: "merged" } });
+    } finally { value.database.close(); }
   });
   it("completes a reviewed local worktree without requiring GitHub", async () => {
     const value = await fixture();

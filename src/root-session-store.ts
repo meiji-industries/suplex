@@ -90,8 +90,9 @@ export class TaskControlStore {
     if (changed !== 1) throw new Error("task_not_active");
     return this.get(taskId);
   }
-  setPullRequest(taskId: string, pullRequest: PullRequestReference): TaskControl {
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET pull_request_json = ?, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(JSON.stringify(PullRequestReferenceSchema.parse(pullRequest)), now(), taskId).changes);
+  setPullRequest(taskId: string, pullRequest: PullRequestReference | null): TaskControl {
+    const value = pullRequest === null ? null : JSON.stringify(PullRequestReferenceSchema.parse(pullRequest));
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET pull_request_json = ?, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(value, now(), taskId).changes);
     if (changed !== 1) throw new Error("task_not_active");
     return this.get(taskId);
   }

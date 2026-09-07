@@ -6,21 +6,36 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      runner:
+        description: Blacksmith runner for timing comparisons
+        type: choice
+        default: blacksmith-8vcpu-ubuntu-2404
+        options:
+          - blacksmith-4vcpu-ubuntu-2404
+          - blacksmith-8vcpu-ubuntu-2404
+          - blacksmith-16vcpu-ubuntu-2404
+      workers:
+        description: Vitest workers for timing comparisons
+        type: choice
+        default: '8'
+        options: ['4', '6', '8', '16']
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.runner }}-${{ inputs.workers }}
   cancel-in-progress: true
 
 jobs:
   test:
     name: Test suite
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ inputs.runner || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 20
     env:
       CI: "true"
+      TEST_WORKERS: ${{ inputs.workers || '8' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -33,13 +48,46 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install shell dependency
-        run: sudo apt-get update && sudo apt-get install --yes zsh
+        run: |
+          command -v zsh || sudo apt-get install --yes --no-install-recommends zsh || {
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends zsh
+          }
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        id: dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          playwright_version=$(node -p 'require("playwright/package.json").version')
+          echo "playwright-version=$playwright_version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: browsers
+        uses: actions/cache/restore@v5
+        with:
+          key: playwright-ubuntu-2404-${{ runner.arch }}-${{ steps.dependencies.outputs.playwright-version }}
+          path: ~/.cache/ms-playwright
 
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Run the verification gate
-        run: pnpm check:full
+      - name: Save Playwright browsers
+        if: steps.browsers.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          key: ${{ steps.browsers.outputs.cache-primary-key }}
+          path: ~/.cache/ms-playwright
+
+      # The build runs the same TypeScript check as typecheck, then emits the app.
+      - name: Lint, typecheck and build
+        run: |
+          pnpm lint &
+          lint_pid=$!
+          pnpm build
+          wait "$lint_pid"
+
+      - name: Unit and integration tests
+        run: pnpm test --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/unit-integration.xml
+
+      - name: Browser tests
+        run: pnpm exec vitest run --config vitest.browser.config.ts --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/browser.xml

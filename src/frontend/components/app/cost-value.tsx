@@ -10,5 +10,5 @@ export function CostValue({ value, subsidized, partial, className, suffix = "" }
 }): ReactElement {
   const text = money(value);
   const explanation = costExplanation(subsidized, partial);
-  return <span className={[className, subsidized && value !== null ? "line-through" : ""].filter(Boolean).join(" ")} title={explanation} aria-label={`${text}. ${explanation}`}>{text}{suffix}</span>;
+  return <span className={className} title={explanation} aria-label={`${text}. ${explanation}`}>{text}{suffix}</span>;
 }

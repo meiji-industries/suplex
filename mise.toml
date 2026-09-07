@@ -68,13 +68,13 @@ echo "force-killed dev stack"
 [tasks."db:migrate"]
 run = "mise exec -- node --import tsx src/cli.ts migrate"
 [tasks.build]
-run = "pnpm run build"
+run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run build"
 [tasks.typecheck]
-run = "pnpm run typecheck"
+run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run typecheck"
 [tasks.test]
-run = "pnpm run test"
+run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run test"
 [tasks.test-browser]
-run = "pnpm run test:browser"
+run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run test:browser"
 
 [tasks."desktop:dev"]
 description = "Build the desktop shell and open it with Electron"

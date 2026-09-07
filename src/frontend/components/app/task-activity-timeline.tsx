@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { TaskTimelineResponseSchema, type TimelineTask } from "../../../task-timeline-contracts.js";
 import { readJson } from "../../lib/api.js";
-import { duration } from "../../lib/analytics.js";
+import { taskTimelineDuration } from "../../lib/task-timeline-duration.js";
 import { Alert, AlertDescription } from "../ui/alert.js";
 import { TimelineAgentLabel } from "./timeline-agent-label.js";
 
@@ -50,6 +50,7 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
   }));
   const start = intervals.reduce((first, entry) => Math.min(first, entry.start), Infinity);
   const end = intervals.reduce((last, entry) => Math.max(last, entry.end), -Infinity);
+  const worked = intervals.reduce((total, entry) => total + entry.end - entry.start, 0);
   const span = Math.max(1, end - start);
   const ticks = Array.from({ length: 5 }, (_, index) => start + span * index / 4);
   const laneMap = new Map<string, { agentId: string; avatarSeed: string; name: string; roles: Set<TimelineTask["activity"][number]["role"]>; entries: typeof intervals }>();
@@ -62,7 +63,7 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
   const lanes = [...laneMap.values()];
 
   return <section aria-label="Task timeline" data-task-timeline className="min-w-0 border-b border-border/70 pb-3">
-    <div className="mb-2 flex items-center gap-2"><h3 className="text-xs font-semibold">Timeline</h3>{intervals.length ? <span className="text-[11px] tabular-nums text-muted-foreground" title="Elapsed time from the first agent response to the last">Elapsed {duration(end - start)}</span> : null}</div>
+    <div className="mb-2 flex flex-wrap items-center gap-2"><h3 className="text-xs font-semibold">Timeline</h3>{intervals.length ? <span className="text-[11px] tabular-nums text-muted-foreground" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span from the first agent response to the last.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(end - start)}</span> : null}</div>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     {!intervals.length ? <p className="text-xs text-muted-foreground">{snapshot ? "No agent time yet." : error ? "Agent time is not available." : "Forge reads the timeline."}</p> : <div className="overflow-x-auto" aria-label="Task timeline Gantt chart">
       <div className="grid min-w-[45rem] grid-cols-[13rem_minmax(32rem,1fr)] text-[11px]">
@@ -72,7 +73,7 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
         </div>
         {lanes.map(lane => <div className="contents" key={lane.agentId}>
           <div className="sticky left-0 z-10 flex min-h-11 items-center border-b border-border bg-background px-3">
-            <TimelineAgentLabel avatarSeed={lane.avatarSeed} name={lane.name} role={[...lane.roles].map(roleLabel).join(" / ")} executionCount={lane.entries.length} duration={duration(lane.entries.reduce((total, entry) => total + entry.end - entry.start, 0))} />
+            <TimelineAgentLabel avatarSeed={lane.avatarSeed} name={lane.name} role={[...lane.roles].map(roleLabel).join(" / ")} executionCount={lane.entries.length} duration={taskTimelineDuration(lane.entries.reduce((total, entry) => total + entry.end - entry.start, 0))} />
           </div>
           <div className="relative min-h-11 border-b border-border/70" role="list" aria-label={`${lane.name} executions`}>
             {lane.entries.map(entry => {
@@ -80,7 +81,7 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
               const width = Math.min(100 - left, Math.max(0.5, (entry.end - entry.start) / span * 100));
               const status = entry.status === "running" && !entry.live ? "Observation not available" : statuses[entry.status];
               const role = roleLabel(entry.role);
-              const label = `${lane.name}, ${role}, session ${entry.attempt}: ${timestamp(entry.start)} to ${timestamp(entry.end)}, ${duration(entry.end - entry.start)}. ${status}.`;
+              const label = `${lane.name}, ${role}, session ${entry.attempt}: ${timestamp(entry.start)} to ${timestamp(entry.end)}, ${taskTimelineDuration(entry.end - entry.start)}. ${status}.`;
               return <div role="listitem" tabIndex={0} key={entry.id} data-task-timing={entry.role} data-task-agent-id={entry.agentId} data-task-timing-active={entry.live || undefined} aria-label={label} title={label} className={`absolute top-3 flex h-5 items-center overflow-hidden rounded-sm px-1 text-left text-[10px] leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${entry.live ? "phase-timing-active text-emerald-950 motion-reduce:animate-none" : entry.status === "failed" ? "bg-destructive/20 text-destructive" : "bg-primary/15 text-foreground"}`} style={{ left: `${left}%`, width: `${width}%` }}><span className="truncate">{role}</span></div>;
             })}
           </div>

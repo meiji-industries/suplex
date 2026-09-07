@@ -13,6 +13,7 @@ import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { TaskControlStore } from "../src/root-session-store.js";
 import { runCommand } from "../src/command-runner.js";
 import { inspectDeliveryDiff } from "../src/delivery-review.js";
+import { commitGitFixture, initializeGitFixture } from "./helpers/git-fixture.js";
 
 const run = (command: string, args: string[]) => runCommand({ command, args, taskId: null, stepId: null });
 const cleanup: string[] = [];
@@ -33,11 +34,8 @@ async function deliverySeed(): Promise<{ directory: string; local: LocalRevision
 
   const directory = await mkdtemp(join(tmpdir(), "forge-delivery-seed-"));
   try {
-    await run("git", ["init", "-b", "task-branch", directory]);
-    await run("git", ["-C", directory, "config", "user.email", "test@example.com"]);
-    await run("git", ["-C", directory, "config", "user.name", "Test"]);
-    await run("git", ["-C", directory, "config", "commit.gpgsign", "false"]);
-    await run("git", ["-C", directory, "commit", "--allow-empty", "-m", "seed"]);
+    await initializeGitFixture(directory, "task-branch");
+    await commitGitFixture(directory, "seed", []);
     seed = { directory, local: await revision(directory) };
     return seed;
   } catch (error) {
@@ -103,11 +101,9 @@ describe("Coordinator delivery operations", () => {
     const value = await fixture();
     try {
       await writeFile(join(value.directory, "unrelated-refactor.ts"), "export const unrelated = true;\n");
-      await run("git", ["-C", value.directory, "add", "unrelated-refactor.ts"]);
-      await run("git", ["-C", value.directory, "commit", "-m", "Unrelated unpublished main work"]);
+      await commitGitFixture(value.directory, "Unrelated unpublished main work", ["unrelated-refactor.ts"]);
       await writeFile(join(value.directory, "task.ts"), "export const task = true;\n");
-      await run("git", ["-C", value.directory, "add", "task.ts"]);
-      await run("git", ["-C", value.directory, "commit", "-m", "Task change"]);
+      await commitGitFixture(value.directory, "Task change", ["task.ts"]);
       const current = await revision(value.directory);
       const fake = github(current);
       fake.port.getBranchHead = async ({ branch }) => branch === "main" ? value.local.headSha : null;

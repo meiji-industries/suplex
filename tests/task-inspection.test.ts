@@ -4,6 +4,7 @@ import { expect, test } from "vitest";
 import { runCommand } from "../src/command-runner.js";
 import { readTaskChecks, readTaskDiff } from "../src/task-inspection.js";
 import { nativeApp } from "./helpers/native-app.js";
+import { commitGitFixture, initializeGitFixture } from "./helpers/git-fixture.js";
 
 test("task diffs read actual Git changes without changing worktree state", async () => {
   const value = await nativeApp();
@@ -12,11 +13,9 @@ test("task diffs read actual Git changes without changing worktree state", async
     expect(await readTaskDiff(task)).toMatchObject({ available: false });
     const cwd = value.project.repositoryPath;
     const git = (args: string[]) => runCommand({ taskId: null, stepId: null, command: "git", args: ["-C", cwd, ...args] });
-    for (const args of [["init"], ["config", "user.name", "Test"], ["config", "user.email", "test@example.invalid"]]) expect((await git(args)).exitCode).toBe(0);
+    await initializeGitFixture(cwd, "main");
     await writeFile(join(cwd, "README.md"), "Before\n");
-    await git(["add", "README.md"]);
-    await git(["commit", "-m", "Initial"]);
-    const head = (await git(["rev-parse", "HEAD"])).stdout.trim();
+    const head = await commitGitFixture(cwd, "Initial", ["README.md"]);
     await writeFile(join(cwd, "README.md"), "After\n");
     const current = { ...task, configuration: { ...task.configuration, baselineSha: head }, worktree: { path: cwd, branch: "main", baseSha: head, headSha: head, dirty: true } };
     const before = (await git(["status", "--porcelain"])).stdout;

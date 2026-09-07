@@ -1,13 +1,16 @@
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
+import * as isomorphicGit from "isomorphic-git";
 
 import type { GithubPullRequest, GithubReleasePort } from "../src/github-delivery.js";
 import type { Project } from "../src/projects.js";
 import { TaskSourceService } from "../src/task-sources.js";
 import { TaskBodySchema } from "../src/http/contracts/tasks.js";
+import { commitGitFixture, initializeGitFixture } from "./helpers/git-fixture.js";
 
 const roots: string[] = [];
 afterEach(() => { delete process.env.FORGE_MIN_FREE_DISK_GB; while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
@@ -45,17 +48,17 @@ test("source resolution sanitizes provider failures", async () => {
 });
 
 function git(cwd: string, ...args: string[]): string { return execFileSync("git", args, { cwd, encoding: "utf8" }).trim(); }
-function fixture(): { repo: string; worktrees: string; base: string; head: string } {
+async function fixture(): Promise<{ repo: string; worktrees: string; base: string; head: string }> {
   const root = mkdtempSync(join(tmpdir(), "forge-source-")); roots.push(root);
   const remote = join(root, "remote.git"); const repo = join(root, "repo"); const worktrees = join(root, "worktrees");
-  mkdirSync(repo); mkdirSync(worktrees); git(root, "init", "--bare", remote); git(repo, "init", "-b", "main"); git(repo, "config", "user.name", "Forge"); git(repo, "config", "user.email", "forge@example.invalid");
-  writeFileSync(join(repo, "README.md"), "base\n"); git(repo, "add", "."); git(repo, "commit", "-m", "base"); const base = git(repo, "rev-parse", "HEAD"); git(repo, "remote", "add", "origin", remote); git(repo, "push", "-u", "origin", "main");
-  git(repo, "switch", "-c", "feature"); writeFileSync(join(repo, "feature.txt"), "source\n"); git(repo, "add", "."); git(repo, "commit", "-m", "source"); const head = git(repo, "rev-parse", "HEAD"); git(repo, "push", "-u", "origin", "feature"); git(repo, "switch", "main");
+  mkdirSync(repo); mkdirSync(worktrees); mkdirSync(remote); await initializeGitFixture(remote, "main", true); await initializeGitFixture(repo, "main");
+  writeFileSync(join(repo, "README.md"), "base\n"); const base = await commitGitFixture(repo, "base", ["README.md"]); await isomorphicGit.addRemote({ fs, dir: repo, remote: "origin", url: remote }); git(repo, "push", "-u", "origin", "main");
+  await isomorphicGit.branch({ fs, dir: repo, ref: "feature" }); await isomorphicGit.checkout({ fs, dir: repo, ref: "feature" }); writeFileSync(join(repo, "feature.txt"), "source\n"); const head = await commitGitFixture(repo, "source", ["feature.txt"]); git(repo, "push", "-u", "origin", "feature"); await isomorphicGit.checkout({ fs, dir: repo, ref: "main" });
   return { repo, worktrees, base, head };
 }
 
 test("branch discovery reads remote refs without changing the repository checkout", async () => {
-  const value = fixture();
+  const value = await fixture();
   const service = new TaskSourceService(github());
   const result = await service.discover(project(value.repo), "branch");
   expect(result).toMatchObject({ available: true, sources: [{ kind: "branch", branch: "feature", headSha: value.head }] });
@@ -64,7 +67,7 @@ test("branch discovery reads remote refs without changing the repository checkou
 });
 
 test("source capture reads the current remote branch head", async () => {
-  const value = fixture();
+  const value = await fixture();
   const service = new TaskSourceService(github());
   expect(await service.resolve(project(value.repo), { kind: "branch", branch: "feature" })).toEqual({ kind: "branch", branch: "feature", headSha: value.head });
   git(value.repo, "push", "origin", "--delete", "feature");

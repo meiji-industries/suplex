@@ -18,8 +18,18 @@ test("archive refuses missing server identity for a native session", async () =>
   await expect(stopIdleArchiveSessions("/unused/forge.db", [session])).rejects.toThrow("server identity is missing");
 });
 
+test("a reused pid is not treated as a live server", async () => {
+  vi.spyOn(servers, "readOpenCodeServer").mockResolvedValue(server);
+  vi.spyOn(servers, "openCodeServerRunning").mockResolvedValue(false);
+  const status = vi.spyOn(OpenCodeClient.prototype, "getStatus").mockRejectedValue(new Error("unreachable"));
+  vi.spyOn(servers, "stopOpenCodeServer").mockResolvedValue();
+  await stopIdleArchiveSessions("/unused/forge.db", [session]);
+  expect(status).not.toHaveBeenCalled();
+});
+
 test("native busy status prevents cleanup despite a stopped database observation", async () => {
   vi.spyOn(servers, "readOpenCodeServer").mockResolvedValue(server);
+  vi.spyOn(servers, "openCodeServerRunning").mockResolvedValue(true);
   vi.spyOn(OpenCodeClient.prototype, "getStatus").mockResolvedValue({ native: { type: "busy" } });
   const stop = vi.spyOn(servers, "stopOpenCodeServer").mockResolvedValue();
   await expect(stopIdleArchiveSessions("/unused/forge.db", [session])).rejects.toThrow("agent is still active");
@@ -28,6 +38,7 @@ test("native busy status prevents cleanup despite a stopped database observation
 
 test("an idle native server can be stopped", async () => {
   vi.spyOn(servers, "readOpenCodeServer").mockResolvedValue(server);
+  vi.spyOn(servers, "openCodeServerRunning").mockResolvedValue(true);
   vi.spyOn(OpenCodeClient.prototype, "getStatus").mockResolvedValue({ native: { type: "idle" } });
   const stop = vi.spyOn(servers, "stopOpenCodeServer").mockResolvedValue();
   await stopIdleArchiveSessions("/unused/forge.db", [session]);

@@ -88,6 +88,11 @@ function ownedProcess(reference: OpenCodeServerReference) {
   return { ...reference.processIdentity, pid: reference.pid, name: `opencode-${reference.generation}`, startedAt: reference.processIdentity.startTime };
 }
 
+export async function openCodeServerRunning(reference: OpenCodeServerReference): Promise<boolean> {
+  if (!openCodeProcessAlive(reference.pid)) return false;
+  return compareProcessIdentity(ownedProcess(reference), await inspectProcessOnce(reference.pid)).kind === "exact_match";
+}
+
 export async function stopOpenCodeServer(reference: OpenCodeServerReference, controller: ProcessController = { ...defaultProcessController, inspect: inspectOpenCodeProcess }): Promise<void> {
   await stopOwnedProcesses({ version: 1, processes: [ownedProcess(reference)] }, controller);
 }

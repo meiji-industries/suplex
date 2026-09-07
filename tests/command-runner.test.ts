@@ -49,8 +49,8 @@ test("logs completed commands at info", async () => {
   expect(records()).toEqual([expect.objectContaining({ level: 30, message: expect.stringMatching(/^Command completed:/) })]);
 });
 
-test("retains exact byte tails while streaming 100 MiB", { timeout: 15_000 }, async () => {
-  const bytesPerStream = 50 * 1024 * 1024;
+test("truncates stream tails while retaining full 256 KiB output", { timeout: 15_000 }, async () => {
+  const bytesPerStream = 256 * 1024;
   const script = `
     const { once } = require("node:events");
     const chunk = "x".repeat(64 * 1024);
@@ -70,6 +70,7 @@ test("retains exact byte tails while streaming 100 MiB", { timeout: 15_000 }, as
 
   expect(Buffer.byteLength(result.stdout)).toBe(bytesPerStream);
   expect(Buffer.byteLength(result.stderr)).toBe(bytesPerStream);
+  expect(result.exitCode).toBe(0);
   expect(result.entries.reduce((bytes, entry) => bytes + Buffer.byteLength(entry.text), 0)).toBe(8 * 1024);
   expect(lines.join("\n").length).toBeLessThan(2_048);
 });

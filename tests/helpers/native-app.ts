@@ -5,7 +5,7 @@ import { AuthService, type WebAuthnAdapter } from "../../src/auth.js";
 import { AgentProfileService } from "../../src/agent-profiles.js";
 import { createApp } from "../../src/app.js";
 import { createTestConfig } from "../../src/config.js";
-import { ForgeDatabase } from "../../src/database.js";
+import { createTestDatabase } from "./test-database.js";
 import { ProjectService } from "../../src/projects.js";
 import { TaskService } from "../../src/tasks.js";
 import { TaskTemplateService } from "../../src/task-templates.js";
@@ -29,7 +29,7 @@ const webAuthn: WebAuthnAdapter = {
 export async function nativeApp() {
   const directory = await mkdtemp(join(tmpdir(), "forge-native-app-"));
   const config = createTestConfig(directory, { reachableAddress: "http://127.0.0.1:4111" });
-  const database = new ForgeDatabase(config.databasePath);
+  const database = createTestDatabase(config.databasePath);
   const auth = new AuthService(database, config, { webAuthn });
   const profiles = new AgentProfileService(database, auth);
   const projects = new ProjectService(database, auth, config, {

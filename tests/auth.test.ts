@@ -9,6 +9,7 @@ import { expect, test } from "vitest";
 import { AuthService, productionWebAuthnAdapter, type WebAuthnAdapter } from "../src/auth.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
+import { createTestDatabase } from "./helpers/test-database.js";
 
 function fakeWebAuthn(): WebAuthnAdapter {
   let challengeNumber = 0;
@@ -43,7 +44,7 @@ function fakeWebAuthn(): WebAuthnAdapter {
 async function fixture(): Promise<{ root: string; filename: string; database: ForgeDatabase; auth: AuthService }> {
   const root = await mkdtemp(join(tmpdir(), "forge-auth-test-"));
   const filename = join(root, "forge.sqlite");
-  const database = new ForgeDatabase(filename);
+  const database = createTestDatabase(filename);
   const auth = new AuthService(database, createTestConfig(root, { reachableAddress: "https://forge.tailnet.ts.net:4111" }), { webAuthn: fakeWebAuthn() });
   return { root, filename, database, auth };
 }

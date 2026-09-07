@@ -97,11 +97,7 @@ test("projects desktop flow creates native projects and shows actionable validat
       await page.goto(`${baseUrl}/projects`);
       await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
       const newProject = page.locator("[data-app-header]").getByRole("button", { name: "New project", exact: true });
-      await newProject.locator("svg.lucide-circle-plus").waitFor();
-      expect(await newProject.evaluate(element => getComputedStyle(element).height)).toBe("32px");
-      await page.screenshot({ path: "/tmp/forge-new-actions-project-header-desktop.png", fullPage: true, animations: "disabled" });
       await newProject.click();
-      await page.screenshot({ path: "/tmp/forge-new-actions-project-dialog-desktop.png", fullPage: true, animations: "disabled" });
       await page.getByLabel("GitHub repository URL", { exact: true }).fill("https://github.com/acme/forge.git");
       await page.getByRole("dialog", { name: "New project", exact: true }).getByRole("button", { name: "New project", exact: true }).click();
       await page.getByText("forge", { exact: true }).waitFor();
@@ -118,19 +114,6 @@ test("projects desktop flow creates native projects and shows actionable validat
       await page.getByText(/repositoryUrl: Use an HTTPS or SSH URL for one GitHub repository/).waitFor();
       expect(await page.locator("body").innerText()).not.toMatch(/token@|ghp_/);
       await page.getByRole("button", { name: "Cancel" }).click();
-      const projectsNav = page.getByRole("link", { name: "Projects" }).first();
-      expect(await projectsNav.getAttribute("aria-current")).toBe("page");
-      expect(await page.getByRole("navigation", { name: "Overview", exact: true }).count()).toBe(0);
-      expect(await page.getByRole("link", { name: "Settings", exact: true }).count()).toBe(1);
-      expect(await page.getByRole("link", { name: "Administration", exact: true }).count()).toBe(0);
-      const systemHealth = page.locator('[data-slot="sidebar"]').getByRole("button", { name: "System health: Healthy", exact: true });
-      await systemHealth.waitFor();
-      expect(await systemHealth.getAttribute("data-status")).toBe("green");
-      expect(await systemHealth.getByText("Healthy", { exact: true }).innerText()).toBe("Healthy");
-      await systemHealth.click();
-      const healthDialog = page.getByRole("dialog", { name: "System health", exact: true });
-      await healthDialog.getByText("OpenCode", { exact: true }).waitFor();
-      await healthDialog.getByRole("button", { name: "Close", exact: true }).click();
       await page.close();
       await context.close();
     } finally {

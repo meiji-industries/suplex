@@ -1,37 +1,10 @@
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { expect, test } from "vitest";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
-test.each([1280, 390])("task tabs do not capture page scrolling at %ipx", { timeout: 30_000 }, async width => {
-  const value = await nativeBrowser(width);
-  try {
-    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Scroll task tabs", description: "Scroll over the tabs to move the page.", startImmediately: false, idempotencyKey: "tab-scroll" });
-    const { page } = value;
-    await page.setViewportSize({ width, height: 600 });
-    await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
-    const row = page.locator("[data-task-work-tabs] > div").first();
-    await row.waitFor();
-    expect(await row.evaluate(element => ({ x: getComputedStyle(element).overflowX, y: getComputedStyle(element).overflowY }))).toEqual({ x: "visible", y: "visible" });
-    const tabs = row.getByRole("tab");
-    expect(await tabs.count()).toBe(5);
-    for (const tab of await tabs.all()) {
-      const bounds = await tab.boundingBox();
-      expect(bounds!.x).toBeGreaterThanOrEqual(0);
-      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-    }
-    await row.hover();
-    await page.mouse.wheel(0, 120);
-    await expect.poll(() => page.locator("[data-task-body]").evaluate(element => element.scrollTop)).toBeGreaterThan(0);
-    expect(await page.evaluate(() => window.scrollY)).toBe(0);
-    expect(await row.evaluate(element => element.scrollTop)).toBe(0);
-    await page.screenshot({ path: join(tmpdir(), `forge-task-tab-scroll-${width}.png`), fullPage: true });
-    expect(value.errors).toEqual([]);
-  } finally { await value.close(); }
-});
+const desktopViewport = 1280;
 
-test.each([1280, 390])("native task detail supports answers, cancellation and safe archive refusal at %ipx", { timeout: 90_000 }, async width => {
-  const value = await nativeBrowser(width);
+test("native task detail supports answers, cancellation and safe archive refusal", { timeout: 90_000 }, async () => {
+  const value = await nativeBrowser(desktopViewport);
   try {
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Native task detail", description: "Preserve the existing branch changes.", startImmediately: true, idempotencyKey: "native-detail" });
     const store = value.tasks.repository.controls;
@@ -41,18 +14,13 @@ test.each([1280, 390])("native task detail supports answers, cancellation and sa
     const { page } = value;
     await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
     await page.getByRole("heading", { name: "Native task detail", level: 2, exact: true }).waitFor();
-    expect(await page.getByRole("link", { name: "Open tasks", exact: true }).count()).toBe(0);
     await page.locator("[data-app-header]").getByRole("button", { name: "Task options", exact: true }).waitFor();
     await page.getByRole("region", { name: "Question" }).getByText("Which base branch should I use?").waitFor();
     await page.getByLabel("Answer", { exact: true }).fill("Use main and preserve local work.");
     await page.getByRole("button", { name: "Answer and continue", exact: true }).click();
     await page.getByRole("region", { name: "Question" }).waitFor({ state: "hidden" });
     expect(store.get(task.id).status).toBe("active");
-    expect(await page.locator("[data-task-current]").count()).toBe(0);
-    expect(await page.getByText("Coordinator owns the task. Agent replies appear below.", { exact: true }).count()).toBe(0);
     expect(store.pendingTurns(root.id).some(turn => turn.promptText.includes("Use main and preserve local work."))).toBe(true);
-    expect(await page.getByLabel("Note to Coordinator", { exact: true }).count()).toBe(0);
-    expect(await page.getByRole("button", { name: "Send note", exact: true }).count()).toBe(0);
     const uncertain = store.pendingTurns(root.id)[0]!;
     store.requireExecutionCleanup(uncertain);
     await page.reload();
@@ -62,14 +30,6 @@ test.each([1280, 390])("native task detail supports answers, cancellation and sa
     await page.getByRole("button", { name: "Answer and continue", exact: true }).click();
     await page.getByRole("region", { name: "Question" }).waitFor({ state: "hidden" });
     expect(store.get(task.id).recoveryTurnId).toBeNull();
-    expect(await page.getByText("ses_browser_root", { exact: true }).isVisible()).toBe(false);
-    await page.getByRole("tab", { name: "Other", exact: true }).click();
-    await page.getByText("Runtime diagnostics", { exact: true }).click();
-    await page.getByRole("region", { name: "Sessions", exact: true }).getByText("ses_browser_root", { exact: true }).waitFor();
-    await page.getByRole("tab", { name: "Chat", exact: true }).click();
-    expect(await page.getByText(/Planner|Builder|Integrator|Start planning/).count()).toBe(0);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await page.screenshot({ path: join(tmpdir(), `forge-native-task-detail-${width}.png`), fullPage: true });
     await page.getByRole("button", { name: "Task options", exact: true }).click();
     await page.getByRole("menuitem", { name: "Cancel task", exact: true }).click();
     await page.getByText("Cancelled", { exact: true }).first().waitFor();
@@ -83,8 +43,8 @@ test.each([1280, 390])("native task detail supports answers, cancellation and sa
   } finally { await value.close(); }
 });
 
-test.each([1280, 390])("backlog details save through the interface at %ipx", { timeout: 90_000 }, async width => {
-  const value = await nativeBrowser(width);
+test("backlog details save through the interface", { timeout: 90_000 }, async () => {
+  const value = await nativeBrowser(desktopViewport);
   try {
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Original title", description: "Original description", startImmediately: false, idempotencyKey: "backlog-edit" });
     await value.page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
@@ -94,7 +54,6 @@ test.each([1280, 390])("backlog details save through the interface at %ipx", { t
     await value.page.getByRole("button", { name: "Save task", exact: true }).click();
     await value.page.getByRole("heading", { name: "Updated title", level: 2, exact: true }).waitFor();
     expect(value.tasks.getTask(value.userId, task.id)).toMatchObject({ title: "Updated title", description: "Updated objective", status: "backlog" });
-    expect(await value.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

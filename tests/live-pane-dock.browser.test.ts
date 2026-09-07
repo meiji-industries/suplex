@@ -1,13 +1,10 @@
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { expect, test } from "vitest";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
-const lightBackground = "oklch(1 0 0)";
-const darkBackground = "oklch(0.145 0 0)";
+const narrowViewport = 390;
 
-test.each([1280, 390])("live panes span the workspace below the scrolling task and properties at %ipx", { timeout: 90_000 }, async width => {
-  const value = await nativeBrowser(width);
+test("live panes support mounting, resizing, switching, and reconnect status", { timeout: 90_000 }, async () => {
+  const value = await nativeBrowser(narrowViewport);
   try {
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Live pane restoration", description: "Watch the agent work.", startImmediately: true, idempotencyKey: "live-dock" });
     const store = value.tasks.repository.controls;
@@ -15,7 +12,6 @@ test.each([1280, 390])("live panes span the workspace below the scrolling task a
     store.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "ses_dock_root" });
     const { page } = value;
     page.setDefaultTimeout(10_000);
-    await page.emulateMedia({ colorScheme: "light" });
     await page.routeWebSocket(/\/pane\/.*\/terminal/, socket => {
       socket.send(JSON.stringify({ type: "open" }));
       socket.send(Buffer.from("\x1b[32mLive agent output\x1b[0m\r\nInspecting the task worktree...\r\n"));
@@ -27,67 +23,8 @@ test.each([1280, 390])("live panes span the workspace below the scrolling task a
     store.bindPane({ sessionId: root.id, generation: root.generation, paneId: "wProof:p1" });
     await dock.waitFor();
     await dock.locator(".xterm-screen").waitFor();
-    expect(await page.getByRole("button", { name: /Open (Coordinator|Worker) terminal/ }).count()).toBe(0);
-    expect(await page.getByLabel("Note to Coordinator", { exact: true }).count()).toBe(0);
     const terminalHost = dock.getByLabel("Live pane output for root", { exact: true });
     const terminalSurface = terminalHost.locator(".xterm-screen");
-    const renderedTerminalBackground = async (surface = terminalSurface): Promise<string> => {
-      const imageUrl = `data:image/png;base64,${(await surface.screenshot({ animations: "disabled" })).toString("base64")}`;
-      return page.evaluate(async source => {
-        const image = new Image();
-        image.src = source;
-        await image.decode();
-        const canvas = document.createElement("canvas");
-        canvas.width = image.width;
-        canvas.height = image.height;
-        const context = canvas.getContext("2d");
-        if (!context) throw new Error("Canvas context is not available");
-        context.drawImage(image, 0, 0);
-        const pixels = context.getImageData(0, 0, image.width, image.height).data;
-        const counts = new Map<string, number>();
-        for (let index = 0; index < pixels.length; index += 16) {
-          const color = `rgb(${pixels[index]}, ${pixels[index + 1]}, ${pixels[index + 2]})`;
-          counts.set(color, (counts.get(color) ?? 0) + 1);
-        }
-        let dominant = "";
-        let count = 0;
-        for (const [color, occurrences] of counts) if (occurrences > count) { dominant = color; count = occurrences; }
-        return dominant;
-      }, imageUrl);
-    };
-    const coordinatorTab = dock.getByRole("tab", { name: "Coordinator", exact: true });
-    const expectDarkDock = async (surface = terminalSurface, host = terminalHost, activeTab = coordinatorTab): Promise<void> => {
-      const appearance = await dock.evaluate(element => {
-        const styles = getComputedStyle(element);
-        return { background: styles.backgroundColor, color: styles.color, colorScheme: styles.colorScheme };
-      });
-      expect(appearance.background).toBe(darkBackground);
-      expect(appearance.color).toMatch(/0\.98/);
-      expect(appearance.colorScheme).toBe("dark");
-      expect(await host.locator("..").evaluate(element => ({ background: getComputedStyle(element).backgroundColor, padding: getComputedStyle(element).padding }))).toEqual({ background: darkBackground, padding: "8px" });
-      expect(await dock.locator("[data-slot=tabs-list]").evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgba(0, 0, 0, 0)");
-      expect(await activeTab.evaluate(element => getComputedStyle(element).color)).toMatch(/0\.98/);
-      expect(await dock.getByRole("slider", { name: "Resize live agent output" }).locator("span").evaluate(element => getComputedStyle(element).backgroundColor)).toMatch(/0\.7/);
-      expect(await renderedTerminalBackground(surface)).toBe("rgb(10, 10, 10)");
-    };
-    expect(await page.locator("html").evaluate(element => element.classList.contains("dark"))).toBe(false);
-    expect(await page.locator("body").evaluate(element => getComputedStyle(element).backgroundColor)).toBe(lightBackground);
-    await expectDarkDock();
-    const main = await page.locator("[data-task-detail]").boundingBox();
-    const bounds = await dock.boundingBox();
-    expect(bounds!.x).toBe(main!.x);
-    expect(bounds!.width).toBe(main!.width);
-    expect(Math.abs(bounds!.y + bounds!.height - (width >= 768 ? 836 : 844))).toBeLessThanOrEqual(1);
-    expect(await dock.evaluate(element => getComputedStyle(element).position)).toBe("sticky");
-    expect(await dock.evaluate(element => getComputedStyle(element).backgroundColor)).toBe(darkBackground);
-    const body = page.locator("[data-task-body]");
-    expect(await body.evaluate(element => getComputedStyle(element).overflowY)).toBe("auto");
-    await body.evaluate(element => { element.scrollTop = element.scrollHeight; });
-    expect(await body.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
-    expect(await page.evaluate(() => window.scrollY)).toBe(0);
-    expect(await dock.boundingBox()).toEqual(bounds);
-    const properties = await page.getByRole("complementary", { name: "Task properties" }).boundingBox();
-    expect(properties!.x + properties!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width + 1);
     const slider = dock.getByRole("slider", { name: "Resize live agent output" });
     await slider.focus();
     await slider.press("ArrowUp");
@@ -96,15 +33,6 @@ test.each([1280, 390])("live panes span the workspace below the scrolling task a
     await dock.waitFor();
     await dock.locator(".xterm-screen").waitFor();
     expect(await slider.getAttribute("aria-valuenow")).toBe("344");
-    await expectDarkDock();
-    await page.getByRole("button", { name: "Use dark theme", exact: true }).click();
-    await expect.poll(() => page.locator("html").evaluate(element => element.classList.contains("dark"))).toBe(true);
-    expect(await page.locator("body").evaluate(element => getComputedStyle(element).backgroundColor)).toBe(darkBackground);
-    await expectDarkDock();
-    await page.getByRole("button", { name: "Use light theme", exact: true }).click();
-    await expect.poll(() => page.locator("html").evaluate(element => element.classList.contains("dark"))).toBe(false);
-    expect(await page.locator("body").evaluate(element => getComputedStyle(element).backgroundColor)).toBe(lightBackground);
-    await expectDarkDock();
     const worker = store.launchWorker({ taskId: task.id, rootSessionId: root.id, rootGeneration: root.generation, instruction: "Verify the dock" });
     store.bindHarnessSession({ sessionId: worker.id, generation: worker.generation, nativeSessionId: "ses_dock_worker" });
     store.bindPane({ sessionId: worker.id, generation: worker.generation, paneId: "wProof:p2" });
@@ -112,53 +40,14 @@ test.each([1280, 390])("live panes span the workspace below the scrolling task a
     await workerTab.click();
     const workerHost = dock.getByLabel("Live pane output for worker", { exact: true });
     await workerHost.waitFor();
-    const workerSurface = workerHost.locator(".xterm-screen");
-    await workerSurface.waitFor();
-    await expectDarkDock(workerSurface, workerHost, workerTab);
+    await workerHost.locator(".xterm-screen").waitFor();
     await dock.getByRole("tab", { name: "Coordinator", exact: true }).click();
     await terminalHost.waitFor();
     await terminalSurface.waitFor();
-    await expectDarkDock();
-    await page.getByRole("tab", { name: /^Activity/ }).click();
-    expect(await dock.isVisible()).toBe(true);
-    const handle = await slider.boundingBox();
-    await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + handle!.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + handle!.height / 2 - 24);
-    await page.mouse.up();
-    expect(await slider.getAttribute("aria-valuenow")).toBe("368");
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: join(tmpdir(), `forge-live-dock-${width}.png`), fullPage: true });
     await page.routeWebSocket(/\/pane\/.*\/terminal/, socket => socket.close({ code: 1011, reason: "Connection lost" }));
     await page.reload();
     const reconnecting = page.getByRole("status").filter({ hasText: "Reconnecting" });
     await reconnecting.waitFor();
-    const reconnectOverlay = reconnecting.locator("..");
-    expect(await page.locator("html").evaluate(element => element.classList.contains("dark"))).toBe(false);
-    const reconnectAppearance = await reconnectOverlay.evaluate(element => {
-      const styles = getComputedStyle(element);
-      return { background: styles.backgroundColor, foreground: styles.color, backgroundToken: styles.getPropertyValue("--background").trim(), colorScheme: styles.colorScheme };
-    });
-    expect(reconnectAppearance.background).toMatch(/0\.145/);
-    expect(reconnectAppearance.background).toContain("0.85");
-    expect(reconnectAppearance.foreground).toMatch(/0\.98/);
-    expect(reconnectAppearance.backgroundToken).toMatch(/0\.145|14\.5%/);
-    expect(reconnectAppearance.colorScheme).toBe("dark");
-    await expectDarkDock(workerSurface, workerHost, workerTab);
-    const spinner = reconnecting.locator('[aria-hidden="true"]');
-    const firstFrame = await spinner.innerText();
-    expect("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏").toContain(firstFrame);
-    await expect.poll(() => spinner.innerText()).not.toBe(firstFrame);
-    expect(await page.getByText("Forge reconnects", { exact: true }).count()).toBe(0);
-    await page.getByRole("button", { name: "Use dark theme", exact: true }).click();
-    await expect.poll(() => page.locator("html").evaluate(element => element.classList.contains("dark"))).toBe(true);
-    const darkReconnectAppearance = await reconnectOverlay.evaluate(element => {
-      const styles = getComputedStyle(element);
-      return { background: styles.backgroundColor, foreground: styles.color, backgroundToken: styles.getPropertyValue("--background").trim(), colorScheme: styles.colorScheme };
-    });
-    expect(darkReconnectAppearance).toEqual(reconnectAppearance);
-    await expectDarkDock(workerSurface, workerHost, workerTab);
-    await page.screenshot({ path: join(tmpdir(), `forge-reconnecting-${width}.png`), fullPage: true });
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

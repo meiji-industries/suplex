@@ -7,6 +7,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { RootController } from "../src/root-controller.js";
 import { TaskControlStore, type ProcessOwnerObservation } from "../src/root-session-store.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
+import { createTestDatabase } from "./helpers/test-database.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
@@ -143,7 +144,7 @@ test("a proven stopped Coordinator execution queues one new continuation on the 
 
 async function fixture(startImmediately = true) {
   const directory = await mkdtemp(join(tmpdir(), "forge-native-controller-"));
-  const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+  const database = createTestDatabase(join(directory, "forge.sqlite"));
   cleanups.push(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   const stamp = new Date().toISOString();
   database.authTransaction((db) => {

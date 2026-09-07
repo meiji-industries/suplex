@@ -1,11 +1,11 @@
 import { insertNativeTaskRow } from "./helpers/native-task-row.js";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
-import { ForgeDatabase } from "../src/database.js";
+import { createTestDatabase } from "./helpers/test-database.js";
 import { DeliveryOperations, type DeliveryGithubPort } from "../src/delivery-operations.js";
 import type { GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation, LocalRevision } from "../src/github-delivery.js";
 import { RootController } from "../src/root-controller.js";
@@ -16,6 +16,7 @@ import { inspectDeliveryDiff } from "../src/delivery-review.js";
 
 const run = (command: string, args: string[]) => runCommand({ command, args, taskId: null, stepId: null });
 const cleanup: string[] = [];
+let seed: { directory: string; local: LocalRevision } | undefined;
 
 async function revision(cwd: string): Promise<LocalRevision> {
   const [branch, headSha, treeSha, status] = await Promise.all([
@@ -27,15 +28,31 @@ async function revision(cwd: string): Promise<LocalRevision> {
   return { branch: branch.stdout.trim(), headSha: headSha.stdout.trim(), treeSha: treeSha.stdout.trim(), clean: status.stdout.trim() === "" };
 }
 
+async function deliverySeed(): Promise<{ directory: string; local: LocalRevision }> {
+  if (seed) return seed;
+
+  const directory = await mkdtemp(join(tmpdir(), "forge-delivery-seed-"));
+  try {
+    await run("git", ["init", "-b", "task-branch", directory]);
+    await run("git", ["-C", directory, "config", "user.email", "test@example.com"]);
+    await run("git", ["-C", directory, "config", "user.name", "Test"]);
+    await run("git", ["-C", directory, "config", "commit.gpgsign", "false"]);
+    await run("git", ["-C", directory, "commit", "--allow-empty", "-m", "seed"]);
+    seed = { directory, local: await revision(directory) };
+    return seed;
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "forge-delivery-"));
   cleanup.push(directory);
-  await run("git", ["init", "-b", "task-branch", directory]);
-  await run("git", ["-C", directory, "config", "user.email", "test@example.com"]);
-  await run("git", ["-C", directory, "config", "user.name", "Test"]);
-  await run("git", ["-C", directory, "commit", "--allow-empty", "-m", "seed"]);
-  const local = await revision(directory);
-  const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+  const value = await deliverySeed();
+  await cp(value.directory, directory, { recursive: true });
+  const local = { ...value.local };
+  const database = createTestDatabase(join(directory, "forge.sqlite"));
   const stamp = new Date().toISOString();
   database.authTransaction((db) => {
     db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
@@ -66,6 +83,10 @@ function github(local: LocalRevision) {
 
 afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+afterAll(async () => {
+  if (seed) await rm(seed.directory, { recursive: true, force: true });
 });
 
 describe("Coordinator delivery operations", () => {

@@ -49,7 +49,7 @@ export function ProviderSettingsView(): ReactElement {
       </SettingsTableGroup>
     </SettingsDataTable>
     <div className="pt-2" role="status" aria-busy={view.status === "loading"}>
-      {view.status === "loading" ? <span className="inline-flex items-center gap-2"><Spinner /><span>Forge checks OpenCode configuration.</span></span> : null}
+      {view.status === "loading" ? <span className="inline-flex items-center gap-2"><Spinner /><span>Checking OpenCode configuration…</span></span> : null}
       {view.status === "failed" ? view.message : null}
       {view.status === "loaded" && providers.length === 0 ? "OpenCode reports no configured providers." : null}
       {view.status === "loaded" ? <p className="break-all">Host directory: <code>{view.data.directory}</code></p> : null}

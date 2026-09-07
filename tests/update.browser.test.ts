@@ -101,7 +101,7 @@ test("keeps the notice and disables duplicate actions while the server is down",
     await expect.poll(() => value.page.getByRole("button", { name: "Restart Now", exact: true }).isDisabled()).toBe(true);
     await value.page.clock.fastForward(1_000);
     expect(await notice.isVisible()).toBe(true);
-    expect(await value.page.locator("[data-update-status]").textContent()).toContain("starts");
+    expect(await value.page.locator("[data-update-status]").textContent()).toContain("Starting update");
     await value.page.screenshot({ path: join(tmpdir(), "forge-update-restart-pending-390.png"), fullPage: true });
     expect(await value.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(value.errors).toEqual([]);

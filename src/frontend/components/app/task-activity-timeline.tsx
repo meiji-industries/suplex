@@ -65,7 +65,7 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
   return <section aria-label="Task timeline" data-task-timeline className="min-w-0 border-b border-border/70 pb-3">
     <div className="mb-2 flex flex-wrap items-center gap-2"><h3 className="text-xs font-semibold">Timeline</h3>{intervals.length ? <span className="text-[11px] tabular-nums text-muted-foreground" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span from the first agent response to the last.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(end - start)}</span> : null}</div>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-    {!intervals.length ? <p className="text-xs text-muted-foreground">{snapshot ? "No agent time yet." : error ? "Agent time is not available." : "Forge reads the timeline."}</p> : <div className="overflow-x-auto" aria-label="Task timeline Gantt chart">
+    {!intervals.length ? <p className="text-xs text-muted-foreground">{snapshot ? "No agent time yet." : error ? "Agent time is not available." : "Loading timeline…"}</p> : <div className="overflow-x-auto" aria-label="Task timeline Gantt chart">
       <div className="grid min-w-[45rem] grid-cols-[13rem_minmax(32rem,1fr)] text-[11px]">
         <div className="sticky left-0 z-20 border-b border-border bg-background px-2 py-1 text-muted-foreground">Agent</div>
         <div className="relative h-6 border-b border-border" data-task-time-axis>

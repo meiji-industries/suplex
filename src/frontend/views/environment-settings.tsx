@@ -49,7 +49,7 @@ export function EnvironmentSettingsView(): ReactElement {
           <form className="flex items-center gap-2" onSubmit={(event) => void save(event)}>
             <div className="w-28"><Input aria-label="Minimum free disk space in GB" type="number" min="0" max="1024" step="0.1" inputMode="decimal" value={minFreeDiskGb} onChange={(event) => { setMinFreeDiskGb(event.target.value); setMessage(""); }} /></div>
             <span className="text-xs text-muted-foreground">GB</span>
-            <Button size="sm" type="submit" disabled={!changed || saving}>{saving ? "Forge saves" : "Save"}</Button>
+            <Button size="sm" type="submit" disabled={!changed || saving}>{saving ? "Saving…" : "Save"}</Button>
           </form>
         </SettingRow>
       </SettingsSection>

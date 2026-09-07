@@ -80,7 +80,7 @@ function CreateProjectDialog({
                 <Input id="project-repository-url" name="repositoryUrl" autoFocus autoComplete="off" spellCheck={false} placeholder="https://github.com/owner/repository" aria-describedby="project-repository-hint" value={repositoryUrl} onChange={(event) => setRepositoryUrl(event.target.value)} />
                 <FieldDescription id="project-repository-hint">HTTPS and SSH URLs are supported. Forge clones into <span className="font-mono">~/forge/repos</span> and creates worktrees in <span className="font-mono">~/forge/worktrees</span>.</FieldDescription>
               </Field>
-              <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><NewButton type="submit" disabled={busy || !companyId || !repositoryUrl.trim()}>{busy ? "Forge copies the repository" : "New project"}</NewButton></DialogFooter>
+              <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><NewButton type="submit" disabled={busy || !companyId || !repositoryUrl.trim()}>{busy ? "Cloning…" : "New project"}</NewButton></DialogFooter>
             </form>
           )}
           {error ? <div className="mt-3 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
@@ -214,7 +214,7 @@ function ProjectSettingsDialog({
                 })}
                 {agents.length === 0 ? <FieldDescription>No agents configured. <a href={withCompany("/admin/agents", project.companyId)}>Add an agent</a> before saving this project.</FieldDescription> : null}
               </FieldSet>
-              <DialogFooter><a href={withCompany(`/projects/${encodeURIComponent(project.id)}/templates`, project.companyId)}>Templates</a><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || !form.rootProfileId || !form.workerProfileId}>{busy ? "Forge saves" : "Save settings"}</Button></DialogFooter>
+              <DialogFooter><a href={withCompany(`/projects/${encodeURIComponent(project.id)}/templates`, project.companyId)}>Templates</a><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || !form.rootProfileId || !form.workerProfileId}>{busy ? "Saving…" : "Save settings"}</Button></DialogFooter>
             </FieldGroup>
           </form> : null}
           {error ? <div className="mt-3 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
@@ -273,7 +273,7 @@ export function ProjectsView(): ReactElement {
           {currentCompany && currentCompany.status !== "active" ? <p className="mb-3 text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p> : null}
           {currentCompany ? (
             <div className="grid gap-3">
-              {!loadError && loadedCompanyId !== companyId ? <div className="flex items-center gap-2 py-8 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Forge loads projects.</span></div> : null}
+              {!loadError && loadedCompanyId !== companyId ? <div className="flex items-center gap-2 py-8 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading projects…</span></div> : null}
               {visibleProjects.map((project) => (
                 <article key={project.id}>
                   <Card size="sm">
@@ -308,7 +308,7 @@ export function ProjectsView(): ReactElement {
               ))}
               {!loading && loadedCompanyId === companyId && visibleProjects.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">No projects configured.</div> : null}
             </div>
-          ) : loading ? <p className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Forge loads companies.</span></p> : <p className="text-xs text-muted-foreground">{companyError ? "Unable to load companies" : user?.role === "admin" ? "Add a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
+          ) : loading ? <p className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading companies…</span></p> : <p className="text-xs text-muted-foreground">{companyError ? "Unable to load companies" : user?.role === "admin" ? "Add a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
           {loadError ? <div className="mt-3 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{loadError}</AlertDescription></Alert></div> : null}
         </section>
         <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} companyId={companyId} companyStatus={currentCompany?.status} onCreated={reload} reloadCompanies={reloadCompanies} />

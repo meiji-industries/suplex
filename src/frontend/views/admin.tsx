@@ -472,7 +472,7 @@ export function AdminView(): ReactElement {
   if (loading || (user?.role === "admin" && initialReloading)) {
     return (
       <SettingsLayout title={viewTitle} companyId={currentCompany?.id ?? ""} backHref={backHref} activeHref={activeHref} contentClassName="">
-        <div className="space-y-2 p-4" aria-busy="true" aria-label="Loading administration"><div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /><span>Forge loads administration.</span></div><Skeleton className="h-4 w-40" /><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-3/4" /></div>
+        <div className="space-y-2 p-4" aria-busy="true" aria-label="Loading administration"><div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /><span>Loading…</span></div><Skeleton className="h-4 w-40" /><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-3/4" /></div>
       </SettingsLayout>
     );
   }

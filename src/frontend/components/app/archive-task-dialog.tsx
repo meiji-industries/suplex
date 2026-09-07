@@ -56,7 +56,7 @@ export function ArchiveTaskDialog({ task, open, onOpenChange, onArchived, onErro
     </ScrollArea> : null}
     <AlertDialogFooter>
       <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-      <AlertDialogAction disabled={busy} onClick={() => void confirmArchive()}>{busy ? "Forge archives the task." : current?.kind === "discard" ? "Discard changes and archive" : "Archive task"}</AlertDialogAction>
+      <AlertDialogAction disabled={busy} onClick={() => void confirmArchive()}>{busy ? "Archiving…" : current?.kind === "discard" ? "Discard changes and archive" : "Archive task"}</AlertDialogAction>
     </AlertDialogFooter></AlertDialogContent>
   </AlertDialog>;
 }

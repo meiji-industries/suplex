@@ -23,9 +23,9 @@ function operationIsPending(status: UpdateOperationStatus["status"]): boolean {
 
 function operationMessage(operation: UpdateOperationStatus | undefined): string | undefined {
   if (!operation) return undefined;
-  if (operation.status === "preparing") return "Forge prepares the update.";
-  if (operation.status === "restarting") return "Forge restarts.";
-  if (operation.status === "pending") return "Forge starts the update.";
+  if (operation.status === "preparing") return "Preparing update…";
+  if (operation.status === "restarting") return "Restarting…";
+  if (operation.status === "pending") return "Starting update…";
   return operation.message;
 }
 
@@ -169,7 +169,7 @@ export function UpdateNotice(): ReactElement | null {
             </div>
           </CardAction>
         </CardHeader>
-        {operationPending ? <CardContent><p data-update-status aria-live="polite">{statusMessage ?? "Forge starts the update."}</p></CardContent> : null}
+        {operationPending ? <CardContent><p data-update-status aria-live="polite">{statusMessage ?? "Starting update…"}</p></CardContent> : null}
       </Card>
     </div>
   );

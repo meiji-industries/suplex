@@ -24,7 +24,7 @@ export function ProfileView(): ReactElement {
 
   useEffect(() => { setDisplayName(user?.displayName ?? ""); setUsername(user?.username ?? ""); setAvatarSeed(user?.avatarSeed ?? ""); setSaved(false); }, [user?.avatarSeed, user?.displayName, user?.username]);
 
-  if (loading || !user) return <ApplicationFrame title="Profile"><div className="flex items-center gap-2 p-4 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Forge loads the profile.</span></div></ApplicationFrame>;
+  if (loading || !user) return <ApplicationFrame title="Profile"><div className="flex items-center gap-2 p-4 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading profile…</span></div></ApplicationFrame>;
 
   const save = async (): Promise<void> => {
     const nextName = displayName.trim();
@@ -47,7 +47,7 @@ export function ProfileView(): ReactElement {
           <Input id="username" value={username} onChange={(event) => { setUsername(event.target.value); setSaved(false); }} />
         </SettingRow>
         <SettingRow label="Avatar" description="Used anywhere your account appears. Regenerate changes the default image.">
-          <div className="flex flex-wrap items-center gap-2"><AvatarEditor kind="user" id={user.id} name={displayName || user.displayName} seed={avatarSeed || user.username} /><Button type="button" variant="ghost" size="icon-xs" aria-label="Regenerate avatar" title="Regenerate avatar" onClick={() => { setAvatarSeed(crypto.randomUUID()); setSaved(false); }}><RefreshCw aria-hidden="true" /></Button><Button type="submit" size="sm" disabled={busy || !displayName.trim() || !username.trim() || (displayName.trim() === user.displayName && username.trim() === user.username && avatarSeed === user.avatarSeed)}><Save className="size-3.5" />{busy ? "Forge saves" : saved ? "Saved" : "Save"}</Button></div>
+          <div className="flex flex-wrap items-center gap-2"><AvatarEditor kind="user" id={user.id} name={displayName || user.displayName} seed={avatarSeed || user.username} /><Button type="button" variant="ghost" size="icon-xs" aria-label="Regenerate avatar" title="Regenerate avatar" onClick={() => { setAvatarSeed(crypto.randomUUID()); setSaved(false); }}><RefreshCw aria-hidden="true" /></Button><Button type="submit" size="sm" disabled={busy || !displayName.trim() || !username.trim() || (displayName.trim() === user.displayName && username.trim() === user.username && avatarSeed === user.avatarSeed)}><Save className="size-3.5" />{busy ? "Saving…" : saved ? "Saved" : "Save"}</Button></div>
         </SettingRow>
       </form>
       <SettingRow label="Inactive task agents" description="Keep idle and stopped agents visible for this long.">

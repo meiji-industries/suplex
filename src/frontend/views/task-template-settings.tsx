@@ -199,7 +199,7 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
             <DialogFooter>
               {editor.kind === "edit" ? <Button type="button" variant="destructive" size="sm" disabled={busy} onClick={() => { setDeleteError(""); setDeleteOpen(true); }}>Delete template</Button> : null}
               <DialogClose disabled={busy} render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose>
-              {editor.kind === "edit" ? <Button type="submit" size="sm" disabled={busy}>{busy ? "Forge saves" : "Save template"}</Button> : <NewButton type="submit" disabled={busy}>{busy ? "Forge saves" : "New template"}</NewButton>}
+              {editor.kind === "edit" ? <Button type="submit" size="sm" disabled={busy}>{busy ? "Creating…" : "Save template"}</Button> : <NewButton type="submit" disabled={busy}>{busy ? "Creating…" : "New template"}</NewButton>}
             </DialogFooter>
           </FieldGroup>
         </form> : null}
@@ -212,7 +212,7 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
         {deleteError ? <Alert variant="destructive"><AlertDescription>{deleteError}</AlertDescription></Alert> : null}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" disabled={busy} onClick={(event) => { event.preventDefault(); void remove(); }}>{busy ? "Forge deletes" : "Delete"}</AlertDialogAction>
+          <AlertDialogAction variant="destructive" disabled={busy} onClick={(event) => { event.preventDefault(); void remove(); }}>{busy ? "Deleting…" : "Delete"}</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

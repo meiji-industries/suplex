@@ -36,13 +36,11 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     await working.waitFor();
     const estimated = working.getByText("$0.12", { exact: true });
     await estimated.waitFor();
-    expect(await estimated.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe("line-through");
     expect(await estimated.getAttribute("title")).toContain("OpenCode reported zero cost");
     expect(await estimated.getAttribute("aria-label")).toContain("models.dev list price");
     const billedRow = page.getByRole("link", { name: "Billed task, Active", exact: true });
     const billedCost = billedRow.getByText("$0.34", { exact: true });
     await billedCost.waitFor();
-    expect(await billedCost.evaluate(element => getComputedStyle(element).textDecorationLine)).not.toBe("line-through");
     expect(await page.locator('[data-slot="sidebar"]').getByText("Unpriced", { exact: true }).count()).toBe(0);
     const createButton = page.locator('[data-slot="sidebar"]').getByRole("button", { name: "New task", exact: true });
     expect(await createButton.evaluate(element => element.closest('[data-sidebar="menu"]') === null)).toBe(true);

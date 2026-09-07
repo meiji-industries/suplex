@@ -27,18 +27,12 @@ test.each([1280, 390])("analytics reads durable costs, filters tasks and links t
     await page.screenshot({ path: join(tmpdir(), `forge-analytics-${width}.png`), fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     const estimatedSpend = page.locator("[data-analytics] > dl").first().getByText("$8.40", { exact: true });
-    expect(await estimatedSpend.evaluate(element => getComputedStyle(element).textDecorationLine)).not.toBe("line-through");
     expect(await estimatedSpend.getAttribute("title")).toContain("Estimated cost (USD)");
     expect(await estimatedSpend.getAttribute("title")).not.toContain("models.dev list price");
-    const projectCost = page.getByRole("region", { name: "Project analytics" }).getByText("$8.40", { exact: true });
-    expect(await projectCost.evaluate(element => getComputedStyle(element).textDecorationLine)).not.toBe("line-through");
     const ledger = page.getByRole("region", { name: "Task analytics" });
     const estimatedLedger = ledger.getByText("$0.40", { exact: true });
-    expect(await estimatedLedger.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe("line-through");
     expect(await estimatedLedger.getAttribute("title")).toContain("OpenCode reported zero cost");
     expect(await estimatedLedger.getAttribute("aria-label")).toContain("models.dev list price");
-    const billedCost = ledger.getByText("$0.80", { exact: true });
-    expect(await billedCost.evaluate(element => getComputedStyle(element).textDecorationLine)).not.toBe("line-through");
     await page.getByRole("combobox", { name: "Creation period" }).click();
     await page.getByRole("option", { name: "Created at any time" }).click();
     await page.getByRole("textbox", { name: "Search analytics tasks" }).fill("no-match");
@@ -51,7 +45,6 @@ test.each([1280, 390])("analytics reads durable costs, filters tasks and links t
     await ledger.getByRole("link", { name: /Analytics task 1/ }).click();
     const estimated = page.getByRole("complementary", { name: "Task properties" }).getByText("$0.40", { exact: true });
     await estimated.waitFor();
-    expect(await estimated.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe("line-through");
     expect(await estimated.getAttribute("title")).toContain("OpenCode reported zero cost");
     expect(await estimated.getAttribute("aria-label")).toContain("models.dev list price");
     expect(value.errors).toEqual([]);

@@ -54,7 +54,10 @@ test.each([1440, 390])("Workflows page lists five workflows, expands one, prefil
     await editor.getByRole("button", { name: "Save workflow", exact: true }).click();
     await editor.waitFor({ state: "hidden" });
     expect(value.workflows.list(value.userId).find(workflow => workflow.id === "workflow_native_refine_pull_request")).toMatchObject({ rootProfileId: fable.id, advisorProfileIds: { rater: fable.id } });
-    expect(await page.locator('[data-workflow-row="workflow_native_refine_pull_request"]').innerText()).toContain("Coordinator: Fable");
+    const repairRow = page.locator('[data-workflow-row="workflow_native_refine_pull_request"]');
+    expect(await repairRow.innerText()).toContain("Fable");
+    expect(await repairRow.getByLabel("Default agents").locator("> span").first().getAttribute("title")).toBe("Coordinator: Fable");
+    expect(await repairRow.getByTitle("Worker: Project default").innerText()).toBe("Project default");
     // A new workflow is a named preset over a built-in engine; archiving hides it from the task dialog.
     await page.getByRole("button", { name: "New workflow", exact: true }).click();
     const creator = page.getByRole("dialog", { name: "New workflow", exact: true });

@@ -6,6 +6,7 @@ import { ADVISOR_LABELS, WORKFLOWS, WorkflowIdSchema, workflowDefinition, type A
 import { SettingsLayout } from "../components/app/settings-layout.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, type SettingsTableColumn } from "../components/app/settings-table.js";
 import { useCompanyContext } from "../components/app/company-context.js";
+import { EntityAvatar } from "../components/app/entity-avatar.js";
 import { requestNewTask } from "../components/app/global-new-task-dialog.js";
 import { taskDeliveryTargetOptions } from "../components/app/task-delivery-target.js";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
@@ -81,12 +82,12 @@ export function WorkflowSettingsView(): ReactElement {
     const sorted = [...workflows].sort((left, right) => Number(Boolean(left.archivedAt)) - Number(Boolean(right.archivedAt)));
     return term ? sorted.filter((workflow) => `${workflow.name} ${workflow.description} ${workflowDefinition(workflow.engine).name}`.toLowerCase().includes(term)) : sorted;
   }, [search, workflows]);
-  const profileName = (id: string | undefined, fallback: string): string => (id && profiles.find((profile) => profile.id === id)?.name) || fallback;
-  const agentSummary = (workflow: ApiWorkflow): string => [
-    `Coordinator: ${profileName(workflow.rootProfileId, "Project default")}`,
-    `Worker: ${profileName(workflow.workerProfileId, "Project default")}`,
-    ...workflowDefinition(workflow.engine).advisorRoles.map((role) => `${ADVISOR_LABELS[role]}: ${profileName(workflow.advisorProfileIds?.[role], "Same as Coordinator")}`),
-  ].join(" · ");
+  const profileFor = (id: string | undefined): ApiProfile | undefined => id ? profiles.find((profile) => profile.id === id) : undefined;
+  const agentLines = (workflow: ApiWorkflow): { label: string; agent: ApiProfile | undefined; fallback: string }[] => [
+    { label: "Coordinator", agent: profileFor(workflow.rootProfileId), fallback: "Project default" },
+    { label: "Worker", agent: profileFor(workflow.workerProfileId), fallback: "Project default" },
+    ...workflowDefinition(workflow.engine).advisorRoles.map((role) => ({ label: ADVISOR_LABELS[role], agent: profileFor(workflow.advisorProfileIds?.[role]), fallback: "Same as Coordinator" })),
+  ];
 
   const edit = (workflow: ApiWorkflow): void => { setError(""); setEditor({ kind: "edit", workflowId: workflow.id, draft: workflowDraft(workflow) }); };
   const setDraft = <Key extends keyof WorkflowRecordInput>(key: Key, value: WorkflowRecordInput[Key]): void => {
@@ -143,7 +144,7 @@ export function WorkflowSettingsView(): ReactElement {
           {visible.map((workflow) => <SettingsTableRow key={workflow.id} data-workflow-row={workflow.id} aria-label={`Edit ${workflow.name}`} tabIndex={0} onClick={(event) => { if (admin && !(event.target as HTMLElement).closest("button, input, label, [data-base-ui-portal]")) edit(workflow); }}>
             <SettingsTableCell className="font-medium"><span className="flex min-w-0 items-center gap-2"><Button variant="link" size="sm" aria-label={`Edit ${workflow.name}`} onClick={() => edit(workflow)}>{workflow.name}</Button>{workflow.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}</span></SettingsTableCell>
             <SettingsTableCell className="truncate text-muted-foreground">{workflowDefinition(workflow.engine).name}</SettingsTableCell>
-            <SettingsTableCell className="truncate text-muted-foreground" title={agentSummary(workflow)}>{agentSummary(workflow)}</SettingsTableCell>
+            <SettingsTableCell className="text-muted-foreground"><span className="grid gap-1" aria-label="Default agents">{agentLines(workflow).map(({ label, agent, fallback }) => <span key={label} className="flex min-w-0 items-center gap-1.5 text-[11px]" title={`${label}: ${agent?.name ?? fallback}`}>{agent ? <EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} size="xs" /> : null}<span className={agent ? "truncate text-foreground" : "truncate"}>{agent?.name ?? fallback}</span></span>)}</span></SettingsTableCell>
             <SettingsTableCell className="truncate text-muted-foreground">{workflow.engine === REPAIR ? "Merged pull request" : deliveryLabel(workflow.deliveryTarget)}</SettingsTableCell>
             <SettingsTableCell><span className="flex items-center gap-1.5 text-muted-foreground"><span className={workflow.archivedAt ? "size-1.5 rounded-full bg-muted-foreground" : "size-1.5 rounded-full bg-emerald-500"} />{workflow.archivedAt ? "archived" : "active"}</span></SettingsTableCell>
             <SettingsTableCell className="p-0">

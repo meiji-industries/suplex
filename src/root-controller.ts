@@ -5,17 +5,16 @@ import { join } from "node:path";
 import type { ArtifactStore } from "./artifacts.js";
 import { DeliveryOperationFailure, DeliveryOperations } from "./delivery-operations.js";
 import { StructuredLogger } from "./logging.js";
-import { createOpenCodePromptIntent, type OpenCodePromptObservation } from "./opencode-session.js";
-import type { OpenCodeTaskRuntime, OpenCodeTaskScope } from "./opencode-task-runtime.js";
+import { createOpenCodePromptIntent } from "./opencode-session.js";
 import type { RootBridgeAdapter } from "./root-bridge.js";
 import type { AdvisorRequest, DeliveryOperation, DeliveryReview, PullRequestTitle, RootIdentity, RootImageResult, WorkerAssignment } from "./root-contracts.js";
 import type { TaskControlStore } from "./root-session-store.js";
 import type { TaskControl, TaskSession, TaskTurn } from "./task-control.js";
+import type { PromptObservation, TaskHarness, TaskScope } from "./task-harness.js";
 import { verifyTaskEvidence, writeTaskEvidence } from "./workflow-evidence.js";
 import { advisorResultWake, composeAdvisorAssignment, composeWorkerAssignment, initialCoordinatorPrompt, workerResultWake } from "./workflow-prompts.js";
 import { ADVISOR_LABELS, latestReview, parseAdvisorReport, publicWorkflowState, repairStalled, REPAIR_RATING_TARGET, sameRange, turnOutcome, validAdvisorSession, workflowDefinition, type ReviewRange, type VerificationRange, type WorkflowInput } from "./workflows.js";
 
-export type TaskHarness = Pick<OpenCodeTaskRuntime, "ensureSession" | "attach" | "observe" | "dispatch" | "recoverDispatch" | "resultText" | "turnEvidence" | "stop">;
 export type TaskDelivery = Pick<DeliveryOperations, "observe" | "execute" | "currentRange"> & Partial<Pick<DeliveryOperations, "checksObservation">>;
 
 const advisorSuccess = "End this Coordinator turn now. Forge will send the Advisor's native report as a new turn on this same session. Do not poll or wait inside this turn.";
@@ -23,7 +22,7 @@ const advisorSuccess = "End this Coordinator turn now. Forge will send the Advis
 export class RootController implements RootBridgeAdapter {
   constructor(readonly store: TaskControlStore, private readonly harness: TaskHarness, private readonly delivery: TaskDelivery = new DeliveryOperations(store), private readonly artifacts?: ArtifactStore, private readonly evidence?: { root: string }) {}
 
-  private scope(control: TaskControl, session: TaskSession): OpenCodeTaskScope {
+  private scope(control: TaskControl, session: TaskSession): TaskScope {
     if (!control.worktree) throw new Error("Task worktree is not configured");
     const advisorRole = session.kind === "worker" ? session.advisorRole : null;
     const selected = session.kind === "root" ? control.rootProfile : advisorRole ? control.advisorProfiles[advisorRole] ?? control.rootProfile : control.workerProfile;
@@ -287,7 +286,7 @@ export class RootController implements RootBridgeAdapter {
       } catch (error) { failures.push(error); }
     }
     if (failures.length) {
-      const error = new AggregateError(failures, "Some OpenCode sessions could not be stopped");
+      const error = new AggregateError(failures, "Some agent sessions could not be stopped");
       if (["cancelled", "delivered"].includes(this.store.get(taskId).status)) throw error;
       new StructuredLogger().warn("Completed session cleanup will be retried", { taskId }, { error: error.message });
     }
@@ -337,13 +336,13 @@ export class RootController implements RootBridgeAdapter {
     }
   }
 
-  private async finishTurn(taskScope: OpenCodeTaskScope, session: TaskSession, turn: TaskTurn, observed: OpenCodePromptObservation): Promise<void> {
+  private async finishTurn(taskScope: TaskScope, session: TaskSession, turn: TaskTurn, observed: PromptObservation): Promise<void> {
     const text = await this.harness.resultText(taskScope, observed);
     const base = { state: observed.state, native: observed.native, reason: observed.reason, interruptedExecution: observed.interruptedExecution, text };
     if (session.kind === "root") {
-      this.store.completeRootTurn(turn.id, JSON.stringify(base), observed.interruptedExecution ? "The previous execution stopped when its OpenCode server exited. Its admitted message will not be replayed. Observe current task, worktree and GitHub state, preserve any partial work, and continue from that evidence." : undefined);
+      this.store.completeRootTurn(turn.id, JSON.stringify(base), observed.interruptedExecution ? "The previous execution stopped when its agent process exited. Its admitted message will not be replayed. Observe current task, worktree and GitHub state, preserve any partial work, and continue from that evidence." : undefined);
       if (observed.state !== "completed" && !observed.interruptedExecution && this.store.get(session.taskId).status === "active") {
-        this.store.askHuman(session.taskId, `OpenCode stopped the Coordinator turn (${observed.state}). ${observed.reason ?? text} Can you resolve the failure and continue?`);
+        this.store.askHuman(session.taskId, `The agent stopped the Coordinator turn (${observed.state}). ${observed.reason ?? text} Can you resolve the failure and continue?`);
       }
       return;
     }

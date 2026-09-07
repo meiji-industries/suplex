@@ -1,9 +1,8 @@
-import { basename } from "node:path";
 import { CliHerdrClient, type Pane } from "./herdr-client.js";
 import type { TaskSession } from "./task-control.js";
-import type { OpenCodeServerReference } from "./opencode-server.js";
+import { isShellProcess } from "./task-harness.js";
 
-type ArchiveSession = Pick<TaskSession, "id" | "taskId" | "paneId" | "nativeSessionId"> & { server: OpenCodeServerReference | null };
+type ArchiveSession = Pick<TaskSession, "id" | "taskId" | "paneId" | "nativeSessionId"> & { display: ((argv: readonly string[]) => boolean) | null };
 type Displays = Pick<CliHerdrClient, "getPane" | "listPanes" | "listWorkspaces" | "getWorkspace" | "getPaneProcessInfo" | "closePane" | "closeWorkspace">;
 
 export async function prepareArchiveDisplays(sessions: ArchiveSession[], herdr: Displays = new CliHerdrClient()): Promise<() => Promise<void>> {
@@ -14,12 +13,7 @@ export async function prepareArchiveDisplays(sessions: ArchiveSession[], herdr: 
     if (!matches(pane, session)) throw new Error("The task pane ownership has changed. Cleanup stopped.");
     const info = await herdr.getPaneProcessInfo(pane.paneId);
     if (!info.foreground_processes.length) throw new Error("The task terminal could not be inspected.");
-    const idle = info.foreground_processes.every(process => {
-      if (process.pid === info.shell_pid && ["zsh", "bash", "sh", "fish", "nu", "pwsh"].includes(basename(process.name))) return true;
-      const args = process.argv;
-      return session.server && args?.[0] === session.server.executable && args[1] === "attach" && args[2] === session.server.baseUrl
-        && args.includes("--session") && args[args.indexOf("--session") + 1] === session.nativeSessionId;
-    });
+    const idle = info.foreground_processes.every(process => isShellProcess(process, info.shell_pid) || process.argv !== undefined && session.display?.(process.argv) === true);
     if (!idle) throw new Error("A command is still active in the task terminal. Stop it before archiving.");
   };
   for (const session of sessions) {

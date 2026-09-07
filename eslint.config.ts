@@ -97,6 +97,7 @@ export default tseslint.config({
     "src/forward-merge.ts",
     "src/github.ts",
     "src/opencode-server.ts",
+    "src/claude-code-task-runtime.ts",
     "src/process-manager.ts",
     "src/provider-readiness.ts",
     "src/runtime.ts",

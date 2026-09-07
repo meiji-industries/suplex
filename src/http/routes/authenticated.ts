@@ -9,7 +9,7 @@ import type { ProjectService } from "../../projects.js";
 import type { TaskService } from "../../tasks.js";
 import type { TaskHost } from "../../task-host.js";
 import type { HermesAgentService } from "../../hermes-agents.js";
-import type { ReadOpenCodeProviders } from "../../opencode-providers.js";
+import type { ReadProviders } from "../../provider-catalog.js";
 import type { UpdateObservation } from "../../self-update.js";
 import type { UpdateAvailability } from "../../update.js";
 import type { UpdateRestartResponse } from "../contracts/update.js";
@@ -35,7 +35,7 @@ export interface AuthenticatedRoutesOptions {
   host?: Pick<TaskHost, "recover">;
   database?: ForgeDatabase;
   hermes?: HermesAgentService;
-  readProviders?: ReadOpenCodeProviders;
+  readProviders?: ReadProviders;
   readUpdate?: (user: AuthUser) => Promise<UpdateAvailability | UpdateObservation>;
   requestUpdateRestart?: (revision: string) => Promise<UpdateRestartResponse>;
   launchUpdateRestart?: (operationId: string) => Promise<void>;

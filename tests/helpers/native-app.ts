@@ -37,7 +37,7 @@ export async function nativeApp() {
     validateProjectConfiguration: true,
     localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "owner/repo", clean: false, baseSha: "a".repeat(40) }; } },
     github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } },
-    readProviders: async () => ({ harness: "opencode", directory, observedAt: new Date().toISOString(), providers: [{ id: "openai", label: "OpenAI", status: "configured", modelCount: 2, models: [{ id: "gpt-5.6-sol", label: "Sol" }, { id: "gpt-5.6-luna", label: "Luna" }] }] }),
+    readProviders: async () => ({ directory, observedAt: new Date().toISOString(), providers: [{ id: "openai", label: "OpenAI", status: "configured", modelCount: 2, models: [{ id: "gpt-5.6-sol", label: "Sol" }, { id: "gpt-5.6-luna", label: "Luna" }] }] }),
   });
   const tasks = new TaskService(database, auth, projects, config);
   const templates = new TaskTemplateService(database, auth, tasks);

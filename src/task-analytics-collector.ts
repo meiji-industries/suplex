@@ -1,18 +1,20 @@
-import type { OpenCodeMessageEnvelope } from "./opencode-contracts.js";
+import { claudeConfigDirectory, claudeUsage, readClaudeTranscript } from "./claude-code-transcript.js";
 import type { ModelPricingCatalog } from "./model-pricing.js";
 import { ModelsDevCatalogReader, type ModelPricingReader } from "./models-dev-catalog.js";
-import { resolveOpenCodeExecutable } from "./opencode-executable.js";
+import { resolveOpenCodeExecutable } from "./executable-resolver.js";
 import { ensureOpenCodeServer, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer } from "./opencode-server.js";
+import type { TaskSession } from "./task-control.js";
+import { sessionHarness } from "./task-harness.js";
 import type { TaskRepository } from "./task-repository.js";
 import type { TaskAnalyticsStore } from "./task-analytics-store.js";
-import { taskUsage } from "./task-usage.js";
+import { taskUsage, type TaskUsage } from "./task-usage.js";
 
 export class TaskAnalyticsCollector {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pending: Promise<void> | undefined;
   private stopped = false;
   constructor(private readonly repository: TaskRepository, private readonly store: TaskAnalyticsStore,
-    private readonly readMessages: (sessionId: string) => Promise<OpenCodeMessageEnvelope[]>,
+    private readonly readUsage: (session: TaskSession, pricing: ModelPricingCatalog | undefined) => Promise<TaskUsage[]>,
     private readonly reportError: (error: unknown) => void,
     private readonly readPricing?: () => Promise<ModelPricingCatalog | undefined>) {}
 
@@ -53,8 +55,7 @@ export class TaskAnalyticsCollector {
           if (lastAttempt && Date.now() - Date.parse(lastAttempt) < refreshMs) continue;
           try {
             const readStartedAt = new Date().toISOString();
-            const messages = await this.readMessages(session.nativeSessionId);
-            this.store.record(task.id, session.id, taskUsage(messages, session.kind, await optionalPricing()), readStartedAt);
+            this.store.record(task.id, session.id, await this.readUsage(session, await optionalPricing()), readStartedAt);
           } catch (error) {
             this.store.failed(task.id, session.id);
             this.reportError(error);
@@ -65,12 +66,15 @@ export class TaskAnalyticsCollector {
   }
 }
 
-/** This server reads shared OpenCode history; it never prompts or resumes a session. */
+/** Reads shared native history: the OpenCode server here never prompts or resumes a session, and Claude Code transcripts are read as files. */
 export class AnalyticsHistoryReader {
   constructor(private readonly directory: string, private readonly pricing: ModelPricingReader = new ModelsDevCatalogReader()) {}
-  async read(sessionId: string): Promise<OpenCodeMessageEnvelope[]> {
+  async read(session: Pick<TaskSession, "nativeSessionId" | "kind">, pricing?: ModelPricingCatalog): Promise<TaskUsage[]> {
+    const sessionId = session.nativeSessionId;
+    if (!sessionId) throw new Error("Session is not available");
+    if (sessionHarness(sessionId) === "claude-code") return claudeUsage(await readClaudeTranscript(sessionId, claudeConfigDirectory()), sessionId, session.kind, pricing);
     const server = await ensureOpenCodeServer({ runtimeDirectory: this.directory, executable: await resolveOpenCodeExecutable(), directory: process.cwd(), config: {} });
-    return openCodeServerClient(server).getMessages(sessionId);
+    return taskUsage(await openCodeServerClient(server).getMessages(sessionId), session.kind, pricing);
   }
   async readPricing(): Promise<ModelPricingCatalog | undefined> { return this.pricing.read(); }
   async close(): Promise<void> {

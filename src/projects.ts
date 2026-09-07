@@ -13,7 +13,7 @@ import { GithubFailure, createGithubAdapter, type GithubAdapter } from "./github
 import type { ForgeDatabase } from "./database.js";
 import { createGithubReleasePort, type GithubReleasePort } from "./github-delivery.js";
 import { TaskSourceService, type TaskSourceSelector } from "./task-sources.js";
-import { readOpenCodeProviders, type ReadOpenCodeProviders } from "./opencode-providers.js";
+import { readProviders as readHostProviders, type ReadProviders } from "./provider-catalog.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -94,7 +94,7 @@ export interface GithubRepositoryCoordinate {
 }
 
 interface ProjectServiceOptions {
-  readProviders?: ReadOpenCodeProviders;
+  readProviders?: ReadProviders;
   github?: GithubAdapter;
   localRepository?: LocalRepositoryAdapter;
   repositoryProvisioner?: RepositoryProvisioner;
@@ -400,7 +400,7 @@ export class ProjectService {
   private readonly repositoryProvisioner: RepositoryProvisioner;
   private readonly validateProjectConfiguration: boolean;
   private readonly taskSources: TaskSourceService;
-  private readonly readProviders: ReadOpenCodeProviders;
+  private readonly readProviders: ReadProviders;
 
   constructor(
     private readonly database: ForgeDatabase,
@@ -417,7 +417,7 @@ export class ProjectService {
     // save-time guard unless an explicit test fake supplies a value.
     this.validateProjectConfiguration = options.validateProjectConfiguration ?? process.env.VITEST === undefined;
     this.taskSources = new TaskSourceService(options.githubRelease ?? createGithubReleasePort());
-    this.readProviders = options.readProviders ?? (() => readOpenCodeProviders({ directory: process.cwd() }));
+    this.readProviders = options.readProviders ?? (() => readHostProviders({ directory: process.cwd() }));
   }
 
   async listModels(actorUserId: string): Promise<OpenCodeModelOption[]> {

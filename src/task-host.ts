@@ -5,9 +5,9 @@ import type { ForgeDatabase } from "./database.js";
 import { DeliveryOperations } from "./delivery-operations.js";
 import { CliHerdrClient } from "./herdr-client.js";
 import { StructuredLogger } from "./logging.js";
-import { OpenCodeTaskRuntime } from "./opencode-task-runtime.js";
 import { RootController } from "./root-controller.js";
 import { TaskControlStore } from "./root-session-store.js";
+import { createTaskHarness } from "./task-harness-registry.js";
 import { prepareTaskWorktree } from "./task-worktree.js";
 import { taskEvidenceRoot } from "./workflow-evidence.js";
 
@@ -26,7 +26,7 @@ export class TaskHost {
     this.store = new TaskControlStore(database);
     this.delivery = options.delivery ?? new DeliveryOperations(this.store);
     const artifactRoot = options.artifactRoot ?? join(dirname(database.filename()), "artifacts");
-    this.controller = options.controller ?? new RootController(this.store, new OpenCodeTaskRuntime(database.filename(), new CliHerdrClient(), { artifactRoot }), undefined, new ArtifactStore(artifactRoot), { root: taskEvidenceRoot(database.filename()) });
+    this.controller = options.controller ?? new RootController(this.store, createTaskHarness(database.filename(), new CliHerdrClient(), { artifactRoot }), undefined, new ArtifactStore(artifactRoot), { root: taskEvidenceRoot(database.filename()) });
     this.worktree = options.worktree ?? prepareTaskWorktree;
   }
 
@@ -82,7 +82,7 @@ export class TaskHost {
     try { await this.controller.recover(taskId); }
     catch (error) {
       if (this.store.get(taskId).status !== "active") throw error;
-      new StructuredLogger().warn("OpenCode recovery will be retried from native state", { taskId }, { error: error instanceof Error ? error.message : String(error) });
+      new StructuredLogger().warn("Agent recovery will be retried from native state", { taskId }, { error: error instanceof Error ? error.message : String(error) });
     }
     const control = this.store.get(taskId);
     if (control.status === "active" || control.status === "waiting_human") this.store.scheduleWake(taskId, new Date(Date.now() + (control.workflowState.deliveryWait ? 30_000 : 15_000)).toISOString());

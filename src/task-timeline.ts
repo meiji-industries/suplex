@@ -1,10 +1,8 @@
-import { dirname, join } from "node:path";
 import type { Task } from "./task-contracts.js";
 import type { TaskSession } from "./task-control.js";
-import { OpenCodeClient } from "./opencode-client.js";
-import { readOpenCodeServer } from "./opencode-server.js";
+import { nativeSessionReader } from "./task-harness-registry.js";
 import type { TaskTimeline, TimelineTask } from "./task-timeline-contracts.js";
-import { taskUsage, type TaskUsage } from "./task-usage.js";
+import type { TaskUsage } from "./task-usage.js";
 import { roleLabel } from "./workflows.js";
 
 export function timelineActivity(task: Pick<Task, "rootProfile" | "workerProfile"> & Partial<Pick<Task, "advisorProfiles">>, session: Pick<TaskSession, "id" | "kind" | "generation"> & Partial<Pick<TaskSession, "advisorRole">>, usage: TaskUsage[], liveMessageId: string | null): TimelineTask["activity"] {
@@ -36,18 +34,7 @@ export function timelineActivity(task: Pick<Task, "rootProfile" | "workerProfile
   return [...turns.values()];
 }
 
-export async function observeTimelineSession(databasePath: string, session: TaskSession) {
-  const server = await readOpenCodeServer(join(dirname(databasePath), "runtime", "task-sessions", session.id));
-  if (!server || !session.nativeSessionId) throw new Error("Session is not available");
-  const client = new OpenCodeClient({ baseUrl: server.baseUrl, password: server.password, timeoutMs: 2000 });
-  const [messages, statuses] = await Promise.all([
-    client.getMessages(session.nativeSessionId, { directory: server.directory, limit: 100 }),
-    client.getStatus(server.directory),
-  ]);
-  const latest = [...messages].sort((a, b) => a.info.time.created - b.info.time.created).at(-1)?.info;
-  const liveMessageId = statuses[session.nativeSessionId]?.type === "busy" && latest?.role === "assistant" && latest.time.completed === undefined ? latest.id : null;
-  return { usage: taskUsage(messages, session.kind), liveMessageId };
-}
+const observeTimelineSession = (databasePath: string, session: TaskSession): Promise<{ usage: TaskUsage[]; liveMessageId: string | null }> => nativeSessionReader(databasePath, session).timeline(session);
 
 export async function readTaskTimeline(databasePath: string, tasks: Task[], sessions: TaskSession[], readUsage: (taskId: string) => TaskUsage[], observe = observeTimelineSession): Promise<TaskTimeline> {
   const result: TaskTimeline = { tasks: [], unavailableSessions: 0 };

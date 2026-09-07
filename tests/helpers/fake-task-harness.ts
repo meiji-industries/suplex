@@ -1,4 +1,4 @@
-import type { TaskHarness } from "../../src/root-controller.js";
+import type { TaskHarness } from "../../src/task-harness.js";
 import type { OpenCodeTaskScope } from "../../src/opencode-task-runtime.js";
 import type { OpenCodePromptIntent, OpenCodePromptObservation } from "../../src/opencode-session.js";
 

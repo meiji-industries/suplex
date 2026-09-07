@@ -27,7 +27,7 @@ test("provider API uses native configuration, not CLI health or Forge credential
   let failObservation = false;
   const app = createApp({ config, auth, database, health, readProviders: async () => {
     if (failObservation) throw new Error("native server failed");
-    return { harness: "opencode", directory: root, observedAt: new Date().toISOString(), providers: [
+    return { directory: root, observedAt: new Date().toISOString(), providers: [
       { id: "openai", label: "OpenAI", modelCount: 1, models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], status: "configured" },
       { id: "opencode", label: "OpenCode Zen", modelCount: 1, models: [{ id: "gpt-5.6-luna", label: "GPT-5.6 Luna" }], status: "configured" },
     ] };
@@ -39,7 +39,7 @@ test("provider API uses native configuration, not CLI health or Forge credential
     const session = cookie(enrolled.headers, SESSION_COOKIE_NAME); const csrf = cookie(enrolled.headers, CSRF_COOKIE_NAME);
     const headers = { cookie: `${SESSION_COOKIE_NAME}=${session}; ${CSRF_COOKIE_NAME}=${csrf}`, origin: config.reachableAddress, "x-csrf-v1": csrf };
     const listed = await app.inject({ method: "GET", url: "/api/admin/providers", headers });
-    expect(listed.json()).toMatchObject({ harness: "opencode", providers: [{ id: "openai", status: "configured" }, { id: "opencode", status: "configured" }] });
+    expect(listed.json()).toMatchObject({ providers: [{ id: "openai", status: "configured" }, { id: "opencode", status: "configured" }] });
     expect(listed.headers["cache-control"]).toBe("private, no-store");
     expect(listed.body).not.toContain("healthy");
     expect(listed.body).not.toContain("codex");

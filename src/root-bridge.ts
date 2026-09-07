@@ -19,8 +19,8 @@ import {
 import { ForgeDatabase } from "./database.js";
 import { CliHerdrClient } from "./herdr-client.js";
 import { RootController } from "./root-controller.js";
-import { OpenCodeTaskRuntime } from "./opencode-task-runtime.js";
 import { TaskControlStore } from "./root-session-store.js";
+import { createTaskHarness } from "./task-harness-registry.js";
 import { ArtifactStore } from "./artifacts.js";
 import { configureProcessLogSink, createDevLogFileSink } from "./logging.js";
 import { taskEvidenceRoot } from "./workflow-evidence.js";
@@ -161,7 +161,7 @@ async function runRootBridge(): Promise<void> {
   const database = new ForgeDatabase(config.databasePath, { migrate: false });
   const herdr = new CliHerdrClient();
   const store = new TaskControlStore(database);
-  const controller = new RootController(store, new OpenCodeTaskRuntime(config.databasePath, herdr, { artifactRoot: config.artifactRoot }), undefined, new ArtifactStore(config.artifactRoot), { root: taskEvidenceRoot(config.databasePath) });
+  const controller = new RootController(store, createTaskHarness(config.databasePath, herdr, { artifactRoot: config.artifactRoot }), undefined, new ArtifactStore(config.artifactRoot), { root: taskEvidenceRoot(config.databasePath) });
   startRootBridgeTransport({ bridge: new RootBridge(config.root, controller), stdin: process.stdin, stdout: process.stdout });
 }
 

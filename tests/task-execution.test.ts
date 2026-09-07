@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { executionFromMessages, readTaskExecution } from "../src/task-execution.js";
+import { readTaskExecution } from "../src/task-execution.js";
+import { executionFromMessages } from "../src/opencode-session-reader.js";
 import { OpenCodeMessageEnvelopeSchema } from "../src/opencode-contracts.js";
 import { nativeApp } from "./helpers/native-app.js";
 
@@ -28,7 +29,7 @@ test("execution observation failures are explicit and cannot wake or alter a tas
     const reserved = store.claimRoot({ taskId: task.id });
     const root = store.bindHarnessSession({ sessionId: reserved.id, generation: reserved.generation, nativeSessionId: "ses_execution" });
     const before = store.get(task.id);
-    const observed = await readTaskExecution(value.config.databasePath, [root], async () => [message("msg_one", 1, [{ type: "tool", callID: "read", tool: "read", state: { status: "running", input: { filePath: "README.md" } } }])]);
+    const observed = await readTaskExecution(value.config.databasePath, [root], async () => ({ ...executionFromMessages([message("msg_one", 1, [{ type: "tool", callID: "read", tool: "read", state: { status: "running", input: { filePath: "README.md" } } }])]), limited: false }));
     expect(observed.sessions[0]).toMatchObject({ available: true, tools: [{ status: "running" }] });
     const response = await value.app.inject({ url: `/api/tasks/${task.id}/execution`, headers: value.headers });
     expect(response.statusCode).toBe(200);

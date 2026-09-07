@@ -45,7 +45,7 @@ async function fixture(): Promise<Fixture> {
   const config = createTestConfig(root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot, worktreeRoot });
   const auth = new AuthService(database, config);
   const projects = new ProjectService(database, auth, config, { localRepository, github, validateProjectConfiguration: true, readProviders: async () => ({
-    harness: "opencode", directory: root, observedAt: new Date().toISOString(), providers: [
+    directory: root, observedAt: new Date().toISOString(), providers: [
       { id: "openai", label: "OpenAI", status: "configured", modelCount: 1, models: [{ id: "shared-model", label: "OpenAI model" }] },
       { id: "opencode", label: "OpenCode Zen", status: "configured", modelCount: 1, models: [{ id: "shared-model", label: "Zen model" }] },
     ],

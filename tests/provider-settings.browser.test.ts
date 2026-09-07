@@ -11,7 +11,7 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { AgentProfileService } from "../src/agent-profiles.js";
 import { ProjectService } from "../src/projects.js";
-import type { ReadOpenCodeProviders } from "../src/opencode-providers.js";
+import type { ReadProviders } from "../src/provider-catalog.js";
 import type { HostHealthDependencies } from "../src/health.js";
 
 const health: HostHealthDependencies = {
@@ -24,7 +24,7 @@ const webAuthn: WebAuthnAdapter = { async generateRegistrationOptions(input) { r
 function cookie(headers: OutgoingHttpHeaders, name: string): string { const values = Array.isArray(headers["set-cookie"]) ? headers["set-cookie"] : [headers["set-cookie"] ?? ""]; return (values.find((value) => value.split("=", 1)[0] === name) ?? "").split(";", 1)[0]!.split("=", 2)[1] ?? ""; }
 
 test("Providers settings shows all providers at desktop and narrow widths", { timeout: 120_000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-provider-settings-browser-")); const database = new ForgeDatabase(join(root, "forge.sqlite")); const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111" }); const auth = new AuthService(database, config, { webAuthn }); const readProviders: ReadOpenCodeProviders = async () => ({ harness: "opencode", directory: root, observedAt: new Date().toISOString(), providers: [{ id: "openai", label: "OpenAI", modelCount: 2, models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }, { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" }], status: "configured" }, { id: "opencode", label: "OpenCode Zen", modelCount: 1, models: [{ id: "gpt-5.6-luna", label: "Zen Luna" }], status: "configured" }] });
+  const root = await mkdtemp(join(tmpdir(), "forge-provider-settings-browser-")); const database = new ForgeDatabase(join(root, "forge.sqlite")); const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111" }); const auth = new AuthService(database, config, { webAuthn }); const readProviders: ReadProviders = async () => ({ directory: root, observedAt: new Date().toISOString(), providers: [{ id: "openai", label: "OpenAI", modelCount: 2, models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }, { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" }], status: "configured" }, { id: "opencode", label: "OpenCode Zen", modelCount: 1, models: [{ id: "gpt-5.6-luna", label: "Zen Luna" }], status: "configured" }] });
   const projects = new ProjectService(database, auth, config, { readProviders });
   const app = createApp({ config, auth, database, projects, profiles: new AgentProfileService(database, auth), health, readProviders });
   await app.listen({ host: "127.0.0.1", port: 0 }); const address = app.server.address(); if (!address || typeof address !== "object") throw new Error("Provider settings server did not expose a port");

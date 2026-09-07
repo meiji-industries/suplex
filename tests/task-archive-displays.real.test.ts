@@ -21,7 +21,7 @@ test("archive closes a real owned Herdr workspace and all its panes", async () =
         return info.foreground_processes.length > 0 && info.foreground_processes.every(process => process.pid === info.shell_pid && process.name === "zsh" && process.argv?.includes("-f"));
       }, { timeout: 10_000 }).toBe(true);
     }
-    const close = await prepareArchiveDisplays([{ id: "proof-session", taskId, paneId: rootPane.paneId, nativeSessionId: null, server: null }], herdr);
+    const close = await prepareArchiveDisplays([{ id: "proof-session", taskId, paneId: rootPane.paneId, nativeSessionId: null, display: null }], herdr);
     await close();
     expect(await herdr.getWorkspace(workspace.workspaceId)).toBeNull();
     expect(await herdr.getPane(rootPane.paneId)).toBeNull();

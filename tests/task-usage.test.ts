@@ -75,7 +75,7 @@ test("collector captures final timings promptly after delivery instead of applyi
     store.record(task.id, root.id, taskUsage([message(false)], "root"), new Date(Date.now() - 1000).toISOString());
     value.tasks.repository.controls.markDelivered(task.id);
     let reads = 0;
-    const collector = new TaskAnalyticsCollector(value.tasks.repository, store, async () => { reads += 1; return [message()]; }, error => { throw error; });
+    const collector = new TaskAnalyticsCollector(value.tasks.repository, store, async () => { reads += 1; return taskUsage([message()], "root"); }, error => { throw error; });
     await collector.collect();
     expect(reads).toBe(1);
     expect(store.read(task.id).usage[0]?.completedAt).toBe(200);
@@ -146,7 +146,7 @@ test("catalog failure cannot prevent message collection or task delivery", async
     controls.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "ses_pricing" });
     const store = new TaskAnalyticsStore(value.database);
     const errors: unknown[] = [];
-    const collector = new TaskAnalyticsCollector(value.tasks.repository, store, async () => [message(true, [], 0)], error => errors.push(error), async () => { throw new Error("models.dev offline"); });
+    const collector = new TaskAnalyticsCollector(value.tasks.repository, store, async (_session, pricing) => taskUsage([message(true, [], 0)], "root", pricing), error => errors.push(error), async () => { throw new Error("models.dev offline"); });
     await collector.collect();
     expect(errors).toEqual([]);
     expect(store.read(task.id).usage).toMatchObject([{ cost: 0, subsidized: false }]);

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 
 import { runCommand } from "../src/command-runner.js";
 import { createGitCommandGuard, type GitCommandGuard } from "../src/worker-environment.js";
@@ -37,12 +37,22 @@ async function testGuardContext(): Promise<GitCommandGuard> {
   }
 }
 
+function testEnvironment(guard: Pick<GitCommandGuard, "directory" | "env">): NodeJS.ProcessEnv {
+  const env = { ...guard.env };
+  const realGit = env.FORGE_GIT_REAL_BIN;
+  if (realGit) env.FORGE_GIT_BIN = realGit;
+  else delete env.FORGE_GIT_BIN;
+  delete env.FORGE_GIT_GUARD_DIR;
+  env.PATH = (env.PATH ?? "").split(delimiter).filter((entry) => entry && resolve(entry) !== resolve(guard.directory)).join(delimiter);
+  return env;
+}
+
 const guard = await testGuardContext();
 try {
   await testGuard(guard, "before");
   let exitCode: number;
   try {
-    const child = spawn("pnpm", ["test", ...process.argv.slice(2)], { cwd: process.cwd(), env: guard.env, stdio: "inherit" });
+    const child = spawn("pnpm", ["test", ...process.argv.slice(2)], { cwd: process.cwd(), env: testEnvironment(guard), stdio: "inherit" });
     exitCode = await new Promise<number>((resolve, reject) => {
       child.once("error", reject);
       child.once("close", code => resolve(code ?? 1));

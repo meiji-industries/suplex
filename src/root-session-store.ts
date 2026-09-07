@@ -401,7 +401,7 @@ export class TaskControlStore {
   }
   requireExecutionCleanup(turn: TaskTurn): void {
     this.database.authTransaction(db => {
-      this.askHuman(turn.taskId, "OpenCode stopped during a tool call. A command can still be active in the worktree. Stop those commands before you continue. Describe what you checked, then confirm that all commands from this session have stopped.");
+      this.askHuman(turn.taskId, "The agent stopped during a tool call. A command can still be active in the worktree. Stop those commands before you continue. Describe what you checked, then confirm that all commands from this session have stopped.");
       db.prepare("UPDATE forge_task_controls SET recovery_turn_id = ? WHERE task_id = ?").run(turn.id, turn.taskId);
     });
   }

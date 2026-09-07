@@ -70,7 +70,7 @@ Need a change? Create a new migration.
 
 - Task HTTP contracts and routes belong in `src/http/contracts/tasks.ts` and `src/http/routes/tasks.ts`. `src/tasks.ts` owns user authorization and task commands.
 - Task metadata belongs in `src/task-repository.ts`. Durable task intent, assignments, and prompt ownership belong in `src/root-session-store.ts`.
-- `src/root-controller.ts` coordinates Root and Worker. `src/opencode-task-runtime.ts` owns native runtime calls and Herdr attachments.
+- `src/root-controller.ts` coordinates Root and Worker through the `TaskHarness` seam in `src/task-harness.ts`. `src/opencode-task-runtime.ts` and `src/claude-code-task-runtime.ts` own native runtime calls; `src/task-harness-registry.ts` selects one by profile provider. Read-only observation of a native session goes through `NativeSessionReader`, never through a harness client directly.
 - `src/delivery-operations.ts` observes Git and GitHub before deterministic delivery operations. Native and external evidence must not depend on a second progress receipt.
 - There is no phase engine or Temporal. Preserve admitted native messages across restart instead of replaying them. Delete dead code when you find it.
 - If `tests/architecture-guardrails.test.ts` line budgets fail, move code into the per-domain modules instead of raising the budget.

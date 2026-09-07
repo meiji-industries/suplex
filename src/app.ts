@@ -9,7 +9,7 @@ import type { ForgeDatabase } from "./database.js";
 import type { ForgeConfig } from "./config.js";
 import type { TaskHost } from "./task-host.js";
 import type { HermesAgentService } from "./hermes-agents.js";
-import type { ReadOpenCodeProviders } from "./opencode-providers.js";
+import type { ReadProviders } from "./provider-catalog.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
 import { inspectUpdateAvailability, type UpdateAvailability } from "./update.js";
 import type { UpdateObservation } from "./self-update.js";
@@ -54,7 +54,7 @@ export interface AppDependencies {
   database?: ForgeDatabase;
   logger?: Logger | false;
   hermes?: HermesAgentService;
-  readProviders?: ReadOpenCodeProviders;
+  readProviders?: ReadProviders;
   readUpdate?: (user: AuthUser) => Promise<UpdateAvailability | UpdateObservation>;
   requestUpdateRestart?: (revision: string) => Promise<UpdateRestartResponse>;
   launchUpdateRestart?: (operationId: string) => Promise<void>;

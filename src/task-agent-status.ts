@@ -1,15 +1,12 @@
-import { dirname, join } from "node:path";
 import type { z } from "zod";
-import { OpenCodeClient } from "./opencode-client.js";
-import { readOpenCodeServer } from "./opencode-server.js";
 import type { Task } from "./task-contracts.js";
 import type { TaskSession } from "./task-control.js";
 import type { TaskAgentStatusSchema } from "./http/contracts/tasks.js";
+import { nativeSessionReader } from "./task-harness-registry.js";
 import { roleLabel } from "./workflows.js";
 
 type AgentStatus = z.infer<typeof TaskAgentStatusSchema>;
-type NativeAgentStatus = "busy" | "retry" | "idle";
-type NativeObservation = { status: NativeAgentStatus; updatedAt: number };
+type NativeObservation = { status: "busy" | "retry" | "idle"; updatedAt: number };
 
 function isoTimestamp(value: number): string | null {
   if (!Number.isFinite(value)) return null;
@@ -17,13 +14,7 @@ function isoTimestamp(value: number): string | null {
   return Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString();
 }
 
-async function observeSession(databasePath: string, session: TaskSession): Promise<NativeObservation> {
-  const server = await readOpenCodeServer(join(dirname(databasePath), "runtime", "task-sessions", session.id));
-  if (!server || !session.nativeSessionId) throw new Error("Session is not available");
-  const client = new OpenCodeClient({ baseUrl: server.baseUrl, password: server.password, timeoutMs: 2000 });
-  const [nativeSession, statuses] = await Promise.all([client.getSession(session.nativeSessionId, server.directory), client.getStatus(server.directory)]);
-  return { status: statuses[session.nativeSessionId]?.type ?? "idle", updatedAt: nativeSession.time.updated };
-}
+const observeSession = (databasePath: string, session: TaskSession): Promise<NativeObservation> => nativeSessionReader(databasePath, session).status(session);
 
 export async function readTaskAgentStatuses(databasePath: string, task: Pick<Task, "status">, sessions: TaskSession[], observe = observeSession) {
   return { agents: await Promise.all(sessions.filter(session => session.current).map(async session => {

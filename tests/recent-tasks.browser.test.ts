@@ -127,7 +127,7 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     await page.route(archiveUrl, async route => {
       archiveBodies.push(JSON.parse(route.request().postData() ?? "{}") as { confirmDiscardDirty?: boolean });
       if (archiveBodies.length === 1) {
-        await route.fulfill({ json: { status: "confirmation_required", dirtyFileCount: 1, dirtyFilePaths: ["src/app.ts"] } });
+        await route.fulfill({ json: { status: "confirmation_required", dirtyFileCount: 1, dirtyFilePaths: ["draft.txt"] } satisfies Awaited<ReturnType<typeof value.tasks.archiveTask>> });
         return;
       }
       await route.continue();
@@ -135,6 +135,7 @@ test.each([1280, 390])("Recent tasks show spinning status and pull request state
     await archive.click();
     await dialog.getByRole("button", { name: "Archive task", exact: true }).click();
     await dialog.getByRole("heading", { name: "Discard 1 uncommitted change and archive?" }).waitFor();
+    await dialog.getByText("draft.txt", { exact: true }).waitFor();
     expect(archiveBodies).toEqual([{ confirmDiscardDirty: false }]);
     await rm(value.project.repositoryPath, { recursive: true, force: true });
     await dialog.getByRole("button", { name: "Discard changes and archive", exact: true }).click();

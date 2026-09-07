@@ -1,69 +1,34 @@
 import { randomUUID } from "node:crypto";
-import { openCodeRolePrompt } from "./opencode-role-prompt.js";
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
-import type { HerdrClient, PaneProcessInfo } from "./herdr-client.js";
-import type { RootIdentity } from "./root-contracts.js";
-import { createGitCommandGuard, withWorktreeMiseTrust } from "./worker-environment.js";
-import { resolveOpenCodeExecutable } from "./opencode-executable.js";
-import { ensureOpenCodeServer, OpenCodeServerReferenceSchema, openCodeAttachCommand, openCodeProcessAlive, openCodeRoleConfig, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer, type OpenCodeProfile } from "./opencode-server.js";
-import { reconcileOpenCodePrompt, replayOpenCodePrompt, type OpenCodePromptIntent, type OpenCodePromptObservation } from "./opencode-session.js";
+import { readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { resolveOpenCodeExecutable } from "./executable-resolver.js";
+import { ensureOpenCodeServer, OpenCodeServerReferenceSchema, openCodeAttachCommand, openCodeProcessAlive, openCodeRoleConfig, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer, type OpenCodeServerReference } from "./opencode-server.js";
+import { reconcileOpenCodePrompt, replayOpenCodePrompt } from "./opencode-session.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "./task-control.js";
-import { executionFromMessages } from "./task-execution.js";
-import type { WorkflowId } from "./workflows.js";
+import { attachTaskDisplay, taskSessionRuntimeDirectory, taskSessionTitle, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskPanePort, type TaskScope } from "./task-harness.js";
+import { taskRolePrompt } from "./task-role-prompt.js";
+import { createGitCommandGuard, withWorktreeMiseTrust } from "./worker-environment.js";
+import { executionFromMessages } from "./opencode-session-reader.js";
 
-type TaskPanePort = Pick<HerdrClient, "getPane" | "getPaneProcessInfo" | "createWorkspace" | "splitPane" | "renamePane" | "runPaneCommand" | "reportPaneMetadata">;
+export type OpenCodeTaskScope = TaskScope;
 
-function isInteractiveShell(info: PaneProcessInfo): boolean {
-  const foreground = info.foreground_processes[0];
-  return info.foreground_processes.length === 1 && foreground !== undefined && foreground.pid === info.shell_pid && info.foreground_process_group_id === info.shell_pid && ["zsh", "bash", "sh", "fish", "nu", "pwsh"].includes(basename(foreground.name));
+export function openCodeDisplayAttached(reference: Pick<OpenCodeServerReference, "executable" | "baseUrl" | "directory">, sessionID: string | null, args: readonly string[]): boolean {
+  return args[0] === reference.executable && args[1] === "attach" && args[2] === reference.baseUrl && args[args.indexOf("--session") + 1] === sessionID && args[args.indexOf("--dir") + 1] === reference.directory;
 }
 
-export type OpenCodeTaskScope = {
-  id: string;
-  taskId: string;
-  directory: string;
-  profile: OpenCodeProfile;
-  workflow: WorkflowId;
-  /** The task's evidence directory, the only external directory read-only roles can read. */
-  evidenceRoot: string | null;
-} & ({ role: "root"; identity: RootIdentity } | { role: "worker"; workerMode: "planned" | "direct"; purpose: "implementation" | "verification" } | { role: "advisor"; label: string });
-
-export function scopeLabel(scope: OpenCodeTaskScope): string {
-  return scope.role === "root" ? "Coordinator" : scope.role === "advisor" ? scope.label : "Worker";
-}
-
-export class OpenCodeTaskRuntime {
+export class OpenCodeTaskRuntime implements TaskHarness {
   constructor(private readonly databasePath: string, private readonly herdr: TaskPanePort, private readonly options: { executable?: string; artifactRoot?: string } = {}) {}
 
-  private runtimeDirectory(scope: Pick<OpenCodeTaskScope, "id">): string {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(scope.id)) throw new Error("Invalid task session identity");
-    return join(dirname(this.databasePath), "runtime", "task-sessions", scope.id);
+  private runtimeDirectory(scope: Pick<TaskScope, "id">): string {
+    return taskSessionRuntimeDirectory(this.databasePath, scope.id);
   }
 
   // The controller holds the durable session claim and persists the returned
   // identity before permitting any prompt dispatch.
-  async ensureSession(scope: OpenCodeTaskScope, nativeSessionId: string | null): Promise<string> {
+  async ensureSession(scope: TaskScope, nativeSessionId: string | null): Promise<string> {
     const runtimeDirectory = this.runtimeDirectory(scope);
     const executable = await resolveOpenCodeExecutable(this.options.executable ? { executable: this.options.executable } : {});
-    let bridge: { command: string; args: string[] } | undefined;
-    if (scope.role === "root") {
-      await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
-      const currentFile = fileURLToPath(import.meta.url);
-      const source = currentFile.endsWith(".ts");
-      const bindingPath = join(runtimeDirectory, "root.binding.json");
-      bridge = {
-        command: process.execPath,
-        args: [
-          ...(source ? [join(dirname(currentFile), "..", "node_modules", "tsx", "dist", "cli.mjs")] : []),
-          join(dirname(currentFile), source ? "root-bridge.ts" : "root-bridge.js"), "--binding", bindingPath,
-        ],
-      };
-      await writeFile(bindingPath, JSON.stringify({ version: 1, root: scope.identity, databasePath: this.databasePath, artifactRoot: this.options.artifactRoot ?? join(dirname(this.databasePath), "artifacts"), server: bridge }), { mode: 0o600 });
-      await chmod(bindingPath, 0o600);
-    }
+    const bridge = scope.role === "root" ? await writeRootBridgeBinding({ runtimeDirectory, identity: scope.identity, databasePath: this.databasePath, artifactRoot: this.options.artifactRoot }) : undefined;
     const guard = scope.role === "worker" ? await createGitCommandGuard(runtimeDirectory, "git-guard") : undefined;
     const evidenceDirectory = scope.role !== "worker" && scope.workflow !== "standard" && scope.evidenceRoot ? scope.evidenceRoot : undefined;
     const reference = await ensureOpenCodeServer({
@@ -78,49 +43,24 @@ export class OpenCodeTaskRuntime {
     }
     if (nativeSessionId) return (await client.getSession(nativeSessionId, scope.directory)).id;
     const native = await client.createSession({
-      title: `${scope.taskId} ${scopeLabel(scope)}`, directory: scope.directory,
+      title: taskSessionTitle(scope), directory: scope.directory,
       model: { providerID: scope.profile.providerID, id: scope.profile.modelID, variant: scope.profile.reasoningEffort },
       agent: `forge-${scope.role}`,
     });
     return native.id;
   }
 
-  async attach(input: { scope: OpenCodeTaskScope; nativeSessionId: string; paneId: string | null; rootPaneId?: string | null; persistPane: (paneId: string) => void }): Promise<string> {
-    const { scope } = input;
-    const reference = await readOpenCodeServer(this.runtimeDirectory(scope));
+  async attach(input: { scope: TaskScope; nativeSessionId: string; paneId: string | null; rootPaneId?: string | null; persistPane: (paneId: string) => void }): Promise<string> {
+    const reference = await readOpenCodeServer(this.runtimeDirectory(input.scope));
     if (!reference) throw new Error("OpenCode server reference is missing");
-    let pane = input.paneId ? await this.herdr.getPane(input.paneId) : null;
-    if (pane) {
-      const info = await this.herdr.getPaneProcessInfo(pane.paneId);
-      const attached = info.foreground_processes.some(process => {
-        const args = process.argv;
-        return args?.[0] === reference.executable && args[1] === "attach" && args[2] === reference.baseUrl && args[args.indexOf("--session") + 1] === input.nativeSessionId && args[args.indexOf("--dir") + 1] === reference.directory;
-      });
-      if (attached) return pane.paneId;
-      const owned = pane.tokens?.forge_binding_id === scope.id || !pane.tokens?.forge_binding_id && pane.cwd === scope.directory;
-      if (owned && info.foreground_processes.length === 0) throw new Error("The task display process could not be inspected");
-      if (!owned || !isInteractiveShell(info)) pane = null;
-    }
-    pane ??= input.rootPaneId && await this.herdr.getPane(input.rootPaneId)
-      ? await this.herdr.splitPane({ paneId: input.rootPaneId, direction: "right", cwd: scope.directory, focus: false })
-      : (await this.herdr.createWorkspace({ label: `forge-${scope.taskId}`, cwd: scope.directory, focus: false })).rootPane;
-    input.persistPane(pane.paneId);
-    const title = `${scope.taskId} ${scopeLabel(scope)}`;
-    await this.herdr.renamePane(pane.paneId, title);
-    await this.herdr.reportPaneMetadata({ paneId: pane.paneId, source: "forge", title, tokens: { forge_binding_id: scope.id, forge_task_id: scope.taskId, forge_native_session_id: input.nativeSessionId, forge_server_generation: reference.generation } });
-    const deadline = Date.now() + 2_000;
-    for (;;) {
-      const info = await this.herdr.getPaneProcessInfo(pane.paneId);
-      if (isInteractiveShell(info)) break;
-      if (Date.now() >= deadline) throw new Error("The task display is not at an interactive shell");
-      await delay(100);
-    }
-    const command = await openCodeAttachCommand({ reference, runtimeDirectory: this.runtimeDirectory(scope), sessionID: input.nativeSessionId });
-    await this.herdr.runPaneCommand(pane.paneId, command);
-    return pane.paneId;
+    return attachTaskDisplay(this.herdr, {
+      ...input, generation: reference.generation,
+      isAttached: args => openCodeDisplayAttached(reference, input.nativeSessionId, args),
+      command: await openCodeAttachCommand({ reference, runtimeDirectory: this.runtimeDirectory(input.scope), sessionID: input.nativeSessionId }),
+    });
   }
 
-  async observe(scope: OpenCodeTaskScope, intent: OpenCodePromptIntent, attempt?: PromptDispatchAttempt | null): Promise<OpenCodePromptObservation> {
+  async observe(scope: TaskScope, intent: PromptIntent, attempt?: PromptDispatchAttempt | null): Promise<PromptObservation> {
     const reference = await readOpenCodeServer(this.runtimeDirectory(scope));
     if (!reference) throw new Error("OpenCode server reference is missing");
     const observed = await reconcileOpenCodePrompt(openCodeServerClient(reference), intent);
@@ -130,7 +70,7 @@ export class OpenCodeTaskRuntime {
     return observed;
   }
 
-  async stop(scope: Pick<OpenCodeTaskScope, "id">, nativeSessionId: string | null): Promise<void> {
+  async stop(scope: Pick<TaskScope, "id">, nativeSessionId: string | null): Promise<void> {
     const reference = await readOpenCodeServer(this.runtimeDirectory(scope));
     if (!reference) {
       if (nativeSessionId) throw new Error("OpenCode server reference is missing");
@@ -145,7 +85,7 @@ export class OpenCodeTaskRuntime {
     await stopOpenCodeServer(reference);
   }
 
-  async recoverDispatch(scope: OpenCodeTaskScope, intent: OpenCodePromptIntent, attempt: PromptDispatchAttempt): Promise<OpenCodePromptObservation> {
+  async recoverDispatch(scope: TaskScope, intent: PromptIntent, attempt: PromptDispatchAttempt): Promise<PromptObservation> {
     PromptDispatchAttemptSchema.parse(attempt);
     const filename = join(this.runtimeDirectory(scope), `dispatch-server-${attempt.serverGeneration}.json`);
     const reference = OpenCodeServerReferenceSchema.parse(JSON.parse(await readFile(filename, "utf8")));
@@ -160,7 +100,7 @@ export class OpenCodeTaskRuntime {
     return observed;
   }
 
-  async dispatch(scope: OpenCodeTaskScope, intent: OpenCodePromptIntent, claim: (serverGeneration: string) => Promise<boolean>): Promise<OpenCodePromptObservation> {
+  async dispatch(scope: TaskScope, intent: PromptIntent, claim: (serverGeneration: string) => Promise<boolean>): Promise<PromptObservation> {
     const reference = await readOpenCodeServer(this.runtimeDirectory(scope));
     if (!reference) throw new Error("OpenCode server reference is missing");
     const filename = join(this.runtimeDirectory(scope), `dispatch-server-${reference.generation}.json`);
@@ -168,12 +108,12 @@ export class OpenCodeTaskRuntime {
     await writeFile(pending, JSON.stringify(reference), { mode: 0o600 });
     await rename(pending, filename);
     const client = openCodeServerClient(reference);
-    await replayOpenCodePrompt(client, { ...intent, system: openCodeRolePrompt(scope.role, { workflow: scope.workflow, ...(scope.role === "worker" ? { workerMode: scope.workerMode, purpose: scope.purpose } : {}) }) }, () => claim(reference.generation));
+    await replayOpenCodePrompt(client, { ...intent, system: taskRolePrompt(scope.role, { workflow: scope.workflow, ...(scope.role === "worker" ? { workerMode: scope.workerMode, purpose: scope.purpose } : {}) }) }, () => claim(reference.generation));
     return reconcileOpenCodePrompt(client, { ...intent, dispatch: "ambiguous" });
   }
 
   /** The whole correlated native turn: every tool call after the admitted prompt, not the display API's bounded page. */
-  async turnEvidence(scope: OpenCodeTaskScope, observation: OpenCodePromptObservation): Promise<{ tools: ReturnType<typeof executionFromMessages>["tools"]; limit: string | null }> {
+  async turnEvidence(scope: TaskScope, observation: PromptObservation): Promise<{ tools: ReturnType<typeof executionFromMessages>["tools"]; limit: string | null }> {
     try {
       const reference = await readOpenCodeServer(this.runtimeDirectory(scope));
       if (!reference) throw new Error("OpenCode server reference is missing");
@@ -186,7 +126,7 @@ export class OpenCodeTaskRuntime {
     }
   }
 
-  async resultText(scope: OpenCodeTaskScope, observation: OpenCodePromptObservation): Promise<string> {
+  async resultText(scope: TaskScope, observation: PromptObservation): Promise<string> {
     const reference = await readOpenCodeServer(this.runtimeDirectory(scope));
     if (!reference) throw new Error("OpenCode server reference is missing");
     const messages = await openCodeServerClient(reference).getMessages(observation.sessionID, { directory: scope.directory });

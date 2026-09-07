@@ -7,7 +7,7 @@ import type { ForgeDatabase } from "./database.js";
 import type { HealthCheck } from "./health.js";
 import { checkGithubAuthentication } from "./provider-readiness.js";
 import { checkBackupHealth } from "./backup.js";
-import { resolveOpenCodeExecutable } from "./opencode-executable.js";
+import { resolveOpenCodeExecutable } from "./executable-resolver.js";
 import { CliHerdrClient } from "./herdr-client.js";
 
 async function checkHerdrReadiness(): Promise<HealthCheck> {

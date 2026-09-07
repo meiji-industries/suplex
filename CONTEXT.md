@@ -48,7 +48,8 @@ The Advisor in Pull request repair that rates the current pull request from 1 to
 _Avoid_: Score oracle, automatic approval.
 
 **Native session**
-The OpenCode conversation that owns admitted messages, tool calls, and results.
+The OpenCode or Claude Code conversation that owns admitted messages, tool
+calls, and results. Forge selects the harness from the agent profile provider.
 _Avoid_: Herdr session, completion receipt file.
 
 **Turn**
@@ -77,13 +78,15 @@ current external state before deciding whether a mutation is necessary.
 _Avoid_: Integrator turn, mirrored release.
 
 **Agent profile**
-A named OpenCode provider, model, reasoning level, and service tier selection.
-Projects choose Coordinator and Worker defaults. Tasks capture the chosen settings.
+A named provider, model, reasoning level, and service tier selection. The
+provider is an OpenCode provider or `claude-code`, which runs the Claude Code
+CLI. Projects choose Coordinator and Worker defaults. Tasks capture the chosen
+settings.
 _Avoid_: CLI provider, separate Forge model catalog.
 
 **Configured provider**
-A provider reported as connected by OpenCode. This does not prove that a model
-request succeeds.
+A provider reported as connected by OpenCode, or Claude Code when its CLI is
+installed. This does not prove that a model request succeeds.
 _Avoid_: Verified inference, inherited Codex authentication.
 
 **Human question**

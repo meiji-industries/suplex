@@ -1,10 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { z } from "zod";
 import type { ForgeConfig } from "../config.js";
 import type { ForgeDatabase } from "../database.js";
 import { TaskControlStore } from "../root-session-store.js";
-import { readOpenCodeServer, openCodeServerClient } from "../opencode-server.js";
+import { nativeSessionReader } from "../task-harness-registry.js";
 
 export async function inspectTask(config: ForgeConfig, database: ForgeDatabase, taskId: string, includeAllHistory = false) {
   const store = new TaskControlStore(database);
@@ -12,14 +12,9 @@ export async function inspectTask(config: ForgeConfig, database: ForgeDatabase, 
   const metadata = database.authQuery(db => z.object({ title: z.string() }).parse(db.prepare("SELECT title FROM forge_tasks WHERE id = ?").get(taskId)));
   const sessions = await Promise.all(store.sessions(taskId).map(async session => {
     try {
-      const reference = await readOpenCodeServer(join(dirname(config.databasePath), "runtime", "task-sessions", session.id));
-      if (!reference || !session.nativeSessionId) return { session, native: null };
-      const client = openCodeServerClient(reference);
-      const [native, status] = await Promise.all([
-        client.getSession(session.nativeSessionId, reference.directory),
-        client.getStatus(reference.directory),
-      ]);
-      return { session, native: { id: native.id, status: status[native.id]?.type ?? "idle" } };
+      if (!session.nativeSessionId) return { session, native: null };
+      const observed = await nativeSessionReader(config.databasePath, session).status(session);
+      return { session, native: { id: session.nativeSessionId, status: observed.status } };
     } catch (error) {
       return { session, native: null, error: error instanceof Error ? error.message : "Native session is not available" };
     }

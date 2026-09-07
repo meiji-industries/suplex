@@ -255,7 +255,7 @@ test("cancellation fences dispatch before native abort and retries abort after r
   await value.controller.recover("task");
   const root = value.store.currentSession("task", "root")!;
   value.harness.failStop = true;
-  await expect(value.controller.cancel("task")).rejects.toThrow("Some OpenCode sessions could not be stopped");
+  await expect(value.controller.cancel("task")).rejects.toThrow("Some agent sessions could not be stopped");
   expect(value.store.get("task").status).toBe("cancelled");
   expect(value.store.currentSession("task", "root")).toBeNull();
   value.harness.failStop = false;
@@ -273,7 +273,7 @@ test("native Coordinator errors ask for a specific intervention instead of consu
   await value.controller.recover("task");
   await value.controller.recover("task");
   expect(value.store.get("task").status).toBe("waiting_human");
-  expect(value.store.get("task").humanQuestion).toContain("OpenCode");
+  expect(value.store.get("task").humanQuestion).toContain("The agent stopped");
   expect(value.harness.dispatched).toHaveLength(1);
 });
 

@@ -11,7 +11,7 @@ import { AuditEventListResponseSchema, CredentialIdParamsSchema, CredentialListR
 import { DisplayNameBodySchema } from "../contracts/auth.js";
 import { ProfileBodySchema, ProfilePatchBodySchema, ProfileResponseSchema, ProfileListQuerySchema, ProfileListResponseSchema, ModelListResponseSchema } from "../contracts/projects.js";
 import { ProviderListResponseSchema, type ProviderListResponse } from "../contracts/providers.js";
-import { readOpenCodeProviders, type ReadOpenCodeProviders } from "../../opencode-providers.js";
+import { readProviders as readHostProviders, type ReadProviders } from "../../provider-catalog.js";
 import { MAX_MIN_FREE_DISK_GB, readEnvironmentSettings, updateEnvironmentSettings } from "../../environment-settings.js";
 
 const EnvironmentSettingsSchema = z.object({ minFreeDiskGb: z.number() });
@@ -23,7 +23,7 @@ export interface AdministrationRoutesOptions {
   profiles?: AgentProfileService;
   database?: ForgeDatabase;
   config?: ForgeConfig;
-  readProviders?: ReadOpenCodeProviders;
+  readProviders?: ReadProviders;
 }
 
 const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (app, options) => {
@@ -47,7 +47,7 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     auth.recordAuditEvent(request.forgeUser.id, "environment_settings_updated", undefined, undefined, { previousMinFreeDiskGb: String(previous.minFreeDiskGb), minFreeDiskGb: String(updated.minFreeDiskGb) });
     return reply.header("Cache-Control", "private, no-store").send(updated);
   });
-  const readProviders = options.readProviders ?? (() => readOpenCodeProviders({ directory: process.cwd() }));
+  const readProviders = options.readProviders ?? (() => readHostProviders({ directory: process.cwd() }));
   let providerObservation: Promise<ProviderListResponse> | undefined;
   typed.get("/api/admin/providers", { schema: { response: { 200: ProviderListResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
     if (!requireAdmin(request.forgeUser.role, reply)) return;
@@ -56,8 +56,8 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
       providerObservation ??= readProviders().finally(() => { providerObservation = undefined; });
       return reply.send(await providerObservation);
     } catch (error) {
-      request.log.warn({ err: error }, "OpenCode provider observation failed");
-      return reply.code(503).send({ error: "OpenCode provider configuration is not available. Check OpenCode on the Forge host." });
+      request.log.warn({ err: error }, "Provider observation failed");
+      return reply.code(503).send({ error: "Provider configuration is not available. Check OpenCode or Claude Code on the Forge host." });
     }
   });
   typed.post("/api/admin/invitations", { schema: { body: DisplayNameBodySchema, response: { 201: InvitationResponseSchema } } }, async (request, reply) => reply.code(201).send(auth.inviteUser(request.forgeUser.id, { displayName: request.body.displayName })));

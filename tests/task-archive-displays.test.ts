@@ -15,7 +15,7 @@ function fixture(shared = false) {
     closePane: vi.fn(async (id: string) => { panes.delete(id); }),
     closeWorkspace: vi.fn(async () => { panes.clear(); workspace = null; }),
   };
-  return { herdr, panes, sessions: [{ id: "session", taskId: "task", paneId: "w1:p1", nativeSessionId: null, server: null }] };
+  return { herdr, panes, sessions: [{ id: "session", taskId: "task", paneId: "w1:p1", nativeSessionId: null, display: null }] };
 }
 
 test("archive closes a task-only workspace, including historical display attachments", async () => {

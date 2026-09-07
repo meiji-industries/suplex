@@ -169,7 +169,7 @@ export function AdminView(): ReactElement {
         readJson<{ agents: ApiHermesAgent[] }>(`/api/admin/hermes-agents${currentCompany ? `?companyId=${encodeURIComponent(currentCompany.id)}` : ""}`).catch(() => ({ agents: [] })),
         currentCompany ? readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(currentCompany.id)}/projects`).catch(() => ({ projects: [] })) : Promise.resolve({ projects: [] }),
         readJson<{ models: ApiModel[] }>("/api/admin/models").catch(() => {
-          setError("Forge cannot read the OpenCode model configuration. Check OpenCode on the Forge host.");
+          setError("Forge cannot read the model configuration. Check OpenCode or Claude Code on the Forge host.");
           return { models: [] };
         }),
       ]);
@@ -869,16 +869,16 @@ export function AdminView(): ReactElement {
 
         {isModels ? <section>
           <SettingsToolbar searchLabel="Search models" searchPlaceholder="Search models" filterLabel="OpenCode" actions={<Button size="sm" variant="outline" onClick={() => void reload()}>Check configuration</Button>} />
-          <p>OpenCode supplies these models. Configure providers in OpenCode on the Forge host.</p>
+          <p>OpenCode and Claude Code supply these models. Configure providers on the Forge host.</p>
           <SettingsDataTable label="Models" columns={MODEL_COLUMNS}>
-            <SettingsTableGroup columnCount={MODEL_COLUMNS.length} count={models.length} label="OpenCode models">
+            <SettingsTableGroup columnCount={MODEL_COLUMNS.length} count={models.length} label="Available models">
               {models.map((model) => <SettingsTableRow key={model.provider + "/" + model.id}>
                 <SettingsTableCell>{model.id}</SettingsTableCell>
                 <SettingsTableCell>{model.providerLabel}</SettingsTableCell>
                 <SettingsTableCell>{model.displayName}</SettingsTableCell>
               </SettingsTableRow>)}
             </SettingsTableGroup>
-            {models.length === 0 ? <SettingsTableEmpty columnCount={MODEL_COLUMNS.length}>OpenCode models are not available. Check provider configuration.</SettingsTableEmpty> : null}
+            {models.length === 0 ? <SettingsTableEmpty columnCount={MODEL_COLUMNS.length}>Models are not available. Check provider configuration.</SettingsTableEmpty> : null}
           </SettingsDataTable>
         </section> : null}
 

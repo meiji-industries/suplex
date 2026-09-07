@@ -32,7 +32,7 @@ check_command() {
     esac
   done
   case "$command" in
-    push|rebase|clean|reset|checkout|switch|worktree|update-ref|filter-repo|gc|prune) echo "Forge Worker policy blocked git $command" >&2; return 125 ;;
+    push|clean|reset|checkout|switch|worktree|update-ref|filter-repo|gc|prune) echo "Forge Worker policy blocked git $command" >&2; return 125 ;;
   esac
   for arg in "$@"; do
     [ "$arg" != -- ] || break

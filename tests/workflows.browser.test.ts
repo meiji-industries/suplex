@@ -36,7 +36,7 @@ test.each([1440, 390])("Workflows page lists five workflows, expands one, prefil
     await page.getByRole("link", { name: "Workflows", exact: true }).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/admin/workflows");
     await page.getByRole("table", { name: "Workflows" }).waitFor();
-    expect(await page.locator("[data-workflow-row]").count()).toBe(5);
+    await expect.poll(() => page.locator('[data-workflow-row]').count()).toBe(5);
     expect(await page.locator("[data-workflow-row]").allTextContents()).toEqual([expect.stringContaining("Combined planning"), expect.stringContaining("Direct build"), expect.stringContaining("Pull request repair"), expect.stringContaining("Second opinion"), expect.stringContaining("Standard")]);
     expect(await page.locator('[data-workflow-row="workflow_native_refine_pull_request"]').innerText()).toContain("Merged pull request");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

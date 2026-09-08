@@ -20,6 +20,7 @@ import { LivePaneDock } from "../components/app/task-chat/live-pane-dock.js";
 import { useTaskCosts } from "../lib/analytics.js";
 import { CostValue } from "../components/app/cost-value.js";
 import { WorkflowHistory, WorkflowStatus } from "../components/app/workflow-history.js";
+import { TaskWorktreeMenu } from "../components/app/task-worktree-menu.js";
 import { ADVISOR_LABELS, workflowDefinition, type AdvisorRole } from "../../workflows.js";
 
 export function TaskDetailsPage({ task, project, onChange }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void }): ReactElement {
@@ -52,15 +53,10 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
     catch (error) { setError(error instanceof Error ? error.message : "The action failed"); }
     finally { setBusy(false); }
   };
-  const openWorktree = async (app: "editor" | "terminal") => {
-    try { const result = await readJson<{ ok: boolean; error?: string }>(`/api/tasks/${task.id}/worktree/open`, { method: "POST", body: JSON.stringify({ app }) }); if (!result.ok) setError(result.error ?? "The worktree could not be opened"); }
-    catch (error) { setError(String(error)); }
-  };
-
   return <article data-task-detail className="flex h-[calc(100dvh-var(--header-height))] min-h-0 min-w-0 flex-none flex-col overflow-hidden md:h-[calc(100dvh-var(--header-height)-1rem)]">
     <div data-task-body className="grid min-h-0 min-w-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_260px]">
       <div data-task-main className="flex min-w-0 flex-col">
-        <header className="px-4 pb-3 pt-4 sm:px-6 lg:px-10"><div className="mx-auto max-w-4xl"><h2 className="text-xl font-semibold leading-8" aria-label={task.title}>{editable ? <button className="text-left hover:text-muted-foreground focus-visible:outline" type="button" aria-label="Edit task title" onClick={() => setEdit({ title: task.title, description: task.description })}>{task.title}</button> : task.title}</h2></div></header>
+        <header className="px-4 pb-3 pt-4 sm:px-6 lg:px-10"><div className="mx-auto flex max-w-4xl min-w-0 items-start justify-between gap-3"><h2 className="min-w-0 flex-1 text-xl font-semibold leading-8" aria-label={task.title}>{editable ? <button className="text-left hover:text-muted-foreground focus-visible:outline" type="button" aria-label="Edit task title" onClick={() => setEdit({ title: task.title, description: task.description })}>{task.title}</button> : task.title}</h2>{task.worktree ? <TaskWorktreeMenu taskId={task.id} path={task.worktree.path} onError={setError} /> : null}</div></header>
         <div data-task-content className="min-w-0 px-4 pb-6 pt-4 sm:px-6 lg:px-10"><div data-task-content-inner className="mx-auto max-w-4xl space-y-7">
           {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
           {edit ? <form className="grid gap-2" aria-label="Task details" onSubmit={event => { event.preventDefault(); void saveDetails(); }}><Input aria-label="Task title" value={edit.title} onChange={event => setEdit({ ...edit, title: event.target.value })} required /><Textarea aria-label="Task description" value={edit.description} onChange={event => setEdit({ ...edit, description: event.target.value })} required /><div className="flex gap-2"><Button type="submit" size="sm" disabled={busy}>Save task</Button><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setEdit(null)}>Cancel</Button></div></form> : <div className="space-y-2"><Markdown source={task.description} />{editable ? <Button size="xs" variant="ghost" onClick={() => setEdit({ title: task.title, description: task.description })}>Edit task description</Button> : null}</div>}
@@ -83,7 +79,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
           {([["root", "Coordinator", task.rootProfile], ["worker", "Worker", task.workerProfile], ...workflowDefinition(task.workflow).advisorRoles.map(role => [role, ADVISOR_LABELS[role], task.advisorProfiles[role as AdvisorRole] ?? task.rootProfile] as const)] as const).map(([role, label, profile]) => <div key={role} className="space-y-1.5"><dt className="text-muted-foreground">{label}</dt><dd className="flex items-center gap-2"><EntityAvatar kind="agent" id={profile.profileId} name={label} size="xs" /><span className="min-w-0"><span className="block truncate" title={`${profile.provider}/${profile.model}`}>{profile.model}</span><span className="block text-[11px] text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></dd></div>)}
           <div className="space-y-1.5"><dt className="text-muted-foreground">Delivery</dt><dd>{taskDeliveryTargetOptions.find(option => option.value === task.deliveryTarget)?.label}</dd></div>
           <div className="space-y-1.5"><dt className="text-muted-foreground">Branch</dt><dd className="flex min-w-0 items-center gap-1.5"><GitBranch className="size-3.5 shrink-0" /><code className="truncate" title={task.configuration.branch}>{task.configuration.branch}</code></dd><dd className="text-muted-foreground">Base · {task.configuration.baseBranch}</dd></div>
-          {task.worktree ? <div className="space-y-1.5"><dt className="text-muted-foreground">Worktree</dt><dd className="truncate font-mono text-[11px]" title={task.worktree.path}>{task.worktree.path.split("/").pop()}</dd><dd className="flex flex-wrap gap-1"><Button size="xs" variant="outline" onClick={() => void openWorktree("editor")}>Open editor</Button><Button size="xs" variant="outline" onClick={() => void openWorktree("terminal")}>Open terminal</Button></dd></div> : null}
+          {task.worktree ? <div className="space-y-1.5"><dt className="text-muted-foreground">Worktree</dt><dd className="truncate font-mono text-[11px]" title={task.worktree.path}>{task.worktree.path.split("/").pop()}</dd></div> : null}
           <div className="space-y-1.5"><dt className="text-muted-foreground">Run project tests</dt><dd>{task.configuration.runProjectTests ? "Enabled" : "Off"}</dd></div>
           <div className="space-y-1.5"><dt className="text-muted-foreground">Browser evidence</dt><dd>{task.configuration.visualEvidence === "off" ? "Off" : task.configuration.visualEvidence === "capture" ? "Capture" : "Necessary"}</dd></div>
           <div className="space-y-1.5"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>

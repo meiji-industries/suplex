@@ -32,3 +32,5 @@ export const TaskChecksResponseSchema = z.object({
   pullRequestState: z.enum(["draft", "ready", "closed", "merged"]).nullable().optional(),
   runs: z.array(z.object({ name: z.string(), status: z.enum(["pending", "failing", "successful"]), url: z.string().nullable(), conclusion: z.string().optional() })),
 });
+export const WorktreeAppSchema = z.enum(["finder", "cursor", "vscode", "ghostty", "terminal"]);
+export const WorktreeAppsResponseSchema = z.object({ apps: z.array(z.object({ id: WorktreeAppSchema, label: z.string() })) });

@@ -100,7 +100,18 @@ recovery use `pnpm run forge recover`.
 Configure companies, projects, and native profiles in the web application.
 Project creation copies a GitHub repository into the configured repository root.
 `FORGE_REPOSITORY_ROOT` and `FORGE_WORKTREE_ROOT` override the default paths.
-`FORGE_EDITOR_COMMAND` selects the editor opened from a task.
+Task Details shows an **Open in** menu when the task has a worktree; it can copy
+the worktree path. Forge
+lists local launchers only for a direct loopback request with the configured Host.
+Forwarding does not automatically make Forge copy-only: it is an unsupported
+locality assumption because the browser and Forge can have different filesystems.
+Forge uses no desktop bridge for these actions. On macOS, Forge discovers Finder,
+Terminal, and editor app bundles in system, standard, and user application directories.
+Xcode, iTerm, Devin, and Antigravity have no verified local directory-opening mechanism,
+so Forge does not list them. On Linux, Forge lists executable PATH entries only; Terminal
+uses `x-terminal-emulator`.
+Set `FORGE_EDITOR_COMMAND` to an executable editor command when the default
+`code` command is not suitable. Forge passes the worktree path as its argument.
 
 The tailnet is the login boundary. A request from the loopback host, a request
 that Tailscale Serve stamped with a `Tailscale-User-Login` identity, or, in

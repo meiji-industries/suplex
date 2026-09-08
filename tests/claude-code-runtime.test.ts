@@ -25,7 +25,7 @@ async function fixture(behaviour: "complete" | "hang" | "crash" | "startup_failu
   const line = (value: unknown) => `echo '${JSON.stringify(value)}'`;
   const script = {
     complete: [line({ type: "system", subtype: "init", session_id: sessionID, cwd: worktree, model: "claude-haiku-4-5-20251001", tools: [] }), line({ type: "assistant", uuid: "a1", session_id: sessionID, message: { role: "assistant", model: "claude-haiku-4-5-20251001", id: "msg_1", content: [{ type: "text", text: "Reviewed." }] } }), line({ type: "result", subtype: "success", is_error: false, result: "Reviewed the change.", session_id: sessionID, uuid: "r1" })],
-    hang: [line({ type: "system", subtype: "init", session_id: sessionID, cwd: worktree, model: "m", tools: [] }), line({ type: "assistant", uuid: "a1", session_id: sessionID, message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "sleep" } }] } }), "sleep 30"],
+    hang: [line({ type: "system", subtype: "init", session_id: sessionID, cwd: worktree, model: "m", tools: [] }), line({ type: "assistant", uuid: "a1", session_id: sessionID, message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "sleep" } }] } }), "exec sleep 30"],
     crash: [line({ type: "system", subtype: "init", session_id: sessionID, cwd: worktree, model: "m", tools: [] }), "exit 1"],
     startup_failure: ["echo 'Error: Not logged in' >&2", "exit 1"],
   }[behaviour];

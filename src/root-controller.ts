@@ -378,6 +378,7 @@ export class RootController implements RootBridgeAdapter {
       }
       for (const turn of this.store.pendingTurns(session.id)) {
         if (this.store.get(control.taskId).status !== "active") break;
+        if (turn.status === "pending_prompt" && this.store.enforceLimits(control.taskId)) break;
         const intent = createOpenCodePromptIntent({ sessionID: nativeSessionId, messageID: turn.id, directory: taskScope.directory, prompt: turn.promptText, model: { providerID: taskScope.profile.providerID, modelID: taskScope.profile.modelID }, agent: `forge-${taskScope.role}`, variant: taskScope.profile.reasoningEffort, dispatch: turn.status === "pending_prompt" ? "not_submitted" : "ambiguous" });
         let observed = await this.harness.observe(taskScope, intent, turn.dispatchAttempt);
         let replayable = turn.status === "pending_prompt";

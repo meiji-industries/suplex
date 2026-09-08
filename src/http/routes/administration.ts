@@ -14,8 +14,8 @@ import { ProviderListResponseSchema, type ProviderListResponse } from "../contra
 import { readProviders as readHostProviders, type ReadProviders } from "../../provider-catalog.js";
 import { MAX_MIN_FREE_DISK_GB, readEnvironmentSettings, updateEnvironmentSettings } from "../../environment-settings.js";
 
-const EnvironmentSettingsSchema = z.object({ minFreeDiskGb: z.number() });
-const EnvironmentSettingsBodySchema = z.object({ minFreeDiskGb: z.number().finite().min(0).max(MAX_MIN_FREE_DISK_GB) });
+const EnvironmentSettingsSchema = z.object({ minFreeDiskGb: z.number(), defaultBudgetUsd: z.number(), defaultMaxTurns: z.number().int() });
+const EnvironmentSettingsBodySchema = z.object({ minFreeDiskGb: z.number().finite().min(0).max(MAX_MIN_FREE_DISK_GB).optional(), defaultBudgetUsd: z.number().finite().min(0).optional(), defaultMaxTurns: z.number().int().min(0).optional() }).refine((body) => Object.keys(body).length > 0);
 
 export interface AdministrationRoutesOptions {
   auth: AuthService;
@@ -43,8 +43,8 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     if (!requireAdmin(request.forgeUser.role, reply)) return;
     if (!database) throw new Error("Database is unavailable");
     const previous = readEnvironmentSettings(database);
-    const updated = updateEnvironmentSettings(database, request.body);
-    auth.recordAuditEvent(request.forgeUser.id, "environment_settings_updated", undefined, undefined, { previousMinFreeDiskGb: String(previous.minFreeDiskGb), minFreeDiskGb: String(updated.minFreeDiskGb) });
+    const updated = updateEnvironmentSettings(database, { minFreeDiskGb: request.body.minFreeDiskGb ?? previous.minFreeDiskGb, defaultBudgetUsd: request.body.defaultBudgetUsd ?? previous.defaultBudgetUsd, defaultMaxTurns: request.body.defaultMaxTurns ?? previous.defaultMaxTurns });
+    auth.recordAuditEvent(request.forgeUser.id, "environment_settings_updated", undefined, undefined, { previousMinFreeDiskGb: String(previous.minFreeDiskGb), minFreeDiskGb: String(updated.minFreeDiskGb), previousDefaultBudgetUsd: String(previous.defaultBudgetUsd), defaultBudgetUsd: String(updated.defaultBudgetUsd), previousDefaultMaxTurns: String(previous.defaultMaxTurns), defaultMaxTurns: String(updated.defaultMaxTurns) });
     return reply.header("Cache-Control", "private, no-store").send(updated);
   });
   const readProviders = options.readProviders ?? (() => readHostProviders({ directory: process.cwd() }));

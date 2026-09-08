@@ -4,6 +4,7 @@ import { HumanQuestionOptionsSchema, type HumanQuestionOptions } from "./human-q
 import { inspectProcessOnce } from "./process-manager.js";
 import { TaskAnalyticsStore } from "./task-analytics-store.js";
 import { StructuredLogger } from "./logging.js";
+import { DEFAULT_TASK_BUDGET_USD, DEFAULT_TASK_MAX_TURNS, readEnvironmentSettings } from "./environment-settings.js";
 
 import type Database from "better-sqlite3";
 import type { ForgeDatabase } from "./database.js";
@@ -64,6 +65,36 @@ export class TaskControlStore {
   readTriggerDeliveryPolicy(taskId: string): GithubTriggerDeliveryPolicy | null { return this.database.authQuery(db => triggerDeliveryPolicy(db, taskId)); }
   authorizedTriggerHead(taskId: string): string | null { return this.database.authQuery(db => authorizedTriggerHead(db, taskId)); }
   recordTriggerPush(input: { taskId: string; dispatchId: string; fromHeadSha: string; toHeadSha: string; review: unknown }): void { this.database.authImmediateTransaction(db => recordTriggerPush(db, input)); }
+  taskSpend(taskId: string): { costUsd: number; turns: number } {
+    return this.database.authQuery((db) => ({
+      costUsd: (db.prepare("SELECT COALESCE(SUM(json_extract(snapshot, '$.cost')), 0) AS cost FROM forge_task_usage WHERE task_id = ?").get(taskId) as { cost: number }).cost,
+      turns: (db.prepare("SELECT COUNT(*) AS turns FROM forge_task_turns WHERE task_id = ? AND status <> 'cancelled'").get(taskId) as { turns: number }).turns,
+    }));
+  }
+  taskLimits(taskId: string): { budgetUsd: number; maxTurns: number } {
+    const row = this.database.authQuery((db) => db.prepare("SELECT budget_usd AS budgetUsd, max_turns AS maxTurns FROM forge_task_controls WHERE task_id = ?").get(taskId) as { budgetUsd: number | null; maxTurns: number | null } | undefined);
+    if (!row) throw new Error(`Task ${taskId} does not exist`);
+    const defaults = readEnvironmentSettings(this.database);
+    return { budgetUsd: row.budgetUsd ?? defaults.defaultBudgetUsd, maxTurns: row.maxTurns ?? defaults.defaultMaxTurns };
+  }
+  enforceLimits(taskId: string): boolean {
+    return this.database.authTransaction((db) => {
+      const control = db.prepare("SELECT status, budget_usd AS budgetUsd, max_turns AS maxTurns FROM forge_task_controls WHERE task_id = ?").get(taskId) as { status: string; budgetUsd: number | null; maxTurns: number | null } | undefined;
+      if (!control || control.status !== "active") return false;
+      const defaults = db.prepare("SELECT default_budget_usd AS defaultBudgetUsd, default_max_turns AS defaultMaxTurns FROM forge_environment_settings WHERE id = 'host'").get() as { defaultBudgetUsd: number; defaultMaxTurns: number } | undefined;
+      const budgetUsd = control.budgetUsd ?? defaults?.defaultBudgetUsd ?? DEFAULT_TASK_BUDGET_USD;
+      const maxTurns = control.maxTurns ?? defaults?.defaultMaxTurns ?? DEFAULT_TASK_MAX_TURNS;
+      const costUsd = (db.prepare("SELECT COALESCE(SUM(json_extract(snapshot, '$.cost')), 0) AS cost FROM forge_task_usage WHERE task_id = ?").get(taskId) as { cost: number }).cost;
+      const turns = (db.prepare("SELECT COUNT(*) AS turns FROM forge_task_turns WHERE task_id = ? AND status <> 'cancelled'").get(taskId) as { turns: number }).turns;
+      const hitBudget = budgetUsd > 0 && costUsd >= budgetUsd;
+      const hitTurns = maxTurns > 0 && turns >= maxTurns;
+      if (!hitBudget && !hitTurns) return false;
+      db.prepare("UPDATE forge_task_controls SET budget_usd = ?, max_turns = ?, updated_at = ? WHERE task_id = ?").run(costUsd + (defaults?.defaultBudgetUsd ?? DEFAULT_TASK_BUDGET_USD), turns + (defaults?.defaultMaxTurns ?? DEFAULT_TASK_MAX_TURNS), now(), taskId);
+      const reached = hitBudget ? "spend budget" : "turn limit";
+      this.askHuman(taskId, `This task reached its ${reached}. Spend is $${costUsd.toFixed(2)} of the $${budgetUsd.toFixed(2)} budget. Turns are ${turns} of ${maxTurns}. Forge raised the limits by one allowance. How do you want to continue?`, [{ label: "Continue", description: "Resume the task with the raised limits.", recommended: true }, { label: "Change approach", description: "Tell the Coordinator what to change before it continues.", recommended: false }]);
+      return true;
+    });
+  }
   create(input: { taskId: string; startImmediately: boolean; objective: string; deliveryTarget: string; deliveryIntent: DeliveryIntent; rootProfile: TaskProfile; workerProfile: TaskProfile; worktree?: WorktreeReference; workflow?: WorkflowId; advisorProfiles?: Partial<Record<AdvisorRole, TaskProfile>> }): TaskControl {
     const time = now();
     const advisorProfiles = Object.fromEntries(Object.entries(input.advisorProfiles ?? {}).map(([role, profile]) => [AdvisorRoleSchema.parse(role), TaskProfileSchema.parse(profile)]));

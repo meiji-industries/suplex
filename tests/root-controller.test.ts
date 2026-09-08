@@ -6,6 +6,8 @@ import { afterEach, expect, test } from "vitest";
 import { ForgeDatabase } from "../src/database.js";
 import { RootController } from "../src/root-controller.js";
 import { TaskControlStore, type ProcessOwnerObservation } from "../src/root-session-store.js";
+import { updateEnvironmentSettings } from "../src/environment-settings.js";
+import { TaskUsageSchema } from "../src/task-usage.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { createTestDatabase } from "./helpers/test-database.js";
 
@@ -18,6 +20,36 @@ test("Coordinator owns planning and review while Workers receive implementation 
   expect(value.store.pendingTurns(root.id)[0]?.promptText).toContain("state your implementation plan and acceptance criteria before delegating");
   const worker = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Implement the specified change" });
   expect(value.store.pendingTurns(worker.id)[0]?.promptText).toContain("Do not take over task planning or final review");
+});
+
+test("a spend budget pauses before dispatch and the raised allowance resumes after an answer", async () => {
+  const value = await fixture();
+  const root = value.controller.prepareRoot("task");
+  const usage = TaskUsageSchema.parse({ sessionId: root.id, messageId: "usage-message", turnId: "usage-turn", role: "root", provider: "openai", model: "gpt-5.6-luna", startedAt: 1, completedAt: 2, failed: false, summary: false, steps: 1, cost: 20, subsidized: false, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, source: "message" });
+  value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_usage (task_id, session_id, message_id, snapshot, observed_at) VALUES (?, ?, ?, ?, ?)").run("task", usage.sessionId, usage.messageId, JSON.stringify(usage), new Date().toISOString()));
+
+  await value.controller.recover("task");
+  expect(value.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestion: expect.stringContaining("budget") });
+  expect(value.harness.dispatched).toEqual([]);
+  expect(value.store.taskLimits("task")).toEqual({ budgetUsd: 35, maxTurns: 41 });
+
+  value.store.answerHuman("task", value.store.get("task").humanQuestionId!, "Continue");
+  await value.controller.recover("task");
+  expect(value.harness.dispatched.length).toBeGreaterThan(0);
+});
+
+test("a turn cap pauses before dispatch and zero limits disable enforcement", async () => {
+  const capped = await fixture();
+  updateEnvironmentSettings(capped.database, { minFreeDiskGb: 5, defaultBudgetUsd: 15, defaultMaxTurns: 1 });
+  await capped.controller.recover("task");
+  expect(capped.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestion: expect.stringContaining("turn") });
+  expect(capped.harness.dispatched).toEqual([]);
+
+  const unlimited = await fixture();
+  updateEnvironmentSettings(unlimited.database, { minFreeDiskGb: 5, defaultBudgetUsd: 0, defaultMaxTurns: 0 });
+  await unlimited.controller.recover("task");
+  expect(unlimited.store.get("task").status).toBe("active");
+  expect(unlimited.harness.dispatched).toHaveLength(1);
 });
 
 test("Coordinator handoff preserves its plan and review criteria in the Worker prompt", async () => {

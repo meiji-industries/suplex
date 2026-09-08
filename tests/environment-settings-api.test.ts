@@ -19,7 +19,7 @@ function cookie(headers: OutgoingHttpHeaders, name: string): string {
   return (all.find((value) => value.split("=", 1)[0] === name) ?? "").split(";", 1)[0]!.split("=", 2)[1] ?? "";
 }
 
-test("environment settings default to 5 GB and persist an administrator update", async () => {
+test("environment settings default and persist partial administrator updates", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-environment-api-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111" });
@@ -31,9 +31,10 @@ test("environment settings default to 5 GB and persist an administrator update",
     const enrolled = await app.inject({ method: "POST", url: "/api/auth/bootstrap/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: "environment-admin", type: "public-key" } } });
     const session = cookie(enrolled.headers, SESSION_COOKIE_NAME); const csrf = cookie(enrolled.headers, CSRF_COOKIE_NAME);
     const headers = { cookie: `${SESSION_COOKIE_NAME}=${session}; ${CSRF_COOKIE_NAME}=${csrf}`, origin: config.reachableAddress, "x-csrf-v1": csrf };
-    expect((await app.inject({ method: "GET", url: "/api/admin/environment", headers })).json()).toEqual({ minFreeDiskGb: 5 });
-    expect((await app.inject({ method: "PATCH", url: "/api/admin/environment", headers, payload: { minFreeDiskGb: 7.5 } })).json()).toEqual({ minFreeDiskGb: 7.5 });
-    expect((await app.inject({ method: "GET", url: "/api/admin/environment", headers })).json()).toEqual({ minFreeDiskGb: 7.5 });
-    expect((await app.inject({ method: "PATCH", url: "/api/admin/environment", headers, payload: { minFreeDiskGb: -1 } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/admin/environment", headers })).json()).toEqual({ minFreeDiskGb: 5, defaultBudgetUsd: 15, defaultMaxTurns: 40 });
+    expect((await app.inject({ method: "PATCH", url: "/api/admin/environment", headers, payload: { minFreeDiskGb: 7.5 } })).json()).toEqual({ minFreeDiskGb: 7.5, defaultBudgetUsd: 15, defaultMaxTurns: 40 });
+    expect((await app.inject({ method: "PATCH", url: "/api/admin/environment", headers, payload: { defaultBudgetUsd: 20, defaultMaxTurns: 30 } })).json()).toEqual({ minFreeDiskGb: 7.5, defaultBudgetUsd: 20, defaultMaxTurns: 30 });
+    expect((await app.inject({ method: "GET", url: "/api/admin/environment", headers })).json()).toEqual({ minFreeDiskGb: 7.5, defaultBudgetUsd: 20, defaultMaxTurns: 30 });
+    expect((await app.inject({ method: "PATCH", url: "/api/admin/environment", headers, payload: { defaultBudgetUsd: -1 } })).statusCode).toBe(400);
   } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }
 });

@@ -11,6 +11,7 @@ export const VisualEvidenceSchema = z.enum(["off", "capture", "required"]);
 export type DeliveryTarget = z.infer<typeof DeliveryTargetSchema>;
 export type VisualEvidence = z.infer<typeof VisualEvidenceSchema>;
 export const TaskSourceInputSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("issue"), number: z.number().int().positive() }).strict(),
   z.object({ kind: z.literal("branch"), branch: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("pull_request"), number: z.number().int().positive() }).strict(),
 ]);

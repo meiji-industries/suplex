@@ -73,3 +73,17 @@ test("source capture reads the current remote branch head", async () => {
   git(value.repo, "push", "origin", "--delete", "feature");
   await expect(service.resolve(project(value.repo), { kind: "branch", branch: "feature" })).rejects.toMatchObject({ code: "source-provider-unavailable" });
 });
+
+test("issues resolve from GitHub without a discovery receipt and retain full context", async () => {
+  const issue = { number: 42, url: "https://github.com/acme/forge/issues/42", title: "Fix search", body: "Original details", author: { login: "octo" }, state: "OPEN" as const, labels: [{ name: "bug" }], assignees: [{ login: "dev" }], milestone: { title: "Launch" }, updatedAt: "2026-09-07", comments: [{ html_url: "https://github.com/acme/forge/issues/42#issuecomment-1", body: "Use the new index", user: { login: "reviewer" }, created_at: "2026-09-07" }] };
+  const service = new TaskSourceService({ ...github(), async listOpenIssues() { return [issue]; }, async getIssue() { return { ...issue, body: "Updated details" }; } });
+  expect(TaskBodySchema.parse({ projectId: "p", title: "Task", description: "Do it", idempotencyKey: "issue-source-001", source: { kind: "issue", number: 42 } }).source).toEqual({ kind: "issue", number: 42 });
+  const resolved = await service.resolve(project(), { kind: "issue", number: 42 });
+  expect(resolved.kind).toBe("issue");
+  if (resolved.kind !== "issue") throw new Error("Expected issue");
+  for (const text of [issue.url, "Updated details", "octo", "bug", "dev", "Launch", "Use the new index", "reviewer", issue.comments[0]!.html_url]) expect(resolved.context).toContain(text);
+  expect(await service.discover(project(), "issue")).toMatchObject({ available: true, sources: [{ kind: "issue", number: 42, author: "octo" }] });
+  const offline = new TaskSourceService({ ...github(), async getIssue() { throw new Error("secret"); } });
+  await expect(offline.resolve(project(), { kind: "issue", number: 42 })).rejects.toMatchObject({ message: "The issue could not be read.", statusCode: 503 });
+  expect(await offline.discover(project(), "issue")).toEqual({ available: false, sources: [] });
+});

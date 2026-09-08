@@ -91,6 +91,7 @@ export class TaskService {
       for (const role of workflowDefinition(request.workflow).advisorRoles) advisorProfiles[role] = this.profile(request.advisorProfileIds[role] ?? rootProfile.profileId, "root");
       const images = request.images.map(image => ({ filename: image.filename, mimeType: image.mimeType, bytes: decodeTaskImage(image) }));
       const source = request.source ? await this.projects.resolveTaskSource(project, request.source) : null;
+      if (source?.kind === "issue") request.description += `\n\n${source.context}`;
       const heads = await this.projects.captureTaskConfiguration(project);
       const taskId = newTaskId();
       const configuration = TaskConfigurationSchema.parse({
@@ -98,7 +99,7 @@ export class TaskService {
         branch: source?.kind === "pull_request" ? source.headBranch : source?.kind === "branch" ? source.branch : `forge/${taskId}`,
         baseBranch: source?.kind === "pull_request" ? source.baseBranch : project.baseBranch,
         baselineSha: source?.kind === "pull_request" ? source.baseSha : heads.baseSha,
-        startingSha: source?.headSha ?? heads.baseSha, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand,
+        startingSha: source && source.kind !== "issue" ? source.headSha : heads.baseSha, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand,
         runProjectTests: request.runProjectTests, visualEvidence: request.visualEvidence, source: request.source ?? null, capturedAt: new Date().toISOString(),
       });
       return this.database.authTransaction(() => {

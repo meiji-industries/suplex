@@ -1,3 +1,4 @@
+import { issueContext } from "./github-issues.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -7,11 +8,13 @@ import type { Project } from "./projects.js";
 const execFileAsync = promisify(execFile);
 const branchPattern = /^(?![-.])(?!.*(?:\.\.|@\{|\\|\s|~|\^|:|\?|\*|\[))[A-Za-z0-9._/-]{1,240}$/;
 
-export type TaskSourceSelector = { kind: "pull_request"; number: number } | { kind: "branch"; branch: string };
+export type TaskSourceSelector = { kind: "issue"; number: number } | { kind: "pull_request"; number: number } | { kind: "branch"; branch: string };
 export type PinnedTaskSource =
+  | { kind: "issue"; context: string }
   | { kind: "pull_request"; number: number; url: string; headBranch: string; baseBranch: string; headSha: string; baseSha: string }
   | { kind: "branch"; branch: string; headSha: string };
 export type DiscoveredTaskSource =
+  | { kind: "issue"; number: number; url: string; title: string; body: string; author: string; updatedAt: string }
   | { kind: "pull_request"; number: number; url: string; title: string; body: string; author: string; headBranch: string; baseBranch: string; headSha: string; updatedAt?: string; isDraft: boolean }
   | { kind: "branch"; branch: string; headSha: string; subject: string; author: string; updatedAt: string };
 
@@ -34,9 +37,16 @@ function safeRef(branch: string): void {
 }
 
 export class TaskSourceService {
-  constructor(private readonly github: Pick<GithubReleasePort, "listOpenPullRequests" | "getPullRequest">) {}
+  constructor(private readonly github: Pick<GithubReleasePort, "listOpenPullRequests" | "getPullRequest" | "listOpenIssues" | "getIssue">) {}
 
   async discover(project: Project, kind: TaskSourceSelector["kind"]): Promise<{ available: boolean; reason?: string; sources: DiscoveredTaskSource[] }> {
+    if (kind === "issue") {
+      if (!project.repository || !this.github.listOpenIssues) return { available: false, sources: [] };
+      try {
+        const issues = await this.github.listOpenIssues({ repository: project.repository, limit: 100 });
+        return { available: true, sources: issues.filter(issue => issue.state === "OPEN").map(issue => ({ kind: "issue", number: issue.number, url: issue.url, title: issue.title, body: issue.body, author: issue.author?.login ?? "", updatedAt: issue.updatedAt })) };
+      } catch { return { available: false, reason: "Issues are not available.", sources: [] }; }
+    }
     if (kind === "pull_request") {
       if (!project.repository || !this.github.listOpenPullRequests) return { available: false, reason: "Pull request provider unavailable", sources: [] };
       try {
@@ -55,6 +65,13 @@ export class TaskSourceService {
   }
 
   async resolve(project: Project, selector: TaskSourceSelector): Promise<PinnedTaskSource> {
+    if (selector.kind === "issue") {
+      if (!project.repository || !this.github.getIssue) throw new TaskSourceFailure("source-provider-unavailable", "Issues are not available.", 503);
+      try {
+        const issue = await this.github.getIssue({ repository: project.repository, number: selector.number });
+        return { kind: "issue", context: issueContext(issue) };
+      } catch { throw new TaskSourceFailure("source-provider-unavailable", "The issue could not be read.", 503); }
+    }
     if (selector.kind === "pull_request") {
       if (!project.repository) throw new TaskSourceFailure("source-provider-unavailable", "Pull requests are unavailable", 503);
       let pull;

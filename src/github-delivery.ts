@@ -1,3 +1,4 @@
+import { GithubIssueSchema, GithubIssueCommentSchema, issueFields, type GithubIssue, type GithubIssueDetails } from "./github-issues.js";
 
 import { z } from "zod";
 
@@ -84,6 +85,8 @@ export interface GithubReleasePort {
   inspectLocalRevision(input: { cwd: string }): Promise<LocalRevision>;
   pushNormal(input: { cwd: string; branch: string; headSha: string }): Promise<void>;
   listPullRequests(input: ExactPullRequestIdentity): Promise<GithubPullRequest[]>;
+  listOpenIssues?(input: { repository: string; limit: number }): Promise<GithubIssue[]>;
+  getIssue?(input: { repository: string; number: number }): Promise<GithubIssueDetails>;
   listOpenPullRequests?(input: { repository: string; limit: number }): Promise<GithubPullRequest[]>;
   createDraftPullRequest(input: DraftPullRequestCreate): Promise<GithubPullRequest>;
   updateDraftPullRequest(input: DraftPullRequestUpdate): Promise<GithubPullRequest>;
@@ -428,6 +431,14 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       const rows = PullListResponseSchema.safeParse(value);
       if (!rows.success) throw providerFailure("invalid-provider-response", "GitHub pull request list could not be parsed");
       return rows.data.map((row) => ({ number: row.number, url: row.url, repository: normalizeRepository(input.repository), headBranch: row.headRefName, baseBranch: row.baseRefName, headSha: row.headRefOid, baseSha: row.baseRefOid, isDraft: row.isDraft, state: row.state.toLowerCase() as GithubPullRequest["state"], mergedAt: null, title: row.title, body: row.body, author: row.author?.login ?? "", ...(row.updatedAt === undefined ? {} : { updatedAt: row.updatedAt }), isCrossRepository: row.isCrossRepository }));
+    },
+    async listOpenIssues(input) {
+      return z.array(GithubIssueSchema).parse(parseJson((await runGh(["issue", "list", "--repo", input.repository, "--state", "open", "--limit", String(Math.min(100, Math.max(1, input.limit))), "--json", issueFields])).stdout));
+    },
+    async getIssue(input) {
+      const issue = GithubIssueSchema.parse(parseJson((await runGh(["issue", "view", String(input.number), "--repo", input.repository, "--json", issueFields])).stdout));
+      const pages = z.array(z.array(GithubIssueCommentSchema)).parse(parseJson((await runGh(["api", "--paginate", "--slurp", `repos/${input.repository}/issues/${input.number}/comments?per_page=100`], { maxBuffer: 16 * 1024 * 1024 })).stdout));
+      return { ...issue, comments: pages.flat() };
     },
     async listOpenPullRequests(input) {
       let value: unknown;

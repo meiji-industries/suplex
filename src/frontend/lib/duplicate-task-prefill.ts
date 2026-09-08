@@ -24,7 +24,7 @@ export async function duplicateTaskDraft(task: Task): Promise<NewTaskDraft> {
   let sourceSummary: TaskSourceSummary | undefined;
   if (source) {
     const result = await readJson<{ sources: TaskSourceSummary[] }>(`/api/projects/${task.projectId}/task-sources?kind=${source.kind}`);
-    sourceSummary = result.sources.find(item => source.kind === "branch" ? item.kind === "branch" && item.branch === source.branch : item.kind === "pull_request" && item.number === source.number);
+    sourceSummary = result.sources.find(item => source.kind === "branch" ? item.kind === "branch" && item.branch === source.branch : item.kind === source.kind && item.number === source.number);
     if (!sourceSummary) throw new Error("The original task source is not available. Select a source in a new task.");
   }
   return {

@@ -100,7 +100,7 @@ interface ProjectServiceOptions {
   repositoryProvisioner?: RepositoryProvisioner;
   now?: () => Date;
   validateProjectConfiguration?: boolean;
-  githubRelease?: Pick<GithubReleasePort, "listOpenPullRequests" | "getPullRequest">;
+  githubRelease?: Pick<GithubReleasePort, "listOpenPullRequests" | "getPullRequest" | "listOpenIssues" | "getIssue">;
 }
 
 interface ProjectRow {

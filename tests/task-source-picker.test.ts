@@ -15,7 +15,7 @@ test("the picker renders its compact source trigger", () => {
 });
 
 test("picker search covers PR metadata and branch metadata", () => {
-  expect(taskSourceTabs).toEqual([{ value: "pull_request", label: "Pull requests" }, { value: "branch", label: "Branches" }]);
+  expect(taskSourceTabs).toEqual([{ value: "pull_request", label: "Pull requests" }, { value: "issue", label: "Issues" }, { value: "branch", label: "Branches" }]);
   expect(filterTaskSources([pull, branch], "17")).toEqual([pull]);
   expect(filterTaskSources([pull, branch], "octo")).toEqual([pull]);
   expect(filterTaskSources([pull, branch], "feature/search")).toEqual([branch]);
@@ -39,4 +39,11 @@ test("source prefill remains editable and only generated values are replaced", (
   expect(preserveEditedPrefill(first, first, next)).toEqual(next);
   expect(preserveEditedPrefill({ title: "My title", description: first.description }, first, next)).toEqual({ title: "My title", description: next.description });
   expect(preserveEditedPrefill({ title: first.title, description: "My description" }, first, next)).toEqual({ title: next.title, description: "My description" });
+});
+
+test("issues prefill the title and URL and use stable selectors", () => {
+  const issue: TaskSourceSummary = { kind: "issue", number: 42, title: "Fix search", url: "https://github.com/acme/forge/issues/42", body: "Details", author: "octo" };
+  expect(selectorForTaskSource(issue)).toEqual({ kind: "issue", number: 42 });
+  expect(prefillForTaskSource(issue)).toEqual({ title: "Fix search", description: "Work on GitHub issue #42: https://github.com/acme/forge/issues/42" });
+  expect(filterTaskSources([pull, branch, issue], "42")).toEqual([issue]);
 });

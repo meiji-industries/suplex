@@ -3,6 +3,8 @@ import { inspectDeliveryDiff, reviewEquivalence } from "./delivery-review.js";
 import type { RootIdentity } from "./root-contracts.js";
 import type { GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation } from "./github-delivery.js";
 import { createGithubReleasePort, GithubReleaseFailure } from "./github-delivery.js";
+import type { GithubTriggerPort, GithubTriggerPullRequestInspection } from "./github-trigger-inspection.js";
+import { matchesGithubTriggerProtectedPaths } from "./github-trigger-paths.js";
 import type { PullRequestReference, TaskControl } from "./task-control.js";
 import type { TaskControlStore } from "./root-session-store.js";
 import { deliveryDecision, deliveryWaitFingerprint, freshReviewHint, latestReview, reviewRole, sameRange, rangeDifferences, workflowReadyForDelivery, type DeliveryDecision, type DeliveryFailureCode, type LocalSourceFacts, type ReviewRange, type WorkflowCompletion } from "./workflows.js";
@@ -18,7 +20,7 @@ export type DeliveryGithubPort = Required<Pick<GithubReleaseAdapter,
   "getRemoteRepository" | "getBranchHead" | "inspectLocalRevision" | "pushNormal" |
   "listPullRequests" | "createDraftPullRequest" | "getPullRequest" |
   "observePullRequest" | "markReadyForReview" | "mergePullRequest"
->>;
+>> & Partial<Pick<GithubReleaseAdapter, "mergePullRequestDirect">> & Partial<Pick<GithubTriggerPort, "inspectPullRequest">>;
 
 export const DELIVERY_WAIT_NEXT = "End this Coordinator turn. Forge will resume it when delivery state changes.";
 const noRemoteChecks = "No remote checks reported";
@@ -285,16 +287,20 @@ export class DeliveryOperations {
   }
 
   private async push(recheck: Recheck, control: TaskControl, repository: string, local: LocalRevisionFacts, actual: ReviewRange): Promise<unknown> {
+    const trigger = await this.inspectTriggerPolicy(control, { protectedPaths: false });
     const remoteHead = await this.github.getBranchHead({ repository, branch: local.branch });
     // The remote observation is an await; the source, delegate, review, and ownership must still hold before Forge publishes or adopts.
     await this.finalRecheck(control, actual, recheck);
+    if (trigger && remoteHead !== trigger.authorizedHead) throw this.triggerBlocked(control, "The trigger pull request head is not an authorized Forge delivery head.", "head_diverged");
     if (remoteHead === local.headSha) {
+      if (trigger && remoteHead !== trigger.authorizedHead) throw this.triggerBlocked(control, "The trigger pull request head is not an authorized Forge delivery head.", "head_diverged");
       if (control.deliveryTarget === "remote_branch") await this.completeRemoteBranch(control, actual, recheck);
       return { kind: "adopted", headSha: local.headSha };
     }
     await this.github.pushNormal({ cwd: control.worktree!.path, branch: local.branch, headSha: local.headSha });
     const observed = await this.github.getBranchHead({ repository, branch: local.branch });
     if (observed !== local.headSha) throw new DeliveryOperationFailure("head_diverged", "The remote branch does not match the observed worktree head");
+    if (trigger) this.store.recordTriggerPush({ taskId: control.taskId, dispatchId: trigger.policy.dispatchId, fromHeadSha: trigger.authorizedHead, toHeadSha: local.headSha, review: actual });
     recheck();
     if (control.deliveryTarget === "remote_branch") await this.completeRemoteBranch(control, actual, recheck);
     return { kind: "pushed", headSha: observed };
@@ -381,7 +387,8 @@ export class DeliveryOperations {
     if (observed.state === "merged" && observed.number !== null) return this.adoptKnownPull(control, await this.github.getPullRequest({ repository, number: observed.number }), { recheck });
     if (observed.headSha !== control.worktree!.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed after review");
     if (!expectedHead || expectedHead !== observed.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed after the Coordinator reviewed it");
-    if (control.workflow !== "standard") {
+    const trigger = await this.inspectTriggerPolicy(control, { expectedHead, expectedBase: actual.baseSha, protectedPaths: true });
+    if (trigger || control.workflow !== "standard") {
       let base: string | null;
       try { base = await this.github.getBranchHead({ repository, branch: control.deliveryIntent.baseBranch }); }
       catch (error) { if (this.observationUnavailable(error)) return this.observationWait(control, observed.headSha!, `the head of ${control.deliveryIntent.baseBranch}`); throw error; }
@@ -399,9 +406,15 @@ export class DeliveryOperations {
       }
       if (eligibility.problems.length) throw new DeliveryOperationFailure("merge_not_eligible", `GitHub does not report this pull request as mergeable: ${eligibility.problems.join("; ")}.`);
     }
+    await this.finalRecheck(control, actual, recheck);
     recheck();
     const requested = observed.number!;
-    await this.github.mergePullRequest({ repository, number: requested, headSha: observed.headSha! });
+    if (trigger) {
+      if (observed.autoMergeEnabled) throw this.triggerBlocked(control, "Auto-merge is enabled for this trigger pull request. Review delivery manually.", "merge_not_eligible");
+      if (!this.github.mergePullRequestDirect) throw new DeliveryOperationFailure("merge_not_eligible", "GitHub cannot perform a conditional trigger merge");
+      const direct = await this.github.mergePullRequestDirect({ repository, number: requested, headSha: observed.headSha! });
+      if (!direct.merged) { const wait = { headSha: observed.headSha!, fingerprint: deliveryWaitFingerprint(observed), since: new Date().toISOString(), reason: "merge_queue" as const }; this.store.updateWorkflowState(control.taskId, state => ({ ...state, deliveryWait: wait })); this.store.scheduleWake(control.taskId, new Date(Date.now() + 30_000).toISOString()); return { kind: "waiting", wait, next: DELIVERY_WAIT_NEXT }; }
+    } else await this.github.mergePullRequest({ repository, number: requested, headSha: observed.headSha! });
     const final = await this.github.getPullRequest({ repository, number: requested });
     if (final.state !== "merged") {
       if (control.workflow === "standard") return reference(final);
@@ -414,6 +427,16 @@ export class DeliveryOperations {
     // The merge result must identify this task's pull request before Forge records anything from it; a mismatched head is external, not verified.
     this.assertMergeResultIdentity(control, repository, requested, final);
     return { ...await this.completeIfTargetMatches(control, reference(final), { validatedRange: actual, recheck }), checkSummary: checkSummary(observed), reviewedHead: observed.headSha };
+  }
+  private triggerBlocked(control: TaskControl, question: string, code: "head_diverged" | "merge_not_eligible"): DeliveryOperationFailure { if (control.status === "active") this.store.askHuman(control.taskId, question); return new DeliveryOperationFailure(code, question); }
+  private async inspectTriggerPolicy(control: TaskControl, input: { expectedHead?: string; expectedBase?: string; protectedPaths: boolean }): Promise<{ policy: { dispatchId: string; repositoryId: number; repositoryName: string; pullRequestNumber: number; headSha: string; baseSha: string; headBranch: string; baseBranch: string; protectedPaths: string[] }; authorizedHead: string; pull: GithubTriggerPullRequestInspection } | null> {
+    const policy = this.store.readTriggerDeliveryPolicy(control.taskId); if (!policy) return null;
+    const authorizedHead = this.store.authorizedTriggerHead(control.taskId); if (!authorizedHead || !this.github.inspectPullRequest) throw new DeliveryOperationFailure("head_diverged", "GitHub trigger delivery policy could not be inspected");
+    let pull: GithubTriggerPullRequestInspection; try { pull = await this.github.inspectPullRequest({ repository: policy.repositoryName, number: policy.pullRequestNumber }); } catch { throw new DeliveryOperationFailure("head_diverged", "GitHub trigger delivery policy could not be inspected"); }
+    const valid = pull.number === policy.pullRequestNumber && pull.state === "open" && !pull.isDraft && !pull.isCrossRepository && pull.baseRepository.id === policy.repositoryId && pull.baseRepository.fullName.toLowerCase() === policy.repositoryName && pull.headRepository?.id === policy.repositoryId && pull.headRepository.fullName.toLowerCase() === policy.repositoryName && pull.headBranch === policy.headBranch && pull.baseBranch === policy.baseBranch && pull.headSha === authorizedHead && (!input.expectedHead || pull.headSha === input.expectedHead) && (!input.expectedBase || pull.baseSha === input.expectedBase);
+    if (!valid) throw this.triggerBlocked(control, "The trigger pull request changed outside Forge-authorized delivery. Review delivery manually.", "head_diverged");
+    if (input.protectedPaths && pull.files.some(file => [file.filename, file.previousFilename].some(path => path && matchesGithubTriggerProtectedPaths(policy.protectedPaths, { filename: path })))) throw this.triggerBlocked(control, "The trigger pull request changes a protected path. Review delivery manually.", "merge_not_eligible");
+    return { policy, authorizedHead, pull };
   }
 
   /** A merge result is adopted only for the requested repository and number, the captured number when one exists, the intended branches, and the same repository. */

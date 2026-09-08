@@ -21,6 +21,9 @@ import { HermesAgentService } from "./hermes-agents.js";
 import { TaskHost } from "./task-host.js";
 import { createSelfUpdateService } from "./self-update.js";
 import { TaskAnalyticsStore } from "./task-analytics-store.js";
+import { GithubTriggerService } from "./github-triggers.js";
+import { GithubTriggerPoller } from "./github-trigger-poller.js";
+import { createGithubReleasePort } from "./github-delivery.js";
 import { AnalyticsHistoryReader, TaskAnalyticsCollector } from "./task-analytics-collector.js";
 
 export interface ForgeServer {
@@ -44,6 +47,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   const tasks = new TaskService(database, auth, projects, config);
   const taskTemplates = new TaskTemplateService(database, auth, tasks);
   const workflows = new WorkflowRecordService(database, auth);
+  const githubTriggers = new GithubTriggerService(database, auth, projects, workflows, createGithubReleasePort(), tasks);
   const instanceId = randomUUID();
   const selfUpdate = createSelfUpdateService({ config, instanceId, workingDirectory: process.cwd() });
   await selfUpdate.initialize();
@@ -57,6 +61,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     tasks,
     taskTemplates,
     workflows,
+    githubTriggers,
     database,
     host,
     logger: createFastifyLogger(options.logSink),
@@ -79,7 +84,9 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   }
   const history = new AnalyticsHistoryReader(join(dirname(config.databasePath), "runtime", "analytics"));
   const analytics = new TaskAnalyticsCollector(tasks.repository, new TaskAnalyticsStore(database), (session, pricing) => history.read(session, pricing), error => app.log.warn({ err: error }, "Analytics observation failed"), () => history.readPricing());
-  app.addHook("onClose", async () => { await analytics.stop(); await history.close(); });
+  const triggerPoller = new GithubTriggerPoller(() => githubTriggers.processEnabledRules(), error => app.log.warn({ err: error }, "GitHub trigger poll failed"));
+  app.addHook("onReady", async () => { triggerPoller.start(); });
+  app.addHook("onClose", async () => { await triggerPoller.stop(); await analytics.stop(); await history.close(); });
   analytics.start();
   host.start();
   return { app, database, host, instanceId };

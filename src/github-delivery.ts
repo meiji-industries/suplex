@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { runCommand } from "./command-runner.js";
 import { redact } from "./logging.js";
+import { createGithubTriggerPort, type GithubTriggerPort } from "./github-trigger-inspection.js";
 
 type GithubFailureCode = "authentication-required" | "invalid-provider-response" | "wrong-remote" | "local-revision-unavailable" | "provider-rate-limited" | "provider-unavailable";
 
@@ -93,11 +94,13 @@ export interface GithubReleasePort {
   getPullRequest(input: { repository: string; number: number }): Promise<GithubPullRequest>;
   observePullRequest?(input: { repository: string; branch: string; pullRequestNumber?: number | null }): Promise<GithubPullRequestObservation>;
   mergePullRequest?(input: { repository: string; number: number; headSha: string }): Promise<void>;
+  mergePullRequestDirect?(input: { repository: string; number: number; headSha: string }): Promise<{ merged: boolean; sha: string | null }>;
 }
 
 export type GithubAcceptancePort = Pick<GithubReleasePort, "getBranchHead" | "getPullRequest"> & {
   markReadyForReview(input: { repository: string; number: number }): Promise<void>;
   mergePullRequest?(input: { repository: string; number: number; headSha: string }): Promise<void>;
+  mergePullRequestDirect?(input: { repository: string; number: number; headSha: string }): Promise<{ merged: boolean; sha: string | null }>;
 };
 export type GithubReleaseAdapter = GithubReleasePort & GithubAcceptancePort;
 
@@ -280,7 +283,11 @@ function diagnostic(error: GithubCommandFailure): string {
   const parsed = restError(error.result.stdout);
   const text = (parsed?.message ?? error.result.stderr.trim() ?? "").split("\n")[0] ?? "";
   // Provider messages can echo a token; never carry one into a question or log.
-  return String(redact(text.slice(0, 200))).replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{6,}|github_pat_[A-Za-z0-9_]{6,})\b/g, "[redacted]");
+  return redactProviderSummary(text);
+}
+
+function redactProviderSummary(summary: string): string {
+  return String(redact(summary.split("\n")[0]?.slice(0, 200) ?? "")).replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{6,}|github_pat_[A-Za-z0-9_]{6,})\b/g, "[redacted]");
 }
 
 /** Rate limiting needs evidence: HTTP 429, or a 403 whose message says so. A bare 403 is an access problem. */
@@ -322,7 +329,7 @@ const defaultRunner: GithubCommandRunner = async ({ command, args, cwd, timeout,
   }
 };
 
-export function createGithubReleasePort(options: GithubReleasePortOptions = {}): Required<GithubReleaseAdapter> {
+export function createGithubReleasePort(options: GithubReleasePortOptions = {}): Required<GithubReleaseAdapter> & GithubTriggerPort {
   const ghCommand = options.ghCommand ?? process.env.FORGE_GH_COMMAND ?? "gh";
   const gitCommand = options.gitCommand ?? "git";
   const runner = options.runner ?? (options.taskId && options.stepId
@@ -372,6 +379,12 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
   };
   const pull = (value: unknown): GithubPullRequest => normalizeGithubPull(value);
   return {
+    ...createGithubTriggerPort(async (args, operation) => {
+      try { return await api(args, operation); } catch (error) {
+        if (error instanceof GithubReleaseFailure) throw new GithubReleaseFailure(error.code, redactProviderSummary(error.summary), error.retryAt);
+        throw error;
+      }
+    }),
     async checkAuthentication() {
       try { await runGh(["auth", "status", "--hostname", "github.com"], { timeout: 10_000, maxBuffer: 16 * 1024 }); } catch (error) { throw classifyCommandFailure(error, "authentication"); }
     },
@@ -487,6 +500,17 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       const method = repo.allow_squash_merge ? "--squash" : repo.allow_merge_commit ? "--merge" : repo.allow_rebase_merge ? "--rebase" : null;
       if (!method) throw providerFailure("provider-unavailable", "The repository does not allow a merge method");
       try { await runGh(["pr", "merge", String(input.number), "--repo", input.repository, method, "--match-head-commit", input.headSha]); } catch (error) { throw classifyCommandFailure(error, "merge pull request"); }
+    },
+    async mergePullRequestDirect(input) {
+      if (!Number.isInteger(input.number) || input.number < 1 || !shaPattern.test(input.headSha)) throw providerFailure("invalid-provider-response", "The pull request merge input is invalid");
+      const repository = normalizeRepository(input.repository);
+      const repo = z.object({ allow_squash_merge: z.boolean(), allow_merge_commit: z.boolean(), allow_rebase_merge: z.boolean() }).parse(await api(["api", `repos/${repository}`], "repository settings"));
+      const method = repo.allow_squash_merge ? "squash" : repo.allow_merge_commit ? "merge" : repo.allow_rebase_merge ? "rebase" : null;
+      if (!method) throw providerFailure("provider-unavailable", "The repository does not allow a merge method");
+      const value = await api(["api", "--method", "PUT", `repos/${repository}/pulls/${input.number}/merge`, "-f", `sha=${input.headSha}`, "-f", `merge_method=${method}`], "conditional pull request merge");
+      const response = z.object({ merged: z.boolean(), message: z.string(), sha: z.string().nullable().optional() }).safeParse(value);
+      if (!response.success || (response.data.merged && (!response.data.sha || !shaPattern.test(response.data.sha)))) throw providerFailure("invalid-provider-response", "GitHub did not confirm the conditional merge result");
+      return response.data.merged ? { merged: true, sha: response.data.sha! } : { merged: false, sha: null };
     },
   };
 }

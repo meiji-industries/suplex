@@ -13,6 +13,8 @@ import { PromptDispatchAttemptSchema, type PromptDispatchAttempt, type PullReque
 import { DeliveryIntentSchema, PullRequestReferenceSchema, TaskControlStatusSchema, TaskProfileSchema, TaskSessionKindSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, WorktreeReferenceSchema, type DeliveryIntent, type TaskControl, type TaskProfile, type TaskSession, type TaskSessionKind, type TaskTurn, type WorktreeReference } from "./task-control.js";
 import { AdvisorRoleSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, turnOutcome, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
 import { STANDARD_WORKER_RESULT_WAKE, workerAssignmentPreamble } from "./workflow-prompts.js";
+import { assertPullRequestAvailable, assertTaskPullRequestsAvailable } from "./task-pull-request-ownership.js";
+import { authorizedTriggerHead, recordTriggerPush, triggerDeliveryPolicy, type GithubTriggerDeliveryPolicy } from "./github-trigger-delivery-policy.js";
 
 const now = (): string => new Date().toISOString();
 const hash = (value: string): string => createHash("sha256").update(value).digest("hex");
@@ -59,14 +61,17 @@ function turn(row: Row): TaskTurn {
 
 export class TaskControlStore {
   constructor(private readonly database: ForgeDatabase, private readonly inspectOwner: (pid: number) => Promise<ProcessOwnerObservation> = observeProcessOwner) {}
+  readTriggerDeliveryPolicy(taskId: string): GithubTriggerDeliveryPolicy | null { return this.database.authQuery(db => triggerDeliveryPolicy(db, taskId)); }
+  authorizedTriggerHead(taskId: string): string | null { return this.database.authQuery(db => authorizedTriggerHead(db, taskId)); }
+  recordTriggerPush(input: { taskId: string; dispatchId: string; fromHeadSha: string; toHeadSha: string; review: unknown }): void { this.database.authImmediateTransaction(db => recordTriggerPush(db, input)); }
   create(input: { taskId: string; startImmediately: boolean; objective: string; deliveryTarget: string; deliveryIntent: DeliveryIntent; rootProfile: TaskProfile; workerProfile: TaskProfile; worktree?: WorktreeReference; workflow?: WorkflowId; advisorProfiles?: Partial<Record<AdvisorRole, TaskProfile>> }): TaskControl {
     const time = now();
     const advisorProfiles = Object.fromEntries(Object.entries(input.advisorProfiles ?? {}).map(([role, profile]) => [AdvisorRoleSchema.parse(role), TaskProfileSchema.parse(profile)]));
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_task_controls (task_id, objective, delivery_target, delivery_intent_json, status, wake_at, human_question, worktree_json, pull_request_json, root_session_id, worker_session_id, root_profile_json, worker_profile_json, workflow, advisor_profiles_json, workflow_state_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)").run(input.taskId, input.objective, input.deliveryTarget, JSON.stringify(DeliveryIntentSchema.parse(input.deliveryIntent)), input.startImmediately ? "active" : "backlog", input.worktree ? JSON.stringify(input.worktree) : null, JSON.stringify(TaskProfileSchema.parse(input.rootProfile)), JSON.stringify(TaskProfileSchema.parse(input.workerProfile)), WorkflowIdSchema.parse(input.workflow ?? "standard"), JSON.stringify(advisorProfiles), JSON.stringify(emptyWorkflowState()), time, time));
+    this.database.authImmediateTransaction((db) => { const intent = DeliveryIntentSchema.parse(input.deliveryIntent); if (intent.pullRequestNumber) assertPullRequestAvailable(db, { taskId: input.taskId, repository: intent.repository, number: intent.pullRequestNumber }); db.prepare("INSERT INTO forge_task_controls (task_id, objective, delivery_target, delivery_intent_json, status, wake_at, human_question, worktree_json, pull_request_json, root_session_id, worker_session_id, root_profile_json, worker_profile_json, workflow, advisor_profiles_json, workflow_state_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)").run(input.taskId, input.objective, input.deliveryTarget, JSON.stringify(intent), input.startImmediately ? "active" : "backlog", input.worktree ? JSON.stringify(input.worktree) : null, JSON.stringify(TaskProfileSchema.parse(input.rootProfile)), JSON.stringify(TaskProfileSchema.parse(input.workerProfile)), WorkflowIdSchema.parse(input.workflow ?? "standard"), JSON.stringify(advisorProfiles), JSON.stringify(emptyWorkflowState()), time, time); });
     return this.observeLifecycle(input.taskId);
   }
   start(taskId: string): TaskControl {
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET status = 'active', wake_at = ?, updated_at = ? WHERE task_id = ? AND status IN ('backlog', 'active')").run(now(), now(), taskId).changes);
+    const changed = this.database.authImmediateTransaction((db) => { assertTaskPullRequestsAvailable(db, taskId); return db.prepare("UPDATE forge_task_controls SET status = 'active', wake_at = ?, updated_at = ? WHERE task_id = ? AND status IN ('backlog', 'active')").run(now(), now(), taskId).changes; });
     if (changed !== 1) throw new Error("task_not_startable");
     return this.observeLifecycle(taskId);
   }
@@ -101,7 +106,7 @@ export class TaskControlStore {
   setPullRequest(taskId: string, pullRequest: PullRequestReference | null): TaskControl {
     // A cancelled task still records what GitHub reports; it never resumes because of it.
     const value = pullRequest === null ? null : JSON.stringify(PullRequestReferenceSchema.parse(pullRequest));
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET pull_request_json = ?, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered', 'cancelled')").run(value, now(), taskId).changes);
+    const changed = this.database.authImmediateTransaction((db) => { const current = db.prepare("SELECT status FROM forge_task_controls WHERE task_id = ?").get(taskId) as { status: string } | undefined; if (pullRequest && current && ["active", "waiting_human"].includes(current.status)) assertPullRequestAvailable(db, { taskId, repository: pullRequest.repository, number: pullRequest.number }); return db.prepare("UPDATE forge_task_controls SET pull_request_json = ?, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered', 'cancelled')").run(value, now(), taskId).changes; });
     if (changed !== 1) throw new Error("task_not_active");
     return this.get(taskId);
   }

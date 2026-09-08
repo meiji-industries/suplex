@@ -16,6 +16,10 @@ import { TaskConfigurationSchema, TaskInputSchema, type Task, type TaskInput } f
 import { decodeTaskImage } from "./task-images.js";
 import { taskBranchName } from "./task-branch.js";
 import { newTaskId, TaskConflict, TaskRepository, taskRequestHash, type TaskCreator, type TaskRow } from "./task-repository.js";
+import { GithubTriggerDispatchRepository, type GithubTriggerDispatch } from "./github-trigger-dispatches.js";
+import { assertTaskPullRequestsAvailable } from "./task-pull-request-ownership.js";
+import type { GithubTriggerPort } from "./github-trigger-inspection.js";
+import { matchesGithubTriggerProtectedPaths } from "./github-trigger-paths.js";
 import { normalizeWorkflowInput, roleLabel, workflowDefinition, WorkflowInputFailure, type AdvisorRole } from "./workflows.js";
 
 export class TaskFailure extends Error {
@@ -62,6 +66,39 @@ export class TaskService {
     return this.create({ kind: "user", userId }, companyId, input);
   }
 
+  /** Internal-only admission path for an immutable, previously validated trigger dispatch. */
+  async createTaskFromGithubTrigger(dispatchId: string): Promise<{ task: Task; created: boolean }> {
+    const dispatches = new GithubTriggerDispatchRepository(this.database);
+    const dispatch = dispatches.get(dispatchId);
+    if (!dispatch) throw new TaskFailure("GitHub trigger dispatch was not found", 404);
+    if (dispatch.request.startImmediately || dispatch.request.images.length) throw new TaskFailure("GitHub trigger dispatch is invalid", 422);
+    if (dispatch.taskId) return { task: this.getTask(dispatch.authorityUserId, dispatch.taskId), created: false };
+    this.requireGithubTriggerAdmission(dispatch);
+    return this.create({ kind: "user", userId: dispatch.authorityUserId }, dispatch.companyId, dispatch.request, dispatch);
+  }
+
+  async startTaskFromGithubTrigger(dispatchId: string, github: Pick<GithubTriggerPort, "inspectPullRequest">): Promise<Task> {
+    const dispatch = new GithubTriggerDispatchRepository(this.database).get(dispatchId);
+    if (!dispatch || !dispatch.taskId) throw new TaskFailure("GitHub trigger dispatch is not linked to a task", 404);
+    const existing = this.getTask(dispatch.authorityUserId, dispatch.taskId);
+    if (existing.archivedAt || existing.status !== "backlog") return existing;
+    this.requireGithubTriggerAdmission(dispatch);
+    const pull = await github.inspectPullRequest({ repository: dispatch.repositoryName, number: dispatch.pullRequestNumber });
+    const protectedPath = pull.files.some(file => [file.filename, file.previousFilename].some(path => path && matchesGithubTriggerProtectedPaths(dispatch.policy.protectedPaths, { filename: path })));
+    const valid = pull.number === dispatch.pullRequestNumber && pull.state === "open" && !pull.isDraft && !pull.isCrossRepository && pull.baseRepository.id === dispatch.repositoryId && pull.baseRepository.fullName.toLowerCase() === dispatch.repositoryName && pull.headRepository?.id === dispatch.repositoryId && pull.headRepository.fullName.toLowerCase() === dispatch.repositoryName && pull.headSha === dispatch.policy.headSha && pull.baseSha === dispatch.policy.baseSha && pull.headBranch === dispatch.policy.headBranch && pull.baseBranch === dispatch.policy.baseBranch && pull.labels.includes(this.database.authQuery(db => db.prepare("SELECT label FROM forge_github_trigger_rules WHERE id = ?").get(dispatch.ruleId) as { label: string }).label) && !protectedPath;
+    if (!valid) throw new TaskFailure("GitHub trigger pull request is no longer eligible", 409);
+    return this.database.authImmediateTransaction(() => {
+      const current = new GithubTriggerDispatchRepository(this.database).get(dispatchId);
+      if (!current?.taskId) throw new TaskFailure("GitHub trigger dispatch is not linked to a task", 404);
+      const task = this.getTask(current.authorityUserId, current.taskId);
+      if (task.archivedAt || task.status !== "backlog") return task;
+      this.requireGithubTriggerAdmission(current);
+      const source = task.configuration.source;
+      if (task.configuration.repository.toLowerCase() !== current.repositoryName || task.configuration.startingSha !== current.policy.headSha || task.configuration.baselineSha !== current.policy.baseSha || task.configuration.branch !== current.policy.headBranch || task.configuration.baseBranch !== current.policy.baseBranch || source?.kind !== "pull_request" || source.number !== current.pullRequestNumber) throw new TaskFailure("GitHub trigger task source changed", 409);
+      return this.startTask(current.authorityUserId, current.taskId);
+    });
+  }
+
   async createTaskForHermes(principal: HermesPrincipal, input: Pick<TaskInput, "projectId" | "title" | "description" | "idempotencyKey">) {
     const result = await this.create({ kind: "hermes", principal }, principal.companyId, input);
     return { created: result.created, task: this.getHermesTask(principal, result.task.id) };
@@ -72,28 +109,39 @@ export class TaskService {
     return { id: task.id, issueKey: task.issueKey, projectId: task.projectId, title: task.title, status: task.status, humanQuestion: task.humanQuestion?.text ?? null, createdAt: task.createdAt, updatedAt: task.updatedAt };
   }
 
-  private async create(authority: Authority, companyId: string, raw: TaskInput): Promise<{ task: Task; created: boolean }> {
+  private async create(authority: Authority, companyId: string, raw: TaskInput, capturedDispatch?: GithubTriggerDispatch): Promise<{ task: Task; created: boolean }> {
     let normalized: TaskInput;
     try { normalized = normalizeWorkflowInput(raw, { requireSource: true }); }
     catch (error) { if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode); throw error; }
     const request = TaskInputSchema.parse(normalized);
+    if (capturedDispatch && (request.startImmediately || request.images.length)) throw new TaskFailure("GitHub trigger dispatch is invalid", 422);
     this.requireScope(authority, companyId, request.projectId, true);
     const creator: TaskCreator = authority.kind === "user" ? { kind: "user", id: authority.userId } : { kind: "agent", id: authority.principal.agentId };
     const requestHash = taskRequestHash(request, creator);
     try {
       const existing = this.repository.existing(companyId, request.idempotencyKey, requestHash, creator);
-      if (existing) return { task: this.repository.task(existing), created: false };
+      if (existing) {
+        if (!capturedDispatch) return { task: this.repository.task(existing), created: false };
+        return this.database.authImmediateTransaction(() => {
+          this.requireGithubTriggerAdmission(capturedDispatch);
+          const task = this.repository.task(existing);
+          new GithubTriggerDispatchRepository(this.database).linkTask(capturedDispatch.id, task.id);
+          return { task, created: false };
+        });
+      }
       const project = this.projects.getProjectInCompany(companyId, request.projectId);
+      const projectSnapshot = JSON.stringify(project);
       if (!project.repository) throw new TaskFailure("Configure the project repository before creating a task", 422);
       const defaults = this.database.authQuery(db => z.object({ root: z.string(), worker: z.string() }).parse(db.prepare("SELECT root_profile_id AS root, worker_profile_id AS worker FROM forge_projects WHERE id = ? AND company_id = ?").get(project.id, companyId)));
-      const rootProfile = this.profile(request.rootProfileId ?? defaults.root, "root");
-      const workerProfile = this.profile(request.workerProfileId ?? defaults.worker, "worker");
+      const rootProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.root.profileId, "root"), capturedDispatch.profiles.root) : this.profile(request.rootProfileId ?? defaults.root, "root");
+      const workerProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.worker.profileId, "worker"), capturedDispatch.profiles.worker) : this.profile(request.workerProfileId ?? defaults.worker, "worker");
       const advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>> = {};
-      for (const role of workflowDefinition(request.workflow).advisorRoles) advisorProfiles[role] = this.profile(request.advisorProfileIds[role] ?? rootProfile.profileId, "root");
+      for (const role of workflowDefinition(request.workflow).advisorRoles) advisorProfiles[role] = capturedDispatch ? (this.profile(capturedDispatch.profiles.advisors[role]!.profileId, "root"), capturedDispatch.profiles.advisors[role]!) : this.profile(request.advisorProfileIds[role] ?? rootProfile.profileId, "root");
       const images = request.images.map(image => ({ filename: image.filename, mimeType: image.mimeType, bytes: decodeTaskImage(image) }));
       const source = request.source ? await this.projects.resolveTaskSource(project, request.source) : null;
       if (source?.kind === "issue") request.description += `\n\n${source.context}`;
       const heads = await this.projects.captureTaskConfiguration(project);
+      if (capturedDispatch && (source?.kind !== "pull_request" || source.number !== capturedDispatch.pullRequestNumber || source.headSha !== capturedDispatch.policy.headSha || source.baseSha !== capturedDispatch.policy.baseSha || source.headBranch !== capturedDispatch.policy.headBranch || source.baseBranch !== capturedDispatch.policy.baseBranch || project.repository?.toLowerCase() !== capturedDispatch.repositoryName || project.baseBranch !== capturedDispatch.policy.baseBranch)) throw new TaskFailure("GitHub trigger source changed", 409);
       const taskId = newTaskId();
       const configuration = TaskConfigurationSchema.parse({
         repository: project.repository, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot,
@@ -103,9 +151,14 @@ export class TaskService {
         startingSha: source && source.kind !== "issue" ? source.headSha : heads.baseSha, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand,
         runProjectTests: request.runProjectTests, visualEvidence: request.visualEvidence, source: request.source ?? null, capturedAt: new Date().toISOString(),
       });
-      return this.database.authTransaction(() => {
+      return this.database.authImmediateTransaction(() => {
         this.requireScope(authority, companyId, request.projectId, true);
+        if (capturedDispatch) {
+          this.requireGithubTriggerAdmission(capturedDispatch);
+          if (JSON.stringify(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project configuration changed", 409);
+        }
         const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images });
+        if (capturedDispatch) new GithubTriggerDispatchRepository(this.database).linkTask(capturedDispatch.id, result.task.id);
         if (result.created) this.audit(authority, companyId, "task_created", result.task.id);
         return result;
       });
@@ -113,6 +166,20 @@ export class TaskService {
       if (error instanceof TaskConflict) throw new TaskFailure(error.message, 409);
       throw error;
     }
+  }
+
+  private requireGithubTriggerAdmission(dispatch: GithubTriggerDispatch): void {
+    const authority = this.auth.getUserForAuthority(dispatch.authorityUserId);
+    if (!authority || authority.role !== "admin") throw new TaskFailure("GitHub trigger authority is not available", 422);
+    const company = this.auth.requireCompanyAccess(dispatch.authorityUserId, dispatch.companyId);
+    if (company.status !== "active") throw new TaskFailure("Company is not active", 409);
+    const rule = this.database.authQuery(db => db.prepare("SELECT 1 FROM forge_github_trigger_rules WHERE id = ? AND company_id = ? AND project_id = ? AND repository_id = ? AND lower(repository_name) = lower(?) AND authority_user_id = ? AND enabled = 1 AND archived_at IS NULL").get(dispatch.ruleId, dispatch.companyId, dispatch.projectId, dispatch.repositoryId, dispatch.repositoryName, dispatch.authorityUserId));
+    if (!rule) throw new TaskFailure("GitHub trigger rule is not available", 409);
+    const preset = this.database.authQuery(db => db.prepare("SELECT 1 FROM forge_workflows WHERE id = ? AND archived_at IS NULL").get(dispatch.preset.id));
+    if (!preset) throw new TaskFailure("GitHub trigger preset is not available", 422);
+    this.profile(dispatch.profiles.root.profileId, "root");
+    this.profile(dispatch.profiles.worker.profileId, "worker");
+    for (const profile of Object.values(dispatch.profiles.advisors)) this.profile(profile.profileId, "root");
   }
 
   startTask(userId: string, taskId: string): Task {
@@ -158,9 +225,9 @@ export class TaskService {
   }
 
   unarchiveTask(userId: string, taskId: string): Task {
-    this.getTask(userId, taskId);
+    const task = this.getTask(userId, taskId);
     if (this.archives.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
-    this.repository.setArchived(taskId, false);
+    this.database.authImmediateTransaction(db => { if (["backlog", "active", "waiting_human"].includes(task.status)) assertTaskPullRequestsAvailable(db, taskId); this.repository.setArchived(taskId, false); });
     return this.getTask(userId, taskId);
   }
 

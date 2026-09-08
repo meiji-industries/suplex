@@ -7,6 +7,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { AvatarEditor } from ".././components/app/entity-avatar.js";
+import { GithubTriggerSettings } from ".././components/app/github-trigger-settings.js";
 import { SettingsContent, SettingsLayout, SettingsSection, SettingRow } from ".././components/app/settings-layout.js";
 import { companySettingsPath, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { Archive, RotateCcw, Save, Pause, Trash2 } from "lucide-react";
@@ -100,8 +101,9 @@ export function CompanySettingsView(): ReactElement {
         <SettingRow label="Created">
           <span className="text-xs text-muted-foreground">{new Date(company.createdAt).toLocaleDateString()}</span>
         </SettingRow>
-      </SettingsSection>
-      {error ? <div className="mb-4 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
+       </SettingsSection>
+       <GithubTriggerSettings key={company.id} companyId={company.id} />
+       {error ? <div className="mb-4 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       <SettingsSection title="Lifecycle" description="Control workspace activity.">
         {company.status === "active" ? <SettingRow label="Pause company" description="Existing records remain available; new projects and tasks are blocked."><Button variant="outline" size="sm" onClick={() => void mutateStatus("paused")} disabled={busy !== ""}><Pause className="size-3.5" />{busy === "paused" ? "Pausing…" : "Pause company"}</Button></SettingRow> : null}
         {company.status === "paused" ? <SettingRow label="Reactivate company" description="Restore creation of new projects and tasks."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Reactivating…" : "Reactivate company"}</Button></SettingRow> : null}

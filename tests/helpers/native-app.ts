@@ -11,6 +11,8 @@ import { TaskService } from "../../src/tasks.js";
 import { TaskTemplateService } from "../../src/task-templates.js";
 import { WorkflowRecordService } from "../../src/workflow-records.js";
 import { HermesAgentService } from "../../src/hermes-agents.js";
+import { GithubTriggerService } from "../../src/github-triggers.js";
+import type { GithubTriggerPort } from "../../src/github-trigger-inspection.js";
 import type { HostHealthDependencies } from "../../src/health.js";
 
 export const healthyHost: HostHealthDependencies = {
@@ -27,7 +29,7 @@ const webAuthn: WebAuthnAdapter = {
   async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; },
 };
 
-export async function nativeApp() {
+export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "forge-native-app-"));
   const config = createTestConfig(directory, { reachableAddress: "http://127.0.0.1:4111" });
   const database = createTestDatabase(config.databasePath);
@@ -43,8 +45,15 @@ export async function nativeApp() {
   const templates = new TaskTemplateService(database, auth, tasks);
   const workflows = new WorkflowRecordService(database, auth);
   const hermes = new HermesAgentService(database, auth);
+  const githubTrigger = fixtureOptions.githubTrigger ?? {
+    async observeRepository(input) { return { id: 1, fullName: input.repository }; },
+    async validateLabel() {},
+    async listOpenPullRequestsByLabel() { return []; },
+    async inspectPullRequest() { throw new Error("No pull request"); },
+  } satisfies GithubTriggerPort;
+  const githubTriggers = new GithubTriggerService(database, auth, projects, workflows, githubTrigger, tasks);
   const wakes: string[] = [];
-  const app = createApp({ config, database, auth, profiles, projects, tasks, taskTemplates: templates, workflows, hermes, health: healthyHost, readUpdate: async () => ({ available: false }), host: { async recover(id) { wakes.push(id); } } });
+  const app = createApp({ config, database, auth, profiles, projects, tasks, taskTemplates: templates, workflows, githubTriggers, hermes, health: healthyHost, readUpdate: async () => ({ available: false }), host: { async recover(id) { wakes.push(id); } } });
   const invitation = auth.ensureBootstrapInvitation();
   if (!invitation) throw new Error("Fresh database did not create an invitation");
   const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });
@@ -60,7 +69,7 @@ export async function nativeApp() {
   await mkdir(repositoryPath, { recursive: true });
   await mkdir(worktreeRoot, { recursive: true });
   const project = await projects.createProject(userId, company.id, { name: "Repository", repositoryPath, worktreeRoot, repository: "owner/repo", baseBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" });
-  return { directory, config, database, auth, profiles, projects, tasks, templates, workflows, hermes, app, headers, userId, company, project, wakes,
+  return { directory, config, database, auth, profiles, projects, tasks, templates, workflows, githubTriggers, hermes, app, headers, userId, company, project, wakes,
     async close() { await app.close(); database.close(); await rm(directory, { recursive: true, force: true }); },
   };
 }

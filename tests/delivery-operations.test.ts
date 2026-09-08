@@ -69,12 +69,12 @@ async function fixture() {
   return { database, directory, local, root, store, review };
 }
 
-function github(local: LocalRevision) {
+function github(local: LocalRevision, baseSha = "base") {
   const calls: string[] = [];
   const createdTitles: string[] = [];
   const createdBodies: string[] = [];
-  let observed: GithubPullRequestObservation = { exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "open", isDraft: false, headSha: local.headSha, baseSha: "base", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", checks: { total: 1, pending: 0, failing: 0, successful: 1, runs: [] }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: "APPROVED" };
-  const pull = (): GithubPullRequest => ({ number: 7, url: "https://github.com/owner/repo/pull/7", repository: "owner/repo", headBranch: local.branch, baseBranch: "main", headSha: observed.headSha!, baseSha: "base", isDraft: observed.isDraft ?? false, state: observed.state!, mergedAt: observed.state === "merged" ? new Date().toISOString() : null });
+  let observed: GithubPullRequestObservation = { exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "open", isDraft: false, headSha: local.headSha, baseSha, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", checks: { total: 1, pending: 0, failing: 0, successful: 1, runs: [] }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: "APPROVED" };
+  const pull = (): GithubPullRequest => ({ number: 7, url: "https://github.com/owner/repo/pull/7", repository: "owner/repo", headBranch: local.branch, baseBranch: "main", headSha: observed.headSha!, baseSha, isDraft: observed.isDraft ?? false, state: observed.state!, mergedAt: observed.state === "merged" ? new Date().toISOString() : null });
   const port: GithubReleaseAdapter & DeliveryGithubPort = {
     markReadyForReview: async () => { calls.push("ready"); observed = { ...observed, isDraft: false }; },
     checkAuthentication: async () => {}, getRemoteRepository: async () => { calls.push("remote"); return "owner/repo"; }, getBranchHead: async () => local.headSha, inspectLocalRevision: async () => { calls.push("inspect"); return local; }, pushNormal: async () => { calls.push("push"); }, listPullRequests: async () => [pull()], createDraftPullRequest: async input => { calls.push("create"); createdTitles.push(input.title); createdBodies.push(input.body); return pull(); }, updateDraftPullRequest: async () => pull(), getPullRequest: async () => { calls.push("get"); return pull(); }, observePullRequest: async () => { calls.push("observe"); return observed; }, mergePullRequest: async () => { calls.push("merge"); observed = { ...observed, state: "merged" }; },
@@ -86,6 +86,20 @@ function cachePull(store: TaskControlStore, pull: GithubPullRequest, number: num
   store.setPullRequest("task", { repository: pull.repository, number, url: pull.url, headSha: pull.headSha, state: pull.state, mergedAt: pull.mergedAt });
 }
 
+function attachTrigger(value: Awaited<ReturnType<typeof fixture>>, protectedPaths: string[] = []): void {
+  const stamp = new Date().toISOString();
+  value.database.authTransaction(db => {
+    db.prepare("INSERT INTO forge_workflows (id, name, description, engine, configuration_json, created_at, updated_at) VALUES ('workflow_trigger_test', 'Trigger test', '', 'standard', ?, ?, ?)").run(JSON.stringify({ advisorProfileIds: {}, deliveryTarget: "merged" }), stamp, stamp);
+    db.prepare("INSERT INTO forge_github_trigger_rules (id, company_id, project_id, name, label, workflow_id, delivery_target, protected_paths_json, repository_id, repository_name, authority_user_id, enabled, archived_at, revision, last_successful_check_at, next_retry_at, latest_error, failure_count, recent_activity_json, created_at, updated_at) VALUES ('rule_trigger_test', 'company', 'project', 'Rule', 'ready', 'workflow_trigger_test', 'merged', ?, 9, 'owner/repo', 'native-test-user', 0, NULL, 1, NULL, NULL, NULL, 0, '[]', ?, ?)").run(JSON.stringify(protectedPaths), stamp, stamp);
+    const policy = { headSha: value.review.headSha, baseSha: value.review.baseSha, headBranch: value.local.branch, baseBranch: "main", protectedPaths, repositoryId: 9, repositoryName: "owner/repo", deliveryTarget: "merged" };
+    db.prepare("INSERT INTO forge_github_trigger_dispatches (id, rule_id, company_id, project_id, repository_id, repository_name, pull_request_number, authority_user_id, request_json, policy_json, preset_json, profiles_json, idempotency_key, task_id, created_at, updated_at) VALUES ('dispatch_trigger_test', 'rule_trigger_test', 'company', 'project', 9, 'owner/repo', 7, 'native-test-user', '{}', ?, '{}', '{}', 'dispatch-trigger-test', 'task', ?, ?)").run(JSON.stringify(policy), stamp, stamp);
+  });
+}
+
+function triggerInspection(value: Awaited<ReturnType<typeof fixture>>, overrides: Partial<{ headSha: string; baseSha: string; files: Array<{ filename: string; previousFilename: string | null }> }> = {}) {
+  return { number: 7, url: "https://github.com/owner/repo/pull/7", title: "Trigger", state: "open" as const, isDraft: false, labels: ["ready"], changedFiles: overrides.files?.length ?? 0, headSha: overrides.headSha ?? value.review.headSha, headBranch: value.local.branch, baseSha: overrides.baseSha ?? value.review.baseSha, baseBranch: "main", headRepository: { id: 9, fullName: "owner/repo" }, baseRepository: { id: 9, fullName: "owner/repo" }, isCrossRepository: false, files: (overrides.files ?? []).map(file => ({ sha: "a", ...file, status: "modified" as const, additions: 1, deletions: 0, changes: 1, blobUrl: "https://example.com/blob", rawUrl: "https://example.com/raw", contentsUrl: "https://example.com/contents" })) };
+}
+
 afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -95,6 +109,63 @@ afterAll(async () => {
 });
 
 describe("Coordinator delivery operations", () => {
+  it("blocks an external trigger head before push and asks for review", async () => {
+    const value = await fixture(); try {
+      attachTrigger(value); const fake = github(value.local); fake.port.inspectPullRequest = async () => triggerInspection(value, { headSha: "c".repeat(40) });
+      await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", value.local.headSha, value.review)).rejects.toMatchObject({ code: "head_diverged" });
+      expect(fake.calls).not.toContain("push"); expect(value.store.get("task").status).toBe("waiting_human");
+    } finally { value.database.close(); }
+  });
+  it("blocks protected renamed paths before a trigger merge", async () => {
+    const value = await fixture(); try {
+      attachTrigger(value, ["migrations/"]); const fake = github(value.local); fake.port.inspectPullRequest = async () => triggerInspection(value, { files: [{ filename: "src/new.ts", previousFilename: "migrations/old.sql" }] });
+      await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review)).rejects.toMatchObject({ code: "merge_not_eligible" });
+      expect(fake.calls).not.toContain("merge"); expect(value.store.get("task").status).toBe("waiting_human");
+    } finally { value.database.close(); }
+  });
+  it("uses conditional trigger merge and waits when GitHub is not ready", async () => {
+    const value = await fixture(); try {
+      attachTrigger(value); const fake = github(value.local, value.review.baseSha); const direct: Array<{ repository: string; number: number; headSha: string }> = [];
+      fake.port.inspectPullRequest = async () => triggerInspection(value);
+      fake.port.mergePullRequestDirect = async input => { direct.push(input); return { merged: false, sha: null }; };
+      await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review)).resolves.toMatchObject({ kind: "waiting" });
+      expect(direct).toEqual([{ repository: "owner/repo", number: 7, headSha: value.local.headSha }]); expect(fake.calls).not.toContain("merge"); expect(value.store.get("task").workflowState.deliveryWait).not.toBeNull();
+    } finally { value.database.close(); }
+  });
+  it.each(["current", "stale", "missing"])("completes a safe trigger merge with %s observed base metadata", async metadata => {
+    const value = await fixture(); try {
+      attachTrigger(value); const fake = github(value.local, value.review.baseSha); const direct: Array<{ repository: string; number: number; headSha: string }> = [];
+      fake.port.inspectPullRequest = async () => triggerInspection(value);
+      const observe = fake.port.observePullRequest;
+      fake.port.observePullRequest = async input => { const observed = await observe(input); return { ...observed, baseSha: metadata === "missing" ? null : metadata === "stale" ? "stale" : observed.baseSha }; };
+      fake.port.mergePullRequestDirect = async input => { direct.push(input); fake.setObserved({ exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "merged", isDraft: false, headSha: value.local.headSha, baseSha: value.review.baseSha, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", checks: { total: 1, pending: 0, failing: 0, successful: 1, runs: [] }, author: null, changedFiles: 0, additions: 0, deletions: 0, autoMergeEnabled: false, reviewDecision: "APPROVED" }); return { merged: true, sha: "d".repeat(40) }; };
+      await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review)).resolves.toMatchObject({ reviewedHead: value.local.headSha });
+      expect(direct).toEqual([{ repository: "owner/repo", number: 7, headSha: value.local.headSha }]); expect(fake.calls).not.toContain("merge"); expect(value.store.get("task").status).toBe("delivered");
+    } finally { value.database.close(); }
+  });
+  it("records only confirmed trigger pushes and follows their lineage", async () => {
+    const value = await fixture(); try {
+      attachTrigger(value);
+      const admitted = value.local.headSha;
+      await commitGitFixture(value.directory, "repair", []);
+      const repaired = await revision(value.directory);
+      const diff = await inspectDeliveryDiff(value.directory, admitted, repaired.headSha);
+      const review = { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest };
+      const fake = github(repaired, admitted); let remoteHead = admitted; let pushes = 0;
+      fake.port.inspectLocalRevision = async () => repaired;
+      fake.port.getBranchHead = async input => input.branch === "main" ? admitted : remoteHead;
+      fake.port.inspectPullRequest = async () => triggerInspection(value, { headSha: remoteHead, baseSha: admitted });
+      fake.port.pushNormal = async () => { pushes += 1; remoteHead = repaired.headSha; };
+      const delivery = new DeliveryOperations(value.store, fake.port);
+      await expect(delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", repaired.headSha, review)).resolves.toMatchObject({ kind: "pushed", headSha: repaired.headSha });
+      expect(value.store.authorizedTriggerHead("task")).toBe(repaired.headSha);
+      expect(value.database.authQuery(db => db.prepare("SELECT from_head_sha, to_head_sha, review_json FROM forge_github_trigger_delivery_operations").get() as { from_head_sha: string; to_head_sha: string; review_json: string })).toMatchObject({ from_head_sha: admitted, to_head_sha: repaired.headSha });
+      await delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", repaired.headSha, review);
+      expect(pushes).toBe(1);
+      value.store.recordTriggerPush({ taskId: "task", dispatchId: "dispatch_trigger_test", fromHeadSha: admitted, toHeadSha: repaired.headSha, review });
+      expect(() => value.store.recordTriggerPush({ taskId: "task", dispatchId: "dispatch_trigger_test", fromHeadSha: "c".repeat(40), toHeadSha: repaired.headSha, review })).toThrow();
+    } finally { value.database.close(); }
+  });
   it("creates a pull request with the Coordinator's normalized title and reviewed description", async () => {
     const value = await fixture();
     try {

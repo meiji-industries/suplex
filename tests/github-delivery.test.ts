@@ -15,6 +15,24 @@ test.each([
   expect(calls).toEqual([["api", "repos/owner/repo"], ["pr", "merge", "7", "--repo", "owner/repo", method, "--match-head-commit", "a".repeat(40)]]);
 });
 
+test.each([
+  [{ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }, "squash"],
+  [{ allow_squash_merge: false, allow_merge_commit: true, allow_rebase_merge: false }, "merge"],
+  [{ allow_squash_merge: false, allow_merge_commit: false, allow_rebase_merge: true }, "rebase"],
+] as const)("direct merge conditionally uses %s", async (settings, method) => {
+  const calls: string[][] = [];
+  const port = createGithubReleasePort({ runner: async input => { calls.push(input.args); return { stdout: JSON.stringify(input.args.some(value => value.includes("/merge")) ? { merged: true, message: "ok", sha: "b".repeat(40) } : settings), stderr: "" }; } });
+  await expect(port.mergePullRequestDirect!({ repository: "owner/repo", number: 7, headSha: "a".repeat(40) })).resolves.toEqual({ merged: true, sha: "b".repeat(40) });
+  expect(calls).toEqual([["api", "repos/owner/repo"], ["api", "--method", "PUT", "repos/owner/repo/pulls/7/merge", "-f", `sha=${"a".repeat(40)}`, "-f", `merge_method=${method}`]]);
+});
+
+test("direct merge does not retry a not-ready or malformed response", async () => {
+  const calls: string[][] = [];
+  const port = createGithubReleasePort({ runner: async input => { calls.push(input.args); return { stdout: JSON.stringify(input.args.some(value => value.includes("/merge")) ? { merged: false, message: "not ready" } : { allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }), stderr: "" }; } });
+  await expect(port.mergePullRequestDirect!({ repository: "owner/repo", number: 7, headSha: "a".repeat(40) })).resolves.toEqual({ merged: false, sha: null });
+  expect(calls).toHaveLength(2);
+});
+
 test("GitHub outages are not interpreted as missing branches", async () => {
   const port = createGithubReleasePort({ runner: async () => { throw Object.assign(new Error("Network failure"), { stderr: "connect: connection refused" }); } });
   await expect(port.getBranchHead({ repository: "owner/repo", branch: "task" })).rejects.toThrow("connection refused");
@@ -23,6 +41,16 @@ test("GitHub outages are not interpreted as missing branches", async () => {
 test("an explicit GitHub 404 is an absent branch", async () => {
   const port = createGithubReleasePort({ runner: async () => { throw Object.assign(new Error("Not found"), { stderr: "gh: Not Found (HTTP 404)" }); } });
   await expect(port.getBranchHead({ repository: "owner/repo", branch: "task" })).resolves.toBeNull();
+});
+
+test("bounded open pull request queries remain unchanged", async () => {
+  const calls: string[][] = [];
+  const port = createGithubReleasePort({ runner: async input => {
+    calls.push(input.args);
+    return { stdout: JSON.stringify([{ number: 7, url: "https://github.com/owner/repo/pull/7", isDraft: false, state: "OPEN", headRefName: "feature", headRefOid: "a".repeat(40), baseRefName: "main", baseRefOid: "b".repeat(40), title: "Existing query", body: "", author: { login: "octo" }, isCrossRepository: false }]), stderr: "" };
+  } });
+  await expect(port.listOpenPullRequests({ repository: "owner/repo", limit: 1000 })).resolves.toMatchObject([{ number: 7, title: "Existing query" }]);
+  expect(calls).toEqual([["pr", "list", "--repo", "owner/repo", "--state", "open", "--limit", "100", "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid,title,body,author,updatedAt,isCrossRepository"]]);
 });
 
 test("check observations retain actionable CI names and log links", () => {

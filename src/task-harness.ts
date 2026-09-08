@@ -8,6 +8,7 @@ import type { RootIdentity } from "./root-contracts.js";
 import type { PromptDispatchAttempt, TaskSession } from "./task-control.js";
 import type { TaskExecution } from "./task-execution-contracts.js";
 import type { TaskUsage } from "./task-usage.js";
+import { splitBalancedPaneRow } from "./task-pane-layout.js";
 import type { WorkflowId } from "./workflows.js";
 
 // The prompt intent and observation vocabulary was designed against OpenCode
@@ -97,7 +98,7 @@ export async function writeRootBridgeBinding(input: { runtimeDirectory: string; 
   return server;
 }
 
-export type TaskPanePort = Pick<HerdrClient, "getPane" | "getPaneProcessInfo" | "createWorkspace" | "splitPane" | "renamePane" | "runPaneCommand" | "reportPaneMetadata">;
+export type TaskPanePort = Pick<HerdrClient, "getPane" | "getPaneProcessInfo" | "createWorkspace" | "splitPane" | "renamePane" | "runPaneCommand" | "reportPaneMetadata"> & Partial<Pick<HerdrClient, "getPaneLayout" | "resizePane">>;
 
 const shells = ["zsh", "bash", "sh", "fish", "nu", "pwsh"];
 
@@ -134,7 +135,7 @@ export async function attachTaskDisplay(herdr: TaskPanePort, input: {
     if (!owned || !isInteractiveShell(info)) pane = null;
   }
   pane ??= input.rootPaneId && await herdr.getPane(input.rootPaneId)
-    ? await herdr.splitPane({ paneId: input.rootPaneId, direction: "right", cwd: scope.directory, focus: false })
+    ? await splitBalancedPaneRow(herdr, { paneId: input.rootPaneId, cwd: scope.directory })
     : (await herdr.createWorkspace({ label: `forge-${scope.taskId}`, cwd: scope.directory, focus: false })).rootPane;
   input.persistPane(pane.paneId);
   const title = taskSessionTitle(scope);

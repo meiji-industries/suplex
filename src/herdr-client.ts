@@ -8,6 +8,39 @@ const PaneProcessInfoSchema = z.object({
   foreground_processes: z.array(z.object({ pid: z.number().int().positive(), name: z.string(), argv: z.array(z.string()).optional() })).default([]),
 });
 export type PaneProcessInfo = z.infer<typeof PaneProcessInfoSchema>;
+const PaneLayoutRectSchema = z.object({
+  x: z.number().int().nonnegative(),
+  y: z.number().int().nonnegative(),
+  width: z.number().int().nonnegative(),
+  height: z.number().int().nonnegative(),
+});
+const PaneLayoutSchema = z.object({
+  workspace_id: z.string().min(1),
+  tab_id: z.string().min(1),
+  zoomed: z.boolean(),
+  area: PaneLayoutRectSchema,
+  focused_pane_id: z.string().min(1),
+  panes: z.array(z.object({
+    pane_id: z.string().min(1),
+    focused: z.boolean(),
+    rect: PaneLayoutRectSchema,
+  })),
+  splits: z.array(z.object({
+    id: z.string().min(1),
+    direction: z.enum(["right", "down"]),
+    ratio: z.number(),
+    rect: PaneLayoutRectSchema,
+  })),
+}).transform(raw => ({
+  workspaceId: raw.workspace_id,
+  tabId: raw.tab_id,
+  zoomed: raw.zoomed,
+  area: raw.area,
+  focusedPaneId: raw.focused_pane_id,
+  panes: raw.panes.map(item => ({ paneId: item.pane_id, focused: item.focused, rect: item.rect })),
+  splits: raw.splits,
+}));
+export type PaneLayout = z.infer<typeof PaneLayoutSchema>;
 import { json } from "./task-utils.js";
 type ExecFileRunner = (
   file: string,
@@ -215,13 +248,20 @@ export interface HerdrClient {
   getWorkspace(id: string): Promise<Workspace | null>;
   closeWorkspace(id: string): Promise<void>;
   getPane(id: string): Promise<Pane | null>;
+  getPaneLayout(id: string): Promise<PaneLayout>;
   getPaneProcessInfo(id: string): Promise<PaneProcessInfo>;
   splitPane(input: {
     paneId: string;
     direction: "right" | "down";
+    ratio?: number;
     cwd: string;
     focus: false;
   }): Promise<Pane>;
+  resizePane(input: {
+    paneId: string;
+    direction: "left" | "right" | "up" | "down";
+    amount: number;
+  }): Promise<void>;
   renamePane(id: string, label: string): Promise<void>;
   runPaneCommand(id: string, command: string): Promise<void>;
   closePane(id: string): Promise<void>;
@@ -369,6 +409,9 @@ export class CliHerdrClient implements HerdrClient {
       pane(value<Json>(await this.call(["pane", "get", idValue], true), "pane")),
     );
   }
+  async getPaneLayout(idValue: string): Promise<PaneLayout> {
+    return PaneLayoutSchema.parse((await this.call(["pane", "layout", "--pane", idValue])).layout);
+  }
   async listPanes(workspaceId: string): Promise<Pane[]> {
     const result = await this.call(["pane", "list", "--workspace", workspaceId]);
     return ((result.panes as Json[]) ?? []).map(pane);
@@ -381,6 +424,7 @@ export class CliHerdrClient implements HerdrClient {
   async splitPane(input: {
     paneId: string;
     direction: "right" | "down";
+    ratio?: number;
     cwd: string;
     focus: false;
   }): Promise<Pane> {
@@ -392,6 +436,7 @@ export class CliHerdrClient implements HerdrClient {
           input.paneId,
           "--direction",
           input.direction,
+          ...(input.ratio === undefined ? [] : ["--ratio", String(input.ratio)]),
           "--cwd",
           input.cwd,
           "--no-focus",
@@ -399,6 +444,22 @@ export class CliHerdrClient implements HerdrClient {
         "pane",
       ),
     );
+  }
+  async resizePane(input: {
+    paneId: string;
+    direction: "left" | "right" | "up" | "down";
+    amount: number;
+  }): Promise<void> {
+    await this.call([
+      "pane",
+      "resize",
+      "--pane",
+      input.paneId,
+      "--direction",
+      input.direction,
+      "--amount",
+      String(input.amount),
+    ]);
   }
   renamePane(idValue: string, label: string): Promise<void> {
     return this.empty(["pane", "rename", idValue, label]);

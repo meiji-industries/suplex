@@ -24,6 +24,31 @@ test("client validates JSON envelopes and passes unambiguous argv", async () => 
   expect(argv).toEqual([["workspace", "get", "w1; rm -rf /"]]);
 });
 
+test("pane layout and sizing methods validate geometry and pass exact argv", async () => {
+  const argv: string[][] = [];
+  const client = new CliHerdrClient("herdr", async (_file, args) => {
+    argv.push([...args]);
+    if (args[1] === "layout") return { stdout: JSON.stringify({ id: "layout", result: { layout: {
+      workspace_id: "w1", tab_id: "w1:t1", zoomed: false, focused_pane_id: "w1:p1",
+      area: { x: 0, y: 0, width: 120, height: 60 },
+      panes: [{ pane_id: "w1:p1", focused: true, rect: { x: 0, y: 0, width: 120, height: 60 } }],
+      splits: [],
+    } } }) };
+    if (args[1] === "resize") return { stdout: JSON.stringify({ id: "resize", result: { resize: {} } }) };
+    return { stdout: JSON.stringify({ id: "split", result: { pane: { pane_id: "w1:p2" } } }) };
+  });
+
+  await expect(client.getPaneLayout("w1:p1")).resolves.toMatchObject({ tabId: "w1:t1", area: { width: 120 }, panes: [{ paneId: "w1:p1" }] });
+  await client.resizePane({ paneId: "w1:p1", direction: "down", amount: 1 / 6 });
+  await client.splitPane({ paneId: "w1:p1", direction: "down", ratio: 0.5, cwd: "/repo", focus: false });
+
+  expect(argv).toEqual([
+    ["pane", "layout", "--pane", "w1:p1"],
+    ["pane", "resize", "--pane", "w1:p1", "--direction", "down", "--amount", String(1 / 6)],
+    ["pane", "split", "w1:p1", "--direction", "down", "--ratio", "0.5", "--cwd", "/repo", "--no-focus"],
+  ]);
+});
+
 
 
 

@@ -185,7 +185,12 @@ pnpm verify
 ```
 
 Verification runs typecheck, lint, unit tests, a production build, and Playwright
-browser tests at desktop and narrow widths. Installed-runtime probes live in
+browser smoke tests for session setup, project creation, and the task lifecycle.
+Task creation and start run at desktop and narrow widths. Follow the
+[browser test budget](AGENTS.md#browser-test-budget) when adding coverage or
+choosing which browser tests to run during development.
+
+Installed-runtime probes live in
 `scripts/probe-opencode-runtime.ts`, `scripts/probe-opencode-attachment.ts`, and
 `scripts/probe-opencode-delivery.ts`. Read each script for its arguments.
 

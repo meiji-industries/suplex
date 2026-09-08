@@ -7,7 +7,7 @@ import { DeliveryOperationFailure, DeliveryOperations } from "./delivery-operati
 import { StructuredLogger } from "./logging.js";
 import { createOpenCodePromptIntent } from "./opencode-session.js";
 import type { RootBridgeAdapter } from "./root-bridge.js";
-import type { AdvisorRequest, DeliveryOperation, DeliveryReview, PullRequestTitle, RootIdentity, RootImageResult, WorkerAssignment } from "./root-contracts.js";
+import type { AdvisorRequest, DeliveryOperation, DeliveryReview, PullRequestBody, PullRequestTitle, RootIdentity, RootImageResult, WorkerAssignment } from "./root-contracts.js";
 import type { TaskControlStore } from "./root-session-store.js";
 import type { TaskControl, TaskSession, TaskTurn } from "./task-control.js";
 import type { NativeSessionReader, PromptObservation, TaskHarness, TaskScope } from "./task-harness.js";
@@ -258,8 +258,8 @@ export class RootController implements RootBridgeAdapter {
     return { ok: true, range: observed.range };
   }
 
-  async requestDelivery(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string, review?: DeliveryReview, pullRequestTitle?: PullRequestTitle): Promise<unknown> {
-    const result = await this.delivery.execute(root, operation, expectedHead, review, pullRequestTitle, { recheck: () => this.recheck(root) });
+  async requestDelivery(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string, review?: DeliveryReview, pullRequestTitle?: PullRequestTitle, pullRequestBody?: PullRequestBody): Promise<unknown> {
+    const result = await this.delivery.execute(root, operation, expectedHead, review, pullRequestTitle, pullRequestBody, { recheck: () => this.recheck(root) });
     if (operation !== "inspect_delivery_diff" || this.store.get(root.taskId).workflow === "standard" || !this.evidence) return result;
     const control = this.store.get(root.taskId);
     const diff = result as ReviewRange;

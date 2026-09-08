@@ -62,6 +62,7 @@ test("delegation requires the Coordinator's plan and acceptance criteria before 
 
 class ForgeAdapterFake implements RootBridgeAdapter {
   readonly calls: string[] = [];
+  pullRequestBody: string | undefined;
   current = true;
   async readImage(): Promise<never> { throw new Error("No image in this fixture"); }
 
@@ -93,7 +94,8 @@ class ForgeAdapterFake implements RootBridgeAdapter {
     return { advisorId: "advisor_1" };
   }
 
-  async requestDelivery(_identity: RootIdentity, operation: "inspect_delivery_diff" | "complete_local_work" | "push_branch" | "create_or_adopt_pull_request" | "observe_pull_request" | "observe_checks" | "request_review" | "merge_pull_request", _expectedHead?: string, _review?: unknown, pullRequestTitle?: string): Promise<unknown> {
+  async requestDelivery(_identity: RootIdentity, operation: "inspect_delivery_diff" | "complete_local_work" | "push_branch" | "create_or_adopt_pull_request" | "observe_pull_request" | "observe_checks" | "request_review" | "merge_pull_request", _expectedHead?: string, _review?: unknown, pullRequestTitle?: string, pullRequestBody?: string): Promise<unknown> {
+    this.pullRequestBody = pullRequestBody;
     this.calls.push(`delivery:${operation}:${pullRequestTitle ?? "none"}`);
     return { delivered: true };
   }
@@ -155,8 +157,10 @@ test("MCP discovery and typed Coordinator calls use the scoped bridge transport"
   const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", plan: "Inspect the scoped diff for the requested implementation", acceptanceCriteria: ["The diff contains only requested changes"], instruction: "Inspect the current diff." } } });
   expect(delegated).toMatchObject({ result: { structuredContent: { assignmentId: "worker_1" } } });
   expect(adapter.calls).toContain("delegate:session_1:Inspect the current diff.");
-  await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "request_delivery", operation: "create_or_adopt_pull_request", pullRequestTitle: "  Create reviewed delivery flow  " } } });
+  const pullRequestBody = "## Summary\n\n- Add the reviewed delivery flow.\n\n## Why\n\nIt records the reviewed result.\n\n## Validation\n\n- pnpm test (passed)\n\n## Review notes\n\nReview the delivery body.";
+  await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "request_delivery", operation: "create_or_adopt_pull_request", pullRequestTitle: "  Create reviewed delivery flow  ", pullRequestBody } } });
   expect(adapter.calls).toContain("delivery:create_or_adopt_pull_request:Create reviewed delivery flow");
+  expect(adapter.pullRequestBody).toBe(pullRequestBody);
   reader.close();
 });
 
@@ -165,6 +169,11 @@ test("Coordinator bridge rejects invalid pull request titles", async () => {
   for (const pullRequestTitle of [" ", "\nCreate a pull request", "Create\na pull request", `Create${String.fromCharCode(1)} a pull request`, "a".repeat(121)]) {
     await expect(bridge.call({ kind: "request_delivery", operation: "create_or_adopt_pull_request", pullRequestTitle })).rejects.toMatchObject({ code: "invalid_request" });
   }
+});
+
+test("Coordinator bridge rejects malformed pull request descriptions", async () => {
+  const bridge = new RootBridge(root, new ForgeAdapterFake());
+  await expect(bridge.call({ kind: "request_delivery", operation: "create_or_adopt_pull_request", pullRequestBody: "## Summary\n\n- Change\n\n## Validation\n\n- pnpm test (passed)\n\n## Review notes\n\nReview it." })).rejects.toMatchObject({ code: "invalid_request" });
 });
 
 test("stdio bridge invokes the production controller against a durable task control", async () => {

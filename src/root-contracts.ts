@@ -39,6 +39,16 @@ export const PullRequestTitleSchema = z.string().refine(
 ).trim().min(1).max(120);
 export type PullRequestTitle = z.infer<typeof PullRequestTitleSchema>;
 
+export const PULL_REQUEST_BODY_SECTIONS = ["## Summary", "## Why", "## Validation", "## Review notes"] as const;
+export const PullRequestBodySchema = z.string().trim().min(1).max(20_000).refine(
+  value => {
+    const indexes = PULL_REQUEST_BODY_SECTIONS.map(section => new RegExp(`^${section}$`, "m").exec(value)?.index);
+    return indexes.every((index, position) => index !== undefined && (position === 0 || index > indexes[position - 1]!));
+  },
+  "Pull request descriptions must contain, in order, the headings ## Summary, ## Why, ## Validation, ## Review notes",
+);
+export type PullRequestBody = z.infer<typeof PullRequestBodySchema>;
+
 const WorkerAssignmentShape = z.object({
   plan: z.string().trim().min(1).optional().describe("The Coordinator's implementation plan, based on its own source investigation. Include the chosen approach, affected files, and constraints. Mandatory in planned mode; omitted in direct mode."),
   acceptanceCriteria: z.array(z.string().trim().min(1)).min(1).describe("Concrete outcomes and checks the Coordinator will use to review the implementation."),
@@ -66,7 +76,7 @@ export const RootToolSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("read_worker_evidence"), turnId: opaqueId, cursor: z.string().regex(/^\d+:\d+:\d+$/).optional(), maxCharacters: z.number().int().min(1_000).max(20_000).optional() }).strict(),
   WorkerAssignmentShape.extend({ kind: z.literal("delegate_worker") }).strict().refine(plannedNeedsPlan, "A planned assignment requires the Coordinator's plan"),
   AdvisorRequestSchema.extend({ kind: z.literal("delegate_advisor") }).strict(),
-  z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional(), review: DeliveryReviewSchema.optional(), pullRequestTitle: PullRequestTitleSchema.optional().describe("For pull request creation, use concise action-oriented wording based on the final reviewed diff. Do not copy task prose or a commit message.") }).strict(),
+  z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional(), review: DeliveryReviewSchema.optional(), pullRequestTitle: PullRequestTitleSchema.optional().describe("For pull request creation, use concise action-oriented wording based on the final reviewed diff. Do not copy task prose or a commit message."), pullRequestBody: PullRequestBodySchema.optional().describe("For pull request creation, markdown with exactly these headings in order: ## Summary (bullets of what changed), ## Why (the motivation), ## Validation (bullets of checks run and their results), ## Review notes (what a reviewer should look at). Base it on the final reviewed diff; do not copy task prose.") }).strict(),
   z.object({ kind: z.literal("ask_human"), question: z.string().min(1), options: RecommendedQuestionOptionsSchema }).strict(),
 ]);
 

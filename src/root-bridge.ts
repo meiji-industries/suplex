@@ -42,8 +42,7 @@ export interface RootBridgeAdapter {
   readWorkerEvidence(root: RootIdentity, turnId: string, cursor?: string, maxCharacters?: number): Promise<unknown>;
   delegateWorker(root: RootIdentity, assignment: WorkerAssignment): Promise<unknown>;
   delegateAdvisor(root: RootIdentity, request: AdvisorRequest): Promise<unknown>;
-  requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation'], expectedHead?: string, review?: Extract<RootTool, { kind: "request_delivery" }>['review']): Promise<unknown>;
-  requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation'], expectedHead?: string, review?: Extract<RootTool, { kind: "request_delivery" }>['review'], pullRequestTitle?: Extract<RootTool, { kind: "request_delivery" }>['pullRequestTitle']): Promise<unknown>;
+  requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation'], expectedHead?: string, review?: Extract<RootTool, { kind: "request_delivery" }>['review'], pullRequestTitle?: Extract<RootTool, { kind: "request_delivery" }>['pullRequestTitle'], pullRequestBody?: Extract<RootTool, { kind: "request_delivery" }>['pullRequestBody']): Promise<unknown>;
   askHuman(root: RootIdentity, question: string, options: Extract<RootTool, { kind: "ask_human" }>['options']): Promise<unknown>;
 }
 
@@ -74,7 +73,7 @@ export class RootBridge {
       case "delegate_advisor":
         return this.adapter.delegateAdvisor(this.root, { role: tool.role, ...(tool.brief === undefined ? {} : { brief: tool.brief }) });
       case "request_delivery":
-        return this.adapter.requestDelivery(this.root, tool.operation, tool.expectedHead, tool.review, tool.pullRequestTitle);
+        return this.adapter.requestDelivery(this.root, tool.operation, tool.expectedHead, tool.review, tool.pullRequestTitle, tool.pullRequestBody);
       case "ask_human":
         return this.adapter.askHuman(this.root, tool.question, tool.options);
     }

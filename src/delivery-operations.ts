@@ -1,4 +1,4 @@
-import { PullRequestTitleSchema, type DeliveryOperation, type DeliveryReview, type PullRequestTitle } from "./root-contracts.js";
+import { PullRequestBodySchema, PullRequestTitleSchema, type DeliveryOperation, type DeliveryReview, type PullRequestBody, type PullRequestTitle } from "./root-contracts.js";
 import { inspectDeliveryDiff, reviewEquivalence } from "./delivery-review.js";
 import type { RootIdentity } from "./root-contracts.js";
 import type { GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation } from "./github-delivery.js";
@@ -116,7 +116,7 @@ export class DeliveryOperations {
     return { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest, clean: local.clean };
   }
 
-  async execute(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string, review?: DeliveryReview, pullRequestTitle?: PullRequestTitle, options: { recheck?: () => void } = {}): Promise<unknown> {
+  async execute(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string, review?: DeliveryReview, pullRequestTitle?: PullRequestTitle, pullRequestBody?: PullRequestBody, options: { recheck?: () => void } = {}): Promise<unknown> {
     this.store.assertCurrentRoot(root);
     const control = this.store.get(root.taskId);
     const recheck: Recheck = () => { this.store.assertCurrentRoot(root); options.recheck?.(); };
@@ -167,7 +167,7 @@ export class DeliveryOperations {
       case "push_branch":
         return this.push(recheck, refreshed, repository, local, actual!);
       case "create_or_adopt_pull_request":
-        return this.createOrAdopt(recheck, refreshed, repository, local, pull, actual!, pullRequestTitle);
+        return this.createOrAdopt(recheck, refreshed, repository, local, pull, actual!, pullRequestTitle, pullRequestBody);
       case "observe_checks":
         return this.observeChecks(refreshed, repository, local);
       case "request_review":
@@ -310,7 +310,7 @@ export class DeliveryOperations {
     }
   }
 
-  private async createOrAdopt(recheck: Recheck, control: TaskControl, repository: string, local: { branch: string; headSha: string }, pull: PullRequestReference | null, actual: ReviewRange, pullRequestTitle?: PullRequestTitle): Promise<PullRequestReference> {
+  private async createOrAdopt(recheck: Recheck, control: TaskControl, repository: string, local: { branch: string; headSha: string }, pull: PullRequestReference | null, actual: ReviewRange, pullRequestTitle?: PullRequestTitle, pullRequestBody?: PullRequestBody): Promise<PullRequestReference> {
     if (pull) {
       if (pull.state === "closed") throw new DeliveryOperationFailure("pull_request_closed", "The matching pull request is closed and was not merged");
       if (pull.headSha !== local.headSha && pull.state !== "merged") throw new DeliveryOperationFailure("head_diverged", "The pull request head does not match the observed worktree head. Push the reviewed head first.");
@@ -328,7 +328,9 @@ export class DeliveryOperations {
     if (candidate) return this.adoptKnownPull(control, candidate, { explicit: true, recheck });
     const title = PullRequestTitleSchema.safeParse(pullRequestTitle);
     if (!title.success) throw new DeliveryOperationFailure("pull_request_title_required", "Supply a concise title that describes the final solution before you create a pull request.");
-    const created = await this.github.createDraftPullRequest({ repository, owner: repository.split("/")[0]!, headBranch: local.branch, baseBranch: control.deliveryIntent.baseBranch, title: title.data, body: control.objective });
+    const body = PullRequestBodySchema.safeParse(pullRequestBody);
+    if (!body.success) throw new DeliveryOperationFailure("pull_request_body_required", "Supply a pull request description with the headings ## Summary, ## Why, ## Validation, ## Review notes, in order, before you create a pull request.");
+    const created = await this.github.createDraftPullRequest({ repository, owner: repository.split("/")[0]!, headBranch: local.branch, baseBranch: control.deliveryIntent.baseBranch, title: title.data, body: body.data });
     return this.adoptKnownPull(control, created, { explicit: true, recheck });
   }
 

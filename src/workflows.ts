@@ -261,7 +261,7 @@ export function workflowReadyForDelivery(control: ControlLike, sessions: Session
   return reviewGate(workflow, control.workflowState.reviews, actualRange);
 }
 
-export type DeliveryFailureCode = "worktree_missing" | "pull_request_ambiguous" | "pull_request_closed" | "head_diverged" | "delivery_target_mismatch" | "delivery_review_required" | "pull_request_title_required" | "workflow_review_required" | "worktree_dirty" | "delegate_active" | "merge_not_eligible" | "observation_unavailable";
+export type DeliveryFailureCode = "worktree_missing" | "pull_request_ambiguous" | "pull_request_closed" | "head_diverged" | "delivery_target_mismatch" | "delivery_review_required" | "pull_request_title_required" | "pull_request_body_required" | "workflow_review_required" | "worktree_dirty" | "delegate_active" | "merge_not_eligible" | "observation_unavailable";
 export type DeliveryDecision = { ok: true } | { ok: false; code: DeliveryFailureCode; reason: string };
 export type LocalSourceFacts = { branch?: string | undefined; headSha?: string | undefined; clean: boolean };
 type DeliverySessionLike = SessionLike & { current?: boolean; lifecycle?: string; generation?: number; launchOwner?: string | null };

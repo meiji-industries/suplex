@@ -18,6 +18,7 @@ import { commitGitFixture, initializeGitFixture } from "./helpers/git-fixture.js
 const run = (command: string, args: string[]) => runCommand({ command, args, taskId: null, stepId: null });
 const cleanup: string[] = [];
 let seed: { directory: string; local: LocalRevision } | undefined;
+const pullRequestBody = "## Summary\n\n- Add the requested change.\n\n## Why\n\nThe task requires it.\n\n## Validation\n\n- pnpm test (passed)\n\n## Review notes\n\nReview the delivery path.";
 
 async function revision(cwd: string): Promise<LocalRevision> {
   const [branch, headSha, treeSha, status] = await Promise.all([
@@ -71,13 +72,14 @@ async function fixture() {
 function github(local: LocalRevision) {
   const calls: string[] = [];
   const createdTitles: string[] = [];
+  const createdBodies: string[] = [];
   let observed: GithubPullRequestObservation = { exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "open", isDraft: false, headSha: local.headSha, baseSha: "base", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", checks: { total: 1, pending: 0, failing: 0, successful: 1, runs: [] }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: "APPROVED" };
   const pull = (): GithubPullRequest => ({ number: 7, url: "https://github.com/owner/repo/pull/7", repository: "owner/repo", headBranch: local.branch, baseBranch: "main", headSha: observed.headSha!, baseSha: "base", isDraft: observed.isDraft ?? false, state: observed.state!, mergedAt: observed.state === "merged" ? new Date().toISOString() : null });
   const port: GithubReleaseAdapter & DeliveryGithubPort = {
     markReadyForReview: async () => { calls.push("ready"); observed = { ...observed, isDraft: false }; },
-    checkAuthentication: async () => {}, getRemoteRepository: async () => { calls.push("remote"); return "owner/repo"; }, getBranchHead: async () => local.headSha, inspectLocalRevision: async () => { calls.push("inspect"); return local; }, pushNormal: async () => { calls.push("push"); }, listPullRequests: async () => [pull()], createDraftPullRequest: async input => { calls.push("create"); createdTitles.push(input.title); return pull(); }, updateDraftPullRequest: async () => pull(), getPullRequest: async () => { calls.push("get"); return pull(); }, observePullRequest: async () => { calls.push("observe"); return observed; }, mergePullRequest: async () => { calls.push("merge"); observed = { ...observed, state: "merged" }; },
+    checkAuthentication: async () => {}, getRemoteRepository: async () => { calls.push("remote"); return "owner/repo"; }, getBranchHead: async () => local.headSha, inspectLocalRevision: async () => { calls.push("inspect"); return local; }, pushNormal: async () => { calls.push("push"); }, listPullRequests: async () => [pull()], createDraftPullRequest: async input => { calls.push("create"); createdTitles.push(input.title); createdBodies.push(input.body); return pull(); }, updateDraftPullRequest: async () => pull(), getPullRequest: async () => { calls.push("get"); return pull(); }, observePullRequest: async () => { calls.push("observe"); return observed; }, mergePullRequest: async () => { calls.push("merge"); observed = { ...observed, state: "merged" }; },
   };
-  return { calls, createdTitles, port, setObserved: (value: GithubPullRequestObservation) => { observed = value; } };
+  return { calls, createdTitles, createdBodies, port, setObserved: (value: GithubPullRequestObservation) => { observed = value; } };
 }
 
 function cachePull(store: TaskControlStore, pull: GithubPullRequest, number: number): void {
@@ -93,15 +95,17 @@ afterAll(async () => {
 });
 
 describe("Coordinator delivery operations", () => {
-  it("creates a pull request with the Coordinator's normalized final-solution title", async () => {
+  it("creates a pull request with the Coordinator's normalized title and reviewed description", async () => {
     const value = await fixture();
     try {
       const fake = github(value.local);
       fake.port.listPullRequests = async () => [];
       value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET objective = ? WHERE task_id = 'task'").run("Auto Restart\n\nRight now the \"Update Forge\" notification does not have a call to action.  I want it to have the ability to self-reload itself somehow.. Please make it happen somehow.  \"Restart Now\"."));
       const controller = new RootController(value.store, new FakeTaskHarness(), new DeliveryOperations(value.store, fake.port));
-      await controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "create_or_adopt_pull_request", value.local.headSha, value.review, "  Add a restart action to the Forge update notification  ");
+      await controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "create_or_adopt_pull_request", value.local.headSha, value.review, "  Add a restart action to the Forge update notification  ", pullRequestBody);
       expect(fake.createdTitles).toEqual(["Add a restart action to the Forge update notification"]);
+      expect(fake.createdBodies).toEqual([pullRequestBody]);
+      expect(fake.createdBodies).not.toContain(value.store.get("task").objective);
     } finally { value.database.close(); }
   });
 
@@ -114,6 +118,24 @@ describe("Coordinator delivery operations", () => {
       for (const title of [undefined, " ", "\nCreate a pull request", "Create\na pull request", `Create${String.fromCharCode(1)} a pull request`, "a".repeat(121)]) {
         await expect(delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "create_or_adopt_pull_request", value.local.headSha, value.review, title)).rejects.toMatchObject({ code: "pull_request_title_required" });
       }
+      expect(fake.calls).not.toContain("create");
+    } finally { value.database.close(); }
+  });
+
+  it.each([undefined, "## Summary\n\n- Change\n\n## Why\n\nReason\n\n## Validation\n\n- pnpm test (passed)", "## Summary\n\n- Change\n\n## Validation\n\n- pnpm test (passed)\n\n## Why\n\nReason\n\n## Review notes\n\nReview it."])
+  ("requires a complete structured description before creating a pull request", async body => {
+    const value = await fixture();
+    try {
+      const fake = github(value.local);
+      fake.port.listPullRequests = async () => [];
+      await expect(new DeliveryOperations(value.store, fake.port).execute(
+        { taskId: "task", sessionId: value.root.id, generation: value.root.generation },
+        "create_or_adopt_pull_request",
+        value.local.headSha,
+        value.review,
+        "Create reviewed delivery flow",
+        body,
+      )).rejects.toMatchObject({ code: "pull_request_body_required" });
       expect(fake.calls).not.toContain("create");
     } finally { value.database.close(); }
   });

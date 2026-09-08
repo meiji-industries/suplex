@@ -25,6 +25,7 @@ describe("OpenCode role configuration", () => {
     expect(taskRolePrompt("root")).toContain("Never delegate planning or the final verification judgment");
     expect(taskRolePrompt("root")).toContain("generate a concise action-oriented title from the final reviewed solution");
     expect(taskRolePrompt("root")).toContain("Supply it as pullRequestTitle");
+    expect(taskRolePrompt("root")).toContain("pullRequestBody");
   });
 
   it("lets Workers edit but not spawn native subagents or call the Coordinator bridge", () => {

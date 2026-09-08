@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { nativeApp } from "./helpers/native-app.js";
 import { ProjectBodySchema } from "../src/http/contracts/projects.js";
 
@@ -17,5 +17,19 @@ test("projects expose two profile defaults and no check or activation mirror", a
     expect(invalid.statusCode).toBe(422);
     expect(f.projects.getProject(f.userId, id).name).toBe("Renamed");
     expect((await f.app.inject({ method: "GET", url: "/api/admin/capacity", headers: f.headers })).statusCode).toBe(404);
+  } finally { await f.close(); }
+});
+
+test("project task sources accept issue discovery through the HTTP route", async () => {
+  const f = await nativeApp();
+  try {
+    const issue = { kind: "issue" as const, number: 42, url: "https://github.com/owner/repo/issues/42", title: "Fix search", body: "Details", author: "octo", updatedAt: "2026-09-07T23:00:00Z" };
+    const discover = vi.spyOn(f.projects, "discoverTaskSources").mockResolvedValue({ available: true, sources: [issue] });
+
+    const response = await f.app.inject({ method: "GET", url: `/api/projects/${f.project.id}/task-sources?kind=issue`, headers: f.headers });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toEqual({ available: true, sources: [issue] });
+    expect(discover).toHaveBeenCalledWith(f.userId, f.project.id, "issue");
   } finally { await f.close(); }
 });

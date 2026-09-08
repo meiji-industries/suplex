@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AgentProfileInputSchema, AgentProfilePatchSchema, AgentProfileSchema } from "../../agent-profile-contracts.js";
+import { AgentProfileInputSchema, AgentProfilePatchSchema, AgentProfileSchema } from "../../profiles/agent-profile-contracts.js";
 
 export const ProjectBodySchema = z.object({
   name: z.string().min(1),

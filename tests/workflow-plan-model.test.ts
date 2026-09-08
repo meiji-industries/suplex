@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { workflowTopology } from "../src/frontend/components/app/workflow-plan-model.js";
+import { workflowTopology } from "../src/frontend/features/tasks/workflow-plan-model.js";
 
 const edge = (workflow: Parameters<typeof workflowTopology>[0], from: string, to: string) => workflowTopology(workflow, "Delivery target").edges.find(item => item.from === from && item.to === to);
 

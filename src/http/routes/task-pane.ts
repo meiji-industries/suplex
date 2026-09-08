@@ -1,10 +1,10 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
-import { openHerdrTerminalBridge } from "../../herdr-terminal-bridge.js";
-import type { TaskService } from "../../tasks.js";
-import type { ForgeConfig } from "../../config.js";
-import { TaskSessionKindSchema } from "../../task-control.js";
+import { openHerdrTerminalBridge } from "../../integrations/herdr/terminal-bridge.js";
+import type { TaskService } from "../../tasks/tasks.js";
+import type { ForgeConfig } from "../../platform/config.js";
+import { TaskSessionKindSchema } from "../../tasks/control.js";
 import { TaskIdParamsSchema } from "../contracts/common.js";
 
 export interface TaskPaneRoutesOptions { tasks: TaskService; config?: ForgeConfig; openBridge?: typeof openHerdrTerminalBridge }

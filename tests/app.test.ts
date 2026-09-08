@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
 
 import { createApp } from "../src/app.js";
-import { createTestConfig } from "../src/config.js";
-import type { HealthSnapshot } from "../src/health.js";
+import { createTestConfig } from "../src/platform/config.js";
+import type { HealthSnapshot } from "../src/platform/health.js";
 
 const snapshot: HealthSnapshot = {
   generatedAt: "2026-08-11T00:00:00.000Z",

@@ -11,9 +11,9 @@ type Finding = { file: string; line: number; text: string };
 // instead of silently weakening the scanner while that broader work is scheduled.
 const VOCABULARY_ALLOWLIST: Record<string, string> = {
   "src/frontend/components/app/plan-subject-summary.tsx": "legacy delivery metadata label",
-  "src/frontend/views/projects.tsx": "legacy provider-check copy",
-  "src/frontend/views/task-details.tsx": "legacy diagnostics copy",
-  "src/frontend/views/timeline.tsx": "legacy timeline copy",
+  "src/frontend/features/projects/projects.tsx": "legacy provider-check copy",
+  "src/frontend/features/tasks/task-details.tsx": "legacy diagnostics copy",
+  "src/frontend/features/timeline/timeline.tsx": "legacy timeline copy",
   "src/engine/activities/context.ts": "legacy provider failure summaries",
   "src/engine/workflow/register-ci.ts": "legacy CI retry labels",
   "src/engine/workflow/register-planning.ts": "legacy cancellation summary",

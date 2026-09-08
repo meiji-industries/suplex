@@ -1,9 +1,9 @@
 import { Activity, ChevronRight, CircleHelp, Database, GitBranch, HardDrive, RefreshCw, Terminal, type LucideIcon } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState, type ReactElement, type ReactNode } from "react";
 
-import type { HealthCheck, HealthSnapshot } from "../../../health.js";
-import { isOwnedHealthCheck } from "../../../health-contract.js";
-import { relativeTime } from "../../lib/view-shared.js";
+import type { HealthCheck, HealthSnapshot } from "../../../platform/health.js";
+import { isOwnedHealthCheck } from "../../../platform/health-contract.js";
+import { relativeTime } from "../../shell/view-shared.js";
 import { Button } from "../ui/button.js";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert.js";
 import { Collapsible } from "../ui/collapsible.js";

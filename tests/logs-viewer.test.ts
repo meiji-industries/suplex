@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 
-import { parseSince, runLogViewer } from "../src/log-viewer.js";
+import { parseSince, runLogViewer } from "../src/platform/log-viewer.js";
 
 async function fixture(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "forge-logs-"));

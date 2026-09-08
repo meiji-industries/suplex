@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
-import { readTaskExecution } from "../src/task-execution.js";
-import { executionFromMessages } from "../src/opencode-session-reader.js";
-import { OpenCodeMessageEnvelopeSchema } from "../src/opencode-contracts.js";
+import { readTaskExecution } from "../src/tasks/execution/execution.js";
+import { executionFromMessages } from "../src/runtimes/opencode/session-reader.js";
+import { OpenCodeMessageEnvelopeSchema } from "../src/runtimes/opencode/contracts.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 function message(id: string, created: number, parts: unknown[]) {

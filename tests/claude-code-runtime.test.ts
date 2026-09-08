@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, test } from "vitest";
-import { ClaudeCodeTaskRuntime, claudeArguments, claudeSessionBusy } from "../src/claude-code-task-runtime.js";
-import type { HerdrClient, Pane, PaneProcessInfo } from "../src/herdr-client.js";
-import { createOpenCodePromptIntent } from "../src/opencode-session.js";
-import { CLAUDE_CODE_PROVIDER, HarnessRouter, profileHarness, sessionHarness, taskSessionRuntimeDirectory, taskSessionTitle, type TaskScope } from "../src/task-harness.js";
+import { ClaudeCodeTaskRuntime, claudeArguments, claudeSessionBusy } from "../src/runtimes/claude-code/task-runtime.js";
+import type { HerdrClient, Pane, PaneProcessInfo } from "../src/integrations/herdr/client.js";
+import { createOpenCodePromptIntent } from "../src/runtimes/opencode/session.js";
+import { CLAUDE_CODE_PROVIDER, HarnessRouter, profileHarness, sessionHarness, taskSessionRuntimeDirectory, taskSessionTitle, type TaskScope } from "../src/runtimes/task-harness.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 
 const directories: string[] = [];

@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, test } from "vitest";
-import { CliHerdrClient } from "../src/herdr-client.js";
-import { prepareArchiveDisplays } from "../src/task-archive-displays.js";
+import { CliHerdrClient } from "../src/integrations/herdr/client.js";
+import { prepareArchiveDisplays } from "../src/tasks/archive/displays.js";
 
 test("archive closes a real owned Herdr workspace and all its panes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "forge-archive-display-proof-"));

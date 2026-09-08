@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { costExplanation, money } from "../../lib/analytics.js";
+import { costExplanation, money } from "../../features/analytics/lib/analytics.js";
 
 export function CostValue({ value, subsidized, partial, className, suffix = "" }: {
   value: number | null;

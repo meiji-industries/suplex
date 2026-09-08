@@ -1,11 +1,11 @@
 import { expect, test } from "vitest";
-import { OpenCodeMessageEnvelopeSchema } from "../src/opencode-contracts.js";
-import { TaskUsageSchema, taskUsage } from "../src/task-usage.js";
-import { TaskAnalyticsStore } from "../src/task-analytics-store.js";
+import { OpenCodeMessageEnvelopeSchema } from "../src/runtimes/opencode/contracts.js";
+import { TaskUsageSchema, taskUsage } from "../src/tasks/usage.js";
+import { TaskAnalyticsStore } from "../src/tasks/analytics/store.js";
 import { nativeApp } from "./helpers/native-app.js";
-import { TaskAnalyticsCollector } from "../src/task-analytics-collector.js";
-import { usageMetrics } from "../src/task-analytics-metrics.js";
-import type { ModelPricing } from "../src/model-pricing.js";
+import { TaskAnalyticsCollector } from "../src/tasks/analytics/collector.js";
+import { usageMetrics } from "../src/tasks/analytics/metrics.js";
+import type { ModelPricing } from "../src/profiles/model-pricing.js";
 
 const tokens = { input: 10, output: 20, reasoning: 30, cache: { read: 40, write: 50 } };
 function message(completed = true, parts: unknown[] = [], cost = 3, providerID = "openai", modelID = "model", sessionID = "ses", messageID = "msg") {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { recentTasks, showRecentTasks } from "../src/frontend/components/app/recent-tasks.js";
+import { recentTasks, showRecentTasks } from "../src/frontend/features/tasks/recent-tasks.js";
 
 describe("recentTasks", () => {
   it("returns the ten newest tasks first", () => {

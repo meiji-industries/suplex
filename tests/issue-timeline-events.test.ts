@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import Database from "better-sqlite3";
 import { expect, test } from "vitest";
 
-import { applyMigrations, readMigrations } from "../src/database.js";
+import { applyMigrations, readMigrations } from "../src/platform/database.js";
 
 const migrations = readMigrations(resolve(process.cwd(), "drizzle"));
 const migration = migrations.find((candidate) => candidate.tag.includes("herdr_execution_substrate"))!;

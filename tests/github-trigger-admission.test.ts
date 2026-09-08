@@ -1,8 +1,8 @@
 import { expect, test, vi } from "vitest";
 
-import { GithubTriggerDispatchRepository } from "../src/github-trigger-dispatches.js";
-import type { GithubTriggerPort } from "../src/github-trigger-inspection.js";
-import { TaskService } from "../src/tasks.js";
+import { GithubTriggerDispatchRepository } from "../src/integrations/github/trigger-dispatches.js";
+import type { GithubTriggerPort } from "../src/integrations/github/trigger-inspection.js";
+import { TaskService } from "../src/tasks/tasks.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 const port: GithubTriggerPort = { async observeRepository(input) { return { id: 9, fullName: input.repository }; }, async validateLabel() {}, async listOpenPullRequestsByLabel() { return []; }, async inspectPullRequest() { throw new Error("not used"); } };

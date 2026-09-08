@@ -4,14 +4,14 @@ import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { AuthService } from "../src/auth.js";
+import { AuthService } from "../src/identity/auth.js";
 import { createApp } from "../src/app.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
-import type { HostHealthDependencies } from "../src/health.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import type { HostHealthDependencies } from "../src/platform/health.js";
 import { UpdateResponseSchema } from "../src/http/contracts/update.js";
-import { SelfUpdateService, SelfUpdateStore } from "../src/self-update.js";
-import { inspectUpdateAvailability, type GitCommand } from "../src/update.js";
+import { SelfUpdateService, SelfUpdateStore } from "../src/platform/updates/self-update.js";
+import { inspectUpdateAvailability, type GitCommand } from "../src/platform/updates/update.js";
 
 const headRevision = "a".repeat(40);
 const remoteRevision = "b".repeat(40);

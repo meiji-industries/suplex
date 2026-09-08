@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { ModelsDevCatalogReader, parseModelsDevCatalog } from "../src/models-dev-catalog.js";
+import { ModelsDevCatalogReader, parseModelsDevCatalog } from "../src/profiles/models-dev-catalog.js";
 
 test("models.dev reader extracts validated model prices and caches successful reads", async () => {
   let calls = 0;

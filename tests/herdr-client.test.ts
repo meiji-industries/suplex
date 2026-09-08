@@ -3,8 +3,8 @@ import { expect, test } from "vitest";
 import {
   CliHerdrClient,
   type HerdrFailure,
-} from "../src/herdr-client.js";
-import type { CommandRunResult } from "../src/command-runner.js";
+} from "../src/integrations/herdr/client.js";
+import type { CommandRunResult } from "../src/platform/command-runner.js";
 
 test("process observations retain foreground argv and reject another pane's identity", async () => {
   const calls: string[][] = [];

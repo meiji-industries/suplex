@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { DeliveryTargetSchema, TaskInputSchema, VisualEvidenceSchema } from "../../task-contracts.js";
-import { AdvisorProfileIdsSchema, WorkflowIdSchema } from "../../workflows.js";
+import { DeliveryTargetSchema, TaskInputSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";
+import { AdvisorProfileIdsSchema, WorkflowIdSchema } from "../../coordination/workflows.js";
 
 export const TaskTemplateParamsSchema = z.object({ templateId: z.string().min(1) });
 export const ProjectTaskTemplatesParamsSchema = z.object({ projectId: z.string().min(1) });

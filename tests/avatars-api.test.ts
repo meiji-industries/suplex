@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { createApp } from "../src/app.js";
-import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
-import { AuthService, type WebAuthnAdapter } from "../src/auth.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
+import { SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
+import { AuthService, type WebAuthnAdapter } from "../src/identity/auth.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
 
 const health = {
   database: async () => ({ id: "database" as const, label: "Database", status: "healthy" as const, summary: "Reachable", details: {} }),

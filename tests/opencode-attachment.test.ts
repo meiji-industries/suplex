@@ -2,9 +2,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import type { HerdrClient, HerdrPaneMetadataReport, Pane, PaneProcessInfo } from "../src/herdr-client.js";
-import { OpenCodeTaskRuntime, type OpenCodeTaskScope } from "../src/opencode-task-runtime.js";
-import type { OpenCodeServerReference } from "../src/opencode-server.js";
+import type { HerdrClient, HerdrPaneMetadataReport, Pane, PaneProcessInfo } from "../src/integrations/herdr/client.js";
+import { OpenCodeTaskRuntime, type OpenCodeTaskScope } from "../src/runtimes/opencode/task-runtime.js";
+import type { OpenCodeServerReference } from "../src/runtimes/opencode/server.js";
 
 test.each(["live", "failed_command", "old_server", "unrelated", "unknown"])("native attachment recovers from %s without treating pane existence as liveness", async condition => {
   const directory = await mkdtemp(join(tmpdir(), "forge-attachment-"));

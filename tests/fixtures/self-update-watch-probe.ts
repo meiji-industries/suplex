@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
-import { createTestConfig } from "../../src/config.js";
-import { SelfUpdateFailure, SelfUpdateService, SelfUpdateStore } from "../../src/self-update.js";
+import { createTestConfig } from "../../src/platform/config.js";
+import { SelfUpdateFailure, SelfUpdateService, SelfUpdateStore } from "../../src/platform/updates/self-update.js";
 
 const root = process.argv.at(-1);
 if (!root) throw new Error("The watch probe requires a fixture root");

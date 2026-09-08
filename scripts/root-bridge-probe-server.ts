@@ -1,7 +1,7 @@
 import { appendFile, readFile } from "node:fs/promises";
 
-import { RootBridge, startRootBridgeTransport, type RootBridgeAdapter } from "../src/root-bridge.js";
-import { RootBridgeConfigSchema, type RootIdentity } from "../src/root-contracts.js";
+import { RootBridge, startRootBridgeTransport, type RootBridgeAdapter } from "../src/coordination/root-bridge.js";
+import { RootBridgeConfigSchema, type RootIdentity } from "../src/coordination/root-contracts.js";
 
 const [bindingPath, callsPath] = process.argv.slice(2);
 

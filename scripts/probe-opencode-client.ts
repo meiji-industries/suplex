@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { OpenCodeClient } from "../src/opencode-client.js";
-import { createOpenCodePromptIntent, reconcileOpenCodePrompt, replayOpenCodePrompt } from "../src/opencode-session.js";
+import { OpenCodeClient } from "../src/runtimes/opencode/client.js";
+import { createOpenCodePromptIntent, reconcileOpenCodePrompt, replayOpenCodePrompt } from "../src/runtimes/opencode/session.js";
 
 const runtime = process.argv[2];
 if (!runtime) throw new Error("Usage: tsx scripts/probe-opencode-client.ts <disposable-proof-directory>");

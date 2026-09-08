@@ -3,10 +3,10 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { BackupService, checkBackupHealth } from "../src/backup.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
-import { runCommand } from "../src/command-runner.js";
+import { BackupService, checkBackupHealth } from "../src/platform/backup.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { runCommand } from "../src/platform/command-runner.js";
 import { z } from "zod";
 
 async function exec(command: string, args: string[], options?: { cwd?: string }) {

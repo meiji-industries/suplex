@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { readTaskList } from "../src/frontend/lib/task-list.js";
+import { readTaskList } from "../src/frontend/features/tasks/lib/task-list.js";
 
 afterEach(() => vi.unstubAllGlobals());
 

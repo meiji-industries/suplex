@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { expect, test, vi } from "vitest";
 
-import { openHerdrTerminalBridge, parseBridgeRecord } from "../src/herdr-terminal-bridge.js";
+import { openHerdrTerminalBridge, parseBridgeRecord } from "../src/integrations/herdr/terminal-bridge.js";
 
 test("parses Herdr terminal bridge records", () => {
   const frame = parseBridgeRecord('{"type":"terminal.frame","seq":1,"encoding":"ansi","full":true,"width":80,"height":24,"bytes":"G1s/MjAyNmgbWzJKG1sxOzFI"}');

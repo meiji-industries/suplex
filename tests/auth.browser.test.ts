@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { chromium } from "playwright";
 import { expect, test } from "vitest";
 
-import { AuthService } from "../src/auth.js";
-import { AgentProfileService } from "../src/agent-profiles.js";
+import { AuthService } from "../src/identity/auth.js";
+import { AgentProfileService } from "../src/profiles/agent-profiles.js";
 import { createApp } from "../src/app.js";
-import { createTestConfig } from "../src/config.js";
-import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 import { createTestDatabase } from "./helpers/test-database.js";
 import { freePort } from "./webauthn-helpers.js";
 

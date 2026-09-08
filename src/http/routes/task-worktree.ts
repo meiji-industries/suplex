@@ -4,11 +4,11 @@ import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 
-import { runCommand, type CommandRunResult } from "../../command-runner.js";
-import type { ForgeDatabase } from "../../database.js";
-import type { TaskService } from "../../tasks.js";
-import type { ForgeConfig } from "../../config.js";
-import { configuredEditorLauncher, worktreeLauncher, worktreeLaunchers, type ConfiguredEditorLauncher, type WorktreeLauncher } from "../../worktree-open.js";
+import { runCommand, type CommandRunResult } from "../../platform/command-runner.js";
+import type { ForgeDatabase } from "../../platform/database.js";
+import type { TaskService } from "../../tasks/tasks.js";
+import type { ForgeConfig } from "../../platform/config.js";
+import { configuredEditorLauncher, worktreeLauncher, worktreeLaunchers, type ConfiguredEditorLauncher, type WorktreeLauncher } from "../../tasks/worktree-open.js";
 import { TaskIdParamsSchema } from "../contracts/common.js";
 import { WorktreeAppsResponseSchema, WorktreeAppSchema } from "../contracts/tasks.js";
 import { isLoopbackHost } from "../session.js";

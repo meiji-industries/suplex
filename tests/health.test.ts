@@ -4,11 +4,11 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { createApp } from "../src/app.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
-import { checkArtifactRoot, checkDatabase } from "../src/host-health.js";
-import { inspectHostHealth, type HealthCheck } from "../src/health.js";
-import { checkGithubAuthentication } from "../src/provider-readiness.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { checkArtifactRoot, checkDatabase } from "../src/platform/host-health.js";
+import { inspectHostHealth, type HealthCheck } from "../src/platform/health.js";
+import { checkGithubAuthentication } from "../src/profiles/provider-readiness.js";
 
 const check = (id: HealthCheck["id"], status: "healthy" | "unhealthy"): HealthCheck => ({
   id,

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { GithubTriggerPathError, matchesGithubTriggerProtectedPaths, validateGithubTriggerProtectedPaths, validateGithubTriggerRepositoryFilename } from "../src/github-trigger-paths.js";
+import { GithubTriggerPathError, matchesGithubTriggerProtectedPaths, validateGithubTriggerProtectedPaths, validateGithubTriggerRepositoryFilename } from "../src/integrations/github/trigger-paths.js";
 
 test("protected paths match exact files and case-sensitive directory prefixes against renamed files", () => {
   const paths = validateGithubTriggerProtectedPaths(["CODEOWNERS", "src/secure/"]);

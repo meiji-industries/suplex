@@ -6,13 +6,13 @@ import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { createTestDatabase } from "./helpers/test-database.js";
-import { DeliveryOperations, type DeliveryGithubPort } from "../src/delivery-operations.js";
-import type { GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation, LocalRevision } from "../src/github-delivery.js";
-import { RootController } from "../src/root-controller.js";
+import { DeliveryOperations, type DeliveryGithubPort } from "../src/delivery/operations.js";
+import type { GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation, LocalRevision } from "../src/integrations/github/delivery.js";
+import { RootController } from "../src/coordination/root-controller.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
-import { TaskControlStore } from "../src/root-session-store.js";
-import { runCommand } from "../src/command-runner.js";
-import { inspectDeliveryDiff, reviewEquivalence } from "../src/delivery-review.js";
+import { TaskControlStore } from "../src/coordination/root-session-store.js";
+import { runCommand } from "../src/platform/command-runner.js";
+import { inspectDeliveryDiff, reviewEquivalence } from "../src/delivery/review.js";
 import { commitGitFixture, initializeGitFixture } from "./helpers/git-fixture.js";
 
 const run = (command: string, args: string[]) => runCommand({ command, args, taskId: null, stepId: null });

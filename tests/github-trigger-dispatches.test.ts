@@ -1,9 +1,9 @@
 import { expect, test } from "vitest";
 
-import { GithubTriggerDispatchRepository } from "../src/github-trigger-dispatches.js";
-import { ForgeDatabase } from "../src/database.js";
-import type { GithubTriggerPort } from "../src/github-trigger-inspection.js";
-import { taskRequestHash } from "../src/task-repository.js";
+import { GithubTriggerDispatchRepository } from "../src/integrations/github/trigger-dispatches.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import type { GithubTriggerPort } from "../src/integrations/github/trigger-inspection.js";
+import { taskRequestHash } from "../src/tasks/repository.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 const github: GithubTriggerPort = {

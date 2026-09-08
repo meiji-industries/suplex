@@ -3,10 +3,10 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { CliHerdrClient } from "../src/herdr-client.js";
-import { OpenCodeTaskRuntime, type OpenCodeTaskScope } from "../src/opencode-task-runtime.js";
-import { createOpenCodePromptIntent } from "../src/opencode-session.js";
-import { OpenCodeServerReferenceSchema, type OpenCodeServerReference } from "../src/opencode-server.js";
+import { CliHerdrClient } from "../src/integrations/herdr/client.js";
+import { OpenCodeTaskRuntime, type OpenCodeTaskScope } from "../src/runtimes/opencode/task-runtime.js";
+import { createOpenCodePromptIntent } from "../src/runtimes/opencode/session.js";
+import { OpenCodeServerReferenceSchema, type OpenCodeServerReference } from "../src/runtimes/opencode/server.js";
 
 test.each(["absent", "admitted", "tool_running", "tool_error", "busy", "bad_history", "bad_status"])("dispatch fencing retains the replacement server and reads native history when %s", async evidence => {
   const directory = await mkdtemp(join(tmpdir(), "forge-dispatch-fence-"));

@@ -1,0 +1,16 @@
+import { adminDate } from "../../shell/view-shared.js";
+
+export function hermesSetupInstructions(pairingCodeData: { code: string; expiresAt: string } | null, profileName: string): string {
+  if (!pairingCodeData?.code || !pairingCodeData.expiresAt) return "";
+  const baseUrl = window.location.origin;
+  const profileId = profileName.trim() || "default";
+  return [
+    "# Connect this Hermes profile to Forge", "", "Configure only the active Hermes profile.", "",
+    "- Forge base URL: `" + baseUrl + "`", "- One-time pairing code: `" + pairingCodeData.code + "`", "- Pairing code expires: `" + adminDate(pairingCodeData.expiresAt) + "`", "",
+    "Complete these steps:", "", "1. Pair the Hermes profile `" + profileId + "`.", "", "2. Exchange the pairing code by sending JSON to `POST " + baseUrl + "/api/hermes/pairing/exchange`:", "", "   ```json", "   {", "     \"pairingCode\": \"" + pairingCodeData.code + "\",", "     \"profileId\": \"" + profileId + "\"", "   }", "   ```", "",
+    "3. Capture the exchange response without printing the raw response or credential. Preserve the active profile's existing `$HERMES_HOME/.env` contents and set:", "", "   - `FORGE_BASE_URL=" + baseUrl + "`", "   - `FORGE_AGENT_CREDENTIAL=<returned credential>`", "", "   Replace existing values for those keys instead of creating duplicates. Keep the file profile-local and restricted to the current user. Never put the credential in chat output, memory, logs, shell history, skill markdown, or source control.", "",
+    "4. Create or update a profile-local Forge skill at `$HERMES_HOME/skills/forge/`. Use the Python standard library and read the Forge URL and credential from the environment at runtime. The skill must support:", "", "   - Creating a task with `POST /api/hermes/tasks` and JSON fields `projectId`, `title`, `description`, and `idempotencyKey`.", "   - Retrieving status with `GET /api/hermes/tasks/{taskId}`.", "   - Sending `Authorization: Bearer <credential>` on every Forge machine request.", "   - Generating one idempotency key per requested task, reusing it for retries of the same payload, and never reusing it for a different payload.", "   - Requiring an explicit project ID and treating Forge's persisted project grants as authoritative.", "",
+    "5. Create one persistent connectivity acknowledgment task by sending `POST " + baseUrl + "/api/hermes/tasks` with the stored bearer credential. Build the request from the exchange response:", "", "   - `projectId`: the first value in the returned `agent.projectIds` array.", "   - `title`: `Hermes connectivity confirmed`.", "   - `description`: `Connection acknowledged. Do not plan or execute this task.`", "   - `idempotencyKey`: `forge-connectivity-` followed by the returned `agent.id`.", "", "   Reuse that exact request if retrying. A `200` or `201` response confirms connectivity. The task must remain in `backlog` until you select `Start`; do not start this task. If no allowed project ID was returned, do not create the task and report that project access is required.", "",
+    "6. Report only the pairing result, Forge agent name/ID, active profile ID, allowed project IDs, and the acknowledgment task issue key/ID and status. Never echo the pairing code or bearer credential.",
+  ].join("\n");
+}

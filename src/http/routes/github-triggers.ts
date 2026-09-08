@@ -1,9 +1,9 @@
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import type { FastifyPluginAsync } from "fastify";
 
-import type { AuthService } from "../../auth.js";
-import type { ForgeConfig } from "../../config.js";
-import type { GithubTriggerService } from "../../github-triggers.js";
+import type { AuthService } from "../../identity/auth.js";
+import type { ForgeConfig } from "../../platform/config.js";
+import type { GithubTriggerService } from "../../integrations/github/triggers.js";
 import { GithubTriggerActivityResponseSchema, GithubTriggerCompanyParamsSchema, GithubTriggerCreateSchema, GithubTriggerListSchema, GithubTriggerParamsSchema, GithubTriggerPatchSchema, GithubTriggerRuleSchema } from "../contracts/github-triggers.js";
 import { sessionUser } from "../session.js";
 

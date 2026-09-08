@@ -1,13 +1,13 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 
-import type { AuthService, AuthUser } from "../auth.js";
-import type { ForgeConfig } from "../config.js";
+import type { AuthService, AuthUser } from "../identity/auth.js";
+import type { ForgeConfig } from "../platform/config.js";
 import {
   CSRF_COOKIE_NAME,
   LEGACY_SESSION_COOKIE_NAME,
   SESSION_COOKIE_NAME,
   newCsrfToken,
-} from "../auth-identifiers.js";
+} from "../identity/auth-identifiers.js";
 
 declare module "fastify" {
   interface FastifyRequest {

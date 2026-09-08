@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
 
-import { createTestConfig } from "../src/config.js";
-import type { OwnedProcess, ProcessController, ProcessInspection } from "../src/process-manager.js";
-import { forgeProcessArguments, healthProbeAddress, readinessProbePath, reconcileExistingRegistry, type RuntimeReconciliationController } from "../src/runtime.js";
+import { createTestConfig } from "../src/platform/config.js";
+import type { OwnedProcess, ProcessController, ProcessInspection } from "../src/platform/process-manager.js";
+import { forgeProcessArguments, healthProbeAddress, readinessProbePath, reconcileExistingRegistry, type RuntimeReconciliationController } from "../src/platform/runtime.js";
 
 function ownedProcess(name: "worker" | "server", pid: number): OwnedProcess {
   return {

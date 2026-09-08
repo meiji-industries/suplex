@@ -6,9 +6,9 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import * as isomorphicGit from "isomorphic-git";
 
-import type { GithubPullRequest, GithubReleasePort } from "../src/github-delivery.js";
-import type { Project } from "../src/projects.js";
-import { TaskSourceService } from "../src/task-sources.js";
+import type { GithubPullRequest, GithubReleasePort } from "../src/integrations/github/delivery.js";
+import type { Project } from "../src/projects/projects.js";
+import { TaskSourceService } from "../src/tasks/sources.js";
 import { TaskBodySchema } from "../src/http/contracts/tasks.js";
 import { commitGitFixture, initializeGitFixture } from "./helpers/git-fixture.js";
 

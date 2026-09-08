@@ -6,9 +6,9 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { expect, test } from "vitest";
 
-import { AuthService, productionWebAuthnAdapter, type WebAuthnAdapter } from "../src/auth.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
+import { AuthService, productionWebAuthnAdapter, type WebAuthnAdapter } from "../src/identity/auth.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
 import { createTestDatabase } from "./helpers/test-database.js";
 
 function fakeWebAuthn(): WebAuthnAdapter {

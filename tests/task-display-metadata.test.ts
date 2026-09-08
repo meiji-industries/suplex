@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
-import type { PaneProcessInfo } from "../src/herdr-client.js";
-import { attachTaskDisplay, type TaskPanePort, type TaskScope } from "../src/task-harness.js";
+import type { PaneProcessInfo } from "../src/integrations/herdr/client.js";
+import type { TaskScope } from "../src/runtimes/task-harness.js";
+import { attachTaskDisplay, type TaskPanePort } from "../src/runtimes/task-display.js";
 
 const profile = { providerID: "openai", modelID: "gpt-5.6-sol", reasoningEffort: "medium", serviceTier: "priority" } as const;
 const scopes: { scope: TaskScope; role: string }[] = [

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { readTaskAgentStatuses } from "../src/task-agent-status.js";
+import { readTaskAgentStatuses } from "../src/tasks/agent-status.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 test("agent rows use native observations and never turn failed observations into idle", async () => {

@@ -5,11 +5,11 @@ import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { AuthService, type WebAuthnAdapter } from "../src/auth.js";
+import { AuthService, type WebAuthnAdapter } from "../src/identity/auth.js";
 import { createApp } from "../src/app.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
-import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 
 function fakeWebAuthn(): WebAuthnAdapter {
   let sequence = 0;

@@ -1,8 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 
-import type { AuthService } from "../../auth.js";
-import type { ForgeConfig } from "../../config.js";
-import type { HealthSnapshot } from "../../health.js";
+import type { AuthService } from "../../identity/auth.js";
+import type { ForgeConfig } from "../../platform/config.js";
+import type { HealthSnapshot } from "../../platform/health.js";
 import { ErrorResponseSchema, HealthSnapshotResponseSchema } from "../contracts/common.js";
 import { sessionUser } from "../session.js";
 

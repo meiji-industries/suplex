@@ -2,8 +2,8 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { claudeExecution, claudeMessageEntries, claudeUnsettledToolIds, claudeUsage, findClaudeTranscript, parseJsonLines, readClaudeTranscript } from "../src/claude-code-transcript.js";
-import type { ModelPricing } from "../src/model-pricing.js";
+import { claudeExecution, claudeMessageEntries, claudeUnsettledToolIds, claudeUsage, findClaudeTranscript, parseJsonLines, readClaudeTranscript } from "../src/runtimes/claude-code/transcript.js";
+import type { ModelPricing } from "../src/profiles/model-pricing.js";
 
 const usage = { input_tokens: 9, output_tokens: 82, cache_read_input_tokens: 5, cache_creation_input_tokens: 6053, output_tokens_details: { thinking_tokens: 74 } };
 const lines = [

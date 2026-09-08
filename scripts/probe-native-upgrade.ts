@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { z } from "zod";
-import { ForgeDatabase } from "../src/database.js";
+import { ForgeDatabase } from "../src/platform/database.js";
 
 const source = process.argv[2];
 if (!source) throw new Error("Usage: tsx scripts/probe-native-upgrade.ts <source-database>");

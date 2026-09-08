@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
-import { redact, StructuredLogger } from "../src/logging.js";
-import { json } from "../src/task-utils.js";
+import { redact, StructuredLogger } from "../src/platform/logging.js";
+import { json } from "../src/shared/json.js";
 
 test("redacts credential-shaped keys and values before serialization", () => {
   const result = redact({

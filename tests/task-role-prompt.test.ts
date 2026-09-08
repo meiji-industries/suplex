@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { taskRolePrompt } from "../src/task-role-prompt.js";
+import { taskRolePrompt } from "../src/tasks/execution/role-prompt.js";
 
 describe.each(["root", "worker"] as const)("%s Git boundary prompt", (role) => {
   it("does not freeze work at the captured SHA and still forbids force-pushing main", () => {

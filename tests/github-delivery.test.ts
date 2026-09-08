@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { createGithubReleasePort, mapGithubPullRequestObservation } from "../src/github-delivery.js";
+import { createGithubReleasePort, mapGithubPullRequestObservation } from "../src/integrations/github/delivery.js";
 
 test.each([
   [{ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }, "squash"],

@@ -1,4 +1,4 @@
-import type { HealthSnapshot } from "../health.js";
+import type { HealthSnapshot } from "../platform/health.js";
 
 declare global {
   interface Window {

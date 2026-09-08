@@ -1,9 +1,9 @@
 import { dirname } from "node:path";
 
-import { AuthService } from "../../src/auth.js";
-import { createTestConfig } from "../../src/config.js";
-import { ForgeDatabase } from "../../src/database.js";
-import { HermesAgentFailure, HermesAgentService } from "../../src/hermes-agents.js";
+import { AuthService } from "../../src/identity/auth.js";
+import { createTestConfig } from "../../src/platform/config.js";
+import { ForgeDatabase } from "../../src/platform/database.js";
+import { HermesAgentFailure, HermesAgentService } from "../../src/identity/hermes-agents.js";
 
 const [databasePath, pairingCode, profileId] = process.argv.slice(2);
 if (!databasePath || !pairingCode || !profileId) throw new Error("database path, pairing code, and profile ID are required");

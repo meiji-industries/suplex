@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { createGithubReleasePort, type GithubReleaseFailure } from "../src/github-delivery.js";
-import { GithubTriggerInspectionChangedFailure } from "../src/github-trigger-inspection.js";
+import { createGithubReleasePort, type GithubReleaseFailure } from "../src/integrations/github/delivery.js";
+import { GithubTriggerInspectionChangedFailure } from "../src/integrations/github/trigger-inspection.js";
 
 const sha = (letter: string) => letter.repeat(40);
 const pull = (overrides: Record<string, unknown> = {}) => ({

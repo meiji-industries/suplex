@@ -1,9 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 
-import { HermesAgentFailure, type HermesAgentService, type HermesPrincipal } from "../../hermes-agents.js";
+import { HermesAgentFailure, type HermesAgentService, type HermesPrincipal } from "../../identity/hermes-agents.js";
 import { HermesSafeTaskProjectionSchema, HermesTaskCreateBodySchema, HermesTaskIdParamsSchema } from "../contracts/hermes.js";
-import type { TaskService } from "../../tasks.js";
+import type { TaskService } from "../../tasks/tasks.js";
 
 function authenticateBearer(header: string | undefined, hermes: HermesAgentService): HermesPrincipal {
   if (!header || !header.startsWith("Bearer ")) {

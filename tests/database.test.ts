@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import Database from "better-sqlite3";
 
-import { type DatabaseMigrationFailure, ForgeDatabase } from "../src/database.js";
+import { type DatabaseMigrationFailure, ForgeDatabase } from "../src/platform/database.js";
 
 test("initializes migrations in WAL mode after reopening", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-db-test-"));

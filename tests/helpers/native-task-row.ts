@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { TaskConfigurationSchema } from "../../src/task-contracts.js";
+import { TaskConfigurationSchema } from "../../src/tasks/contracts.js";
 
 export function insertNativeTaskRow(db: Database.Database, options: { taskId?: string; companyId?: string; projectId?: string; directory?: string } = {}): void {
   const taskId = options.taskId ?? "task";

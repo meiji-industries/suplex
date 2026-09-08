@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 
-import { runCommand } from "../src/command-runner.js";
-import { createGitCommandGuard, type GitCommandGuard } from "../src/worker-environment.js";
+import { runCommand } from "../src/platform/command-runner.js";
+import { createGitCommandGuard, type GitCommandGuard } from "../src/coordination/worker-environment.js";
 
 async function testGuard(guard: Pick<GitCommandGuard, "directory" | "env">, phase: "before" | "after"): Promise<void> {
   const git = join(guard.directory, "git");

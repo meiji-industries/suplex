@@ -4,11 +4,11 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { ForgeDatabase } from "../src/database.js";
-import { RootController } from "../src/root-controller.js";
-import { TaskControlStore } from "../src/root-session-store.js";
-import { OpenCodeTaskRuntime } from "../src/opencode-task-runtime.js";
-import { readOpenCodeServer, openCodeServerClient, openCodeProcessAlive } from "../src/opencode-server.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { RootController } from "../src/coordination/root-controller.js";
+import { TaskControlStore } from "../src/coordination/root-session-store.js";
+import { OpenCodeTaskRuntime } from "../src/runtimes/opencode/task-runtime.js";
+import { readOpenCodeServer, openCodeServerClient, openCodeProcessAlive } from "../src/runtimes/opencode/server.js";
 
 const executable = process.argv[2];
 assert.ok(executable, "Usage: tsx scripts/probe-opencode-root.ts <absolute-opencode-executable>");

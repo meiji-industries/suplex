@@ -1,9 +1,9 @@
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import type { FastifyPluginAsync } from "fastify";
 
-import type { AuthService } from "../../auth.js";
-import type { ForgeConfig } from "../../config.js";
-import type { WorkflowRecordService } from "../../workflow-records.js";
+import type { AuthService } from "../../identity/auth.js";
+import type { ForgeConfig } from "../../platform/config.js";
+import type { WorkflowRecordService } from "../../coordination/workflow-records.js";
 import { WorkflowListQuerySchema, WorkflowListResponseSchema, WorkflowRecordInputSchema, WorkflowRecordParamsSchema, WorkflowRecordPatchSchema, WorkflowRecordSchema } from "../contracts/workflows.js";
 import { sessionUser } from "../session.js";
 

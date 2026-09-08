@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import { expect, test, vi } from "vitest";
 import WebSocket from "ws";
 import taskPane, { originAllowed } from "../src/http/routes/task-pane.js";
-import type { BridgeEvent } from "../src/herdr-terminal-bridge.js";
+import type { BridgeEvent } from "../src/integrations/herdr/terminal-bridge.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 test("terminal origin accepts only the request host or configured origin", () => {

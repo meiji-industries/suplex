@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 import { expect, test } from "vitest";
-import { TaskSchema } from "../src/task-contracts.js";
+import { TaskSchema } from "../src/tasks/contracts.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 test.each([1280, 390])("tasks can be created, started and viewed on the board at %ipx", { timeout: 90_000 }, async width => {

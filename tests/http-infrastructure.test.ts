@@ -1,11 +1,11 @@
 import { expect, test } from "vitest";
 
 import { createApp } from "../src/app.js";
-import { createTestConfig } from "../src/config.js";
-import { createFastifyLogger } from "../src/logging.js";
-import type { HostHealthDependencies } from "../src/health.js";
-import { ProjectFailure } from "../src/projects.js";
-import { jsonRequired } from "../src/task-utils.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { createFastifyLogger } from "../src/platform/logging.js";
+import type { HostHealthDependencies } from "../src/platform/health.js";
+import { ProjectFailure } from "../src/projects/projects.js";
+import { jsonRequired } from "../src/shared/json.js";
 
 const health: HostHealthDependencies = {
   database: async () => ({ id: "database", label: "Database", status: "healthy" as const, summary: "Ready", details: {} }),

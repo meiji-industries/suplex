@@ -4,29 +4,29 @@ import { serializerCompiler, validatorCompiler } from "@fastify/type-provider-zo
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { Logger } from "pino";
 
-import type { AuthService, AuthUser } from "./auth.js";
-import type { ForgeDatabase } from "./database.js";
-import type { ForgeConfig } from "./config.js";
-import type { TaskHost } from "./task-host.js";
-import type { HermesAgentService } from "./hermes-agents.js";
-import type { ReadProviders } from "./provider-catalog.js";
-import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
-import { inspectUpdateAvailability, type UpdateAvailability } from "./update.js";
-import type { UpdateObservation } from "./self-update.js";
+import type { AuthService, AuthUser } from "./identity/auth.js";
+import type { ForgeDatabase } from "./platform/database.js";
+import type { ForgeConfig } from "./platform/config.js";
+import type { TaskHost } from "./tasks/host.js";
+import type { HermesAgentService } from "./identity/hermes-agents.js";
+import type { ReadProviders } from "./profiles/provider-catalog.js";
+import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./platform/health.js";
+import { inspectUpdateAvailability, type UpdateAvailability } from "./platform/updates/update.js";
+import type { UpdateObservation } from "./platform/updates/self-update.js";
 import type { UpdateRestartResponse } from "./http/contracts/update.js";
-import type { AgentProfileService } from "./agent-profiles.js";
-import type { ProjectService } from "./projects.js";
-import type { TaskService } from "./tasks.js";
-import type { TaskTemplateService } from "./task-templates.js";
-import type { WorkflowRecordService } from "./workflow-records.js";
-import type { GithubTriggerService } from "./github-triggers.js";
-import { HealthSnapshotSchema } from "./schemas.js";
+import type { AgentProfileService } from "./profiles/agent-profiles.js";
+import type { ProjectService } from "./projects/projects.js";
+import type { TaskService } from "./tasks/tasks.js";
+import type { TaskTemplateService } from "./tasks/templates.js";
+import type { WorkflowRecordService } from "./coordination/workflow-records.js";
+import type { GithubTriggerService } from "./integrations/github/triggers.js";
+import { HealthSnapshotSchema } from "./platform/schemas.js";
 import {
   CSRF_COOKIE_NAME,
   CSRF_HEADER_NAME,
   LEGACY_SESSION_COOKIE_NAME,
   SESSION_COOKIE_NAME,
-} from "./auth-identifiers.js";
+} from "./identity/auth-identifiers.js";
 import { installHttpErrorHandlers } from "./http/errors.js";
 import { isLoopbackHost } from "./http/session.js";
 import authRoutes from "./http/routes/auth.js";

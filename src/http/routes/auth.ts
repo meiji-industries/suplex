@@ -1,9 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 
-import type { AuthService } from "../../auth.js";
-import type { ForgeConfig } from "../../config.js";
-import { LEGACY_SESSION_COOKIE_NAME, SESSION_COOKIE_NAME } from "../../auth-identifiers.js";
+import type { AuthService } from "../../identity/auth.js";
+import type { ForgeConfig } from "../../platform/config.js";
+import { LEGACY_SESSION_COOKIE_NAME, SESSION_COOKIE_NAME } from "../../identity/auth-identifiers.js";
 import type { FastifyReply } from "fastify";
 import { AuthEnvelopeSchema, AuthOptionsResponseSchema, AuthStatusResponseSchema, ErrorResponseSchema, SignOutResponseSchema, TokenBodySchema, RegistrationVerificationBodySchema, AuthenticationVerificationBodySchema } from "../contracts/common.js";
 import { ProfileBodySchema } from "../contracts/auth.js";

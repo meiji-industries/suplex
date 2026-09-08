@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 
-import { runCommand } from "../src/command-runner.js";
-import { createGitCommandGuard } from "../src/worker-environment.js";
+import { runCommand } from "../src/platform/command-runner.js";
+import { createGitCommandGuard } from "../src/coordination/worker-environment.js";
 
 test("the guarded test runner reuses an inherited Worker guard without removing it", { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-guarded-test-runner-"));

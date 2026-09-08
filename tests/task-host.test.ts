@@ -1,13 +1,13 @@
-import { runCommand } from "../src/command-runner.js";
+import { runCommand } from "../src/platform/command-runner.js";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { ForgeDatabase } from "../src/database.js";
-import { RootController } from "../src/root-controller.js";
-import { TaskControlStore } from "../src/root-session-store.js";
-import { TaskHost } from "../src/task-host.js";
-import { prepareTaskWorktree } from "../src/task-worktree.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { RootController } from "../src/coordination/root-controller.js";
+import { TaskControlStore } from "../src/coordination/root-session-store.js";
+import { TaskHost } from "../src/tasks/host.js";
+import { prepareTaskWorktree } from "../src/tasks/worktree.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { insertNativeTaskRow } from "./helpers/native-task-row.js";
 

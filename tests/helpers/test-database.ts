@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { ForgeDatabase } from "../../src/database.js";
+import { ForgeDatabase } from "../../src/platform/database.js";
 
 let pristineDatabase: Buffer | undefined;
 

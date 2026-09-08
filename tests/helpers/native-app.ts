@@ -1,19 +1,19 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AuthService, type WebAuthnAdapter } from "../../src/auth.js";
-import { AgentProfileService } from "../../src/agent-profiles.js";
+import { AuthService, type WebAuthnAdapter } from "../../src/identity/auth.js";
+import { AgentProfileService } from "../../src/profiles/agent-profiles.js";
 import { createApp } from "../../src/app.js";
-import { createTestConfig } from "../../src/config.js";
+import { createTestConfig } from "../../src/platform/config.js";
 import { createTestDatabase } from "./test-database.js";
-import { ProjectService } from "../../src/projects.js";
-import { TaskService } from "../../src/tasks.js";
-import { TaskTemplateService } from "../../src/task-templates.js";
-import { WorkflowRecordService } from "../../src/workflow-records.js";
-import { HermesAgentService } from "../../src/hermes-agents.js";
-import { GithubTriggerService } from "../../src/github-triggers.js";
-import type { GithubTriggerPort } from "../../src/github-trigger-inspection.js";
-import type { HostHealthDependencies } from "../../src/health.js";
+import { ProjectService } from "../../src/projects/projects.js";
+import { TaskService } from "../../src/tasks/tasks.js";
+import { TaskTemplateService } from "../../src/tasks/templates.js";
+import { WorkflowRecordService } from "../../src/coordination/workflow-records.js";
+import { HermesAgentService } from "../../src/identity/hermes-agents.js";
+import { GithubTriggerService } from "../../src/integrations/github/triggers.js";
+import type { GithubTriggerPort } from "../../src/integrations/github/trigger-inspection.js";
+import type { HostHealthDependencies } from "../../src/platform/health.js";
 
 export const healthyHost: HostHealthDependencies = {
   database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),

@@ -1,9 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 
-import type { AvatarService } from "../../avatars.js";
-import { MAX_AVATAR_IMAGE_BASE64_LENGTH, dicebearUrl } from "../../avatar-kinds.js";
-import type { ProjectService } from "../../projects.js";
+import type { AvatarService } from "../../identity/avatars.js";
+import { MAX_AVATAR_IMAGE_BASE64_LENGTH, dicebearUrl } from "../../identity/avatar-kinds.js";
+import type { ProjectService } from "../../projects/projects.js";
 import { AvatarDirectoryResponseSchema, AvatarOwnerParamsSchema, AvatarRecordSchema, AvatarUpdateBodySchema } from "../contracts/avatars.js";
 
 const avatars: FastifyPluginAsync<{ avatars: AvatarService; projects?: ProjectService }> = async (app, options) => {

@@ -2,17 +2,17 @@ import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 
-import type { AgentProfileService } from "../../agent-profiles.js";
-import type { AuthService } from "../../auth.js";
-import type { ForgeDatabase } from "../../database.js";
-import type { ProjectService } from "../../projects.js";
-import type { ForgeConfig } from "../../config.js";
+import type { AgentProfileService } from "../../profiles/agent-profiles.js";
+import type { AuthService } from "../../identity/auth.js";
+import type { ForgeDatabase } from "../../platform/database.js";
+import type { ProjectService } from "../../projects/projects.js";
+import type { ForgeConfig } from "../../platform/config.js";
 import { AuditEventListResponseSchema, CredentialIdParamsSchema, CredentialListResponseSchema, ErrorResponseSchema, InvitationResponseSchema, InvitationSummaryListResponseSchema, UserIdParamsSchema, UserListResponseSchema } from "../contracts/common.js";
 import { DisplayNameBodySchema } from "../contracts/auth.js";
 import { ProfileBodySchema, ProfilePatchBodySchema, ProfileResponseSchema, ProfileListQuerySchema, ProfileListResponseSchema, ModelListResponseSchema } from "../contracts/projects.js";
 import { ProviderListResponseSchema, type ProviderListResponse } from "../contracts/providers.js";
-import { readProviders as readHostProviders, type ReadProviders } from "../../provider-catalog.js";
-import { MAX_MIN_FREE_DISK_GB, readEnvironmentSettings, updateEnvironmentSettings } from "../../environment-settings.js";
+import { readProviders as readHostProviders, type ReadProviders } from "../../profiles/provider-catalog.js";
+import { MAX_MIN_FREE_DISK_GB, readEnvironmentSettings, updateEnvironmentSettings } from "../../platform/environment-settings.js";
 
 const EnvironmentSettingsSchema = z.object({ minFreeDiskGb: z.number(), defaultBudgetUsd: z.number(), defaultMaxTurns: z.number().int() });
 const EnvironmentSettingsBodySchema = z.object({ minFreeDiskGb: z.number().finite().min(0).max(MAX_MIN_FREE_DISK_GB).optional(), defaultBudgetUsd: z.number().finite().min(0).optional(), defaultMaxTurns: z.number().int().min(0).optional() }).refine((body) => Object.keys(body).length > 0);

@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
 
 import { parseThemePreference, resolveTheme } from "../src/frontend/components/app/theme.js";
-import { renderApplicationPage, renderHealthPage } from "../src/ui.js";
-import type { HealthSnapshot } from "../src/health.js";
+import { renderApplicationPage, renderHealthPage } from "../src/platform/ui.js";
+import type { HealthSnapshot } from "../src/platform/health.js";
 
 test("theme preferences parse external storage values and resolve system preference", () => {
   expect(parseThemePreference("light")).toBe("light");

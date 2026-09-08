@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { canQuickArchive, pullRequestColor } from "../src/frontend/components/app/recent-pull-request.js";
+import { canQuickArchive, pullRequestColor } from "../src/frontend/features/tasks/recent-pull-request.js";
 import { TaskChecksResponseSchema } from "../src/http/contracts/tasks.js";
 
 test.each([

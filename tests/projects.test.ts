@@ -4,11 +4,11 @@ import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { AuthService } from "../src/auth.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
-import { ProjectService, inferRepositoryCommands, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects.js";
-import type { GithubAdapter } from "../src/github.js";
+import { AuthService } from "../src/identity/auth.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { ProjectService, inferRepositoryCommands, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects/projects.js";
+import type { GithubAdapter } from "../src/integrations/github/client.js";
 
 interface Fixture {
   root: string;

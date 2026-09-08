@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { OpenCodeClient, type OpenCodeFailure } from "../src/opencode-client.js";
+import { OpenCodeClient, type OpenCodeFailure } from "../src/runtimes/opencode/client.js";
 
 const session = {
   id: "ses_test",

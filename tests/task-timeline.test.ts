@@ -1,10 +1,10 @@
 import { expect, test } from "vitest";
-import { readTaskTimeline, timelineActivity } from "../src/task-timeline.js";
-import { OpenCodeMessageEnvelopeSchema } from "../src/opencode-contracts.js";
-import { TaskProfileSchema } from "../src/task-control.js";
+import { readTaskTimeline, timelineActivity } from "../src/tasks/timeline/timeline.js";
+import { OpenCodeMessageEnvelopeSchema } from "../src/runtimes/opencode/contracts.js";
+import { TaskProfileSchema } from "../src/tasks/control.js";
 import { nativeApp } from "./helpers/native-app.js";
-import { TaskAnalyticsStore } from "../src/task-analytics-store.js";
-import { taskUsage } from "../src/task-usage.js";
+import { TaskAnalyticsStore } from "../src/tasks/analytics/store.js";
+import { taskUsage } from "../src/tasks/usage.js";
 
 test("task Activity and company Timeline read durable analytics timing without waking archived tasks", async () => {
   const value = await nativeApp();

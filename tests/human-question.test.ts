@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { RootToolSchema } from "../src/root-contracts.js";
+import { RootToolSchema } from "../src/coordination/root-contracts.js";
 
 const options = [{ label: "Wait", description: "Wait for the prerequisite to land.", recommended: true }, { label: "Change scope", description: "Use the existing published code.", recommended: false }];
 

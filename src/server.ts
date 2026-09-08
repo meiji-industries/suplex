@@ -6,25 +6,25 @@ import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 
 import { createApp } from "./app.js";
-import { AuthService } from "./auth.js";
-import { loadConfig, type ForgeConfig } from "./config.js";
-import { ForgeDatabase } from "./database.js";
-import { seedDevelopmentData } from "./development.js";
-import { createHostHealthDependencies } from "./host-health.js";
-import { TaskTemplateService } from "./task-templates.js";
-import { WorkflowRecordService } from "./workflow-records.js";
-import { createFastifyLogger, StructuredLogger } from "./logging.js";
-import { AgentProfileService } from "./agent-profiles.js";
-import { ProjectService } from "./projects.js";
-import { TaskService } from "./tasks.js";
-import { HermesAgentService } from "./hermes-agents.js";
-import { TaskHost } from "./task-host.js";
-import { createSelfUpdateService } from "./self-update.js";
-import { TaskAnalyticsStore } from "./task-analytics-store.js";
-import { GithubTriggerService } from "./github-triggers.js";
-import { GithubTriggerPoller } from "./github-trigger-poller.js";
-import { createGithubReleasePort } from "./github-delivery.js";
-import { AnalyticsHistoryReader, TaskAnalyticsCollector } from "./task-analytics-collector.js";
+import { AuthService } from "./identity/auth.js";
+import { loadConfig, type ForgeConfig } from "./platform/config.js";
+import { ForgeDatabase } from "./platform/database.js";
+import { seedDevelopmentData } from "./platform/development.js";
+import { createHostHealthDependencies } from "./platform/host-health.js";
+import { TaskTemplateService } from "./tasks/templates.js";
+import { WorkflowRecordService } from "./coordination/workflow-records.js";
+import { createFastifyLogger, StructuredLogger } from "./platform/logging.js";
+import { AgentProfileService } from "./profiles/agent-profiles.js";
+import { ProjectService } from "./projects/projects.js";
+import { TaskService } from "./tasks/tasks.js";
+import { HermesAgentService } from "./identity/hermes-agents.js";
+import { TaskHost } from "./tasks/host.js";
+import { createSelfUpdateService } from "./platform/updates/self-update.js";
+import { TaskAnalyticsStore } from "./tasks/analytics/store.js";
+import { GithubTriggerService } from "./integrations/github/triggers.js";
+import { GithubTriggerPoller } from "./integrations/github/trigger-poller.js";
+import { createGithubReleasePort } from "./integrations/github/delivery.js";
+import { AnalyticsHistoryReader, TaskAnalyticsCollector } from "./tasks/analytics/collector.js";
 
 export interface ForgeServer {
   app: FastifyInstance;
@@ -73,7 +73,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   let app: FastifyInstance;
   try {
     if (process.env.FORGE_FRONTEND_DEV_SERVER === "1") {
-      const { createDevelopmentApp } = await import("./frontend-development.js");
+      const { createDevelopmentApp } = await import("./platform/frontend-development.js");
       app = (await createDevelopmentApp(dependencies)).app;
     } else {
       app = createApp(dependencies);

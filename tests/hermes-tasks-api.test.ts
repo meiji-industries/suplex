@@ -6,14 +6,14 @@ import { promisify } from "node:util";
 
 import { afterEach, beforeEach, expect, test } from "vitest";
 
-import { AuthService } from "../src/auth.js";
+import { AuthService } from "../src/identity/auth.js";
 import { createApp } from "../src/app.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
-import type { GithubAdapter } from "../src/github.js";
-import { HermesAgentService } from "../src/hermes-agents.js";
-import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
-import { TaskService } from "../src/tasks.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import type { GithubAdapter } from "../src/integrations/github/client.js";
+import { HermesAgentService } from "../src/identity/hermes-agents.js";
+import { ProjectService, type LocalRepositoryAdapter } from "../src/projects/projects.js";
+import { TaskService } from "../src/tasks/tasks.js";
 
 const execFileAsync = promisify(execFile);
 

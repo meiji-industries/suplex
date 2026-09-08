@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 
-import { isTailscaleDaemonUnavailable, upsertForgeEnvironment } from "../src/setup.js";
+import { isTailscaleDaemonUnavailable, upsertForgeEnvironment } from "../src/platform/setup.js";
 
 test("setup upserts Forge choices without duplicating or overwriting unrelated settings", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-setup-test-"));

@@ -1,9 +1,9 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 
-import type { AuthService } from "../../auth.js";
-import type { ForgeConfig } from "../../config.js";
-import type { HealthSnapshot } from "../../health.js";
-import { renderApplicationPage, renderHealthPage } from "../../ui.js";
+import type { AuthService } from "../../identity/auth.js";
+import type { ForgeConfig } from "../../platform/config.js";
+import type { HealthSnapshot } from "../../platform/health.js";
+import { renderApplicationPage, renderHealthPage } from "../../platform/ui.js";
 import { sessionUser } from "../session.js";
 
 export interface PageRoutesOptions {

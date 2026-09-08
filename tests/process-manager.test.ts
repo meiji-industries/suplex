@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 
-import { compareProcessIdentity, inspectProcessOnce, readProcessRegistry, stopOwnedProcesses, type OwnedProcess, type ProcessController, type ProcessInspection } from "../src/process-manager.js";
+import { compareProcessIdentity, inspectProcessOnce, readProcessRegistry, stopOwnedProcesses, type OwnedProcess, type ProcessController, type ProcessInspection } from "../src/platform/process-manager.js";
 
 test("process identity survives a change in the observing process locale", async () => {
   try {

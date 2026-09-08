@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 
-import { runCommand } from "../src/command-runner.js";
+import { runCommand } from "../src/platform/command-runner.js";
 import { commitGitFixture, initializeGitFixture } from "./helpers/git-fixture.js";
 
 async function git(directory: string, ...args: string[]): Promise<string> {

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
-import { HealthSnapshotSchema, ProcessRegistrySchema } from "../src/schemas.js";
-import { parseTailscaleHostname, parseTailscaleServeStatus } from "../src/tailscale.js";
+import { HealthSnapshotSchema, ProcessRegistrySchema } from "../src/platform/schemas.js";
+import { parseTailscaleHostname, parseTailscaleServeStatus } from "../src/platform/tailscale.js";
 
 test("boundary schemas reject malformed and unexpected values", () => {
   expect(HealthSnapshotSchema.safeParse({ ready: "yes" }).success).toBe(false);

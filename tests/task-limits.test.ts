@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { evaluateTaskLimits } from "../src/task-limits.js";
+import { evaluateTaskLimits } from "../src/tasks/limits/limits.js";
 
 test("task limits enforce budget and turns independently", () => {
   expect(evaluateTaskLimits({ limits: { budgetUsd: 15, maxTurns: 40 }, usage: { estimatedCostUsd: 14.99, admittedTurns: 39 }, allowance: { budgetUsd: 15, maxTurns: 40 } })).toEqual({ kind: "within_limits" });

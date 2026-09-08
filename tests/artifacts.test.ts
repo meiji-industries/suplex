@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { ArtifactStore } from "../src/artifacts.js";
+import { ArtifactStore } from "../src/platform/artifacts.js";
 
 test("put/get preserves bytes within its company", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-artifacts-"));

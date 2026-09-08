@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { ForgeDatabase } from "../src/database.js";
+import { ForgeDatabase } from "../src/platform/database.js";
 
 test("native cutover removes phase records from a populated database and preserves company configuration", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-review-migration-test-"));

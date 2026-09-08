@@ -8,14 +8,14 @@ import { promisify } from "node:util";
 import { chromium } from "playwright";
 import { expect, test } from "vitest";
 
-import { AuthService, type WebAuthnAdapter } from "../src/auth.js";
+import { AuthService, type WebAuthnAdapter } from "../src/identity/auth.js";
 import { createApp } from "../src/app.js";
-import { AgentProfileService } from "../src/agent-profiles.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
-import { ProjectService } from "../src/projects.js";
-import type { GithubAdapter } from "../src/github.js";
-import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
+import { AgentProfileService } from "../src/profiles/agent-profiles.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { ProjectService } from "../src/projects/projects.js";
+import type { GithubAdapter } from "../src/integrations/github/client.js";
+import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 
 const execFileAsync = promisify(execFile);
 

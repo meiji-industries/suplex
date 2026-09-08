@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, expect, test } from "vitest";
 
-import { ForgeDatabase } from "../../src/database.js";
+import { ForgeDatabase } from "../../src/platform/database.js";
 import { createTestDatabase } from "./test-database.js";
 
 const directories: string[] = [];

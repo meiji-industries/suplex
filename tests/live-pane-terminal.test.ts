@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { observerDimensionsChanged, observerViewport, reconnectDelayMs, terminalCloseStatus } from "../src/frontend/components/app/task-chat/live-pane-terminal.js";
+import { observerDimensionsChanged, observerViewport, reconnectDelayMs, terminalCloseStatus } from "../src/frontend/features/tasks/task-chat/live-pane-terminal.js";
 
 test("live pane terminal reopens an observer only when its viewport changes", () => {
   expect(observerDimensionsChanged(undefined, { cols: 80, rows: 24 })).toBe(true);

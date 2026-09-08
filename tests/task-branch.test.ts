@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { taskBranchName } from "../src/task-branch.js";
+import { taskBranchName } from "../src/tasks/branch.js";
 
 const taskId = "task_e37a6f28b1dd43d1ac46fc97357d3d7f";
 

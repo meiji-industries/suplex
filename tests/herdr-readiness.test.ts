@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
 
-import { checkHerdrReadiness, type HerdrReadinessCommand } from "../src/herdr-readiness.js";
-import { inspectHostHealth, type HealthCheck } from "../src/health.js";
-import { createTestConfig } from "../src/config.js";
+import { checkHerdrReadiness, type HerdrReadinessCommand } from "../src/integrations/herdr/readiness.js";
+import { inspectHostHealth, type HealthCheck } from "../src/platform/health.js";
+import { createTestConfig } from "../src/platform/config.js";
 
 function runner(outputs: readonly string[]): { run: HerdrReadinessCommand; calls: string[][] } {
   const calls: string[][] = [];

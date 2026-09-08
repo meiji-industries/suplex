@@ -6,11 +6,11 @@ import { promisify } from "node:util";
 
 import { expect, test } from "vitest";
 
-import { AuthService } from "../src/auth.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
-import { createGithubAdapter } from "../src/github.js";
-import { ProjectService } from "../src/projects.js";
+import { AuthService } from "../src/identity/auth.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { createGithubAdapter } from "../src/integrations/github/client.js";
+import { ProjectService } from "../src/projects/projects.js";
 
 const execFileAsync = promisify(execFile);
 const repositoryIdentity = process.env.FORGE_REAL_GITHUB_REPOSITORY?.trim().toLowerCase();

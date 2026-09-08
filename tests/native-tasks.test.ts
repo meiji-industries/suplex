@@ -2,12 +2,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { AuthService } from "../src/auth.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
-import { TaskService } from "../src/tasks.js";
-import type { Project } from "../src/projects.js";
-import { TaskControlStore } from "../src/root-session-store.js";
+import { AuthService } from "../src/identity/auth.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { TaskService } from "../src/tasks/tasks.js";
+import type { Project } from "../src/projects/projects.js";
+import { TaskControlStore } from "../src/coordination/root-session-store.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });

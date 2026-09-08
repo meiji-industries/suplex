@@ -3,12 +3,12 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 
-import type { AuthService } from "../../auth.js";
-import type { ForgeConfig } from "../../config.js";
-import type { TaskTemplateService } from "../../task-templates.js";
+import type { AuthService } from "../../identity/auth.js";
+import type { ForgeConfig } from "../../platform/config.js";
+import type { TaskTemplateService } from "../../tasks/templates.js";
 import { CreateTaskTemplateBodySchema, ProjectTaskTemplatesParamsSchema, SaveTaskAsTemplateBodySchema, SaveTaskAsTemplateParamsSchema, TaskTemplateListResponseSchema, TaskTemplateParamsSchema, TaskTemplateResponseSchema, UpdateTaskTemplateBodySchema } from "../contracts/task-templates.js";
 import { sessionUser } from "../session.js";
-import { normalizeWorkflowInput, WorkflowInputFailure } from "../../workflows.js";
+import { normalizeWorkflowInput, WorkflowInputFailure } from "../../coordination/workflows.js";
 
 export interface TaskTemplateRoutesOptions { auth: AuthService; config: ForgeConfig; templates: TaskTemplateService; }
 

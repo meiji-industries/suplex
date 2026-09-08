@@ -5,7 +5,7 @@ import { RestartUpdateBodySchema, UPDATE_OPERATION_TIMEOUT_MS, UpdateRestartResp
 import { ApiError, readJson } from "../../lib/api.js";
 import { Button } from "../ui/button.js";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card.js";
-import { useOptionalCompanyContext } from "./company-context.js";
+import { useOptionalCompanyContext } from "../../shell/company-context.js";
 
 const UPDATE_POLL_INTERVAL_MS = 60_000;
 const RESTART_POLL_INTERVAL_MS = 1_000;

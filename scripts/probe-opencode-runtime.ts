@@ -7,9 +7,9 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { z } from "zod";
-import { ensureOpenCodeServer, openCodeRoleConfig, openCodeServerClient, stopOpenCodeServer, type OpenCodeServerReference } from "../src/opencode-server.js";
-import { createOpenCodePromptIntent, reconcileOpenCodePrompt, replayOpenCodePrompt } from "../src/opencode-session.js";
-import { createGitCommandGuard } from "../src/worker-environment.js";
+import { ensureOpenCodeServer, openCodeRoleConfig, openCodeServerClient, stopOpenCodeServer, type OpenCodeServerReference } from "../src/runtimes/opencode/server.js";
+import { createOpenCodePromptIntent, reconcileOpenCodePrompt, replayOpenCodePrompt } from "../src/runtimes/opencode/session.js";
+import { createGitCommandGuard } from "../src/coordination/worker-environment.js";
 
 const executable = process.argv[2];
 if (!executable) throw new Error("Usage: tsx scripts/probe-opencode-runtime.ts <absolute-opencode-executable>");

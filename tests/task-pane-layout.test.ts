@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 
-import type { HerdrClient, PaneLayout } from "../src/herdr-client.js";
-import { balancedRowResizes, paneForNextRow, splitBalancedPaneRow } from "../src/task-pane-layout.js";
+import type { HerdrClient, PaneLayout } from "../src/integrations/herdr/client.js";
+import { balancedRowResizes, paneForNextRow, splitBalancedPaneRow } from "../src/tasks/execution/pane-layout.js";
 
 const layout: PaneLayout = {
   workspaceId: "w1",

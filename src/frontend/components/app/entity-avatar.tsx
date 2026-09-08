@@ -1,11 +1,11 @@
 import { Trash2, Upload } from "lucide-react";
 import { useRef, useState, type ReactElement } from "react";
-import { AVATAR_DEFAULTS, MAX_AVATAR_IMAGE_BYTES, dicebearUrl, type AvatarKind } from "../../../avatar-kinds.js";
+import { AVATAR_DEFAULTS, MAX_AVATAR_IMAGE_BYTES, dicebearUrl, type AvatarKind } from "../../../identity/avatar-kinds.js";
 import type { AvatarUpdateBody } from "../../../http/contracts/avatars.js";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar.js";
 import { Button } from "../ui/button.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.js";
-import { useOptionalCompanyContext } from "./company-context.js";
+import { useOptionalCompanyContext } from "../../shell/company-context.js";
 
 export type { AvatarKind };
 

@@ -1,9 +1,9 @@
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
-import * as displays from "../src/task-archive-displays.js";
-import { runCommand } from "../src/command-runner.js";
-import { prepareTaskWorktree } from "../src/task-worktree.js";
+import * as displays from "../src/tasks/archive/displays.js";
+import { runCommand } from "../src/platform/command-runner.js";
+import { prepareTaskWorktree } from "../src/tasks/worktree.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 const git = async (cwd: string, args: string[]) => (await runCommand({ taskId: null, stepId: null, command: "git", cwd, args })).stdout.trim();

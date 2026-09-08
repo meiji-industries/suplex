@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
-import { hasPullRequestOwner } from "../src/task-pull-request-ownership.js";
-import { TaskService } from "../src/tasks.js";
+import { hasPullRequestOwner } from "../src/delivery/pull-request-ownership.js";
+import { TaskService } from "../src/tasks/tasks.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 test("starts a branch-source backlog task without claiming a pull request", async () => {

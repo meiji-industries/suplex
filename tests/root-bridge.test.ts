@@ -6,16 +6,16 @@ import { join } from "node:path";
 
 import { expect, test, vi } from "vitest";
 
-import { RootBridge, RootBridgeFailure, startRootBridgeTransport, type RootBridgeAdapter } from "../src/root-bridge.js";
-import type { RootIdentity } from "../src/root-contracts.js";
-import { ForgeDatabase } from "../src/database.js";
-import { RootController } from "../src/root-controller.js";
+import { RootBridge, RootBridgeFailure, startRootBridgeTransport, type RootBridgeAdapter } from "../src/coordination/root-bridge.js";
+import type { RootIdentity } from "../src/coordination/root-contracts.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { RootController } from "../src/coordination/root-controller.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
-import { TaskControlStore } from "../src/root-session-store.js";
-import { runCommand } from "../src/command-runner.js";
+import { TaskControlStore } from "../src/coordination/root-session-store.js";
+import { runCommand } from "../src/platform/command-runner.js";
 import { nativeApp } from "./helpers/native-app.js";
-import { ArtifactStore } from "../src/artifacts.js";
-import { TaskUsageSchema } from "../src/task-usage.js";
+import { ArtifactStore } from "../src/platform/artifacts.js";
+import { TaskUsageSchema } from "../src/tasks/usage.js";
 
 test("Coordinator image reads enforce task ownership and content integrity and return MCP image content", async () => {
   const value = await nativeApp();

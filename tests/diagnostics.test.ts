@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import Database from "better-sqlite3";
 
-import { formatDoctor } from "../src/diagnostics/doctor.js";
-import { inspectTask, formatTaskDiagnostic } from "../src/diagnostics/task.js";
-import { ForgeDatabase } from "../src/database.js";
+import { formatDoctor } from "../src/platform/diagnostics/doctor.js";
+import { inspectTask, formatTaskDiagnostic } from "../src/platform/diagnostics/task.js";
+import { ForgeDatabase } from "../src/platform/database.js";
 import { nativeApp } from "./helpers/native-app.js";
-import { createTestConfig } from "../src/config.js";
+import { createTestConfig } from "../src/platform/config.js";
 
 describe("operator diagnostics formatting", () => {
   test("reports the native task intent and question without a phase projection", async () => {
@@ -60,7 +60,7 @@ test("doctor reports a database behind this build without migrating it", async (
     migrating.close();
 
     const diagnostic = new ForgeDatabase(filename, { migrate: false });
-    const { runDoctor } = await import("../src/diagnostics/doctor.js");
+    const { runDoctor } = await import("../src/platform/diagnostics/doctor.js");
     expect(await runDoctor(createTestConfig(root), diagnostic)).toEqual([expect.objectContaining({ status: "FAIL", name: "database schema" })]);
     expect(diagnostic.schemaStatus().state).toBe("behind");
     diagnostic.close();

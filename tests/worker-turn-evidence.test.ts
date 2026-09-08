@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { readWorkerEvidence } from "../src/worker-turn-evidence.js";
+import { readWorkerEvidence } from "../src/coordination/worker-turn-evidence.js";
 
 const tool = (input: Partial<{
   id: string;

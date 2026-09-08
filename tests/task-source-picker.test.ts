@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { expect, test } from "vitest";
 
-import { filterTaskSources, prefillForTaskSource, preserveEditedPrefill, selectorForTaskSource, taskSourceTabs, TaskSourcePicker, type TaskSourceSummary } from "../src/frontend/components/app/task-source-picker.js";
+import { filterTaskSources, prefillForTaskSource, preserveEditedPrefill, selectorForTaskSource, taskSourceTabs, TaskSourcePicker, type TaskSourceSummary } from "../src/frontend/features/tasks/task-source-picker.js";
 
 const pull: TaskSourceSummary = { kind: "pull_request", number: 17, title: "Improve picker", body: "PR body", author: "octo", headBranch: "feature/picker", baseBranch: "main", isDraft: false };
 const branch: TaskSourceSummary = { kind: "branch", branch: "feature/search", headSha: "a".repeat(40), subject: "Add search", author: "hubot" };
@@ -28,7 +28,7 @@ test("selection produces only the stable selector payload", () => {
 });
 
 test("source menu rows use Base UI's activation event", () => {
-  const source = readFileSync(new URL("../src/frontend/components/app/task-source-picker.tsx", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/frontend/features/tasks/task-source-picker.tsx", import.meta.url), "utf8");
   expect(source).toContain("onClick={() => onSelect(row, selectorForTaskSource(row))}");
   expect(source).not.toContain("onSelect={() => onSelect(row, selectorForTaskSource(row))}");
 });

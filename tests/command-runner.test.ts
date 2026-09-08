@@ -5,10 +5,10 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { beforeEach, expect, test, vi } from "vitest";
 
-import { CommandCleanupError, runCommand, setCommandRunnerLogger } from "../src/command-runner.js";
-import { StructuredLogger } from "../src/logging.js";
-import { compareProcessIdentity, defaultProcessController, inspectProcessOnce, signalOwnedProcess, type OwnedProcess } from "../src/process-manager.js";
-import { json } from "../src/task-utils.js";
+import { CommandCleanupError, runCommand, setCommandRunnerLogger } from "../src/platform/command-runner.js";
+import { StructuredLogger } from "../src/platform/logging.js";
+import { compareProcessIdentity, defaultProcessController, inspectProcessOnce, signalOwnedProcess, type OwnedProcess } from "../src/platform/process-manager.js";
+import { json } from "../src/shared/json.js";
 
 let lines: string[];
 

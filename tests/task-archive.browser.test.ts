@@ -1,8 +1,8 @@
 import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { runCommand } from "../src/command-runner.js";
-import { prepareTaskWorktree } from "../src/task-worktree.js";
+import { runCommand } from "../src/platform/command-runner.js";
+import { prepareTaskWorktree } from "../src/tasks/worktree.js";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
 test("archive confirms dirty cleanup and returns to tasks", { timeout: 45_000 }, async () => {

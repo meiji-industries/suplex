@@ -1,8 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { runCommand } from "../src/command-runner.js";
-import { readTaskChecks, readTaskDiff } from "../src/task-inspection.js";
+import { runCommand } from "../src/platform/command-runner.js";
+import { readTaskChecks, readTaskDiff } from "../src/tasks/inspection.js";
 import { nativeApp } from "./helpers/native-app.js";
 import { commitGitFixture, initializeGitFixture } from "./helpers/git-fixture.js";
 

@@ -1,10 +1,10 @@
 import { expect, test } from "vitest";
 
 import { createAppServer } from "../src/app.js";
-import { createTestConfig } from "../src/config.js";
-import type { HostHealthDependencies } from "../src/health.js";
-import { configureProcessLogSink, createFastifyLogger, formatDevLogLine, StructuredLogger } from "../src/logging.js";
-import { jsonRequired } from "../src/task-utils.js";
+import { createTestConfig } from "../src/platform/config.js";
+import type { HostHealthDependencies } from "../src/platform/health.js";
+import { configureProcessLogSink, createFastifyLogger, formatDevLogLine, StructuredLogger } from "../src/platform/logging.js";
+import { jsonRequired } from "../src/shared/json.js";
 
 function records(lines: string[]): Array<Record<string, unknown>> {
   return lines.map((line) => jsonRequired(line) as Record<string, unknown>);

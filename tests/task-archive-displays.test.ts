@@ -2,9 +2,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
-import { prepareArchiveDisplays } from "../src/task-archive-displays.js";
-import { HerdrFailure, type Pane, type Workspace } from "../src/herdr-client.js";
-import type { TaskSession } from "../src/task-control.js";
+import { prepareArchiveDisplays } from "../src/tasks/archive/displays.js";
+import { HerdrFailure, type Pane, type Workspace } from "../src/integrations/herdr/client.js";
+import type { TaskSession } from "../src/tasks/control.js";
 
 function fixture(shared = false) {
   const workspace: Workspace = { workspaceId: "w1", label: "forge-task" };

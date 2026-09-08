@@ -1,6 +1,6 @@
-import type { TaskHarness } from "../../src/task-harness.js";
-import type { OpenCodeTaskScope } from "../../src/opencode-task-runtime.js";
-import type { OpenCodePromptIntent, OpenCodePromptObservation } from "../../src/opencode-session.js";
+import type { TaskHarness } from "../../src/runtimes/task-harness.js";
+import type { OpenCodeTaskScope } from "../../src/runtimes/opencode/task-runtime.js";
+import type { OpenCodePromptIntent, OpenCodePromptObservation } from "../../src/runtimes/opencode/session.js";
 
 export class FakeTaskHarness implements TaskHarness {
   readonly dispatched: OpenCodePromptIntent[] = [];

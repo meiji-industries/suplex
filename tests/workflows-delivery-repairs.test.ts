@@ -1,11 +1,11 @@
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { ForgeDatabase } from "../src/database.js";
-import { DeliveryOperations, type DeliveryGithubPort } from "../src/delivery-operations.js";
-import { createGithubReleasePort, GithubReleaseFailure, type GithubCommandRunner } from "../src/github-delivery.js";
-import { RootController } from "../src/root-controller.js";
-import { TaskControlStore } from "../src/root-session-store.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { DeliveryOperations, type DeliveryGithubPort } from "../src/delivery/operations.js";
+import { createGithubReleasePort, GithubReleaseFailure, type GithubCommandRunner } from "../src/integrations/github/delivery.js";
+import { RootController } from "../src/coordination/root-controller.js";
+import { TaskControlStore } from "../src/coordination/root-session-store.js";
 import { cleanupDeliveryFixtures, fixture, git, pending, rater, reviewer, successful } from "./helpers/workflow-delivery-fixture.js";
 
 afterEach(cleanupDeliveryFixtures);

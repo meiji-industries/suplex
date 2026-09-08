@@ -1,13 +1,13 @@
 import { isResponseSerializationError } from "@fastify/type-provider-zod";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-import { AuthFailure } from "../auth.js";
-import { ProjectFailure } from "../projects.js";
-import { TaskFailure } from "../tasks.js";
-import { redact } from "../logging.js";
-import { HermesAgentFailure } from "../hermes-agents.js";
-import { ArtifactFailure } from "../artifacts.js";
-import { TaskSourceFailure } from "../task-sources.js";
+import { AuthFailure } from "../identity/auth.js";
+import { ProjectFailure } from "../projects/projects.js";
+import { TaskFailure } from "../tasks/tasks.js";
+import { redact } from "../platform/logging.js";
+import { HermesAgentFailure } from "../identity/hermes-agents.js";
+import { ArtifactFailure } from "../platform/artifacts.js";
+import { TaskSourceFailure } from "../tasks/sources.js";
 
 interface ValidationIssue {
   instancePath?: string;

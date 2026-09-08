@@ -121,12 +121,12 @@ Need a change? Create a new migration.
 
 ## Where new code goes
 
-- Task HTTP contracts and routes belong in `src/http/contracts/tasks.ts` and `src/http/routes/tasks.ts`. `src/tasks.ts` owns user authorization and task commands.
-- Task metadata belongs in `src/task-repository.ts`. Durable task intent, assignments, and prompt ownership belong in `src/root-session-store.ts`.
-- `src/root-controller.ts` coordinates Root and Worker through the `TaskHarness` seam in `src/task-harness.ts`. `src/opencode-task-runtime.ts` and `src/claude-code-task-runtime.ts` own native runtime calls; `src/task-harness-registry.ts` selects one by profile provider. Read-only observation of a native session goes through `NativeSessionReader`, never through a harness client directly.
-- `src/delivery-operations.ts` observes Git and GitHub before deterministic delivery operations. Native and external evidence must not depend on a second progress receipt.
+- Task HTTP contracts and routes belong in `src/http/contracts/tasks.ts` and `src/http/routes/tasks.ts`. `src/tasks/tasks.ts` owns user authorization and task commands. Task metadata belongs in `src/tasks/repository.ts`.
+- Durable task intent, assignments, and prompt ownership belong in `src/coordination/root-session-store.ts`. `src/coordination/root-controller.ts` coordinates Root and Worker through the `TaskHarness` seam in `src/runtimes/task-harness.ts`.
+- Provider runtimes live under `src/runtimes`. `src/runtimes/task-harness-registry.ts` selects one by profile provider. Read-only observation of a native session goes through `NativeSessionReader`, never through a harness client directly.
+- `src/delivery/operations.ts` observes Git and GitHub before deterministic delivery operations. Native and external evidence must not depend on a second progress receipt.
+- Keep backend code in its domain folder. Keep domain-neutral utilities in `src/shared`. Keep feature-owned frontend code under `src/frontend/features` and global application behavior under `src/frontend/shell`.
 - There is no phase engine or Temporal. Preserve admitted native messages across restart instead of replaying them. Delete dead code when you find it.
-- If `tests/architecture-guardrails.test.ts` line budgets fail, move code into the per-domain modules instead of raising the budget.
 
 ## Agent skills
 

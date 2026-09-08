@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { nativeApp } from "./helpers/native-app.js";
-import { TaskSchema } from "../src/task-contracts.js";
+import { TaskSchema } from "../src/tasks/contracts.js";
 
 test("Start immediately commits active intent and schedules Coordinator without a second command", async () => {
   const f = await nativeApp();

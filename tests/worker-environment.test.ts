@@ -3,8 +3,8 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { runCommand } from "../src/command-runner.js";
-import { createGitCommandGuard } from "../src/worker-environment.js";
+import { runCommand } from "../src/platform/command-runner.js";
+import { createGitCommandGuard } from "../src/coordination/worker-environment.js";
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const result = await runCommand({ command: "git", args, cwd, taskId: null, stepId: null });

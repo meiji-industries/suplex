@@ -1,8 +1,8 @@
 import { expect, test, vi } from "vitest";
 
-import type { GithubTriggerPort } from "../src/github-trigger-inspection.js";
-import { GithubTriggerService } from "../src/github-triggers.js";
-import { TaskService } from "../src/tasks.js";
+import type { GithubTriggerPort } from "../src/integrations/github/trigger-inspection.js";
+import { GithubTriggerService } from "../src/integrations/github/triggers.js";
+import { TaskService } from "../src/tasks/tasks.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 test("enabled rule dispatch creates one linked backlog task and preview is read-only", async () => {

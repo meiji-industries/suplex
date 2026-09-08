@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { DeliveryTargetSchema } from "../../task-contracts.js";
+import { DeliveryTargetSchema } from "../../tasks/contracts.js";
 
 const id = z.string().min(1).max(128);
 const name = z.string().trim().min(1).max(120);

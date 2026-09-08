@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
-import { GithubReleaseFailure } from "../src/github-delivery.js";
-import type { GithubTriggerPort } from "../src/github-trigger-inspection.js";
+import { GithubReleaseFailure } from "../src/integrations/github/delivery.js";
+import type { GithubTriggerPort } from "../src/integrations/github/trigger-inspection.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 function deferred<T = void>() {

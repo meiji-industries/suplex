@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 
-import { configuredEditorLauncher, resolveExecutable, worktreeLaunchers } from "../src/worktree-open.js";
+import { configuredEditorLauncher, resolveExecutable, worktreeLaunchers } from "../src/tasks/worktree-open.js";
 
 test("discovers resolved macOS applications with fixed argument arrays", () => {
   const apps = worktreeLaunchers({

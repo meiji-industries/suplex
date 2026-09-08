@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { expect, test } from "vitest";
 import { z } from "zod";
-import { ForgeDatabase } from "../src/database.js";
-import { TaskControlStore } from "../src/root-session-store.js";
-import { TaskSchema } from "../src/task-contracts.js";
-import { composeAdvisorAssignment, composeWorkerAssignment, IMPLEMENTATION_COMMIT_PROMPT, initialCoordinatorPrompt, VERIFICATION_WORKER_PROMPT, workerAssignmentPreamble } from "../src/workflow-prompts.js";
-import { normalizeWorkflowInput, parseAdvisorReport, PublicWorkflowStateSchema, reviewGate, roleLabel, WORKFLOWS, workflowDefinition, type ReviewRecord } from "../src/workflows.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { TaskControlStore } from "../src/coordination/root-session-store.js";
+import { TaskSchema } from "../src/tasks/contracts.js";
+import { composeAdvisorAssignment, composeWorkerAssignment, IMPLEMENTATION_COMMIT_PROMPT, initialCoordinatorPrompt, VERIFICATION_WORKER_PROMPT, workerAssignmentPreamble } from "../src/coordination/workflow-prompts.js";
+import { normalizeWorkflowInput, parseAdvisorReport, PublicWorkflowStateSchema, reviewGate, roleLabel, WORKFLOWS, workflowDefinition, type ReviewRecord } from "../src/coordination/workflows.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 const sha = (letter: string) => letter.repeat(40);
@@ -121,13 +121,13 @@ test("repair tasks require an open same-repository pull request and the fixed ta
     expect((await post({ ...base, idempotencyKey: "repair-tests", source: { kind: "pull_request", number: 7 }, runProjectTests: false })).statusCode).toBe(422);
     expect(f.tasks.listTasks(f.userId)).toEqual([]);
     const pull = { number: 7, url: "https://github.com/owner/repo/pull/7", repository: "owner/repo", headBranch: "feature", baseBranch: "main", headSha: sha("b"), baseSha: sha("a"), isDraft: true, state: "open" as const, mergedAt: null };
-    const service = new (await import("../src/tasks.js")).TaskService(f.database, f.auth, {
+    const service = new (await import("../src/tasks/tasks.js")).TaskService(f.database, f.auth, {
       getProject: f.projects.getProject.bind(f.projects), getProjectInCompany: f.projects.getProjectInCompany.bind(f.projects),
       captureTaskConfiguration: async () => ({ baseSha: sha("a") }),
       resolveTaskSource: async (_project, selector) => {
         if (selector.kind !== "pull_request") throw new Error("unexpected");
-        if (selector.number === 8) throw new (await import("../src/task-sources.js")).TaskSourceFailure("source-pull-request-closed", "The pull request is not open");
-        if (selector.number === 9) throw new (await import("../src/task-sources.js")).TaskSourceFailure("source-unsupported-fork", "Fork pull requests cannot be used as task sources");
+        if (selector.number === 8) throw new (await import("../src/tasks/sources.js")).TaskSourceFailure("source-pull-request-closed", "The pull request is not open");
+        if (selector.number === 9) throw new (await import("../src/tasks/sources.js")).TaskSourceFailure("source-unsupported-fork", "Fork pull requests cannot be used as task sources");
         return { kind: "pull_request", ...pull };
       },
     }, f.config);

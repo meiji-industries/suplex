@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
-import { TaskSchema } from "../src/task-contracts.js";
-import { TaskSourceService } from "../src/task-sources.js";
+import { TaskSchema } from "../src/tasks/contracts.js";
+import { TaskSourceService } from "../src/tasks/sources.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 test("issue creation saves current GitHub context and user instructions on a fresh branch", async () => {

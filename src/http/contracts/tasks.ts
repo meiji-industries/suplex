@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { TaskInputSchema, TaskSchema } from "../../task-contracts.js";
-import { TaskSessionKindSchema, TaskTurnStatusSchema } from "../../task-control.js";
-import { AdvisorRoleSchema } from "../../workflows.js";
-import { TaskLimitDecisionSchema } from "../../task-limits.js";
+import { TaskInputSchema, TaskSchema } from "../../tasks/contracts.js";
+import { TaskSessionKindSchema, TaskTurnStatusSchema } from "../../tasks/control.js";
+import { AdvisorRoleSchema } from "../../coordination/workflows.js";
+import { TaskLimitDecisionSchema } from "../../tasks/limits/limits.js";
 
-export { DeliveryTargetSchema, VisualEvidenceSchema } from "../../task-contracts.js";
-export { MAX_TASK_REQUEST_BYTES } from "../../task-attachment-limits.js";
+export { DeliveryTargetSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";
+export { MAX_TASK_REQUEST_BYTES } from "../../tasks/limits/attachment-limits.js";
 export const TaskBodySchema = TaskInputSchema;
 export const TaskResponseSchema = TaskSchema.strip();
 export type TaskResponse = z.infer<typeof TaskResponseSchema>;

@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 
-import type { HermesAgentService } from "../../hermes-agents.js";
+import type { HermesAgentService } from "../../identity/hermes-agents.js";
 import {
   HermesAdminAgentParamsSchema,
   HermesAdminCreateBodySchema,

@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 
-import { BACKUP_HEALTH_MAX_AGE_MS, BackupService, checkBackupHealth } from "../src/backup.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
+import { BACKUP_HEALTH_MAX_AGE_MS, BackupService, checkBackupHealth } from "../src/platform/backup.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
 
 test("backup snapshots exclude provider API keys", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-provider-backup-"));

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { OpenCodeMessageEnvelopeSchema } from "../src/opencode-contracts.js";
+import { OpenCodeMessageEnvelopeSchema } from "../src/runtimes/opencode/contracts.js";
 
 import {
   createOpenCodeMessageID,
@@ -8,7 +8,7 @@ import {
   reconcileOpenCodePrompt,
   replayOpenCodePrompt,
   type OpenCodePromptReadPort,
-} from "../src/opencode-session.js";
+} from "../src/runtimes/opencode/session.js";
 
 const intent = createOpenCodePromptIntent({
   sessionID: "ses_task",

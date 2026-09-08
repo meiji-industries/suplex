@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MAX_AVATAR_IMAGE_BASE64_LENGTH } from "../../avatar-kinds.js";
+import { MAX_AVATAR_IMAGE_BASE64_LENGTH } from "../../identity/avatar-kinds.js";
 import { IdSchema } from "./common.js";
 
 export const AvatarShapeSchema = z.enum(["square", "circle"]);

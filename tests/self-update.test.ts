@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "vitest";
 
-import { createTestConfig } from "../src/config.js";
-import { runCommand as executeCommand, type CommandRunResult } from "../src/command-runner.js";
-import { writeProcessRegistry, type ProcessController, type ProcessInspection } from "../src/process-manager.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { runCommand as executeCommand, type CommandRunResult } from "../src/platform/command-runner.js";
+import { writeProcessRegistry, type ProcessController, type ProcessInspection } from "../src/platform/process-manager.js";
 import {
   SELF_UPDATE_SERVER_LOG_FILENAME,
   SelfUpdateService,
@@ -17,7 +17,7 @@ import {
   type SelfUpdateCommand,
   type SelfUpdatePayload,
   type SelfUpdateSpawner,
-} from "../src/self-update.js";
+} from "../src/platform/updates/self-update.js";
 
 const headRevision = "a".repeat(40);
 const targetRevision = "b".repeat(40);
@@ -435,11 +435,13 @@ test("launching the same accepted operation again after spawn resolves does not 
     };
     const processController: ProcessController = { async inspect() { return identity; }, async signal() {} };
     let spawns = 0;
-    const service = new SelfUpdateService({ config, processController, argv: ["node", "src/server.ts"], environment: {}, spawn: () => { spawns += 1; return fakeDetachedChild(); } });
+    let helperArgs: readonly string[] | undefined;
+    const service = new SelfUpdateService({ config, processController, argv: ["node", "src/server.ts"], environment: {}, spawn: (_command, args) => { spawns += 1; helperArgs = args; return fakeDetachedChild(); } });
     const accepted = await service.acceptRestart(targetRevision);
     await service.launchRestart(accepted.operation.operationId);
     await service.launchRestart(accepted.operation.operationId);
     expect(spawns).toBe(1);
+    expect(helperArgs).toEqual(["--import", "tsx", "src/platform/updates/self-update-runner.ts", "--operation", accepted.operation.operationId]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

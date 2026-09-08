@@ -3,9 +3,9 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { CliHerdrClient } from "../src/herdr-client.js";
-import { OpenCodeTaskRuntime, type OpenCodeTaskScope } from "../src/opencode-task-runtime.js";
-import { readOpenCodeServer, stopOpenCodeServer } from "../src/opencode-server.js";
+import { CliHerdrClient } from "../src/integrations/herdr/client.js";
+import { OpenCodeTaskRuntime, type OpenCodeTaskScope } from "../src/runtimes/opencode/task-runtime.js";
+import { readOpenCodeServer, stopOpenCodeServer } from "../src/runtimes/opencode/server.js";
 
 assert.equal(process.env.HERDR_ENV, "1", "Run this probe inside Herdr");
 const directory = await mkdtemp(join(tmpdir(), "forge-native-attachment-"));

@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { isTaskAgentExpired } from "../src/frontend/components/app/recent-task-agents.js";
-import { defaultTaskAgentExpiryMs, parseTaskAgentExpiry, taskAgentExpiryOptions } from "../src/frontend/components/app/task-agent-expiry.js";
+import { isTaskAgentExpired } from "../src/frontend/features/tasks/recent-task-agents.js";
+import { defaultTaskAgentExpiryMs, parseTaskAgentExpiry, taskAgentExpiryOptions } from "../src/frontend/features/tasks/task-agent-expiry.js";
 
 const now = Date.parse("2026-09-06T00:00:00.000Z");
 const expiryMs = 300_000;

@@ -1,8 +1,8 @@
 import { afterEach, expect, test, vi } from "vitest";
-import type { TaskSession } from "../src/task-control.js";
-import { stopIdleArchiveSessions } from "../src/task-archive-sessions.js";
-import * as servers from "../src/opencode-server.js";
-import { OpenCodeClient } from "../src/opencode-client.js";
+import type { TaskSession } from "../src/tasks/control.js";
+import { stopIdleArchiveSessions } from "../src/tasks/archive/sessions.js";
+import * as servers from "../src/runtimes/opencode/server.js";
+import { OpenCodeClient } from "../src/runtimes/opencode/client.js";
 
 const session: TaskSession = { id: "session", taskId: "task", kind: "root", generation: 1, current: true, paneId: null, nativeSessionId: "native", lifecycle: "stopped", assignmentHash: null, launchOwner: null, launchOwnerPid: null, launchOwnerStartTime: null, stopRequestedAt: null, stoppedAt: null, advisorRole: null, workflowInput: null };
 const server: servers.OpenCodeServerReference = { pid: process.pid, baseUrl: "http://127.0.0.1:1234", password: "a".repeat(64), directory: "/repo", executable: "/bin/opencode", generation: "b775df17-718a-4cb2-8e23-6912b8aa0d39", configHash: "a".repeat(64), processIdentity: { command: "opencode serve", executable: "/bin/opencode", argv: ["opencode", "serve"], processGroup: process.pid, startTime: "start", ownerUid: 501 } };

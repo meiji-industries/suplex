@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { describe, expect, test } from "vitest";
 
-import { applyMigrations, readMigrations } from "../src/database.js";
+import { applyMigrations, readMigrations } from "../src/platform/database.js";
 
 describe("timestamp migrations", () => {
   test("gives internal agents that share a profile independent settings rows", () => {

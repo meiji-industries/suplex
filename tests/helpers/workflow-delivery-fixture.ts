@@ -1,14 +1,14 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCommand } from "../../src/command-runner.js";
-import { ForgeDatabase } from "../../src/database.js";
-import { DeliveryOperations, type DeliveryGithubPort } from "../../src/delivery-operations.js";
-import { GithubReleaseFailure, type GithubPullRequest, type GithubPullRequestObservation, type LocalRevision } from "../../src/github-delivery.js";
-import { RootController } from "../../src/root-controller.js";
-import { TaskControlStore, type ProcessOwnerObservation } from "../../src/root-session-store.js";
-import { prepareTaskWorktree } from "../../src/task-worktree.js";
-import type { WorkflowId } from "../../src/workflows.js";
+import { runCommand } from "../../src/platform/command-runner.js";
+import { ForgeDatabase } from "../../src/platform/database.js";
+import { DeliveryOperations, type DeliveryGithubPort } from "../../src/delivery/operations.js";
+import { GithubReleaseFailure, type GithubPullRequest, type GithubPullRequestObservation, type LocalRevision } from "../../src/integrations/github/delivery.js";
+import { RootController } from "../../src/coordination/root-controller.js";
+import { TaskControlStore, type ProcessOwnerObservation } from "../../src/coordination/root-session-store.js";
+import { prepareTaskWorktree } from "../../src/tasks/worktree.js";
+import type { WorkflowId } from "../../src/coordination/workflows.js";
 import { FakeTaskHarness } from "./fake-task-harness.js";
 import { insertNativeTaskRow } from "./native-task-row.js";
 

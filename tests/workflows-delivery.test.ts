@@ -1,14 +1,14 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { ForgeDatabase } from "../src/database.js";
-import { DELIVERY_WAIT_NEXT, DeliveryOperations } from "../src/delivery-operations.js";
-import { inspectDeliveryDiff } from "../src/delivery-review.js";
-import { RootBridge } from "../src/root-bridge.js";
-import { RootController } from "../src/root-controller.js";
-import { TaskControlStore, type ProcessOwnerObservation } from "../src/root-session-store.js";
-import { TaskHost } from "../src/task-host.js";
-import { rangeDifferences, sameRange } from "../src/workflows.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { DELIVERY_WAIT_NEXT, DeliveryOperations } from "../src/delivery/operations.js";
+import { inspectDeliveryDiff } from "../src/delivery/review.js";
+import { RootBridge } from "../src/coordination/root-bridge.js";
+import { RootController } from "../src/coordination/root-controller.js";
+import { TaskControlStore, type ProcessOwnerObservation } from "../src/coordination/root-session-store.js";
+import { TaskHost } from "../src/tasks/host.js";
+import { rangeDifferences, sameRange } from "../src/coordination/workflows.js";
 import { cleanupDeliveryFixtures, failing, fixture, git, pending, rater, reviewer, successful } from "./helpers/workflow-delivery-fixture.js";
 
 afterEach(cleanupDeliveryFixtures);

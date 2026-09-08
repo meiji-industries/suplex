@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { AuthService } from "../src/auth.js";
-import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
+import { AuthService } from "../src/identity/auth.js";
+import { createTestConfig } from "../src/platform/config.js";
+import { ForgeDatabase } from "../src/platform/database.js";
 import { insertNativeTaskRow } from "./helpers/native-task-row.js";
 
 const now = "2026-08-12T00:00:00.000Z";

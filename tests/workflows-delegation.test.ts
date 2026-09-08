@@ -2,17 +2,17 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { ArtifactStore } from "../src/artifacts.js";
-import { runCommand } from "../src/command-runner.js";
-import { ForgeDatabase } from "../src/database.js";
-import { inspectDeliveryDiff } from "../src/delivery-review.js";
-import { openCodeRoleConfig } from "../src/opencode-server.js";
-import { taskRolePrompt } from "../src/task-role-prompt.js";
-import type { OpenCodeTaskScope } from "../src/opencode-task-runtime.js";
-import { RootController, type TaskDelivery } from "../src/root-controller.js";
-import { TaskControlStore } from "../src/root-session-store.js";
-import { verifyTaskEvidence } from "../src/workflow-evidence.js";
-import type { WorkflowId } from "../src/workflows.js";
+import { ArtifactStore } from "../src/platform/artifacts.js";
+import { runCommand } from "../src/platform/command-runner.js";
+import { ForgeDatabase } from "../src/platform/database.js";
+import { inspectDeliveryDiff } from "../src/delivery/review.js";
+import { openCodeRoleConfig } from "../src/runtimes/opencode/server.js";
+import { taskRolePrompt } from "../src/tasks/execution/role-prompt.js";
+import type { OpenCodeTaskScope } from "../src/runtimes/opencode/task-runtime.js";
+import { RootController, type TaskDelivery } from "../src/coordination/root-controller.js";
+import { TaskControlStore } from "../src/coordination/root-session-store.js";
+import { verifyTaskEvidence } from "../src/coordination/workflow-evidence.js";
+import type { WorkflowId } from "../src/coordination/workflows.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { insertNativeTaskRow } from "./helpers/native-task-row.js";
 
@@ -695,6 +695,6 @@ test("E1: check-only Workers persist before/after range evidence that is valid o
   expect(verification.workerTurns.find(turn => turn.turnId === assignmentTurn(f, implementation)?.id)).toMatchObject({ verificationRange: null, sourceRangeProof: "none" });
   expect(assignmentTurn(f, advisor)!.promptText).toContain("verificationRange.valid");
   // The evidence survives native retirement and a reopened store.
-  const reopened = new TaskControlStore(new (await import("../src/database.js")).ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false }));
+  const reopened = new TaskControlStore(new (await import("../src/platform/database.js")).ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false }));
   expect(JSON.parse(reopened.turns("task").find(turn => turn.sessionId === clean.id)!.terminalObservation!)).toMatchObject({ verificationRange: { valid: true } });
 });

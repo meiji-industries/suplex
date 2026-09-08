@@ -2,8 +2,8 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { taskRolePrompt } from "../src/task-role-prompt.js";
-import { openCodeAttachCommand, openCodeRoleConfig, readOpenCodeServer, stopOpenCodeServer, type OpenCodeServerReference } from "../src/opencode-server.js";
+import { taskRolePrompt } from "../src/tasks/execution/role-prompt.js";
+import { openCodeAttachCommand, openCodeRoleConfig, readOpenCodeServer, stopOpenCodeServer, type OpenCodeServerReference } from "../src/runtimes/opencode/server.js";
 
 const directories: string[] = [];
 afterEach(async () => {

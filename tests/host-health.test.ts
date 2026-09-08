@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { checkGithubAuthentication } from "../src/provider-readiness.js";
+import { checkGithubAuthentication } from "../src/profiles/provider-readiness.js";
 
 test("GitHub readiness parses bounded JSON without exposing account details", async () => {
   const calls: string[][] = [];

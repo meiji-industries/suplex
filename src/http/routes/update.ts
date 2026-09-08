@@ -1,10 +1,10 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 
-import type { AuthUser } from "../../auth.js";
-import { SelfUpdateFailure } from "../../self-update.js";
-import type { UpdateObservation } from "../../self-update.js";
-import type { UpdateAvailability } from "../../update.js";
+import type { AuthUser } from "../../identity/auth.js";
+import { SelfUpdateFailure } from "../../platform/updates/self-update.js";
+import type { UpdateObservation } from "../../platform/updates/self-update.js";
+import type { UpdateAvailability } from "../../platform/updates/update.js";
 import { ErrorResponseSchema } from "../contracts/common.js";
 import { RestartUpdateBodySchema, UpdateRestartResponseSchema, UpdateResponseSchema, type UpdateRestartResponse } from "../contracts/update.js";
 

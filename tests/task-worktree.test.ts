@@ -2,8 +2,8 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { runCommand } from "../src/command-runner.js";
-import { prepareTaskWorktree } from "../src/task-worktree.js";
+import { runCommand } from "../src/platform/command-runner.js";
+import { prepareTaskWorktree } from "../src/tasks/worktree.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });

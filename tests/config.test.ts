@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { UnsafeBindingError, UnsupportedRuntimeError, loadConfig } from "../src/config.js";
+import { UnsafeBindingError, UnsupportedRuntimeError, loadConfig } from "../src/platform/config.js";
 
 const baseEnvironment = {
   FORGE_TAILSCALE_ADDRESS: "forge.tailnet.ts.net",

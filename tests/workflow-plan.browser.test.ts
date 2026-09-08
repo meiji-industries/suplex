@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { expect, test } from "vitest";
-import { taskDeliveryTargetOptions } from "../src/frontend/components/app/task-delivery-target.js";
+import { taskDeliveryTargetOptions } from "../src/frontend/features/tasks/task-delivery-target.js";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
 const proof = resolve(".context/workflow-plan-proof");

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { taskTimelineDuration } from "../src/frontend/lib/task-timeline-duration.js";
+import { taskTimelineDuration } from "../src/frontend/features/timeline/lib/task-timeline-duration.js";
 
 describe("taskTimelineDuration", () => {
   test("formats zero and rounded seconds", () => {

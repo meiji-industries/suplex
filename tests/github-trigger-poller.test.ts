@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { GithubTriggerPoller } from "../src/github-trigger-poller.js";
+import { GithubTriggerPoller } from "../src/integrations/github/trigger-poller.js";
 
 test("runs once at startup and once sixty seconds after completion", async () => {
   vi.useFakeTimers(); let calls = 0; let release!: () => void;

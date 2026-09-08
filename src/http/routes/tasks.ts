@@ -1,20 +1,20 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
-import { AnalyticsResponseSchema, TaskCostsResponseSchema } from "../../task-analytics-contracts.js";
-import { usageMetrics } from "../../task-analytics-metrics.js";
-import type { TaskService } from "../../tasks.js";
-import type { TaskHost } from "../../task-host.js";
-import type { ForgeConfig } from "../../config.js";
-import { readTaskAgentStatuses } from "../../task-agent-status.js";
+import { AnalyticsResponseSchema, TaskCostsResponseSchema } from "../../tasks/analytics/contracts.js";
+import { usageMetrics } from "../../tasks/analytics/metrics.js";
+import type { TaskService } from "../../tasks/tasks.js";
+import type { TaskHost } from "../../tasks/host.js";
+import type { ForgeConfig } from "../../platform/config.js";
+import { readTaskAgentStatuses } from "../../tasks/agent-status.js";
 import { TaskAgentsResponseSchema, TaskArchiveBodySchema, TaskArchiveResponseSchema } from "../contracts/tasks.js";
-import { readTaskChecks, readTaskDiff } from "../../task-inspection.js";
-import { readTaskExecution } from "../../task-execution.js";
-import { TaskTimelineResponseSchema } from "../../task-timeline-contracts.js";
-import { TaskExecutionResponseSchema } from "../../task-execution-contracts.js";
+import { readTaskChecks, readTaskDiff } from "../../tasks/inspection.js";
+import { readTaskExecution } from "../../tasks/execution/execution.js";
+import { TaskTimelineResponseSchema } from "../../tasks/timeline/contracts.js";
+import { TaskExecutionResponseSchema } from "../../tasks/execution/contracts.js";
 import { TaskChecksResponseSchema, TaskDiffResponseSchema } from "../contracts/tasks.js";
 import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
-import { normalizeWorkflowInput, WorkflowInputFailure } from "../../workflows.js";
+import { normalizeWorkflowInput, WorkflowInputFailure } from "../../coordination/workflows.js";
 import { MAX_TASK_REQUEST_BYTES, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions { tasks: TaskService; host?: Pick<TaskHost, "recover">; config?: Pick<ForgeConfig, "databasePath"> }

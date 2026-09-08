@@ -2,7 +2,7 @@ import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { resolveOpenCodeExecutable } from "../src/executable-resolver.js";
+import { resolveOpenCodeExecutable } from "../src/platform/executable-resolver.js";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });

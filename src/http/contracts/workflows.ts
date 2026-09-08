@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../task-contracts.js";
-import { AdvisorProfileIdsSchema, WorkflowIdSchema } from "../../workflows.js";
+import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";
+import { AdvisorProfileIdsSchema, WorkflowIdSchema } from "../../coordination/workflows.js";
 
 // A workflow record is a named, editable preset over one built-in engine: default agents and delivery settings the task dialog applies.
 const name = z.string().trim().min(1).max(80);

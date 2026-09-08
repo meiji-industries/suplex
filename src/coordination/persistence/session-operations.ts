@@ -1,0 +1,38 @@
+import type { ForgeDatabase } from "../../platform/database.js";
+import { PromptDispatchAttemptSchema, TaskSessionKindSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, type PromptDispatchAttempt, type TaskSession, type TaskSessionKind, type TaskTurn } from "../../tasks/control.js";
+import { AdvisorRoleSchema, WorkflowInputSchema } from "../workflows.js";
+import { integer, parseJson, text, type Row } from "./row-values.js";
+
+export const session = (row: Row): TaskSession => {
+  const id = text(row, "id"); const taskId = text(row, "task_id");
+  if (!id || !taskId) throw new Error("Invalid persisted task session");
+  const launchOwnerPid = row.launch_owner_pid === null || row.launch_owner_pid === undefined ? null : integer(row, "launch_owner_pid");
+  return { id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), launchOwner: text(row, "launch_owner"), launchOwnerPid, launchOwnerStartTime: text(row, "launch_owner_start_time"), stopRequestedAt: text(row, "stop_requested_at"), stoppedAt: text(row, "stopped_at"), advisorRole: text(row, "advisor_role") === null ? null : AdvisorRoleSchema.parse(text(row, "advisor_role")), delegateSlot: text(row, "delegate_slot"), workflowInput: parseJson(text(row, "workflow_input_json"), WorkflowInputSchema) };
+};
+
+export const turn = (row: Row): TaskTurn => {
+  const id = text(row, "id"); const taskId = text(row, "task_id"); const sessionId = text(row, "session_id"); const promptHash = text(row, "prompt_hash"); const promptText = text(row, "prompt_text");
+  if (!id || !taskId || !sessionId || !promptHash || promptText === null) throw new Error("Invalid persisted task turn");
+  return { id, taskId, sessionId, generation: integer(row, "generation"), assignmentHash: text(row, "assignment_hash"), promptHash, promptText, status: TaskTurnStatusSchema.parse(text(row, "status")), resultReceiptId: text(row, "result_receipt_id"), terminalObservation: text(row, "terminal_observation"), nativeTurnId: text(row, "native_turn_id"), dispatchAttempt: parseJson(text(row, "dispatch_attempt_json"), PromptDispatchAttemptSchema), workflowInput: parseJson(text(row, "workflow_input_json"), WorkflowInputSchema) };
+};
+
+export const currentSession = (database: ForgeDatabase, taskId: string, kind: TaskSessionKind): TaskSession | null => database.authQuery(db => {
+  if (kind === "worker") {
+    const pointed = db.prepare("SELECT s.* FROM forge_task_controls c JOIN forge_task_sessions s ON s.id = c.worker_session_id WHERE c.task_id = ? AND s.is_current = 1").get(taskId) as Row | undefined;
+    const row = pointed ?? db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND is_current = 1 ORDER BY created_at, id LIMIT 1").get(taskId) as Row | undefined;
+    return row ? session(row) : null;
+  }
+  const row = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = ? AND is_current = 1").get(taskId, kind) as Row | undefined;
+  return row ? session(row) : null;
+});
+export const currentDelegates = (database: ForgeDatabase, taskId: string): TaskSession[] => database.authQuery(db => (db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND is_current = 1 ORDER BY CASE delegate_slot WHEN 'planner_a' THEN 0 WHEN 'planner_b' THEN 1 ELSE 2 END, created_at, id").all(taskId) as Row[]).map(session));
+export const currentSessionByIdentity = (database: ForgeDatabase, sessionId: string, generation: number): TaskSession | null => database.authQuery(db => { const row = db.prepare("SELECT * FROM forge_task_sessions WHERE id = ? AND generation = ? AND is_current = 1").get(sessionId, generation) as Row | undefined; return row ? session(row) : null; });
+export const sessions = (database: ForgeDatabase, taskId: string): TaskSession[] => database.authQuery(db => (db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? ORDER BY created_at, id").all(taskId) as Row[]).map(session));
+export const turns = (database: ForgeDatabase, taskId: string): TaskTurn[] => database.authQuery(db => (db.prepare("SELECT * FROM forge_task_turns WHERE task_id = ? ORDER BY created_at, id").all(taskId) as Row[]).map(turn));
+export const releaseSessionOperation = (database: ForgeDatabase, sessionId: string, owner: string): void => { database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL WHERE id = ? AND launch_owner = ?").run(sessionId, owner)); };
+export const bindHarnessSession = (database: ForgeDatabase, input: { sessionId: string; generation: number; nativeSessionId: string }, now: () => string): void => { const changed = database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET native_session_id = ?, lifecycle = 'live', updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle <> 'cancelled' AND (native_session_id IS NULL OR native_session_id = ?)").run(input.nativeSessionId, now(), input.sessionId, input.generation, input.nativeSessionId).changes); if (changed !== 1) throw new Error("stale_generation"); };
+export const bindPane = (database: ForgeDatabase, input: { sessionId: string; generation: number; paneId: string }, now: () => string): void => { const changed = database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = ?, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle <> 'cancelled'").run(input.paneId, now(), input.sessionId, input.generation).changes); if (changed !== 1) throw new Error("stale_generation"); };
+export const hasTurns = (database: ForgeDatabase, sessionId: string): boolean => database.authQuery(db => Boolean(db.prepare("SELECT 1 FROM forge_task_turns WHERE session_id = ? LIMIT 1").get(sessionId)));
+export const requeueFencedPrompt = (database: ForgeDatabase, input: { turnId: string; attempt: PromptDispatchAttempt; owner: string }, now: () => string): boolean => database.authTransaction(db => db.prepare("UPDATE forge_task_turns SET status = 'pending_prompt', dispatch_attempt_json = NULL, updated_at = ? WHERE id = ? AND status = 'unknown' AND dispatch_attempt_json = ? AND EXISTS (SELECT 1 FROM forge_task_sessions s JOIN forge_task_controls c ON c.task_id = s.task_id WHERE s.id = forge_task_turns.session_id AND s.generation = forge_task_turns.generation AND s.launch_owner = ? AND s.is_current = 1 AND s.lifecycle <> 'cancelled' AND c.status = 'active')").run(now(), input.turnId, JSON.stringify(input.attempt), input.owner).changes === 1);
+export const markPrompted = (database: ForgeDatabase, input: { turnId: string; generation: number }, now: () => string): void => { if (database.authTransaction(db => db.prepare("UPDATE forge_task_turns SET status = 'prompted', prompted_at = ?, updated_at = ? WHERE id = ? AND generation = ? AND status IN ('pending_prompt', 'unknown') AND EXISTS (SELECT 1 FROM forge_task_sessions session WHERE session.id = forge_task_turns.session_id AND session.is_current = 1 AND session.generation = forge_task_turns.generation)").run(now(), now(), input.turnId, input.generation).changes) !== 1) throw new Error("stale_turn"); };
+export const pendingTurns = (database: ForgeDatabase, sessionId: string): TaskTurn[] => database.authQuery(db => (db.prepare("SELECT * FROM forge_task_turns WHERE session_id = ? AND status IN ('pending_prompt', 'unknown', 'prompted') ORDER BY created_at, id").all(sessionId) as Row[]).map(turn));

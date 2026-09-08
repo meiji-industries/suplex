@@ -28,10 +28,14 @@ export async function observeTaskLimitUsage(input: {
   }
   let usage = [...unique.values()];
   if (usage.some(usageIsUnpriced)) {
-    const pricing = await input.readPricing();
+    let pricing: ModelPricingCatalog | undefined;
+    try {
+      pricing = await input.readPricing();
+    } catch {
+      pricing = undefined;
+    }
     if (pricing) usage = estimateUnpricedUsage(usage, pricing);
   }
-  if (usage.some(usageIsUnpriced)) throw new Error("Native task usage has no price. Forge will retry after pricing is available.");
   input.store.replaceNativeUsage(input.taskId, usage);
-  return { estimatedCostUsd: usageMetrics(usage).cost ?? 0, admittedTurns };
+  return { estimatedCostUsd: usageMetrics(usage).cost, admittedTurns };
 }

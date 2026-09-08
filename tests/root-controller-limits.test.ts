@@ -3,6 +3,8 @@ import { cleanupRootControllerFixtures, fixture, usage } from "./helpers/root-co
 import { updateEnvironmentSettings } from "../src/platform/environment-settings.js";
 import { RootController } from "../src/coordination/root-controller.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
+import type { ModelPricingCatalog } from "../src/profiles/model-pricing.js";
+import { observeTaskLimitUsage } from "../src/tasks/limits/limit-observer.js";
 
 afterEach(cleanupRootControllerFixtures);
 
@@ -45,15 +47,60 @@ test("native usage failure retries without asking the user or dispatching", asyn
   expect(value.harness.dispatched).toHaveLength(2);
 });
 
-test("unpriced native usage cannot become a zero-cost budget observation", async () => {
+test("missing model pricing preserves usage, permits dispatch, and retries pricing", async () => {
   const value = await fixture();
-  await value.controller.recover("task");
+  let pricing: ModelPricingCatalog | undefined = new Map();
+  const controller = new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, value.reader, async () => pricing);
+  await controller.recover("task");
   const first = value.harness.dispatched[0]!;
   value.harness.finish(first.messageID);
-  await value.controller.recover("task");
+  await controller.recover("task");
   value.nativeUsage.set(value.store.currentSession("task", "root")!.id, [{ ...usage(first.sessionID, 0), tokens: { input: 100, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }]);
-  await expect(value.controller.recover("task")).rejects.toThrow("no price");
+  await expect(observeTaskLimitUsage({ taskId: "task", store: value.store, reader: value.reader, readPricing: async () => pricing })).resolves.toEqual({ estimatedCostUsd: null, admittedTurns: 1 });
+  await controller.recover("task");
   expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
+  expect(value.harness.dispatched).toHaveLength(2);
+  const stored = value.database.authQuery(db => db.prepare("SELECT snapshot FROM forge_task_usage WHERE task_id = 'task'").get() as { snapshot: string });
+  expect(JSON.parse(stored.snapshot)).toMatchObject({ cost: 0, tokens: { input: 100 } });
+
+  value.harness.finish(value.harness.dispatched[1]!.messageID);
+  await controller.recover("task");
+  pricing = new Map([["openai/gpt-5.6-luna", { input: 200_000, output: 0, cacheRead: 0, cacheWrite: 0 }]]);
+  await controller.recover("task");
+  expect(value.store.get("task")).toMatchObject({ status: "waiting_human", limitPause: { reason: "budget", usage: { estimatedCostUsd: 20 } } });
+  expect(value.store.taskSpend("task")).toEqual({ costUsd: 20, turns: 2 });
+  expect(value.harness.dispatched).toHaveLength(2);
+});
+
+test("pricing lookup failure preserves usage and permits dispatch", async () => {
+  const value = await fixture();
+  const controller = new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, value.reader, async () => { throw new Error("Pricing is offline"); });
+  await controller.recover("task");
+  const first = value.harness.dispatched[0]!;
+  value.harness.finish(first.messageID);
+  await controller.recover("task");
+  value.nativeUsage.set(value.store.currentSession("task", "root")!.id, [{ ...usage(first.sessionID, 0), tokens: { input: 100, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }]);
+  await controller.recover("task");
+  expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null, limitPause: null });
+  expect(value.harness.dispatched).toHaveLength(2);
+  const stored = value.database.authQuery(db => db.prepare("SELECT snapshot FROM forge_task_usage WHERE task_id = 'task'").get() as { snapshot: string });
+  expect(JSON.parse(stored.snapshot)).toMatchObject({ cost: 0, tokens: { input: 100 } });
+});
+
+test("known native cost enforces a budget when other usage is unpriced", async () => {
+  const value = await fixture();
+  const controller = new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, value.reader, async () => new Map());
+  await controller.recover("task");
+  const first = value.harness.dispatched[0]!;
+  value.harness.finish(first.messageID);
+  await controller.recover("task");
+  value.nativeUsage.set(value.store.currentSession("task", "root")!.id, [
+    usage(first.sessionID, 15),
+    { ...usage(first.sessionID, 0), messageId: "unpriced", tokens: { input: 100, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+  ]);
+  await controller.recover("task");
+  expect(value.store.get("task")).toMatchObject({ status: "waiting_human", limitPause: { reason: "budget", usage: { estimatedCostUsd: 15 } } });
+  expect(value.store.taskSpend("task").costUsd).toBe(15);
   expect(value.harness.dispatched).toHaveLength(1);
 });
 

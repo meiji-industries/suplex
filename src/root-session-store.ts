@@ -54,7 +54,7 @@ function session(row: Row): TaskSession {
 function turn(row: Row): TaskTurn {
   const id = text(row, "id"); const taskId = text(row, "task_id"); const sessionId = text(row, "session_id"); const promptHash = text(row, "prompt_hash"); const promptText = text(row, "prompt_text");
   if (!id || !taskId || !sessionId || !promptHash || promptText === null) throw new Error("Invalid persisted task turn");
-  return { id, taskId, sessionId, generation: integer(row, "generation"), assignmentHash: text(row, "assignment_hash"), promptHash, promptText, status: TaskTurnStatusSchema.parse(text(row, "status")), resultReceiptId: text(row, "result_receipt_id"), terminalObservation: text(row, "terminal_observation"), nativeTurnId: text(row, "native_turn_id"), dispatchAttempt: parseJson(text(row, "dispatch_attempt_json"), PromptDispatchAttemptSchema) };
+  return { id, taskId, sessionId, generation: integer(row, "generation"), assignmentHash: text(row, "assignment_hash"), promptHash, promptText, status: TaskTurnStatusSchema.parse(text(row, "status")), resultReceiptId: text(row, "result_receipt_id"), terminalObservation: text(row, "terminal_observation"), nativeTurnId: text(row, "native_turn_id"), dispatchAttempt: parseJson(text(row, "dispatch_attempt_json"), PromptDispatchAttemptSchema), workflowInput: parseJson(text(row, "workflow_input_json"), WorkflowInputSchema) };
 }
 
 export class TaskControlStore {
@@ -209,7 +209,7 @@ export class TaskControlStore {
   claimRoot(input: { taskId: string }): TaskSession {
     return this.claim(input.taskId);
   }
-  /** Launches the one delegated session: a Worker assignment, or an Advisor with its Forge-composed prompt and input. */
+  /** Claims the delegated slot for a role conversation and appends its immutable assignment turn. */
   launchWorker(input: { taskId: string; rootSessionId: string; rootGeneration: number } & ({ instruction: string; workflowInput?: Extract<WorkflowInput, { kind: "worker" }> } | { advisor: { role: AdvisorRole; prompt: string; input: Extract<WorkflowInput, { kind: "advisor" }> } })): TaskSession {
     const time = now();
     const advisor = "advisor" in input ? input.advisor : null;
@@ -223,21 +223,30 @@ export class TaskControlStore {
       const root = db.prepare("SELECT * FROM forge_task_sessions WHERE id = ? AND task_id = ? AND kind = 'root' AND is_current = 1 AND generation = ?").get(input.rootSessionId, input.taskId, input.rootGeneration) as Row | undefined;
       if (!task || TaskControlStatusSchema.parse(text(task, "status")) !== "active" || !root || TaskSessionLifecycleSchema.parse(text(root, "lifecycle")) === "cancelled") throw new Error("root_identity_mismatch");
       const current = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND is_current = 1").get(input.taskId) as Row | undefined;
-      const generation = (current ? integer(current, "generation") : 0) + 1;
-      // A Standard-workflow Worker keeps one native session across assignments; Advisors and workflow Workers pin per-session input, so they get a fresh session.
-      const reuse = Boolean(current) && !advisor && !workflowInput && text(current!, "advisor_role") === null && text(current!, "workflow_input_json") === null;
-      const id = reuse ? text(current!, "id") : randomUUID();
+      if (current) {
+        const activeTurn = db.prepare("SELECT 1 FROM forge_task_turns WHERE session_id = ? AND generation = ? AND status IN ('pending_prompt', 'prompted', 'unknown') LIMIT 1").get(text(current, "id"), integer(current, "generation"));
+        const stopInProgress = text(current, "stop_requested_at") !== null && text(current, "stopped_at") === null;
+        const launchInProgress = text(current, "launch_owner") !== null && text(current, "stopped_at") === null;
+        if (activeTurn || stopInProgress || launchInProgress) throw new Error("worker_already_assigned");
+      }
+      const latest = db.prepare("SELECT COALESCE(MAX(generation), 0) AS generation FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker'").get(input.taskId) as Row;
+      const generation = integer(latest, "generation") + 1;
+      const role = advisor?.role ?? null;
+      const compatible = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND advisor_role IS ? AND lifecycle <> 'cancelled' ORDER BY generation DESC, created_at DESC, id DESC LIMIT 1").get(input.taskId, role) as Row | undefined;
+      if (compatible && text(compatible, "stop_requested_at") !== null && text(compatible, "stopped_at") === null) throw new Error("worker_already_assigned");
+      const reuse = Boolean(compatible);
+      const id = reuse ? text(compatible!, "id") : randomUUID();
       if (!id) throw new Error("Invalid persisted task session");
       if (reuse) {
-        const changed = db.prepare("UPDATE forge_task_sessions SET generation = ?, lifecycle = CASE WHEN lifecycle = 'stopped' THEN 'reserved' ELSE lifecycle END, assignment_hash = ?, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, stop_requested_at = NULL, stopped_at = NULL, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1 AND lifecycle IN ('reserved', 'live', 'stopped') AND (launch_owner IS NULL OR (lifecycle = 'stopped' AND stopped_at IS NOT NULL)) AND (stop_requested_at IS NULL OR stopped_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = forge_task_sessions.id AND t.generation = forge_task_sessions.generation AND t.status IN ('pending_prompt', 'prompted', 'unknown'))").run(generation, assignmentHash, time, id, integer(current!, "generation")).changes;
+        if (current && text(current, "id") !== id) db.prepare("UPDATE forge_task_sessions SET is_current = 0, updated_at = ? WHERE id = ? AND is_current = 1").run(time, text(current, "id"));
+        const changed = db.prepare("UPDATE forge_task_sessions SET generation = ?, is_current = 1, lifecycle = CASE WHEN lifecycle = 'stopped' THEN 'reserved' ELSE lifecycle END, assignment_hash = ?, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, stop_requested_at = NULL, stopped_at = NULL, updated_at = ? WHERE id = ? AND lifecycle IN ('reserved', 'live', 'stopped') AND (launch_owner IS NULL OR stopped_at IS NOT NULL) AND (stop_requested_at IS NULL OR stopped_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = forge_task_sessions.id AND t.generation = forge_task_sessions.generation AND t.status IN ('pending_prompt', 'prompted', 'unknown'))").run(generation, assignmentHash, time, id).changes;
         if (changed !== 1) throw new Error("worker_already_assigned");
       } else {
-        if (current && ["reserved", "live", "unknown"].includes(TaskSessionLifecycleSchema.parse(text(current, "lifecycle")))) throw new Error("worker_already_assigned");
-        if (current) db.prepare("UPDATE forge_task_sessions SET is_current = 0, lifecycle = 'stopped', updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1").run(time, text(current, "id"), integer(current, "generation"));
+        if (current) db.prepare("UPDATE forge_task_sessions SET is_current = 0, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1").run(time, text(current, "id"), integer(current, "generation"));
         db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, native_session_id, lifecycle, assignment_hash, advisor_role, workflow_input_json, created_at, updated_at) VALUES (?, ?, 'worker', ?, 1, NULL, NULL, 'reserved', ?, ?, ?, ?, ?)").run(id, input.taskId, generation, assignmentHash, advisor?.role ?? null, workflowInput ? JSON.stringify(workflowInput) : null, time, time);
       }
       db.prepare("UPDATE forge_task_controls SET worker_session_id = ?, updated_at = ? WHERE task_id = ? AND status = 'active'").run(id, time, input.taskId);
-      db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_prompt', NULL, NULL, ?, NULL, NULL, ?)").run(createOpenCodeMessageID(), input.taskId, id, generation, assignmentHash, hash(promptText), promptText, time, time);
+      db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, workflow_input_json, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_prompt', NULL, NULL, ?, ?, NULL, NULL, ?)").run(createOpenCodeMessageID(), input.taskId, id, generation, assignmentHash, hash(promptText), promptText, workflowInput ? JSON.stringify(workflowInput) : null, time, time);
       return session(db.prepare("SELECT * FROM forge_task_sessions WHERE id = ?").get(id) as Row);
     });
   }
@@ -263,7 +272,7 @@ export class TaskControlStore {
   }
   markPrompted(input: { turnId: string; generation: number }): void { if (this.database.authTransaction((db) => db.prepare("UPDATE forge_task_turns SET status = 'prompted', prompted_at = ?, updated_at = ? WHERE id = ? AND generation = ? AND status IN ('pending_prompt', 'unknown') AND EXISTS (SELECT 1 FROM forge_task_sessions session WHERE session.id = forge_task_turns.session_id AND session.is_current = 1 AND session.generation = forge_task_turns.generation)").run(now(), now(), input.turnId, input.generation).changes) !== 1) throw new Error("stale_turn"); }
   pendingTurns(sessionId: string): TaskTurn[] { return this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_task_turns WHERE session_id = ? AND status IN ('pending_prompt', 'unknown', 'prompted') ORDER BY created_at, id").all(sessionId) as Row[]).map(turn)); }
-  /** Completes the delegate turn, appends a Reviewer/Rater record from the session's stored input, retires the delegate, and wakes Coordinator once, all in one transaction. */
+  /** Completes the delegate turn, appends a Reviewer/Rater record from its immutable turn input, and wakes Coordinator once. */
   recordWorkerResultAndWake(input: { taskId: string; sessionId: string; generation: number; receiptId: string; observation: string; nativeTurnId?: string; review?: { result: ReviewerResult | RaterResult | null; invalidReason: string | null }; wakePrompt?: string }): { kind: "recorded"; wake: TaskTurn } | { kind: "duplicate" } {
     return this.database.authTransaction((db) => {
       const workerTurn = db.prepare("SELECT * FROM forge_task_turns WHERE task_id = ? AND session_id = ? AND generation = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.sessionId, input.generation) as Row | undefined;
@@ -275,16 +284,15 @@ export class TaskControlStore {
       if (!root) throw new Error("root_notification_unavailable");
       const time = now(); const wakeId = createOpenCodeMessageID(); const promptText = input.wakePrompt ?? `Worker result receipt ${input.receiptId}. ${STANDARD_WORKER_RESULT_WAKE}\n\n${input.observation}`; const promptHash = hash(promptText);
       db.prepare("UPDATE forge_task_turns SET status = 'completed', result_receipt_id = ?, terminal_observation = ?, native_turn_id = ?, completed_at = ?, updated_at = ? WHERE id = ?").run(input.receiptId, input.observation, input.nativeTurnId ?? null, time, time, text(workerTurn, "id"));
-      if ((worker.advisorRole === "reviewer" || worker.advisorRole === "rater") && worker.workflowInput?.kind === "advisor") {
+      const workflowInput = parseJson(text(workerTurn, "workflow_input_json"), WorkflowInputSchema) ?? worker.workflowInput;
+      if ((worker.advisorRole === "reviewer" || worker.advisorRole === "rater") && workflowInput?.kind === "advisor") {
         const role = worker.advisorRole;
         const review = input.review ?? { result: null, invalidReason: "The Advisor turn did not complete" };
         const result = review.result && review.result.role === role ? review.result : null;
         const state = this.workflowStateRow(db, input.taskId);
-        state.reviews.push({ sessionId: worker.id, turnId: text(workerTurn, "id")!, role, range: worker.workflowInput.range, result, invalidReason: result ? null : review.invalidReason ?? "The Advisor result does not match its role", recordedAt: time } as WorkflowState["reviews"][number]);
+        state.reviews.push({ sessionId: worker.id, turnId: text(workerTurn, "id")!, role, range: workflowInput.range, result, invalidReason: result ? null : review.invalidReason ?? "The Advisor result does not match its role", recordedAt: time } as WorkflowState["reviews"][number]);
         this.writeWorkflowState(db, input.taskId, state);
       }
-      // Advisors and workflow Workers are one-shot; a Standard Worker stays live so the next assignment reuses its context.
-      if (worker.advisorRole || worker.workflowInput) db.prepare("UPDATE forge_task_sessions SET lifecycle = 'stopped', stop_requested_at = ?, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1").run(time, time, input.sessionId, input.generation);
       db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending_prompt', NULL, NULL, ?, NULL, NULL, ?)").run(wakeId, input.taskId, text(root, "id"), integer(root, "generation"), promptHash, promptText, time, time);
       db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ?").run(time, time, input.taskId);
       return { kind: "recorded", wake: turn(db.prepare("SELECT * FROM forge_task_turns WHERE id = ?").get(wakeId) as Row) };

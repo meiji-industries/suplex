@@ -70,6 +70,14 @@ async function fixture(workflow: WorkflowId, options: { image?: boolean } = {}) 
   return { directory, repo, baseSha, database, store, harness, controller, identity, finishDelegate, commit, scopes, delivery, artifacts, source };
 }
 
+function assignmentInput(f: Awaited<ReturnType<typeof fixture>>, session: { id: string; generation: number }) {
+  return assignmentTurn(f, session)?.workflowInput;
+}
+
+function assignmentTurn(f: Awaited<ReturnType<typeof fixture>>, session: { id: string; generation: number }) {
+  return f.store.turns("task").find(turn => turn.sessionId === session.id && turn.generation === session.generation);
+}
+
 test("Direct build has no mandatory Coordinator plan in system, initial, or assignment prompts and direct mode is limited to it", async () => {
   const f = await fixture("direct_build");
   const initial = f.store.turns("task")[0]!.promptText;
@@ -89,7 +97,7 @@ test("Direct build has no mandatory Coordinator plan in system, initial, or assi
   expect(prompt).toContain("Direct build assignment");
   expect(prompt).toContain("Direct build: choose the implementation approach yourself");
   expect(prompt).not.toMatch(/Coordinator plan:|Do not take over task planning/);
-  expect(worker.workflowInput).toMatchObject({ kind: "worker", mode: "direct", purpose: "implementation", range: { baseSha: f.baseSha, files: ["big.txt"] } });
+  expect(assignmentInput(f, worker)).toMatchObject({ kind: "worker", mode: "direct", purpose: "implementation", range: { baseSha: f.baseSha, files: ["big.txt"] } });
   expect(f.scopes.at(-1)).toMatchObject({ role: "worker", workerMode: "direct", purpose: "implementation", workflow: "direct_build", profile: { modelID: "gpt-5.6-luna" } });
   expect(f.harness.dispatched.at(-1)?.agent).toBe("forge-worker");
   f.harness.evidence.set(f.harness.dispatched.at(-1)!.messageID, { tools: [{ id: "m:1", name: "bash", status: "completed", input: { command: "pnpm test" }, output: "1 passed", error: null }], limit: null });
@@ -99,6 +107,12 @@ test("Direct build has no mandatory Coordinator plan in system, initial, or assi
   const wake = f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText;
   expect(wake).toContain("Worker result receipt");
   expect(wake).toContain("request the selected delivery target");
+  await f.controller.delegateWorker(f.identity(), { mode: "direct", acceptanceCriteria: ["The follow-up is complete"], instruction: "Apply the follow-up" });
+  const followUp = f.store.currentSession("task", "worker")!;
+  expect(followUp).toMatchObject({ id: worker.id, nativeSessionId: worker.nativeSessionId, paneId: worker.paneId });
+  expect(followUp.generation).toBeGreaterThan(worker.generation);
+  expect(assignmentInput(f, worker)).toMatchObject({ instruction: "Add the change" });
+  expect(assignmentInput(f, followUp)).toMatchObject({ instruction: "Apply the follow-up" });
   const reviewed = await fixture("independent_review");
   await expect(reviewed.controller.delegateWorker(reviewed.identity(), { mode: "direct", acceptanceCriteria: ["x"], instruction: "y" })).rejects.toThrow("legal only for the Direct build");
 });
@@ -111,13 +125,13 @@ test("Plan A and Plan B are distinct sessions on the same range, Plan B never se
   await f.controller.delegateAdvisor(f.identity(), { role: "planner_a" });
   const a = f.store.currentSession("task", "worker")!;
   expect(a.advisorRole).toBe("planner_a");
-  expect(a.workflowInput).toMatchObject({ kind: "advisor", role: "planner_a", range: { baseSha: f.baseSha, files: ["big.txt"] } });
+  expect(assignmentInput(f, a)).toMatchObject({ kind: "advisor", role: "planner_a", range: { baseSha: f.baseSha, files: ["big.txt"] } });
   expect(f.scopes.at(-1)).toMatchObject({ role: "advisor", label: "Plan A", profile: { modelID: "gpt-5.6-nova", reasoningEffort: "high" }, evidenceRoot: join(f.directory, "evidence", "task") });
   expect(f.harness.dispatched.at(-1)?.agent).toBe("forge-advisor");
   const promptA = f.store.turns("task").find(turn => turn.sessionId === a.id)!.promptText;
   expect(promptA).toContain("Role: Plan A");
   expect(promptA).toContain("patch.diff");
-  const evidence = (a.workflowInput as { evidenceDirectory: string; evidenceSha256: string });
+  const evidence = (assignmentInput(f, a) as { evidenceDirectory: string; evidenceSha256: string });
   expect((await stat(join(evidence.evidenceDirectory, "patch.diff"))).size).toBeGreaterThan(64_000);
   expect(await verifyTaskEvidence(evidence.evidenceDirectory, evidence.evidenceSha256)).toBe(true);
   await expect(f.controller.delegateAdvisor(f.identity(), { role: "planner_b" })).rejects.toThrow("worker_already_assigned");
@@ -132,7 +146,7 @@ test("Plan A and Plan B are distinct sessions on the same range, Plan B never se
   const promptB = f.store.turns("task").find(turn => turn.sessionId === b.id)!.promptText;
   expect(promptB).not.toContain("PLAN-A-UNIQUE");
   expect(promptB).not.toMatch(/rating/i);
-  expect((b.workflowInput as { range: unknown }).range).toEqual((a.workflowInput as { range: unknown }).range);
+  expect((assignmentInput(f, b) as { range: unknown }).range).toEqual((assignmentInput(f, a) as { range: unknown }).range);
   await f.finishDelegate("No json block here.");
   await expect(f.controller.delegateWorker(f.identity(), { plan: "combined", acceptanceCriteria: ["x"], instruction: "y", candidateSessionIds: [a.id, b.id] })).rejects.toThrow("Plan B session");
   await f.controller.delegateAdvisor(f.identity(), { role: "planner_b" });
@@ -144,10 +158,85 @@ test("Plan A and Plan B are distinct sessions on the same range, Plan B never se
   await expect(f.controller.delegateWorker(f.identity(), { plan: "combined", acceptanceCriteria: ["x"], instruction: "y", candidateSessionIds: [a.id, b2.id] })).rejects.toThrow("different source range");
   await f.controller.delegateAdvisor(f.identity(), { role: "planner_a" }); const a2 = f.store.currentSession("task", "worker")!; await f.finishDelegate(json({ summary: "A again" }));
   await f.controller.delegateAdvisor(f.identity(), { role: "planner_b" }); const b3 = f.store.currentSession("task", "worker")!; await f.finishDelegate(json({ summary: "B again" }));
-  await f.controller.delegateWorker(f.identity(), { plan: "Combined plan: helper module plus tests", acceptanceCriteria: ["Tests pass"], instruction: "Build the combined plan", candidateSessionIds: [a2.id, b3.id] });
+  await f.controller.delegateWorker(f.identity(), { plan: "Combined plan: helper module plus tests", acceptanceCriteria: ["Tests pass"], instruction: "Build the combined plan", candidateTurnIds: [assignmentTurn(f, a2)!.id, assignmentTurn(f, b3)!.id] });
   const build = f.store.currentSession("task", "worker")!;
-  expect(build.workflowInput).toMatchObject({ kind: "worker", mode: "planned", candidateSessionIds: [a2.id, b3.id], plan: "Combined plan: helper module plus tests" });
+  expect(assignmentInput(f, build)).toMatchObject({ kind: "worker", mode: "planned", candidateReports: [{ sessionId: a2.id }, { sessionId: b3.id }], plan: "Combined plan: helper module plus tests" });
   expect(f.store.turns("task").find(turn => turn.sessionId === build.id)!.promptText).toContain("Coordinator plan:\nCombined plan");
+});
+
+test("each Planner role reuses its own native conversation and pane", async () => {
+  const f = await fixture("competing_plans");
+  await f.controller.delegateAdvisor(f.identity(), { role: "planner_a" });
+  const firstA = f.store.currentSession("task", "worker")!;
+  await f.finishDelegate(json({ summary: "First Plan A" }));
+
+  await f.controller.delegateAdvisor(f.identity(), { role: "planner_b" });
+  const firstB = f.store.currentSession("task", "worker")!;
+  await f.finishDelegate(json({ summary: "First Plan B" }));
+
+  await f.controller.delegateAdvisor(f.identity(), { role: "planner_a" });
+  const secondA = f.store.currentSession("task", "worker")!;
+  await f.finishDelegate(json({ summary: "Second Plan A" }));
+
+  await f.controller.delegateAdvisor(f.identity(), { role: "planner_b" });
+  const secondB = f.store.currentSession("task", "worker")!;
+
+  expect(firstA.id).not.toBe(firstB.id);
+  expect(secondA).toMatchObject({ id: firstA.id, nativeSessionId: firstA.nativeSessionId, paneId: firstA.paneId });
+  expect(secondB).toMatchObject({ id: firstB.id, nativeSessionId: firstB.nativeSessionId, paneId: firstB.paneId });
+  expect(secondA.generation).toBeGreaterThan(firstB.generation);
+  expect(secondB.generation).toBeGreaterThan(secondA.generation);
+});
+
+test("Worker and Rater reuse separate conversations with immutable turn inputs and exact report selection", async () => {
+  const f = await fixture("refine_pull_request");
+  await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
+  const firstRater = f.store.currentSession("task", "worker")!;
+  const firstRaterTurn = f.store.turns("task").find(turn => turn.sessionId === firstRater.id)!;
+  await f.finishDelegate(rater(7, ["src/a.ts: first defect"]));
+
+  await f.controller.delegateWorker(f.identity(), { plan: "First repair", acceptanceCriteria: ["First defect fixed"], instruction: "Fix the first defect", advisorSessionId: firstRater.id });
+  const firstWorker = f.store.currentSession("task", "worker")!;
+  const firstWorkerTurn = f.store.turns("task").find(turn => turn.sessionId === firstWorker.id)!;
+  await f.commit("first-repair.ts");
+  await f.finishDelegate("First repair complete.");
+
+  // Existing tasks can contain one-shot role sessions already stopped by an older Forge version.
+  f.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET lifecycle = 'stopped', stop_requested_at = updated_at, stopped_at = updated_at WHERE id = ?").run(firstRater.id));
+
+  await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
+  const secondRater = f.store.currentSession("task", "worker")!;
+  const secondRaterTurn = f.store.turns("task").filter(turn => turn.sessionId === secondRater.id).at(-1)!;
+  const dispatchedBeforeRecovery = f.harness.dispatched.filter(turn => turn.messageID === secondRaterTurn.id).length;
+  await f.controller.recover("task");
+  expect(f.harness.dispatched.filter(turn => turn.messageID === secondRaterTurn.id)).toHaveLength(dispatchedBeforeRecovery);
+  await f.finishDelegate(rater(7, ["src/b.ts: second defect"]));
+
+  await f.controller.delegateWorker(f.identity(), { plan: "Second repair", acceptanceCriteria: ["Second defect fixed"], instruction: "Fix the second defect", advisorTurnId: secondRaterTurn.id });
+  const secondWorker = f.store.currentSession("task", "worker")!;
+  const secondWorkerTurn = f.store.turns("task").filter(turn => turn.sessionId === secondWorker.id).at(-1)!;
+
+  expect(firstRater.id).not.toBe(firstWorker.id);
+  expect(secondRater).toMatchObject({ id: firstRater.id, nativeSessionId: firstRater.nativeSessionId, paneId: firstRater.paneId });
+  expect(secondWorker).toMatchObject({ id: firstWorker.id, nativeSessionId: firstWorker.nativeSessionId, paneId: firstWorker.paneId });
+  expect(secondRater.generation).toBeGreaterThan(firstWorker.generation);
+  expect(secondWorker.generation).toBeGreaterThan(secondRater.generation);
+
+  const firstRaterInput = (firstRaterTurn as typeof firstRaterTurn & { workflowInput: { kind: string; evidenceDirectory: string; range: { headSha: string } } | null }).workflowInput;
+  const secondRaterInput = (secondRaterTurn as typeof secondRaterTurn & { workflowInput: { kind: string; evidenceDirectory: string; range: { headSha: string } } | null }).workflowInput;
+  expect(firstRaterInput).toMatchObject({ kind: "advisor", range: { headSha: expect.any(String) } });
+  expect(secondRaterInput).toMatchObject({ kind: "advisor", range: { headSha: expect.any(String) } });
+  expect(secondRaterInput?.evidenceDirectory).not.toBe(firstRaterInput?.evidenceDirectory);
+  expect(secondRaterInput?.range.headSha).not.toBe(firstRaterInput?.range.headSha);
+
+  const firstWorkerInput = (firstWorkerTurn as typeof firstWorkerTurn & { workflowInput: unknown }).workflowInput;
+  const secondWorkerInput = (secondWorkerTurn as typeof secondWorkerTurn & { workflowInput: { advisorReport?: { sessionId: string; turnId: string } | null } | null }).workflowInput;
+  expect(firstWorkerInput).toMatchObject({ plan: "First repair", advisorReport: { sessionId: firstRater.id, turnId: firstRaterTurn.id } });
+  expect(secondWorkerInput).toMatchObject({ plan: "Second repair", advisorReport: { sessionId: secondRater.id, turnId: secondRaterTurn.id } });
+
+  f.store.cancel("task");
+  await f.controller.recover("task");
+  expect(f.harness.stopped).toEqual(expect.arrayContaining([firstRater.nativeSessionId, firstWorker.nativeSessionId]));
 });
 
 test("Rater results keep their launch range, invalid or stale reports record null, and duplicates or crashes cannot add records or wakes", async () => {
@@ -155,7 +244,7 @@ test("Rater results keep their launch range, invalid or stale reports record nul
   await expect(f.controller.delegateWorker(f.identity(), { plan: "fix", acceptanceCriteria: ["x"], instruction: "y" })).rejects.toThrow("requires advisorSessionId");
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   const first = f.store.currentSession("task", "worker")!;
-  const input = first.workflowInput as { range: { headSha: string }; evidenceDirectory: string; evidenceSha256: string; verificationTurnIds: string[] };
+  const input = assignmentInput(f, first) as { range: { headSha: string }; evidenceDirectory: string; evidenceSha256: string; verificationTurnIds: string[] };
   const manifest = JSON.parse(await readFile(join(input.evidenceDirectory, "manifest.json"), "utf8"));
   expect(manifest.attachments).toEqual([{ artifactId: expect.stringMatching(/^artifact_/), path: expect.stringMatching(/^attachments\/artifact_.*\.png$/), error: null }]);
   expect((await stat(join(input.evidenceDirectory, manifest.attachments[0].path))).size).toBe(4);
@@ -180,27 +269,27 @@ test("Rater results keep their launch range, invalid or stale reports record nul
   await f.controller.delegateWorker(f.identity(), { plan: "Guard the dereference", acceptanceCriteria: ["No null dereference"], instruction: "Add the guard", advisorSessionId: first.id });
   const repair = f.store.currentSession("task", "worker")!;
   expect(f.store.turns("task").find(turn => turn.sessionId === repair.id)!.promptText).toContain("Rater report and surgical plan:\nReport prose.");
-  expect(repair.workflowInput).toMatchObject({ advisorSessionId: first.id, purpose: "implementation" });
+  expect(assignmentInput(f, repair)).toMatchObject({ advisorReport: { sessionId: first.id, turnId: control.workflowState.reviews[0]!.turnId }, purpose: "implementation" });
   const repaired = await f.commit("guard.ts");
   f.harness.evidence.set(f.harness.dispatched.at(-1)!.messageID, { tools: [{ id: "m:1", name: "bash", status: "completed", input: { command: "pnpm test" }, output: "2 passed", error: null }], limit: null });
   await f.finishDelegate("Added the guard and ran pnpm test.");
-  expect(f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText).toContain("request a fresh Rater");
-  // A fresh Rater sees prior findings and the repair evidence, without the previous number.
+  expect(f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText).toContain("request a new Rater assessment");
+  // The next Rater turn sees prior findings and repair evidence. The old score remains conversation context, not current proof.
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   const second = f.store.currentSession("task", "worker")!;
-  const promptR2 = f.store.turns("task").find(turn => turn.sessionId === second.id)!.promptText;
+  const promptR2 = assignmentTurn(f, second)!.promptText;
   expect(promptR2).toContain("Prior findings");
   expect(promptR2).toContain("src/a.ts: null dereference");
   expect(promptR2).toContain("Added the guard and ran pnpm test.");
   expect(promptR2).not.toMatch(/7\/10|Rated 7/);
-  const secondInput = second.workflowInput as { range: { headSha: string }; evidenceDirectory: string; verificationTurnIds: string[] };
+  const secondInput = assignmentInput(f, second) as { range: { headSha: string }; evidenceDirectory: string; verificationTurnIds: string[] };
   expect(secondInput.range.headSha).toBe(repaired);
   expect(secondInput.verificationTurnIds).toHaveLength(1);
   expect(JSON.parse(await readFile(join(secondInput.evidenceDirectory, "verification.json"), "utf8")).workerTurns[0]).toMatchObject({ tools: [{ name: "bash", output: "2 passed" }], purpose: "implementation" });
   // Malformed output completes the turn, records an invalid result, and wakes Coordinator once.
   await f.finishDelegate("I think it is a 9 now.");
   expect(f.store.get("task").workflowState.reviews.at(-1)).toMatchObject({ role: "rater", sessionId: second.id, result: null, invalidReason: expect.stringContaining("no fenced json") });
-  expect(f.store.turns("task").find(turn => turn.sessionId === second.id)!.status).toBe("completed");
+  expect(assignmentTurn(f, second)!.status).toBe("completed");
   expect(f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText).toContain("was not accepted");
   // The source changing during a review invalidates the report instead of relabeling it.
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
@@ -216,7 +305,7 @@ test("Rater results keep their launch range, invalid or stale reports record nul
   // Changed evidence files never produce an approval.
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   const fourth = f.store.currentSession("task", "worker")!;
-  await writeFile(join((fourth.workflowInput as { evidenceDirectory: string }).evidenceDirectory, "patch.diff"), "tampered");
+  await writeFile(join((assignmentInput(f, fourth) as { evidenceDirectory: string }).evidenceDirectory, "patch.diff"), "tampered");
   await f.finishDelegate(rater(9));
   expect(f.store.get("task").workflowState.reviews.at(-1)).toMatchObject({ sessionId: fourth.id, result: null, invalidReason: expect.stringContaining("evidence files changed") });
   // A crash inside the result transaction leaves neither a record nor a wake.
@@ -228,7 +317,7 @@ test("Rater results keep their launch range, invalid or stale reports record nul
   f.harness.finish(f.harness.dispatched.at(-1)!.messageID, "completed", rater(9));
   await expect(f.controller.recover("task")).rejects.toThrow(/crash/);
   expect(f.store.get("task").workflowState.reviews).toHaveLength(before);
-  expect(f.store.turns("task").find(turn => turn.sessionId === fifth.id)!.status).not.toBe("completed");
+  expect(assignmentTurn(f, fifth)!.status).not.toBe("completed");
   expect(f.store.turns("task").filter(turn => turn.sessionId === f.identity().sessionId)).toHaveLength(wakesBefore);
   f.database.authQuery(db => db.exec("DROP TRIGGER crash"));
   await f.controller.recover("task");
@@ -261,6 +350,12 @@ test("Reviewer requires the Coordinator brief, records approvals against its ran
   await f.finishDelegate(json({ approved: false, blockingFindings: ["src/a.ts: unguarded"], verification: "missing", verificationSummary: "No Worker checks ran", summary: "Not yet" }));
   expect(f.store.get("task").workflowState.reviews.at(-1)).toMatchObject({ role: "reviewer", result: { approved: false, verification: "missing" } });
   await f.controller.delegateAdvisor(f.identity(), { role: "reviewer", brief: "Same plan." });
+  const repeated = f.store.currentSession("task", "worker")!;
+  expect(repeated).toMatchObject({ id: reviewer.id, nativeSessionId: reviewer.nativeSessionId, paneId: reviewer.paneId });
+  expect(repeated.generation).toBeGreaterThan(reviewer.generation);
+  expect(assignmentTurn(f, reviewer)?.promptText).toContain("Plan: guard the dereference. Criteria: tests pass.");
+  expect(assignmentTurn(f, repeated)?.promptText).toContain("Same plan.");
+  expect((assignmentInput(f, repeated) as { evidenceDirectory: string }).evidenceDirectory).not.toBe((assignmentInput(f, reviewer) as { evidenceDirectory: string }).evidenceDirectory);
   await f.finishDelegate(json({ approved: true, blockingFindings: [], verification: "passed", verificationSummary: "pnpm test exit 0 in verification.json", summary: "Approved" }));
   expect(f.store.get("task").workflowState.reviews.at(-1)).toMatchObject({ role: "reviewer", result: { approved: true }, range: { baseSha: f.baseSha } });
   const inspected = await f.controller.requestDelivery(f.identity(), "inspect_delivery_diff") as { evidenceDirectory: string; patchTruncated: boolean };
@@ -292,7 +387,8 @@ test("E1: Advisors and check-only Workers launch only from a clean source, and a
   await rm(join(f.repo, "dirty.txt"));
   // Dirty source at completion.
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
-  const pinned = (f.store.currentSession("task", "worker")!.workflowInput as { range: { headSha: string; baseSha: string } }).range;
+  const current = f.store.currentSession("task", "worker")!;
+  const pinned = (assignmentInput(f, current) as { range: { headSha: string; baseSha: string } }).range;
   await writeFile(join(f.repo, "dirty.txt"), "edited while rating");
   expect(await finish(rater(9))).toMatchObject({ result: null, invalidReason: expect.stringMatching(/uncommitted|dirty/i), range: pinned });
   await rm(join(f.repo, "dirty.txt"));
@@ -331,27 +427,27 @@ test("E1: Advisors and check-only Workers launch only from a clean source, and a
 
 test("E1: check-only Workers persist before/after range evidence that is valid only for identical clean endpoints, and Advisor evidence carries it", async () => {
   const f = await fixture("refine_pull_request");
-  const observation = (id: string) => JSON.parse(f.store.turns("task").find(turn => turn.sessionId === id)!.terminalObservation!) as { verificationRange?: { before: { headSha: string }; after: { headSha: string } | null; cleanAfter: boolean | null; valid: boolean; invalidReason: string | null } };
+  const observation = (session: { id: string; generation: number }) => JSON.parse(f.store.turns("task").find(turn => turn.sessionId === session.id && turn.generation === session.generation)!.terminalObservation!) as { verificationRange?: { before: { headSha: string }; after: { headSha: string } | null; cleanAfter: boolean | null; valid: boolean; invalidReason: string | null } };
   await f.controller.delegateWorker(f.identity(), { plan: "verify", purpose: "verification", acceptanceCriteria: ["pnpm test passes"], instruction: "Run pnpm test" });
   const clean = f.store.currentSession("task", "worker")!;
-  expect((clean.workflowInput as { purpose: string }).purpose).toBe("verification");
+  expect((assignmentInput(f, clean) as { purpose: string }).purpose).toBe("verification");
   f.harness.evidence.set(f.harness.dispatched.at(-1)!.messageID, { tools: [{ id: "c:1", name: "bash", status: "completed", input: { command: "pnpm test" }, output: "3 passed", error: null }], limit: null });
   await f.finishDelegate("pnpm test passed on the pinned revision.");
-  expect(observation(clean.id).verificationRange).toMatchObject({ valid: true, cleanAfter: true, invalidReason: null, before: { headSha: expect.any(String) }, after: { headSha: expect.any(String) } });
-  expect(observation(clean.id).verificationRange!.after!.headSha).toBe(observation(clean.id).verificationRange!.before.headSha);
+  expect(observation(clean).verificationRange).toMatchObject({ valid: true, cleanAfter: true, invalidReason: null, before: { headSha: expect.any(String) }, after: { headSha: expect.any(String) } });
+  expect(observation(clean).verificationRange!.after!.headSha).toBe(observation(clean).verificationRange!.before.headSha);
   // A check that leaves edits is invalid range evidence even when its text claims success.
   await f.controller.delegateWorker(f.identity(), { plan: "verify", purpose: "verification", acceptanceCriteria: ["pnpm test passes"], instruction: "Run pnpm test" });
   const edited = f.store.currentSession("task", "worker")!;
   await writeFile(join(f.repo, "generated.txt"), "left behind");
   await f.finishDelegate("Tests passed.");
-  expect(observation(edited.id).verificationRange).toMatchObject({ valid: false, cleanAfter: false, invalidReason: expect.stringMatching(/uncommitted|dirty|edit/i) });
+  expect(observation(edited).verificationRange).toMatchObject({ valid: false, cleanAfter: false, invalidReason: expect.stringMatching(/uncommitted|dirty|edit/i) });
   await rm(join(f.repo, "generated.txt"));
   // A check that commits a change is invalid range evidence.
   await f.controller.delegateWorker(f.identity(), { plan: "verify", purpose: "verification", acceptanceCriteria: ["pnpm test passes"], instruction: "Run pnpm test" });
   const committed = f.store.currentSession("task", "worker")!;
   await f.commit("fixup.txt");
   await f.finishDelegate("Tests passed after a small fix.");
-  expect(observation(committed.id).verificationRange).toMatchObject({ valid: false, cleanAfter: true, invalidReason: expect.stringMatching(/head|range|commit/i) });
+  expect(observation(committed).verificationRange).toMatchObject({ valid: false, cleanAfter: true, invalidReason: expect.stringMatching(/head|range|commit/i) });
   // Implementation turns keep tools but carry no source-range proof.
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   const rater1 = f.store.currentSession("task", "worker")!;
@@ -360,14 +456,14 @@ test("E1: check-only Workers persist before/after range evidence that is valid o
   const implementation = f.store.currentSession("task", "worker")!;
   await f.commit("repair.txt");
   await f.finishDelegate("Fixed.");
-  expect(observation(implementation.id).verificationRange).toBeUndefined();
+  expect(observation(implementation).verificationRange).toBeUndefined();
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   const advisor = f.store.currentSession("task", "worker")!;
-  const verification = JSON.parse(await readFile(join((advisor.workflowInput as { evidenceDirectory: string }).evidenceDirectory, "verification.json"), "utf8")) as { workerTurns: Array<{ sessionId: string; verificationRange: unknown; sourceRangeProof: string }> };
-  expect(verification.workerTurns.find(turn => turn.sessionId === clean.id)).toMatchObject({ verificationRange: { valid: true }, sourceRangeProof: "valid" });
-  expect(verification.workerTurns.find(turn => turn.sessionId === committed.id)).toMatchObject({ verificationRange: { valid: false }, sourceRangeProof: "invalid" });
-  expect(verification.workerTurns.find(turn => turn.sessionId === implementation.id)).toMatchObject({ verificationRange: null, sourceRangeProof: "none" });
-  expect(f.store.turns("task").find(turn => turn.sessionId === advisor.id)!.promptText).toContain("verificationRange.valid");
+  const verification = JSON.parse(await readFile(join((assignmentInput(f, advisor) as { evidenceDirectory: string }).evidenceDirectory, "verification.json"), "utf8")) as { workerTurns: Array<{ sessionId: string; turnId: string; verificationRange: unknown; sourceRangeProof: string }> };
+  expect(verification.workerTurns.find(turn => turn.turnId === assignmentTurn(f, clean)?.id)).toMatchObject({ verificationRange: { valid: true }, sourceRangeProof: "valid" });
+  expect(verification.workerTurns.find(turn => turn.turnId === assignmentTurn(f, committed)?.id)).toMatchObject({ verificationRange: { valid: false }, sourceRangeProof: "invalid" });
+  expect(verification.workerTurns.find(turn => turn.turnId === assignmentTurn(f, implementation)?.id)).toMatchObject({ verificationRange: null, sourceRangeProof: "none" });
+  expect(assignmentTurn(f, advisor)!.promptText).toContain("verificationRange.valid");
   // The evidence survives native retirement and a reopened store.
   const reopened = new TaskControlStore(new (await import("../src/database.js")).ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false }));
   expect(JSON.parse(reopened.turns("task").find(turn => turn.sessionId === clean.id)!.terminalObservation!)).toMatchObject({ verificationRange: { valid: true } });

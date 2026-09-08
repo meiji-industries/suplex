@@ -8,8 +8,8 @@ import { Markdown } from "./markdown.js";
 const ObservationSchema = z.object({ text: z.string().optional() });
 const short = (sha: string) => sha.slice(0, 10);
 
-function reportText(activity: TaskActivity, sessionId: string): string {
-  const turn = activity.turns.find(turn => turn.sessionId === sessionId && turn.status === "completed");
+function reportText(activity: TaskActivity, turnId: string): string {
+  const turn = activity.turns.find(turn => turn.id === turnId && turn.status === "completed");
   if (!turn?.result) return "";
   try { const parsed = ObservationSchema.safeParse(JSON.parse(turn.result)); return parsed.success ? parsed.data.text ?? "" : ""; }
   catch { return ""; }
@@ -47,8 +47,14 @@ export function WorkflowStatus({ task }: { task: Task }) {
 /** Review rounds, invalid attempts, and the candidate plans behind a build, each opening its full native report. */
 export function WorkflowHistory({ task, activity }: { task: Task; activity: TaskActivity }) {
   const reviews = task.workflowState.reviews;
-  const planners = activity.sessions.filter(session => session.advisorRole === "planner_a" || session.advisorRole === "planner_b");
-  const builds = activity.sessions.filter(session => session.kind === "worker" && !session.advisorRole);
+  const planners = activity.turns.flatMap(turn => {
+    const session = activity.sessions.find(candidate => candidate.id === turn.sessionId);
+    return session?.advisorRole === "planner_a" || session?.advisorRole === "planner_b" ? [{ session, turn }] : [];
+  });
+  const builds = activity.turns.flatMap(turn => {
+    const session = activity.sessions.find(candidate => candidate.id === turn.sessionId);
+    return session?.kind === "worker" && !session.advisorRole ? [{ session, turn }] : [];
+  });
   if (!reviews.length && !planners.length) return null;
   return <details data-workflow-history className="text-xs">
     <summary className="cursor-pointer font-medium">Review history <span className="text-muted-foreground">{reviews.length || planners.length}</span></summary>
@@ -59,14 +65,14 @@ export function WorkflowHistory({ task, activity }: { task: Task; activity: Task
           <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{ADVISOR_LABELS[record.role]} round {round}</span><Badge variant={record.result ? "secondary" : "destructive"}>{resultLabel(record)}</Badge><code className="text-muted-foreground" title={`${record.range.baseSha}..${record.range.headSha}`}>{short(record.range.baseSha)}..{short(record.range.headSha)}</code><time className="text-muted-foreground" dateTime={record.recordedAt}>{new Date(record.recordedAt).toLocaleString()}</time></div>
           {record.result ? <p className="text-muted-foreground">{record.result.summary}{record.result.blockingFindings.length ? ` · ${record.result.blockingFindings.length} blocking finding(s)` : ""} · verification {record.result.verification}</p> : <p className="text-destructive">{record.invalidReason}</p>}
           {record.result?.blockingFindings.length ? <ul className="list-disc pl-4 text-muted-foreground">{record.result.blockingFindings.map(finding => <li key={finding}>{finding}</li>)}</ul> : null}
-          {reportText(activity, record.sessionId) ? <details className="mt-1"><summary className="cursor-pointer text-muted-foreground">Full report and repair plan</summary><div className="mt-1"><Markdown source={reportText(activity, record.sessionId)} /></div></details> : null}
+          {reportText(activity, record.turnId) ? <details className="mt-1"><summary className="cursor-pointer text-muted-foreground">Full report and repair plan</summary><div className="mt-1"><Markdown source={reportText(activity, record.turnId)} /></div></details> : null}
         </li>;
       })}
-      {planners.map(session => <li key={session.id} className="border-l-2 pl-3" data-plan-report={session.advisorRole}>
-        <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{session.label}</span><Badge variant={reportText(activity, session.id) ? "secondary" : "outline"}>{reportText(activity, session.id) ? "Report" : "No report yet"}</Badge></div>
-        {reportText(activity, session.id) ? <details className="mt-1"><summary className="cursor-pointer text-muted-foreground">Full plan</summary><div className="mt-1"><Markdown source={reportText(activity, session.id)} /></div></details> : null}
+      {planners.map(({ session, turn }) => <li key={turn.id} className="border-l-2 pl-3" data-plan-report={session.advisorRole}>
+        <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{session.label}</span><Badge variant={reportText(activity, turn.id) ? "secondary" : "outline"}>{reportText(activity, turn.id) ? "Report" : "No report yet"}</Badge></div>
+        {reportText(activity, turn.id) ? <details className="mt-1"><summary className="cursor-pointer text-muted-foreground">Full plan</summary><div className="mt-1"><Markdown source={reportText(activity, turn.id)} /></div></details> : null}
       </li>)}
-      {task.workflow === "competing_plans" ? builds.map(session => { const assignment = activity.turns.find(turn => turn.sessionId === session.id)?.prompt ?? ""; return assignment.includes("Coordinator plan:") ? <li key={session.id} className="border-l-2 pl-3" data-synthesis-assignment><div className="flex items-center gap-2"><span className="font-medium">Worker {session.generation}</span><Badge variant="secondary">Combined plan</Badge></div><details className="mt-1"><summary className="cursor-pointer text-muted-foreground">Assignment</summary><div className="mt-1"><Markdown source={assignment} /></div></details></li> : null; }) : null}
+      {task.workflow === "competing_plans" ? builds.map(({ turn }) => turn.prompt.includes("Coordinator plan:") ? <li key={turn.id} className="border-l-2 pl-3" data-synthesis-assignment><div className="flex items-center gap-2"><span className="font-medium">Worker</span><Badge variant="secondary">Combined plan</Badge></div><details className="mt-1"><summary className="cursor-pointer text-muted-foreground">Assignment</summary><div className="mt-1"><Markdown source={turn.prompt} /></div></details></li> : null) : null}
     </ol>
   </details>;
 }

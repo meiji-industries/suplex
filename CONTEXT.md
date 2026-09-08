@@ -52,6 +52,12 @@ The OpenCode or Claude Code conversation that owns admitted messages, tool
 calls, and results. Forge selects the harness from the agent profile provider.
 _Avoid_: Herdr session, completion receipt file.
 
+Forge keeps one native session per task role: Coordinator, Worker, Reviewer,
+Plan A, Plan B, and Rater. Each assignment is an immutable turn in that role's
+conversation. Only one Worker or Advisor turn runs at a time, but switching
+roles does not end the inactive conversation. Missing display attachment data
+does not prevent Forge from resuming native work.
+
 **Turn**
 One prompt and its correlated native response within a session. A turn can
 contain multiple tool calls and native compaction messages.

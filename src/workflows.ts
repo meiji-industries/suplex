@@ -31,11 +31,11 @@ export const WORKFLOWS: readonly WorkflowDefinition[] = [
   { id: "direct_build", name: "Direct build", description: "Worker builds from your instructions. Coordinator reviews the result before delivery.", advisorRoles: [], agents: "Coordinator, Worker", delivery: "Selected target",
     steps: ["Coordinator observes the source and delegates Worker with your instructions.", "Worker chooses the approach, builds, and runs the checks.", "Coordinator reviews the changes and the check evidence.", "Coordinator requests the selected delivery target."] },
   { id: "independent_review", name: "Second opinion", description: "A separate Reviewer checks the changes before Coordinator delivers the result.", advisorRoles: ["reviewer"], agents: "Coordinator, Worker, Reviewer", delivery: "Selected target",
-    steps: ["Coordinator writes the plan and acceptance criteria.", "Worker builds the plan and runs the checks.", "Coordinator reviews the changes and the check evidence.", "Reviewer inspects the complete change independently.", "Worker repairs every blocking finding, then a fresh Reviewer checks again.", "Coordinator requests the selected delivery target after Reviewer approves."] },
+    steps: ["Coordinator writes the plan and acceptance criteria.", "Worker builds the plan and runs the checks.", "Coordinator reviews the changes and the check evidence.", "Reviewer inspects the complete change independently.", "Worker repairs every blocking finding, then Reviewer makes a new assessment of the current change.", "Coordinator requests the selected delivery target after Reviewer approves."] },
   { id: "competing_plans", name: "Combined planning", description: "Two agents write separate plans. Coordinator combines them and assigns the build to Worker.", advisorRoles: ["planner_a", "planner_b"], agents: "Coordinator, Worker, Plan A, Plan B", delivery: "Selected target",
     steps: ["Plan A writes an implementation plan from the objective.", "Plan B writes a separate plan from the same objective.", "Coordinator combines both plans into one plan with acceptance criteria.", "Worker builds the combined plan and runs the checks.", "Coordinator reviews the changes and requests the selected delivery target."] },
   { id: "refine_pull_request", name: "Pull request repair", description: "Rater reviews an existing pull request. Worker applies repairs until it scores at least 9/10. Forge then pushes and merges it.", advisorRoles: ["rater"], agents: "Coordinator, Worker, Rater", delivery: "Merged pull request",
-    steps: ["Rater rates the existing pull request from 1 to 10 and writes a repair plan.", "Worker applies the repair plan and runs the checks.", "A fresh Rater rates the result. Forge repeats until the rating is at least 9/10.", "Forge pushes the branch and observes the checks.", "If CI fails, Rater reviews the failure and Worker repairs it.", "Forge merges the same pull request after GitHub reports it ready."] },
+    steps: ["Rater rates the existing pull request from 1 to 10 and writes a repair plan.", "Worker applies the repair plan and runs the checks.", "Rater makes a new assessment of the current result. Forge repeats until the rating is at least 9/10.", "Forge pushes the branch and observes the checks.", "If CI fails, Rater reviews the failure and Worker repairs it.", "Forge merges the same pull request after GitHub reports it ready."] },
 ];
 
 export function workflowDefinition(workflow: WorkflowId): WorkflowDefinition {
@@ -80,12 +80,22 @@ export const ReviewRecordSchema = z.discriminatedUnion("role", [
 ]);
 export type ReviewRecord = z.infer<typeof ReviewRecordSchema>;
 
-export const WorkflowInputSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("advisor"), role: AdvisorRoleSchema, range: ReviewRangeSchema, evidenceDirectory: z.string().min(1), evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/), verificationTurnIds: z.array(id) }).strict(),
-  z.object({ kind: z.literal("worker"), mode: z.enum(["planned", "direct"]), purpose: z.enum(["implementation", "verification"]), range: ReviewRangeSchema, plan: z.string().nullable(), acceptanceCriteria: z.array(z.string()), instruction: z.string(), advisorSessionId: id.nullable(), candidateSessionIds: z.tuple([id, id]).nullable() }).strict(),
-]);
+export const ReportReferenceSchema = z.object({ sessionId: id, turnId: id }).strict();
+export type ReportReference = z.infer<typeof ReportReferenceSchema>;
+const AdvisorWorkflowInputSchema = z.object({ kind: z.literal("advisor"), role: AdvisorRoleSchema, range: ReviewRangeSchema, evidenceDirectory: z.string().min(1), evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/), verificationTurnIds: z.array(id) }).strict();
+const WorkerInputBase = { kind: z.literal("worker"), mode: z.enum(["planned", "direct"]), purpose: z.enum(["implementation", "verification"]), range: ReviewRangeSchema, plan: z.string().nullable(), acceptanceCriteria: z.array(z.string()), instruction: z.string() };
+const LegacyWorkerWorkflowInputSchema = z.object({ ...WorkerInputBase, advisorSessionId: id.nullable(), candidateSessionIds: z.tuple([id, id]).nullable() }).strict();
+export const WorkerWorkflowInputSchema = z.object({ ...WorkerInputBase, version: z.literal(2), advisorReport: ReportReferenceSchema.nullable(), candidateReports: z.tuple([ReportReferenceSchema, ReportReferenceSchema]).nullable() }).strict();
+export const WorkflowInputSchema = z.union([AdvisorWorkflowInputSchema, WorkerWorkflowInputSchema, LegacyWorkerWorkflowInputSchema]);
 export type WorkflowInput = z.infer<typeof WorkflowInputSchema>;
 export type WorkerWorkflowInput = Extract<WorkflowInput, { kind: "worker" }>;
+
+export function workerCandidateReports(input: WorkerWorkflowInput): [ReportReference, ReportReference] | null {
+  if ("version" in input) return input.candidateReports;
+  if (!input.candidateSessionIds) return null;
+  const [first, second] = input.candidateSessionIds;
+  return [{ sessionId: first, turnId: first }, { sessionId: second, turnId: second }];
+}
 
 /** Proof that a check-only Worker ran against one committed source: identical clean endpoints before and after. */
 export const VerificationRangeSchema = z.object({ before: ReviewRangeSchema, after: ReviewRangeSchema.nullable(), cleanAfter: z.boolean().nullable(), valid: z.boolean(), invalidReason: z.string().nullable() }).strict();
@@ -170,7 +180,7 @@ export function turnOutcome(observation: string | null): { state: string | null;
 }
 
 type SessionLike = { id: string; kind: "root" | "worker"; advisorRole: AdvisorRole | null; workflowInput: WorkflowInput | null };
-type TurnLike = { sessionId: string; status: string; terminalObservation: string | null };
+type TurnLike = { id?: string; sessionId: string; generation?: number; status: string; terminalObservation: string | null; workflowInput?: WorkflowInput | null };
 type ControlLike = { workflow: WorkflowId; workflowState: WorkflowState };
 
 export function latestReview(reviews: ReviewRecord[], role: "reviewer" | "rater"): ReviewRecord | undefined {
@@ -183,16 +193,20 @@ export function reviewGate(workflow: WorkflowId, reviews: ReviewRecord[], actual
   const role = workflow === "independent_review" ? "reviewer" : "rater";
   const latest = latestReview(reviews, role);
   if (!latest) return { ok: false, reason: `No ${ADVISOR_LABELS[role]} result exists yet. Request ${ADVISOR_LABELS[role]} for the current range.` };
-  if (!latest.result) return { ok: false, reason: `The latest ${ADVISOR_LABELS[role]} result is invalid: ${latest.invalidReason ?? "unknown"}. Request a fresh ${ADVISOR_LABELS[role]}.` };
-  if (!sameRange(latest.range, actualRange)) return { ok: false, reason: `The latest ${ADVISOR_LABELS[role]} result reviewed ${latest.range.baseSha.slice(0, 12)}..${latest.range.headSha.slice(0, 12)}, not the current range. Request a fresh ${ADVISOR_LABELS[role]}.` };
-  if (latest.result.role === "reviewer") return latest.result.approved ? { ok: true } : { ok: false, reason: "Reviewer did not approve the current range. Repair every blocking finding and request a fresh Reviewer." };
-  if (latest.result.rating < REPAIR_RATING_TARGET) return { ok: false, reason: `Rater scored the current range ${latest.result.rating}/10. Repair the findings and request a fresh Rater.` };
+  if (!latest.result) return { ok: false, reason: `The latest ${ADVISOR_LABELS[role]} result is invalid: ${latest.invalidReason ?? "unknown"}. Request a new ${ADVISOR_LABELS[role]} assessment.` };
+  if (!sameRange(latest.range, actualRange)) return { ok: false, reason: `The latest ${ADVISOR_LABELS[role]} result reviewed ${latest.range.baseSha.slice(0, 12)}..${latest.range.headSha.slice(0, 12)}, not the current range. Request a new ${ADVISOR_LABELS[role]} assessment.` };
+  if (latest.result.role === "reviewer") return latest.result.approved ? { ok: true } : { ok: false, reason: "Reviewer did not approve the current range. Repair every blocking finding and request a new Reviewer assessment." };
+  if (latest.result.rating < REPAIR_RATING_TARGET) return { ok: false, reason: `Rater scored the current range ${latest.result.rating}/10. Repair the findings and request a new Rater assessment.` };
   if (latest.result.blockingFindings.length || !verified(latest.result.verification)) return { ok: false, reason: "The Rater result carries blocking findings or missing verification." };
   return { ok: true };
 }
 
-function succeeded(turns: TurnLike[], sessionId: string): boolean {
-  return turns.some(turn => turn.sessionId === sessionId && turn.status === "completed" && turnOutcome(turn.terminalObservation).state === "completed");
+function inputForTurn(sessions: SessionLike[], turn: TurnLike): WorkflowInput | null {
+  return turn.workflowInput ?? sessions.find(session => session.id === turn.sessionId)?.workflowInput ?? null;
+}
+
+function succeeded(turn: TurnLike): boolean {
+  return turn.status === "completed" && turnOutcome(turn.terminalObservation).state === "completed";
 }
 
 export function validAdvisorSession(sessions: SessionLike[], turns: TurnLike[], sessionId: string, role: AdvisorRole): boolean {
@@ -201,19 +215,35 @@ export function validAdvisorSession(sessions: SessionLike[], turns: TurnLike[], 
   return turns.some(turn => turn.sessionId === sessionId && turn.status === "completed" && turnOutcome(turn.terminalObservation).advisor?.result !== null && turnOutcome(turn.terminalObservation).advisor?.role === role);
 }
 
+function validAdvisorReference(sessions: SessionLike[], turns: TurnLike[], reference: ReportReference, role: AdvisorRole, exact: boolean): boolean {
+  if (!exact) return validAdvisorSession(sessions, turns, reference.sessionId, role);
+  const session = sessions.find(candidate => candidate.id === reference.sessionId);
+  const turn = turns.find(candidate => candidate.id === reference.turnId && candidate.sessionId === reference.sessionId);
+  const outcome = turn ? turnOutcome(turn.terminalObservation).advisor : null;
+  return session?.kind === "worker" && session.advisorRole === role && turn?.status === "completed" && outcome?.result !== null && outcome?.role === role;
+}
+
 /** Whether the workflow's obligations for the actual range are complete. Standard keeps its existing behavior. */
 export function workflowReadyForDelivery(control: ControlLike, sessions: SessionLike[], turns: TurnLike[], actualRange: ReviewRange): { ok: true } | { ok: false; reason: string } {
   const workflow = control.workflow;
   if (workflow === "standard") return { ok: true };
   const workers = sessions.filter(session => session.kind === "worker" && session.advisorRole === null);
   if (workflow === "direct_build") {
-    return workers.some(session => session.workflowInput?.kind === "worker" && session.workflowInput.mode === "direct" && session.workflowInput.purpose === "implementation" && succeeded(turns, session.id))
+    return turns.some(turn => {
+      const input = inputForTurn(sessions, turn);
+      return workers.some(session => session.id === turn.sessionId) && input?.kind === "worker" && input.mode === "direct" && input.purpose === "implementation" && succeeded(turn);
+    })
       ? { ok: true } : { ok: false, reason: "Direct build requires a completed Worker assignment in direct mode before delivery." };
   }
   if (workflow === "competing_plans") {
-    const build = workers.find(session => session.workflowInput?.kind === "worker" && session.workflowInput.candidateSessionIds && session.workflowInput.plan && succeeded(turns, session.id));
-    const candidates = build?.workflowInput?.kind === "worker" ? build.workflowInput.candidateSessionIds : null;
-    if (!build || !candidates || !validAdvisorSession(sessions, turns, candidates[0], "planner_a") || !validAdvisorSession(sessions, turns, candidates[1], "planner_b")) {
+    const build = turns.find(turn => {
+      const input = inputForTurn(sessions, turn);
+      return workers.some(session => session.id === turn.sessionId) && input?.kind === "worker" && input.plan && workerCandidateReports(input) && succeeded(turn);
+    });
+    const input = build ? inputForTurn(sessions, build) : null;
+    const candidates = input?.kind === "worker" ? workerCandidateReports(input) : null;
+    const exact = input?.kind === "worker" && "version" in input;
+    if (!build || !candidates || !validAdvisorReference(sessions, turns, candidates[0], "planner_a", exact) || !validAdvisorReference(sessions, turns, candidates[1], "planner_b", exact)) {
       return { ok: false, reason: "Combined planning requires two valid plan reports and a completed Worker build of the combined plan before delivery." };
     }
     return { ok: true };
@@ -224,7 +254,7 @@ export function workflowReadyForDelivery(control: ControlLike, sessions: Session
 export type DeliveryFailureCode = "worktree_missing" | "pull_request_ambiguous" | "pull_request_closed" | "head_diverged" | "delivery_target_mismatch" | "delivery_review_required" | "pull_request_title_required" | "workflow_review_required" | "worktree_dirty" | "delegate_active" | "merge_not_eligible";
 export type DeliveryDecision = { ok: true } | { ok: false; code: DeliveryFailureCode; reason: string };
 export type LocalSourceFacts = { branch?: string | undefined; headSha?: string | undefined; clean: boolean };
-type DeliverySessionLike = SessionLike & { current?: boolean; lifecycle?: string };
+type DeliverySessionLike = SessionLike & { current?: boolean; lifecycle?: string; generation?: number; launchOwner?: string | null };
 
 export function reviewRole(workflow: WorkflowId): "rater" | "reviewer" | null {
   return workflow === "refine_pull_request" ? "rater" : workflow === "independent_review" ? "reviewer" : null;
@@ -232,7 +262,7 @@ export function reviewRole(workflow: WorkflowId): "rater" | "reviewer" | null {
 
 export function freshReviewHint(workflow: WorkflowId): string {
   const role = reviewRole(workflow);
-  return role ? ` Inspect the new range and request a fresh ${ADVISOR_LABELS[role]} review.` : " Inspect the new range and review it again.";
+  return role ? ` Inspect the new range and request a new ${ADVISOR_LABELS[role]} assessment.` : " Inspect the new range and review it again.";
 }
 
 /**
@@ -245,7 +275,7 @@ export function deliveryDecision(control: ControlLike & { deliveryIntent: { head
   if (local.branch !== undefined && local.branch !== control.deliveryIntent.headBranch) return { ok: false, code: "head_diverged", reason: `The worktree is on ${local.branch}, not the task branch ${control.deliveryIntent.headBranch}.` };
   if (local.headSha !== undefined && local.headSha !== range.headSha) return { ok: false, code: "head_diverged", reason: `The worktree head ${local.headSha.slice(0, 12)} is not the reviewed head ${range.headSha.slice(0, 12)}.${freshReviewHint(control.workflow)}` };
   if (!local.clean) return { ok: false, code: "worktree_dirty", reason: "The worktree has uncommitted changes. Commit or discard them, inspect delivery again, and review the committed range." };
-  const delegate = sessions.find(session => session.kind === "worker" && session.current === true && ["reserved", "live", "unknown"].includes(session.lifecycle ?? ""));
+  const delegate = sessions.find(session => session.kind === "worker" && session.current === true && (session.launchOwner || turns.some(turn => turn.sessionId === session.id && (turn.generation === undefined || session.generation === undefined || turn.generation === session.generation) && ["pending_prompt", "prompted", "unknown"].includes(turn.status))));
   if (delegate) return { ok: false, code: "delegate_active", reason: `${delegate.advisorRole ? ADVISOR_LABELS[delegate.advisorRole] : "Worker"} is still active. Wait for its result before requesting delivery.` };
   const ready = workflowReadyForDelivery(control, sessions, turns, range);
   return ready.ok ? { ok: true } : { ok: false, code: "workflow_review_required", reason: ready.reason };
@@ -258,8 +288,14 @@ export function repairStalled(reviews: ReviewRecord[], sessions: SessionLike[], 
   const ratings = reviews.filter((record): record is Extract<ReviewRecord, { role: "rater" }> => record.role === "rater" && record.result !== null);
   const normalize = (findings: string[]) => findings.map(finding => finding.trim()).sort().join("\n");
   const repairBetween = (from: ReviewRecord, to: ReviewRecord) => {
+    const startTurn = turns.findIndex(turn => turn.id === from.turnId); const endTurn = turns.findIndex(turn => turn.id === to.turnId);
+    if (startTurn >= 0 && endTurn >= 0) return turns.slice(startTurn + 1, endTurn).some(turn => {
+      const session = sessions.find(candidate => candidate.id === turn.sessionId);
+      const input = inputForTurn(sessions, turn);
+      return session?.kind === "worker" && session.advisorRole === null && input?.kind === "worker" && input.purpose === "implementation" && succeeded(turn);
+    });
     const start = ordered.indexOf(from.sessionId); const end = ordered.indexOf(to.sessionId);
-    return sessions.slice(start + 1, end).some(session => session.kind === "worker" && session.advisorRole === null && session.workflowInput?.kind === "worker" && session.workflowInput.purpose === "implementation" && succeeded(turns, session.id));
+    return sessions.slice(start + 1, end).some(session => session.kind === "worker" && session.advisorRole === null && session.workflowInput?.kind === "worker" && session.workflowInput.purpose === "implementation" && turns.some(turn => turn.sessionId === session.id && succeeded(turn)));
   };
   if (ratings.length < 4) return { stalled: false };
   const window = ratings.slice(-4);

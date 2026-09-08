@@ -88,4 +88,5 @@ export interface TaskTurn {
   terminalObservation: string | null;
   nativeTurnId: string | null;
   dispatchAttempt: PromptDispatchAttempt | null;
+  workflowInput: WorkflowInput | null;
 }

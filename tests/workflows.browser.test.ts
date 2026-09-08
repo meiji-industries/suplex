@@ -15,9 +15,9 @@ const report = (rating: number) => `## Rating ${rating}/10\n\nCorrectness: the g
 function seedAdvisor(store: TaskControlStore, taskId: string, role: "rater" | "planner_a" | "planner_b", head: string, text: string, result: RaterResult | null, invalidReason: string | null) {
   const root = store.currentSession(taskId, "root")!;
   const session = store.launchWorker({ taskId, rootSessionId: root.id, rootGeneration: root.generation, advisor: { role, prompt: `${role} assignment`, input: { kind: "advisor", role, range: range(head), evidenceDirectory: "/evidence", evidenceSha256: "f".repeat(64), verificationTurnIds: [] } } });
-  store.bindHarnessSession({ sessionId: session.id, generation: session.generation, nativeSessionId: `ses_${role}_${session.generation}` });
+  if (!session.nativeSessionId) store.bindHarnessSession({ sessionId: session.id, generation: session.generation, nativeSessionId: `ses_${role}_${session.generation}` });
   const outcome = role === "rater" ? { result, invalidReason } : { result: result ? { role, summary: "Plan summary" } : null, invalidReason };
-  store.recordWorkerResultAndWake({ taskId, sessionId: session.id, generation: session.generation, receiptId: `${session.id}:done`, observation: JSON.stringify({ state: "completed", text, advisor: { role, ...outcome } }), ...(role === "rater" ? { review: { result, invalidReason } } : {}) });
+  store.recordWorkerResultAndWake({ taskId, sessionId: session.id, generation: session.generation, receiptId: `${session.id}:${session.generation}:done`, observation: JSON.stringify({ state: "completed", text, advisor: { role, ...outcome } }), ...(role === "rater" ? { review: { result, invalidReason } } : {}) });
   return session;
 }
 
@@ -249,11 +249,13 @@ test.each([1440, 390])("templates and duplicates carry workflow selections, and 
     expect(await rounds.nth(2).innerText()).toContain("Rater round 3");
     await rounds.nth(0).getByText("Full report and repair plan", { exact: true }).click();
     await rounds.nth(0).getByText("Add the null guard in src/feature.ts.").waitFor();
+    await rounds.nth(2).getByText("Full report and repair plan", { exact: true }).click();
+    await rounds.nth(2).getByText("Rating 9/10", { exact: true }).waitFor();
     store.askHuman(repair.id, "Three consecutive repair cycles left the same blocking findings at 7/10. How should Forge continue?", [{ label: "Continue", description: "Another attempt.", recommended: true }, { label: "Revise scope", description: "Describe the decision.", recommended: false }]);
     await page.getByRole("region", { name: "Question" }).getByText(/Three consecutive repair cycles/).waitFor();
     await page.getByRole("tab", { name: "Other", exact: true }).click();
     await page.getByText("Runtime diagnostics", { exact: true }).click();
-    expect(await page.getByRole("region", { name: "Sessions", exact: true }).innerText()).toContain("Rater 1");
+    expect(await page.getByRole("region", { name: "Sessions", exact: true }).innerText()).toContain("Rater 3");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: join(proof, `task-repair-history-${width}.png`), fullPage: true, animations: "disabled" });
     // Combined planning: both candidate reports and the Worker's stored synthesis assignment.
@@ -261,18 +263,30 @@ test.each([1440, 390])("templates and duplicates carry workflow selections, and 
     const combinedRoot = store.claimRoot({ taskId: combined.id });
     store.bindHarnessSession({ sessionId: combinedRoot.id, generation: combinedRoot.generation, nativeSessionId: "ses_combined_root" });
     store.setWorktree(combined.id, { path: "/worktrees/combined", branch: "forge/combined", baseSha: sha("a"), headSha: sha("a"), dirty: false });
-    const planA = seedAdvisor(store, combined.id, "planner_a", sha("a"), "# Plan A\n\nAdd a helper module.\n\n```json\n{\"summary\":\"Helper module\"}\n```", { role: "rater", rating: 1, blockingFindings: [], verification: "passed", verificationSummary: "", summary: "" } as never, null);
+    seedAdvisor(store, combined.id, "planner_a", sha("a"), "# Plan A\n\nAdd a helper module.\n\n```json\n{\"summary\":\"Helper module\"}\n```", { role: "rater", rating: 1, blockingFindings: [], verification: "passed", verificationSummary: "", summary: "" } as never, null);
     const planB = seedAdvisor(store, combined.id, "planner_b", sha("a"), "# Plan B\n\nInline the change.\n\n```json\n{\"summary\":\"Inline\"}\n```", { role: "rater", rating: 1, blockingFindings: [], verification: "passed", verificationSummary: "", summary: "" } as never, null);
-    store.launchWorker({ taskId: combined.id, rootSessionId: combinedRoot.id, rootGeneration: combinedRoot.generation, instruction: "Coordinator plan:\nCombined plan: helper module with inline call site.\n\nAcceptance criteria:\n1. Tests pass", workflowInput: { kind: "worker", mode: "planned", purpose: "implementation", range: range(sha("a")), plan: "Combined plan", acceptanceCriteria: ["Tests pass"], instruction: "Build", advisorSessionId: null, candidateSessionIds: [planA.id, planB.id] } });
+    const planARevised = seedAdvisor(store, combined.id, "planner_a", sha("a"), "# Plan A revised\n\nExtract a focused helper.\n\n```json\n{\"summary\":\"Focused helper\"}\n```", { role: "rater", rating: 1, blockingFindings: [], verification: "passed", verificationSummary: "", summary: "" } as never, null);
+    const reportTurn = (session: { id: string; generation: number }) => store.turns(combined.id).find(turn => turn.sessionId === session.id && turn.generation === session.generation)!;
+    const firstBuild = store.launchWorker({ taskId: combined.id, rootSessionId: combinedRoot.id, rootGeneration: combinedRoot.generation, instruction: "Coordinator plan:\nCombined plan: helper module with inline call site.\n\nAcceptance criteria:\n1. Tests pass", workflowInput: { kind: "worker", version: 2, mode: "planned", purpose: "implementation", range: range(sha("a")), plan: "Combined plan", acceptanceCriteria: ["Tests pass"], instruction: "Build", advisorReport: null, candidateReports: [{ sessionId: planARevised.id, turnId: reportTurn(planARevised).id }, { sessionId: planB.id, turnId: reportTurn(planB).id }] } });
+    store.recordWorkerResultAndWake({ taskId: combined.id, sessionId: firstBuild.id, generation: firstBuild.generation, receiptId: "combined:first:done", observation: "First combined build completed" });
+    store.launchWorker({ taskId: combined.id, rootSessionId: combinedRoot.id, rootGeneration: combinedRoot.generation, instruction: "Coordinator plan:\nCombined plan: keep the helper and add a focused test.\n\nAcceptance criteria:\n1. Focused test passes", workflowInput: { kind: "worker", version: 2, mode: "planned", purpose: "implementation", range: range(sha("a")), plan: "Revised combined plan", acceptanceCriteria: ["Focused test passes"], instruction: "Add the focused test", advisorReport: null, candidateReports: [{ sessionId: planARevised.id, turnId: reportTurn(planARevised).id }, { sessionId: planB.id, turnId: reportTurn(planB).id }] } });
     await page.goto(`${value.base}/tasks/${combined.id}?company=${value.company.id}`);
     await page.getByRole("heading", { name: "Combined planning build", level: 2, exact: true }).waitFor();
     await page.locator("[data-workflow-history] summary").first().click();
-    expect(await page.locator('[data-plan-report="planner_a"]').innerText()).toContain("Plan A");
+    expect(await page.locator('[data-plan-report="planner_a"]').count()).toBe(2);
+    expect(await page.locator('[data-plan-report="planner_a"]').nth(0).innerText()).toContain("Plan A");
+    await page.locator('[data-plan-report="planner_a"]').nth(1).getByText("Full plan", { exact: true }).click();
+    await page.locator('[data-plan-report="planner_a"]').nth(1).getByText("Extract a focused helper.").waitFor();
     expect(await page.locator('[data-plan-report="planner_b"]').innerText()).toContain("Plan B");
     await page.locator('[data-plan-report="planner_b"]').getByText("Full plan", { exact: true }).click();
     await page.locator('[data-plan-report="planner_b"]').getByText("Inline the change.").waitFor();
-    await page.locator("[data-synthesis-assignment]").getByText("Assignment", { exact: true }).click();
-    await page.locator("[data-synthesis-assignment]").getByText(/Combined plan: helper module with inline call site/).waitFor();
+    const synthesisAssignments = page.locator("[data-synthesis-assignment]");
+    expect(await synthesisAssignments.count()).toBe(2);
+    expect(await synthesisAssignments.getByText("Worker", { exact: true }).allTextContents()).toEqual(["Worker", "Worker"]);
+    await synthesisAssignments.nth(0).getByText("Assignment", { exact: true }).click();
+    await synthesisAssignments.nth(0).getByText(/Combined plan: helper module with inline call site/).waitFor();
+    await synthesisAssignments.nth(1).getByText("Assignment", { exact: true }).click();
+    await synthesisAssignments.nth(1).getByText(/Combined plan: keep the helper and add a focused test/).waitFor();
     await page.screenshot({ path: join(proof, `task-combined-history-${width}.png`), fullPage: true, animations: "disabled" });
     // External merge before the obligations: labeled truthfully, no fabricated rating. Then a workflow merge shows Merged.
     const { task: external } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Merged by someone else", description: "External merge.", idempotencyKey: "browser-external", startImmediately: true, workflow: "independent_review" });

@@ -464,6 +464,41 @@ test("a legacy stopped Worker resumes its native conversation after cleanup comp
   expect(value.store.sessions("task").filter(session => session.kind === "worker")).toHaveLength(1);
 });
 
+test("role reuse selects the highest generation even when an older session was updated later", async () => {
+  const value = await fixture();
+  const root = value.controller.prepareRoot("task");
+  const older = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Older assignment" });
+  value.store.bindHarnessSession({ sessionId: older.id, generation: older.generation, nativeSessionId: "older-native" });
+  value.store.bindPane({ sessionId: older.id, generation: older.generation, paneId: "older-pane" });
+  value.store.recordWorkerResultAndWake({ taskId: "task", sessionId: older.id, generation: older.generation, receiptId: "older-receipt", observation: "Older result" });
+  value.database.authTransaction(db => {
+    db.prepare("UPDATE forge_task_sessions SET is_current = 0, updated_at = '2099-01-01T00:00:00.000Z' WHERE id = ?").run(older.id);
+    db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, native_session_id, lifecycle, assignment_hash, created_at, updated_at) VALUES ('newer-worker', 'task', 'worker', 2, 1, 'newer-pane', 'newer-native', 'live', 'newer-assignment', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')").run();
+  });
+  const reused = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Current assignment" });
+  expect(reused).toMatchObject({ id: "newer-worker", generation: 3, nativeSessionId: "newer-native", paneId: "newer-pane" });
+});
+
+test("role reuse waits for cleanup of the newest conversation instead of falling back", async () => {
+  const value = await fixture();
+  const root = value.controller.prepareRoot("task");
+  const older = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Older assignment" });
+  value.store.recordWorkerResultAndWake({ taskId: "task", sessionId: older.id, generation: older.generation, receiptId: "older-receipt", observation: "Older result" });
+  value.database.authTransaction(db => {
+    db.prepare("UPDATE forge_task_sessions SET is_current = 0 WHERE id = ?").run(older.id);
+    db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, native_session_id, lifecycle, assignment_hash, stop_requested_at, created_at, updated_at) VALUES ('cleanup-worker', 'task', 'worker', 2, 1, 'cleanup-pane', 'cleanup-native', 'stopped', 'cleanup-assignment', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')").run();
+  });
+  const turnCount = value.store.turns("task").length;
+  expect(() => value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Blocked assignment" })).toThrow("worker_already_assigned");
+  expect(value.store.turns("task")).toHaveLength(turnCount);
+
+  await value.controller.recover("task");
+  expect(value.harness.stopped).toContain("cleanup-native");
+  const reused = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Current assignment" });
+  expect(reused).toMatchObject({ id: "cleanup-worker", generation: 3, nativeSessionId: "cleanup-native", paneId: "cleanup-pane" });
+  expect(value.store.sessions("task").filter(session => session.kind === "worker")).toHaveLength(2);
+});
+
 test.each(["delivered", "cancelled"] as const)("a retained idle Worker is stopped when the task is %s", async terminalStatus => {
   const value = await fixture();
   await value.controller.recover("task");

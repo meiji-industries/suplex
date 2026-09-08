@@ -66,7 +66,8 @@ test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI
   await expect(f.request("merge_pull_request")).rejects.toMatchObject({ code: "merge_not_eligible", message: expect.stringContaining("failing") });
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   const ciRater = f.store.currentSession("task", "worker")!;
-  const evidence = JSON.parse(await readFile(join((ciRater.workflowInput as { evidenceDirectory: string }).evidenceDirectory, "verification.json"), "utf8"));
+  const ciRaterInput = f.store.turns("task").find(turn => turn.sessionId === ciRater.id && turn.generation === ciRater.generation)!.workflowInput as { evidenceDirectory: string };
+  const evidence = JSON.parse(await readFile(join(ciRaterInput.evidenceDirectory, "verification.json"), "utf8"));
   expect(evidence.pullRequestChecks).toMatchObject({ checks: { failing: 1, runs: [{ name: "unit", conclusion: "FAILURE" }] } });
   await f.finishDelegate(rater(6, ["src.ts: unit check fails on the new head"]));
   await expect(f.request("push_branch")).rejects.toMatchObject({ code: "workflow_review_required" });
@@ -160,8 +161,9 @@ test("changed heads, dirty trees, active delegates, newer negative reviews, dive
   await f.finishDelegate("pnpm test passed.");
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" }); await f.finishDelegate("garbage without json");
   await expect(f.request("push_branch")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("invalid") });
-  await f.controller.delegateAdvisor(f.identity(), { role: "rater" }); await f.finishDelegate(rater(9));
-  expect(good.id).not.toBe(f.store.currentSession("task", "worker")!.id);
+  await f.controller.delegateAdvisor(f.identity(), { role: "rater" }); const repeated = f.store.currentSession("task", "worker")!; await f.finishDelegate(rater(9));
+  expect(repeated).toMatchObject({ id: good.id, nativeSessionId: good.nativeSessionId, paneId: good.paneId });
+  expect(repeated.generation).toBeGreaterThan(good.generation);
   // Remote divergence: someone else advanced the branch. A normal push is rejected and local work stays.
   const other = join(f.directory, "other"); await git(f.directory, ["clone", f.bare, other]); await git(other, ["checkout", "feature"]);
   await git(other, ["config", "user.email", "o@example.com"]); await git(other, ["config", "user.name", "O"]);

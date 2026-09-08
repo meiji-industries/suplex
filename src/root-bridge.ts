@@ -67,7 +67,7 @@ export class RootBridge {
       case "read_image":
         return this.adapter.readImage(this.root, tool.artifactId);
       case "delegate_worker":
-        return this.adapter.delegateWorker(this.root, { plan: tool.plan, acceptanceCriteria: tool.acceptanceCriteria, instruction: tool.instruction, mode: tool.mode, purpose: tool.purpose, advisorSessionId: tool.advisorSessionId, candidateSessionIds: tool.candidateSessionIds });
+        return this.adapter.delegateWorker(this.root, { plan: tool.plan, acceptanceCriteria: tool.acceptanceCriteria, instruction: tool.instruction, mode: tool.mode, purpose: tool.purpose, advisorTurnId: tool.advisorTurnId, candidateTurnIds: tool.candidateTurnIds, advisorSessionId: tool.advisorSessionId, candidateSessionIds: tool.candidateSessionIds });
       case "delegate_advisor":
         return this.adapter.delegateAdvisor(this.root, { role: tool.role, ...(tool.brief === undefined ? {} : { brief: tool.brief }) });
       case "request_delivery":

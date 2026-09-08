@@ -13,7 +13,7 @@ import type { TaskControl, TaskSession, TaskTurn } from "./task-control.js";
 import type { PromptObservation, TaskHarness, TaskScope } from "./task-harness.js";
 import { verifyTaskEvidence, writeTaskEvidence } from "./workflow-evidence.js";
 import { advisorResultWake, composeAdvisorAssignment, composeWorkerAssignment, initialCoordinatorPrompt, workerResultWake } from "./workflow-prompts.js";
-import { ADVISOR_LABELS, latestReview, parseAdvisorReport, publicWorkflowState, repairStalled, REPAIR_RATING_TARGET, sameRange, turnOutcome, validAdvisorSession, workflowDefinition, type ReviewRange, type VerificationRange, type WorkflowInput } from "./workflows.js";
+import { ADVISOR_LABELS, latestReview, parseAdvisorReport, publicWorkflowState, repairStalled, REPAIR_RATING_TARGET, sameRange, turnOutcome, workflowDefinition, type AdvisorRole, type ReportReference, type ReviewRange, type VerificationRange, type WorkflowInput, type WorkerWorkflowInput } from "./workflows.js";
 
 export type TaskDelivery = Pick<DeliveryOperations, "observe" | "execute" | "currentRange"> & Partial<Pick<DeliveryOperations, "checksObservation">>;
 
@@ -22,7 +22,7 @@ const advisorSuccess = "End this Coordinator turn now. Forge will send the Advis
 export class RootController implements RootBridgeAdapter {
   constructor(readonly store: TaskControlStore, private readonly harness: TaskHarness, private readonly delivery: TaskDelivery = new DeliveryOperations(store), private readonly artifacts?: ArtifactStore, private readonly evidence?: { root: string }) {}
 
-  private scope(control: TaskControl, session: TaskSession): TaskScope {
+  private scope(control: TaskControl, session: TaskSession, workflowInput: WorkflowInput | null = null): TaskScope {
     if (!control.worktree) throw new Error("Task worktree is not configured");
     const advisorRole = session.kind === "worker" ? session.advisorRole : null;
     const selected = session.kind === "root" ? control.rootProfile : advisorRole ? control.advisorProfiles[advisorRole] ?? control.rootProfile : control.workerProfile;
@@ -32,7 +32,7 @@ export class RootController implements RootBridgeAdapter {
     };
     if (session.kind === "root") return { ...common, role: "root", identity: { taskId: control.taskId, sessionId: session.id, generation: session.generation } };
     if (advisorRole) return { ...common, role: "advisor", label: ADVISOR_LABELS[advisorRole] };
-    const input = session.workflowInput?.kind === "worker" ? session.workflowInput : null;
+    const input = workflowInput?.kind === "worker" ? workflowInput : null;
     return { ...common, role: "worker", workerMode: input?.mode ?? "planned", purpose: input?.purpose ?? "implementation" };
   }
 
@@ -102,40 +102,53 @@ export class RootController implements RootBridgeAdapter {
     const sessions = this.store.sessions(root.taskId);
     const turns = this.store.turns(root.taskId);
     let advisorReport: { label: string; text: string } | undefined;
-    let candidateSessionIds: [string, string] | null = null;
+    let candidateReports: [ReportReference, ReportReference] | null = null;
     if (control.workflow === "competing_plans" && purpose === "implementation") {
-      const built = sessions.some(session => session.kind === "worker" && session.advisorRole === null && session.workflowInput?.kind === "worker" && session.workflowInput.purpose === "implementation" && turns.some(turn => turn.sessionId === session.id && turn.status === "completed" && turnOutcome(turn.terminalObservation).state === "completed"));
+      const built = turns.some(turn => {
+        const session = sessions.find(candidate => candidate.id === turn.sessionId);
+        const input = session ? turnWorkflowInput(session, turn) : null;
+        return session?.kind === "worker" && session.advisorRole === null && input?.kind === "worker" && input.purpose === "implementation" && turn.status === "completed" && turnOutcome(turn.terminalObservation).state === "completed";
+      });
       if (!built) {
-        if (!assignment.candidateSessionIds) throw new Error("Combined planning requires candidateSessionIds [Plan A, Plan B] for the first implementation.");
-        const [a, b] = assignment.candidateSessionIds;
+        const requested = assignment.candidateTurnIds ?? assignment.candidateSessionIds;
+        if (!requested) throw new Error("Combined planning requires candidateSessionIds or candidateTurnIds [Plan A, Plan B] for the first implementation.");
+        const [a, b] = requested;
         if (a === b) throw new Error("candidateSessionIds must name two distinct Advisor sessions.");
+        const reports: ReportReference[] = [];
         for (const [id, role] of [[a, "planner_a"], [b, "planner_b"]] as const) {
-          const session = sessions.find(candidate => candidate.id === id);
-          if (!session || !validAdvisorSession(sessions, turns, id, role)) throw new Error(`${ADVISOR_LABELS[role]} session ${id} is not a completed valid ${ADVISOR_LABELS[role]} report for this task.`);
-          if (session.workflowInput?.kind !== "advisor" || !sameRange(session.workflowInput.range, range)) throw new Error(`${ADVISOR_LABELS[role]} planned against a different source range. Request new plans for the current range.`);
+          const report = resolveAdvisorReport(sessions, turns, role, assignment.candidateTurnIds ? { turnId: id } : { sessionId: id });
+          if (!report) throw new Error(`${ADVISOR_LABELS[role]} session ${id} is not a completed valid ${ADVISOR_LABELS[role]} report for this task.`);
+          if (!sameRange(report.input.range, range)) throw new Error(`${ADVISOR_LABELS[role]} planned against a different source range. Request new plans for the current range.`);
+          reports.push({ sessionId: report.session.id, turnId: report.turn.id });
         }
-        candidateSessionIds = [a, b];
+        const [first, second] = reports;
+        if (!first || !second) throw new Error("Combined planning requires two report turns.");
+        candidateReports = [first, second];
       }
     }
-    if (assignment.candidateSessionIds && control.workflow !== "competing_plans") throw new Error("candidateSessionIds apply only to Combined planning.");
-    let advisorSessionId: string | null = null;
+    if ((assignment.candidateTurnIds || assignment.candidateSessionIds) && control.workflow !== "competing_plans") throw new Error("candidateTurnIds apply only to Combined planning.");
+    let advisorReportReference: ReportReference | null = null;
     if (control.workflow === "refine_pull_request" && purpose === "implementation") {
-      if (!assignment.advisorSessionId) throw new Error("Pull request repair implementation requires advisorSessionId: the latest valid current-range Rater report below 9.");
-      const session = sessions.find(candidate => candidate.id === assignment.advisorSessionId);
+      const requested = assignment.advisorTurnId ?? assignment.advisorSessionId;
+      if (!requested) throw new Error("Pull request repair implementation requires advisorSessionId or advisorTurnId for the latest valid current-range Rater report below 9.");
       const latest = latestReview(control.workflowState.reviews, "rater");
-      if (!session || session.advisorRole !== "rater" || !latest || latest.sessionId !== session.id || !latest.result) throw new Error("advisorSessionId must be the latest valid Rater session for this task.");
-      if (!sameRange(latest.range, range)) throw new Error("The latest Rater report concerns a different source range. Request a fresh Rater for the current range.");
+      const matches = assignment.advisorTurnId ? latest?.turnId === requested : latest?.sessionId === requested;
+      if (!latest || !matches || !latest.result) throw new Error("advisorTurnId must be the latest valid Rater report for this task.");
+      if (!sameRange(latest.range, range)) throw new Error("The latest Rater report concerns a different source range. Request a new Rater assessment for the current range.");
       if (latest.result.role === "rater" && latest.result.rating >= REPAIR_RATING_TARGET) throw new Error("The current Rater rating is already at least 9. Continue with delivery instead of another repair.");
-      const report = turns.find(turn => turn.sessionId === session.id && turn.status === "completed");
+      const report = turns.find(turn => turn.id === latest.turnId && turn.sessionId === latest.sessionId && turn.status === "completed");
+      if (!report) throw new Error("The latest Rater report turn is missing.");
       advisorReport = { label: "Rater", text: turnOutcome(report?.terminalObservation ?? null).text ?? "" };
-      advisorSessionId = session.id;
-    } else if (assignment.advisorSessionId) {
-      const session = sessions.find(candidate => candidate.id === assignment.advisorSessionId);
-      if (!session?.advisorRole) throw new Error("advisorSessionId does not name an Advisor session of this task.");
-      advisorSessionId = session.id;
+      advisorReportReference = { sessionId: latest.sessionId, turnId: latest.turnId };
+    } else if (assignment.advisorTurnId || assignment.advisorSessionId) {
+      const requested = assignment.advisorTurnId ?? assignment.advisorSessionId;
+      if (!requested) throw new Error("The Advisor reference is missing.");
+      const report = findAdvisorReport(sessions, turns, assignment.advisorTurnId ? { turnId: requested } : { sessionId: requested });
+      if (!report) throw new Error("The Advisor reference does not name a completed report for this task.");
+      advisorReportReference = { sessionId: report.session.id, turnId: report.turn.id };
     }
     const instruction = composeWorkerAssignment({ mode, purpose, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, visualEvidence: this.store.context(root.taskId).configuration.visualEvidence, range, advisorReport });
-    const workflowInput: Extract<WorkflowInput, { kind: "worker" }> = { kind: "worker", mode, purpose, range, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, advisorSessionId, candidateSessionIds };
+    const workflowInput: WorkerWorkflowInput = { kind: "worker", version: 2, mode, purpose, range, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, advisorReport: advisorReportReference, candidateReports };
     const worker = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, instruction, workflowInput });
     await this.recoverSession(worker);
     return { worker: this.store.currentSession(root.taskId, "worker"), next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
@@ -173,14 +186,14 @@ export class RootController implements RootBridgeAdapter {
     const range = observedSource.range;
     const context = this.store.context(root.taskId);
     const images = context.images as Array<{ artifactId: string; filename: string }>;
-    const workerTurns = sessions.filter(session => session.kind === "worker" && session.advisorRole === null).flatMap(session => turns.filter(turn => turn.sessionId === session.id && turn.status === "completed").map(turn => ({ session, turn })));
+    const workerTurns = sessions.filter(session => session.kind === "worker" && session.advisorRole === null).flatMap(session => turns.filter(turn => turn.sessionId === session.id && turn.status === "completed").map(turn => ({ session, turn, input: turnWorkflowInput(session, turn) })));
     const verification = {
       configuration: { verificationCommand: context.configuration.verificationCommand, runProjectTests: context.configuration.runProjectTests, visualEvidence: context.configuration.visualEvidence },
       pullRequest: control.pullRequest,
       pullRequestChecks: this.delivery.checksObservation ? await this.delivery.checksObservation(root.taskId) : null,
-      workerTurns: workerTurns.map(({ session, turn }) => {
+      workerTurns: workerTurns.map(({ session, turn, input }) => {
         const parsed = parseObservation(turn.terminalObservation);
-        return { turnId: turn.id, sessionId: session.id, mode: session.workflowInput?.kind === "worker" ? session.workflowInput.mode : "planned", purpose: session.workflowInput?.kind === "worker" ? session.workflowInput.purpose : "implementation", range: session.workflowInput?.kind === "worker" ? session.workflowInput.range : null, state: parsed.state, text: parsed.text, tools: parsed.tools, limit: parsed.toolsLimit ?? (parsed.tools === null ? "Native tool evidence was not captured for this turn" : null), verificationRange: parsed.verificationRange, sourceRangeProof: parsed.verificationRange ? (parsed.verificationRange.valid ? "valid" : "invalid") : "none" };
+        return { turnId: turn.id, sessionId: session.id, mode: input?.kind === "worker" ? input.mode : "planned", purpose: input?.kind === "worker" ? input.purpose : "implementation", range: input?.kind === "worker" ? input.range : null, state: parsed.state, text: parsed.text, tools: parsed.tools, limit: parsed.toolsLimit ?? (parsed.tools === null ? "Native tool evidence was not captured for this turn" : null), verificationRange: parsed.verificationRange, sourceRangeProof: parsed.verificationRange ? (parsed.verificationRange.valid ? "valid" : "invalid") : "none" };
       }),
     };
     if (!this.evidence) throw new Error("Task evidence storage is not configured");
@@ -196,7 +209,8 @@ export class RootController implements RootBridgeAdapter {
     });
     const manifest = JSON.parse(await (await import("node:fs/promises")).readFile(join(evidence.directory, "manifest.json"), "utf8")) as { attachments: Array<{ artifactId: string; path: string | null; error: string | null }> };
     const previous = request.role === "rater" ? latestReview(control.workflowState.reviews, "rater") : undefined;
-    const repairEvidence = previous ? workerTurns.filter(({ session }) => sessions.indexOf(session) > sessions.findIndex(candidate => candidate.id === previous.sessionId)).map(({ turn }) => `Turn ${turn.id}: ${parseObservation(turn.terminalObservation).text ?? "(no text)"}`) : null;
+    const previousTurnIndex = previous ? turns.findIndex(turn => turn.id === previous.turnId) : -1;
+    const repairEvidence = previous ? workerTurns.filter(({ turn }) => turns.indexOf(turn) > previousTurnIndex).map(({ turn }) => `Turn ${turn.id}: ${parseObservation(turn.terminalObservation).text ?? "(no text)"}`) : null;
     const prompt = composeAdvisorAssignment({
       role: request.role, objective: control.objective, configuration: context.configuration, visualEvidence: context.configuration.visualEvidence, images, repository: control.deliveryIntent.repository, headBranch: control.deliveryIntent.headBranch, baseBranch: control.deliveryIntent.baseBranch,
       pullRequestNumber: control.deliveryIntent.pullRequestNumber, range, evidenceDirectory: evidence.directory, attachments: manifest.attachments, brief: request.brief ?? null,
@@ -305,7 +319,8 @@ export class RootController implements RootBridgeAdapter {
       const control = this.store.get(previous.taskId);
       const current = this.store.currentSession(previous.taskId, previous.kind);
       if (!current || current.id !== previous.id || current.generation !== previous.generation) return;
-      const taskScope = this.scope(control, current);
+      const currentTurn = this.store.pendingTurns(current.id)[0];
+      const taskScope = this.scope(control, current, currentTurn ? turnWorkflowInput(current, currentTurn) : null);
       const nativeSessionId = await this.harness.ensureSession(taskScope, current.nativeSessionId);
       const session = this.store.bindHarnessSession({ sessionId: previous.id, generation: previous.generation, nativeSessionId });
       try {
@@ -352,14 +367,15 @@ export class RootController implements RootBridgeAdapter {
       this.store.recordWorkerResultAndWake({ taskId: session.taskId, sessionId: session.id, generation: session.generation, receiptId, observation: JSON.stringify(base), ...nativeTurnId });
       return;
     }
-    if (taskScope.role === "advisor" && session.advisorRole && session.workflowInput?.kind === "advisor") {
+    const workflowInput = turnWorkflowInput(session, turn);
+    if (taskScope.role === "advisor" && session.advisorRole && workflowInput?.kind === "advisor") {
       const role = session.advisorRole;
-      const input = session.workflowInput;
+      const input = workflowInput;
       let outcome = observed.state === "completed" ? parseAdvisorReport(role, text) : { result: null, invalidReason: `The ${ADVISOR_LABELS[role]} turn ended with state ${observed.state}${observed.reason ? ` (${observed.reason})` : ""}` };
-      if (outcome.result && !(await verifyTaskEvidence(input.evidenceDirectory, input.evidenceSha256))) outcome = { result: null, invalidReason: "The evidence files changed or are missing since the assignment; request a fresh review" };
+      if (outcome.result && !(await verifyTaskEvidence(input.evidenceDirectory, input.evidenceSha256))) outcome = { result: null, invalidReason: "The evidence files changed or are missing since the assignment. Request a new assessment." };
       if (outcome.result) {
         const source = await this.sourceStillMatches(session.taskId, input.range, `${ADVISOR_LABELS[role]} review`);
-        if (!source.ok) outcome = { result: null, invalidReason: `${source.reason}; request a fresh review` };
+        if (!source.ok) outcome = { result: null, invalidReason: `${source.reason}. Request a new assessment.` };
       }
       const observation = JSON.stringify({ ...base, advisor: { role, result: outcome.result, invalidReason: outcome.invalidReason } });
       const summary = outcome.result ? outcome.result.role === "rater" ? `Rating ${outcome.result.rating}/10 with ${outcome.result.blockingFindings.length} blocking finding(s); verification ${outcome.result.verification}.` : outcome.result.role === "reviewer" ? `${outcome.result.approved ? "Approved" : "Not approved"} with ${outcome.result.blockingFindings.length} blocking finding(s); verification ${outcome.result.verification}.` : outcome.result.summary : outcome.invalidReason ?? "invalid";
@@ -369,12 +385,12 @@ export class RootController implements RootBridgeAdapter {
       return;
     }
     const evidence = await this.harness.turnEvidence(taskScope, observed);
-    const purpose = session.workflowInput?.kind === "worker" ? session.workflowInput.purpose : "implementation";
+    const purpose = workflowInput?.kind === "worker" ? workflowInput.purpose : "implementation";
     let verificationRange: VerificationRange | undefined;
-    if (purpose === "verification" && session.workflowInput?.kind === "worker") {
+    if (purpose === "verification" && workflowInput?.kind === "worker") {
       // Check-only evidence proves which committed source was checked: identical clean endpoints before and after.
-      const source = await this.sourceStillMatches(session.taskId, session.workflowInput.range, "check");
-      verificationRange = source.ok ? { before: session.workflowInput.range, after: source.range, cleanAfter: true, valid: true, invalidReason: null } : { before: session.workflowInput.range, after: source.range, cleanAfter: source.clean, valid: false, invalidReason: source.reason };
+      const source = await this.sourceStillMatches(session.taskId, workflowInput.range, "check");
+      verificationRange = source.ok ? { before: workflowInput.range, after: source.range, cleanAfter: true, valid: true, invalidReason: null } : { before: workflowInput.range, after: source.range, cleanAfter: source.clean, valid: false, invalidReason: source.reason };
     }
     const observation = JSON.stringify({ ...base, tools: evidence.tools, toolsLimit: evidence.limit, ...(verificationRange ? { verificationRange } : {}) });
     this.store.recordWorkerResultAndWake({ taskId: session.taskId, sessionId: session.id, generation: session.generation, receiptId, observation, ...nativeTurnId, wakePrompt: workerResultWake(taskScope.workflow, receiptId, observation, purpose) });
@@ -389,6 +405,27 @@ export class RootController implements RootBridgeAdapter {
       { label: "Revise scope", description: "Describe the decision necessary to resolve the defect. The 9/10 target stays.", recommended: false },
     ]);
   }
+}
+
+function turnWorkflowInput(session: TaskSession, turn: TaskTurn): WorkflowInput | null {
+  return turn.workflowInput ?? session.workflowInput;
+}
+
+function findAdvisorReport(sessions: TaskSession[], turns: TaskTurn[], reference: { turnId: string } | { sessionId: string }): { session: TaskSession; turn: TaskTurn; input: Extract<WorkflowInput, { kind: "advisor" }> } | null {
+  const candidates = "turnId" in reference ? turns.filter(turn => turn.id === reference.turnId) : turns.filter(turn => turn.sessionId === reference.sessionId).reverse();
+  for (const turn of candidates) {
+    const session = sessions.find(candidate => candidate.id === turn.sessionId);
+    if (!session?.advisorRole || turn.status !== "completed") continue;
+    const input = turnWorkflowInput(session, turn);
+    const outcome = turnOutcome(turn.terminalObservation).advisor;
+    if (input?.kind === "advisor" && outcome?.result && outcome.role === session.advisorRole) return { session, turn, input };
+  }
+  return null;
+}
+
+function resolveAdvisorReport(sessions: TaskSession[], turns: TaskTurn[], role: AdvisorRole, reference: { turnId: string } | { sessionId: string }): { session: TaskSession; turn: TaskTurn; input: Extract<WorkflowInput, { kind: "advisor" }> } | null {
+  const report = findAdvisorReport(sessions, turns, reference);
+  return report?.session.advisorRole === role && report.input.role === role ? report : null;
 }
 
 function isHumanAnswer(prompt: string): boolean {

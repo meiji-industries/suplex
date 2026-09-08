@@ -15,15 +15,15 @@ export const WORKFLOW_INSTRUCTIONS: Record<Exclude<WorkflowId, "standard">, stri
 After Worker returns, inspect its source changes and command evidence. Request bounded repairs or missing checks, then request the selected delivery target. Skipping the initial plan does not skip verification or your independent review.`,
   independent_review: `Use Second opinion. Investigate the source and write your plan and acceptance criteria. Delegate planned implementation to Worker. Inspect the implementation and actual check evidence yourself. Resolve defects or missing checks before requesting Reviewer.
 
-Call delegate_advisor with role reviewer and a brief containing your plan and acceptance criteria. Reviewer independently inspects the complete current range. Address every blocking finding through a bounded Worker assignment, inspect the result, and request a fresh Reviewer. Delivery requires your own current review and a passing Reviewer result for the same current range. You cannot waive that result.`,
+Call delegate_advisor with role reviewer and a brief containing your plan and acceptance criteria. Reviewer independently inspects the complete current range. Address every blocking finding through a bounded Worker assignment, inspect the result, and request a new Reviewer assessment. Delivery requires your own current review and a passing Reviewer result for the same current range. You cannot waive that result.`,
   competing_plans: `Use Combined planning. Request Plan A, then Plan B, through delegate_advisor without a brief. Both receive the same original objective and pinned input. Do not give either agent the other's plan or your preferred design.
 
 Read both complete reports and relevant source. Write one implementation plan with design decisions, affected files, ordered changes, constraints, verification commands, and acceptance criteria. Explain which conflicting suggestions you accepted or rejected and why. Resolve alternatives yourself; do not ask Worker to choose between the two plans.
 
-Delegate Worker with your combined plan and both candidateSessionIds. Inspect its implementation and check evidence, request bounded repairs, then request the selected delivery target.`,
-  refine_pull_request: `Use Pull request repair on the captured existing pull request. Request a fresh Rater before source repair. If necessary check evidence is missing, delegate a bounded verification assignment and request Rater again. Do not write a competing assessment in place of Rater.
+Delegate Worker with your combined plan and both candidateTurnIds. Inspect its implementation and check evidence, request bounded repairs, then request the selected delivery target.`,
+  refine_pull_request: `Use Pull request repair on the captured existing pull request. Request a Rater assessment before source repair. If necessary check evidence is missing, delegate a bounded verification assignment and request Rater again. Do not write a competing assessment in place of Rater.
 
-When the rating is below 9 and the report contains actionable repairs, delegate planned Worker implementation using advisorSessionId for that report. Include the actual surgical plan, acceptance criteria, and necessary checks. Preserve scope and existing work. Inspect Worker's result and check evidence yourself, then request a fresh Rater for the complete current range. Repeat until a valid rating is at least 9 with no blocking findings and adequate verification.
+When the rating is below 9 and the report contains actionable repairs, delegate planned Worker implementation using advisorTurnId for that report. Include the actual surgical plan, acceptance criteria, and necessary checks. Preserve scope and existing work. Inspect Worker's result and check evidence yourself, then ask Rater for a new assessment of the complete current range. Repeat until a valid current rating is at least 9 with no blocking findings and adequate verification. An earlier score is context, not proof of the current rating.
 
 At 9 or above, inspect the entire delivery range yourself and request push_branch, create_or_adopt_pull_request for the same PR, request_review if it is a draft, observe_checks, and merge_pull_request only when Forge reports merge eligibility. If CI fails, obtain its actual evidence, request Rater, repair the defect, obtain a fresh passing rating, and push again. Pending CI is a wait, not a failed repair.
 
@@ -159,7 +159,7 @@ export const STANDARD_WORKER_RESULT_WAKE = "You own independent review. Read the
 export function workerResultWake(workflow: WorkflowId, receiptId: string, observation: string, purpose: "implementation" | "verification"): string {
   if (workflow === "standard") return `Worker result receipt ${receiptId}. ${STANDARD_WORKER_RESULT_WAKE}\n\n${observation}`;
   const next = workflow === "independent_review" ? "When the implementation and its checks satisfy you, request Reviewer with delegate_advisor. Reviewer approval for the current range is necessary before delivery."
-    : workflow === "refine_pull_request" ? "When the repair and its checks satisfy you, request a fresh Rater with delegate_advisor for the complete current range. Do not request delivery on an earlier rating."
+    : workflow === "refine_pull_request" ? "When the repair and its checks satisfy you, request a new Rater assessment with delegate_advisor for the complete current range. Do not request delivery on an earlier rating."
     : workflow === "competing_plans" ? "Compare the result with your combined plan. Request bounded repairs if necessary, then request the selected delivery target."
     : "Compare the result with the objective and acceptance outcomes. Request bounded repairs or missing checks if necessary, then request the selected delivery target.";
   const evidence = purpose === "verification" ? " The result carries verificationRange; only valid: true with an unchanged clean range proves the pinned source was checked, otherwise request another bounded verification assignment." : "";
@@ -170,9 +170,9 @@ export function workerResultWake(workflow: WorkflowId, receiptId: string, observ
 export function advisorResultWake(role: AdvisorRole, receiptId: string, outcome: { valid: boolean; summary: string }, observation: string): string {
   const label = ADVISOR_LABELS[role];
   const next = !outcome.valid ? `The ${label} report was not accepted: ${outcome.summary}. Request a fresh ${label}; after two consecutive invalid reports Forge asks you for a decision instead.`
-    : role === "reviewer" ? "If Reviewer approved the current range, request delivery. Otherwise delegate a bounded Worker repair for every blocking finding, inspect the result, and request a fresh Reviewer."
-    : role === "rater" ? "If the rating is at least 9 with no blocking findings and adequate verification, inspect the whole range yourself and continue with delivery. Otherwise delegate planned Worker implementation with advisorSessionId set to this Rater session, inspect the result, and request a fresh Rater. If only verification is missing, delegate a bounded verification assignment first."
+    : role === "reviewer" ? "If Reviewer approved the current range, request delivery. Otherwise delegate a bounded Worker repair for every blocking finding, inspect the result, and request a new Reviewer assessment."
+    : role === "rater" ? "If the rating is at least 9 with no blocking findings and adequate verification, inspect the whole range yourself and continue with delivery. Otherwise delegate planned Worker implementation with advisorTurnId set to this Rater report turn, inspect the result, and request a new Rater assessment. If only verification is missing, delegate a bounded verification assignment first."
     : role === "planner_a" ? "Request Plan B with delegate_advisor next. Do not share this report with Plan B."
-    : "Read both complete plan reports and relevant source, write one combined plan, and delegate Worker with both candidateSessionIds.";
+    : "Read both complete plan reports and relevant source, write one combined plan, and delegate Worker with both candidateTurnIds.";
   return `${label} result receipt ${receiptId}. ${outcome.valid ? outcome.summary : ""} ${next}\n\n${observation}`.replace("  ", " ");
 }

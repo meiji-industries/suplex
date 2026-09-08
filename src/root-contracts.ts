@@ -44,8 +44,10 @@ const WorkerAssignmentShape = z.object({
   instruction: z.string().trim().min(1).describe("Specific implementation or check commands for the Worker. Planning and final review remain with the Coordinator."),
   mode: z.enum(["planned", "direct"]).optional().describe("planned (default) requires a plan. direct is legal only for the Direct build workflow."),
   purpose: z.enum(["implementation", "verification"]).optional().describe("verification runs the specified checks on the pinned revision without intentional source edits."),
-  advisorSessionId: opaqueId.optional().describe("Pull request repair: the latest valid current-range Rater session whose report the Worker implements."),
-  candidateSessionIds: z.tuple([opaqueId, opaqueId]).optional().describe("Combined planning: the Plan A and Plan B sessions, in that order, that the combined plan resolves."),
+  advisorTurnId: opaqueId.optional().describe("Pull request repair: the exact latest valid current-range Rater report turn that the Worker implements."),
+  candidateTurnIds: z.tuple([opaqueId, opaqueId]).optional().describe("Combined planning: the exact Plan A and Plan B report turns, in that order, that the combined plan resolves."),
+  advisorSessionId: opaqueId.optional().describe("Legacy form of advisorTurnId. Forge resolves the latest valid report turn in this session."),
+  candidateSessionIds: z.tuple([opaqueId, opaqueId]).optional().describe("Legacy form of candidateTurnIds. Forge resolves the latest valid report turn in each session."),
 }).strict();
 const plannedNeedsPlan = (assignment: { mode?: "planned" | "direct" | undefined; plan?: string | undefined }) => assignment.mode === "direct" || (assignment.plan?.length ?? 0) > 0;
 export const WorkerAssignmentSchema = WorkerAssignmentShape.refine(plannedNeedsPlan, "A planned assignment requires the Coordinator's plan");

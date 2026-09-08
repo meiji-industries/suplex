@@ -50,15 +50,25 @@ export function roleLabel(session: { kind: "root" | "worker"; advisorRole?: Advi
   return session.advisorRole ? ADVISOR_LABELS[session.advisorRole] : "Worker";
 }
 
-export const ReviewRangeSchema = z.object({ baseSha: commit, headSha: commit, files: z.array(z.string().min(1)), commits: z.array(commit) }).strict();
+export const ReviewRangeSchema = z.object({ baseSha: commit, headSha: commit, files: z.array(z.string().min(1)), commits: z.array(commit), patchDigest: z.string().optional() }).strict();
 export type ReviewRange = z.infer<typeof ReviewRangeSchema>;
 
-export function sameRange(review: ReviewRange, actual: ReviewRange): boolean {
+/** Two ranges are review-equivalent when head, commit set, and file set are identical and either the base is identical or the sha256 digests of the complete three-dot patch are identical; file names, commit counts, and the truncated display patch are never sufficient. */
+export function rangeDifferences(review: ReviewRange, actual: ReviewRange): string[] {
   const same = (left: string[], right: string[]) => {
     const sortedRight = [...right].sort();
     return left.length === right.length && [...left].sort().every((value, index) => value === sortedRight[index]);
   };
-  return review.baseSha === actual.baseSha && review.headSha === actual.headSha && same(review.files, actual.files) && same(review.commits, actual.commits);
+  const differences: string[] = [];
+  if (review.headSha !== actual.headSha) differences.push("head");
+  if (!same(review.commits, actual.commits)) differences.push("commits");
+  if (!same(review.files, actual.files)) differences.push("files");
+  if (review.baseSha !== actual.baseSha && (!review.patchDigest || !actual.patchDigest || review.patchDigest !== actual.patchDigest)) differences.push("patch content");
+  return differences;
+}
+
+export function sameRange(review: ReviewRange, actual: ReviewRange): boolean {
+  return rangeDifferences(review, actual).length === 0;
 }
 
 const VerificationSchema = z.enum(["passed", "not_applicable", "missing", "failed"]);
@@ -101,7 +111,7 @@ export function workerCandidateReports(input: WorkerWorkflowInput): [ReportRefer
 export const VerificationRangeSchema = z.object({ before: ReviewRangeSchema, after: ReviewRangeSchema.nullable(), cleanAfter: z.boolean().nullable(), valid: z.boolean(), invalidReason: z.string().nullable() }).strict();
 export type VerificationRange = z.infer<typeof VerificationRangeSchema>;
 
-export const DeliveryWaitSchema = z.object({ headSha: z.string().min(1), fingerprint: z.string().min(1), since: z.string(), reason: z.enum(["checks", "mergeability", "merge_queue"]) }).strict();
+export const DeliveryWaitSchema = z.object({ headSha: z.string().min(1), fingerprint: z.string().min(1), since: z.string(), reason: z.enum(["checks", "mergeability", "merge_queue", "observation"]) }).strict();
 export type DeliveryWait = z.infer<typeof DeliveryWaitSchema>;
 export const WorkflowCompletionSchema = z.object({ kind: z.enum(["workflow", "external_merge"]), reviewedHead: z.string().nullable(), pullRequestNumber: z.number().int().positive().nullable(), observedAt: z.string() }).strict();
 export type WorkflowCompletion = z.infer<typeof WorkflowCompletionSchema>;
@@ -251,7 +261,7 @@ export function workflowReadyForDelivery(control: ControlLike, sessions: Session
   return reviewGate(workflow, control.workflowState.reviews, actualRange);
 }
 
-export type DeliveryFailureCode = "worktree_missing" | "pull_request_ambiguous" | "pull_request_closed" | "head_diverged" | "delivery_target_mismatch" | "delivery_review_required" | "pull_request_title_required" | "workflow_review_required" | "worktree_dirty" | "delegate_active" | "merge_not_eligible";
+export type DeliveryFailureCode = "worktree_missing" | "pull_request_ambiguous" | "pull_request_closed" | "head_diverged" | "delivery_target_mismatch" | "delivery_review_required" | "pull_request_title_required" | "workflow_review_required" | "worktree_dirty" | "delegate_active" | "merge_not_eligible" | "observation_unavailable";
 export type DeliveryDecision = { ok: true } | { ok: false; code: DeliveryFailureCode; reason: string };
 export type LocalSourceFacts = { branch?: string | undefined; headSha?: string | undefined; clean: boolean };
 type DeliverySessionLike = SessionLike & { current?: boolean; lifecycle?: string; generation?: number; launchOwner?: string | null };
@@ -308,5 +318,5 @@ export function repairStalled(reviews: ReviewRecord[], sessions: SessionLike[], 
 }
 
 export function deliveryWaitFingerprint(observation: { number: number | null; headSha: string | null; baseSha: string | null; isDraft: boolean | null; reviewDecision: string | null; mergeable: string | null; mergeStateStatus: string | null; state: string | null; checks: { runs: Array<{ name: string; status: string; conclusion?: string | undefined }> } }): string {
-  return JSON.stringify({ number: observation.number, head: observation.headSha, base: observation.baseSha, draft: observation.isDraft, review: observation.reviewDecision, mergeable: observation.mergeable, mergeState: observation.mergeStateStatus, state: observation.state, checks: [...observation.checks.runs].map(run => `${run.name}:${run.status}:${run.conclusion ?? ""}`).sort() });
+  return JSON.stringify({ number: observation.number, head: observation.headSha, draft: observation.isDraft, review: observation.reviewDecision, mergeable: observation.mergeable, mergeState: observation.mergeStateStatus, state: observation.state, checks: [...observation.checks.runs].map(run => `${run.name}:${run.status}:${run.conclusion ?? ""}`).sort() });
 }

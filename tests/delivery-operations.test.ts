@@ -12,7 +12,7 @@ import { RootController } from "../src/root-controller.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { TaskControlStore } from "../src/root-session-store.js";
 import { runCommand } from "../src/command-runner.js";
-import { inspectDeliveryDiff } from "../src/delivery-review.js";
+import { inspectDeliveryDiff, reviewEquivalence } from "../src/delivery-review.js";
 import { commitGitFixture, initializeGitFixture } from "./helpers/git-fixture.js";
 
 const run = (command: string, args: string[]) => runCommand({ command, args, taskId: null, stepId: null });
@@ -135,6 +135,15 @@ describe("Coordinator delivery operations", () => {
       const review = { ...value.review, [field]: field === "files" ? ["unreviewed.ts"] : field === "commits" ? ["a".repeat(40)] : "a".repeat(40) };
       await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", value.local.headSha, review)).rejects.toMatchObject({ code: "delivery_review_required" });
       expect(fake.calls).not.toContain("push");
+    } finally { value.database.close(); }
+  });
+  it("requires Git review equivalence when the base changes", async () => {
+    const value = await fixture();
+    try {
+      const accepted = await inspectDeliveryDiff(value.directory, value.local.headSha, value.local.headSha);
+      expect(await reviewEquivalence(value.directory, accepted, value.local.headSha)).toMatchObject({ ok: true, range: { patchDigest: expect.any(String) } });
+      const changed = { ...accepted, commits: ["a".repeat(40)] };
+      await expect(reviewEquivalence(value.directory, changed, value.local.headSha)).resolves.toMatchObject({ ok: false, reason: expect.stringMatching(/accepted range/i) });
     } finally { value.database.close(); }
   });
   it("refuses to publish an imported local-main history without a whole-range review", async () => {

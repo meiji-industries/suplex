@@ -37,6 +37,7 @@ idempotency keys, because those are facts Forge owns.
 | --- | --- | --- |
 | `forge_developer_executions.status` and `result_commit` before a release | git had the reviewed commit clean at HEAD | Prove the revision in git; rows narrow the lookup (`src/engine/activities/git-proof.ts`) |
 | Forward-merge lineage chain across three base moves | git had the merge commit with the base as an ancestor | Same proof in the no-drift path of `target-base.ts` |
+| PR base observation vs reviewed base | Git integration result on the authoritative base | Digest-aware `sameRange` in `src/workflows.ts` and review equivalence in `src/delivery-review.ts` |
 | A workflow state field pointing at an execution id that was never inserted | nothing owned it | Keep the prior id until the activity returns a persisted row |
 | `forge_herdr_turns.status = 'waiting'` treated as a live turn | Herdr showed the pane idle and the result file present | Parse the result with the turn's schema, then ask Herdr; a `dispatching` turn gets a bounded grace |
 | A prompt acknowledgement timeout treated as a failed turn | Herdr showed the agent working | Read `herdr agent get` after the timeout |

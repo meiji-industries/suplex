@@ -29,6 +29,7 @@ export const DeliveryReviewSchema = z.object({
   headSha: z.string().regex(/^[a-f0-9]{40,64}$/),
   files: z.array(z.string().min(1)),
   commits: z.array(z.string().regex(/^[a-f0-9]{40,64}$/)),
+  patchDigest: z.string().optional(),
 }).strict();
 export type DeliveryReview = z.infer<typeof DeliveryReviewSchema>;
 

@@ -1,11 +1,11 @@
 import { PullRequestTitleSchema, type DeliveryOperation, type DeliveryReview, type PullRequestTitle } from "./root-contracts.js";
-import { inspectDeliveryDiff, matchesDeliveryReview } from "./delivery-review.js";
+import { inspectDeliveryDiff, reviewEquivalence } from "./delivery-review.js";
 import type { RootIdentity } from "./root-contracts.js";
 import type { GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation } from "./github-delivery.js";
 import { createGithubReleasePort, GithubReleaseFailure } from "./github-delivery.js";
 import type { PullRequestReference, TaskControl } from "./task-control.js";
 import type { TaskControlStore } from "./root-session-store.js";
-import { deliveryDecision, deliveryWaitFingerprint, freshReviewHint, latestReview, reviewRole, sameRange, workflowReadyForDelivery, type DeliveryDecision, type DeliveryFailureCode, type LocalSourceFacts, type ReviewRange, type WorkflowCompletion } from "./workflows.js";
+import { deliveryDecision, deliveryWaitFingerprint, freshReviewHint, latestReview, reviewRole, sameRange, rangeDifferences, workflowReadyForDelivery, type DeliveryDecision, type DeliveryFailureCode, type LocalSourceFacts, type ReviewRange, type WorkflowCompletion } from "./workflows.js";
 
 export class DeliveryOperationFailure extends Error {
   constructor(readonly code: DeliveryFailureCode, message: string) {
@@ -24,7 +24,7 @@ export const DELIVERY_WAIT_NEXT = "End this Coordinator turn. Forge will resume 
 const noRemoteChecks = "No remote checks reported";
 type Recheck = () => void;
 type AdoptionOptions = { explicit?: boolean | undefined; recheck?: Recheck | undefined };
-type CompletionOptions = AdoptionOptions & { isDraft?: boolean | undefined; observedBase?: string | null | undefined; validatedRange?: ReviewRange | undefined };
+type CompletionOptions = AdoptionOptions & { isDraft?: boolean | undefined; validatedRange?: ReviewRange | undefined };
 type Decision = DeliveryDecision;
 type CommitDecision = Decision | { ok: false; code: DeliveryFailureCode; reason: string; cancelled: true };
 type LocalRevisionFacts = { branch: string; headSha: string; clean: boolean };
@@ -86,6 +86,12 @@ export class DeliveryOperations {
       this.store.clearDeliveryWait(taskId, wait);
       return "finished";
     }
+    if (wait.reason === "observation") {
+      const base = await this.github.getBranchHead({ repository, branch: control.deliveryIntent.baseBranch });
+      if (base === null) return "unchanged";
+      const prompt = `GitHub evidence is available again (the head of ${control.deliveryIntent.baseBranch}). Retry the delivery operation with your current review; no source change is needed.`;
+      return this.store.resumeDeliveryWait(taskId, wait, prompt) ? "changed" : "none";
+    }
     const fingerprint = deliveryWaitFingerprint(observed);
     if (observed.exists && fingerprint === wait.fingerprint) return "unchanged";
     const prompt = `Delivery state changed while Forge waited (${wait.reason}). Current observation: ${JSON.stringify({ exists: observed.exists, state: observed.state, headSha: observed.headSha, isDraft: observed.isDraft, mergeable: observed.mergeable, mergeStateStatus: observed.mergeStateStatus, reviewDecision: observed.reviewDecision, checks: observed.checks })}. If checks failed, obtain their evidence and continue the workflow; if the pull request is eligible, request merge_pull_request with your current review; otherwise observe_checks again.`;
@@ -107,7 +113,7 @@ export class DeliveryOperations {
     if (!control.worktree) throw new DeliveryOperationFailure("worktree_missing", "The task has no worktree");
     const local = await this.github.inspectLocalRevision({ cwd: control.worktree.path });
     const diff = await this.deliveryDiff(control, local.headSha);
-    return { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, clean: local.clean };
+    return { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest, clean: local.clean };
   }
 
   async execute(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string, review?: DeliveryReview, pullRequestTitle?: PullRequestTitle, options: { recheck?: () => void } = {}): Promise<unknown> {
@@ -135,9 +141,20 @@ export class DeliveryOperations {
     let actual: ReviewRange | undefined;
     if (mutation) {
       if (!review || expectedHead !== local.headSha) throw new DeliveryOperationFailure("delivery_review_required", "Inspect delivery with inspect_delivery_diff. Independently review the entire GitHub-base-to-head diff and every commit, then supply expectedHead and review { baseSha, headSha, files, commits }. Do not approve unrelated changes or import unpublished local main; ask the human if the task depends on unpublished work.");
-      const diff = await this.deliveryDiff(refreshed, local.headSha);
-      actual = { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits };
-      if (!matchesDeliveryReview(review, actual)) throw new DeliveryOperationFailure("delivery_review_required", "The GitHub base, task head, files, or commits differ from the reviewed delivery range. Inspect delivery again and review the whole range before retrying.");
+      let diff;
+      try { diff = await this.deliveryDiff(refreshed, local.headSha); }
+      catch (error) {
+        if (operation === "merge_pull_request" && refreshed.pullRequest && this.observationUnavailable(error)) return this.observationWait(refreshed, local.headSha, `the head of ${refreshed.deliveryIntent.baseBranch}`);
+        throw error;
+      }
+      actual = { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest };
+      if (review.baseSha === actual.baseSha) {
+        if (!sameRange(review, actual)) throw new DeliveryOperationFailure("delivery_review_required", `The reviewed delivery range differs in: ${rangeDifferences(review, actual).join(", ")}. Inspect delivery again and review the new range before retrying.`);
+      } else {
+        const equivalent = await reviewEquivalence(refreshed.worktree!.path, review, actual.baseSha);
+        if (!equivalent.ok) throw new DeliveryOperationFailure("delivery_review_required", `${equivalent.reason} Inspect delivery again and review the new range before retrying.`);
+        actual = equivalent.range;
+      }
       this.gateWorkflow(refreshed, actual, { clean: local.clean });
       recheck();
     }
@@ -182,8 +199,20 @@ export class DeliveryOperations {
 
   private async deliveryDiff(control: TaskControl, headSha: string) {
     const baseSha = await this.github.getBranchHead({ repository: control.deliveryIntent.repository, branch: control.deliveryIntent.baseBranch });
-    if (!baseSha) throw new DeliveryOperationFailure("head_diverged", "GitHub did not return the intended delivery base");
+    if (!baseSha) throw new DeliveryOperationFailure("observation_unavailable", `GitHub did not return the head of ${control.deliveryIntent.baseBranch}. Forge cannot compute the delivery range until that observation is available; no source change is needed.`);
     return inspectDeliveryDiff(control.worktree!.path, baseSha, headSha);
+  }
+
+  private observationUnavailable(error: unknown): boolean {
+    return error instanceof DeliveryOperationFailure && error.code === "observation_unavailable"
+      || error instanceof GithubReleaseFailure && (error.code === "provider-unavailable" || error.code === "provider-rate-limited");
+  }
+
+  private observationWait(control: TaskControl, headSha: string, evidence: string) {
+    const wait = { headSha, fingerprint: `observation:${evidence}`, since: new Date().toISOString(), reason: "observation" as const };
+    this.store.updateWorkflowState(control.taskId, state => ({ ...state, deliveryWait: wait }));
+    this.store.scheduleWake(control.taskId, new Date(Date.now() + 30_000).toISOString());
+    return { kind: "waiting", problems: [`${evidence} is unavailable`], wait, next: DELIVERY_WAIT_NEXT };
   }
 
   /**
@@ -221,7 +250,7 @@ export class DeliveryOperations {
       return { kind: "local_work_completed", headSha: local.headSha };
     }
     const diff = await this.deliveryDiff(control, local.headSha);
-    const actual = { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits };
+    const actual = { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest };
     const decision = await this.commitCompletion(control, actual, null, { requireAccepted: false, recheck, projectWorktree: true });
     if (!decision.ok) {
       if ("cancelled" in decision) recheck();
@@ -244,7 +273,7 @@ export class DeliveryOperations {
 
   private async adoptKnownPull(control: TaskControl, pull: GithubPullRequest, options: AdoptionOptions = {}): Promise<PullRequestReference> {
     if (!matchesIntent(control, pull)) throw new DeliveryOperationFailure("pull_request_ambiguous", "The stored pull request no longer matches this task intent");
-    return this.completeIfTargetMatches(control, reference(pull), { isDraft: pull.isDraft, observedBase: pull.baseSha, explicit: options.explicit, recheck: options.recheck });
+    return this.completeIfTargetMatches(control, reference(pull), { isDraft: pull.isDraft, explicit: options.explicit, recheck: options.recheck });
   }
 
   private async observePull(control: TaskControl, repository: string, branch: string): Promise<PullRequestReference | null> {
@@ -320,8 +349,11 @@ export class DeliveryOperations {
     const unknown = observed.mergeable === "UNKNOWN" || observed.mergeStateStatus === "UNKNOWN" || observed.mergeStateStatus === null;
     if (observed.checks.failing > 0) return { ...summary, note: "Checks failed on this head. Obtain the failure evidence, request Rater or repair, and push a corrected head; pending CI is not a failure." };
     if (!pending && !unknown) return summary;
-    const diff = await this.deliveryDiff(control, local.headSha);
-    const ready = workflowReadyForDelivery(control, this.store.sessions(control.taskId), this.store.turns(control.taskId), { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits });
+    let diff;
+    try { diff = await this.deliveryDiff(control, local.headSha); }
+    catch (error) { if (this.observationUnavailable(error)) return this.observationWait(control, local.headSha, `the head of ${control.deliveryIntent.baseBranch}`); throw error; }
+    const fresh = { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest };
+    const ready = workflowReadyForDelivery(control, this.store.sessions(control.taskId), this.store.turns(control.taskId), fresh);
     if (!ready.ok) return { ...summary, note: ready.reason };
     const wait = { headSha: local.headSha, fingerprint: deliveryWaitFingerprint(observed), since: new Date().toISOString(), reason: pending ? "checks" as const : "mergeability" as const };
     this.store.updateWorkflowState(control.taskId, state => ({ ...state, deliveryWait: wait }));
@@ -348,9 +380,13 @@ export class DeliveryOperations {
     if (observed.headSha !== control.worktree!.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed after review");
     if (!expectedHead || expectedHead !== observed.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed after the Coordinator reviewed it");
     if (control.workflow !== "standard") {
-      // The manifest gate at the start of execute() can go stale during awaits: the final observation must show the reviewed base.
-      if (observed.baseSha === null) throw new DeliveryOperationFailure("delivery_review_required", `GitHub did not report the pull request base, so the reviewed base ${actual.baseSha.slice(0, 12)} cannot be confirmed.${freshReviewHint(control.workflow)}`);
-      if (observed.baseSha !== actual.baseSha) throw new DeliveryOperationFailure("delivery_review_required", `The pull request base is ${observed.baseSha.slice(0, 12)}, not the reviewed base ${actual.baseSha.slice(0, 12)}.${freshReviewHint(control.workflow)}`);
+      let base: string | null;
+      try { base = await this.github.getBranchHead({ repository, branch: control.deliveryIntent.baseBranch }); }
+      catch (error) { if (this.observationUnavailable(error)) return this.observationWait(control, observed.headSha!, `the head of ${control.deliveryIntent.baseBranch}`); throw error; }
+      if (base === null) return this.observationWait(control, observed.headSha!, `the head of ${control.deliveryIntent.baseBranch}`);
+      // Concrete harm prevented: merging content the accepted review never covered. Evidence: Git integration result on the current authoritative base.
+      const equivalent = await reviewEquivalence(control.worktree!.path, actual, base);
+      if (!equivalent.ok) throw new DeliveryOperationFailure("delivery_review_required", `${equivalent.reason}${freshReviewHint(control.workflow)}`);
       await this.finalRecheck(control, actual, recheck);
       const eligibility = this.mergeEligibility(observed);
       if (eligibility.wait) {
@@ -375,7 +411,7 @@ export class DeliveryOperations {
     }
     // The merge result must identify this task's pull request before Forge records anything from it; a mismatched head is external, not verified.
     this.assertMergeResultIdentity(control, repository, requested, final);
-    return { ...await this.completeIfTargetMatches(control, reference(final), { validatedRange: actual, observedBase: final.baseSha, recheck }), checkSummary: checkSummary(observed), reviewedHead: observed.headSha };
+    return { ...await this.completeIfTargetMatches(control, reference(final), { validatedRange: actual, recheck }), checkSummary: checkSummary(observed), reviewedHead: observed.headSha };
   }
 
   /** A merge result is adopted only for the requested repository and number, the captured number when one exists, the intended branches, and the same repository. */
@@ -418,12 +454,11 @@ export class DeliveryOperations {
     return { ok: true };
   }
 
-  /** Passive proof for a merged pull request: the accepted range, its head, and its base must all still hold before the local source is checked. */
-  private passiveMergeProof(control: TaskControl, pull: PullRequestReference, observedBase: string | null | undefined): Decision {
+  /** Passive proof rejects concrete harm only: no accepted Forge decision, or a GitHub merge of a different head. */
+  private passiveMergeProof(control: TaskControl, pull: PullRequestReference): Decision {
     const accepted = control.workflowState.acceptedDelivery;
     if (!accepted) return { ok: false, code: "workflow_review_required", reason: "No accepted delivery decision exists for this pull request." };
     if (accepted.headSha !== pull.headSha) return { ok: false, code: "head_diverged", reason: `The merged head ${pull.headSha.slice(0, 12)} is not the accepted head ${accepted.headSha.slice(0, 12)}.` };
-    if (!observedBase || observedBase !== accepted.baseSha) return { ok: false, code: "delivery_review_required", reason: `The post-merge observation does not establish the accepted base ${accepted.baseSha.slice(0, 12)}.` };
     return { ok: true };
   }
 
@@ -434,11 +469,11 @@ export class DeliveryOperations {
     if (pull.headSha !== accepted.headSha) return { ok: false, code: "head_diverged", reason: `The pull request head ${pull.headSha.slice(0, 12)} is not the accepted head ${accepted.headSha.slice(0, 12)}.` };
     let remoteBase: string | null;
     try { remoteBase = await this.github.getBranchHead({ repository: control.deliveryIntent.repository, branch: control.deliveryIntent.baseBranch }); }
-    catch (error) { return { ok: false, code: "delivery_review_required", reason: `The intended base could not be observed: ${error instanceof Error ? error.message : String(error)}` }; }
-    if (remoteBase !== accepted.baseSha) return { ok: false, code: "delivery_review_required", reason: `The base branch is ${remoteBase?.slice(0, 12) ?? "unavailable"}, not the accepted base ${accepted.baseSha.slice(0, 12)}.${freshReviewHint(control.workflow)}` };
+    catch { return { ok: false, code: "observation_unavailable", reason: `GitHub did not return the head of ${control.deliveryIntent.baseBranch}; Forge will observe it again.` }; }
+    if (remoteBase === null) return { ok: false, code: "observation_unavailable", reason: `GitHub did not return the head of ${control.deliveryIntent.baseBranch}; Forge will observe it again.` };
     if (!control.worktree) return { ok: false, code: "worktree_missing", reason: "The task has no observed worktree to confirm the reviewed source." };
-    const diff = await inspectDeliveryDiff(control.worktree.path, accepted.baseSha, accepted.headSha);
-    if (!sameRange({ baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits }, accepted)) return { ok: false, code: "delivery_review_required", reason: `The delivery range differs from the accepted range.${freshReviewHint(control.workflow)}` };
+    const equivalent = await reviewEquivalence(control.worktree.path, accepted, remoteBase);
+    if (!equivalent.ok) return { ok: false, code: "delivery_review_required", reason: `${equivalent.reason}${freshReviewHint(control.workflow)}` };
     return this.commitCompletion(control, accepted, pull.number, { requireAccepted: true, recheck });
   }
 
@@ -458,7 +493,7 @@ export class DeliveryOperations {
     if (control.workflow === "standard") { this.store.markDelivered(control.taskId); return pull; }
     if (current.workflowState.completion) { if (current.status !== "delivered") this.store.markDelivered(control.taskId); return pull; }
     if (pull.state === "merged") {
-      const proof = options.validatedRange ? this.directMergeProof(pull, options.validatedRange) : this.passiveMergeProof(current, pull, options.observedBase);
+      const proof = options.validatedRange ? this.directMergeProof(pull, options.validatedRange) : this.passiveMergeProof(current, pull);
       const range = options.validatedRange ?? current.workflowState.acceptedDelivery;
       const decision: CommitDecision = proof.ok && range ? await this.commitCompletion(current, range, pull.number, { requireAccepted: options.validatedRange === undefined, recheck: options.recheck }) : proof;
       if (decision.ok) return pull;

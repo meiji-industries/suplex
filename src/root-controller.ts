@@ -224,7 +224,7 @@ export class RootController implements RootBridgeAdapter {
   /** The live range plus whether the worktree is clean; callers decide what an unclean tree means for them. */
   private async currentRange(taskId: string): Promise<{ range: ReviewRange; clean: boolean }> {
     const observed = await this.delivery.currentRange(taskId);
-    return { range: { baseSha: observed.baseSha, headSha: observed.headSha, files: observed.files, commits: observed.commits }, clean: observed.clean };
+    return { range: { baseSha: observed.baseSha, headSha: observed.headSha, files: observed.files, commits: observed.commits, patchDigest: observed.patchDigest }, clean: observed.clean };
   }
 
   /** Compares the live committed source with a pinned range; any observation failure is a concrete reason, never an approval. */
@@ -243,7 +243,7 @@ export class RootController implements RootBridgeAdapter {
     const control = this.store.get(root.taskId);
     const diff = result as ReviewRange;
     if (!control.worktree) return result;
-    const evidence = await writeTaskEvidence({ root: this.evidence.root, taskId: root.taskId, worktree: control.worktree.path, range: { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits }, attachments: [], verification: { note: "Coordinator inspection; Worker evidence is attached to Advisor requests." } });
+    const evidence = await writeTaskEvidence({ root: this.evidence.root, taskId: root.taskId, worktree: control.worktree.path, range: { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest }, attachments: [], verification: { note: "Coordinator inspection; Worker evidence is attached to Advisor requests." } });
     return { ...(result as object), evidenceDirectory: evidence.directory };
   }
 

@@ -3,13 +3,44 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { ForgeDatabase } from "../src/database.js";
 import { DELIVERY_WAIT_NEXT, DeliveryOperations } from "../src/delivery-operations.js";
+import { inspectDeliveryDiff } from "../src/delivery-review.js";
 import { RootBridge } from "../src/root-bridge.js";
 import { RootController } from "../src/root-controller.js";
 import { TaskControlStore, type ProcessOwnerObservation } from "../src/root-session-store.js";
 import { TaskHost } from "../src/task-host.js";
+import { rangeDifferences, sameRange } from "../src/workflows.js";
 import { cleanupDeliveryFixtures, failing, fixture, git, pending, rater, reviewer, successful } from "./helpers/workflow-delivery-fixture.js";
 
 afterEach(cleanupDeliveryFixtures);
+
+test("range equivalence uses the complete patch digest when bases differ", () => {
+  const base = { baseSha: "a".repeat(40), headSha: "b".repeat(40), files: ["src.ts"], commits: ["b".repeat(40)], patchDigest: "c".repeat(64) };
+  expect(rangeDifferences(base, base)).toEqual([]);
+  expect(rangeDifferences(base, { ...base, baseSha: "d".repeat(40) })).toEqual([]);
+  expect(rangeDifferences(base, { ...base, baseSha: "d".repeat(40), patchDigest: "e".repeat(64) })).toEqual(["patch content"]);
+  expect(rangeDifferences(base, { ...base, baseSha: "d".repeat(40), patchDigest: undefined })).toEqual(["patch content"]);
+  expect(rangeDifferences(base, { ...base, baseSha: "d".repeat(40), headSha: "e".repeat(40) })).toEqual(["head"]);
+  expect(sameRange(base, { ...base, baseSha: "d".repeat(40) })).toBe(true);
+});
+
+test("inspectDeliveryDiff digests are stable across unrelated base moves and change when the merge-base moves", { timeout: 90_000 }, async () => {
+  const f = await fixture("refine_pull_request");
+  await f.commit("src.ts", "export const value = 3;\n");
+  const head = await git(f.worktree.path, ["rev-parse", "HEAD"]);
+  const a = await inspectDeliveryDiff(f.worktree.path, f.baseSha, head);
+  const clone = join(f.directory, "digest-advance");
+  await git(f.directory, ["clone", "--quiet", f.bare, clone]);
+  await git(clone, ["config", "user.email", "o@example.com"]); await git(clone, ["config", "user.name", "O"]);
+  await writeFile(join(clone, "unrelated.txt"), "unrelated\n"); await git(clone, ["add", "."]); await git(clone, ["commit", "-q", "-m", "unrelated"]); await git(clone, ["push", "-q", "origin", "main"]);
+  const newMain = await git(clone, ["rev-parse", "HEAD"]);
+  const b = await inspectDeliveryDiff(f.worktree.path, newMain, head);
+  expect(a.patchDigest).toBe(b.patchDigest);
+  expect(a.commits).toEqual(b.commits);
+  const c = await inspectDeliveryDiff(f.worktree.path, f.featureSha, head);
+  expect(c.patchDigest).not.toBe(a.patchDigest);
+  expect(c.files).toEqual(["src.ts"]);
+  expect(c.commits).toHaveLength(1);
+});
 
 test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI, repairs the CI failure, and merges the same pull request", { timeout: 60_000 }, async () => {
   const f = await fixture("refine_pull_request");

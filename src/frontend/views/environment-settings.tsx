@@ -66,7 +66,7 @@ export function EnvironmentSettingsView(): ReactElement {
           </form>
         </SettingRow>
       </SettingsSection>
-      <SettingsSection title="Task limits" description="Host-wide limits applied before Forge dispatches a task prompt.">
+      <SettingsSection title="Task limits" description="These defaults apply to tasks without task-specific limits. Forge checks each limit before it dispatches a new prompt.">
         <form className="space-y-2" onSubmit={(event) => void save(event)}>
           <SettingRow label="Default task budget" description="Pause a task when its estimated spend reaches this amount.">
             <div className="flex items-center gap-2">
@@ -74,13 +74,14 @@ export function EnvironmentSettingsView(): ReactElement {
               <span className="text-xs text-muted-foreground">USD</span>
             </div>
           </SettingRow>
-          <SettingRow label="Default maximum turns" description="Pause a task when its Coordinator and Worker turns reach this count.">
+          <SettingRow label="Default maximum turns" description="Pause a task when all admitted agent turns reach this count.">
             <div className="flex items-center gap-2">
               <div className="w-28"><Input aria-label="Default maximum task turns" type="number" min="0" step="1" inputMode="numeric" value={defaultMaxTurns} onChange={(event) => { setDefaultMaxTurns(event.target.value); setMessage(""); }} /></div>
               <span className="text-xs text-muted-foreground">Turns</span>
             </div>
           </SettingRow>
           <Button size="sm" type="submit" disabled={!changed || saving}>{saving ? "Saving…" : "Save"}</Button>
+          <p className="text-xs text-muted-foreground">Set a limit to 0 to disable it. A native turn already in progress can finish before Forge pauses.</p>
         </form>
       </SettingsSection>
       {!validDisk ? <p className="text-xs text-destructive" role="alert">Enter a value from 0 to 1024 GB.</p> : null}

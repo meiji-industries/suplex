@@ -13,15 +13,21 @@ import type { TaskControl, TaskSession, TaskTurn } from "./task-control.js";
 import type { NativeSessionReader, PromptObservation, TaskHarness, TaskScope } from "./task-harness.js";
 import { verifyTaskEvidence, writeTaskEvidence } from "./workflow-evidence.js";
 import { advisorResultWake, composeAdvisorAssignment, composeWorkerAssignment, initialCoordinatorPrompt, workerResultWake } from "./workflow-prompts.js";
-import { ADVISOR_LABELS, latestReview, parseAdvisorReport, publicWorkflowState, repairStalled, REPAIR_RATING_TARGET, sameRange, turnOutcome, workflowDefinition, type AdvisorRole, type ReportReference, type ReviewRange, type VerificationRange, type WorkflowInput, type WorkerWorkflowInput } from "./workflows.js";
+import { ADVISOR_LABELS, latestReview, parseAdvisorReport, publicWorkflowState, REPAIR_RATING_TARGET, sameRange, turnOutcome, workflowDefinition, type AdvisorRole, type ReportReference, type ReviewRange, type VerificationRange, type WorkflowInput, type WorkerWorkflowInput } from "./workflows.js";
 import { readWorkerEvidence } from "./worker-turn-evidence.js";
+import type { ModelPricingCatalog } from "./model-pricing.js";
+import { observeTaskLimitUsage } from "./task-limit-observer.js";
+import { ModelsDevCatalogReader } from "./models-dev-catalog.js";
 
 export type TaskDelivery = Pick<DeliveryOperations, "observe" | "execute" | "currentRange"> & Partial<Pick<DeliveryOperations, "checksObservation">>;
+type AcceptedWorkerAssignment = { kind: "workflow_input"; input: WorkerWorkflowInput } | { kind: "saved_prompt"; prompt: string };
 
 const advisorSuccess = "End this Coordinator turn now. Forge will send the Advisor's native report as a new turn on this same session. Do not poll or wait inside this turn.";
+const defaultPricing = new ModelsDevCatalogReader();
+const readDefaultPricing = () => defaultPricing.read();
 
 export class RootController implements RootBridgeAdapter {
-  constructor(readonly store: TaskControlStore, private readonly harness: TaskHarness, private readonly delivery: TaskDelivery = new DeliveryOperations(store), private readonly artifacts?: ArtifactStore, private readonly evidence?: { root: string }, private readonly reader?: (session: TaskSession) => Pick<NativeSessionReader, "turnEvidence">) {}
+  constructor(readonly store: TaskControlStore, private readonly harness: TaskHarness, private readonly delivery: TaskDelivery = new DeliveryOperations(store), private readonly artifacts?: ArtifactStore, private readonly evidence?: { root: string }, private readonly reader?: (session: TaskSession) => Pick<NativeSessionReader, "turnEvidence"> & Partial<Pick<NativeSessionReader, "timeline">>, private readonly readPricing: () => Promise<ModelPricingCatalog | undefined> = readDefaultPricing) {}
 
   private scope(control: TaskControl, session: TaskSession, workflowInput: WorkflowInput | null = null): TaskScope {
     if (!control.worktree) throw new Error("Task worktree is not configured");
@@ -86,7 +92,14 @@ export class RootController implements RootBridgeAdapter {
       return [session.id, turn ? summarizeWorkerObservation(turn) : null];
     }));
     const workerResult = worker ? results[worker.id] ?? null : null;
-    return { control: { ...this.store.get(root.taskId), workflowState: publicWorkflowState(this.store.get(root.taskId).workflowState) }, context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, workerResult, workers, results, worktree, pullRequest };
+    const acceptedAssignment = worker?.advisorRole === null ? this.acceptedWorkerAssignment(root.taskId, worker) : null;
+    return { control: { ...this.store.get(root.taskId), workflowState: publicWorkflowState(this.store.get(root.taskId).workflowState) }, context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, acceptedAssignment, workerResult, workers, results, worktree, pullRequest };
+  }
+
+  private acceptedWorkerAssignment(taskId: string, worker: TaskSession): AcceptedWorkerAssignment | null {
+    const turn = this.store.turns(taskId).filter(candidate => candidate.sessionId === worker.id && candidate.generation === worker.generation).at(-1);
+    if (!turn) return null;
+    return turn.workflowInput?.kind === "worker" ? { kind: "workflow_input", input: turn.workflowInput } : { kind: "saved_prompt", prompt: turn.promptText };
   }
 
   async readWorkerEvidence(root: RootIdentity, request: WorkerEvidenceRequest) {
@@ -117,7 +130,7 @@ export class RootController implements RootBridgeAdapter {
       }
       const instruction = composeWorkerAssignment({ mode: "planned", purpose, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, visualEvidence: this.store.context(root.taskId).configuration.visualEvidence, ...(range ? { range } : {}) });
       const worker = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, instruction, ...(workflowInput ? { workflowInput } : {}) });
-      return { worker, next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
+      return { worker, acceptedAssignment: this.acceptedWorkerAssignment(root.taskId, worker), next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
     }
     this.recheck(root);
     const observed = await this.currentRange(root.taskId);
@@ -174,7 +187,7 @@ export class RootController implements RootBridgeAdapter {
     const instruction = composeWorkerAssignment({ mode, purpose, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, visualEvidence: this.store.context(root.taskId).configuration.visualEvidence, range, advisorReport });
     const workflowInput: WorkerWorkflowInput = { kind: "worker", version: 2, mode, purpose, range, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, advisorReport: advisorReportReference, candidateReports };
     const worker = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, instruction, workflowInput });
-    return { worker, next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
+    return { worker, acceptedAssignment: this.acceptedWorkerAssignment(root.taskId, worker), next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
   }
 
   async delegateAdvisor(root: RootIdentity, request: AdvisorRequest): Promise<unknown> {
@@ -187,9 +200,6 @@ export class RootController implements RootBridgeAdapter {
     if (request.role === "reviewer" && !request.brief) throw new Error("Reviewer requires a brief with your plan and acceptance criteria.");
     const sessions = this.store.sessions(root.taskId);
     const turns = this.store.turns(root.taskId);
-    if (this.escalateInvalidAdvisors(root, sessions, turns, [request.role])) {
-      return { asked: true, control: this.store.get(root.taskId) };
-    }
     if (!control.worktree) throw new Error("The task has no worktree");
     this.recheck(root);
     const observedSource = await this.currentRange(root.taskId);
@@ -214,7 +224,6 @@ export class RootController implements RootBridgeAdapter {
     if (control.workflow !== "competing_plans") throw new Error("delegate_planners is legal only for Combined planning.");
     const sessions = this.store.sessions(root.taskId);
     const turns = this.store.turns(root.taskId);
-    if (this.escalateInvalidAdvisors(root, sessions, turns, ["planner_a", "planner_b"])) return { asked: true, control: this.store.get(root.taskId) };
     if (!control.worktree) throw new Error("The task has no worktree");
     this.recheck(root);
     const observedSource = await this.currentRange(root.taskId);
@@ -257,21 +266,6 @@ export class RootController implements RootBridgeAdapter {
   private async currentRange(taskId: string): Promise<{ range: ReviewRange; clean: boolean }> {
     const observed = await this.delivery.currentRange(taskId);
     return { range: { baseSha: observed.baseSha, headSha: observed.headSha, files: observed.files, commits: observed.commits, patchDigest: observed.patchDigest }, clean: observed.clean };
-  }
-
-  private escalateInvalidAdvisors(root: RootIdentity, sessions: TaskSession[], turns: TaskTurn[], roles: AdvisorRole[]): boolean {
-    const answerFromEnd = [...turns].reverse().findIndex(turn => turn.sessionId === root.sessionId && isHumanAnswer(turn.promptText));
-    const afterAnswer = turns.slice(answerFromEnd === -1 ? 0 : turns.length - answerFromEnd);
-    for (const role of roles) {
-      const attempts = afterAnswer.filter(turn => turn.status === "completed" && sessions.find(session => session.id === turn.sessionId)?.advisorRole === role).slice(-2);
-      if (attempts.length !== 2 || !attempts.every(turn => turnOutcome(turn.terminalObservation).advisor?.result === null)) continue;
-      const reasons = attempts.map(turn => turnOutcome(turn.terminalObservation).advisor?.invalidReason ?? "unknown");
-      const environmental = reasons.every(reason => /source|base|observed|uncommitted|evidence files/i.test(reason));
-      const label = ADVISOR_LABELS[role];
-      this.store.askHuman(root.taskId, environmental ? `The source, base, or evidence could not be confirmed for the last two ${label} reviews (${reasons.join("; ")}). Resolve the source state, then continue?` : `${label} returned two consecutive invalid reports (${reasons.join("; ")}). How should Forge continue?`, [{ label: "Retry", description: `Request ${label} once more with the same captured profile.`, recommended: true }, { label: "Revise scope", description: "Describe a change to the objective or evidence before another attempt.", recommended: false }]);
-      return true;
-    }
-    return false;
   }
 
   /** Compares the live committed source with a pinned range; any observation failure is a concrete reason, never an approval. */
@@ -378,7 +372,6 @@ export class RootController implements RootBridgeAdapter {
       }
       for (const turn of this.store.pendingTurns(session.id)) {
         if (this.store.get(control.taskId).status !== "active") break;
-        if (turn.status === "pending_prompt" && this.store.enforceLimits(control.taskId)) break;
         const intent = createOpenCodePromptIntent({ sessionID: nativeSessionId, messageID: turn.id, directory: taskScope.directory, prompt: turn.promptText, model: { providerID: taskScope.profile.providerID, modelID: taskScope.profile.modelID }, agent: `forge-${taskScope.role}`, variant: taskScope.profile.reasoningEffort, dispatch: turn.status === "pending_prompt" ? "not_submitted" : "ambiguous" });
         let observed = await this.harness.observe(taskScope, intent, turn.dispatchAttempt);
         let replayable = turn.status === "pending_prompt";
@@ -387,7 +380,9 @@ export class RootController implements RootBridgeAdapter {
           if (observed.retry === "allowed") replayable = this.store.requeueFencedPrompt({ turnId: turn.id, attempt: turn.dispatchAttempt, owner });
         }
         if (observed.retry === "allowed" && replayable) {
-          observed = await this.harness.dispatch(taskScope, { ...intent, dispatch: "not_submitted" }, async serverGeneration => this.store.claimPrompt(turn.id, serverGeneration, owner));
+          const usage = await observeTaskLimitUsage({ taskId: control.taskId, store: this.store, ...(this.reader ? { reader: this.reader } : {}), readPricing: this.readPricing });
+          if (this.store.pauseAtTaskLimit(control.taskId, usage)) break;
+          observed = await this.harness.dispatch(taskScope, { ...intent, dispatch: "not_submitted" }, async serverGeneration => this.store.claimPrompt({ taskId: control.taskId, turnId: turn.id, serverGeneration, owner, usage }));
         }
         if (this.store.get(control.taskId).status === "cancelled") break;
         if (observed.admission === "observed" && turn.status !== "prompted") this.store.markPrompted({ turnId: turn.id, generation: session.generation });
@@ -425,8 +420,7 @@ export class RootController implements RootBridgeAdapter {
       const observation = JSON.stringify({ ...base, advisor: { role, result: outcome.result, invalidReason: outcome.invalidReason } });
       const summary = outcome.result ? outcome.result.role === "rater" ? `Rating ${outcome.result.rating}/10 with ${outcome.result.blockingFindings.length} blocking finding(s); verification ${outcome.result.verification}.` : outcome.result.role === "reviewer" ? `${outcome.result.approved ? "Approved" : "Not approved"} with ${outcome.result.blockingFindings.length} blocking finding(s); verification ${outcome.result.verification}.` : outcome.result.summary : outcome.invalidReason ?? "invalid";
       const review = role === "reviewer" || role === "rater" ? { review: { result: outcome.result as Extract<typeof outcome.result, { role: "reviewer" | "rater" }> | null, invalidReason: outcome.invalidReason } } : {};
-      const recorded = this.store.recordWorkerResultAndWake({ taskId: session.taskId, sessionId: session.id, generation: session.generation, receiptId, observation, ...nativeTurnId, ...review, wakePrompt: advisorResultWake(role, receiptId, { valid: outcome.result !== null, summary }, observation) });
-      if (recorded.kind === "recorded" && role === "rater" && outcome.result) this.checkStall(session.taskId);
+      this.store.recordWorkerResultAndWake({ taskId: session.taskId, sessionId: session.id, generation: session.generation, receiptId, observation, ...nativeTurnId, ...review, wakePrompt: advisorResultWake(role, receiptId, { valid: outcome.result !== null, summary }, observation) });
       return;
     }
     const purpose = workflowInput?.kind === "worker" ? workflowInput.purpose : "implementation";
@@ -446,15 +440,6 @@ export class RootController implements RootBridgeAdapter {
     this.store.recordWorkerResultAndWake({ taskId: session.taskId, sessionId: session.id, generation: session.generation, receiptId, observation, ...nativeTurnId, wakePrompt: workerResultWake(taskScope.workflow, receiptId, { turnId: turn.id, state: observed.state, text, verificationRange }, purpose) });
   }
 
-  private checkStall(taskId: string): void {
-    const control = this.store.get(taskId);
-    const stall = repairStalled(control.workflowState.reviews, this.store.sessions(taskId), this.store.turns(taskId));
-    if (!stall.stalled || control.status !== "active") return;
-    this.store.askHuman(taskId, `Three consecutive repair cycles left the same blocking findings at ${stall.rating}/10: ${stall.findings.join("; ") || "no findings listed"}. Rater and Worker have not resolved this defect. How should Forge continue?`, [
-      { label: "Continue", description: "Run another bounded repair attempt with the same 9/10 target.", recommended: true },
-      { label: "Revise scope", description: "Describe the decision necessary to resolve the defect. The 9/10 target stays.", recommended: false },
-    ]);
-  }
 }
 
 function turnWorkflowInput(session: TaskSession, turn: TaskTurn): WorkflowInput | null {
@@ -476,11 +461,6 @@ function findAdvisorReport(sessions: TaskSession[], turns: TaskTurn[], reference
 function resolveAdvisorReport(sessions: TaskSession[], turns: TaskTurn[], role: AdvisorRole, reference: { turnId: string } | { sessionId: string }): { session: TaskSession; turn: TaskTurn; input: Extract<WorkflowInput, { kind: "advisor" }> } | null {
   const report = findAdvisorReport(sessions, turns, reference);
   return report?.session.advisorRole === role && report.input.role === role ? report : null;
-}
-
-function isHumanAnswer(prompt: string): boolean {
-  try { const parsed = JSON.parse(prompt) as { question?: unknown; answer?: unknown }; return typeof parsed.question === "string" && typeof parsed.answer === "string"; }
-  catch { return false; }
 }
 
 function parseObservation(observation: string | null): { state: string | null; text: string | null; tools: unknown[] | null; toolsLimit: string | null; verificationRange: VerificationRange | null } {

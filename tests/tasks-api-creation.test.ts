@@ -11,6 +11,7 @@ test("Start immediately commits active intent and schedules Coordinator without 
     expect(response.statusCode, response.body).toBe(201);
     const task = TaskSchema.parse(response.json());
     expect(task.status).toBe("active");
+    expect(task.limits).toEqual({ budgetUsd: 15, maxTurns: 40, admittedTurns: 0 });
     expect(f.wakes).toContain(task.id);
     const retried = await f.app.inject({ method: "POST", url, headers: f.headers, payload });
     expect(retried.statusCode, retried.body).toBe(200);
@@ -18,6 +19,28 @@ test("Start immediately commits active intent and schedules Coordinator without 
     const conflict = await f.app.inject({ method: "POST", url, headers: f.headers, payload: { ...payload, title: "Different objective" } });
     expect(conflict.statusCode).toBe(409);
     expect(f.tasks.listTasks(f.userId)).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+test("task limit answers require an explicit decision and expose the approved limits", async () => {
+  const f = await nativeApp();
+  try {
+    const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Limited task", description: "Stop at the boundary", idempotencyKey: "limited-task-1", startImmediately: true });
+    f.tasks.repository.controls.claimRoot({ taskId: task.id });
+    const pause = { kind: "task_limit", reason: "budget", limits: { budgetUsd: 15, maxTurns: 40 }, usage: { estimatedCostUsd: 16, admittedTurns: 2 }, proposedLimits: { budgetUsd: 31, maxTurns: 40 } };
+    f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET status = 'waiting_human', human_question = 'Task limit reached', human_question_id = 'limit-question', limit_pause_json = ? WHERE task_id = ?").run(JSON.stringify(pause), task.id));
+    const url = `/api/tasks/${task.id}/answer`;
+    expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { questionId: "limit-question", answer: "Continue" } })).statusCode).toBe(409);
+    const response = await f.app.inject({ method: "POST", url, headers: f.headers, payload: { questionId: "limit-question", limitDecision: { kind: "add_allowance" } } });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(TaskSchema.parse(response.json())).toMatchObject({ status: "active", humanQuestion: null, limits: { budgetUsd: 31, maxTurns: 40, admittedTurns: 0 } });
+
+    const cancelled = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Stopped task", description: "Stop at the limit", idempotencyKey: "limited-task-2", startImmediately: true });
+    f.tasks.repository.controls.claimRoot({ taskId: cancelled.task.id });
+    f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET status = 'waiting_human', human_question = 'Task limit reached', human_question_id = 'cancel-question', limit_pause_json = ? WHERE task_id = ?").run(JSON.stringify(pause), cancelled.task.id));
+    const cancelResponse = await f.app.inject({ method: "POST", url: `/api/tasks/${cancelled.task.id}/answer`, headers: f.headers, payload: { questionId: "cancel-question", limitDecision: { kind: "cancel_task" } } });
+    expect(cancelResponse.statusCode, cancelResponse.body).toBe(200);
+    expect(TaskSchema.parse(cancelResponse.json())).toMatchObject({ status: "cancelled", humanQuestion: null });
   } finally { await f.close(); }
 });
 

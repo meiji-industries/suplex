@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { HumanQuestionOptions } from "./human-question.js";
+import type { TaskLimitPause } from "./task-limits.js";
 import type { AdvisorRole, WorkflowId, WorkflowInput, WorkflowState } from "./workflows.js";
 
 
@@ -45,6 +46,7 @@ export interface TaskControl {
   humanQuestionOptions?: HumanQuestionOptions;
   humanQuestionId: string | null;
   recoveryTurnId: string | null;
+  limitPause: TaskLimitPause | null;
   worktree: WorktreeReference | null;
   pullRequest: PullRequestReference | null;
   rootSessionId: string | null;

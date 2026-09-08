@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { RootBridge, RootBridgeFailure, startRootBridgeTransport, type RootBridgeAdapter } from "../src/root-bridge.js";
 import type { RootIdentity } from "../src/root-contracts.js";
@@ -15,6 +15,7 @@ import { TaskControlStore } from "../src/root-session-store.js";
 import { runCommand } from "../src/command-runner.js";
 import { nativeApp } from "./helpers/native-app.js";
 import { ArtifactStore } from "../src/artifacts.js";
+import { TaskUsageSchema } from "../src/task-usage.js";
 
 test("Coordinator image reads enforce task ownership and content integrity and return MCP image content", async () => {
   const value = await nativeApp();
@@ -210,7 +211,23 @@ test("stdio bridge invokes the production controller against a durable task cont
     const session = store.claimRoot({ taskId: "task" });
     store.bindHarnessSession({ sessionId: session.id, generation: session.generation, nativeSessionId: "ses_root" });
     store.bindPane({ sessionId: session.id, generation: session.generation, paneId: "root-pane" });
-    const controller = new RootController(store, new FakeTaskHarness());
+    const harness = new FakeTaskHarness();
+    const nativeUsage = TaskUsageSchema.parse({ sessionId: "ses_root", messageId: "native-usage", turnId: "native-turn", role: "root", provider: "openai", model: "gpt-5.6-sol", startedAt: 1, completedAt: 2, failed: false, summary: false, steps: 1, cost: 0, subsidized: false, tokens: { input: 1_000_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, source: "message" });
+    const timeline = vi.fn(async () => ({ usage: [nativeUsage], liveMessageId: null }));
+    const controller = new RootController(store, harness, undefined, undefined, undefined, () => ({
+      turnEvidence: async () => ({ tools: [], limitation: null }),
+      timeline,
+    }));
+    const pricingFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ openai: { id: "openai", models: { "gpt-5.6-sol": { id: "gpt-5.6-sol", cost: { input: 1, output: 1 } } } } }), { status: 200 }));
+    try {
+      await controller.recover("task");
+      harness.finish(harness.dispatched[0]!.messageID);
+      await controller.recover("task");
+      await controller.recover("task");
+      expect(pricingFetch).toHaveBeenCalledTimes(1);
+      expect(timeline).toHaveBeenCalledTimes(1);
+      expect(store.taskSpend("task").costUsd).toBe(1);
+    } finally { pricingFetch.mockRestore(); }
     const stdin = new PassThrough(); const stdout = new PassThrough(); const responses: unknown[] = [];
     stdout.on("data", (chunk: Buffer) => responses.push(JSON.parse(chunk.toString())));
     const reader = startRootBridgeTransport({ bridge: new RootBridge({ taskId: "task", sessionId: session.id, generation: session.generation }, controller), stdin, stdout });

@@ -63,9 +63,10 @@ test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI
   expect(f.store.get("task").status).toBe("active");
   await f.request("request_review");
   expect(f.github.isDraft).toBe(false);
-  const waiting = await f.request("observe_checks") as { next?: string; wait?: { reason: string } };
-  expect(waiting).toMatchObject({ next: DELIVERY_WAIT_NEXT, wait: { reason: "checks" } });
-  expect(f.store.get("task").workflowState.deliveryWait).toMatchObject({ headSha: head9, reason: "checks" });
+  expect(await f.request("observe_checks")).toMatchObject({ checkSummary: "0 successful, 1 pending, 0 failing" });
+  expect(f.store.get("task").workflowState.deliveryWait).toBeNull();
+  f.github.onMerge = () => "queue";
+  await expect(f.request("merge_pull_request")).resolves.toMatchObject({ kind: "merge_requested", wait: { headSha: head9, reason: "merge_queue" }, next: DELIVERY_WAIT_NEXT });
   expect(Date.parse(f.store.get("task").wakeAt!) - Date.now()).toBeGreaterThan(20_000);
   // Pending CI: no repeated model turn, no Worker, and no generic idle wake.
   // The Coordinator ends its turn as instructed; the wait must not produce another model turn.
@@ -81,7 +82,7 @@ test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI
     expect(f.store.get("task").workflowState.deliveryWait).not.toBeNull();
     expect(Date.parse(f.store.get("task").wakeAt!) - Date.now()).toBeGreaterThan(20_000);
     // The wait survives a restart with new instances and unchanged polls still add nothing.
-    const restarted = new TaskHost(new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false }), { controller: new RootController(new TaskControlStore(f.database, f.alive), f.harness, new DeliveryOperations(new TaskControlStore(f.database, f.alive), f.port), undefined, { root: join(f.directory, "evidence") }), delivery: new DeliveryOperations(new TaskControlStore(f.database, f.alive), f.port) });
+    const restarted = new TaskHost(new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false }), { controller: new RootController(new TaskControlStore(f.database, f.alive), f.harness, new DeliveryOperations(new TaskControlStore(f.database, f.alive), f.port), undefined, { root: join(f.directory, "evidence") }, f.reader), delivery: new DeliveryOperations(new TaskControlStore(f.database, f.alive), f.port) });
     try { await restarted.recover("task"); } finally { await restarted.stop(); }
     expect(f.rootTurns()).toHaveLength(turnsBefore);
     // CI fails with real evidence from the fixture: one continuation, then Rater sees the failure.
@@ -94,7 +95,6 @@ test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI
     expect(f.harness.dispatched).toHaveLength(dispatchedBefore + 1);
     f.harness.finish(f.harness.dispatched.at(-1)!.messageID);
   } finally { await host.stop(); }
-  await expect(f.request("merge_pull_request")).rejects.toMatchObject({ code: "merge_not_eligible", message: expect.stringContaining("failing") });
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   const ciRater = f.store.currentSession("task", "worker")!;
   const ciRaterInput = f.store.turns("task").find(turn => turn.sessionId === ciRater.id && turn.generation === ciRater.generation)!.workflowInput as { evidenceDirectory: string };
@@ -107,13 +107,19 @@ test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI
   f.github.onPush = () => { f.github.checks = pending; f.github.mergeStateStatus = "UNKNOWN"; };
   expect(await f.request("push_branch")).toMatchObject({ kind: "pushed", headSha: head9b });
   expect(f.calls.filter(call => call.startsWith("push"))).toEqual([`push:${head9}`, `push:${head9b}`]);
-  expect(await f.request("observe_checks")).toMatchObject({ next: DELIVERY_WAIT_NEXT });
-  await expect(f.request("merge_pull_request")).resolves.toMatchObject({ kind: "waiting" });
+  expect(await f.request("observe_checks")).toMatchObject({ checkSummary: "0 successful, 1 pending, 0 failing" });
+  expect(f.store.get("task").workflowState.deliveryWait).toBeNull();
+  await expect(f.request("merge_pull_request")).resolves.toMatchObject({ kind: "merge_requested", wait: { reason: "merge_queue" } });
   f.github.checks = successful; f.github.mergeStateStatus = "CLEAN";
   expect(await f.delivery.observeDeliveryWait("task")).toBe("changed");
+  f.github.onMerge = () => "merge";
   const merged = await f.request("merge_pull_request") as { state: string; number: number };
   expect(merged).toMatchObject({ state: "merged", number: 7, checkSummary: "1 successful, 0 pending, 0 failing" });
-  expect(f.calls.filter(call => call.startsWith("merge"))).toEqual([`merge:${head9b}`]);
+  expect(f.calls.filter(call => call.startsWith("merge"))).toEqual([
+    `merge:${head9}`,
+    `merge:${head9b}`,
+    `merge:${head9b}`,
+  ]);
   expect(await git(f.bare, ["rev-parse", "refs/heads/main"])).toBe(head9b);
   const final = f.store.get("task");
   expect(final).toMatchObject({ status: "delivered", pullRequest: { number: 7, state: "merged" }, workflowState: { completion: { kind: "workflow", reviewedHead: head9b, pullRequestNumber: 7 }, deliveryWait: null } });
@@ -121,7 +127,7 @@ test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI
   expect(final.workflowState.reviews.map(record => record.range.headSha)).toEqual([f.featureSha, expect.any(String), head9, head9, head9b]);
 });
 
-test("an initial 9 with adequate evidence needs no repair commit, and four rounds below 9 never open the gate even after Continue", { timeout: 60_000 }, async () => {
+test("an initial 9 needs no repair commit, and repeated defects stay active without opening the gate", { timeout: 60_000 }, async () => {
   const f = await fixture("refine_pull_request");
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   const nine = f.store.currentSession("task", "worker")!;
@@ -137,12 +143,9 @@ test("an initial 9 with adequate evidence needs no repair commit, and four round
     await g.controller.delegateAdvisor(g.identity(), { role: "rater" });
     previous = g.store.currentSession("task", "worker")!;
     await g.finishDelegate(rater(5, ["src.ts: race condition"]));
-    if (g.store.get("task").status === "active") await expect(g.request("push_branch")).rejects.toMatchObject({ code: "workflow_review_required" });
-    else expect(round).toBe(3);
+    await expect(g.request("push_branch")).rejects.toMatchObject({ code: "workflow_review_required" });
   }
-  expect(g.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestion: expect.stringContaining("Three consecutive repair cycles"), humanQuestionOptions: [{ label: "Continue" }, { label: "Revise scope" }] });
-  g.store.answerHuman("task", g.store.get("task").humanQuestionId!, "Continue");
-  await g.controller.recover("task");
+  expect(g.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
   await expect(g.request("push_branch")).rejects.toMatchObject({ code: "workflow_review_required" });
   await g.controller.delegateWorker(g.identity(), { plan: "again", acceptanceCriteria: ["x"], instruction: "y", advisorSessionId: previous!.id }); await g.commit("attempt-final.ts"); await g.finishDelegate("Fifth attempt.");
   await g.controller.delegateAdvisor(g.identity(), { role: "rater" }); await g.finishDelegate(rater(9));
@@ -212,27 +215,25 @@ test("changed heads, dirty trees, active delegates, newer negative reviews, dive
   expect(f.calls).not.toContain("create");
 });
 
-test("merge needs GitHub readiness: pending or failing CI never merges, unknown readiness waits, and an empty rollup proceeds only when CLEAN and MERGEABLE", { timeout: 60_000 }, async () => {
+test("merge delegates eligibility to GitHub and waits for accepted asynchronous requests", { timeout: 60_000 }, async () => {
   const f = await fixture("refine_pull_request");
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" }); await f.finishDelegate(rater(9));
   f.github.isDraft = false;
-  f.github.checks = pending; f.github.mergeStateStatus = "UNKNOWN";
-  expect(await f.request("merge_pull_request")).toMatchObject({ kind: "waiting", wait: { reason: "checks" } });
-  f.github.checks = failing; f.github.mergeStateStatus = "UNSTABLE";
-  await expect(f.request("merge_pull_request")).rejects.toMatchObject({ code: "merge_not_eligible" });
-  f.github.checks = { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }; f.github.mergeable = "UNKNOWN"; f.github.mergeStateStatus = "UNKNOWN";
-  expect(await f.request("merge_pull_request")).toMatchObject({ kind: "waiting", wait: { reason: "mergeability" }, checkSummary: "No remote checks reported" });
-  f.github.mergeable = "MERGEABLE"; f.github.mergeStateStatus = "BLOCKED"; f.github.reviewDecision = "REVIEW_REQUIRED";
-  await expect(f.request("merge_pull_request")).rejects.toMatchObject({ code: "merge_not_eligible", message: expect.stringContaining("REVIEW_REQUIRED") });
-  f.github.mergeStateStatus = "CLEAN"; f.github.reviewDecision = "APPROVED";
-  expect(f.calls.filter(call => call.startsWith("merge"))).toEqual([]);
-  // Queue behavior: the provider accepts without merging, so Forge records a merge_queue wait, not delivery.
   f.github.onMerge = () => "queue";
+  f.github.checks = pending; f.github.mergeStateStatus = "UNKNOWN";
   expect(await f.request("merge_pull_request")).toMatchObject({ kind: "merge_requested", wait: { reason: "merge_queue" } });
+  expect(f.calls.filter(call => call.startsWith("merge"))).toEqual([`merge:${f.featureSha}`]);
   expect(f.store.get("task").status).toBe("active");
-  f.github.onMerge = () => "merge";
-  expect(await f.request("merge_pull_request")).toMatchObject({ state: "merged", checkSummary: "No remote checks reported" });
+  f.github.state = "merged";
+  expect(await f.delivery.observeDeliveryWait("task")).toBe("finished");
   expect(f.store.get("task")).toMatchObject({ status: "delivered", workflowState: { completion: { kind: "workflow" } } });
+
+  const g = await fixture("refine_pull_request");
+  await g.controller.delegateAdvisor(g.identity(), { role: "rater" }); await g.finishDelegate(rater(9));
+  g.github.isDraft = false; g.github.checks = failing; g.github.mergeStateStatus = "UNSTABLE";
+  expect(await g.request("merge_pull_request")).toMatchObject({ state: "merged", checkSummary: "0 successful, 0 pending, 1 failing" });
+  expect(g.calls.filter(call => call.startsWith("merge"))).toEqual([`merge:${g.featureSha}`]);
+  expect(g.store.get("task")).toMatchObject({ status: "delivered", workflowState: { completion: { kind: "workflow" } } });
 });
 
 test("an external merge before the obligations are met is labeled external and never fabricates a rating, and a cancelled task stays cancelled", { timeout: 60_000 }, async () => {

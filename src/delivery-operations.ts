@@ -1,13 +1,13 @@
 import { PullRequestBodySchema, PullRequestTitleSchema, type DeliveryOperation, type DeliveryReview, type PullRequestBody, type PullRequestTitle } from "./root-contracts.js";
 import { inspectDeliveryDiff, reviewEquivalence } from "./delivery-review.js";
 import type { RootIdentity } from "./root-contracts.js";
-import type { GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation } from "./github-delivery.js";
+import type { GithubConditionalMergeResult, GithubReleaseAdapter, GithubPullRequest, GithubPullRequestObservation } from "./github-delivery.js";
 import { createGithubReleasePort, GithubReleaseFailure } from "./github-delivery.js";
 import type { GithubTriggerPort, GithubTriggerPullRequestInspection } from "./github-trigger-inspection.js";
 import { matchesGithubTriggerProtectedPaths } from "./github-trigger-paths.js";
 import type { PullRequestReference, TaskControl } from "./task-control.js";
 import type { TaskControlStore } from "./root-session-store.js";
-import { deliveryDecision, deliveryWaitFingerprint, freshReviewHint, latestReview, reviewRole, sameRange, rangeDifferences, workflowReadyForDelivery, type DeliveryDecision, type DeliveryFailureCode, type LocalSourceFacts, type ReviewRange, type WorkflowCompletion } from "./workflows.js";
+import { deliveryDecision, deliveryWaitFingerprint, freshReviewHint, latestReview, reviewRole, sameRange, rangeDifferences, type DeliveryDecision, type DeliveryFailureCode, type LocalSourceFacts, type ReviewRange, type WorkflowCompletion } from "./workflows.js";
 
 export class DeliveryOperationFailure extends Error {
   constructor(readonly code: DeliveryFailureCode, message: string) {
@@ -347,26 +347,12 @@ export class DeliveryOperations {
     return observed;
   }
 
-  /** observe_checks: pending checks or transient unknown mergeability on a review-ready task become a persisted wait. */
+  /** GitHub reports check details here; its exact-head merge response remains authoritative for eligibility. */
   private async observeChecks(control: TaskControl, repository: string, local: { branch: string; headSha: string }): Promise<unknown> {
     const observed = await this.checks(control, repository, local.branch);
-    if (control.workflow === "standard") return observed;
     const summary = { ...observed, checkSummary: checkSummary(observed) };
     if (observed.headSha !== local.headSha) return { ...summary, note: "The pull request head differs from the local head. Push the reviewed head before observing its checks." };
-    const pending = observed.checks.pending > 0;
-    const unknown = observed.mergeable === "UNKNOWN" || observed.mergeStateStatus === "UNKNOWN" || observed.mergeStateStatus === null;
-    if (observed.checks.failing > 0) return { ...summary, note: "Checks failed on this head. Obtain the failure evidence, request Rater or repair, and push a corrected head; pending CI is not a failure." };
-    if (!pending && !unknown) return summary;
-    let diff;
-    try { diff = await this.deliveryDiff(control, local.headSha); }
-    catch (error) { if (this.observationUnavailable(error)) return this.observationWait(control, local.headSha, `the head of ${control.deliveryIntent.baseBranch}`); throw error; }
-    const fresh = { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest };
-    const ready = workflowReadyForDelivery(control, this.store.sessions(control.taskId), this.store.turns(control.taskId), fresh);
-    if (!ready.ok) return { ...summary, note: ready.reason };
-    const wait = { headSha: local.headSha, fingerprint: deliveryWaitFingerprint(observed), since: new Date().toISOString(), reason: pending ? "checks" as const : "mergeability" as const };
-    this.store.updateWorkflowState(control.taskId, state => ({ ...state, deliveryWait: wait }));
-    this.store.scheduleWake(control.taskId, new Date(Date.now() + 30_000).toISOString());
-    return { ...summary, wait, next: DELIVERY_WAIT_NEXT };
+    return summary;
   }
 
   private async requestReview(recheck: Recheck, control: TaskControl, repository: string, branch: string, expectedHead: string | undefined, actual: ReviewRange): Promise<GithubPullRequestObservation> {
@@ -396,28 +382,30 @@ export class DeliveryOperations {
       // Concrete harm prevented: merging content the accepted review never covered. Evidence: Git integration result on the current authoritative base.
       const equivalent = await reviewEquivalence(control.worktree!.path, actual, base);
       if (!equivalent.ok) throw new DeliveryOperationFailure("delivery_review_required", `${equivalent.reason}${freshReviewHint(control.workflow)}`);
-      await this.finalRecheck(control, actual, recheck);
-      const eligibility = this.mergeEligibility(observed);
-      if (eligibility.wait) {
-        const wait = { headSha: observed.headSha, fingerprint: deliveryWaitFingerprint(observed), since: new Date().toISOString(), reason: eligibility.wait };
-        this.store.updateWorkflowState(control.taskId, state => ({ ...state, deliveryWait: wait }));
-        this.store.scheduleWake(control.taskId, new Date(Date.now() + 30_000).toISOString());
-        return { kind: "waiting", problems: eligibility.problems, checkSummary: checkSummary(observed), wait, next: DELIVERY_WAIT_NEXT };
-      }
-      if (eligibility.problems.length) throw new DeliveryOperationFailure("merge_not_eligible", `GitHub does not report this pull request as mergeable: ${eligibility.problems.join("; ")}.`);
     }
     await this.finalRecheck(control, actual, recheck);
     recheck();
     const requested = observed.number!;
+    let mergeResult: GithubConditionalMergeResult | void;
     if (trigger) {
       if (observed.autoMergeEnabled) throw this.triggerBlocked(control, "Auto-merge is enabled for this trigger pull request. Review delivery manually.", "merge_not_eligible");
       if (!this.github.mergePullRequestDirect) throw new DeliveryOperationFailure("merge_not_eligible", "GitHub cannot perform a conditional trigger merge");
-      const direct = await this.github.mergePullRequestDirect({ repository, number: requested, headSha: observed.headSha! });
-      if (!direct.merged) { const wait = { headSha: observed.headSha!, fingerprint: deliveryWaitFingerprint(observed), since: new Date().toISOString(), reason: "merge_queue" as const }; this.store.updateWorkflowState(control.taskId, state => ({ ...state, deliveryWait: wait })); this.store.scheduleWake(control.taskId, new Date(Date.now() + 30_000).toISOString()); return { kind: "waiting", wait, next: DELIVERY_WAIT_NEXT }; }
-    } else await this.github.mergePullRequest({ repository, number: requested, headSha: observed.headSha! });
+      mergeResult = await this.github.mergePullRequestDirect({ repository, number: requested, headSha: observed.headSha! });
+    } else mergeResult = await this.github.mergePullRequest({ repository, number: requested, headSha: observed.headSha! });
+    if (mergeResult && !mergeResult.merged) {
+      const disposition = "disposition" in mergeResult ? mergeResult.disposition : undefined;
+      const message = "message" in mergeResult ? mergeResult.message : "GitHub has not completed the merge";
+      if (disposition === "blocked") throw new DeliveryOperationFailure("merge_not_eligible", message);
+      const reason = disposition === "waiting" ? "checks" as const : "merge_queue" as const;
+      const wait = { headSha: observed.headSha!, fingerprint: deliveryWaitFingerprint(observed), since: new Date().toISOString(), reason };
+      this.store.updateWorkflowState(control.taskId, state => ({ ...state, deliveryWait: wait }));
+      this.store.scheduleWake(control.taskId, new Date(Date.now() + 30_000).toISOString());
+      return disposition === "queued"
+        ? { kind: "merge_requested", checkSummary: checkSummary(observed), wait, next: DELIVERY_WAIT_NEXT }
+        : { kind: "waiting", problems: [message], wait, next: DELIVERY_WAIT_NEXT };
+    }
     const final = await this.github.getPullRequest({ repository, number: requested });
     if (final.state !== "merged") {
-      if (control.workflow === "standard") return reference(final);
       // The provider accepted the request without merging: a queue or asynchronous merge. Observe its actual outcome.
       const wait = { headSha: observed.headSha!, fingerprint: deliveryWaitFingerprint(observed), since: new Date().toISOString(), reason: "merge_queue" as const };
       this.store.updateWorkflowState(control.taskId, state => ({ ...state, deliveryWait: wait }));
@@ -445,21 +433,6 @@ export class DeliveryOperations {
     if (final.repository !== repository || final.number !== requested || (captured !== null && final.number !== captured) || !matchesIntent(control, final)) {
       throw new DeliveryOperationFailure("pull_request_ambiguous", `GitHub returned ${final.repository}#${final.number} (${final.headBranch} into ${final.baseBranch}${final.isCrossRepository ? ", cross-repository" : ""}) for the merge request of ${repository}#${requested}; the result does not identify this task's pull request.`);
     }
-  }
-
-  /** GitHub is the authority for required checks, reviews, and queues; Forge only refuses what GitHub does not report as ready. */
-  private mergeEligibility(observed: GithubPullRequestObservation): { problems: string[]; wait: "checks" | "mergeability" | null } {
-    const problems: string[] = [];
-    let wait: "checks" | "mergeability" | null = null;
-    if (observed.isDraft) problems.push("the pull request is a draft");
-    if (observed.state !== "open") problems.push(`the pull request is ${observed.state}`);
-    if (observed.checks.failing > 0) problems.push(`${observed.checks.failing} check(s) failing`);
-    if (observed.checks.pending > 0) { problems.push(`${observed.checks.pending} check(s) pending`); wait = "checks"; }
-    if (observed.reviewDecision === "CHANGES_REQUESTED" || observed.reviewDecision === "REVIEW_REQUIRED") problems.push(`review decision is ${observed.reviewDecision}`);
-    if (observed.mergeable !== "MERGEABLE") { problems.push(`mergeable is ${observed.mergeable ?? "unknown"}`); if (observed.mergeable === "UNKNOWN" || observed.mergeable === null) wait ??= "mergeability"; }
-    if (observed.mergeStateStatus !== "CLEAN") { problems.push(`merge state is ${observed.mergeStateStatus ?? "unknown"}`); if (observed.mergeStateStatus === "UNKNOWN" || observed.mergeStateStatus === null) wait ??= "mergeability"; }
-    if (observed.checks.failing > 0 || observed.isDraft || observed.mergeStateStatus === "DIRTY" || observed.mergeStateStatus === "BLOCKED" || observed.mergeable === "CONFLICTING") wait = null;
-    return { problems, wait };
   }
 
   /** The unverified outcome for a merged pull request: the latest valid review's head is kept in history, never relabeled. */

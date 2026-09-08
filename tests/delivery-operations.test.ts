@@ -479,14 +479,49 @@ describe("Coordinator delivery operations", () => {
     expect(value.store.get("task").status).toBe("delivered");
   });
 
-  it("lets GitHub decide whether failing or pending checks prohibit an exact-head merge", async () => {
+  it("waits for GitHub after it accepts an exact-head merge with required checks pending", async () => {
     const value = await fixture();
     const fake = github(value.local);
     const observed = await fake.port.observePullRequest!({ repository: "owner/repo", branch: value.local.branch });
-    fake.setObserved({ ...observed, checks: { total: 3, pending: 1, failing: 1, successful: 1, runs: [] } });
+    fake.setObserved({ ...observed, checks: { total: 1, pending: 1, failing: 0, successful: 0, runs: [{ name: "required", status: "pending", url: null }] } });
+    fake.port.mergePullRequest = async () => { fake.calls.push("merge"); return { merged: false, sha: null, disposition: "waiting", message: "GitHub is waiting for required checks: unit (PENDING)." }; };
+    const delivery = new DeliveryOperations(value.store, fake.port);
+    await expect(delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review)).resolves.toMatchObject({ kind: "waiting", problems: [expect.stringContaining("unit (PENDING)")], wait: { reason: "checks" } });
+    expect(fake.calls).toContain("merge");
+    expect(value.store.get("task")).toMatchObject({ status: "active", workflowState: { deliveryWait: { reason: "checks" } } });
+    fake.setObserved({ ...observed, state: "merged" });
+    await expect(delivery.observeDeliveryWait("task")).resolves.toBe("finished");
+    expect(value.store.get("task").status).toBe("delivered");
+  });
+
+  it("returns failed required-check evidence to the Coordinator without creating a wait", async () => {
+    const value = await fixture();
+    const fake = github(value.local);
+    fake.port.mergePullRequest = async () => ({ merged: false, sha: null, disposition: "blocked", message: "GitHub refused the merge because required checks failed: unit (FAILURE, https://github.com/owner/repo/actions/runs/1)." });
+    await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review)).rejects.toMatchObject({ code: "merge_not_eligible", message: expect.stringMatching(/unit.*FAILURE/) });
+    expect(value.store.get("task").workflowState.deliveryWait).toBeNull();
+  });
+
+  it("lets GitHub merge while an optional status is failing", async () => {
+    const value = await fixture();
+    const fake = github(value.local);
+    const observed = await fake.port.observePullRequest!({ repository: "owner/repo", branch: value.local.branch });
+    fake.setObserved({ ...observed, mergeStateStatus: "UNSTABLE", checks: { total: 1, pending: 0, failing: 1, successful: 0, runs: [{ name: "optional", status: "failing", url: null }] } });
     await new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review);
     expect(fake.calls).toContain("merge");
     expect(value.store.get("task").status).toBe("delivered");
+  });
+
+  it("reports optional pending checks without creating a local eligibility wait", async () => {
+    const value = await fixture();
+    value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET workflow = 'direct_build' WHERE task_id = 'task'").run());
+    const fake = github(value.local);
+    const observed = await fake.port.observePullRequest!({ repository: "owner/repo", branch: value.local.branch });
+    fake.setObserved({ ...observed, checks: { total: 1, pending: 1, failing: 0, successful: 0, runs: [{ name: "optional", status: "pending", url: null }] } });
+    const result = await new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "observe_checks");
+    expect(result).toMatchObject({ checkSummary: "0 successful, 1 pending, 0 failing" });
+    expect(result).not.toHaveProperty("wait");
+    expect(value.store.get("task").workflowState.deliveryWait).toBeNull();
   });
 
   it.each(["pull_request_draft", "pull_request_ready"])("adopts an existing ready PR for the %s target", async (target) => {

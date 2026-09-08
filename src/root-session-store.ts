@@ -4,7 +4,9 @@ import { HumanQuestionOptionsSchema, type HumanQuestionOptions } from "./human-q
 import { inspectProcessOnce } from "./process-manager.js";
 import { TaskAnalyticsStore } from "./task-analytics-store.js";
 import { StructuredLogger } from "./logging.js";
-import { DEFAULT_TASK_BUDGET_USD, DEFAULT_TASK_MAX_TURNS, readEnvironmentSettings } from "./environment-settings.js";
+import { TaskLimitStore } from "./task-limit-store.js";
+import { TaskLimitPauseSchema, type TaskLimitDecision, type TaskLimitPause, type TaskLimits, type TaskLimitUsage } from "./task-limits.js";
+import type { TaskUsage } from "./task-usage.js";
 
 import type Database from "better-sqlite3";
 import type { ForgeDatabase } from "./database.js";
@@ -46,7 +48,7 @@ function control(row: Row): TaskControl {
   const workflow = WorkflowIdSchema.parse(text(row, "workflow") ?? "standard");
   const advisorProfiles = z.partialRecord(AdvisorRoleSchema, TaskProfileSchema).parse(JSON.parse(text(row, "advisor_profiles_json") ?? "{}"));
   const workflowState = parseJson(text(row, "workflow_state_json"), WorkflowStateSchema) ?? emptyWorkflowState();
-  return { workflow, advisorProfiles, workflowState, humanQuestionOptions: HumanQuestionOptionsSchema.parse(JSON.parse(text(row, "human_question_options_json") ?? "[]")), taskId, objective, deliveryTarget, deliveryIntent, status, wakeAt: text(row, "wake_at"), humanQuestion: text(row, "human_question"), humanQuestionId: text(row, "human_question_id"), recoveryTurnId: text(row, "recovery_turn_id"), worktree: parseJson(text(row, "worktree_json"), WorktreeReferenceSchema), pullRequest: parseJson(text(row, "pull_request_json"), PullRequestReferenceSchema), rootSessionId: text(row, "root_session_id"), workerSessionId: text(row, "worker_session_id"), rootProfile, workerProfile };
+  return { workflow, advisorProfiles, workflowState, humanQuestionOptions: HumanQuestionOptionsSchema.parse(JSON.parse(text(row, "human_question_options_json") ?? "[]")), taskId, objective, deliveryTarget, deliveryIntent, status, wakeAt: text(row, "wake_at"), humanQuestion: text(row, "human_question"), humanQuestionId: text(row, "human_question_id"), recoveryTurnId: text(row, "recovery_turn_id"), limitPause: parseJson(text(row, "limit_pause_json"), TaskLimitPauseSchema), worktree: parseJson(text(row, "worktree_json"), WorktreeReferenceSchema), pullRequest: parseJson(text(row, "pull_request_json"), PullRequestReferenceSchema), rootSessionId: text(row, "root_session_id"), workerSessionId: text(row, "worker_session_id"), rootProfile, workerProfile };
 }
 function session(row: Row): TaskSession {
   const id = text(row, "id"); const taskId = text(row, "task_id");
@@ -61,40 +63,32 @@ function turn(row: Row): TaskTurn {
 }
 
 export class TaskControlStore {
-  constructor(private readonly database: ForgeDatabase, private readonly inspectOwner: (pid: number) => Promise<ProcessOwnerObservation> = observeProcessOwner) {}
+  private readonly limitStore: TaskLimitStore;
+  constructor(private readonly database: ForgeDatabase, private readonly inspectOwner: (pid: number) => Promise<ProcessOwnerObservation> = observeProcessOwner) { this.limitStore = new TaskLimitStore(database); }
   readTriggerDeliveryPolicy(taskId: string): GithubTriggerDeliveryPolicy | null { return this.database.authQuery(db => triggerDeliveryPolicy(db, taskId)); }
   authorizedTriggerHead(taskId: string): string | null { return this.database.authQuery(db => authorizedTriggerHead(db, taskId)); }
   recordTriggerPush(input: { taskId: string; dispatchId: string; fromHeadSha: string; toHeadSha: string; review: unknown }): void { this.database.authImmediateTransaction(db => recordTriggerPush(db, input)); }
   taskSpend(taskId: string): { costUsd: number; turns: number } {
     return this.database.authQuery((db) => ({
       costUsd: (db.prepare("SELECT COALESCE(SUM(json_extract(snapshot, '$.cost')), 0) AS cost FROM forge_task_usage WHERE task_id = ?").get(taskId) as { cost: number }).cost,
-      turns: (db.prepare("SELECT COUNT(*) AS turns FROM forge_task_turns WHERE task_id = ? AND status <> 'cancelled'").get(taskId) as { turns: number }).turns,
+      turns: (db.prepare("SELECT COUNT(*) AS turns FROM forge_task_turns WHERE task_id = ? AND prompted_at IS NOT NULL").get(taskId) as { turns: number }).turns,
     }));
   }
   taskLimits(taskId: string): { budgetUsd: number; maxTurns: number } {
-    const row = this.database.authQuery((db) => db.prepare("SELECT budget_usd AS budgetUsd, max_turns AS maxTurns FROM forge_task_controls WHERE task_id = ?").get(taskId) as { budgetUsd: number | null; maxTurns: number | null } | undefined);
-    if (!row) throw new Error(`Task ${taskId} does not exist`);
-    const defaults = readEnvironmentSettings(this.database);
-    return { budgetUsd: row.budgetUsd ?? defaults.defaultBudgetUsd, maxTurns: row.maxTurns ?? defaults.defaultMaxTurns };
+    return this.limitStore.read(taskId);
   }
-  enforceLimits(taskId: string): boolean {
-    return this.database.authTransaction((db) => {
-      const control = db.prepare("SELECT status, budget_usd AS budgetUsd, max_turns AS maxTurns FROM forge_task_controls WHERE task_id = ?").get(taskId) as { status: string; budgetUsd: number | null; maxTurns: number | null } | undefined;
-      if (!control || control.status !== "active") return false;
-      const defaults = db.prepare("SELECT default_budget_usd AS defaultBudgetUsd, default_max_turns AS defaultMaxTurns FROM forge_environment_settings WHERE id = 'host'").get() as { defaultBudgetUsd: number; defaultMaxTurns: number } | undefined;
-      const budgetUsd = control.budgetUsd ?? defaults?.defaultBudgetUsd ?? DEFAULT_TASK_BUDGET_USD;
-      const maxTurns = control.maxTurns ?? defaults?.defaultMaxTurns ?? DEFAULT_TASK_MAX_TURNS;
-      const costUsd = (db.prepare("SELECT COALESCE(SUM(json_extract(snapshot, '$.cost')), 0) AS cost FROM forge_task_usage WHERE task_id = ?").get(taskId) as { cost: number }).cost;
-      const turns = (db.prepare("SELECT COUNT(*) AS turns FROM forge_task_turns WHERE task_id = ? AND status <> 'cancelled'").get(taskId) as { turns: number }).turns;
-      const hitBudget = budgetUsd > 0 && costUsd >= budgetUsd;
-      const hitTurns = maxTurns > 0 && turns >= maxTurns;
-      if (!hitBudget && !hitTurns) return false;
-      db.prepare("UPDATE forge_task_controls SET budget_usd = ?, max_turns = ?, updated_at = ? WHERE task_id = ?").run(costUsd + (defaults?.defaultBudgetUsd ?? DEFAULT_TASK_BUDGET_USD), turns + (defaults?.defaultMaxTurns ?? DEFAULT_TASK_MAX_TURNS), now(), taskId);
-      const reached = hitBudget ? "spend budget" : "turn limit";
-      this.askHuman(taskId, `This task reached its ${reached}. Spend is $${costUsd.toFixed(2)} of the $${budgetUsd.toFixed(2)} budget. Turns are ${turns} of ${maxTurns}. Forge raised the limits by one allowance. How do you want to continue?`, [{ label: "Continue", description: "Resume the task with the raised limits.", recommended: true }, { label: "Change approach", description: "Tell the Coordinator what to change before it continues.", recommended: false }]);
-      return true;
-    });
+  taskLimitState(taskId: string): { limits: TaskLimits; admittedTurns: number; pause: TaskLimitPause | null } {
+    const limits = this.taskLimits(taskId);
+    const current = this.get(taskId);
+    return { limits, admittedTurns: this.taskSpend(taskId).turns, pause: current.limitPause };
   }
+  sessionsWithNativeWork(taskId: string): TaskSession[] {
+    return this.database.authQuery(db => (db.prepare("SELECT DISTINCT s.* FROM forge_task_sessions s JOIN forge_task_turns t ON t.session_id = s.id WHERE s.task_id = ? AND s.native_session_id IS NOT NULL AND (t.prompted_at IS NOT NULL OR t.status = 'unknown') ORDER BY s.created_at, s.id").all(taskId) as Row[]).map(session));
+  }
+  replaceNativeUsage(taskId: string, usage: TaskUsage[]): void {
+    this.limitStore.replaceUsage(taskId, usage);
+  }
+  pauseAtTaskLimit(taskId: string, usage: TaskLimitUsage): boolean { return this.limitStore.pauseIfReached(taskId, usage); }
   create(input: { taskId: string; startImmediately: boolean; objective: string; deliveryTarget: string; deliveryIntent: DeliveryIntent; rootProfile: TaskProfile; workerProfile: TaskProfile; worktree?: WorktreeReference; workflow?: WorkflowId; advisorProfiles?: Partial<Record<AdvisorRole, TaskProfile>> }): TaskControl {
     const time = now();
     const advisorProfiles = Object.fromEntries(Object.entries(input.advisorProfiles ?? {}).map(([role, profile]) => [AdvisorRoleSchema.parse(role), TaskProfileSchema.parse(profile)]));
@@ -111,6 +105,7 @@ export class TaskControlStore {
     this.database.authTransaction((db) => {
       const row = db.prepare("SELECT * FROM forge_task_controls WHERE task_id = ? AND status = 'waiting_human' AND human_question_id = ?").get(taskId, questionId) as Row | undefined;
       if (!row) throw new Error("question_identity_mismatch");
+      if (text(row, "limit_pause_json") !== null) throw new Error("task_limit_decision_required");
       const root = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'root' AND is_current = 1 AND lifecycle <> 'cancelled'").get(taskId) as Row | undefined;
       if (!root) throw new Error("root_notification_unavailable");
       const recoveryTurnId = text(row, "recovery_turn_id");
@@ -129,6 +124,10 @@ export class TaskControlStore {
     });
     return this.observeLifecycle(taskId);
   }
+  answerTaskLimit(taskId: string, questionId: string, rawDecision: TaskLimitDecision): TaskControl {
+    this.limitStore.answer(taskId, questionId, rawDecision);
+    return this.observeLifecycle(taskId);
+  }
   setWorktree(taskId: string, worktree: WorktreeReference): TaskControl {
     const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET worktree_json = ?, updated_at = ? WHERE task_id = ? AND status = 'active'").run(JSON.stringify(WorktreeReferenceSchema.parse(worktree)), now(), taskId).changes);
     if (changed !== 1) throw new Error("task_not_active");
@@ -142,7 +141,7 @@ export class TaskControlStore {
     return this.get(taskId);
   }
   markDelivered(taskId: string): TaskControl {
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(now(), taskId).changes);
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(now(), taskId).changes);
     if (changed !== 1) throw new Error("task_not_active");
     return this.observeLifecycle(taskId);
   }
@@ -240,9 +239,8 @@ export class TaskControlStore {
     const prompt = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
     this.database.authTransaction((db) => db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) SELECT ?, c.task_id, s.id, s.generation, ?, ?, 'pending_prompt', ?, ? FROM forge_task_controls c JOIN forge_task_sessions s ON s.id = c.root_session_id WHERE c.task_id = ? AND c.status = 'active' AND json_extract(c.workflow_state_json, '$.deliveryWait') IS NULL AND s.is_current = 1 AND s.lifecycle = 'live' AND s.native_session_id IS NOT NULL AND s.launch_owner IS NULL AND NOT EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = s.id AND t.status IN ('pending_prompt', 'prompted', 'unknown')) AND NOT EXISTS (SELECT 1 FROM forge_task_sessions w JOIN forge_task_turns wt ON wt.session_id = w.id AND wt.generation = w.generation WHERE w.task_id = c.task_id AND w.kind = 'worker' AND w.is_current = 1 AND wt.status IN ('pending_prompt', 'prompted', 'unknown'))").run(createOpenCodeMessageID(), hash(prompt), prompt, time, time, taskId));
   }
-  claimPrompt(turnId: string, serverGeneration: string, owner: string): boolean {
-    const attempt = PromptDispatchAttemptSchema.parse({ serverGeneration, claimedAt: now() });
-    return this.database.authTransaction((db) => db.prepare("UPDATE forge_task_turns SET status = 'unknown', dispatch_attempt_json = ?, updated_at = ? WHERE id = ? AND status = 'pending_prompt' AND EXISTS (SELECT 1 FROM forge_task_sessions s JOIN forge_task_controls c ON c.task_id = s.task_id WHERE s.id = forge_task_turns.session_id AND s.generation = forge_task_turns.generation AND s.launch_owner = ? AND s.is_current = 1 AND s.lifecycle <> 'cancelled' AND c.status = 'active')").run(JSON.stringify(attempt), attempt.claimedAt, turnId, owner).changes === 1);
+  claimPrompt(input: { taskId: string; turnId: string; serverGeneration: string; owner: string; usage: TaskLimitUsage }): boolean {
+    return this.limitStore.claimPrompt(input);
   }
   requeueFencedPrompt(input: { turnId: string; attempt: PromptDispatchAttempt; owner: string }): boolean {
     return this.database.authTransaction(db => db.prepare("UPDATE forge_task_turns SET status = 'pending_prompt', dispatch_attempt_json = NULL, updated_at = ? WHERE id = ? AND status = 'unknown' AND dispatch_attempt_json = ? AND EXISTS (SELECT 1 FROM forge_task_sessions s JOIN forge_task_controls c ON c.task_id = s.task_id WHERE s.id = forge_task_turns.session_id AND s.generation = forge_task_turns.generation AND s.launch_owner = ? AND s.is_current = 1 AND s.lifecycle <> 'cancelled' AND c.status = 'active')").run(now(), input.turnId, JSON.stringify(input.attempt), input.owner).changes === 1);
@@ -506,7 +504,7 @@ export class TaskControlStore {
   }
   cancel(taskId: string): void {
     this.database.authTransaction((db) => {
-      const changed = db.prepare("UPDATE forge_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ? WHERE task_id = ? AND status <> 'delivered'").run(now(), taskId).changes;
+      const changed = db.prepare("UPDATE forge_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ? WHERE task_id = ? AND status <> 'delivered'").run(now(), taskId).changes;
       if (changed !== 1) throw new Error("task_not_cancellable");
       db.prepare("UPDATE forge_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = COALESCE(stop_requested_at, ?), updated_at = ? WHERE task_id = ? AND stopped_at IS NULL").run(now(), now(), taskId);
       db.prepare("UPDATE forge_task_turns SET status = 'cancelled', updated_at = ? WHERE task_id = ? AND status IN ('pending_prompt', 'prompted', 'unknown')").run(now(), taskId);

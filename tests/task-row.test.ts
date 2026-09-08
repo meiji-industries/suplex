@@ -45,6 +45,7 @@ const task = {
     mergedAt: null,
   },
   humanQuestion: null,
+  limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 },
   wakeAt: null,
   images: [],
   createdAt: "2026-09-08T00:00:00.000Z",

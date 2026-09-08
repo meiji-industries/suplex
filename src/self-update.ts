@@ -636,7 +636,15 @@ export class SelfUpdateService {
 
   async readUpdate(): Promise<UpdateObservation> {
     await this.captureRunningRevision();
-    const operation = await readStatusForView(this.store, this.now);
+    let operation = await readStatusForView(this.store, this.now);
+    const operationExpired = operation && Date.parse(operation.updatedAt) + SELF_UPDATE_TIMEOUTS.operation < this.now().getTime();
+    if (operation && ACTIVE_OPERATION_STATUSES.has(operation.status) && operationExpired) {
+      const lock = await this.store.readLock();
+      if (lock?.operationId === operation.operationId) {
+        await this.recoverStaleOperation(operation, lock);
+        operation = await readStatusForView(this.store, this.now);
+      }
+    }
     const observed = operation && ACTIVE_OPERATION_STATUSES.has(operation.status)
       ? { available: true, revision: operation.targetRevision }
       : await inspectUpdateAvailability({

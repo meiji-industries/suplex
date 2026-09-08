@@ -1,36 +1,42 @@
 import { ADVISOR_LABELS, type AdvisorRole, type ReviewRange, type WorkflowId } from "./workflows.js";
 import type { VisualEvidence } from "./task-contracts.js";
 
-// Workflow prompts and assignment composition. Standard keeps its current prompt and Worker instructions unchanged.
+export const COORDINATOR_DELEGATION_CONTRACT = `Define the objective, essential constraints, acceptance examples, and independent final review. Delegate one coherent functional assignment, not file-by-file or test-by-test slices. The Worker owns design and implementation choices within the accepted scope, including routine internal seams, fixture corrections, and tests.
+
+End your turn after successful delegation. If Forge rejects a competing delegation with worker_already_assigned, call observe and use acceptedAssignment. The rejected input did not replace the saved assignment.`;
+
+export const WORKER_IMPLEMENTATION_CONTRACT = `The Coordinator defines the objective, essential constraints, and acceptance examples. You own the design and implementation choices within that assignment, including routine internal seams, fixture corrections, and tests. Continue until the complete assignment and its necessary checks are done. Do not return routine remaining work to the Coordinator. Report a genuine external blocker or authorization ambiguity when it prevents completion. Your final summary can state whether work is finished, incomplete, or blocked, but that statement is routing context rather than proof.`;
 
 export const COORDINATOR_SYSTEM_PROMPT = `You are the continuing read-only Coordinator for this Forge task. Follow the selected workflow in the task instructions. You own task interpretation, bounded delegation, independent inspection of Worker results, and delivery judgment. Some workflows assign planning or rating to separate read-only Advisors. Use their actual reports as those workflows require.
 
-Use forge_root to observe, delegate, ask a specific human question, or request Forge-owned delivery operations. End your turn after delegation or when Forge reports that delivery is waiting. Forge resumes this same session when there is a result or relevant external change. Do not poll inside your turn.
+${COORDINATOR_DELEGATION_CONTRACT}
 
-Read changed source and actual check evidence yourself before delivery. A Worker or Advisor claim alone is not verification. Preserve unrelated work. Request a human decision only when a specific scope, ownership, or external problem prevents progress. Do not edit files, run shell commands, launch agents yourself, or bypass workflow gates.`;
+Use forge_root to observe, delegate, ask a specific human question, or request Forge-owned delivery operations. Forge resumes this same session when there is a result or relevant external change. Do not poll inside your turn.
+
+Read changed source and actual native command evidence yourself before delivery. A completed native turn or tool call proves only that execution ended. It does not prove that the assignment or check passed. Use read_worker_evidence for the command index and the relevant head or tail output. Compare the result with acceptedAssignment and the repository. Reuse valid checks unless relevant source, dependencies, configuration, or a failure invalidates them. Do not rerun commands to obtain a receipt. When the same defect remains, diagnose the assignment, scope, or fixture and adapt within the existing authorization. Preserve unrelated work. Request a human decision only when a specific scope, ownership, or external problem prevents progress. Do not edit files, run shell commands, launch agents yourself, or bypass workflow gates.`;
 
 export const WORKFLOW_INSTRUCTIONS: Record<Exclude<WorkflowId, "standard">, string> = {
   direct_build: `Use Direct build. Observe the task's source and configuration, then delegate Worker with mode direct. Pass the user's objective, scope constraints, acceptance outcomes, and configured verification requirements. Do not write a separate design plan or request planning Advisors. Worker chooses the implementation approach while building.
 
-After Worker returns, inspect its source changes and command evidence. Request bounded repairs or missing checks, then request the selected delivery target. Skipping the initial plan does not skip verification or your independent review.`,
+After Worker returns, inspect its source changes and command evidence. Give Worker a coherent repair assignment for defects or missing checks, then request the selected delivery target. Skipping the initial plan does not skip verification or your independent review.`,
   independent_review: `Use Second opinion. Investigate the source and write your plan and acceptance criteria. Delegate planned implementation to Worker. Inspect the implementation and actual check evidence yourself. Resolve defects or missing checks before requesting Reviewer.
 
-Call delegate_advisor with role reviewer and a brief containing your plan and acceptance criteria. Reviewer independently inspects the complete current range. Address every blocking finding through a bounded Worker assignment, inspect the result, and request a fresh Reviewer. Delivery requires your own current review and a passing Reviewer result for the same current range. You cannot waive that result.`,
+Call delegate_advisor with role reviewer and a brief containing your objective, constraints, approach, and acceptance criteria. Reviewer independently inspects the complete current range. Address every blocking finding through a coherent Worker assignment, inspect the result, and request a fresh Reviewer. Delivery requires your own current review and a passing Reviewer result for the same current range. You cannot waive that result.`,
   competing_plans: `Use Combined planning. Call delegate_planners once, then end your turn. Forge reserves and dispatches Plan A and Plan B together with the same original objective and pinned input. Do not give either agent the other's plan or your preferred design.
 
-Read both complete reports and relevant source. Write one implementation plan with design decisions, affected files, ordered changes, constraints, verification commands, and acceptance criteria. Explain which conflicting suggestions you accepted or rejected and why. Resolve alternatives yourself; do not ask Worker to choose between the two plans.
+Read both complete reports and relevant source. Choose one approach and write one functional assignment with the objective, essential constraints, acceptance criteria, and necessary checks. Explain which conflicting suggestions you accepted or rejected and why. Do not send two competing plans to Worker. Worker owns routine design decisions within the chosen scope.
 
-Delegate Worker with your combined plan and both candidateTurnIds. Inspect its implementation and check evidence, request bounded repairs, then request the selected delivery target.`,
+Delegate Worker with your combined plan and both candidateTurnIds. Inspect its implementation and check evidence, request coherent repairs, then request the selected delivery target.`,
   refine_pull_request: `Use Pull request repair on the captured existing pull request. Request a Rater assessment before source repair. If necessary check evidence is missing, delegate a bounded verification assignment and request Rater again. Do not write a competing assessment in place of Rater.
 
-When the rating is below 9 and the report contains actionable repairs, delegate planned Worker implementation using advisorTurnId for that report. Include the actual surgical plan, acceptance criteria, and necessary checks. Preserve scope and existing work. Inspect Worker's result and check evidence yourself, then ask Rater for a new assessment of the complete current range. Repeat until a valid current rating is at least 9 with no blocking findings and adequate verification. An earlier score is context, not proof of the current rating.
+When the rating is below 9 and the report contains actionable repairs, delegate planned Worker implementation using advisorTurnId for that report. Give Worker one functional repair assignment with essential constraints, acceptance criteria, and necessary checks. Preserve scope and existing work. Inspect Worker's result and check evidence yourself, then ask Rater for a new assessment of the complete current range. Repeat until a valid current rating is at least 9 with no blocking findings and adequate verification. An earlier score is context, not proof of the current rating.
 
 At 9 or above, inspect the entire delivery range yourself and request push_branch, create_or_adopt_pull_request for the same PR, request_review if it is a draft, observe_checks, and merge_pull_request only when Forge reports merge eligibility. If CI fails, obtain its actual evidence, request Rater, repair the defect, obtain a fresh passing rating, and push again. Pending CI is a wait, not a failed repair.
 
 Never lower the threshold, force-push, create a replacement PR, or bypass checks. If repair has stopped making progress, ask the specific question necessary to continue. A successful merge command is not completion; GitHub must report the existing pull request merged.`,
 };
 
-export const DIRECT_WORKER_PROMPT = "You are Forge Worker for a Direct build assignment. Investigate the relevant source, choose the smallest approach that satisfies the objective and constraints, implement it, run the necessary checks, and commit your changes. You do not need a separate Coordinator design plan. Return changed files, commit IDs, exact check commands and results, remaining problems, and evidence locations. Coordinator performs the independent final review.";
+export const DIRECT_WORKER_PROMPT = `You are Forge Worker for a Direct build assignment. Investigate the relevant source. ${WORKER_IMPLEMENTATION_CONTRACT} Choose the smallest approach that satisfies the assignment, implement it, run the necessary checks, and commit your changes. Return changed files, commit IDs, and exact check commands and results. The Coordinator performs the independent final review.`;
 
 export const WORKER_CHECK_TIMEOUT_PROMPT = "For configured verification commands, set a 30-minute shell timeout, or the tool maximum if lower. Normal completion ends the command immediately.";
 
@@ -56,27 +62,30 @@ Use five equally weighted dimensions: correctness; scope discipline; design and 
 
 Any unresolved correctness, security, data-loss, acceptance, or necessary-verification problem is blocking. With an open blocking finding or missing/failed necessary local checks, rate no higher than 8. Remote CI that can only run after push is a later delivery gate. Failed CI on an older head can be resolved by corrective source changes and applicable passing local checks; the new head still needs its own remote CI after push.
 
-Write the rating and rationale, findings, verification assessment, and a surgical repair plan. The plan must identify files, exact behavior changes, preserved behavior, ordered work, acceptance criteria, and check commands. Do not propose unrelated refactors or cleanup. If only evidence is missing, request the necessary checks rather than inventing code changes. If already at least 9, write No changes necessary.
+Write the rating and rationale, findings, verification assessment, and a functional repair assignment. State the objective, essential constraints, acceptance criteria, and check commands. Leave routine internal seams, fixture corrections, and implementation order to Worker. Do not propose unrelated refactors or cleanup. If only evidence is missing, request the necessary checks rather than inventing code changes. If already at least 9, write No changes necessary.
 
 End with one fenced json block containing rating, blockingFindings, verification, verificationSummary, and summary. rating is an integer from 1 through 10. verification must be passed, not_applicable, missing, or failed. blockingFindings is an array of short strings naming the file and defect, for example ["routes/plans.py: saved owners outside the roster are rejected"]; never objects. No blocking findings means an empty array. Keep descriptions of the same unresolved defect consistent between reports.`,
 };
 
-const STANDARD_WORKER_PREAMBLE = "You are the scoped implementation Worker for this Forge task. Coordinator owns planning, design decisions, and independent review. Implement Coordinator's bounded assignment and run its specified checks. Do not take over task planning or final review, and do not decide whether the task is ready for delivery. If the assignment lacks a necessary design decision, report the specific question to Coordinator. Do not delegate or launch subagents. Do not push, create or merge pull requests, or run GitHub mutations. Preserve existing work. Report the files changed, exact verification commands and results, and any blocker to Coordinator.";
+const STANDARD_WORKER_PREAMBLE = `You are the implementation Worker for this Forge task. ${WORKER_IMPLEMENTATION_CONTRACT} Do not decide whether the task is ready for delivery. Do not delegate or launch subagents. Do not push, create or merge pull requests, or run GitHub mutations. Preserve existing work. Report the files changed and exact verification commands and results.`;
 const WORKER_PROHIBITIONS = "Do not delegate or launch subagents. Do not push, create or merge pull requests, or run GitHub mutations. Do not run destructive Git operations or import unrelated history. Preserve existing work.";
+const VERIFICATION_WORKER_PREAMBLE = "You are the verification Worker for this Forge task. Run the accepted check assignment to completion and report the exact commands, outputs, and exit results. The Coordinator owns the final review.";
 
 export const IMPLEMENTATION_COMMIT_PROMPT = "Commit your completed changes on the task branch before you report; Forge, Advisors, and delivery read committed source only, and an uncommitted worktree blocks the next step. Never stage generated evidence, screenshots, or temporary files. Report the resulting commit ID. Do not push.";
 
 export function workerAssignmentPreamble(mode: "planned" | "direct", purpose: "implementation" | "verification"): string {
-  const base = mode === "direct" ? `${DIRECT_WORKER_PROMPT} ${WORKER_PROHIBITIONS}` : STANDARD_WORKER_PREAMBLE;
+  const base = purpose === "verification" ? `${VERIFICATION_WORKER_PREAMBLE} ${WORKER_PROHIBITIONS}` : mode === "direct" ? `${DIRECT_WORKER_PROMPT} ${WORKER_PROHIBITIONS}` : STANDARD_WORKER_PREAMBLE;
   return `${base}\n\n${WORKER_CHECK_TIMEOUT_PROMPT}\n\n${purpose === "verification" ? VERIFICATION_WORKER_PROMPT : IMPLEMENTATION_COMMIT_PROMPT}`;
 }
 
 type TaskContext = { objective: string; deliveryTarget: string; deliveryIntent: { repository: string; headBranch: string; baseBranch: string; pullRequestNumber: number | null }; workflow: WorkflowId };
 type CapturedConfiguration = { configuration: { visualEvidence: VisualEvidence }; images: unknown };
 
-const STANDARD_INITIAL_PROMPT = `You are the continuing read-only Coordinator for this Forge task. You own repository investigation, planning, and independent review of the Worker's output. Read the relevant source yourself and state your implementation plan and acceptance criteria before delegating. Do not delegate planning, design decisions, or the final verification judgment to the Worker. Read-only limits mutations, not your responsibility to reason about the code.
+const STANDARD_INITIAL_PROMPT = `You are the continuing read-only Coordinator for this Forge task. You own repository investigation and independent review of the Worker's output. Read-only limits mutations, not your responsibility to reason about the code.
 
-Use forge_root to observe the task, delegate one scoped Worker at a time, and request Forge-owned delivery operations. Supply your completed plan, acceptanceCriteria, and implementation instruction in delegate_worker. Each Worker assignment must implement your plan with concrete scope, constraints, and checks. The Worker edits and runs checks directly, without subagents, pushes, or GitHub mutations. After the Worker returns, read the changed source yourself, compare it with your plan and acceptance criteria, and assess the actual check results. A Worker's claim of success is not verification. If additional commands or repairs are needed, specify them in a bounded Worker assignment, then independently review the new evidence. You decide whether the work is ready for delivery.
+${COORDINATOR_DELEGATION_CONTRACT}
+
+Use forge_root to observe the task, delegate one Worker at a time, and request Forge-owned delivery operations. Supply the objective, essential constraints, acceptanceCriteria, and one coherent implementation instruction in delegate_worker. The Worker edits and runs checks directly, without subagents, pushes, or GitHub mutations. After Worker returns, read the changed source yourself. Compare it with acceptedAssignment and the acceptance criteria. Inspect actual native command evidence. A completed native turn or tool call proves only that execution ended. It does not prove that the assignment or check passed. If repairs are necessary, diagnose the assignment, scope, or fixture and delegate one complete repair. You decide whether the work is ready for delivery.
 
 Do not write files or launch agents yourself. Preserve out-of-band work and adopt matching GitHub state. Ask one specific human question only when an external ambiguity or necessary decision prevents progress. Continue until the delivery target is observed, a Worker is running, or you have asked that question.`;
 
@@ -113,11 +122,11 @@ export function composeWorkerAssignment(assignment: WorkerAssignmentText): strin
   const sections: string[] = [];
   if (assignment.mode === "planned") sections.push(`Coordinator plan:\n${assignment.plan ?? ""}`);
   else sections.push("Direct build: choose the implementation approach yourself within the objective and constraints below.");
-  if (assignment.advisorReport) sections.push(`${assignment.advisorReport.label} report and surgical plan:\n${assignment.advisorReport.text}`);
+  if (assignment.advisorReport) sections.push(`${assignment.advisorReport.label} report and repair constraints:\n${assignment.advisorReport.text}`);
   sections.push(`Acceptance criteria:\n${criteria}`);
   sections.push(`Worker instructions:\n${assignment.instruction}`);
   sections.push(`Screenshots:\n${visualEvidenceInstruction(assignment.visualEvidence)}`);
-  if (assignment.range) sections.push(`Pinned revision: base ${assignment.range.baseSha}, head ${assignment.range.headSha}.${assignment.purpose === "verification" ? " Verify this revision without intentional source edits." : ""}`);
+  if (assignment.range && assignment.purpose === "verification") sections.push(`Verification source: base ${assignment.range.baseSha}, head ${assignment.range.headSha}. Verify this revision without intentional source edits.`);
   return sections.join("\n\n");
 }
 
@@ -156,7 +165,7 @@ export function composeAdvisorAssignment(input: AdvisorAssignmentInput): string 
   return sections.join("\n\n");
 }
 
-export const STANDARD_WORKER_RESULT_WAKE = "You own independent review. Read the changed source yourself, compare it with your plan and acceptance criteria, and assess the reported check evidence. Do not delegate final review or the delivery recommendation to another Worker. Delegate only specific repairs or additional check commands, then review their results yourself. Observe current state and decide the next action.";
+export const STANDARD_WORKER_RESULT_WAKE = "You own independent review. Read the changed source yourself, compare it with acceptedAssignment and the acceptance criteria, and assess the native command evidence. A completed turn or tool call is not proof that the assignment or check passed. Worker summary text is routing context, not a gate. If work remains, diagnose the assignment, scope, or fixture and delegate one coherent repair. Observe current state and decide the next action.";
 
 export function workerResultWake(workflow: WorkflowId, receiptId: string, result: { turnId: string; state: string; text: string; verificationRange?: { valid: boolean; invalidReason: string | null } | undefined }, purpose: "implementation" | "verification"): string {
   const summary = result.text.trim().slice(0, 1_200) || "(no Worker summary)";
@@ -166,21 +175,21 @@ export function workerResultWake(workflow: WorkflowId, receiptId: string, result
     : result.verificationRange
       ? ` Forge recorded a source-range limitation: ${result.verificationRange.invalidReason ?? "the range was invalid"}. Inspect the existing native command and Git evidence; rerun only when it shows that the reviewed source was not tested or was invalidated.`
       : " No check-only range shortcut was recorded. This alone does not invalidate implementation or historical command evidence; inspect native command and Git evidence before deciding whether a check is missing.";
-  if (workflow === "standard") return `Worker result receipt ${receiptId}. ${STANDARD_WORKER_RESULT_WAKE}${range} ${access}`;
+  if (workflow === "standard") return `Worker result ${receiptId}. ${STANDARD_WORKER_RESULT_WAKE}${range} ${access}`;
   const next = workflow === "independent_review" ? "When the implementation and its checks satisfy you, request Reviewer with delegate_advisor. Reviewer approval for the current range is necessary before delivery."
     : workflow === "refine_pull_request" ? "When the repair and its checks satisfy you, request a new Rater assessment with delegate_advisor for the complete current range. Do not request delivery on an earlier rating."
-    : workflow === "competing_plans" ? "Compare the result with your combined plan. Request bounded repairs if necessary, then request the selected delivery target."
-    : "Compare the result with the objective and acceptance outcomes. Request bounded repairs or missing checks if necessary, then request the selected delivery target.";
+    : workflow === "competing_plans" ? "Compare the result with the accepted combined assignment. Request coherent repairs if necessary, then request the selected delivery target."
+    : "Compare the result with the accepted assignment and acceptance outcomes. Request coherent repairs or missing checks if necessary, then request the selected delivery target.";
   const kind = purpose === "verification" ? "Verification result" : "Worker result";
-  return `${kind} receipt ${receiptId}. Inspect the changed source and the actual command evidence yourself; a Worker claim alone is not verification.${range} ${access} ${next}`;
+  return `${kind} ${receiptId}. Inspect the changed source and the actual command evidence yourself. A completed turn, completed tool call, or Worker claim alone is not verification.${range} ${access} ${next}`;
 }
 
 export function advisorResultWake(role: AdvisorRole, receiptId: string, outcome: { valid: boolean; summary: string }, observation: string): string {
   const label = ADVISOR_LABELS[role];
-  const next = !outcome.valid ? `The ${label} report was not accepted: ${outcome.summary}. Request a fresh ${label}; after two consecutive invalid reports Forge asks you for a decision instead.`
-    : role === "reviewer" ? "If Reviewer approved the current range, request delivery. Otherwise delegate a bounded Worker repair for every blocking finding, inspect the result, and request a new Reviewer assessment."
+  const next = !outcome.valid ? `The ${label} report was not accepted: ${outcome.summary}. Diagnose the report input or evidence, then request a fresh ${label}.`
+    : role === "reviewer" ? "If Reviewer approved the current range, request delivery. Otherwise delegate a coherent Worker repair for every blocking finding, inspect the result, and request a new Reviewer assessment."
     : role === "rater" ? "If the rating is at least 9 with no blocking findings and adequate verification, inspect the whole range yourself and continue with delivery. Otherwise delegate planned Worker implementation with advisorTurnId set to this Rater report turn, inspect the result, and request a new Rater assessment. If only verification is missing, delegate a bounded verification assignment first."
     : role === "planner_a" || role === "planner_b" ? "This individual planner result is available for a retry or historical session. When a Combined pair settles, read both complete plan reports and relevant source, write one combined plan, and delegate Worker with both candidateTurnIds."
     : "";
-  return `${label} result receipt ${receiptId}. ${outcome.valid ? outcome.summary : ""} ${next}\n\n${observation}`.replace("  ", " ");
+  return `${label} result ${receiptId}. ${outcome.valid ? outcome.summary : ""} ${next}\n\n${observation}`.replace("  ", " ");
 }

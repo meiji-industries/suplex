@@ -22,7 +22,8 @@ describe("OpenCode role configuration", () => {
     });
     expect(JSON.stringify(config)).not.toContain('"*":"allow"');
     expect(Object.keys(config.mcp ?? {})).toEqual(["forge_root"]);
-    expect(taskRolePrompt("root")).toContain("Never delegate planning or the final verification judgment");
+    expect(taskRolePrompt("root")).toContain("Delegate one coherent functional assignment");
+    expect(taskRolePrompt("root")).toContain("independent reviewer");
     expect(taskRolePrompt("root")).toContain("generate a concise action-oriented title from the final reviewed solution");
     expect(taskRolePrompt("root")).toContain("Supply it as pullRequestTitle");
     expect(taskRolePrompt("root")).toContain("pullRequestBody");

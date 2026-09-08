@@ -1,4 +1,5 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { delimiter, join, resolve } from "node:path";
 import { runCommand } from "./command-runner.js";
 
@@ -11,6 +12,12 @@ export interface GitCommandGuard {
 
 export function withWorktreeMiseTrust(env: NodeJS.ProcessEnv, worktreePath: string): NodeJS.ProcessEnv {
   return { ...env, MISE_TRUSTED_CONFIG_PATHS: [env.MISE_TRUSTED_CONFIG_PATHS, worktreePath].filter(Boolean).join(delimiter) };
+}
+
+async function writeExecutable(path: string, content: string): Promise<void> {
+  const pending = `${path}.${randomUUID()}.pending`;
+  await writeFile(pending, content, { encoding: "utf8", mode: 0o700 });
+  await rename(pending, path);
 }
 
 export async function createGitCommandGuard(runtimeRoot: string, name = "worker-guard"): Promise<GitCommandGuard> {
@@ -52,8 +59,10 @@ esac
 echo "Forge Worker policy blocks provider-side GitHub mutation" >&2
 exit 125
   `;
-  await writeFile(join(directory, "git"), gitGuard, { encoding: "utf8", mode: 0o700 });
-  await writeFile(join(directory, "gh"), ghGuard, { encoding: "utf8", mode: 0o700 });
+  await Promise.all([
+    writeExecutable(join(directory, "git"), gitGuard),
+    writeExecutable(join(directory, "gh"), ghGuard),
+  ]);
   return {
     directory,
     gitRealBin: gitBin,

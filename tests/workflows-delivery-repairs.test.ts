@@ -334,7 +334,7 @@ test("D5: a reopened store with stale observations merges and completes without 
   const reopened = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
   try {
     const store = new TaskControlStore(reopened, f.alive);
-    const controller = new RootController(store, f.harness, new DeliveryOperations(store, f.port), undefined, { root: join(f.directory, "evidence") });
+    const controller = new RootController(store, f.harness, new DeliveryOperations(store, f.port), undefined, { root: join(f.directory, "evidence") }, f.reader);
     const inspected = await controller.requestDelivery(f.identity(), "inspect_delivery_diff") as { baseSha: string; headSha: string; files: string[]; commits: string[]; patchDigest: string };
     const review = { baseSha: inspected.baseSha, headSha: inspected.headSha, files: inspected.files, commits: inspected.commits, patchDigest: inspected.patchDigest };
     expect(await controller.requestDelivery(f.identity(), "merge_pull_request", inspected.headSha, review)).toMatchObject({ state: "merged" });
@@ -377,7 +377,9 @@ test("D3: the real adapter classifies 401, missing login, permission 403, rate l
     await rateNine(f);
     f.github.isDraft = false; f.github.checks = pending;
     await f.request("push_branch");
-    expect(await f.request("observe_checks")).toMatchObject({ wait: { reason: "checks" } });
+    expect(await f.request("observe_checks")).not.toHaveProperty("wait");
+    f.github.onMerge = () => "queue";
+    expect(await f.request("merge_pull_request")).toMatchObject({ wait: { reason: "merge_queue" } });
     const { runner, commands } = scripted({ "gh pr view": failure });
     const real = createGithubReleasePort({ runner });
     const port: DeliveryGithubPort = { ...f.port, observePullRequest: real.observePullRequest.bind(real) };
@@ -397,7 +399,8 @@ test("D3: the real adapter classifies 401, missing login, permission 403, rate l
   await rateNine(t);
   t.github.isDraft = false; t.github.checks = pending;
   await t.request("push_branch");
-  await t.request("observe_checks");
+  t.github.onMerge = () => "queue";
+  await t.request("merge_pull_request");
   const { runner } = scripted({ "gh pr view": { stderr: "connect: network is unreachable", timedOut: true } });
   const real = createGithubReleasePort({ runner });
   const before = t.rootTurns().length; const wait = t.store.get("task").workflowState.deliveryWait;
@@ -411,7 +414,8 @@ test("D4: two observers of one persisted wait produce one continuation, and canc
   await rateNine(f);
   f.github.isDraft = false; f.github.checks = pending; f.github.mergeStateStatus = "UNKNOWN";
   await f.request("push_branch");
-  await f.request("observe_checks");
+  f.github.onMerge = () => "queue";
+  await f.request("merge_pull_request");
   await f.drainRoot();
   const original = f.store.get("task").workflowState.deliveryWait!;
   const barrier = () => { let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }); let arrived = 0; let opened!: () => void; const both = new Promise<void>(resolve => { opened = resolve; }); return { gate, release, arrive: () => { arrived += 1; if (arrived === 2) opened(); }, both }; };
@@ -435,7 +439,7 @@ test("D4: two observers of one persisted wait produce one continuation, and canc
   // Reopened store: install a new wait, race again, still one continuation.
   await f.drainRoot();
   f.github.checks = pending; f.github.mergeStateStatus = "UNKNOWN";
-  await f.request("observe_checks");
+  await f.request("merge_pull_request");
   await f.drainRoot();
   const reopened = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
   try {
@@ -448,7 +452,7 @@ test("D4: two observers of one persisted wait produce one continuation, and canc
   // Unchanged polls add nothing and keep the 30-second schedule.
   await f.drainRoot();
   f.github.checks = pending; f.github.mergeStateStatus = "UNKNOWN";
-  await f.request("observe_checks");
+  await f.request("merge_pull_request");
   await f.drainRoot();
   const stable = f.rootTurns().length;
   expect(await f.delivery.observeDeliveryWait("task")).toBe("unchanged");
@@ -466,7 +470,7 @@ test("D4: two observers of one persisted wait produce one continuation, and canc
   const cancelled = await race(f.database, () => f.store.cancel("task"));
   expect(cancelled).toEqual(["none", "none"]);
   expect(f.store.get("task").status).toBe("cancelled");
-  expect(original.reason).toBe("checks");
+  expect(original.reason).toBe("merge_queue");
   expect(f.store.turns("task").filter(turn => turn.status === "pending_prompt")).toEqual([]);
 });
 
@@ -599,7 +603,7 @@ test("F1g: a delegate reserved or a review replaced from a second connection aft
   const other = new ForgeDatabase(join(g.directory, "forge.sqlite"), { migrate: false });
   try {
     const store = new TaskControlStore(other, g.alive);
-    const controller = new RootController(store, g.harness, new DeliveryOperations(store, g.port), undefined, { root: join(g.directory, "evidence") });
+    const controller = new RootController(store, g.harness, new DeliveryOperations(store, g.port), undefined, { root: join(g.directory, "evidence") }, g.reader);
     const replace = afterNextLocalInspection(g, async () => {
       await controller.delegateAdvisor(g.identity(), { role: "reviewer", brief: "Plan again." });
       g.endRootTurn();

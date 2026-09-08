@@ -58,16 +58,20 @@ async function fixture(workflow: WorkflowId, options: { image?: boolean } = {}) 
     currentRange: async () => { if (source.failure) throw source.failure; const head = (await git(repo, ["rev-parse", "HEAD"])).stdout.trim(); const clean = (await git(repo, ["status", "--porcelain"])).stdout.trim() === ""; return { ...await inspectDeliveryDiff(repo, source.base, head), clean }; },
   };
   const harness = new FakeTaskHarness();
+  const reader = () => ({
+    turnEvidence: async () => ({ tools: [], limitation: null }),
+    timeline: async () => ({ usage: [], liveMessageId: null }),
+  });
   const scopes: OpenCodeTaskScope[] = [];
   const ensure = harness.ensureSession.bind(harness);
   harness.ensureSession = async (scope, native) => { scopes.push(scope); return ensure(scope, native); };
-  const controller = new RootController(store, harness, delivery, artifacts, { root: join(directory, "evidence") });
+  const controller = new RootController(store, harness, delivery, artifacts, { root: join(directory, "evidence") }, reader);
   await controller.recover("task");
   harness.finish(harness.dispatched[0]!.messageID);
   const identity = () => { const current = store.currentSession("task", "root")!; return { taskId: "task", sessionId: current.id, generation: current.generation }; };
   const finishDelegate = async (text?: string, state: "completed" | "error" = "completed") => { await controller.recover("task"); harness.finish(harness.dispatched.at(-1)!.messageID, state, text); await controller.recover("task"); };
   const commit = async (name: string) => { await writeFile(join(repo, name), `${name}\n`); await git(repo, ["add", "."]); await git(repo, ["commit", "-m", name]); return (await git(repo, ["rev-parse", "HEAD"])).stdout.trim(); };
-  return { directory, repo, baseSha, database, store, harness, controller, identity, finishDelegate, commit, scopes, delivery, artifacts, source };
+  return { directory, repo, baseSha, database, store, harness, controller, identity, finishDelegate, commit, scopes, delivery, artifacts, source, reader };
 }
 
 function assignmentInput(f: Awaited<ReturnType<typeof fixture>>, session: { id: string; generation: number }) {
@@ -96,13 +100,18 @@ test("Direct build has no mandatory Coordinator plan in system, initial, or assi
   expect(initial).not.toMatch(/state your implementation plan|Supply your completed plan/);
   expect(taskRolePrompt("root", { workflow: "direct_build" })).not.toMatch(/call delegate_worker with your own plan|explain your plan/);
   expect(taskRolePrompt("root", { workflow: "direct_build" })).toContain("Follow the selected workflow");
-  expect(taskRolePrompt("root")).toContain("call delegate_worker with your own plan");
+  expect(taskRolePrompt("root")).toContain("Delegate one coherent functional assignment");
   const direct = taskRolePrompt("worker", { workflow: "direct_build", workerMode: "direct" });
   expect(direct).toContain("Direct build assignment");
-  expect(direct).not.toContain("Coordinator owns planning and independent review. Implement its bounded assignment");
+  expect(direct).toContain("own the design and implementation choices within that assignment");
   expect(taskRolePrompt("worker", { workflow: "direct_build", workerMode: "planned", purpose: "verification" })).toContain("verification only");
   await expect(f.controller.delegateWorker(f.identity(), { acceptanceCriteria: ["Builds"], instruction: "Do it" })).rejects.toThrow("requires the Coordinator's plan");
-  await f.controller.delegateWorker(f.identity(), { mode: "direct", acceptanceCriteria: ["The README mentions the change"], instruction: "Add the change" });
+  const delegated = await f.controller.delegateWorker(f.identity(), { mode: "direct", acceptanceCriteria: ["The README mentions the change"], instruction: "Add the change" }) as { acceptedAssignment: { kind: string; input: { instruction: string } } };
+  expect(delegated.acceptedAssignment).toMatchObject({ kind: "workflow_input", input: { instruction: "Add the change" } });
+  await expect(f.controller.delegateWorker(f.identity(), { mode: "direct", acceptanceCriteria: ["A competing plan wins"], instruction: "Replace the accepted assignment" })).rejects.toThrow("worker_already_assigned");
+  const restarted = new RootController(new TaskControlStore(f.database), f.harness, f.delivery, f.artifacts, { root: join(f.directory, "evidence") }, f.reader);
+  const observedAssignment = await restarted.observe(f.identity()) as { acceptedAssignment: { kind: string; input: { instruction: string } } };
+  expect(observedAssignment.acceptedAssignment).toMatchObject({ kind: "workflow_input", input: { instruction: "Add the change" } });
   await f.controller.recover("task");
   const worker = f.store.currentSession("task", "worker")!;
   const prompt = f.store.turns("task").find(turn => turn.sessionId === worker.id)!.promptText;
@@ -117,7 +126,7 @@ test("Direct build has no mandatory Coordinator plan in system, initial, or assi
   const result = f.store.turns("task").find(turn => turn.sessionId === worker.id)!;
   expect(JSON.parse(result.terminalObservation!)).toMatchObject({ state: "completed", tools: [{ name: "bash", output: "1 passed" }] });
   const wake = f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText;
-  expect(wake).toContain("Worker result receipt");
+  expect(wake).toContain("Worker result");
   expect(wake).toContain("Worker reported (completed): Implemented and tested.");
   expect(wake).toContain(`read_worker_evidence with turnId ${result.id} for the compact tool index`);
   expect(wake).toContain("select the exact toolId, field, and position tail");
@@ -305,7 +314,7 @@ test("planner reservations and admitted sibling turns survive controller reconst
   const database = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
   cleanups.push(async () => database.close());
   const store = new TaskControlStore(database, async () => ({ kind: "running", startTime: "test-process" }));
-  const restarted = new RootController(store, f.harness, f.delivery, f.artifacts, { root: join(f.directory, "evidence") });
+  const restarted = new RootController(store, f.harness, f.delivery, f.artifacts, { root: join(f.directory, "evidence") }, f.reader);
   await restarted.recover("task");
   expect(store.currentDelegates("task").map(session => session.id)).toEqual(ids);
   for (const id of ids) expect(f.harness.dispatched.filter(intent => intent.messageID === store.pendingTurns(id)[0]!.id)).toHaveLength(1);
@@ -318,7 +327,7 @@ test("planner reservations and admitted sibling turns survive controller reconst
   const afterA = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
   cleanups.push(async () => afterA.close());
   const afterAStore = new TaskControlStore(afterA, async () => ({ kind: "running", startTime: "test-process" }));
-  const afterAController = new RootController(afterAStore, f.harness, f.delivery, f.artifacts, { root: join(f.directory, "evidence") });
+  const afterAController = new RootController(afterAStore, f.harness, f.delivery, f.artifacts, { root: join(f.directory, "evidence") }, f.reader);
   await afterAController.recover("task");
   expect(f.harness.dispatched.filter(intent => intent.messageID === bTurn.id)).toHaveLength(1);
   f.harness.finish(bTurn.id, "completed", json({ summary: "B survives restart" }));
@@ -363,7 +372,7 @@ test("planner launch failure and lost acknowledgement recover without replaying 
   expect(lost.harness.dispatched.filter(intent => turns.some(turn => turn.id === intent.messageID))).toHaveLength(2);
 });
 
-test("two invalid planner rounds require an answer before batch or individual retries", async () => {
+test("invalid planner rounds remain retryable without a mandatory human answer", async () => {
   const f = await fixture("competing_plans");
   for (let round = 0; round < 2; round += 1) {
     await f.controller.delegatePlanners(f.identity());
@@ -372,18 +381,16 @@ test("two invalid planner rounds require an answer before batch or individual re
       await f.controller.recover("task");
     }
   }
-  expect(await f.controller.delegatePlanners(f.identity())).toMatchObject({ asked: true });
-  f.store.answerHuman("task", f.store.get("task").humanQuestionId!, "Retry the planners");
   await expect(f.controller.delegatePlanners(f.identity())).resolves.toMatchObject({ planners: expect.any(Array) });
+  expect(f.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
 
   const individual = await fixture("competing_plans");
   for (let round = 0; round < 2; round += 1) {
     await individual.controller.delegateAdvisor(individual.identity(), { role: "planner_a" });
     await individual.finishDelegate("not a report");
   }
-  expect(await individual.controller.delegateAdvisor(individual.identity(), { role: "planner_a" })).toMatchObject({ asked: true });
-  individual.store.answerHuman("task", individual.store.get("task").humanQuestionId!, "Retry Plan A");
-  await expect(individual.controller.delegateAdvisor(individual.identity(), { role: "planner_a" })).resolves.toMatchObject({ advisor: expect.any(Object) });
+  await expect(individual.controller.delegateAdvisor(individual.identity(), { role: "planner_a" })).resolves.toMatchObject({ advisor: { advisorRole: "planner_a" } });
+  expect(individual.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
 });
 
 test("each Planner role reuses its own native conversation and pane", async () => {
@@ -494,7 +501,7 @@ test("Rater results keep their launch range, invalid or stale reports record nul
   await expect(f.controller.delegateWorker(f.identity(), { plan: "fix", acceptanceCriteria: ["x"], instruction: "y", advisorSessionId: f.identity().sessionId })).rejects.toThrow("latest valid Rater");
   await f.controller.delegateWorker(f.identity(), { plan: "Guard the dereference", acceptanceCriteria: ["No null dereference"], instruction: "Add the guard", advisorSessionId: first.id });
   const repair = f.store.currentSession("task", "worker")!;
-  expect(f.store.turns("task").find(turn => turn.sessionId === repair.id)!.promptText).toContain("Rater report and surgical plan:\nReport prose.");
+  expect(f.store.turns("task").find(turn => turn.sessionId === repair.id)!.promptText).toContain("Rater report and repair constraints:\nReport prose.");
   expect(assignmentInput(f, repair)).toMatchObject({ advisorReport: { sessionId: first.id, turnId: control.workflowState.reviews[0]!.turnId }, purpose: "implementation" });
   const repaired = await f.commit("guard.ts");
   await f.controller.recover("task");
@@ -524,13 +531,10 @@ test("Rater results keep their launch range, invalid or stale reports record nul
   await f.commit("late.txt");
   await f.finishDelegate(rater(9));
   expect(f.store.get("task").workflowState.reviews.at(-1)).toMatchObject({ sessionId: third.id, range: { headSha: repaired }, result: null, invalidReason: expect.stringMatching(/range changed|head changed/) });
-  // Two consecutive invalid attempts turn the next request into a specific human question.
-  const asked = await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
-  expect(asked).toMatchObject({ asked: true });
-  expect(f.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestion: expect.stringContaining("two consecutive invalid reports") });
-  f.store.answerHuman("task", f.store.get("task").humanQuestionId!, "Retry");
-  // Changed evidence files never produce an approval.
+  // Invalid attempts remain retryable without a mandatory human step.
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
+  expect(f.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
+  // Changed evidence files never produce an approval.
   const fourth = f.store.currentSession("task", "worker")!;
   await writeFile(join((assignmentInput(f, fourth) as { evidenceDirectory: string }).evidenceDirectory, "patch.diff"), "tampered");
   await f.finishDelegate(rater(9));
@@ -621,7 +625,7 @@ test("E1: Advisors and check-only Workers launch only from a clean source, and a
   await writeFile(join(f.repo, "dirty.txt"), "edited while rating");
   expect(await finish(rater(9))).toMatchObject({ result: null, invalidReason: expect.stringMatching(/uncommitted|dirty/i), range: pinned });
   await rm(join(f.repo, "dirty.txt"));
-  // Healthy rounds between invalid ones keep the two-invalid guard for the final pair.
+  // Healthy rounds between invalid ones keep later attempts available.
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   expect(await finish(rater(7, ["src.ts: one thing"]))).toMatchObject({ result: { rating: 7 }, invalidReason: null });
   // Changed head at completion.
@@ -643,14 +647,10 @@ test("E1: Advisors and check-only Workers launch only from a clean source, and a
   expect(failed).toMatchObject({ result: null, invalidReason: expect.stringMatching(/could not be observed|delivery base/i) });
   expect(failed.invalidReason).not.toMatch(/json/i);
   f.source.failure = null;
-  // Two environmental invalidations ask about the source, not the model output.
-  const asked = await f.controller.delegateAdvisor(f.identity(), { role: "rater" }) as { asked?: boolean };
-  expect(asked.asked).toBe(true);
-  expect(f.store.get("task").humanQuestion).toMatch(/source|base|observed/i);
-  expect(f.store.get("task").humanQuestion).not.toMatch(/JSON/);
-  f.store.answerHuman("task", f.store.get("task").humanQuestionId!, "Resolved");
+  // Environmental invalidations remain retryable after the source recovers.
+  await expect(f.controller.delegateAdvisor(f.identity(), { role: "rater" })).resolves.toMatchObject({ advisor: { advisorRole: "rater" } });
+  expect(f.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
   // A healthy unchanged range still records the parsed report.
-  await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   expect(await finish(rater(9))).toMatchObject({ result: { rating: 9 }, invalidReason: null, range: { headSha: currentHead } });
 });
 

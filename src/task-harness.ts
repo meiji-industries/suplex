@@ -8,6 +8,7 @@ import type { RootIdentity } from "./root-contracts.js";
 import type { PromptDispatchAttempt, TaskSession } from "./task-control.js";
 import type { TaskExecution } from "./task-execution-contracts.js";
 import type { TaskUsage } from "./task-usage.js";
+import type { ModelPricingCatalog } from "./model-pricing.js";
 import { splitBalancedPaneRow } from "./task-pane-layout.js";
 import type { WorkflowId } from "./workflows.js";
 
@@ -202,7 +203,7 @@ export interface NativeSessionReader {
   /** Reads one admitted native turn. Stored completion observations are not required for correlation. */
   turnEvidence(session: TaskSession, turnId: string): Promise<{ tools: TaskExecution["sessions"][number]["tools"]; limitation: string | null }>;
   status(session: TaskSession): Promise<{ status: "busy" | "retry" | "idle"; updatedAt: number }>;
-  timeline(session: TaskSession): Promise<{ usage: TaskUsage[]; liveMessageId: string | null }>;
+  timeline(session: TaskSession, pricing?: ModelPricingCatalog): Promise<{ usage: TaskUsage[]; liveMessageId: string | null }>;
   /** Refuses while the agent is active; returns the stop action for Archive. */
   archive(session: TaskSession): Promise<{ stop: () => Promise<void> }>;
 }

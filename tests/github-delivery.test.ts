@@ -2,17 +2,17 @@ import { expect, test } from "vitest";
 import { createGithubReleasePort, mapGithubPullRequestObservation } from "../src/github-delivery.js";
 
 test.each([
-  [{ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }, "--squash"],
-  [{ allow_squash_merge: false, allow_merge_commit: true, allow_rebase_merge: false }, "--merge"],
-  [{ allow_squash_merge: false, allow_merge_commit: false, allow_rebase_merge: true }, "--rebase"],
+  [{ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }, "squash"],
+  [{ allow_squash_merge: false, allow_merge_commit: true, allow_rebase_merge: false }, "merge"],
+  [{ allow_squash_merge: false, allow_merge_commit: false, allow_rebase_merge: true }, "rebase"],
 ] as const)("merge uses a repository-supported method %s", async (settings, method) => {
   const calls: string[][] = [];
   const port = createGithubReleasePort({ runner: async input => {
     calls.push(input.args);
-    return { stdout: input.args[0] === "api" ? JSON.stringify(settings) : "", stderr: "" };
+    return { stdout: JSON.stringify(input.args.some(value => value.includes("/merge")) ? { merged: true, message: "ok", sha: "b".repeat(40) } : settings), stderr: "" };
   } });
   await port.mergePullRequest({ repository: "owner/repo", number: 7, headSha: "a".repeat(40) });
-  expect(calls).toEqual([["api", "repos/owner/repo"], ["pr", "merge", "7", "--repo", "owner/repo", method, "--match-head-commit", "a".repeat(40)]]);
+  expect(calls).toEqual([["api", "repos/owner/repo"], ["api", "--method", "PUT", "repos/owner/repo/pulls/7/merge", "-f", `sha=${"a".repeat(40)}`, "-f", `merge_method=${method}`]]);
 });
 
 test.each([
@@ -31,6 +31,94 @@ test("direct merge does not retry a not-ready or malformed response", async () =
   const port = createGithubReleasePort({ runner: async input => { calls.push(input.args); return { stdout: JSON.stringify(input.args.some(value => value.includes("/merge")) ? { merged: false, message: "not ready" } : { allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }), stderr: "" }; } });
   await expect(port.mergePullRequestDirect!({ repository: "owner/repo", number: 7, headSha: "a".repeat(40) })).resolves.toEqual({ merged: false, sha: null });
   expect(calls).toHaveLength(2);
+});
+
+test.each([
+  ["fail", "blocked"],
+  ["pending", "waiting"],
+] as const)("direct merge reports a required %s check as %s with native evidence", async (bucket, disposition) => {
+  const calls: string[][] = [];
+  const port = createGithubReleasePort({ runner: async input => {
+    calls.push(input.args);
+    if (input.args.some(value => value.includes("/merge"))) throw Object.assign(new Error("not mergeable"), {
+      stdout: JSON.stringify({ message: "Pull Request is not mergeable", documentation_url: "https://docs.github.com/rest/pulls/pulls#merge-a-pull-request", status: "405" }),
+      stderr: "gh: Pull Request is not mergeable (HTTP 405)",
+    });
+    if (input.args[0] === "pr" && input.args[1] === "view") return { stdout: JSON.stringify({ id: "PR_7", headRefOid: "a".repeat(40), baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }), stderr: "" };
+    if (input.args[0] === "pr" && input.args[1] === "checks") {
+      const stdout = JSON.stringify([{ name: "unit", bucket, state: bucket === "fail" ? "FAILURE" : "PENDING", link: "https://github.com/owner/repo/actions/runs/1" }]);
+      throw Object.assign(new Error("checks incomplete"), { stdout, stderr: "" });
+    }
+    if (input.args.some(value => value.includes("/rules/branches/main"))) return { stdout: "[]", stderr: "" };
+    return { stdout: JSON.stringify({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }), stderr: "" };
+  } });
+  await expect(port.mergePullRequestDirect!({ repository: "owner/repo", number: 7, headSha: "a".repeat(40) })).resolves.toEqual({ merged: false, sha: null, disposition, message: expect.stringMatching(/unit.*FAILURE|unit.*PENDING/) });
+  expect(calls).toContainEqual(["pr", "checks", "7", "--repo", "owner/repo", "--required", "--json", "name,bucket,state,link"]);
+});
+
+test("direct merge reports a native conflict instead of waiting", async () => {
+  const port = createGithubReleasePort({ runner: async input => {
+    if (input.args.some(value => value.includes("/merge"))) throw Object.assign(new Error("not mergeable"), {
+      stdout: JSON.stringify({ message: "Pull Request is not mergeable", documentation_url: "https://docs.github.com/rest/pulls/pulls#merge-a-pull-request", status: "405" }),
+      stderr: "gh: Pull Request is not mergeable (HTTP 405)",
+    });
+    if (input.args[0] === "pr" && input.args[1] === "view") return { stdout: JSON.stringify({ id: "PR_7", headRefOid: "a".repeat(40), baseRefName: "main", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }), stderr: "" };
+    if (input.args[0] === "pr" && input.args[1] === "checks") return { stdout: "[]", stderr: "" };
+    if (input.args.some(value => value.includes("/rules/branches/main"))) return { stdout: "[]", stderr: "" };
+    return { stdout: JSON.stringify({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }), stderr: "" };
+  } });
+  await expect(port.mergePullRequestDirect!({ repository: "owner/repo", number: 7, headSha: "a".repeat(40) })).resolves.toMatchObject({ merged: false, disposition: "blocked", message: expect.stringMatching(/conflict/i) });
+});
+
+test("direct merge is blocked without enqueueing when the base requires a merge queue", async () => {
+  const calls: string[][] = [];
+  const port = createGithubReleasePort({ runner: async input => {
+    calls.push(input.args);
+    if (input.args.some(value => value.includes("/merge"))) throw Object.assign(new Error("not mergeable"), {
+      stdout: JSON.stringify({ message: "Pull Request is not mergeable", documentation_url: "https://docs.github.com/rest/pulls/pulls#merge-a-pull-request", status: "405" }),
+      stderr: "gh: Pull Request is not mergeable (HTTP 405)",
+    });
+    if (input.args[0] === "pr" && input.args[1] === "view") return { stdout: JSON.stringify({ id: "PR_7", headRefOid: "a".repeat(40), baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }), stderr: "" };
+    if (input.args[0] === "pr" && input.args[1] === "checks") return { stdout: "[]", stderr: "" };
+    if (input.args.some(value => value.includes("/rules/branches/main"))) return { stdout: JSON.stringify([{ type: "merge_queue" }]), stderr: "" };
+    if (input.args[0] === "api" && input.args[1] === "graphql") throw new Error("direct merge must not enqueue");
+    return { stdout: JSON.stringify({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }), stderr: "" };
+  } });
+  await expect(port.mergePullRequestDirect!({ repository: "owner/repo", number: 7, headSha: "a".repeat(40) })).resolves.toMatchObject({ merged: false, disposition: "blocked", message: expect.stringMatching(/merge queue.*direct trigger/i) });
+  expect(calls.some(args => args[0] === "api" && args[1] === "graphql")).toBe(false);
+  expect(calls.flat().join(" ")).not.toContain("--auto");
+});
+
+test("ordinary merge enqueues the exact reviewed head when the base requires a merge queue", async () => {
+  const calls: string[][] = [];
+  const port = createGithubReleasePort({ runner: async input => {
+    calls.push(input.args);
+    if (input.args.some(value => value.includes("/merge"))) throw Object.assign(new Error("not mergeable"), {
+      stdout: JSON.stringify({ message: "Pull Request is not mergeable", documentation_url: "https://docs.github.com/rest/pulls/pulls#merge-a-pull-request", status: "405" }),
+      stderr: "gh: Pull Request is not mergeable (HTTP 405)",
+    });
+    if (input.args[0] === "pr" && input.args[1] === "view") return { stdout: JSON.stringify({ id: "PR_7", headRefOid: "a".repeat(40), baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }), stderr: "" };
+    if (input.args[0] === "pr" && input.args[1] === "checks") return { stdout: "[]", stderr: "" };
+    if (input.args.some(value => value.includes("/rules/branches/main"))) return { stdout: JSON.stringify([{ type: "merge_queue" }]), stderr: "" };
+    if (input.args[0] === "api" && input.args[1] === "graphql") return { stdout: JSON.stringify({ data: { enqueuePullRequest: { mergeQueueEntry: { id: "MQE_1" } } } }), stderr: "" };
+    return { stdout: JSON.stringify({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }), stderr: "" };
+  } });
+  await expect(port.mergePullRequest({ repository: "owner/repo", number: 7, headSha: "a".repeat(40) })).resolves.toBeUndefined();
+  expect(calls.at(-1)).toEqual(expect.arrayContaining(["graphql", "-f", `expectedHeadOid=${"a".repeat(40)}`]));
+});
+
+test.each([
+  ["403", "authentication-required"],
+  ["409", "provider-unavailable"],
+] as const)("direct merge preserves GitHub HTTP %s as %s", async (status, code) => {
+  const port = createGithubReleasePort({ runner: async input => {
+    if (!input.args.some(value => value.includes("/merge"))) return { stdout: JSON.stringify({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }), stderr: "" };
+    throw Object.assign(new Error("merge failed"), {
+      stdout: JSON.stringify({ message: "merge failed", documentation_url: "https://docs.github.com/rest/pulls/pulls#merge-a-pull-request", status }),
+      stderr: `gh: merge failed (HTTP ${status})`,
+    });
+  } });
+  await expect(port.mergePullRequestDirect!({ repository: "owner/repo", number: 7, headSha: "a".repeat(40) })).rejects.toMatchObject({ code });
 });
 
 test("GitHub outages are not interpreted as missing branches", async () => {

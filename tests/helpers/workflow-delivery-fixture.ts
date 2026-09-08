@@ -90,7 +90,11 @@ export async function fixture(workflow: WorkflowId, options: { deliveryTarget?: 
   };
   const delivery = new DeliveryOperations(store, port);
   const harness = new FakeTaskHarness();
-  const controller = new RootController(store, harness, delivery, undefined, { root: options.evidenceRoot ?? join(directory, "evidence") });
+  const reader = () => ({
+    turnEvidence: async () => ({ tools: [], limitation: null }),
+    timeline: async () => ({ usage: [], liveMessageId: null }),
+  });
+  const controller = new RootController(store, harness, delivery, undefined, { root: options.evidenceRoot ?? join(directory, "evidence") }, reader);
   await controller.recover("task");
   harness.finish(harness.dispatched[0]!.messageID);
   const identity = () => { const current = store.currentSession("task", "root")!; return { taskId: "task", sessionId: current.id, generation: current.generation }; };
@@ -109,5 +113,5 @@ export async function fixture(workflow: WorkflowId, options: { deliveryTarget?: 
   const inspect = async () => { const diff = await controller.requestDelivery(identity(), "inspect_delivery_diff") as { baseSha: string; headSha: string; files: string[]; commits: string[] }; return { headSha: diff.headSha, review: { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits } }; };
   const request = async (operation: Parameters<RootController["requestDelivery"]>[1]) => { const { headSha, review } = await inspect(); return controller.requestDelivery(identity(), operation, headSha, review); };
   const rootTurns = () => store.turns("task").filter(turn => turn.sessionId === identity().sessionId);
-  return { directory, bare, repo, worktree, baseSha, featureSha, database, store, alive, harness, controller, delivery, port, github, calls, identity, endRootTurn, drainRoot, finishDelegate, commit, inspect, request, rootTurns };
+  return { directory, bare, repo, worktree, baseSha, featureSha, database, store, alive, harness, controller, delivery, port, github, calls, reader, identity, endRootTurn, drainRoot, finishDelegate, commit, inspect, request, rootTurns };
 }

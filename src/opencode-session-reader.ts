@@ -7,6 +7,7 @@ import { TaskPlanItemSchema, type TaskExecution } from "./task-execution-contrac
 import { taskSessionRuntimeDirectory, type NativeSessionReader } from "./task-harness.js";
 import { taskUsage } from "./task-usage.js";
 import { correlatedAssistants } from "./opencode-session.js";
+import type { ModelPricingCatalog } from "./model-pricing.js";
 
 const messageLimit = 100;
 const ToolDetailsSchema = z.object({ input: z.record(z.string(), z.unknown()).default({}), output: z.string().optional(), error: z.string().optional() });
@@ -64,12 +65,12 @@ export class OpenCodeSessionReader implements NativeSessionReader {
     return { status: statuses[sessionID]?.type ?? "idle" as const, updatedAt: native.time.updated };
   }
 
-  async timeline(session: TaskSession) {
+  async timeline(session: TaskSession, pricing?: ModelPricingCatalog) {
     const { server, client, sessionID } = await this.connect(session);
-    const [messages, statuses] = await Promise.all([client.getMessages(sessionID, { directory: server.directory, limit: messageLimit }), client.getStatus(server.directory)]);
+    const [messages, statuses] = await Promise.all([client.getMessages(sessionID, { directory: server.directory }), client.getStatus(server.directory)]);
     const latest = [...messages].sort((a, b) => a.info.time.created - b.info.time.created).at(-1)?.info;
     const liveMessageId = statuses[sessionID]?.type === "busy" && latest?.role === "assistant" && latest.time.completed === undefined ? latest.id : null;
-    return { usage: taskUsage(messages, session.kind), liveMessageId };
+    return { usage: taskUsage(messages, session.kind, pricing), liveMessageId };
   }
 
   async archive(session: TaskSession) {

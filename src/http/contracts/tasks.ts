@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TaskInputSchema, TaskSchema } from "../../task-contracts.js";
 import { TaskSessionKindSchema, TaskTurnStatusSchema } from "../../task-control.js";
 import { AdvisorRoleSchema } from "../../workflows.js";
+import { TaskLimitDecisionSchema } from "../../task-limits.js";
 
 export { DeliveryTargetSchema, VisualEvidenceSchema } from "../../task-contracts.js";
 export { MAX_TASK_REQUEST_BYTES } from "../../task-attachment-limits.js";
@@ -17,7 +18,10 @@ export const TaskArchiveResponseSchema = z.union([TaskResponseSchema, z.object({
   dirtyFileCount: z.number().int().nonnegative(),
   dirtyFilePaths: z.array(z.string()),
 })]);
-export const TaskAnswerBodySchema = z.object({ questionId: z.string().min(1), answer: z.string().trim().min(1), confirmCommandsStopped: z.boolean().optional() }).strict();
+export const TaskAnswerBodySchema = z.union([
+  z.object({ questionId: z.string().min(1), answer: z.string().trim().min(1), confirmCommandsStopped: z.boolean().optional() }).strict(),
+  z.object({ questionId: z.string().min(1), limitDecision: TaskLimitDecisionSchema }).strict(),
+]);
 export const TaskNoteBodySchema = z.object({ note: z.string().trim().min(1) }).strict();
 export const TaskActivityResponseSchema = z.object({
   sessions: z.array(z.object({ id: z.string(), kind: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable(), label: z.string(), profileId: z.string(), generation: z.number(), nativeSessionId: z.string().nullable(), paneId: z.string().nullable(), current: z.boolean() })),

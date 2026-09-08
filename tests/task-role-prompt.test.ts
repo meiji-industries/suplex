@@ -21,3 +21,14 @@ it.each([
   const prompt = taskRolePrompt("worker", options);
   expect(prompt.match(/For configured verification commands, set a 30-minute shell timeout, or the tool maximum if lower\. Normal completion ends the command immediately\./g)).toHaveLength(1);
 });
+
+it.each([
+  { workerMode: "planned", purpose: "implementation" },
+  { workerMode: "direct", purpose: "implementation" },
+] as const)("gives $workerMode Workers implementation ownership", options => {
+  const prompt = taskRolePrompt("worker", options);
+  expect(prompt).toContain("own the design and implementation choices within that assignment");
+  expect(prompt).toContain("routine internal seams, fixture corrections, and tests");
+  expect(prompt).toContain("Continue until the complete assignment and its necessary checks are done");
+  expect(prompt).not.toMatch(/Return missing design decisions|Coordinator owns planning, design decisions|Do not take over planning/);
+});

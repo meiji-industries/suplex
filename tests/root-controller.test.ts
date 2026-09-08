@@ -8,42 +8,140 @@ import { RootController } from "../src/root-controller.js";
 import { TaskControlStore, type ProcessOwnerObservation } from "../src/root-session-store.js";
 import { updateEnvironmentSettings } from "../src/environment-settings.js";
 import { TaskUsageSchema } from "../src/task-usage.js";
+import type { TaskSession } from "../src/task-control.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { createTestDatabase } from "./helpers/test-database.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
 
-test("Coordinator owns planning and review while Workers receive implementation assignments", async () => {
+function usage(sessionId: string, cost: number) {
+  return TaskUsageSchema.parse({ sessionId, messageId: `usage-${cost}`, turnId: `turn-${cost}`, role: "root", provider: "openai", model: "gpt-5.6-luna", startedAt: 1, completedAt: 2, failed: false, summary: false, steps: 1, cost, subsidized: false, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, source: "message" });
+}
+
+test("Coordinator defines the assignment while Worker owns implementation decisions", async () => {
   const value = await fixture();
   const root = value.controller.prepareRoot("task");
-  expect(value.store.pendingTurns(root.id)[0]?.promptText).toContain("state your implementation plan and acceptance criteria before delegating");
+  expect(value.store.pendingTurns(root.id)[0]?.promptText).toContain("objective, essential constraints, acceptance examples");
   const worker = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Implement the specified change" });
-  expect(value.store.pendingTurns(worker.id)[0]?.promptText).toContain("Do not take over task planning or final review");
+  expect(value.store.pendingTurns(worker.id)[0]?.promptText).toContain("own the design and implementation choices within that assignment");
 });
 
-test("a spend budget pauses before dispatch and the raised allowance resumes after an answer", async () => {
+test("a spend budget uses native usage and increases only after an explicit decision", async () => {
   const value = await fixture();
-  const root = value.controller.prepareRoot("task");
-  const usage = TaskUsageSchema.parse({ sessionId: root.id, messageId: "usage-message", turnId: "usage-turn", role: "root", provider: "openai", model: "gpt-5.6-luna", startedAt: 1, completedAt: 2, failed: false, summary: false, steps: 1, cost: 20, subsidized: false, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, source: "message" });
-  value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_usage (task_id, session_id, message_id, snapshot, observed_at) VALUES (?, ?, ?, ?, ?)").run("task", usage.sessionId, usage.messageId, JSON.stringify(usage), new Date().toISOString()));
-
+  updateEnvironmentSettings(value.database, { minFreeDiskGb: 5, defaultBudgetUsd: 15, defaultMaxTurns: 0 });
+  await value.controller.recover("task");
+  const root = value.store.currentSession("task", "root")!;
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 20)]);
+  value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_usage (task_id, session_id, message_id, snapshot, observed_at) VALUES (?, 'stale-session', 'stale-message', ?, ?)").run("task", JSON.stringify(usage("stale-session", 100)), new Date().toISOString()));
+  await value.controller.recover("task");
   await value.controller.recover("task");
   expect(value.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestion: expect.stringContaining("budget") });
-  expect(value.harness.dispatched).toEqual([]);
-  expect(value.store.taskLimits("task")).toEqual({ budgetUsd: 35, maxTurns: 41 });
+  expect(value.harness.dispatched).toHaveLength(1);
+  expect(value.store.taskSpend("task").costUsd).toBe(20);
+  expect(value.store.taskLimits("task")).toEqual({ budgetUsd: 15, maxTurns: 0 });
+  expect(value.store.get("task").limitPause).toMatchObject({ usage: { estimatedCostUsd: 20, admittedTurns: 1 }, proposedLimits: { budgetUsd: 35, maxTurns: 0 } });
+  expect(new TaskControlStore(value.database).get("task").limitPause).toEqual(value.store.get("task").limitPause);
+  expect(() => value.store.answerHuman("task", value.store.get("task").humanQuestionId!, "Continue")).toThrow("task_limit_decision_required");
 
-  value.store.answerHuman("task", value.store.get("task").humanQuestionId!, "Continue");
+  value.store.answerTaskLimit("task", value.store.get("task").humanQuestionId!, { kind: "add_allowance" });
+  expect(value.store.taskLimits("task")).toEqual({ budgetUsd: 35, maxTurns: 0 });
   await value.controller.recover("task");
-  expect(value.harness.dispatched.length).toBeGreaterThan(0);
+  expect(value.harness.dispatched).toHaveLength(2);
 });
 
-test("a turn cap pauses before dispatch and zero limits disable enforcement", async () => {
+test("native usage failure retries without asking the user or dispatching", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  const first = value.harness.dispatched[0]!;
+  value.harness.finish(first.messageID);
+  await value.controller.recover("task");
+  value.setUsageError(new Error("Native session is not available"));
+  await expect(value.controller.recover("task")).rejects.toThrow("Native session is not available");
+  expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
+  expect(value.harness.dispatched).toHaveLength(1);
+  value.setUsageError(null);
+  value.nativeUsage.set(value.store.currentSession("task", "root")!.id, [usage(first.sessionID, 1)]);
+  await value.controller.recover("task");
+  expect(value.harness.dispatched).toHaveLength(2);
+});
+
+test("unpriced native usage cannot become a zero-cost budget observation", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  const first = value.harness.dispatched[0]!;
+  value.harness.finish(first.messageID);
+  await value.controller.recover("task");
+  value.nativeUsage.set(value.store.currentSession("task", "root")!.id, [{ ...usage(first.sessionID, 0), tokens: { input: 100, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }]);
+  await expect(value.controller.recover("task")).rejects.toThrow("no price");
+  expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
+  expect(value.harness.dispatched).toHaveLength(1);
+});
+
+test("native cost does not depend on the price catalog", async () => {
+  const value = await fixture();
+  const controller = new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, value.reader, async () => { throw new Error("Pricing is offline"); });
+  await controller.recover("task");
+  const first = value.harness.dispatched[0]!;
+  value.harness.finish(first.messageID);
+  value.nativeUsage.set(value.store.currentSession("task", "root")!.id, [{ ...usage(first.sessionID, 20), tokens: { input: 100, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }]);
+  await controller.recover("task");
+  await controller.recover("task");
+  expect(value.store.get("task")).toMatchObject({ status: "waiting_human", limitPause: { reason: "budget", usage: { estimatedCostUsd: 20 } } });
+  expect(value.harness.dispatched).toHaveLength(1);
+});
+
+test("a known turn cap pauses without observing native cost", async () => {
+  const value = await fixture();
+  updateEnvironmentSettings(value.database, { minFreeDiskGb: 5, defaultBudgetUsd: 15, defaultMaxTurns: 1 });
+  await value.controller.recover("task");
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  await value.controller.recover("task");
+  value.setUsageError(new Error("Native session is unavailable"));
+  await value.controller.recover("task");
+  expect(value.store.get("task")).toMatchObject({
+    status: "waiting_human",
+    humanQuestion: expect.stringContaining("Estimated spend is not available"),
+    limitPause: { reason: "turns", usage: { estimatedCostUsd: null, admittedTurns: 1 }, proposedLimits: { budgetUsd: 15, maxTurns: 2 } },
+  });
+  expect(value.harness.dispatched).toHaveLength(1);
+});
+
+test("turn admission is atomic across roles and counts cancelled admitted work", async () => {
+  const value = await fixture();
+  updateEnvironmentSettings(value.database, { minFreeDiskGb: 5, defaultBudgetUsd: 0, defaultMaxTurns: 1 });
+  const root = value.controller.prepareRoot("task");
+  const worker = value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Do the work" });
+  const rootTurn = value.store.pendingTurns(root.id)[0]!;
+  const workerTurn = value.store.pendingTurns(worker.id)[0]!;
+  const rootOwner = await value.store.claimSessionOperation({ sessionId: root.id, generation: root.generation });
+  const workerOwner = await value.store.claimSessionOperation({ sessionId: worker.id, generation: worker.generation });
+  const limitUsage = { estimatedCostUsd: 0, admittedTurns: 0 };
+  expect(value.store.claimPrompt({ taskId: "task", turnId: rootTurn.id, serverGeneration: value.harness.serverGeneration, owner: rootOwner!, usage: limitUsage })).toBe(true);
+  expect(value.store.claimPrompt({ taskId: "task", turnId: workerTurn.id, serverGeneration: "c775df17-718a-4cb2-8e23-6912b8aa0d39", owner: workerOwner!, usage: limitUsage })).toBe(false);
+  expect(value.store.get("task").status).toBe("active");
+  value.store.markPrompted({ turnId: rootTurn.id, generation: root.generation });
+  value.store.cancel("task");
+  expect(value.store.taskSpend("task").turns).toBe(1);
+
+  const queued = await fixture();
+  queued.controller.prepareRoot("task");
+  queued.store.cancel("task");
+  expect(queued.store.taskSpend("task").turns).toBe(0);
+});
+
+test("a turn cap counts admitted turns but excludes queued prompts", async () => {
   const capped = await fixture();
-  updateEnvironmentSettings(capped.database, { minFreeDiskGb: 5, defaultBudgetUsd: 15, defaultMaxTurns: 1 });
+  updateEnvironmentSettings(capped.database, { minFreeDiskGb: 5, defaultBudgetUsd: 0, defaultMaxTurns: 1 });
+  await capped.controller.recover("task");
+  expect(capped.harness.dispatched).toHaveLength(1);
+  capped.harness.finish(capped.harness.dispatched[0]!.messageID);
+  await capped.controller.recover("task");
   await capped.controller.recover("task");
   expect(capped.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestion: expect.stringContaining("turn") });
-  expect(capped.harness.dispatched).toEqual([]);
+  expect(capped.store.taskSpend("task").turns).toBe(1);
+  expect(capped.harness.dispatched).toHaveLength(1);
 
   const unlimited = await fixture();
   updateEnvironmentSettings(unlimited.database, { minFreeDiskGb: 5, defaultBudgetUsd: 0, defaultMaxTurns: 0 });
@@ -55,11 +153,12 @@ test("a turn cap pauses before dispatch and zero limits disable enforcement", as
 test("Coordinator handoff preserves its plan and review criteria in the Worker prompt", async () => {
   const value = await fixture();
   value.controller.prepareRoot("task");
-  await value.controller.delegateWorker(value.identity(), {
+  const delegated = await value.controller.delegateWorker(value.identity(), {
     plan: "Update the existing README heading; leave runtime code unchanged.",
     acceptanceCriteria: ["Only README.md changes", "The heading describes the current runtime"],
     instruction: "Apply the heading change and report the diff.",
-  });
+  }) as { acceptedAssignment: { kind: string; prompt: string } };
+  expect(delegated.acceptedAssignment).toMatchObject({ kind: "saved_prompt", prompt: expect.stringContaining("Update the existing README heading") });
   const worker = value.store.currentSession("task", "worker");
   expect(worker).not.toBeNull();
   const prompt = value.store.turns("task").find(turn => turn.sessionId === worker?.id)?.promptText;
@@ -69,7 +168,7 @@ test("Coordinator handoff preserves its plan and review criteria in the Worker p
   expect(prompt?.match(/For configured verification commands, set a 30-minute shell timeout, or the tool maximum if lower\. Normal completion ends the command immediately\./g)).toHaveLength(1);
 });
 
-test("a durable Worker assignment is accepted before native recovery and launches once after reconstruction", async () => {
+test("a durable Worker assignment stays authoritative across reconstruction and a rejected competing plan", async () => {
   const value = await fixture();
   value.controller.prepareRoot("task");
   const ensure = value.harness.ensureSession.bind(value.harness);
@@ -79,7 +178,10 @@ test("a durable Worker assignment is accepted before native recovery and launche
     plan: "Update the scoped source without changing unrelated behavior.",
     acceptanceCriteria: ["The focused check passes"],
     instruction: "Implement the scoped change.",
-  })).resolves.toMatchObject({ worker: { kind: "worker", lifecycle: "reserved" } });
+  })).resolves.toMatchObject({
+    worker: { kind: "worker", lifecycle: "reserved" },
+    acceptedAssignment: { kind: "saved_prompt", prompt: expect.stringContaining("Implement the scoped change.") },
+  });
   expect(value.store.sessions("task").filter(session => session.kind === "worker")).toHaveLength(1);
   expect(value.store.turns("task").filter(turn => turn.sessionId === value.store.currentSession("task", "worker")?.id)).toHaveLength(1);
   await expect(value.controller.delegateWorker(value.identity(), {
@@ -89,7 +191,7 @@ test("a durable Worker assignment is accepted before native recovery and launche
   })).rejects.toThrow("worker_already_assigned");
 
   value.harness.ensureSession = ensure;
-  const restarted = new RootController(new TaskControlStore(value.database), value.harness);
+  const restarted = new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, value.reader);
   await restarted.recover("task");
   await restarted.recover("task");
   expect(value.harness.dispatched.filter(intent => intent.agent === "forge-worker")).toHaveLength(1);
@@ -130,7 +232,7 @@ test("a crash after claiming but before posting fences the old server and submit
   const root = value.controller.prepareRoot("task");
   const turn = value.store.pendingTurns(root.id)[0]!;
   const owner = await value.store.claimSessionOperation({ sessionId: root.id, generation: root.generation });
-  expect(value.store.claimPrompt(turn.id, value.harness.serverGeneration, owner!)).toBe(true);
+  expect(value.store.claimPrompt({ taskId: "task", turnId: turn.id, serverGeneration: value.harness.serverGeneration, owner: owner!, usage: { estimatedCostUsd: 0, admittedTurns: 0 } })).toBe(true);
   value.store.releaseSessionOperation(root.id, owner!);
   await value.controller.recover("task");
   expect(value.harness.fenced).toEqual([]);
@@ -166,12 +268,12 @@ test("fence receipts cannot requeue another attempt or bypass the current sessio
   const root = value.controller.prepareRoot("task");
   const turn = value.store.pendingTurns(root.id)[0]!;
   const owner = await value.store.claimSessionOperation({ sessionId: root.id, generation: root.generation });
-  expect(value.store.claimPrompt(turn.id, value.harness.serverGeneration, owner!)).toBe(true);
+  expect(value.store.claimPrompt({ taskId: "task", turnId: turn.id, serverGeneration: value.harness.serverGeneration, owner: owner!, usage: { estimatedCostUsd: 0, admittedTurns: 0 } })).toBe(true);
   const attempt = value.store.pendingTurns(root.id)[0]!.dispatchAttempt!;
   expect(value.store.requeueFencedPrompt({ turnId: turn.id, attempt, owner: "stale-owner" })).toBe(false);
   expect(value.store.requeueFencedPrompt({ turnId: turn.id, attempt: { ...attempt, serverGeneration: "c775df17-718a-4cb2-8e23-6912b8aa0d39" }, owner: owner! })).toBe(false);
   expect(value.store.requeueFencedPrompt({ turnId: turn.id, attempt, owner: owner! })).toBe(true);
-  expect(value.store.claimPrompt(turn.id, "c775df17-718a-4cb2-8e23-6912b8aa0d39", owner!)).toBe(true);
+  expect(value.store.claimPrompt({ taskId: "task", turnId: turn.id, serverGeneration: "c775df17-718a-4cb2-8e23-6912b8aa0d39", owner: owner!, usage: { estimatedCostUsd: 0, admittedTurns: 0 } })).toBe(true);
   expect(value.store.requeueFencedPrompt({ turnId: turn.id, attempt, owner: owner! })).toBe(false);
   value.store.cancel("task");
   expect(value.store.requeueFencedPrompt({ turnId: turn.id, attempt, owner: owner! })).toBe(false);
@@ -216,13 +318,22 @@ async function fixture(startImmediately = true) {
   const store = new TaskControlStore(database);
   store.create({ taskId: "task", startImmediately, objective: "Ship it", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: directory, branch: "task", baseSha: "a", headSha: "a", dirty: false } });
   const harness = new FakeTaskHarness();
-  const controller = new RootController(store, harness);
+  const nativeUsage = new Map<string, ReturnType<typeof usage>[]>();
+  let usageError: Error | null = null;
+  const reader = (session: TaskSession) => ({
+    turnEvidence: async () => ({ tools: [], limitation: null }),
+    timeline: async () => {
+      if (usageError) throw usageError;
+      return { usage: nativeUsage.get(session.id) ?? [], liveMessageId: null };
+    },
+  });
+  const controller = new RootController(store, harness, undefined, undefined, undefined, reader, async () => undefined);
   const identity = () => {
     const root = store.currentSession("task", "root");
     if (!root) throw new Error("Coordinator not created");
     return { taskId: "task", sessionId: root.id, generation: root.generation };
   };
-  return { directory, database, store, harness, controller, identity };
+  return { directory, database, store, harness, controller, identity, nativeUsage, setUsageError(error: Error | null) { usageError = error; }, reader };
 }
 
 test.each(["root", "worker"] as const)("a crashed %s tool retains its turn until explicit cleanup confirmation", async kind => {
@@ -500,7 +611,7 @@ test("sequential Worker assignments reuse one native session and pane across con
   value.harness.finish(firstWorkerIntent.messageID);
 
   const restartedStore = new TaskControlStore(value.database);
-  const restartedController = new RootController(restartedStore, value.harness);
+  const restartedController = new RootController(restartedStore, value.harness, undefined, undefined, undefined, value.reader);
   await restartedController.recover("task");
   const idleWorker = restartedStore.currentSession("task", "worker")!;
   expect(idleWorker).toMatchObject({ id: firstWorker.id, nativeSessionId: firstWorker.nativeSessionId, paneId: firstWorker.paneId, lifecycle: "live" });

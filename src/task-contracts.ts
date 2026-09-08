@@ -3,6 +3,7 @@ import { HumanQuestionOptionsSchema } from "./human-question.js";
 import { TaskControlStatusSchema, TaskProfileSchema, WorktreeReferenceSchema, PullRequestReferenceSchema } from "./task-control.js";
 import { MAX_TASK_IMAGES, MAX_TASK_IMAGE_BASE64_LENGTH } from "./task-attachment-limits.js";
 import { AdvisorProfileIdsSchema, AdvisorRoleSchema, PublicWorkflowStateSchema, WorkflowIdSchema } from "./workflows.js";
+import { TaskLimitPauseSchema, TaskLimitsSchema } from "./task-limits.js";
 
 const id = z.string().min(1).max(256);
 const commit = z.string().regex(/^[a-f0-9]{40,64}$/i);
@@ -57,6 +58,11 @@ export const TaskConfigurationSchema = z.object({
 export type TaskConfiguration = z.infer<typeof TaskConfigurationSchema>;
 
 export const TaskImageSchema = z.object({ artifactId: id, filename: z.string(), mimeType: z.string(), byteSize: z.number().int().nonnegative() }).strict();
+const TaskQuestionBaseSchema = z.object({ id, text: z.string(), options: HumanQuestionOptionsSchema.default([]), requiresCommandCleanup: z.boolean() });
+const TaskHumanQuestionSchema = z.discriminatedUnion("kind", [
+  TaskQuestionBaseSchema.extend({ kind: z.literal("question") }).strict(),
+  TaskQuestionBaseSchema.extend({ kind: z.literal("task_limit"), pause: TaskLimitPauseSchema }).strict(),
+]);
 export const TaskSchema = z.object({
   id, companyId: id, projectId: id,
   issueKey: z.string().nullable(),
@@ -71,7 +77,8 @@ export const TaskSchema = z.object({
   configuration: TaskConfigurationSchema,
   worktree: WorktreeReferenceSchema.nullable(),
   pullRequest: PullRequestReferenceSchema.nullable(),
-  humanQuestion: z.object({ id, text: z.string(), options: HumanQuestionOptionsSchema.default([]), requiresCommandCleanup: z.boolean() }).nullable(),
+  humanQuestion: TaskHumanQuestionSchema.nullable(),
+  limits: TaskLimitsSchema.extend({ admittedTurns: z.number().int().nonnegative() }).strict(),
   wakeAt: z.string().nullable(),
   images: z.array(TaskImageSchema),
   createdAt: z.string(), updatedAt: z.string(), archivedAt: z.string().nullable(),

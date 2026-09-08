@@ -25,7 +25,7 @@ async function fixture(behaviour: "complete" | "hang" | "crash" | "startup_failu
   const line = (value: unknown) => `echo '${JSON.stringify(value)}'`;
   const script = {
     complete: [line({ type: "system", subtype: "init", session_id: sessionID, cwd: worktree, model: "claude-haiku-4-5-20251001", tools: [] }), line({ type: "assistant", uuid: "a1", session_id: sessionID, message: { role: "assistant", model: "claude-haiku-4-5-20251001", id: "msg_1", content: [{ type: "text", text: "Reviewed." }] } }), line({ type: "result", subtype: "success", is_error: false, result: "Reviewed the change.", session_id: sessionID, uuid: "r1" })],
-    hang: [line({ type: "system", subtype: "init", session_id: sessionID, cwd: worktree, model: "m", tools: [] }), line({ type: "assistant", uuid: "a1", session_id: sessionID, message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "sleep" } }] } }), "exec sleep 30"],
+    hang: [line({ type: "system", subtype: "init", session_id: sessionID, cwd: worktree, model: "m", tools: [] }), line({ type: "assistant", uuid: "a1", session_id: sessionID, message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "sleep" } }] } }), "sleep 30", "exit 0"],
     crash: [line({ type: "system", subtype: "init", session_id: sessionID, cwd: worktree, model: "m", tools: [] }), "exit 1"],
     startup_failure: ["echo 'Error: Not logged in' >&2", "exit 1"],
   }[behaviour];
@@ -162,7 +162,8 @@ test("Claude workflow roles retain their prompts, read-only Advisor tools, and e
   expect(args).not.toContain("mcp__forge_root");
   expect(args[args.indexOf("--append-system-prompt") + 1]).toContain("Advisor");
   const worker = claudeArguments({ scope: { ...f.scope, role: "worker", workflow: "direct_build", workerMode: "direct", purpose: "verification" }, sessionID, resume: false, print: true, runtimeDirectory: f.runtimeDirectory });
-  expect(worker[worker.indexOf("--append-system-prompt") + 1]).toContain("Direct build assignment");
+  expect(worker[worker.indexOf("--append-system-prompt") + 1]).toContain("verification Worker");
+  expect(worker[worker.indexOf("--append-system-prompt") + 1]).not.toContain("Direct build assignment");
   expect(worker[worker.indexOf("--append-system-prompt") + 1]).toContain("verification only");
 });
 

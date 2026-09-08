@@ -24,6 +24,16 @@ export function addTokens(total: UsageTokens, value: UsageTokens): void {
   total.cache.write += value.cache.write;
 }
 
+export function estimateUnpricedUsage(usage: TaskUsage[], pricing: ModelPricingCatalog): TaskUsage[] {
+  return usage.map(entry => {
+    if (entry.cost > 0 || entry.tokens.input + entry.tokens.output + entry.tokens.reasoning + entry.tokens.cache.read + entry.tokens.cache.write === 0) return entry;
+    const listed = pricing.get(modelPricingKey(entry.provider, entry.model));
+    if (!listed) return entry;
+    const cost = estimateUsageCost(entry.tokens, listed);
+    return cost > 0 ? { ...entry, cost, subsidized: true } : entry;
+  });
+}
+
 export function taskUsage(messages: OpenCodeMessageEnvelope[], role: TaskUsage["role"], pricing?: ModelPricingCatalog): TaskUsage[] {
   return messages.flatMap(({ info, parts }) => {
     if (info.role !== "assistant") return [];

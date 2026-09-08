@@ -50,9 +50,9 @@ export const PullRequestBodySchema = z.string().trim().min(1).max(20_000).refine
 export type PullRequestBody = z.infer<typeof PullRequestBodySchema>;
 
 const WorkerAssignmentShape = z.object({
-  plan: z.string().trim().min(1).optional().describe("The Coordinator's implementation plan, based on its own source investigation. Include the chosen approach, affected files, and constraints. Mandatory in planned mode; omitted in direct mode."),
-  acceptanceCriteria: z.array(z.string().trim().min(1)).min(1).describe("Concrete outcomes and checks the Coordinator will use to review the implementation."),
-  instruction: z.string().trim().min(1).describe("Specific implementation or check commands for the Worker. Planning and final review remain with the Coordinator."),
+  plan: z.string().trim().min(1).optional().describe("The accepted objective, chosen approach, and essential constraints. Leave routine design and implementation choices to Worker. Mandatory in planned mode; omitted in direct mode."),
+  acceptanceCriteria: z.array(z.string().trim().min(1)).min(1).describe("Observable outcomes, acceptance examples, and necessary checks for independent final review."),
+  instruction: z.string().trim().min(1).describe("One coherent functional implementation or verification assignment. Do not split routine seams, fixture corrections, and tests into separate assignments."),
   mode: z.enum(["planned", "direct"]).optional().describe("planned (default) requires a plan. direct is legal only for the Direct build workflow."),
   purpose: z.enum(["implementation", "verification"]).optional().describe("verification runs the specified checks on the pinned revision without intentional source edits."),
   advisorTurnId: opaqueId.optional().describe("Pull request repair: the exact latest valid current-range Rater report turn that the Worker implements."),

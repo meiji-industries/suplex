@@ -4,6 +4,7 @@ import { claudeSessionBusy } from "./claude-code-task-runtime.js";
 import { claudeConfigDirectory, claudeExecution, claudeMessageEntries, claudeUsage, findClaudeTranscript, parseJsonLines, readClaudeTranscript } from "./claude-code-transcript.js";
 import type { TaskSession } from "./task-control.js";
 import { taskSessionRuntimeDirectory, type NativeSessionReader } from "./task-harness.js";
+import type { ModelPricingCatalog } from "./model-pricing.js";
 
 export class ClaudeCodeSessionReader implements NativeSessionReader {
   constructor(private readonly databasePath: string, private readonly configDirectory = claudeConfigDirectory()) {}
@@ -35,9 +36,9 @@ export class ClaudeCodeSessionReader implements NativeSessionReader {
     return { status: await this.busy(session) ? "busy" as const : "idle" as const, updatedAt };
   }
 
-  async timeline(session: TaskSession) {
+  async timeline(session: TaskSession, pricing?: ModelPricingCatalog) {
     const sessionID = this.sessionID(session);
-    const usage = claudeUsage(await readClaudeTranscript(sessionID, this.configDirectory), sessionID, session.kind);
+    const usage = claudeUsage(await readClaudeTranscript(sessionID, this.configDirectory), sessionID, session.kind, pricing);
     const live = await this.busy(session) ? usage.at(-1) : undefined;
     if (live) live.completedAt = null;
     return { usage, liveMessageId: live?.messageId ?? null };

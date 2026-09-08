@@ -59,6 +59,11 @@ export interface GithubPullRequestObservation {
   reviewDecision: string | null;
 }
 
+export type GithubConditionalMergeResult =
+  | { merged: true; sha: string }
+  | { merged: false; sha: null }
+  | { merged: false; sha: null; disposition: "blocked" | "waiting" | "queued"; message: string };
+
 export interface ExactPullRequestIdentity {
   repository: string;
   owner: string;
@@ -93,14 +98,14 @@ export interface GithubReleasePort {
   updateDraftPullRequest(input: DraftPullRequestUpdate): Promise<GithubPullRequest>;
   getPullRequest(input: { repository: string; number: number }): Promise<GithubPullRequest>;
   observePullRequest?(input: { repository: string; branch: string; pullRequestNumber?: number | null }): Promise<GithubPullRequestObservation>;
-  mergePullRequest?(input: { repository: string; number: number; headSha: string }): Promise<void>;
-  mergePullRequestDirect?(input: { repository: string; number: number; headSha: string }): Promise<{ merged: boolean; sha: string | null }>;
+  mergePullRequest?(input: { repository: string; number: number; headSha: string }): Promise<GithubConditionalMergeResult | void>;
+  mergePullRequestDirect?(input: { repository: string; number: number; headSha: string }): Promise<GithubConditionalMergeResult>;
 }
 
 export type GithubAcceptancePort = Pick<GithubReleasePort, "getBranchHead" | "getPullRequest"> & {
   markReadyForReview(input: { repository: string; number: number }): Promise<void>;
-  mergePullRequest?(input: { repository: string; number: number; headSha: string }): Promise<void>;
-  mergePullRequestDirect?(input: { repository: string; number: number; headSha: string }): Promise<{ merged: boolean; sha: string | null }>;
+  mergePullRequest?(input: { repository: string; number: number; headSha: string }): Promise<GithubConditionalMergeResult | void>;
+  mergePullRequestDirect?(input: { repository: string; number: number; headSha: string }): Promise<GithubConditionalMergeResult>;
 };
 export type GithubReleaseAdapter = GithubReleasePort & GithubAcceptancePort;
 
@@ -181,6 +186,12 @@ const PullViewResponseSchema = z.object({
   }).passthrough()).nullable(),
 });
 const RateLimitResponseSchema = z.object({ resources: z.object({ core: z.object({ reset: z.number().int() }) }) });
+const AcceptedApiFailureSchema = z.object({ kind: z.literal("accepted-failure"), status: z.number().int(), message: z.string().min(1) });
+const ConditionalMergeResponseSchema = z.object({ merged: z.boolean(), message: z.string(), sha: z.string().nullable().optional() });
+const RequiredCheckSchema = z.object({ name: z.string().min(1), bucket: z.enum(["pass", "fail", "pending", "skipping", "cancel"]), state: z.string().min(1), link: z.string().url().optional() });
+const PullMergeContextSchema = z.object({ id: z.string().min(1), headRefOid: z.string().regex(shaPattern), baseRefName: z.string().min(1), mergeable: z.string().nullable(), mergeStateStatus: z.string().nullable() });
+const BranchRulesSchema = z.array(z.object({ type: z.string().min(1) }).passthrough());
+const EnqueueResponseSchema = z.object({ data: z.object({ enqueuePullRequest: z.object({ mergeQueueEntry: z.object({ id: z.string().min(1) }) }) }) });
 
 class GithubCommandFailure extends Error {
   constructor(readonly result: GithubCommandResult, readonly timedOut = false) {
@@ -358,11 +369,14 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       return Date.parse(retryAt) > Date.now() ? retryAt : null;
     } catch { return null; }
   };
-  const api = async (args: string[], operation: string, allowNotFound = false, notFoundSummary?: string): Promise<unknown> => {
+  const api = async (args: string[], operation: string, allowNotFound = false, notFoundSummary?: string, acceptedFailureStatuses: readonly number[] = []): Promise<unknown> => {
     try { return parseJson((await runGh(args)).stdout); } catch (error) {
       if (error instanceof GithubReleaseFailure) throw error;
       if (error instanceof GithubCommandFailure) {
         const parsed = restError(error.result.stdout);
+        const textStatus = /\bHTTP (\d{3})\b/.exec(error.result.stderr)?.[1];
+        const status = parsed?.status ?? (textStatus ? Number(textStatus) : undefined);
+        if (status !== undefined && acceptedFailureStatuses.includes(status)) return { kind: "accepted-failure", status, message: diagnostic(error) || `GitHub refused the request with HTTP ${status}` };
         if (allowNotFound && parsed?.status === 404) return null;
         // GitHub sometimes returns plain-text 404s. Treat them as an absent
         // observation; the next operation will adopt what GitHub reports.
@@ -378,6 +392,60 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
     }
   };
   const pull = (value: unknown): GithubPullRequest => normalizeGithubPull(value);
+  const retryTransientObservation = async <T>(observe: () => Promise<T>): Promise<T> => {
+    try { return await observe(); }
+    catch (error) {
+      if (!(error instanceof GithubReleaseFailure) || error.code !== "provider-unavailable") throw error;
+      return observe();
+    }
+  };
+  const requiredChecks = async (repository: string, number: number): Promise<z.infer<typeof RequiredCheckSchema>[]> => {
+    const args = ["pr", "checks", String(number), "--repo", repository, "--required", "--json", "name,bucket,state,link"];
+    try {
+      return z.array(RequiredCheckSchema).parse(parseJson((await runGh(args)).stdout));
+    } catch (error) {
+      if (error instanceof GithubCommandFailure) {
+        const parsed = z.array(RequiredCheckSchema).safeParse((() => { try { return JSON.parse(error.result.stdout) as unknown; } catch { return null; } })());
+        if (parsed.success) return parsed.data;
+      }
+      if (error instanceof GithubReleaseFailure) throw error;
+      throw classifyCommandFailure(error, "required pull request checks");
+    }
+  };
+  const mergeConditionally = async (input: { repository: string; number: number; headSha: string }, allowQueue: boolean): Promise<GithubConditionalMergeResult> => {
+    if (!Number.isInteger(input.number) || input.number < 1 || !shaPattern.test(input.headSha)) throw providerFailure("invalid-provider-response", "The pull request merge input is invalid");
+    const repository = normalizeRepository(input.repository);
+    const repo = z.object({ allow_squash_merge: z.boolean(), allow_merge_commit: z.boolean(), allow_rebase_merge: z.boolean() }).parse(await api(["api", `repos/${repository}`], "repository settings"));
+    const method = repo.allow_squash_merge ? "squash" : repo.allow_merge_commit ? "merge" : repo.allow_rebase_merge ? "rebase" : null;
+    if (!method) throw providerFailure("provider-unavailable", "The repository does not allow a merge method");
+    const value = await api(["api", "--method", "PUT", `repos/${repository}/pulls/${input.number}/merge`, "-f", `sha=${input.headSha}`, "-f", `merge_method=${method}`], "conditional pull request merge", false, undefined, [405]);
+    const acceptedFailure = AcceptedApiFailureSchema.safeParse(value);
+    if (acceptedFailure.success) {
+      const context = await retryTransientObservation(async () => {
+        try { return PullMergeContextSchema.parse(parseJson((await runGh(["pr", "view", String(input.number), "--repo", repository, "--json", "id,headRefOid,baseRefName,mergeable,mergeStateStatus"])).stdout)); }
+        catch (error) { if (error instanceof GithubReleaseFailure) throw error; throw classifyCommandFailure(error, "pull request merge observation"); }
+      });
+      if (context.headRefOid !== input.headSha) return { merged: false, sha: null, disposition: "blocked", message: `GitHub refused the exact-head merge because the pull request head changed from ${input.headSha} to ${context.headRefOid}. ${acceptedFailure.data.message}` };
+      const checks = await retryTransientObservation(() => requiredChecks(repository, input.number));
+      const failed = checks.filter(check => check.bucket === "fail" || check.bucket === "cancel");
+      if (failed.length > 0) return { merged: false, sha: null, disposition: "blocked", message: `GitHub refused the merge because required checks failed: ${failed.map(check => `${check.name} (${check.state}${check.link ? `, ${check.link}` : ""})`).join(", ")}. ${acceptedFailure.data.message}` };
+      const pending = checks.filter(check => check.bucket === "pending");
+      if (pending.length > 0) return { merged: false, sha: null, disposition: "waiting", message: `GitHub is waiting for required checks: ${pending.map(check => `${check.name} (${check.state}${check.link ? `, ${check.link}` : ""})`).join(", ")}. ${acceptedFailure.data.message}` };
+      if (context.mergeable === "CONFLICTING" || context.mergeStateStatus === "DIRTY") return { merged: false, sha: null, disposition: "blocked", message: `GitHub refused the merge because the pull request has merge conflicts (${context.mergeable ?? "UNKNOWN"}/${context.mergeStateStatus ?? "UNKNOWN"}). ${acceptedFailure.data.message}` };
+      if (context.mergeable === "UNKNOWN") return { merged: false, sha: null, disposition: "waiting", message: `GitHub is still computing mergeability. ${acceptedFailure.data.message}` };
+      const rules = await retryTransientObservation(async () => BranchRulesSchema.parse(await api(["api", `repos/${repository}/rules/branches/${encodeURIComponent(context.baseRefName)}`], "branch rules")));
+      if (rules.some(rule => rule.type === "merge_queue")) {
+        if (!allowQueue) return { merged: false, sha: null, disposition: "blocked", message: `GitHub requires a merge queue for ${context.baseRefName}, but direct trigger merges cannot enter the queue.` };
+        const query = "mutation($pullRequestId:ID!,$expectedHeadOid:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$pullRequestId,expectedHeadOid:$expectedHeadOid}){mergeQueueEntry{id}}}";
+        EnqueueResponseSchema.parse(await api(["api", "graphql", "-f", `query=${query}`, "-f", `pullRequestId=${context.id}`, "-f", `expectedHeadOid=${input.headSha}`], "merge queue enqueue"));
+        return { merged: false, sha: null, disposition: "queued", message: `GitHub added pull request ${input.number} at ${input.headSha} to the merge queue.` };
+      }
+      return { merged: false, sha: null, disposition: "blocked", message: `GitHub refused the merge with no pending required checks or merge queue: ${acceptedFailure.data.message}. Merge state is ${context.mergeStateStatus ?? "UNKNOWN"}.` };
+    }
+    const response = ConditionalMergeResponseSchema.safeParse(value);
+    if (!response.success || (response.data.merged && (!response.data.sha || !shaPattern.test(response.data.sha)))) throw providerFailure("invalid-provider-response", "GitHub did not confirm the conditional merge result");
+    return response.data.merged ? { merged: true, sha: response.data.sha! } : { merged: false, sha: null };
+  };
   return {
     ...createGithubTriggerPort(async (args, operation) => {
       try { return await api(args, operation); } catch (error) {
@@ -496,21 +564,10 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       try { await runGh(["pr", "ready", String(input.number), "--repo", input.repository]); } catch (error) { throw classifyCommandFailure(error, "mark ready for review"); }
     },
     async mergePullRequest(input) {
-      const repo = z.object({ allow_squash_merge: z.boolean(), allow_merge_commit: z.boolean(), allow_rebase_merge: z.boolean() }).parse(await api(["api", `repos/${input.repository}`], "repository settings"));
-      const method = repo.allow_squash_merge ? "--squash" : repo.allow_merge_commit ? "--merge" : repo.allow_rebase_merge ? "--rebase" : null;
-      if (!method) throw providerFailure("provider-unavailable", "The repository does not allow a merge method");
-      try { await runGh(["pr", "merge", String(input.number), "--repo", input.repository, method, "--match-head-commit", input.headSha]); } catch (error) { throw classifyCommandFailure(error, "merge pull request"); }
+      await mergeConditionally(input, true);
     },
     async mergePullRequestDirect(input) {
-      if (!Number.isInteger(input.number) || input.number < 1 || !shaPattern.test(input.headSha)) throw providerFailure("invalid-provider-response", "The pull request merge input is invalid");
-      const repository = normalizeRepository(input.repository);
-      const repo = z.object({ allow_squash_merge: z.boolean(), allow_merge_commit: z.boolean(), allow_rebase_merge: z.boolean() }).parse(await api(["api", `repos/${repository}`], "repository settings"));
-      const method = repo.allow_squash_merge ? "squash" : repo.allow_merge_commit ? "merge" : repo.allow_rebase_merge ? "rebase" : null;
-      if (!method) throw providerFailure("provider-unavailable", "The repository does not allow a merge method");
-      const value = await api(["api", "--method", "PUT", `repos/${repository}/pulls/${input.number}/merge`, "-f", `sha=${input.headSha}`, "-f", `merge_method=${method}`], "conditional pull request merge");
-      const response = z.object({ merged: z.boolean(), message: z.string(), sha: z.string().nullable().optional() }).safeParse(value);
-      if (!response.success || (response.data.merged && (!response.data.sha || !shaPattern.test(response.data.sha)))) throw providerFailure("invalid-provider-response", "GitHub did not confirm the conditional merge result");
-      return response.data.merged ? { merged: true, sha: response.data.sha! } : { merged: false, sha: null };
+      return mergeConditionally(input, false);
     },
   };
 }

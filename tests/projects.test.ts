@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 import { AuthService } from "../src/auth.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { ProjectService, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects.js";
+import { ProjectService, inferRepositoryCommands, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
 
 interface Fixture {
@@ -84,6 +84,38 @@ test("normalizes supported GitHub repository URLs", () => {
   expect(parseGithubRepositoryUrl("git@github.com:meiji-industries/sampler.git").cloneUrl).toBe("git@github.com:meiji-industries/sampler.git");
   expect(() => parseGithubRepositoryUrl("https://token@github.com/meiji-industries/sampler.git")).toThrowError("GitHub repository URL is invalid");
   expect(() => parseGithubRepositoryUrl("https://gitlab.com/meiji-industries/sampler.git")).toThrowError("GitHub repository URL is invalid");
+});
+
+test.each([
+  ["pnpm", "pnpm-lock.yaml", "pnpm check"],
+  ["npm", "package-lock.json", "npm run check"],
+  ["yarn", "yarn.lock", "yarn check"],
+  ["bun", "bun.lock", "bun check"],
+] as const)("prefers the complete package check with the %s runner", async (packageManager, lockfile, verificationCommand) => {
+  const repository = await mkdtemp(join(tmpdir(), `forge-infer-${packageManager}-`));
+  try {
+    await writeFile(join(repository, "package.json"), JSON.stringify({ scripts: { check: "lint && test", test: "test" } }));
+    await writeFile(join(repository, lockfile), "");
+    await expect(inferRepositoryCommands(repository)).resolves.toMatchObject({ verificationCommand });
+  } finally {
+    await rm(repository, { recursive: true, force: true });
+  }
+});
+
+test("prefers complete checks in mise and Makefile repositories", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-infer-checks-"));
+  try {
+    const miseRepository = join(root, "mise");
+    const makeRepository = join(root, "make");
+    await mkdir(miseRepository);
+    await mkdir(makeRepository);
+    await writeFile(join(miseRepository, "mise.toml"), "[tasks.check]\nrun = \"test && lint\"\n[tasks.test]\nrun = \"test\"\n");
+    await writeFile(join(makeRepository, "Makefile"), "check:\n\ttrue\n\ntest:\n\ttrue\n");
+    await expect(inferRepositoryCommands(miseRepository)).resolves.toMatchObject({ verificationCommand: "mise run check" });
+    await expect(inferRepositoryCommands(makeRepository)).resolves.toMatchObject({ verificationCommand: "make check" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("reads provider-qualified models from OpenCode without a Forge catalog gate", async () => {

@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -25,6 +25,26 @@ test("Worker guards permit local repairs and CI reads without provider writes", 
     }
     expect((await run("gh", ["run", "view", "123", "--log-failed"])).stdout.trim()).toBe("run view 123 --log-failed");
     expect((await run("gh", ["pr", "merge", "7"])).exitCode).toBe(125);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("Worker guard refreshes atomically replace complete executables", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "forge-worker-guard-refresh-"));
+  try {
+    const first = await createGitCommandGuard(directory);
+    const executable = join(first.directory, "git");
+    const before = await stat(executable);
+    const refreshed = await createGitCommandGuard(directory);
+    const after = await stat(executable);
+    expect(after.ino).not.toBe(before.ino);
+    expect(after.mode & 0o700).toBe(0o700);
+    await expect(runCommand({
+      command: executable,
+      args: ["--version"],
+      taskId: null,
+      stepId: null,
+      env: refreshed.env,
+    })).resolves.toMatchObject({ exitCode: 0 });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

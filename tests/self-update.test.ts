@@ -519,12 +519,121 @@ test("a dead helper identity allows a stale operation to recover without touchin
   }
 });
 
+test("an expired pending operation without a helper becomes failed when Forge reads its update state", async () => {
+  const fixture = await operationFixture();
+  try {
+    const service = new SelfUpdateService({
+      config: fixture.config,
+      store: fixture.store,
+      processController: { async inspect() { return undefined; }, async signal() {} },
+      runGit: gitScript(fixture.root).runGit,
+      runningRevision: headRevision,
+      now: () => new Date("2026-09-06T00:20:00.000Z"),
+      argv: ["node", "src/server.ts"],
+      environment: {},
+    });
+
+    await expect(service.readUpdate()).resolves.toMatchObject({
+      operation: { status: "failed", targetRevision },
+    });
+    await expect(fixture.store.readStatus()).resolves.toMatchObject({
+      status: "failed",
+      error: "The detached update helper did not finish within the time limit.",
+    });
+    await expect(fixture.store.readLock()).resolves.toBeUndefined();
+    await expect(fixture.store.readPayload()).resolves.toBeUndefined();
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a lock for another operation does not cause update observation to cancel the current operation", async () => {
+  const fixture = await operationFixture();
+  try {
+    await fixture.store.releaseLock(fixture.operationId);
+    await fixture.store.acquireLock("44444444-4444-4444-8444-444444444444");
+    const service = new SelfUpdateService({
+      config: fixture.config,
+      store: fixture.store,
+      runGit: gitScript(fixture.root).runGit,
+      runningRevision: headRevision,
+      now: () => new Date("2026-09-06T00:20:00.000Z"),
+      argv: ["node", "src/server.ts"],
+      environment: {},
+    });
+
+    await expect(service.readUpdate()).resolves.toMatchObject({
+      available: true,
+      revision: targetRevision,
+      operation: { operationId: fixture.operationId, status: "pending" },
+    });
+    await expect(fixture.store.readStatus()).resolves.toMatchObject({ operationId: fixture.operationId, status: "pending" });
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a missing lock does not cause update observation to cancel the current operation", async () => {
+  const fixture = await operationFixture();
+  try {
+    await fixture.store.releaseLock(fixture.operationId);
+    const service = new SelfUpdateService({
+      config: fixture.config,
+      store: fixture.store,
+      runGit: gitScript(fixture.root).runGit,
+      runningRevision: headRevision,
+      now: () => new Date("2026-09-06T00:20:00.000Z"),
+      argv: ["node", "src/server.ts"],
+      environment: {},
+    });
+
+    await expect(service.readUpdate()).resolves.toMatchObject({
+      available: true,
+      revision: targetRevision,
+      operation: { operationId: fixture.operationId, status: "pending" },
+    });
+    await expect(fixture.store.readStatus()).resolves.toMatchObject({ operationId: fixture.operationId, status: "pending" });
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("an expired operation with a live runner claim remains active", async () => {
+  const fixture = await operationFixture();
+  try {
+    const runnerIdentity = { ...inspection(5252), name: "self-update-runner", startedAt: "2026-09-06T00:00:00.000Z", startId: "runner-start" };
+    await fixture.store.acquireRunnerClaim(fixture.operationId, runnerIdentity, runnerIdentity.startedAt);
+    const service = new SelfUpdateService({
+      config: fixture.config,
+      store: fixture.store,
+      processController: { async inspect(pid) { return pid === runnerIdentity.pid ? inspection(runnerIdentity.pid) : undefined; }, async signal() {} },
+      runGit: gitScript(fixture.root).runGit,
+      runningRevision: headRevision,
+      now: () => new Date("2026-09-06T00:20:00.000Z"),
+      argv: ["node", "src/server.ts"],
+      environment: {},
+    });
+
+    await expect(service.readUpdate()).resolves.toMatchObject({
+      available: true,
+      revision: targetRevision,
+      operation: { operationId: fixture.operationId, status: "pending" },
+    });
+    await expect(fixture.store.readStatus()).resolves.toMatchObject({ operationId: fixture.operationId, status: "pending" });
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("active update observations do not fetch while the helper owns preparation", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-self-update-observation-"));
   try {
     const config = createTestConfig(root);
     const store = new SelfUpdateStore(config.runtimeRoot);
-    await store.writeStatus({ operationId: "22222222-2222-4222-8222-222222222222", status: "preparing", targetRevision, acceptedAt: "2026-09-06T00:00:00.000Z", updatedAt: "2026-09-06T00:00:00.000Z" });
+    const operationId = "22222222-2222-4222-8222-222222222222";
+    await store.writeStatus({ operationId, status: "preparing", targetRevision, acceptedAt: "2026-09-06T00:00:00.000Z", updatedAt: "2026-09-06T00:00:00.000Z" });
+    await store.acquireLock(operationId);
+    await store.recordHelper(operationId, { ...inspection(5252), name: "self-update-helper", startedAt: "2026-09-06T00:00:00.000Z", startId: "helper-start" });
     const calls: string[][] = [];
     const service = new SelfUpdateService({
       config,
@@ -534,6 +643,8 @@ test("active update observations do not fetch while the helper owns preparation"
         if (args.join(" ") === "rev-parse --verify HEAD^{commit}") return `${headRevision}\n`;
         throw new Error(`unexpected Git observation: ${args.join(" ")}`);
       },
+      processController: { async inspect(pid) { return pid === 5252 ? inspection(5252) : undefined; }, async signal() {} },
+      now: () => new Date("2026-09-06T00:20:00.000Z"),
       environment: {},
     });
     await expect(service.readUpdate()).resolves.toMatchObject({ available: true, revision: targetRevision, currentRevision: headRevision, operation: { status: "preparing" } });

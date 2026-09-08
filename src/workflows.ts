@@ -291,32 +291,6 @@ export function deliveryDecision(control: ControlLike & { deliveryIntent: { head
   return ready.ok ? { ok: true } : { ok: false, code: "workflow_review_required", reason: ready.reason };
 }
 
-/** Three consecutive completed repair cycles with the same normalized findings and no rating improvement. */
-export function repairStalled(reviews: ReviewRecord[], sessions: SessionLike[], turns: TurnLike[]): { stalled: false } | { stalled: true; findings: string[]; rating: number } {
-  // ponytail: trimmed, sorted finding text; wording changes evade stall detection and Coordinator must still notice obvious repeated failures.
-  const ordered = sessions.map(session => session.id);
-  const ratings = reviews.filter((record): record is Extract<ReviewRecord, { role: "rater" }> => record.role === "rater" && record.result !== null);
-  const normalize = (findings: string[]) => findings.map(finding => finding.trim()).sort().join("\n");
-  const repairBetween = (from: ReviewRecord, to: ReviewRecord) => {
-    const startTurn = turns.findIndex(turn => turn.id === from.turnId); const endTurn = turns.findIndex(turn => turn.id === to.turnId);
-    if (startTurn >= 0 && endTurn >= 0) return turns.slice(startTurn + 1, endTurn).some(turn => {
-      const session = sessions.find(candidate => candidate.id === turn.sessionId);
-      const input = inputForTurn(sessions, turn);
-      return session?.kind === "worker" && session.advisorRole === null && input?.kind === "worker" && input.purpose === "implementation" && succeeded(turn);
-    });
-    const start = ordered.indexOf(from.sessionId); const end = ordered.indexOf(to.sessionId);
-    return sessions.slice(start + 1, end).some(session => session.kind === "worker" && session.advisorRole === null && session.workflowInput?.kind === "worker" && session.workflowInput.purpose === "implementation" && turns.some(turn => turn.sessionId === session.id && succeeded(turn)));
-  };
-  if (ratings.length < 4) return { stalled: false };
-  const window = ratings.slice(-4);
-  const first = window[0]!.result!;
-  for (let index = 1; index < window.length; index++) {
-    const current = window[index]!.result!;
-    if (!repairBetween(window[index - 1]!, window[index]!) || current.rating > first.rating || normalize(current.blockingFindings) !== normalize(first.blockingFindings)) return { stalled: false };
-  }
-  return { stalled: true, findings: [...first.blockingFindings].map(finding => finding.trim()).sort(), rating: window.at(-1)!.result!.rating };
-}
-
 export function deliveryWaitFingerprint(observation: { number: number | null; headSha: string | null; baseSha: string | null; isDraft: boolean | null; reviewDecision: string | null; mergeable: string | null; mergeStateStatus: string | null; state: string | null; checks: { runs: Array<{ name: string; status: string; conclusion?: string | undefined }> } }): string {
   return JSON.stringify({ number: observation.number, head: observation.headSha, draft: observation.isDraft, review: observation.reviewDecision, mergeable: observation.mergeable, mergeState: observation.mergeStateStatus, state: observation.state, checks: [...observation.checks.runs].map(run => `${run.name}:${run.status}:${run.conclusion ?? ""}`).sort() });
 }

@@ -88,6 +88,7 @@ export class TaskRepository {
 
   task(row: TaskRow): Task {
     const control = this.controls.get(row.id);
+    const limitState = this.controls.taskLimitState(row.id);
     const images = this.database.authQuery(db => z.array(TaskImageSchema).parse(db.prepare("SELECT id AS artifactId, filename, mime_type AS mimeType, byte_size AS byteSize FROM forge_artifacts WHERE task_id = ? AND company_id = ? AND kind = 'task-image' ORDER BY created_at, id").all(row.id, row.company_id)));
     return TaskSchema.parse({
       id: row.id, companyId: row.company_id, projectId: row.project_id,
@@ -95,7 +96,11 @@ export class TaskRepository {
       title: row.title, description: row.description, status: control.status, deliveryTarget: control.deliveryTarget,
       rootProfile: control.rootProfile, workerProfile: control.workerProfile, workflow: control.workflow, advisorProfiles: control.advisorProfiles, workflowState: publicWorkflowState(control.workflowState), configuration: JSON.parse(row.configuration_json),
       worktree: control.worktree, pullRequest: control.pullRequest,
-      humanQuestion: control.humanQuestion && control.humanQuestionId ? { id: control.humanQuestionId, text: control.humanQuestion, options: control.humanQuestionOptions ?? [], requiresCommandCleanup: control.recoveryTurnId !== null } : null,
+      humanQuestion: control.humanQuestion && control.humanQuestionId ? control.limitPause
+        ? { kind: "task_limit", id: control.humanQuestionId, text: control.humanQuestion, options: [], requiresCommandCleanup: false, pause: control.limitPause }
+        : { kind: "question", id: control.humanQuestionId, text: control.humanQuestion, options: control.humanQuestionOptions ?? [], requiresCommandCleanup: control.recoveryTurnId !== null }
+        : null,
+      limits: { ...limitState.limits, admittedTurns: limitState.admittedTurns },
       wakeAt: control.wakeAt, images, createdAt: row.created_at, updatedAt: row.activity_updated_at, archivedAt: row.archived_at,
     });
   }

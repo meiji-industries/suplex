@@ -242,19 +242,19 @@ export async function inferRepositoryCommands(repositoryPath: string): Promise<{
   }
 
   const scripts = packageJson?.scripts ?? {};
-  const script = ["test", "typecheck", "lint"].find((name) => Boolean(scripts[name]));
+  const script = ["check", "test", "typecheck", "lint"].find((name) => Boolean(scripts[name]));
   let verificationCommand: string | undefined;
   if (script && packageManager) {
     verificationCommand = packageManager === "npm" ? (script === "test" ? "npm test" : `npm run ${script}`) : `${packageManager} ${script}`;
   } else if (miseConfiguration) {
-    const miseTask = ["test", "typecheck", "lint"].find((name) => hasMiseTask(miseConfiguration, name));
+    const miseTask = ["check", "test", "typecheck", "lint"].find((name) => hasMiseTask(miseConfiguration, name));
     if (miseTask) verificationCommand = `mise run ${miseTask}`;
   } else if (await fileExists(join(repositoryPath, "Cargo.toml"))) {
     verificationCommand = "cargo test";
   } else {
     const makefile = await readableFile(join(repositoryPath, "Makefile"));
-    if (makefile && /^test\s*:/m.test(makefile)) verificationCommand = "make test";
-    else if (makefile && /^check\s*:/m.test(makefile)) verificationCommand = "make check";
+    if (makefile && /^check\s*:/m.test(makefile)) verificationCommand = "make check";
+    else if (makefile && /^test\s*:/m.test(makefile)) verificationCommand = "make test";
   }
 
   return {

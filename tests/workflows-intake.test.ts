@@ -8,7 +8,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { TaskControlStore } from "../src/root-session-store.js";
 import { TaskSchema } from "../src/task-contracts.js";
 import { composeAdvisorAssignment, composeWorkerAssignment, IMPLEMENTATION_COMMIT_PROMPT, initialCoordinatorPrompt, VERIFICATION_WORKER_PROMPT, workerAssignmentPreamble } from "../src/workflow-prompts.js";
-import { normalizeWorkflowInput, parseAdvisorReport, PublicWorkflowStateSchema, repairStalled, reviewGate, roleLabel, WORKFLOWS, workflowDefinition, type ReviewRecord } from "../src/workflows.js";
+import { normalizeWorkflowInput, parseAdvisorReport, PublicWorkflowStateSchema, reviewGate, roleLabel, WORKFLOWS, workflowDefinition, type ReviewRecord } from "../src/workflows.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 const sha = (letter: string) => letter.repeat(40);
@@ -68,22 +68,6 @@ test("the review gate uses the latest same-role record for the actual range", ()
   expect(reviewGate("refine_pull_request", [record("rater", pass, { range: { ...range, headSha: sha("c") } })], range)).toMatchObject({ ok: false, reason: expect.stringContaining("not the current range") });
   expect(reviewGate("independent_review", [record("reviewer", { role: "reviewer", approved: true, blockingFindings: [], verification: "not_applicable", verificationSummary: "docs only", summary: "ok" })], range)).toEqual({ ok: true });
   expect(reviewGate("independent_review", [record("reviewer", { role: "reviewer", approved: false, blockingFindings: ["x"], verification: "passed", verificationSummary: "ok", summary: "no" })], range).ok).toBe(false);
-});
-
-test("stall detection needs three unchanged repair cycles and ignores checks-only attempts", () => {
-  const rating = (id: string, value: number, findings: string[]): ReviewRecord => ({ sessionId: id, turnId: `${id}-turn`, role: "rater", range, result: { role: "rater", rating: value, blockingFindings: findings, verification: "passed", verificationSummary: "ok", summary: "ok" }, invalidReason: null, recordedAt: "2026-09-06T00:00:00.000Z" });
-  const worker = (id: string, purpose: "implementation" | "verification") => ({ id, kind: "worker" as const, advisorRole: null, workflowInput: { kind: "worker" as const, mode: "planned" as const, purpose, range, plan: "p", acceptanceCriteria: [], instruction: "i", advisorSessionId: null, candidateSessionIds: null } });
-  const rater = (id: string) => ({ id, kind: "worker" as const, advisorRole: "rater" as const, workflowInput: null });
-  const done = (id: string) => ({ sessionId: id, status: "completed", terminalObservation: JSON.stringify({ state: "completed" }) });
-  const sessions = [rater("r1"), worker("w1", "implementation"), rater("r2"), worker("w2", "implementation"), rater("r3"), worker("w3", "implementation"), rater("r4")];
-  const turns = ["w1", "w2", "w3"].map(done);
-  const same = ["src/a.ts: leak", " src/b.ts: race "];
-  expect(repairStalled([rating("r1", 6, same), rating("r2", 6, [...same].reverse()), rating("r3", 6, same), rating("r4", 6, same)], sessions, turns)).toMatchObject({ stalled: true, rating: 6, findings: ["src/a.ts: leak", "src/b.ts: race"] });
-  expect(repairStalled([rating("r1", 6, same), rating("r2", 7, same), rating("r3", 7, same), rating("r4", 7, same)], sessions, turns)).toEqual({ stalled: false });
-  expect(repairStalled([rating("r1", 6, same), rating("r2", 6, same), rating("r3", 6, ["other"]), rating("r4", 6, same)], sessions, turns)).toEqual({ stalled: false });
-  const checksOnly = [rater("r1"), worker("w1", "verification"), rater("r2"), worker("w2", "implementation"), rater("r3"), worker("w3", "implementation"), rater("r4")];
-  expect(repairStalled([rating("r1", 6, same), rating("r2", 6, same), rating("r3", 6, same), rating("r4", 6, same)], checksOnly, turns)).toEqual({ stalled: false });
-  expect(repairStalled([rating("r1", 6, same), rating("r2", 6, same), rating("r3", 6, same)], sessions, turns)).toEqual({ stalled: false });
 });
 
 test("task creation captures workflow and Advisor profiles and keeps pre-upgrade idempotency hashes", async () => {
@@ -240,6 +224,23 @@ test("implementation Workers are told to commit and verification Workers are tol
     expect(workerAssignmentPreamble(mode, "verification")).toContain(VERIFICATION_WORKER_PROMPT);
     expect(workerAssignmentPreamble(mode, "verification")).toContain("For configured verification commands, set a 30-minute shell timeout, or the tool maximum if lower. Normal completion ends the command immediately.");
     expect(workerAssignmentPreamble(mode, "verification")).not.toContain(IMPLEMENTATION_COMMIT_PROMPT);
+  }
+});
+
+test("Coordinator and implementation prompts share one Worker ownership boundary", () => {
+  const context = { configuration: { visualEvidence: "off" as const }, images: [] };
+  for (const workflow of ["standard", "direct_build", "independent_review", "competing_plans", "refine_pull_request"] as const) {
+    const coordinator = initialCoordinatorPrompt({ objective: "Complete the change", deliveryTarget: "pull_request_draft", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", pullRequestNumber: workflow === "refine_pull_request" ? 7 : null }, workflow }, context);
+    expect(coordinator).toContain("The Worker owns design and implementation choices within the accepted scope");
+    expect(coordinator).toContain("End your turn after successful delegation");
+    expect(coordinator).not.toMatch(/Do not delegate planning, design decisions|file-by-file or test-by-test slices.*Delegate/);
+  }
+
+  for (const mode of ["planned", "direct"] as const) {
+    const worker = workerAssignmentPreamble(mode, "implementation");
+    expect(worker).toContain("routine internal seams, fixture corrections, and tests");
+    expect(worker).toContain("Continue until the complete assignment and its necessary checks are done");
+    expect(worker).not.toMatch(/Coordinator owns planning, design decisions|Return missing design decisions|Do not take over task planning/);
   }
 });
 

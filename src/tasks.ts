@@ -21,6 +21,7 @@ import { assertTaskPullRequestsAvailable } from "./task-pull-request-ownership.j
 import type { GithubTriggerPort } from "./github-trigger-inspection.js";
 import { matchesGithubTriggerProtectedPaths } from "./github-trigger-paths.js";
 import { normalizeWorkflowInput, roleLabel, workflowDefinition, WorkflowInputFailure, type AdvisorRole } from "./workflows.js";
+import type { TaskLimitDecision } from "./task-limits.js";
 
 export class TaskFailure extends Error {
   constructor(readonly publicMessage: string, readonly statusCode = 400) { super(publicMessage); }
@@ -194,9 +195,18 @@ export class TaskService {
   answerTask(userId: string, taskId: string, questionId: string, answer: string, confirmCommandsStopped = false): Task {
     const task = this.getTask(userId, taskId);
     if (task.archivedAt || task.humanQuestion?.id !== questionId || !answer.trim()) throw new TaskFailure("The question changed. Read the current question before answering", 409);
+    if (task.humanQuestion.kind === "task_limit") throw new TaskFailure("Select a task limit action before you continue", 409);
     if (task.humanQuestion.requiresCommandCleanup && !confirmCommandsStopped) throw new TaskFailure("Confirm that the commands have stopped before you continue", 409);
     this.repository.controls.answerHuman(taskId, questionId, answer, confirmCommandsStopped);
     this.audit({ kind: "user", userId }, task.companyId, "task_answered", taskId);
+    return this.getTask(userId, taskId);
+  }
+
+  answerTaskLimit(userId: string, taskId: string, questionId: string, decision: TaskLimitDecision): Task {
+    const task = this.getTask(userId, taskId);
+    if (task.archivedAt || task.humanQuestion?.id !== questionId || task.humanQuestion.kind !== "task_limit") throw new TaskFailure("The question changed. Read the current question before answering", 409);
+    this.repository.controls.answerTaskLimit(taskId, questionId, decision);
+    this.audit({ kind: "user", userId }, task.companyId, decision.kind === "cancel_task" ? "task_cancelled" : "task_answered", taskId);
     return this.getTask(userId, taskId);
   }
 

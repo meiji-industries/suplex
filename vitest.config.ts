@@ -8,6 +8,8 @@ const integrationTests = [
   "tests/task-sources.test.ts",
   "tests/task-worktree.test.ts",
   "tests/worker-environment.test.ts",
+  "tests/workflows-delivery.test.ts",
+  "tests/workflows-delivery-repairs.test.ts",
 ];
 const packagedTests = ["desktop/tests/packaged-smoke.test.ts"];
 

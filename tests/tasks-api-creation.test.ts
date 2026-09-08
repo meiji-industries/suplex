@@ -22,6 +22,33 @@ test("Start immediately commits active intent and schedules Coordinator without 
   } finally { await f.close(); }
 });
 
+test("task creation accepts a title without a description and keeps its objective clean", async () => {
+  const f = await nativeApp();
+  try {
+    const url = `/api/companies/${f.company.id}/tasks`;
+    const response = await f.app.inject({ method: "POST", url, headers: f.headers, payload: { projectId: f.project.id, title: "Title only", idempotencyKey: "title-only-1" } });
+    expect(response.statusCode, response.body).toBe(201);
+    const task = TaskSchema.parse(response.json());
+    expect(task.description).toBe("");
+    expect(f.tasks.repository.controls.get(task.id).objective).toBe("Title only");
+    const missingTitle = await f.app.inject({ method: "POST", url, headers: f.headers, payload: { projectId: f.project.id, description: "Description only", idempotencyKey: "missing-title-1" } });
+    expect(missingTitle.statusCode).toBe(400);
+  } finally { await f.close(); }
+});
+
+test("task details can clear a description but not its title", async () => {
+  const f = await nativeApp();
+  try {
+    const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Editable title", description: "Existing description", idempotencyKey: "clear-description-1" });
+    const response = await f.app.inject({ method: "PATCH", url: `/api/tasks/${task.id}`, headers: f.headers, payload: { description: "" } });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(TaskSchema.parse(response.json())).toMatchObject({ title: "Editable title", description: "" });
+    expect(f.tasks.repository.controls.get(task.id).objective).toBe("Editable title");
+    const emptyTitle = await f.app.inject({ method: "PATCH", url: `/api/tasks/${task.id}`, headers: f.headers, payload: { title: "" } });
+    expect(emptyTitle.statusCode).toBe(400);
+  } finally { await f.close(); }
+});
+
 test("task limit answers require an explicit decision and expose the approved limits", async () => {
   const f = await nativeApp();
   try {

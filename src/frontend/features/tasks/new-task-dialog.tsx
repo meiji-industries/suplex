@@ -167,7 +167,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   };
   const missingSource = repair && source?.kind !== "pull_request";
   const submit = async () => {
-    if (busy || imageRead.current.pending || !projectId || !title.trim() || !description.trim() || missingSource) return;
+    if (busy || imageRead.current.pending || !projectId || !title.trim() || missingSource) return;
     setBusy(true); setError("");
     try {
       const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(source ? { source } : {}) };
@@ -224,7 +224,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
           <TaskRoleSelector role="root" profiles={profiles} assignment={rootProfileId} defaultProfileId={project?.rootProfileId} busy={busy} onChange={setRootProfileId} />
           <TaskRoleSelector role="worker" profiles={profiles} assignment={workerProfileId} defaultProfileId={project?.workerProfileId} busy={busy} onChange={setWorkerProfileId} />
           {definition.advisorRoles.map(role => <TaskRoleSelector key={role} role="root" label={ADVISOR_LABELS[role]} profiles={profiles} assignment={advisorProfileIds[role] ?? ""} defaultProfileId={rootProfileId || project?.rootProfileId} busy={busy} onChange={profileId => setAdvisorProfileIds(current => ({ ...current, [role]: profileId || undefined }))} />)}
-          <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">{repair ? <span className="text-xs text-muted-foreground" data-repair-note>{missingSource ? "Select a pull request source." : repairNote}</span> : null}<NewButton type="submit" disabled={busy || readingImages || !projectId || !title.trim() || !description.trim() || missingSource} title="New task (⌘Enter)">{busy ? "Forge saves" : "New task"}</NewButton></DialogFooter>
+          <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">{repair ? <span className="text-xs text-muted-foreground" data-repair-note>{missingSource ? "Select a pull request source." : repairNote}</span> : null}<NewButton type="submit" disabled={busy || readingImages || !projectId || !title.trim() || missingSource} title="New task (⌘Enter)">{busy ? "Forge saves" : "New task"}</NewButton></DialogFooter>
         </div>
         <fieldset className="min-w-0 border-t border-border/70 bg-muted/30 px-5 py-3"><legend className="px-0 text-xs font-medium text-muted-foreground">Delivery &amp; checks</legend>
           <RadioGroup aria-label="Delivery target" value={deliveryTarget} disabled={repair} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))} className="mt-2.5 flex flex-wrap gap-x-4 gap-y-2">{taskDeliveryTargetOptions.map(option => <label className="flex items-center gap-1.5 text-xs" key={option.value}><RadioGroupItem value={option.value} disabled={repair} />{option.label}</label>)}</RadioGroup>

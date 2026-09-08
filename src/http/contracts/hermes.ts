@@ -89,7 +89,7 @@ export const HermesPairingExchangeResponseSchema = z.object({
 export const HermesTaskCreateBodySchema = z.object({
   projectId: z.string().min(1).max(128),
   title: z.string().trim().min(1),
-  description: z.string().trim().min(1),
+  description: z.string().trim().default(""),
   idempotencyKey: z.string().trim().min(1).max(128),
 });
 

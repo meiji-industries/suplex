@@ -129,3 +129,11 @@ test("editing the objective checks backlog ownership in the same transaction as 
   expect(f.tasks.getTask("alice", task.id).title).toBe("Updated title");
   expect(f.tasks.repository.controls.get(task.id).objective).toBe(`Updated title\n\n${f.input.description}`);
 });
+
+test("editing details can clear the description without leaving objective whitespace", async () => {
+  const f = await fixture();
+  const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false });
+  expect(f.tasks.updateTaskDetails("alice", task.id, { description: "" })).toMatchObject({ title: f.input.title, description: "" });
+  expect(f.tasks.repository.controls.get(task.id).objective).toBe(f.input.title);
+  expect(() => f.tasks.updateTaskDetails("alice", task.id, { title: "" })).toThrow();
+});

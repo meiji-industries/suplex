@@ -28,7 +28,7 @@ export class TaskFailure extends Error {
 }
 type Authority = { kind: "user"; userId: string } | { kind: "hermes"; principal: HermesPrincipal };
 type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "resolveTaskSource" | "captureTaskConfiguration">;
-const DetailsSchema = TaskInputSchema.pick({ title: true, description: true }).partial().strict().refine(input => input.title !== undefined || input.description !== undefined);
+const DetailsSchema = TaskInputSchema.pick({ title: true }).extend({ description: z.string().trim().optional() }).partial().strict().refine(input => input.title !== undefined || input.description !== undefined);
 
 export class TaskService {
   private readonly archives = new Set<string>();
@@ -140,7 +140,7 @@ export class TaskService {
       for (const role of workflowDefinition(request.workflow).advisorRoles) advisorProfiles[role] = capturedDispatch ? (this.profile(capturedDispatch.profiles.advisors[role]!.profileId, "root"), capturedDispatch.profiles.advisors[role]!) : this.profile(request.advisorProfileIds[role] ?? rootProfile.profileId, "root");
       const images = request.images.map(image => ({ filename: image.filename, mimeType: image.mimeType, bytes: decodeTaskImage(image) }));
       const source = request.source ? await this.projects.resolveTaskSource(project, request.source) : null;
-      if (source?.kind === "issue") request.description += `\n\n${source.context}`;
+      if (source?.kind === "issue") request.description = request.description ? `${request.description}\n\n${source.context}` : source.context;
       const heads = await this.projects.captureTaskConfiguration(project);
       if (capturedDispatch && (source?.kind !== "pull_request" || source.number !== capturedDispatch.pullRequestNumber || source.headSha !== capturedDispatch.policy.headSha || source.baseSha !== capturedDispatch.policy.baseSha || source.headBranch !== capturedDispatch.policy.headBranch || source.baseBranch !== capturedDispatch.policy.baseBranch || project.repository?.toLowerCase() !== capturedDispatch.repositoryName || project.baseBranch !== capturedDispatch.policy.baseBranch)) throw new TaskFailure("GitHub trigger source changed", 409);
       const taskId = newTaskId();

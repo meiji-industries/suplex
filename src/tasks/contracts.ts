@@ -24,7 +24,7 @@ export const TaskImageInputSchema = z.object({
 export const TaskInputSchema = z.object({
   projectId: id,
   title: z.string().trim().min(1),
-  description: z.string().trim().min(1),
+  description: z.string().trim().default(""),
   idempotencyKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/),
   images: z.array(TaskImageInputSchema).max(MAX_TASK_IMAGES).default([]),
   rootProfileId: id.optional(),

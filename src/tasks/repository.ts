@@ -71,7 +71,7 @@ export class TaskRepository {
           .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, time, time);
         for (const image of input.images) written.push(this.artifacts.putArtifactSync(db, input.companyId, "task-image", { ...image, taskId: input.taskId }));
         this.controls.create({
-          taskId: input.taskId, startImmediately: input.request.startImmediately, objective: `${input.request.title}\n\n${input.request.description}`, deliveryTarget: input.request.deliveryTarget,
+          taskId: input.taskId, startImmediately: input.request.startImmediately, objective: input.request.description ? `${input.request.title}\n\n${input.request.description}` : input.request.title, deliveryTarget: input.request.deliveryTarget,
           deliveryIntent: { repository: configuration.repository, headBranch: configuration.branch, baseBranch: configuration.baseBranch, baselineSha: configuration.baselineSha, pullRequestNumber: configuration.source?.kind === "pull_request" ? configuration.source.number : null },
           rootProfile: input.rootProfile, workerProfile: input.workerProfile, workflow: input.request.workflow, advisorProfiles: input.advisorProfiles,
         });
@@ -120,7 +120,7 @@ export class TaskRepository {
       const updated = db.prepare("UPDATE forge_tasks SET title = COALESCE(?, title), description = COALESCE(?, description), updated_at = ? WHERE id = ? AND archived_at IS NULL AND EXISTS (SELECT 1 FROM forge_task_controls WHERE task_id = forge_tasks.id AND status = 'backlog')")
         .run(details.title ?? null, details.description ?? null, time, taskId);
       if (updated.changes !== 1) return false;
-      db.prepare("UPDATE forge_task_controls SET objective = (SELECT title || char(10) || char(10) || description FROM forge_tasks WHERE id = ?), updated_at = ? WHERE task_id = ?").run(taskId, time, taskId);
+      db.prepare("UPDATE forge_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM forge_tasks WHERE id = ?), updated_at = ? WHERE task_id = ?").run(taskId, time, taskId);
       return true;
     });
   }

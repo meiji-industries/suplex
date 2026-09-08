@@ -40,10 +40,10 @@ function schemaForRole(role: AdvisorRole) {
   return role === "reviewer" ? ReviewerResultSchema : role === "rater" ? RaterResultSchema : PlannerResultSchema;
 }
 
-export function validateAdvisorSubmission(role: AdvisorRole, raw: unknown): AdvisorReportOutcome {
+export function validateAdvisorSubmission(role: AdvisorRole, raw: unknown, rejectMismatchedRole = true): AdvisorReportOutcome {
   const parsed = object.safeParse(raw);
   if (!parsed.success) return { result: null, invalidReason: "The report is not an object" };
-  if (parsed.data.role !== undefined && parsed.data.role !== role) return { result: null, invalidReason: `The submitted report role ${String(parsed.data.role)} does not match the assigned role ${role}` };
+  if (rejectMismatchedRole && parsed.data.role !== undefined && parsed.data.role !== role) return { result: null, invalidReason: `The submitted report role ${String(parsed.data.role)} does not match the assigned role ${role}` };
   const candidate: Record<string, unknown> = { ...parsed.data, role };
   if (Array.isArray(candidate.blockingFindings)) candidate.blockingFindings = candidate.blockingFindings.map(flattenFinding);
   const result = schemaForRole(role).safeParse(candidate);
@@ -84,7 +84,7 @@ export function parseAdvisorReport(role: AdvisorRole, report: string): AdvisorRe
     const prefix = fenced.length ? "The report JSON is not valid JSON" : "The report has no fenced json block or valid raw JSON object";
     return { result: null, invalidReason: `${prefix}: ${parsed.error}` };
   }
-  return validateAdvisorSubmission(role, parsed.value);
+  return validateAdvisorSubmission(role, parsed.value, false);
 }
 
 type ToolOutputValue = { kind: "error" } | { kind: "value"; value: unknown };

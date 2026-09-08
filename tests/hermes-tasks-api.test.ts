@@ -233,6 +233,19 @@ test("POST /api/hermes/tasks creates task with native status, private no-store h
   expect(recoveryWakes).toBe(0);
 });
 
+test("POST /api/hermes/tasks accepts a title without a description", async () => {
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/hermes/tasks",
+    headers: { Authorization: `Bearer ${agentCredential}` },
+    payload: { projectId, title: "Hermes title only", idempotencyKey: "hermes-title-only-001" },
+  });
+  expect(response.statusCode, response.body).toBe(201);
+  const taskId = response.json().id as string;
+  expect(database.authQuery(db => db.prepare("SELECT description FROM forge_tasks WHERE id = ?").get(taskId))).toEqual({ description: "" });
+  expect(database.authQuery(db => db.prepare("SELECT objective FROM forge_task_controls WHERE task_id = ?").get(taskId))).toEqual({ objective: "Hermes title only" });
+});
+
 
 test("cross-company and out-of-grant projects are non-enumerating with zero side effects", async () => {
   const counts = (): Record<string, number> => Object.fromEntries([

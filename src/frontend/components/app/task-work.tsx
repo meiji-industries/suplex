@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Markdown } from "./markdown.js";
 import { EntityAvatar } from "./entity-avatar.js";
 import { RootPlan, TaskTools, useTaskExecution } from "./task-execution.js";
+import { WorkflowPlan } from "./workflow-plan.js";
 import { TaskCheckResults } from "./task-check-results.js";
 import { DeveloperDiff } from "./developer-diff.js";
 import { TaskActivityTimeline } from "./task-activity-timeline.js";
@@ -40,6 +41,7 @@ export function TaskWork({ task, activity }: { task: Task; activity: TaskActivit
     <TaskActivityTimeline taskId={task.id} />
     <div className="max-w-full border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
     <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3" aria-label="Conversation">
+      <WorkflowPlan key={task.id} task={task} />
       <RootPlan execution={execution} />
       {activity.turns.filter(turn => resultText(turn.result) || humanMessage(turn.prompt)).map(turn => {
         const session = activity.sessions.find(session => session.id === turn.sessionId);

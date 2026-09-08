@@ -61,7 +61,7 @@ export function openCodeRoleConfig(input: {
         tools: role === "root"
           ? { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false }
           : role === "advisor"
-            ? { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false, "forge_root_*": false }
+            ? { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false, "forge_root_*": false, "forge_advisor_*": true }
             : { task: false, question: false, "forge_root_*": false },
         reasoningEffort: profile.reasoningEffort,
         serviceTier: profile.serviceTier,
@@ -72,7 +72,7 @@ export function openCodeRoleConfig(input: {
         [profile.modelID]: { options: { reasoningEffort: profile.reasoningEffort, serviceTier: profile.serviceTier } },
       } },
     },
-    ...(input.bridge && role === "root" ? { mcp: { forge_root: { type: "local", command: [input.bridge.command, ...input.bridge.args], enabled: true } } } : {}),
+    ...(input.bridge && role !== "worker" ? { mcp: { [role === "root" ? "forge_root" : "forge_advisor"]: { type: "local", command: [input.bridge.command, ...input.bridge.args], enabled: true } } } : {}),
   };
 }
 

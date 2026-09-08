@@ -11,6 +11,7 @@ import { taskRolePrompt } from "../src/tasks/execution/role-prompt.js";
 import type { OpenCodeTaskScope } from "../src/runtimes/opencode/task-runtime.js";
 import { RootController, type TaskDelivery } from "../src/coordination/root-controller.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
+import { reconcileCompletedAdvisorReport } from "../src/coordination/session-recovery.js";
 import { verifyTaskEvidence } from "../src/coordination/workflow-evidence.js";
 import type { WorkflowId } from "../src/coordination/workflows.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
@@ -589,23 +590,55 @@ test("Reviewer requires the Coordinator brief, records approvals against its ran
   expect(assignmentTurn(f, reviewer)?.promptText).toContain("Plan: guard the dereference. Criteria: tests pass.");
   expect(assignmentTurn(f, repeated)?.promptText).toContain("Same plan.");
   expect((assignmentInput(f, repeated) as { evidenceDirectory: string }).evidenceDirectory).not.toBe((assignmentInput(f, reviewer) as { evidenceDirectory: string }).evidenceDirectory);
-  await f.finishDelegate(json({ approved: true, blockingFindings: [], verification: "passed", verificationSummary: "pnpm test exit 0 in verification.json", summary: "Approved" }));
+  const submitted = { role: "reviewer", approved: true, blockingFindings: [], verification: "passed", verificationSummary: "pnpm test exit 0 in verification.json", summary: "Approved" };
+  f.harness.evidence.set(assignmentTurn(f, repeated)!.id, { tools: [{ id: "report", name: "forge_advisor_submit_report", status: "completed", input: {}, output: JSON.stringify(submitted), error: null }], limit: null });
+  await f.finishDelegate("The change is ready. This prose contains no JSON.");
   expect(f.store.get("task").workflowState.reviews.at(-1)).toMatchObject({ role: "reviewer", result: { approved: true }, range: { baseSha: f.baseSha } });
   const inspected = await f.controller.requestDelivery(f.identity(), "inspect_delivery_diff") as { evidenceDirectory: string; patchTruncated: boolean };
   expect(inspected.patchTruncated).toBe(true);
   expect((await stat(join(inspected.evidenceDirectory, "patch.diff"))).size).toBeGreaterThan(64_000);
 });
 
-test("advisor native configuration is read-only with no bridge and only the task evidence directory as external access", () => {
+test("advisor native configuration is read-only with only the report bridge and task evidence directory", () => {
   const profile = { providerID: "openai", modelID: "gpt-5.6-nova", reasoningEffort: "high" as const, serviceTier: "default" as const };
   const config = openCodeRoleConfig({ role: "advisor", profile, bridge: { command: "/node", args: ["bridge"] }, evidenceDirectory: "/data/runtime/task-evidence/task" }) as { mcp?: unknown; agent: Record<string, { permission: Record<string, unknown>; tools: Record<string, boolean> }> };
-  expect(config.mcp).toBeUndefined();
-  expect(config.agent["forge-advisor"]).toMatchObject({ permission: { edit: "deny", bash: "deny", task: "deny", question: "deny", "forge_root_*": "deny", external_directory: { "*": "deny", "/data/runtime/task-evidence/task/**": "allow" } }, tools: { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false, "forge_root_*": false } });
+  expect(config.mcp).toEqual({ forge_advisor: { type: "local", command: ["/node", "bridge"], enabled: true } });
+  expect(config.agent["forge-advisor"]).toMatchObject({ permission: { edit: "deny", bash: "deny", task: "deny", question: "deny", "forge_root_*": "deny", external_directory: { "*": "deny", "/data/runtime/task-evidence/task/**": "allow" } }, tools: { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false, "forge_root_*": false, "forge_advisor_*": true } });
   const root = openCodeRoleConfig({ role: "root", profile, bridge: { command: "/node", args: ["bridge"] }, evidenceDirectory: "/data/runtime/task-evidence/task", directory: "/worktrees/task" }) as { mcp?: unknown; agent: Record<string, { permission: Record<string, unknown> }> };
   expect(root.mcp).toBeDefined();
   expect(root.agent["forge-root"]!.permission.external_directory).toEqual({ "*": "deny", "/data/runtime/task-evidence/task": "allow", "/data/runtime/task-evidence/task/**": "allow", "/worktrees/task": "allow", "/worktrees/task/**": "allow" });
   expect((openCodeRoleConfig({ role: "root", profile }) as { agent: Record<string, { permission: Record<string, unknown> }> }).agent["forge-root"]!.permission.external_directory).toBe("deny");
   expect((openCodeRoleConfig({ role: "worker", profile }) as { agent: Record<string, { permission: Record<string, unknown> }> }).agent["forge-worker"]!.permission).toMatchObject({ edit: "allow", bash: "allow" });
+});
+
+test("a retained invalid Advisor turn is reconciled in place after its original evidence and range pass", async () => {
+  const f = await fixture("refine_pull_request");
+  await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
+  const advisor = f.store.currentSession("task", "worker")!;
+  await f.finishDelegate("No JSON report was captured.");
+  const turn = assignmentTurn(f, advisor)!;
+  const reviewBefore = f.store.get("task").workflowState.reviews.at(-1)!;
+  const observation = JSON.parse(turn.terminalObservation!) as Record<string, unknown>;
+  const retained = `${JSON.stringify({ rating: 9, blockingFindings: [], verification: "passed", verificationSummary: "Focused checks passed", summary: "Ready" })}\n`;
+  f.database.authTransaction(db => db.prepare("UPDATE forge_task_turns SET terminal_observation = ? WHERE id = ?").run(JSON.stringify({ ...observation, text: `Assessment complete.\n\n\`\`\`json\n${retained}` }), turn.id));
+  const workflowInput = assignmentInput(f, advisor);
+  if (workflowInput?.kind !== "advisor") throw new Error("Expected Advisor input");
+  const mismatch = await reconcileCompletedAdvisorReport({
+    store: f.store,
+    harness: f.harness,
+    scope: () => { throw new Error("Reconciliation does not launch a session"); },
+    sourceStillMatches: async () => ({ ok: false, reason: "The source differs", range: null, clean: true }),
+    reader: f.reader,
+    readPricing: async () => undefined,
+  }, { taskId: "task", turnId: turn.id });
+  expect(mismatch).toMatchObject({ result: null, invalidReason: expect.stringContaining("source differs") });
+  expect(f.store.get("task").workflowState.reviews.at(-1)?.result).toBeNull();
+  const outcome = await f.controller.reconcileAdvisorReport("task", turn.id);
+  expect(outcome).toMatchObject({ result: { role: "rater", rating: 9 } });
+  const reviewAfter = f.store.get("task").workflowState.reviews.at(-1)!;
+  expect(reviewAfter).toMatchObject({ sessionId: advisor.id, turnId: turn.id, result: { rating: 9 }, invalidReason: null, recordedAt: reviewBefore.recordedAt });
+  expect(f.store.turns("task").find(candidate => candidate.id === turn.id)?.nativeTurnId).toBe(turn.nativeTurnId);
+  await expect(f.controller.reconcileAdvisorReport("task", turn.id)).rejects.toThrow("already_valid");
 });
 
 test("E1: Advisors and check-only Workers launch only from a clean source, and a report is invalid when the source, base, or observation changes before completion", async () => {

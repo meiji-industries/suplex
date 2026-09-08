@@ -8,7 +8,7 @@ import { claudeAssistantText, claudeConfigDirectory, claudeExecution, claudeMess
 import { resolveClaudeExecutable } from "../../platform/executable-resolver.js";
 import { compareProcessIdentity, inspectProcessOnce, stopOwnedProcesses, type OwnedProcess } from "../../platform/process-manager.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
-import { shellQuote, taskSessionRuntimeDirectory, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
+import { shellQuote, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
 import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
 import { taskRolePrompt } from "../../tasks/execution/role-prompt.js";
 import { createGitCommandGuard, withWorktreeMiseTrust, type GitCommandGuard } from "../../coordination/worker-environment.js";
@@ -75,10 +75,10 @@ export function claudeArguments(input: { scope: TaskScope; sessionID: string; re
     input.resume ? "--resume" : "--session-id", input.sessionID,
     "--model", scope.profile.modelID, "--effort", scope.profile.reasoningEffort,
     "--append-system-prompt", taskRolePrompt(scope.role, { workflow: scope.workflow, ...(scope.role === "worker" ? { workerMode: scope.workerMode, purpose: scope.purpose } : {}) }),
-    "--strict-mcp-config", "--mcp-config", scope.role === "root" ? join(input.runtimeDirectory, "mcp.json") : '{"mcpServers":{}}',
+    "--strict-mcp-config", "--mcp-config", scope.role !== "worker" ? join(input.runtimeDirectory, "mcp.json") : '{"mcpServers":{}}',
     ...(scope.role !== "worker" && scope.workflow !== "standard" && scope.evidenceRoot ? ["--add-dir", scope.evidenceRoot] : []),
     ...(scope.role !== "worker"
-      ? ["--tools", ROOT_TOOLS, ...(scope.role === "root" ? ["--allowedTools", "mcp__forge_root"] : [])]
+      ? ["--tools", ROOT_TOOLS, "--allowedTools", scope.role === "root" ? "mcp__forge_root" : "mcp__forge_advisor__submit_report"]
       : ["--disallowedTools", "Agent,AskUserQuestion", "--dangerously-skip-permissions"]),
   ];
 }
@@ -126,9 +126,11 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
     await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
     if (scope.role !== "worker" && scope.workflow !== "standard" && scope.evidenceRoot) await mkdir(scope.evidenceRoot, { recursive: true, mode: 0o700 });
     await this.executable();
-    if (scope.role === "root") {
-      const server = await writeRootBridgeBinding({ runtimeDirectory, identity: scope.identity, databasePath: this.databasePath, artifactRoot: this.options.artifactRoot });
-      await writeFile(join(runtimeDirectory, "mcp.json"), JSON.stringify({ mcpServers: { forge_root: server } }), { mode: 0o600 });
+    if (scope.role !== "worker") {
+      const server = scope.role === "root"
+        ? await writeRootBridgeBinding({ runtimeDirectory, identity: scope.identity, databasePath: this.databasePath, artifactRoot: this.options.artifactRoot })
+        : await writeAdvisorReportBridgeBinding({ runtimeDirectory, role: scope.advisorRole });
+      await writeFile(join(runtimeDirectory, "mcp.json"), JSON.stringify({ mcpServers: { [scope.role === "root" ? "forge_root" : "forge_advisor"]: server } }), { mode: 0o600 });
     }
     return nativeSessionId ?? randomUUID();
   }

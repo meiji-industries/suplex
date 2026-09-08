@@ -5,7 +5,7 @@ import { resolveOpenCodeExecutable } from "../../platform/executable-resolver.js
 import { ensureOpenCodeServer, OpenCodeServerReferenceSchema, openCodeAttachCommand, openCodeProcessAlive, openCodeRoleConfig, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer, type OpenCodeServerReference } from "./server.js";
 import { reconcileOpenCodePrompt, replayOpenCodePrompt } from "./session.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
-import { taskSessionRuntimeDirectory, taskSessionTitle, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
+import { taskSessionRuntimeDirectory, taskSessionTitle, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
 import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
 import { taskRolePrompt } from "../../tasks/execution/role-prompt.js";
 import { createGitCommandGuard, withWorktreeMiseTrust } from "../../coordination/worker-environment.js";
@@ -29,7 +29,9 @@ export class OpenCodeTaskRuntime implements TaskHarness {
   async ensureSession(scope: TaskScope, nativeSessionId: string | null): Promise<string> {
     const runtimeDirectory = this.runtimeDirectory(scope);
     const executable = await resolveOpenCodeExecutable(this.options.executable ? { executable: this.options.executable } : {});
-    const bridge = scope.role === "root" ? await writeRootBridgeBinding({ runtimeDirectory, identity: scope.identity, databasePath: this.databasePath, artifactRoot: this.options.artifactRoot }) : undefined;
+    const bridge = scope.role === "root"
+      ? await writeRootBridgeBinding({ runtimeDirectory, identity: scope.identity, databasePath: this.databasePath, artifactRoot: this.options.artifactRoot })
+      : scope.role === "advisor" ? await writeAdvisorReportBridgeBinding({ runtimeDirectory, role: scope.advisorRole }) : undefined;
     const guard = scope.role === "worker" ? await createGitCommandGuard(runtimeDirectory, "git-guard") : undefined;
     const evidenceDirectory = scope.role !== "worker" && scope.workflow !== "standard" && scope.evidenceRoot ? scope.evidenceRoot : undefined;
     const reference = await ensureOpenCodeServer({
@@ -38,9 +40,10 @@ export class OpenCodeTaskRuntime implements TaskHarness {
       env: withWorktreeMiseTrust(guard?.env ?? process.env, scope.directory),
     });
     const client = openCodeServerClient(reference);
-    if (scope.role === "root") {
-      const bridgeStatus = (await client.mcpStatus(scope.directory)).forge_root;
-      if (bridgeStatus?.status !== "connected") throw new Error(`Forge Coordinator bridge is unavailable: ${bridgeStatus?.error ?? bridgeStatus?.status ?? "not configured"}`);
+    if (scope.role !== "worker") {
+      const bridgeName = scope.role === "root" ? "forge_root" : "forge_advisor";
+      const bridgeStatus = (await client.mcpStatus(scope.directory))[bridgeName];
+      if (bridgeStatus?.status !== "connected") throw new Error(`Forge ${scope.role === "root" ? "Coordinator" : "Advisor report"} bridge is unavailable: ${bridgeStatus?.error ?? bridgeStatus?.status ?? "not configured"}`);
     }
     if (nativeSessionId) return (await client.getSession(nativeSessionId, scope.directory)).id;
     const native = await client.createSession({

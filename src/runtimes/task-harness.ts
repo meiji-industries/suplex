@@ -7,7 +7,7 @@ import type { PromptDispatchAttempt, TaskSession } from "../tasks/control.js";
 import type { TaskExecution } from "../tasks/execution/contracts.js";
 import type { TaskUsage } from "../tasks/usage.js";
 import type { ModelPricingCatalog } from "../profiles/model-pricing.js";
-import type { WorkflowId } from "../coordination/workflows.js";
+import type { AdvisorRole, WorkflowId } from "../coordination/workflows.js";
 
 // The prompt intent and observation vocabulary was designed against OpenCode
 // and is shared by every harness. Claude Code maps its own evidence onto it.
@@ -28,7 +28,7 @@ export type TaskScope = {
   profile: TaskProfileSelection;
   workflow: WorkflowId;
   evidenceRoot: string | null;
-} & ({ role: "root"; identity: RootIdentity } | { role: "worker"; workerMode: "planned" | "direct"; purpose: "implementation" | "verification" } | { role: "advisor"; label: string });
+} & ({ role: "root"; identity: RootIdentity } | { role: "worker"; workerMode: "planned" | "direct"; purpose: "implementation" | "verification" } | { role: "advisor"; advisorRole: AdvisorRole; label: string });
 
 export interface TaskHarness {
   ensureSession(scope: TaskScope, nativeSessionId: string | null): Promise<string>;
@@ -96,6 +96,23 @@ export async function writeRootBridgeBinding(input: { runtimeDirectory: string; 
     ],
   };
   await writeFile(bindingPath, JSON.stringify({ version: 1, root: input.identity, databasePath: input.databasePath, artifactRoot: input.artifactRoot ?? join(dirname(input.databasePath), "artifacts"), server }), { mode: 0o600 });
+  await chmod(bindingPath, 0o600);
+  return server;
+}
+
+export async function writeAdvisorReportBridgeBinding(input: { runtimeDirectory: string; role: AdvisorRole }): Promise<{ command: string; args: string[] }> {
+  await mkdir(input.runtimeDirectory, { recursive: true, mode: 0o700 });
+  const currentFile = fileURLToPath(import.meta.url);
+  const source = currentFile.endsWith(".ts");
+  const bindingPath = join(input.runtimeDirectory, "advisor.binding.json");
+  const server = {
+    command: process.execPath,
+    args: [
+      ...(source ? [join(dirname(currentFile), "..", "..", "node_modules", "tsx", "dist", "cli.mjs")] : []),
+      join(dirname(currentFile), "..", "coordination", source ? "advisor-report-bridge.ts" : "advisor-report-bridge.js"), "--binding", bindingPath,
+    ],
+  };
+  await writeFile(bindingPath, JSON.stringify({ version: 1, role: input.role }), { mode: 0o600 });
   await chmod(bindingPath, 0o600);
   return server;
 }

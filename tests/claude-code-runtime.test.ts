@@ -150,13 +150,16 @@ test("harness selection follows the profile provider and the native session iden
 test("Claude workflow roles retain their prompts, read-only Advisor tools, and evidence directory", async () => {
   const f = await fixture("complete");
   const evidenceRoot = join(f.root, "evidence", "task-claude");
-  const scope: TaskScope = { ...f.scope, role: "advisor", label: "Reviewer", workflow: "independent_review", evidenceRoot };
+  const scope: TaskScope = { ...f.scope, role: "advisor", advisorRole: "reviewer", label: "Reviewer", workflow: "independent_review", evidenceRoot };
   await f.runtime.ensureSession(scope, sessionID);
   expect(await readdir(evidenceRoot)).toEqual([]);
   expect(taskSessionTitle(scope)).toBe("task-claude Reviewer");
   const args = claudeArguments({ scope, sessionID, resume: false, print: true, runtimeDirectory: f.runtimeDirectory });
   expect(args[args.indexOf("--tools") + 1]).toBe("Read,Glob,Grep,WebFetch,WebSearch,TodoWrite");
-  expect(args[args.indexOf("--mcp-config") + 1]).toBe('{"mcpServers":{}}');
+  expect(args[args.indexOf("--mcp-config") + 1]).toBe(join(f.runtimeDirectory, "mcp.json"));
+  expect(args).toEqual(expect.arrayContaining(["--allowedTools", "mcp__forge_advisor__submit_report"]));
+  expect(JSON.parse(await readFile(join(f.runtimeDirectory, "advisor.binding.json"), "utf8"))).toEqual({ version: 1, role: "reviewer" });
+  expect(Object.keys(JSON.parse(await readFile(join(f.runtimeDirectory, "mcp.json"), "utf8")).mcpServers)).toEqual(["forge_advisor"]);
   expect(args[args.indexOf("--add-dir") + 1]).toBe(scope.evidenceRoot);
   expect(args).not.toContain("--dangerously-skip-permissions");
   expect(args).not.toContain("mcp__forge_root");
@@ -175,7 +178,7 @@ test("workflow evidence routes to Claude and reads only the requested native tur
   opencode.turnEvidence = async () => { throw new Error("Wrong harness"); };
   const router = new HarnessRouter({ "claude-code": f.runtime, opencode });
   expect(await router.turnEvidence(f.scope, observation)).toMatchObject({ tools: [], limit: expect.stringContaining("missing") });
-  await writeFile(join(f.runtimeDirectory, "turn-other.jsonl"), JSON.stringify({ type: "assistant", uuid: "other", message: { role: "assistant", content: [{ type: "tool_use", id: "other-tool", name: "Bash", input: { command: "wrong turn" } }] } }));
+  await writeFile(join(f.runtimeDirectory, "turn-other.jsonl"), JSON.stringify({ type: "assistant", uuid: "other", message: { role: "assistant", content: [{ type: "tool_use", id: "other-tool", name: "mcp__forge_advisor__submit_report", input: { summary: "wrong turn" } }] } }));
   await writeFile(join(f.runtimeDirectory, `turn-${observation.messageID}.jsonl`), [
     { type: "assistant", uuid: "a1", message: { role: "assistant", content: [{ type: "tool_use", id: "check", name: "Bash", input: { command: "pnpm test" } }] } },
     { type: "user", uuid: "u1", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "check", content: "Tests passed" }] } },

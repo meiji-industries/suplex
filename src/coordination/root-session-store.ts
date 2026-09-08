@@ -14,7 +14,7 @@ import { createOpenCodeMessageID } from "../runtimes/opencode/session.js";
 import { TaskConfigurationSchema } from "../tasks/contracts.js";
 import type { PromptDispatchAttempt, PullRequestReference } from "../tasks/control.js";
 import { DeliveryIntentSchema, PullRequestReferenceSchema, TaskControlStatusSchema, TaskProfileSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, WorktreeReferenceSchema, type DeliveryIntent, type TaskControl, type TaskProfile, type TaskSession, type TaskSessionKind, type TaskTurn, type WorktreeReference } from "../tasks/control.js";
-import { AdvisorRoleSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, turnOutcome, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
+import { AdvisorRoleSchema, RaterResultSchema, ReviewerResultSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, turnOutcome, type AdvisorResult, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
 import { STANDARD_WORKER_RESULT_WAKE, workerAssignmentPreamble } from "./workflow-prompts.js";
 import { assertPullRequestAvailable, assertTaskPullRequestsAvailable } from "../delivery/pull-request-ownership.js";
 import { authorizedTriggerHead, recordTriggerPush, triggerDeliveryPolicy, type GithubTriggerDeliveryPolicy } from "../integrations/github/trigger-delivery-policy.js";
@@ -350,6 +350,32 @@ export class TaskControlStore {
       db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending_prompt', NULL, NULL, ?, NULL, NULL, ?)").run(wakeId, input.taskId, text(root, "id"), integer(root, "generation"), promptHash, promptText, time, time);
       db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ?").run(time, time, input.taskId);
       return { kind: "recorded", wake: turn(db.prepare("SELECT * FROM forge_task_turns WHERE id = ?").get(wakeId) as Row) };
+    });
+  }
+  /** Replaces one invalid retained Advisor outcome after native evidence, task evidence, and source range have been revalidated. */
+  reconcileAdvisorResult(input: { taskId: string; sessionId: string; turnId: string; result: AdvisorResult }): void {
+    this.database.authTransaction((db) => {
+      const sessionRow = db.prepare("SELECT * FROM forge_task_sessions WHERE id = ? AND task_id = ? AND kind = 'worker'").get(input.sessionId, input.taskId) as Row | undefined;
+      const turnRow = db.prepare("SELECT * FROM forge_task_turns WHERE id = ? AND task_id = ? AND session_id = ? AND status = 'completed'").get(input.turnId, input.taskId, input.sessionId) as Row | undefined;
+      if (!sessionRow || !turnRow) throw new Error("advisor_turn_not_found");
+      const advisor = session(sessionRow);
+      const workflowInput = parseJson(text(turnRow, "workflow_input_json"), WorkflowInputSchema) ?? advisor.workflowInput;
+      if (!advisor.advisorRole || workflowInput?.kind !== "advisor" || workflowInput.role !== advisor.advisorRole || input.result.role !== advisor.advisorRole) throw new Error("advisor_role_mismatch");
+      const previous = turnOutcome(text(turnRow, "terminal_observation"));
+      if (previous.advisor?.result) throw new Error("advisor_result_already_valid");
+      const observation: unknown = JSON.parse(text(turnRow, "terminal_observation") ?? "null");
+      const base = z.record(z.string(), z.unknown()).parse(observation);
+      db.prepare("UPDATE forge_task_turns SET terminal_observation = ?, updated_at = ? WHERE id = ?").run(JSON.stringify({ ...base, advisor: { role: advisor.advisorRole, result: input.result, invalidReason: null } }), now(), input.turnId);
+      if (advisor.advisorRole === "reviewer" || advisor.advisorRole === "rater") {
+        const state = this.workflowStateRow(db, input.taskId);
+        const index = state.reviews.findIndex(review => review.sessionId === input.sessionId && review.turnId === input.turnId && review.role === advisor.advisorRole);
+        if (index < 0 || state.reviews[index]!.result) throw new Error("advisor_review_not_reconcilable");
+        const review = state.reviews[index]!;
+        state.reviews[index] = advisor.advisorRole === "reviewer"
+          ? { ...review, role: "reviewer", result: ReviewerResultSchema.parse(input.result), invalidReason: null }
+          : { ...review, role: "rater", result: RaterResultSchema.parse(input.result), invalidReason: null };
+        this.writeWorkflowState(db, input.taskId, state);
+      }
     });
   }
   private workflowStateRow(db: Database.Database, taskId: string): WorkflowState {

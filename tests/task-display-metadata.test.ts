@@ -7,7 +7,7 @@ const profile = { providerID: "openai", modelID: "gpt-5.6-sol", reasoningEffort:
 const scopes: { scope: TaskScope; role: string }[] = [
   { scope: { id: "root-session", taskId: "task-123", directory: "/repo", workflow: "standard", evidenceRoot: null, profile, role: "root", identity: { taskId: "task-123", sessionId: "root-session", generation: 1 } }, role: "Coordinator" },
   { scope: { id: "worker-session", taskId: "task-123", directory: "/repo", workflow: "standard", evidenceRoot: null, profile, role: "worker", workerMode: "planned", purpose: "implementation" }, role: "Worker" },
-  { scope: { id: "advisor-session", taskId: "task-123", directory: "/repo", workflow: "independent_review", evidenceRoot: "/evidence", profile, role: "advisor", label: "Security reviewer" }, role: "Security reviewer" },
+  { scope: { id: "advisor-session", taskId: "task-123", directory: "/repo", workflow: "independent_review", evidenceRoot: "/evidence", profile, role: "advisor", advisorRole: "reviewer", label: "Security reviewer" }, role: "Security reviewer" },
 ];
 const workerScope: TaskScope = { id: "worker-session", taskId: "task-123", directory: "/repo", workflow: "standard", evidenceRoot: null, profile, role: "worker", workerMode: "planned", purpose: "implementation" };
 

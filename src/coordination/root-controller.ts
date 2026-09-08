@@ -16,7 +16,8 @@ import type { ModelPricingCatalog } from "../profiles/model-pricing.js";
 import { ModelsDevCatalogReader } from "../profiles/models-dev-catalog.js";
 import { findAdvisorReport, observeWorktree, resolveAdvisorReport, summarizeWorkerObservation, turnWorkflowInput } from "./controller-reports.js";
 import { prepareAdvisorEvidence } from "./advisor-evidence.js";
-import { recoverSession, stopRetiredSessions, type SessionRecoveryDependencies } from "./session-recovery.js";
+import { reconcileCompletedAdvisorReport, recoverSession, stopRetiredSessions, type SessionRecoveryDependencies } from "./session-recovery.js";
+import type { AdvisorReportOutcome } from "./advisor-report.js";
 
 export type TaskDelivery = Pick<DeliveryOperations, "observe" | "execute" | "currentRange"> & Partial<Pick<DeliveryOperations, "checksObservation">>;
 type AcceptedWorkerAssignment = { kind: "workflow_input"; input: WorkerWorkflowInput } | { kind: "saved_prompt"; prompt: string };
@@ -37,7 +38,7 @@ export class RootController implements RootBridgeAdapter {
       profile: { providerID: selected.provider, modelID: selected.model, reasoningEffort: selected.reasoningLevel, serviceTier: selected.serviceTier },
     };
     if (session.kind === "root") return { ...common, role: "root", identity: { taskId: control.taskId, sessionId: session.id, generation: session.generation } };
-    if (advisorRole) return { ...common, role: "advisor", label: ADVISOR_LABELS[advisorRole] };
+    if (advisorRole) return { ...common, role: "advisor", advisorRole, label: ADVISOR_LABELS[advisorRole] };
     const input = workflowInput?.kind === "worker" ? workflowInput : null;
     return { ...common, role: "worker", workerMode: input?.mode ?? "planned", purpose: input?.purpose ?? "implementation" };
   }
@@ -295,6 +296,11 @@ export class RootController implements RootBridgeAdapter {
       // A delivery wait keeps its own 30-second observation schedule.
       if (!control.workflowState.deliveryWait) this.store.scheduleWake(taskId, new Date(Date.now() + 15_000).toISOString());
     }
+  }
+
+  /** Revalidates one retained invalid Advisor turn without launching or resuming an agent. */
+  async reconcileAdvisorReport(taskId: string, turnId: string): Promise<AdvisorReportOutcome> {
+    return reconcileCompletedAdvisorReport(this.recoveryDependencies(), { taskId, turnId });
   }
 
   prepareRoot(taskId: string): TaskSession {

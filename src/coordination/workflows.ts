@@ -1,19 +1,17 @@
 import { z } from "zod";
+import { AdvisorResultSchema, AdvisorRoleSchema, REPAIR_RATING_TARGET, RaterResultSchema, ReviewerResultSchema, type AdvisorRole } from "./advisor-report.js";
+
+export { AdvisorResultSchema, AdvisorRoleSchema, PlannerResultSchema, REPAIR_RATING_TARGET, RaterResultSchema, ReviewerResultSchema, parseAdvisorReport } from "./advisor-report.js";
+export type { AdvisorResult, AdvisorRole, RaterResult, ReviewerResult } from "./advisor-report.js";
 
 // Shared workflow catalog, schemas, and pure policy helpers. Frontend-safe: zod only.
 
 const id = z.string().min(1).max(256);
 const commit = z.string().regex(/^[a-f0-9]{40,64}$/i);
-const text = z.string().trim().min(1);
-
 export const WorkflowIdSchema = z.enum(["standard", "direct_build", "independent_review", "competing_plans", "refine_pull_request"]);
 export type WorkflowId = z.infer<typeof WorkflowIdSchema>;
-export const AdvisorRoleSchema = z.enum(["reviewer", "planner_a", "planner_b", "rater"]);
-export type AdvisorRole = z.infer<typeof AdvisorRoleSchema>;
 export const AdvisorProfileIdsSchema = z.object({ reviewer: id.optional(), planner_a: id.optional(), planner_b: id.optional(), rater: id.optional() }).strict();
 export type AdvisorProfileIds = z.infer<typeof AdvisorProfileIdsSchema>;
-
-export const REPAIR_RATING_TARGET = 9; // ponytail: fixed score target; configurable ratings are out of scope.
 
 export interface WorkflowDefinition {
   id: WorkflowId;
@@ -71,17 +69,7 @@ export function sameRange(review: ReviewRange, actual: ReviewRange): boolean {
   return rangeDifferences(review, actual).length === 0;
 }
 
-const VerificationSchema = z.enum(["passed", "not_applicable", "missing", "failed"]);
-const verified = (verification: z.infer<typeof VerificationSchema>) => verification === "passed" || verification === "not_applicable";
-export const ReviewerResultSchema = z.object({ role: z.literal("reviewer"), approved: z.boolean(), blockingFindings: z.array(text), verification: VerificationSchema, verificationSummary: text, summary: text }).strict()
-  .refine(result => !result.approved || (result.blockingFindings.length === 0 && verified(result.verification)), "An approval cannot carry blocking findings or missing verification");
-export const RaterResultSchema = z.object({ role: z.literal("rater"), rating: z.number().int().min(1).max(10), blockingFindings: z.array(text), verification: VerificationSchema, verificationSummary: text, summary: text }).strict()
-  .refine(result => result.rating < REPAIR_RATING_TARGET || (result.blockingFindings.length === 0 && verified(result.verification)), "A rating of 9 or more cannot carry blocking findings or missing verification");
-export const PlannerResultSchema = z.object({ role: z.enum(["planner_a", "planner_b"]), summary: text }).strict();
-export const AdvisorResultSchema = z.union([ReviewerResultSchema, RaterResultSchema, PlannerResultSchema]);
-export type AdvisorResult = z.infer<typeof AdvisorResultSchema>;
-export type ReviewerResult = z.infer<typeof ReviewerResultSchema>;
-export type RaterResult = z.infer<typeof RaterResultSchema>;
+const verified = (verification: "passed" | "not_applicable" | "missing" | "failed") => verification === "passed" || verification === "not_applicable";
 
 const reviewRecordBase = { sessionId: id, turnId: id, range: ReviewRangeSchema, invalidReason: z.string().nullable(), recordedAt: z.string() };
 export const ReviewRecordSchema = z.discriminatedUnion("role", [
@@ -123,28 +111,6 @@ export type PublicWorkflowState = z.infer<typeof PublicWorkflowStateSchema>;
 export function emptyWorkflowState(): WorkflowState { return { version: 1, reviews: [], acceptedDelivery: null, deliveryWait: null, completion: null, toolOwner: null }; }
 export function publicWorkflowState(state: WorkflowState): PublicWorkflowState {
   return { version: state.version, reviews: state.reviews, acceptedDelivery: state.acceptedDelivery, deliveryWait: state.deliveryWait, completion: state.completion };
-}
-
-/** Advisors sometimes emit a finding as {id, description} or {file, defect}; fold its string fields into the one-line finding the schema wants. */
-function flattenFinding(value: unknown): unknown {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
-  return Object.values(value).filter((field): field is string => typeof field === "string" && field.trim().length > 0).join(": ");
-}
-
-/** Takes the last fenced json block, validates it for the assigned role, and adds the role from Forge's assignment. */
-export function parseAdvisorReport(role: AdvisorRole, report: string): { result: AdvisorResult; invalidReason: null } | { result: null; invalidReason: string } {
-  const blocks = [...report.matchAll(/```json\s*\n([\s\S]*?)```/g)];
-  const block = blocks.at(-1)?.[1];
-  if (block === undefined) return { result: null, invalidReason: "The report has no fenced json block" };
-  let parsed: unknown;
-  try { parsed = JSON.parse(block); } catch (error) { return { result: null, invalidReason: `The json block is not valid JSON: ${error instanceof Error ? error.message : String(error)}` }; }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { result: null, invalidReason: "The json block is not an object" };
-  const schema = role === "reviewer" ? ReviewerResultSchema : role === "rater" ? RaterResultSchema : PlannerResultSchema;
-  const candidate: Record<string, unknown> = { ...(parsed as Record<string, unknown>), role };
-  if (Array.isArray(candidate.blockingFindings)) candidate.blockingFindings = candidate.blockingFindings.map(flattenFinding);
-  const result = schema.safeParse(candidate);
-  if (!result.success) return { result: null, invalidReason: result.error.issues.map(issue => `${issue.path.join(".") || "report"}: ${issue.message}`).join("; ") };
-  return { result: result.data, invalidReason: null };
 }
 
 export class WorkflowInputFailure extends Error {

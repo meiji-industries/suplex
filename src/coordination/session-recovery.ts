@@ -1,4 +1,5 @@
 import { StructuredLogger } from "../platform/logging.js";
+import { z } from "zod";
 import type { ModelPricingCatalog } from "../profiles/model-pricing.js";
 import { createOpenCodePromptIntent } from "../runtimes/opencode/session.js";
 import type { NativeSessionReader, PromptObservation, TaskHarness, TaskScope } from "../runtimes/task-harness.js";
@@ -7,7 +8,8 @@ import { observeTaskLimitUsage } from "../tasks/limits/limit-observer.js";
 import type { TaskControlStore } from "./root-session-store.js";
 import { advisorResultWake, workerResultWake } from "./workflow-prompts.js";
 import { verifyTaskEvidence } from "./workflow-evidence.js";
-import { ADVISOR_LABELS, parseAdvisorReport, type ReviewRange, type VerificationRange } from "./workflows.js";
+import { ADVISOR_LABELS, type ReviewRange, type VerificationRange } from "./workflows.js";
+import { advisorReportFromTurn, type AdvisorReportOutcome } from "./advisor-report.js";
 import { turnWorkflowInput } from "./controller-reports.js";
 
 type SourceMatch = { ok: true; range: ReviewRange } | { ok: false; reason: string; range: ReviewRange | null; clean: boolean | null };
@@ -36,6 +38,32 @@ export async function stopRetiredSessions(dependencies: Pick<SessionRecoveryDepe
     if (["cancelled", "delivered"].includes(dependencies.store.get(taskId).status)) throw error;
     new StructuredLogger().warn("Completed session cleanup will be retried", { taskId }, { error: error.message });
   }
+}
+
+async function verifyAdvisorOutcome(dependencies: SessionRecoveryDependencies, session: TaskSession, input: Extract<NonNullable<ReturnType<typeof turnWorkflowInput>>, { kind: "advisor" }>, outcome: AdvisorReportOutcome): Promise<AdvisorReportOutcome> {
+  if (!outcome.result) return outcome;
+  if (!(await verifyTaskEvidence(input.evidenceDirectory, input.evidenceSha256))) return { result: null, invalidReason: "The evidence files changed or are missing since the assignment. Request a new assessment." };
+  const source = await dependencies.sourceStillMatches(session.taskId, input.range, `${ADVISOR_LABELS[input.role]} review`);
+  return source.ok ? outcome : { result: null, invalidReason: `${source.reason}. Request a new assessment.` };
+}
+
+export async function reconcileCompletedAdvisorReport(dependencies: SessionRecoveryDependencies, request: { taskId: string; turnId: string }): Promise<AdvisorReportOutcome> {
+  const turn = dependencies.store.turns(request.taskId).find(candidate => candidate.id === request.turnId);
+  const session = turn ? dependencies.store.sessions(request.taskId).find(candidate => candidate.id === turn.sessionId) : undefined;
+  if (!turn || turn.status !== "completed" || !session || session.kind !== "worker" || !session.advisorRole) return { result: null, invalidReason: "The retained Advisor turn does not exist or is not complete" };
+  const workflowInput = turnWorkflowInput(session, turn);
+  if (workflowInput?.kind !== "advisor" || workflowInput.role !== session.advisorRole) return { result: null, invalidReason: "The retained Advisor turn has no matching assignment" };
+  const previous: unknown = JSON.parse(turn.terminalObservation ?? "null");
+  const stored = z.object({ text: z.string().default("") }).passthrough().safeParse(previous);
+  if (!stored.success) return { result: null, invalidReason: "The retained Advisor observation is invalid" };
+  let tools: Awaited<ReturnType<NativeSessionReader["turnEvidence"]>>["tools"] = [];
+  if (dependencies.reader) {
+    try { tools = (await dependencies.reader(session).turnEvidence(session, turn.id)).tools; }
+    catch { tools = []; }
+  }
+  const outcome = await verifyAdvisorOutcome(dependencies, session, workflowInput, advisorReportFromTurn(session.advisorRole, tools, stored.data.text));
+  if (outcome.result) dependencies.store.reconcileAdvisorResult({ taskId: request.taskId, sessionId: session.id, turnId: turn.id, result: outcome.result });
+  return outcome;
 }
 
 export async function recoverSession(dependencies: SessionRecoveryDependencies, previous: TaskSession): Promise<void> {
@@ -116,12 +144,9 @@ async function finishTurn(dependencies: SessionRecoveryDependencies, taskScope: 
   if (taskScope.role === "advisor" && session.advisorRole && workflowInput?.kind === "advisor") {
     const role = session.advisorRole;
     const input = workflowInput;
-    let outcome = observed.state === "completed" ? parseAdvisorReport(role, text) : { result: null, invalidReason: `The ${ADVISOR_LABELS[role]} turn ended with state ${observed.state}${observed.reason ? ` (${observed.reason})` : ""}` };
-    if (outcome.result && !(await verifyTaskEvidence(input.evidenceDirectory, input.evidenceSha256))) outcome = { result: null, invalidReason: "The evidence files changed or are missing since the assignment. Request a new assessment." };
-    if (outcome.result) {
-      const source = await dependencies.sourceStillMatches(session.taskId, input.range, `${ADVISOR_LABELS[role]} review`);
-      if (!source.ok) outcome = { result: null, invalidReason: `${source.reason}. Request a new assessment.` };
-    }
+    const toolEvidence = observed.state === "completed" ? await harness.turnEvidence(taskScope, observed) : null;
+    let outcome = observed.state === "completed" ? advisorReportFromTurn(role, toolEvidence?.tools ?? [], text) : { result: null, invalidReason: `The ${ADVISOR_LABELS[role]} turn ended with state ${observed.state}${observed.reason ? ` (${observed.reason})` : ""}` };
+    outcome = await verifyAdvisorOutcome(dependencies, session, input, outcome);
     const observation = JSON.stringify({ ...base, advisor: { role, result: outcome.result, invalidReason: outcome.invalidReason } });
     const summary = outcome.result ? outcome.result.role === "rater" ? `Rating ${outcome.result.rating}/10 with ${outcome.result.blockingFindings.length} blocking finding(s); verification ${outcome.result.verification}.` : outcome.result.role === "reviewer" ? `${outcome.result.approved ? "Approved" : "Not approved"} with ${outcome.result.blockingFindings.length} blocking finding(s); verification ${outcome.result.verification}.` : outcome.result.summary : outcome.invalidReason ?? "invalid";
     const reviewResult = outcome.result?.role === "reviewer" || outcome.result?.role === "rater" ? outcome.result : null;

@@ -35,6 +35,15 @@ describe("OpenCode role configuration", () => {
       provider: { openai: { models: { "gpt-5.6-luna": { options: { reasoningEffort: "max", serviceTier: "priority" } } } } },
     });
   });
+
+  it("gives Advisors only the read-only report bridge", () => {
+    const config = openCodeRoleConfig({ role: "advisor", profile, bridge: { command: "/node", args: ["/forge/advisor-report-bridge.ts"] }, evidenceDirectory: "/evidence", directory: "/repo" });
+    expect(config).toMatchObject({
+      agent: { "forge-advisor": { permission: { edit: "deny", bash: "deny", task: "deny", "forge_root_*": "deny" }, tools: { bash: false, edit: false, write: false, task: false, "forge_root_*": false, "forge_advisor_*": true } } },
+      mcp: { forge_advisor: { type: "local", command: ["/node", "/forge/advisor-report-bridge.ts"], enabled: true } },
+    });
+    expect(Object.keys(config.mcp ?? {})).toEqual(["forge_advisor"]);
+  });
 });
 
 it("keeps attach credentials out of the pane command", async () => {

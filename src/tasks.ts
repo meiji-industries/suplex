@@ -14,6 +14,7 @@ import type { ProjectService } from "./projects.js";
 import { TaskProfileSchema, type TaskProfile } from "./task-control.js";
 import { TaskConfigurationSchema, TaskInputSchema, type Task, type TaskInput } from "./task-contracts.js";
 import { decodeTaskImage } from "./task-images.js";
+import { taskBranchName } from "./task-branch.js";
 import { newTaskId, TaskConflict, TaskRepository, taskRequestHash, type TaskCreator, type TaskRow } from "./task-repository.js";
 import { normalizeWorkflowInput, roleLabel, workflowDefinition, WorkflowInputFailure, type AdvisorRole } from "./workflows.js";
 
@@ -96,7 +97,7 @@ export class TaskService {
       const taskId = newTaskId();
       const configuration = TaskConfigurationSchema.parse({
         repository: project.repository, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot,
-        branch: source?.kind === "pull_request" ? source.headBranch : source?.kind === "branch" ? source.branch : `forge/${taskId}`,
+        branch: source?.kind === "pull_request" ? source.headBranch : source?.kind === "branch" ? source.branch : taskBranchName(request.title, taskId),
         baseBranch: source?.kind === "pull_request" ? source.baseBranch : project.baseBranch,
         baselineSha: source?.kind === "pull_request" ? source.baseSha : heads.baseSha,
         startingSha: source && source.kind !== "issue" ? source.headSha : heads.baseSha, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand,

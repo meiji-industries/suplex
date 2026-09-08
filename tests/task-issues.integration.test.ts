@@ -27,7 +27,7 @@ test("issue creation saves current GitHub context and user instructions on a fre
     expect(response.statusCode, response.body).toBe(201);
     const task = TaskSchema.parse(response.json());
     expect(task.configuration.source).toEqual({ kind: "issue", number: 42 });
-    expect(task.configuration.branch).toBe(`forge/${task.id}`);
+    expect(task.configuration.branch).toBe(`fix/search-${task.id.slice(-6)}`);
     expect(task.configuration.startingSha).toBe("a".repeat(40));
     expect(task.configuration.baseBranch).toBe("main");
     for (const text of ["Keep my instructions.", body, "Comment from reviewer", "https://github.com/owner/repo/issues/42", "octo", "bug", "worker", "Launch"]) expect(task.description).toContain(text);

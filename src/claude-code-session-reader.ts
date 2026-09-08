@@ -1,8 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { claudeSessionBusy, claudeDisplayAttached } from "./claude-code-task-runtime.js";
+import { claudeSessionBusy } from "./claude-code-task-runtime.js";
 import { claudeConfigDirectory, claudeExecution, claudeMessageEntries, claudeUsage, findClaudeTranscript, parseJsonLines, readClaudeTranscript } from "./claude-code-transcript.js";
-import { resolveClaudeExecutable } from "./executable-resolver.js";
 import type { TaskSession } from "./task-control.js";
 import { taskSessionRuntimeDirectory, type NativeSessionReader } from "./task-harness.js";
 
@@ -46,7 +45,6 @@ export class ClaudeCodeSessionReader implements NativeSessionReader {
 
   async archive(session: TaskSession) {
     if (await this.busy(session)) throw new Error("An agent is still active. Retry after it stops.");
-    const executable = await resolveClaudeExecutable();
-    return { display: (argv: readonly string[]) => claudeDisplayAttached(executable, session.nativeSessionId, argv), stop: async () => {} };
+    return { stop: async () => {} };
   }
 }

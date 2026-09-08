@@ -203,6 +203,6 @@ export interface NativeSessionReader {
   turnEvidence(session: TaskSession, turnId: string): Promise<{ tools: TaskExecution["sessions"][number]["tools"]; limitation: string | null }>;
   status(session: TaskSession): Promise<{ status: "busy" | "retry" | "idle"; updatedAt: number }>;
   timeline(session: TaskSession): Promise<{ usage: TaskUsage[]; liveMessageId: string | null }>;
-  /** Refuses while the agent is active; returns the display matcher and the stop action for Archive. */
-  archive(session: TaskSession): Promise<{ display: ((argv: readonly string[]) => boolean) | null; stop: () => Promise<void> }>;
+  /** Refuses while the agent is active; returns the stop action for Archive. */
+  archive(session: TaskSession): Promise<{ stop: () => Promise<void> }>;
 }

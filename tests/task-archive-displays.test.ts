@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 import { prepareArchiveDisplays } from "../src/task-archive-displays.js";
 import { HerdrFailure, type Pane, type Workspace } from "../src/herdr-client.js";
+import type { TaskSession } from "../src/task-control.js";
 
 function fixture(shared = false) {
   const workspace: Workspace = { workspaceId: "w1", label: "forge-task" };
@@ -24,7 +25,8 @@ function fixture(shared = false) {
     closePane: vi.fn(async (id: string) => { panes.delete(id); }),
     closeWorkspace: vi.fn(async () => { panes.clear(); workspaceOpen = false; }),
   };
-  return { herdr, panes, workspace, sessions: [{ id: "session", taskId: "task", paneId: "w1:p1", nativeSessionId: null, display: null }] };
+  const sessions: Array<Pick<TaskSession, "id" | "taskId" | "paneId" | "nativeSessionId">> = [{ id: "session", taskId: "task", paneId: "w1:p1", nativeSessionId: null }];
+  return { herdr, panes, workspace, sessions };
 }
 
 test("archive closes a task-only workspace, including historical display attachments", async () => {
@@ -78,10 +80,39 @@ test("archive succeeds when a recorded pane is missing", async () => {
   expect(f.herdr.closePane).not.toHaveBeenCalled();
 });
 
-test("archive refuses active shell commands even in historical panes", async () => {
+test("archive terminates an active command and closes its task workspace", async () => {
   const f = fixture();
+  let running = true;
+  const kill = vi.fn(() => { running = false; });
+  f.herdr.getPaneProcessInfo = async paneId => ({ pane_id: paneId, shell_pid: 1, foreground_process_group_id: running ? 2 : 1, foreground_processes: [{ pid: running ? 2 : 1, name: running ? "git" : "zsh", argv: [running ? "git" : "/bin/zsh", "commit"] }] });
+  await (await prepareArchiveDisplays(f.sessions, f.herdr, kill))();
+  expect(kill).toHaveBeenCalledWith(-2, "SIGTERM");
+  expect(f.herdr.closeWorkspace).toHaveBeenCalledWith("w1");
+  expect(f.panes.size).toBe(0);
+});
+
+test("archive kills a command that does not stop", async () => {
+  const f = fixture();
+  const kill = vi.fn();
   f.herdr.getPaneProcessInfo = async paneId => ({ pane_id: paneId, shell_pid: 1, foreground_process_group_id: 2, foreground_processes: [{ pid: 2, name: "git", argv: ["git", "commit"] }] });
-  await expect(prepareArchiveDisplays(f.sessions, f.herdr)).rejects.toThrow("command is still active");
+  await expect(prepareArchiveDisplays(f.sessions, f.herdr, kill)).rejects.toThrow("could not be stopped");
+  expect(kill).toHaveBeenNthCalledWith(1, -2, "SIGTERM");
+  expect(kill).toHaveBeenNthCalledWith(2, -2, "SIGKILL");
+  expect(f.herdr.closePane).not.toHaveBeenCalled();
+}, 10_000);
+
+test("archive does not signal when ownership is lost before termination", async () => {
+  const f = fixture();
+  let reads = 0;
+  f.herdr.getPane = async id => {
+    reads += 1;
+    return reads >= 3 ? null : f.panes.get(id) ?? null;
+  };
+  const kill = vi.fn();
+  f.herdr.getPaneProcessInfo = async paneId => ({ pane_id: paneId, shell_pid: 1, foreground_process_group_id: 2, foreground_processes: [{ pid: 2, name: "git", argv: ["git", "commit"] }] });
+  await (await prepareArchiveDisplays(f.sessions, f.herdr, kill))();
+  expect(kill).not.toHaveBeenCalled();
+  expect(f.herdr.closePane).not.toHaveBeenCalled();
 });
 
 test("archive preserves a pane whose ownership metadata is lost before cleanup", async () => {
@@ -136,20 +167,13 @@ test("archive succeeds when an owned pane disappears before cleanup", async () =
   expect(f.herdr.closePane).not.toHaveBeenCalled();
 });
 
-test("archive refuses a command that becomes active before cleanup", async () => {
-  const f = fixture();
-  const close = await prepareArchiveDisplays(f.sessions, f.herdr);
-  f.herdr.getPaneProcessInfo = async paneId => ({ pane_id: paneId, shell_pid: 1, foreground_process_group_id: 2, foreground_processes: [{ pid: 2, name: "git", argv: ["git", "commit"] }] });
-  await expect(close()).rejects.toThrow("command is still active");
-  expect(f.herdr.closeWorkspace).not.toHaveBeenCalled();
-  expect(f.herdr.closePane).not.toHaveBeenCalled();
-});
-
 test("an active process in an unowned pane does not block archive", async () => {
   const f = fixture();
   f.panes.set("w1:p1", { paneId: "w1:p1", workspaceId: "w1" });
+  const kill = vi.fn();
   f.herdr.getPaneProcessInfo = async () => ({ pane_id: "w1:p1", shell_pid: 1, foreground_process_group_id: 2, foreground_processes: [{ pid: 2, name: "git", argv: ["git", "commit"] }] });
-  await expect((await prepareArchiveDisplays(f.sessions, f.herdr))()).resolves.toBeUndefined();
+  await expect((await prepareArchiveDisplays(f.sessions, f.herdr, kill))()).resolves.toBeUndefined();
+  expect(kill).not.toHaveBeenCalled();
   expect([...f.panes.keys()]).toEqual(["w1:p1"]);
 });
 

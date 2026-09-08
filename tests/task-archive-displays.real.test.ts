@@ -21,11 +21,21 @@ test("archive closes a real owned Herdr workspace and all its panes", async () =
         return info.foreground_processes.length > 0 && info.foreground_processes.every(process => process.pid === info.shell_pid && process.name === "zsh" && process.argv?.includes("-f"));
       }, { timeout: 10_000 }).toBe(true);
     }
-    const close = await prepareArchiveDisplays([{ id: "proof-session", taskId, paneId: rootPane.paneId, nativeSessionId: null, display: null }], herdr);
+    await herdr.runPaneCommand(worker.paneId, "sleep 300");
+    let sleepPid: number | undefined;
+    await expect.poll(async () => {
+      const info = await herdr.getPaneProcessInfo(worker.paneId);
+      sleepPid = info.foreground_processes.find(process => process.name === "sleep")?.pid;
+      return sleepPid;
+    }, { timeout: 10_000 }).toBeTypeOf("number");
+    if (!sleepPid) throw new Error("Sleep process was not found");
+    const terminatedSleepPid = sleepPid;
+    const close = await prepareArchiveDisplays([{ id: "proof-session", taskId, paneId: rootPane.paneId, nativeSessionId: null }], herdr);
     await close();
     expect(await herdr.getWorkspace(workspace.workspaceId)).toBeNull();
     expect(await herdr.getPane(rootPane.paneId)).toBeNull();
     expect(await herdr.getPane(worker.paneId)).toBeNull();
+    expect(() => process.kill(terminatedSleepPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
     await close();
   } finally {
     if (await herdr.getWorkspace(workspace.workspaceId)) await herdr.closeWorkspace(workspace.workspaceId);

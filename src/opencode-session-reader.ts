@@ -2,7 +2,6 @@ import { z } from "zod";
 import { OpenCodeClient } from "./opencode-client.js";
 import { OpenCodeToolPartSchema, type OpenCodeMessageEnvelope } from "./opencode-contracts.js";
 import { openCodeServerClient, openCodeServerRunning, readOpenCodeServer, stopOpenCodeServer, type OpenCodeServerReference } from "./opencode-server.js";
-import { openCodeDisplayAttached } from "./opencode-task-runtime.js";
 import type { TaskSession } from "./task-control.js";
 import { TaskPlanItemSchema, type TaskExecution } from "./task-execution-contracts.js";
 import { taskSessionRuntimeDirectory, type NativeSessionReader } from "./task-harness.js";
@@ -81,6 +80,6 @@ export class OpenCodeSessionReader implements NativeSessionReader {
       const statuses = await openCodeServerClient(server).getStatus(server.directory);
       if (Object.values(statuses).some(status => status.type !== "idle")) throw new Error("An agent is still active. Retry after it stops.");
     }
-    return { display: server ? (argv: readonly string[]) => openCodeDisplayAttached(server, session.nativeSessionId, argv) : null, stop: async () => { if (server) await stopOpenCodeServer(server); } };
+    return { stop: async () => { if (server) await stopOpenCodeServer(server); } };
   }
 }

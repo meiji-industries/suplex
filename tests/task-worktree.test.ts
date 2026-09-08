@@ -42,21 +42,58 @@ test("a missing worktree reattaches the existing branch without discarding its c
   expect(await prepareTaskWorktree(intent)).toMatchObject({ path: initial.path, headSha: head, dirty: false });
 });
 
-test("a conflicting branch or symlink is never silently adopted", async () => {
+test("an existing task worktree is reused after its branch changes", async () => {
   const intent = await fixture();
   const initial = await prepareTaskWorktree(intent);
   await git(initial.path, ["switch", "-c", "somebody-else"]);
-  await expect(prepareTaskWorktree(intent)).rejects.toThrow("conflicting owner");
+  await writeFile(join(initial.path, "preserved.txt"), "keep this");
+  await expect(prepareTaskWorktree(intent)).resolves.toMatchObject({ path: initial.path, branch: intent.branch, dirty: true });
   expect(await git(initial.path, ["branch", "--show-current"])).toBe("somebody-else");
+  expect(await readFile(join(initial.path, "preserved.txt"), "utf8")).toBe("keep this");
+});
+
+test("a symlink at the task path is never silently adopted", async () => {
+  const intent = await fixture();
+  const initial = await prepareTaskWorktree(intent);
   await git(intent.repositoryPath, ["worktree", "remove", initial.path]);
   await symlink(intent.repositoryPath, initial.path);
   await expect(prepareTaskWorktree(intent)).rejects.toThrow("conflicting owner");
+});
+
+test("a repository owned by someone else at the task path is never overwritten", async () => {
+  const intent = await fixture();
+  const path = join(intent.worktreeRoot, intent.taskId);
+  await mkdir(path, { recursive: true });
+  await git(path, ["init", "-b", intent.branch]);
+  await git(path, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "foreign"]);
+  await writeFile(join(path, "preserved.txt"), "foreign repository");
+  await expect(prepareTaskWorktree(intent)).rejects.toThrow("does not match its repository");
+  expect(await readFile(join(path, "preserved.txt"), "utf8")).toBe("foreign repository");
+});
+
+test("an unrelated directory at the task path is never overwritten", async () => {
+  const intent = await fixture();
+  const path = join(intent.worktreeRoot, intent.taskId);
+  await mkdir(path, { recursive: true });
+  await writeFile(join(path, "preserved.txt"), "unrelated directory");
+  await expect(prepareTaskWorktree(intent)).rejects.toThrow();
+  expect(await readFile(join(path, "preserved.txt"), "utf8")).toBe("unrelated directory");
 });
 
 test("a task branch already in another worktree is not checked out twice", async () => {
   const intent = await fixture();
   await prepareTaskWorktree(intent);
   await expect(prepareTaskWorktree({ ...intent, taskId: "another_task" })).rejects.toThrow("another worktree");
+});
+
+test("an existing task worktree is reused when its intended branch is checked out elsewhere", async () => {
+  const intent = await fixture();
+  const initial = await prepareTaskWorktree(intent);
+  await git(initial.path, ["switch", "-c", "rebase-state"]);
+  const otherPath = join(intent.worktreeRoot, "intended-branch");
+  await git(intent.repositoryPath, ["worktree", "add", otherPath, intent.branch]);
+  await expect(prepareTaskWorktree(intent)).resolves.toMatchObject({ path: initial.path, branch: intent.branch });
+  expect(await git(initial.path, ["branch", "--show-current"])).toBe("rebase-state");
 });
 
 test("concurrent materialization converges on the same Git worktree", async () => {

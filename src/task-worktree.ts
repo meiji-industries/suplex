@@ -32,16 +32,15 @@ async function registeredWorktrees(repository: string): Promise<Array<{ path: st
 }
 
 async function observe(path: string, repository: string, intent: TaskWorktreeIntent): Promise<WorktreeReference> {
-  const [actualRoot, common, expectedCommon, head, branch, dirty] = await Promise.all([
+  const [actualRoot, common, expectedCommon, head, dirty] = await Promise.all([
     git(path, ["rev-parse", "--show-toplevel"]),
     git(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
     git(repository, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
     git(path, ["rev-parse", "HEAD"]),
-    git(path, ["symbolic-ref", "--short", "HEAD"]),
     git(path, ["status", "--porcelain=v1", "--untracked-files=all"]),
   ]);
-  if (await realpath(actualRoot.stdout.trim()) !== path || await realpath(common.stdout.trim()) !== await realpath(expectedCommon.stdout.trim()) || branch.stdout.trim() !== intent.branch) {
-    throw new Error("Task worktree does not match its repository and branch");
+  if (await realpath(actualRoot.stdout.trim()) !== path || await realpath(common.stdout.trim()) !== await realpath(expectedCommon.stdout.trim())) {
+    throw new Error("Task worktree does not match its repository");
   }
   return { path, branch: intent.branch, baseSha: intent.startingSha, headSha: head.stdout.trim(), dirty: dirty.stdout.length > 0 };
 }
@@ -56,17 +55,17 @@ export async function prepareTaskWorktree(intent: TaskWorktreeIntent): Promise<W
   const canonicalRoot = await realpath(root);
   if (contains(repository, canonicalRoot) || contains(canonicalRoot, repository)) throw new Error("Task worktree roots overlap");
   const path = join(canonicalRoot, intent.taskId);
-  await git(repository, ["check-ref-format", `refs/heads/${intent.branch}`]);
-  const registry = await registeredWorktrees(repository);
-  if (registry.some(entry => entry.branch === intent.branch && entry.path !== path)) throw new Error("Task branch is checked out in another worktree");
   const existing = await lstat(path).catch((error: unknown) => {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
     throw error;
   });
   if (existing) {
-    if (existing.isSymbolicLink() || !existing.isDirectory() || !registry.some(entry => entry.path === path && entry.branch === intent.branch)) throw new Error("Task worktree path has a conflicting owner");
+    if (existing.isSymbolicLink() || !existing.isDirectory()) throw new Error("Task worktree path has a conflicting owner");
     return observe(path, repository, intent);
   }
+  await git(repository, ["check-ref-format", `refs/heads/${intent.branch}`]);
+  const registry = await registeredWorktrees(repository);
+  if (registry.some(entry => entry.branch === intent.branch && entry.path !== path)) throw new Error("Task branch is checked out in another worktree");
   const branch = await runCommand({ taskId: null, stepId: null, command: "git", cwd: repository, args: ["show-ref", "--verify", "--quiet", `refs/heads/${intent.branch}`], expectNonZero: true });
   if (branch.exitCode !== 0 && branch.exitCode !== 1) throw new Error("Git could not inspect the task branch");
   if (branch.exitCode === 1) {

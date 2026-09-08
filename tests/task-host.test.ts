@@ -62,6 +62,40 @@ test("restart adopts dirty out-of-band work without replacing the native session
   expect(await readFile(join(worktree.path, "external.txt"), "utf8")).toBe("Preserve me");
 });
 
+test.each(["missing", "stale"] as const)("restart with %s worktree metadata recovers a conflicting rebase", async metadata => {
+  const f = await fixture();
+  await f.host.recover("task");
+  const native = f.store.currentSession("task", "root")?.nativeSessionId;
+  const worktree = f.store.get("task").worktree!;
+  await writeFile(join(worktree.path, "conflict.txt"), "task\n");
+  await runCommand({ taskId: null, stepId: null, command: "git", cwd: worktree.path, args: ["add", "conflict.txt"] });
+  await runCommand({ taskId: null, stepId: null, command: "git", cwd: worktree.path, args: ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "task change"] });
+  await writeFile(join(f.directory, "repo", "conflict.txt"), "main\n");
+  await runCommand({ taskId: null, stepId: null, command: "git", cwd: join(f.directory, "repo"), args: ["add", "conflict.txt"] });
+  await runCommand({ taskId: null, stepId: null, command: "git", cwd: join(f.directory, "repo"), args: ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "main change"] });
+  await writeFile(join(worktree.path, "preserved.txt"), "Preserve me");
+  const rebase = await runCommand({ taskId: null, stepId: null, command: "git", cwd: worktree.path, args: ["rebase", "main"], expectNonZero: true });
+  expect(rebase.exitCode).not.toBe(0);
+  expect((await runCommand({ taskId: null, stepId: null, command: "git", cwd: worktree.path, args: ["branch", "--show-current"] })).stdout.trim()).toBe("");
+  const head = (await runCommand({ taskId: null, stepId: null, command: "git", cwd: worktree.path, args: ["rev-parse", "HEAD"] })).stdout.trim();
+  const status = (await runCommand({ taskId: null, stepId: null, command: "git", cwd: worktree.path, args: ["status", "--porcelain=v1"] })).stdout;
+  const conflict = await readFile(join(worktree.path, "conflict.txt"), "utf8");
+  const rebaseHeadNamePath = (await runCommand({ taskId: null, stepId: null, command: "git", cwd: worktree.path, args: ["rev-parse", "--path-format=absolute", "--git-path", "rebase-merge/head-name"] })).stdout.trim();
+  const rebaseHeadName = await readFile(rebaseHeadNamePath, "utf8");
+  if (metadata === "missing") f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET worktree_json = NULL WHERE task_id = 'task'").run());
+
+  const restarted = new TaskHost(f.database, { controller: f.controller, delivery: f.delivery });
+  try { await restarted.recover("task"); } finally { await restarted.stop(); }
+
+  expect(f.store.get("task")).toMatchObject({ status: "active", humanQuestion: null, worktree: { path: worktree.path, branch: "task", headSha: head, dirty: true } });
+  expect(f.store.currentSession("task", "root")?.nativeSessionId).toBe(native);
+  expect(f.harness.dispatched).toHaveLength(1);
+  expect((await runCommand({ taskId: null, stepId: null, command: "git", cwd: worktree.path, args: ["status", "--porcelain=v1"] })).stdout).toBe(status);
+  expect(await readFile(join(worktree.path, "conflict.txt"), "utf8")).toBe(conflict);
+  expect(await readFile(join(worktree.path, "preserved.txt"), "utf8")).toBe("Preserve me");
+  expect(await readFile(rebaseHeadNamePath, "utf8")).toBe(rebaseHeadName);
+});
+
 test("a preparation failure keeps an answerable Coordinator and its original objective", async () => {
   const f = await fixture();
   let fail = true;

@@ -98,6 +98,11 @@ function SettingsSidebar({ companyId, backHref, activeHref }: { companyId: strin
 export function SettingsLayout({ title, companyId, backHref, activeHref, contentClassName = "", children }: { title: string; companyId: string; backHref: string; activeHref: string; contentClassName?: string; children: ReactNode }): ReactElement {
   return <ApplicationFrame title={title} sidebar={<SettingsSidebar companyId={companyId} backHref={backHref} activeHref={activeHref} />} headerRight={<SystemHealthIndicator />}><div className={`px-4 pb-8 lg:px-6 ${contentClassName}`}>{children}</div></ApplicationFrame>;
 }
+
+export function SettingsContent({ children }: { children: ReactNode }): ReactElement {
+  return <div className="mt-5 max-w-3xl">{children}</div>;
+}
+
 export function SettingsSection({ title, description, children }: { title?: string; description?: string; children: ReactNode }): ReactElement {
   return (
     <section className="mb-6">

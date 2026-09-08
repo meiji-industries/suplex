@@ -29,7 +29,7 @@ export function SettingsToolbarAction({ tone = "secondary", type = "button", ...
 export function SettingsDataTable({ label, columns, className, children }: { label: string; columns: SettingsTableColumn[]; className?: string; children: ReactNode }): ReactElement {
   const width = 60 + columns.reduce((sum, column) => sum + column.width, 0);
   return (
-    <div className={cn("-mx-4 overflow-x-auto lg:-mx-14", className)}>
+    <div className={cn("-mx-4 overflow-x-auto lg:-mx-6", className)}>
       <table aria-label={label} className="w-full table-fixed border-separate border-spacing-0 text-left" style={{ minWidth: width }}>
         <colgroup><col style={{ width: 60 }} />{columns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup>
         <thead><tr className="h-8 text-[12px] font-medium text-muted-foreground"><th className="font-medium" scope="col" />{columns.map((column) => <th className="font-medium" key={column.key} scope="col">{column.label ? <span className="-ml-[6.5px] inline-flex h-6 items-center rounded-full px-1.5">{column.label}</span> : null}</th>)}</tr></thead>

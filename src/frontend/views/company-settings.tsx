@@ -7,7 +7,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { AvatarEditor } from ".././components/app/entity-avatar.js";
-import { SettingsLayout, SettingsSection, SettingRow } from ".././components/app/settings-layout.js";
+import { SettingsContent, SettingsLayout, SettingsSection, SettingRow } from ".././components/app/settings-layout.js";
 import { companySettingsPath, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { Archive, RotateCcw, Save, Pause, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
@@ -77,6 +77,7 @@ export function CompanySettingsView(): ReactElement {
 
   return (
     <SettingsLayout title="Workspace" companyId={company.id} backHref={backHref} activeHref={companySettingsPath(company.id)}>
+      <SettingsContent>
       <SettingsSection title="Profile">
         <SettingRow label="Company name" description="Public workspace name.">
           <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void save(); }}>
@@ -108,6 +109,7 @@ export function CompanySettingsView(): ReactElement {
         {company.status === "archived" ? <SettingRow label="Restore company" description="Restore the company to active status."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Restoring…" : "Restore company"}</Button></SettingRow> : null}
         <SettingRow label="Clear account" description="Permanently delete every project, task, and record for this workspace, then reset it to factory state." destructive><Button variant="destructive" size="sm" onClick={() => setClearOpen(true)} disabled={busy !== ""}><Trash2 className="size-3.5" />Clear account</Button></SettingRow>
       </SettingsSection>
+      </SettingsContent>
       <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Archive {company.name}?</AlertDialogTitle><AlertDialogDescription>You can reverse this action. You can read the project and task history, but you cannot start new work.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void mutateStatus("archived")} disabled={busy !== ""}>{busy === "archived" ? "Archiving…" : "Archive"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
       <AlertDialog open={clearOpen} onOpenChange={setClearOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Clear {company.name}?</AlertDialogTitle><AlertDialogDescription>This permanently deletes every project, task, artifact, and execution record for this workspace and resets it to factory state. Memberships and audit history are kept. This cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void clearAccount()} disabled={busy !== ""}>{busy === "clear" ? "Clearing…" : "Clear account"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     </SettingsLayout>

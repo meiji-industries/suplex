@@ -2,10 +2,9 @@ import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
 import { Spinner } from "../components/ui/spinner.js";
-import { ApplicationFrame } from "../components/app/application-frame.js";
 import { useCompanyContext } from "../components/app/company-context.js";
 import { AvatarEditor } from "../components/app/entity-avatar.js";
-import { SettingsLayout, SettingsSection, SettingRow } from "../components/app/settings-layout.js";
+import { SettingsContent, SettingsLayout, SettingsSection, SettingRow } from "../components/app/settings-layout.js";
 import { readTaskAgentExpiry, saveTaskAgentExpiry, taskAgentExpiryOptions } from "../components/app/task-agent-expiry.js";
 import { withCompany } from "../lib/api.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select.js";
@@ -24,9 +23,8 @@ export function ProfileView(): ReactElement {
 
   useEffect(() => { setDisplayName(user?.displayName ?? ""); setUsername(user?.username ?? ""); setAvatarSeed(user?.avatarSeed ?? ""); setSaved(false); }, [user?.avatarSeed, user?.displayName, user?.username]);
 
-  if (loading || !user) return <ApplicationFrame title="Profile"><div className="flex items-center gap-2 p-4 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading profile…</span></div></ApplicationFrame>;
-
   const save = async (): Promise<void> => {
+    if (!user) return;
     const nextName = displayName.trim();
     const next = username.trim();
     if (!nextName || !next || busy || (nextName === user.displayName && next === user.username && avatarSeed === user.avatarSeed)) return;
@@ -38,6 +36,8 @@ export function ProfileView(): ReactElement {
   const companyId = currentCompany?.id;
 
   return <SettingsLayout title="Profile" companyId={companyId ?? ""} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/profile", companyId)}>
+    <SettingsContent>
+    {loading || !user ? <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Please wait.</span></div> : <>
     <SettingsSection title="Profile">
       <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <SettingRow label="Name" description="Shown anywhere your account appears.">
@@ -58,5 +58,7 @@ export function ProfileView(): ReactElement {
       </SettingRow>
     </SettingsSection>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+    </>}
+    </SettingsContent>
   </SettingsLayout>;
 }

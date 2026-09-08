@@ -877,7 +877,7 @@ export function AdminView(): ReactElement {
 
         {isModels ? <section>
           <SettingsToolbar searchLabel="Search models" searchPlaceholder="Search models" filterLabel="OpenCode" actions={<Button size="sm" variant="outline" onClick={() => void reload()}>Check configuration</Button>} />
-          <p>OpenCode and Claude Code supply these models. Configure providers on the Forge host.</p>
+          <p className="my-3 text-xs text-muted-foreground">OpenCode and Claude Code supply these models. Configure providers on the Forge host.</p>
           <SettingsDataTable label="Models" columns={MODEL_COLUMNS}>
             <SettingsTableGroup columnCount={MODEL_COLUMNS.length} count={models.length} label="Available models">
               {models.map((model) => <SettingsTableRow key={model.provider + "/" + model.id}>

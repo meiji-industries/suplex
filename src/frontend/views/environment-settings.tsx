@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactElement } from "react";
 
-import { SettingsLayout, SettingRow, SettingsSection } from "../components/app/settings-layout.js";
+import { SettingsContent, SettingsLayout, SettingRow, SettingsSection } from "../components/app/settings-layout.js";
 import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
 import { useCompanyContext } from "../components/app/company-context.js";
@@ -43,7 +43,7 @@ export function EnvironmentSettingsView(): ReactElement {
   };
 
   return <SettingsLayout title="Environment" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/environment", companyId)}>
-    <div className="mt-5 max-w-3xl">
+    <SettingsContent>
       <SettingsSection title="Worktrees" description="Host-wide limits applied before Forge creates or changes a worktree.">
         <SettingRow label="Minimum free disk space" description="Block worktree operations when available space falls below this threshold.">
           <form className="flex items-center gap-2" onSubmit={(event) => void save(event)}>
@@ -55,6 +55,6 @@ export function EnvironmentSettingsView(): ReactElement {
       </SettingsSection>
       {!valid ? <p className="text-xs text-destructive" role="alert">Enter a value from 0 to 1024 GB.</p> : null}
       {message ? <p className="text-xs text-muted-foreground" role="status">{message}</p> : null}
-    </div>
+    </SettingsContent>
   </SettingsLayout>;
 }

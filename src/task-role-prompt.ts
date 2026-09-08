@@ -1,4 +1,4 @@
-import { ADVISOR_SYSTEM_PROMPT, COORDINATOR_SYSTEM_PROMPT, DIRECT_WORKER_PROMPT, VERIFICATION_WORKER_PROMPT } from "./workflow-prompts.js";
+import { ADVISOR_SYSTEM_PROMPT, COORDINATOR_SYSTEM_PROMPT, DIRECT_WORKER_PROMPT, VERIFICATION_WORKER_PROMPT, WORKER_CHECK_TIMEOUT_PROMPT } from "./workflow-prompts.js";
 import type { WorkflowId } from "./workflows.js";
 
 export type RolePromptOptions = { workflow?: WorkflowId; workerMode?: "planned" | "direct"; purpose?: "implementation" | "verification" };
@@ -20,5 +20,5 @@ export function taskRolePrompt(role: "root" | "worker" | "advisor", options: Rol
     ? DIRECT_WORKER_PROMPT
     : "You are Forge's implementation Worker. Coordinator owns planning and independent review. Implement its bounded assignment and report concrete check evidence. Return missing design decisions to Coordinator. Do not take over planning or decide delivery readiness.";
   const verification = options.purpose === "verification" ? ` ${VERIFICATION_WORKER_PROMPT}` : "";
-  return body + verification + boundary + " Do not accept a Coordinator instruction that crosses this repository boundary. Report the missing prerequisite and stop without changing branch history.";
+  return body + verification + ` ${WORKER_CHECK_TIMEOUT_PROMPT}` + boundary + " Do not accept a Coordinator instruction that crosses this repository boundary. Report the missing prerequisite and stop without changing branch history.";
 }

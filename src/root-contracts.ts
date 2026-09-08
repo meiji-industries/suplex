@@ -72,11 +72,34 @@ export type AdvisorRequest = z.infer<typeof AdvisorRequestSchema>;
 
 export const DelegatePlannersRequestSchema = z.object({ kind: z.literal("delegate_planners") }).strict();
 
+const WorkerEvidenceRequestShape = z.object({
+  turnId: opaqueId.describe("The Worker turn whose live native tool evidence to read."),
+  toolId: opaqueId.optional().describe("Select one native tool by its exact ID. Omit this field to receive the compact tool index."),
+  field: z.enum(["input", "output", "error"]).optional().describe("Selected-tool field. Defaults to output. Valid only with toolId."),
+  position: z.enum(["head", "tail"]).optional().describe("Selected-tool field position. Defaults to tail. Head supports continuation cursors. Valid only with toolId."),
+  cursor: z.string().regex(/^(?:index|field):\d+$/).optional().describe("Use an index cursor for the compact index or a field cursor with selected-tool head access."),
+  maxCharacters: z.number().int().min(1_000).max(20_000).optional().describe("Maximum evidence characters to return. Defaults to 12000."),
+}).strict().superRefine((request, context) => {
+  if (request.toolId === undefined && (request.field !== undefined || request.position !== undefined)) {
+    context.addIssue({ code: "custom", message: "field and position require toolId" });
+  }
+  if (request.toolId === undefined && request.cursor?.startsWith("field:")) {
+    context.addIssue({ code: "custom", path: ["cursor"], message: "A field cursor requires toolId" });
+  }
+  if (request.toolId !== undefined && request.cursor?.startsWith("index:")) {
+    context.addIssue({ code: "custom", path: ["cursor"], message: "An index cursor cannot select a tool field" });
+  }
+  if (request.toolId !== undefined && request.cursor !== undefined && (request.position ?? "tail") !== "head") {
+    context.addIssue({ code: "custom", path: ["cursor"], message: "A field cursor is valid only with position head" });
+  }
+}).describe("Without toolId, returns a compact index. With toolId, field defaults to output and position defaults to tail. Use position head and the returned field cursor to read the complete selected field.");
+export type WorkerEvidenceRequest = z.infer<typeof WorkerEvidenceRequestShape>;
+
 export const RootToolSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("observe") }).strict(),
   z.object({ kind: z.literal("read_image"), artifactId: opaqueId }).strict(),
-  z.object({ kind: z.literal("read_worker_evidence"), turnId: opaqueId, cursor: z.string().regex(/^\d+:\d+:\d+$/).optional(), maxCharacters: z.number().int().min(1_000).max(20_000).optional() }).strict(),
-  WorkerAssignmentShape.extend({ kind: z.literal("delegate_worker") }).strict().refine(plannedNeedsPlan, "A planned assignment requires the Coordinator's plan"),
+  WorkerEvidenceRequestShape.extend({ kind: z.literal("read_worker_evidence") }),
+  WorkerAssignmentShape.extend({ kind: z.literal("delegate_worker") }).strict().refine(plannedNeedsPlan, "A planned assignment requires the Coordinator's plan").describe("acceptanceCriteria and instruction are required. plan is also required when mode is planned or omitted."),
   AdvisorRequestSchema.extend({ kind: z.literal("delegate_advisor") }).strict(),
   DelegatePlannersRequestSchema,
   z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional(), review: DeliveryReviewSchema.optional(), pullRequestTitle: PullRequestTitleSchema.optional().describe("For pull request creation, use concise action-oriented wording based on the final reviewed diff. Do not copy task prose or a commit message."), pullRequestBody: PullRequestBodySchema.optional().describe("For pull request creation, markdown with exactly these headings in order: ## Summary (bullets of what changed), ## Why (the motivation), ## Validation (bullets of checks run and their results), ## Review notes (what a reviewer should look at). Base it on the final reviewed diff; do not copy task prose.") }).strict(),
@@ -91,10 +114,12 @@ export function rootToolInputSchema(): Record<string, unknown> {
   const kinds: string[] = [];
   const guide: string[] = [];
   for (const variant of RootToolSchema.options) {
-    const schema = z.toJSONSchema(variant) as { properties?: Record<string, Record<string, unknown>> };
+    const schema = z.toJSONSchema(variant) as { description?: string; properties?: Record<string, Record<string, unknown>>; required?: string[] };
     const fields = Object.keys(schema.properties ?? {}).filter(name => name !== "kind");
+    const required = (schema.required ?? []).filter(name => name !== "kind");
+    const optional = fields.filter(name => !required.includes(name));
     kinds.push(String(schema.properties?.kind?.const));
-    guide.push(`${String(schema.properties?.kind?.const)}: ${fields.join(", ") || "no other fields"}`);
+    guide.push(`${String(schema.properties?.kind?.const)}: required ${required.join(", ") || "no other fields"}; optional ${optional.join(", ") || "no other fields"}${schema.description ? `. ${schema.description}` : ""}`);
     for (const name of fields) properties[name] ??= schema.properties?.[name];
   }
   return { type: "object", properties: { kind: { type: "string", enum: kinds, description: `The request kind. Fields per kind. ${guide.join(". ")}.` }, ...properties }, required: ["kind"], additionalProperties: false };

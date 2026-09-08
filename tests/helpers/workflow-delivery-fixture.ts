@@ -99,9 +99,10 @@ export async function fixture(workflow: WorkflowId, options: { deliveryTarget?: 
   /** Ends every queued Coordinator wake, as a live Coordinator would consume them one turn at a time. */
   const drainRoot = async () => { for (let guard = 0; guard < 10 && store.pendingTurns(identity().sessionId).length; guard++) { endRootTurn(); await controller.recover("task"); } };
   const finishDelegate = async (text?: string, tools = true) => {
+    endRootTurn();
+    await controller.recover("task");
     const message = harness.dispatched.at(-1)!.messageID;
     if (tools && !text?.includes("```json")) harness.evidence.set(message, { tools: [{ id: `${message}:1`, name: "bash", status: "completed", input: { command: "pnpm test" }, output: "1 passed", error: null }], limit: null });
-    endRootTurn();
     harness.finish(message, "completed", text); await controller.recover("task");
   };
   const commit = async (name: string, content = `${name}\n`) => { await writeFile(join(worktree.path, name), content); await git(worktree.path, ["add", "."]); await git(worktree.path, ["commit", "-m", name]); return git(worktree.path, ["rev-parse", "HEAD"]); };

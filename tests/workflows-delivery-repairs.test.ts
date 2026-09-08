@@ -602,8 +602,9 @@ test("F1g: a delegate reserved or a review replaced from a second connection aft
     const controller = new RootController(store, g.harness, new DeliveryOperations(store, g.port), undefined, { root: join(g.directory, "evidence") });
     const replace = afterNextLocalInspection(g, async () => {
       await controller.delegateAdvisor(g.identity(), { role: "reviewer", brief: "Plan again." });
-      const message = g.harness.dispatched.at(-1)!.messageID;
       g.endRootTurn();
+      await controller.recover("task");
+      const message = g.harness.dispatched.at(-1)!.messageID;
       g.harness.finish(message, "completed", reviewer(false, ["src.ts: regression"]));
       await controller.recover("task");
     });

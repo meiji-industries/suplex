@@ -178,7 +178,7 @@ test("an existing open pull request does not complete Second opinion before Revi
 
 test("changed heads, dirty trees, active delegates, newer negative reviews, divergence, and wrong repositories block publication with specific reasons", { timeout: 60_000 }, async () => {
   const f = await fixture("refine_pull_request");
-  await f.controller.delegateAdvisor(f.identity(), { role: "rater" }); const good = f.store.currentSession("task", "worker")!; await f.finishDelegate(rater(9));
+  await f.controller.delegateAdvisor(f.identity(), { role: "rater" }); await f.finishDelegate(rater(9)); const good = f.store.currentSession("task", "worker")!;
   const { headSha, review } = await f.inspect();
   await f.commit("late.ts");
   await expect(f.controller.requestDelivery(f.identity(), "push_branch", headSha, review)).rejects.toMatchObject({ code: "delivery_review_required" });

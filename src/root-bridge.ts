@@ -14,6 +14,7 @@ import {
   type RootIdentity,
   type RootTool,
   type WorkerAssignment,
+  type WorkerEvidenceRequest,
   type AdvisorRequest,
 } from "./root-contracts.js";
 import { ForgeDatabase } from "./database.js";
@@ -39,7 +40,7 @@ export interface RootBridgeAdapter {
   releaseToolOwner(root: RootIdentity, token: string): Promise<void>;
   observe(root: RootIdentity): Promise<unknown>;
   readImage(root: RootIdentity, artifactId: string): Promise<RootImageResult>;
-  readWorkerEvidence(root: RootIdentity, turnId: string, cursor?: string, maxCharacters?: number): Promise<unknown>;
+  readWorkerEvidence(root: RootIdentity, request: WorkerEvidenceRequest): Promise<unknown>;
   delegateWorker(root: RootIdentity, assignment: WorkerAssignment): Promise<unknown>;
   delegateAdvisor(root: RootIdentity, request: AdvisorRequest): Promise<unknown>;
   delegatePlanners(root: RootIdentity): Promise<unknown>;
@@ -68,7 +69,7 @@ export class RootBridge {
       case "read_image":
         return this.adapter.readImage(this.root, tool.artifactId);
       case "read_worker_evidence":
-        return this.adapter.readWorkerEvidence(this.root, tool.turnId, tool.cursor, tool.maxCharacters);
+        return this.adapter.readWorkerEvidence(this.root, { turnId: tool.turnId, toolId: tool.toolId, field: tool.field, position: tool.position, cursor: tool.cursor, maxCharacters: tool.maxCharacters });
       case "delegate_worker":
         return this.adapter.delegateWorker(this.root, { plan: tool.plan, acceptanceCriteria: tool.acceptanceCriteria, instruction: tool.instruction, mode: tool.mode, purpose: tool.purpose, advisorTurnId: tool.advisorTurnId, candidateTurnIds: tool.candidateTurnIds, advisorSessionId: tool.advisorSessionId, candidateSessionIds: tool.candidateSessionIds });
       case "delegate_advisor":

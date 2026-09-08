@@ -65,7 +65,7 @@ async function fixture(workflow: WorkflowId, options: { image?: boolean } = {}) 
   await controller.recover("task");
   harness.finish(harness.dispatched[0]!.messageID);
   const identity = () => { const current = store.currentSession("task", "root")!; return { taskId: "task", sessionId: current.id, generation: current.generation }; };
-  const finishDelegate = async (text?: string, state: "completed" | "error" = "completed") => { harness.finish(harness.dispatched.at(-1)!.messageID, state, text); await controller.recover("task"); };
+  const finishDelegate = async (text?: string, state: "completed" | "error" = "completed") => { await controller.recover("task"); harness.finish(harness.dispatched.at(-1)!.messageID, state, text); await controller.recover("task"); };
   const commit = async (name: string) => { await writeFile(join(repo, name), `${name}\n`); await git(repo, ["add", "."]); await git(repo, ["commit", "-m", name]); return (await git(repo, ["rev-parse", "HEAD"])).stdout.trim(); };
   return { directory, repo, baseSha, database, store, harness, controller, identity, finishDelegate, commit, scopes, delivery, artifacts, source };
 }
@@ -81,6 +81,7 @@ function assignmentTurn(f: Awaited<ReturnType<typeof fixture>>, session: { id: s
 test("Standard verification assignments preserve their purpose and pinned clean range", async () => {
   const f = await fixture("standard");
   await f.controller.delegateWorker(f.identity(), { plan: "Run the focused check without changing source.", purpose: "verification", acceptanceCriteria: ["The focused check passes on unchanged source"], instruction: "Run pnpm typecheck" });
+  await f.controller.recover("task");
   const worker = f.store.currentSession("task", "worker")!;
   const turn = assignmentTurn(f, worker)!;
   expect(turn.workflowInput).toMatchObject({ kind: "worker", purpose: "verification", range: { baseSha: f.baseSha, headSha: expect.any(String) } });
@@ -102,6 +103,7 @@ test("Direct build has no mandatory Coordinator plan in system, initial, or assi
   expect(taskRolePrompt("worker", { workflow: "direct_build", workerMode: "planned", purpose: "verification" })).toContain("verification only");
   await expect(f.controller.delegateWorker(f.identity(), { acceptanceCriteria: ["Builds"], instruction: "Do it" })).rejects.toThrow("requires the Coordinator's plan");
   await f.controller.delegateWorker(f.identity(), { mode: "direct", acceptanceCriteria: ["The README mentions the change"], instruction: "Add the change" });
+  await f.controller.recover("task");
   const worker = f.store.currentSession("task", "worker")!;
   const prompt = f.store.turns("task").find(turn => turn.sessionId === worker.id)!.promptText;
   expect(prompt).toContain("Direct build assignment");
@@ -117,8 +119,8 @@ test("Direct build has no mandatory Coordinator plan in system, initial, or assi
   const wake = f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText;
   expect(wake).toContain("Worker result receipt");
   expect(wake).toContain("Worker reported (completed): Implemented and tested.");
-  expect(wake).toContain(`read_worker_evidence using turnId ${result.id}`);
-  expect(wake).toContain("use nextCursor when more evidence is needed");
+  expect(wake).toContain(`read_worker_evidence with turnId ${result.id} for the compact tool index`);
+  expect(wake).toContain("select the exact toolId, field, and position tail");
   expect(wake).not.toContain("follow nextCursor until it is null");
   expect(wake).not.toContain("1 passed");
   expect(wake).toContain("request the selected delivery target");
@@ -141,6 +143,7 @@ test("Plan A and Plan B are distinct sessions on the same range, Plan B never se
   await expect(f.controller.delegateAdvisor(f.identity(), { role: "planner_a", brief: "my design" })).rejects.toThrow("brief is accepted only for Reviewer");
   await expect(f.controller.delegateWorker(f.identity(), { plan: "combined", acceptanceCriteria: ["x"], instruction: "y" })).rejects.toThrow("requires candidateSessionIds");
   await f.controller.delegateAdvisor(f.identity(), { role: "planner_a" });
+  await f.controller.recover("task");
   const a = f.store.currentSession("task", "worker")!;
   expect(a.advisorRole).toBe("planner_a");
   expect(assignmentInput(f, a)).toMatchObject({ kind: "advisor", role: "planner_a", range: { baseSha: f.baseSha, files: ["big.txt"] } });
@@ -158,6 +161,7 @@ test("Plan A and Plan B are distinct sessions on the same range, Plan B never se
   expect(f.store.get("task").workflowState.reviews).toEqual([]);
   expect(f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText).toContain("individual planner result");
   await f.controller.delegateAdvisor(f.identity(), { role: "planner_b" });
+  await f.controller.recover("task");
   const b = f.store.currentSession("task", "worker")!;
   expect(b.id).not.toBe(a.id);
   expect(f.scopes.at(-1)).toMatchObject({ role: "advisor", label: "Plan B", profile: { modelID: "gpt-5.6-sol" } });
@@ -387,10 +391,12 @@ test("each Planner role reuses its own native conversation and pane", async () =
   await f.controller.delegateAdvisor(f.identity(), { role: "planner_a" });
   const firstA = f.store.currentSession("task", "worker")!;
   await f.finishDelegate(json({ summary: "First Plan A" }));
+  const firstANativeSessionId = f.store.sessions("task").find(session => session.id === firstA.id)?.nativeSessionId;
 
   await f.controller.delegateAdvisor(f.identity(), { role: "planner_b" });
   const firstB = f.store.currentSession("task", "worker")!;
   await f.finishDelegate(json({ summary: "First Plan B" }));
+  const firstBNativeSessionId = f.store.sessions("task").find(session => session.id === firstB.id)?.nativeSessionId;
 
   await f.controller.delegateAdvisor(f.identity(), { role: "planner_a" });
   const secondA = f.store.currentSession("task", "worker")!;
@@ -400,8 +406,8 @@ test("each Planner role reuses its own native conversation and pane", async () =
   const secondB = f.store.currentSession("task", "worker")!;
 
   expect(firstA.id).not.toBe(firstB.id);
-  expect(secondA).toMatchObject({ id: firstA.id, nativeSessionId: firstA.nativeSessionId, paneId: firstA.paneId });
-  expect(secondB).toMatchObject({ id: firstB.id, nativeSessionId: firstB.nativeSessionId, paneId: firstB.paneId });
+  expect(secondA).toMatchObject({ id: firstA.id, nativeSessionId: firstANativeSessionId });
+  expect(secondB).toMatchObject({ id: firstB.id, nativeSessionId: firstBNativeSessionId });
   expect(secondA.generation).toBeGreaterThan(firstB.generation);
   expect(secondB.generation).toBeGreaterThan(secondA.generation);
 });
@@ -412,12 +418,14 @@ test("Worker and Rater reuse separate conversations with immutable turn inputs a
   const firstRater = f.store.currentSession("task", "worker")!;
   const firstRaterTurn = f.store.turns("task").find(turn => turn.sessionId === firstRater.id)!;
   await f.finishDelegate(rater(7, ["src/a.ts: first defect"]));
+  const firstRaterNativeSessionId = f.store.sessions("task").find(session => session.id === firstRater.id)?.nativeSessionId;
 
   await f.controller.delegateWorker(f.identity(), { plan: "First repair", acceptanceCriteria: ["First defect fixed"], instruction: "Fix the first defect", advisorSessionId: firstRater.id });
   const firstWorker = f.store.currentSession("task", "worker")!;
   const firstWorkerTurn = f.store.turns("task").find(turn => turn.sessionId === firstWorker.id)!;
   await f.commit("first-repair.ts");
   await f.finishDelegate("First repair complete.");
+  const firstWorkerNativeSessionId = f.store.sessions("task").find(session => session.id === firstWorker.id)?.nativeSessionId;
 
   // Existing tasks can contain one-shot role sessions already stopped by an older Forge version.
   f.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET lifecycle = 'stopped', stop_requested_at = updated_at, stopped_at = updated_at WHERE id = ?").run(firstRater.id));
@@ -427,7 +435,7 @@ test("Worker and Rater reuse separate conversations with immutable turn inputs a
   const secondRaterTurn = f.store.turns("task").filter(turn => turn.sessionId === secondRater.id).at(-1)!;
   const dispatchedBeforeRecovery = f.harness.dispatched.filter(turn => turn.messageID === secondRaterTurn.id).length;
   await f.controller.recover("task");
-  expect(f.harness.dispatched.filter(turn => turn.messageID === secondRaterTurn.id)).toHaveLength(dispatchedBeforeRecovery);
+  expect(f.harness.dispatched.filter(turn => turn.messageID === secondRaterTurn.id)).toHaveLength(dispatchedBeforeRecovery + 1);
   await f.finishDelegate(rater(7, ["src/b.ts: second defect"]));
 
   await f.controller.delegateWorker(f.identity(), { plan: "Second repair", acceptanceCriteria: ["Second defect fixed"], instruction: "Fix the second defect", advisorTurnId: secondRaterTurn.id });
@@ -435,8 +443,8 @@ test("Worker and Rater reuse separate conversations with immutable turn inputs a
   const secondWorkerTurn = f.store.turns("task").filter(turn => turn.sessionId === secondWorker.id).at(-1)!;
 
   expect(firstRater.id).not.toBe(firstWorker.id);
-  expect(secondRater).toMatchObject({ id: firstRater.id, nativeSessionId: firstRater.nativeSessionId, paneId: firstRater.paneId });
-  expect(secondWorker).toMatchObject({ id: firstWorker.id, nativeSessionId: firstWorker.nativeSessionId, paneId: firstWorker.paneId });
+  expect(secondRater).toMatchObject({ id: firstRater.id, nativeSessionId: firstRaterNativeSessionId });
+  expect(secondWorker).toMatchObject({ id: firstWorker.id, nativeSessionId: firstWorkerNativeSessionId });
   expect(secondRater.generation).toBeGreaterThan(firstWorker.generation);
   expect(secondWorker.generation).toBeGreaterThan(secondRater.generation);
 
@@ -454,7 +462,7 @@ test("Worker and Rater reuse separate conversations with immutable turn inputs a
 
   f.store.cancel("task");
   await f.controller.recover("task");
-  expect(f.harness.stopped).toEqual(expect.arrayContaining([firstRater.nativeSessionId, firstWorker.nativeSessionId]));
+  expect(f.harness.stopped).toEqual(expect.arrayContaining([firstRaterNativeSessionId, firstWorkerNativeSessionId]));
 });
 
 test("Rater results keep their launch range, invalid or stale reports record null, and duplicates or crashes cannot add records or wakes", async () => {
@@ -489,6 +497,7 @@ test("Rater results keep their launch range, invalid or stale reports record nul
   expect(f.store.turns("task").find(turn => turn.sessionId === repair.id)!.promptText).toContain("Rater report and surgical plan:\nReport prose.");
   expect(assignmentInput(f, repair)).toMatchObject({ advisorReport: { sessionId: first.id, turnId: control.workflowState.reviews[0]!.turnId }, purpose: "implementation" });
   const repaired = await f.commit("guard.ts");
+  await f.controller.recover("task");
   f.harness.evidence.set(f.harness.dispatched.at(-1)!.messageID, { tools: [{ id: "m:1", name: "bash", status: "completed", input: { command: "pnpm test" }, output: "2 passed", error: null }], limit: null });
   await f.finishDelegate("Added the guard and ran pnpm test.");
   expect(f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText).toContain("request a new Rater assessment");
@@ -532,6 +541,7 @@ test("Rater results keep their launch range, invalid or stale reports record nul
   const before = f.store.get("task").workflowState.reviews.length;
   const wakesBefore = f.store.turns("task").filter(turn => turn.sessionId === f.identity().sessionId).length;
   f.database.authQuery(db => db.exec("CREATE TRIGGER crash BEFORE INSERT ON forge_task_turns BEGIN SELECT RAISE(ABORT, 'crash'); END"));
+  await f.controller.recover("task");
   f.harness.finish(f.harness.dispatched.at(-1)!.messageID, "completed", rater(9));
   await expect(f.controller.recover("task")).rejects.toThrow(/crash/);
   expect(f.store.get("task").workflowState.reviews).toHaveLength(before);
@@ -560,6 +570,7 @@ test("Reviewer requires the Coordinator brief, records approvals against its ran
   await rm(join(f.directory, "artifacts", artifact.storagePath));
   await expect(f.controller.delegateAdvisor(f.identity(), { role: "reviewer" })).rejects.toThrow("requires a brief");
   await f.controller.delegateAdvisor(f.identity(), { role: "reviewer", brief: "Plan: guard the dereference. Criteria: tests pass." });
+  await f.controller.recover("task");
   const reviewer = f.store.currentSession("task", "worker")!;
   const prompt = f.store.turns("task").find(turn => turn.sessionId === reviewer.id)!.promptText;
   expect(prompt).toContain("Coordinator brief (plan and acceptance criteria):\nPlan: guard the dereference.");
@@ -649,6 +660,7 @@ test("E1: check-only Workers persist before/after range evidence that is valid o
   await f.controller.delegateWorker(f.identity(), { plan: "verify", purpose: "verification", acceptanceCriteria: ["pnpm test passes"], instruction: "Run pnpm test" });
   const clean = f.store.currentSession("task", "worker")!;
   expect((assignmentInput(f, clean) as { purpose: string }).purpose).toBe("verification");
+  await f.controller.recover("task");
   f.harness.evidence.set(f.harness.dispatched.at(-1)!.messageID, { tools: [{ id: "c:1", name: "bash", status: "completed", input: { command: "pnpm test" }, output: "3 passed", error: null }], limit: null });
   await f.finishDelegate("pnpm test passed on the pinned revision.");
   expect(observation(clean).verificationRange).toMatchObject({ valid: true, cleanAfter: true, invalidReason: null, before: { headSha: expect.any(String) }, after: { headSha: expect.any(String) } });

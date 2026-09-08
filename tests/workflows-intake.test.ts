@@ -236,7 +236,9 @@ test("a populated pre-workflow database keeps sessions, claims, turns, and templ
 test("implementation Workers are told to commit and verification Workers are told not to", () => {
   for (const mode of ["planned", "direct"] as const) {
     expect(workerAssignmentPreamble(mode, "implementation")).toContain(IMPLEMENTATION_COMMIT_PROMPT);
+    expect(workerAssignmentPreamble(mode, "implementation")).toContain("For configured verification commands, set a 30-minute shell timeout, or the tool maximum if lower. Normal completion ends the command immediately.");
     expect(workerAssignmentPreamble(mode, "verification")).toContain(VERIFICATION_WORKER_PROMPT);
+    expect(workerAssignmentPreamble(mode, "verification")).toContain("For configured verification commands, set a 30-minute shell timeout, or the tool maximum if lower. Normal completion ends the command immediately.");
     expect(workerAssignmentPreamble(mode, "verification")).not.toContain(IMPLEMENTATION_COMMIT_PROMPT);
   }
 });

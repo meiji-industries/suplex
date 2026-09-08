@@ -7,14 +7,14 @@ import { DeliveryOperationFailure, DeliveryOperations } from "./delivery-operati
 import { StructuredLogger } from "./logging.js";
 import { createOpenCodePromptIntent } from "./opencode-session.js";
 import type { RootBridgeAdapter } from "./root-bridge.js";
-import type { AdvisorRequest, DeliveryOperation, DeliveryReview, PullRequestBody, PullRequestTitle, RootIdentity, RootImageResult, WorkerAssignment } from "./root-contracts.js";
+import type { AdvisorRequest, DeliveryOperation, DeliveryReview, PullRequestBody, PullRequestTitle, RootIdentity, RootImageResult, WorkerAssignment, WorkerEvidenceRequest } from "./root-contracts.js";
 import type { TaskControlStore } from "./root-session-store.js";
 import type { TaskControl, TaskSession, TaskTurn } from "./task-control.js";
 import type { NativeSessionReader, PromptObservation, TaskHarness, TaskScope } from "./task-harness.js";
 import { verifyTaskEvidence, writeTaskEvidence } from "./workflow-evidence.js";
 import { advisorResultWake, composeAdvisorAssignment, composeWorkerAssignment, initialCoordinatorPrompt, workerResultWake } from "./workflow-prompts.js";
 import { ADVISOR_LABELS, latestReview, parseAdvisorReport, publicWorkflowState, repairStalled, REPAIR_RATING_TARGET, sameRange, turnOutcome, workflowDefinition, type AdvisorRole, type ReportReference, type ReviewRange, type VerificationRange, type WorkflowInput, type WorkerWorkflowInput } from "./workflows.js";
-import { pageWorkerEvidence } from "./worker-turn-evidence.js";
+import { readWorkerEvidence } from "./worker-turn-evidence.js";
 
 export type TaskDelivery = Pick<DeliveryOperations, "observe" | "execute" | "currentRange"> & Partial<Pick<DeliveryOperations, "checksObservation">>;
 
@@ -89,14 +89,14 @@ export class RootController implements RootBridgeAdapter {
     return { control: { ...this.store.get(root.taskId), workflowState: publicWorkflowState(this.store.get(root.taskId).workflowState) }, context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, workerResult, workers, results, worktree, pullRequest };
   }
 
-  async readWorkerEvidence(root: RootIdentity, turnId: string, cursor?: string, maxCharacters = 12_000) {
+  async readWorkerEvidence(root: RootIdentity, request: WorkerEvidenceRequest) {
     this.store.assertCurrentRoot(root);
     if (!this.reader) throw new Error("Native session evidence reading is not configured");
-    const turn = this.store.turns(root.taskId).find(candidate => candidate.id === turnId);
+    const turn = this.store.turns(root.taskId).find(candidate => candidate.id === request.turnId);
     const session = turn ? this.store.sessions(root.taskId).find(candidate => candidate.id === turn.sessionId) : undefined;
     if (!turn || !session || session.kind !== "worker" || session.advisorRole !== null) throw new Error("Worker turn does not belong to this task");
     const evidence = await this.reader(session).turnEvidence(session, turn.id);
-    return { turnId: turn.id, sessionId: session.id, localObservation: { status: turn.status, terminalObservationAvailable: turn.terminalObservation !== null, nativeTurnIdAvailable: turn.nativeTurnId !== null }, limitation: evidence.limitation, ...pageWorkerEvidence(evidence.tools, cursor, maxCharacters) };
+    return { turnId: turn.id, sessionId: session.id, localObservation: { status: turn.status, terminalObservationAvailable: turn.terminalObservation !== null, nativeTurnIdAvailable: turn.nativeTurnId !== null }, limitation: evidence.limitation, ...readWorkerEvidence(evidence.tools, { toolId: request.toolId, field: request.field, position: request.position, cursor: request.cursor, maxCharacters: request.maxCharacters ?? 12_000 }) };
   }
 
   async delegateWorker(root: RootIdentity, assignment: WorkerAssignment): Promise<unknown> {
@@ -117,8 +117,7 @@ export class RootController implements RootBridgeAdapter {
       }
       const instruction = composeWorkerAssignment({ mode: "planned", purpose, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, visualEvidence: this.store.context(root.taskId).configuration.visualEvidence, ...(range ? { range } : {}) });
       const worker = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, instruction, ...(workflowInput ? { workflowInput } : {}) });
-      await this.recoverSession(worker);
-      return { worker: this.store.currentSession(root.taskId, "worker"), next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
+      return { worker, next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
     }
     this.recheck(root);
     const observed = await this.currentRange(root.taskId);
@@ -175,8 +174,7 @@ export class RootController implements RootBridgeAdapter {
     const instruction = composeWorkerAssignment({ mode, purpose, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, visualEvidence: this.store.context(root.taskId).configuration.visualEvidence, range, advisorReport });
     const workflowInput: WorkerWorkflowInput = { kind: "worker", version: 2, mode, purpose, range, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, advisorReport: advisorReportReference, candidateReports };
     const worker = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, instruction, workflowInput });
-    await this.recoverSession(worker);
-    return { worker: this.store.currentSession(root.taskId, "worker"), next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
+    return { worker, next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
   }
 
   async delegateAdvisor(root: RootIdentity, request: AdvisorRequest): Promise<unknown> {
@@ -207,8 +205,7 @@ export class RootController implements RootBridgeAdapter {
       priorFindings: previous?.result?.blockingFindings ?? null, repairEvidence,
     });
     const advisor = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, advisor: { role: request.role, prompt, input: { kind: "advisor", role: request.role, range, evidenceDirectory: evidence.directory, evidenceSha256: evidence.sha256, verificationTurnIds: workerTurns.map(({ turn }) => turn.id) } } });
-    await this.recoverSession(advisor);
-    return { advisor: this.store.currentSession(root.taskId, "worker"), evidenceDirectory: evidence.directory, next: advisorSuccess };
+    return { advisor, evidenceDirectory: evidence.directory, next: advisorSuccess };
   }
 
   async delegatePlanners(root: RootIdentity): Promise<unknown> {

@@ -34,6 +34,33 @@ test("Coordinator handoff preserves its plan and review criteria in the Worker p
   expect(prompt).toContain("Coordinator plan:\nUpdate the existing README heading");
   expect(prompt).toContain("1. Only README.md changes\n2. The heading describes the current runtime");
   expect(prompt).toContain("Worker instructions:\nApply the heading change");
+  expect(prompt?.match(/For configured verification commands, set a 30-minute shell timeout, or the tool maximum if lower\. Normal completion ends the command immediately\./g)).toHaveLength(1);
+});
+
+test("a durable Worker assignment is accepted before native recovery and launches once after reconstruction", async () => {
+  const value = await fixture();
+  value.controller.prepareRoot("task");
+  const ensure = value.harness.ensureSession.bind(value.harness);
+  value.harness.ensureSession = async () => { throw new Error("OpenCode request timed out for /session"); };
+
+  await expect(value.controller.delegateWorker(value.identity(), {
+    plan: "Update the scoped source without changing unrelated behavior.",
+    acceptanceCriteria: ["The focused check passes"],
+    instruction: "Implement the scoped change.",
+  })).resolves.toMatchObject({ worker: { kind: "worker", lifecycle: "reserved" } });
+  expect(value.store.sessions("task").filter(session => session.kind === "worker")).toHaveLength(1);
+  expect(value.store.turns("task").filter(turn => turn.sessionId === value.store.currentSession("task", "worker")?.id)).toHaveLength(1);
+  await expect(value.controller.delegateWorker(value.identity(), {
+    plan: "Start different work.",
+    acceptanceCriteria: ["The other check passes"],
+    instruction: "Dispatch a duplicate.",
+  })).rejects.toThrow("worker_already_assigned");
+
+  value.harness.ensureSession = ensure;
+  const restarted = new RootController(new TaskControlStore(value.database), value.harness);
+  await restarted.recover("task");
+  await restarted.recover("task");
+  expect(value.harness.dispatched.filter(intent => intent.agent === "forge-worker")).toHaveLength(1);
 });
 
 test("session claims recover from PID reuse without stealing a live or uncertain owner", async () => {
@@ -172,6 +199,7 @@ test.each(["root", "worker"] as const)("a crashed %s tool retains its turn until
   if (kind === "worker") {
     value.harness.finish(value.harness.dispatched[0]!.messageID);
     await value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Make the change" });
+    await value.controller.recover("task");
   }
   const dispatched = value.harness.dispatched.at(-1)!;
   value.harness.observations.set(dispatched.messageID, { ...value.harness.observations.get(dispatched.messageID)!, state: "unknown", executionUncertain: { stoppedServerGeneration: value.harness.serverGeneration } });
@@ -319,8 +347,9 @@ test("an idle retained Worker does not gate Coordinator progress", async () => {
   await value.controller.recover("task");
   value.harness.finish(value.harness.dispatched[0]!.messageID);
   await value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Make the change" });
+  await value.controller.recover("task");
   const worker = value.store.currentSession("task", "worker")!;
-  value.harness.finish(value.harness.dispatched[1]!.messageID);
+  value.harness.finish(value.harness.dispatched.find(intent => intent.agent === "forge-worker")!.messageID);
   await value.controller.recover("task");
   await value.controller.recover("task");
   expect(value.harness.dispatched.filter(turn => turn.agent === "forge-root")).toHaveLength(2);
@@ -383,12 +412,13 @@ test("one completed Worker wakes Coordinator once and allows the next assignment
   await value.controller.recover("task");
   await value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Make the scoped change" });
   await expect(value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Duplicate work" })).rejects.toThrow("worker_already_assigned");
+  await value.controller.recover("task");
   const worker = value.store.currentSession("task", "worker")!;
-  value.harness.finish(value.harness.dispatched[1]!.messageID);
+  value.harness.finish(value.harness.dispatched.find(intent => intent.agent === "forge-worker")!.messageID);
   await value.controller.recover("task");
   await value.controller.recover("task");
   await value.controller.recover("task");
-  expect(value.store.currentSession("task", "worker")).toMatchObject({ id: worker.id, lifecycle: "live" });
+  expect(value.store.currentSession("task", "worker")).toMatchObject({ id: worker.id, lifecycle: "live", launchOwner: null });
   expect(value.harness.dispatched.filter((intent) => intent.agent === "forge-root")).toHaveLength(2);
   await value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Next scoped change" });
   expect(value.store.currentSession("task", "worker")?.generation).toBe(worker.generation + 1);
@@ -400,6 +430,7 @@ test("Coordinator reads bounded authoritative evidence for a historical Worker t
   value.harness.finish(value.harness.dispatched[0]!.messageID);
   await value.controller.recover("task");
   await value.controller.delegateWorker(value.identity(), { plan: "Make the scoped change", acceptanceCriteria: ["The focused check passes"], instruction: "Implement and check it" });
+  await value.controller.recover("task");
   const worker = value.store.currentSession("task", "worker")!;
   const workerIntent = value.harness.dispatched.find(intent => intent.agent === "forge-worker")!;
   value.harness.finish(workerIntent.messageID);
@@ -414,16 +445,15 @@ test("Coordinator reads bounded authoritative evidence for a historical Worker t
       return { tools: [{ id: "native-tool-1", name: "bash", status: "completed" as const, input: { command: "pnpm test" }, output, error: null }], limitation: null };
     },
   }));
-  const first = await controller.readWorkerEvidence(value.identity(), turn.id, undefined, 4096);
+  const first = await controller.readWorkerEvidence(value.identity(), { turnId: turn.id, toolId: "native-tool-1", field: "output", position: "head", maxCharacters: 4096 });
   expect(calls).toEqual([`${worker.id}:${turn.id}`]);
-  expect(first.chunks.some(chunk => chunk.toolId === "native-tool-1" && chunk.complete === false)).toBe(true);
-  expect(first.chunks.reduce((total, chunk) => total + chunk.text.length, 0)).toBeLessThanOrEqual(4096);
+  expect(first).toMatchObject({ kind: "tool", tool: { toolId: "native-tool-1", status: "completed" }, evidence: { text: "x".repeat(4096), truncatedAfter: true } });
   expect(first.nextCursor).not.toBeNull();
-  const second = await controller.readWorkerEvidence(value.identity(), turn.id, first.nextCursor!, 4096);
-  expect(second.chunks[0]?.toolId).toBe("native-tool-1");
+  const second = await controller.readWorkerEvidence(value.identity(), { turnId: turn.id, toolId: "native-tool-1", field: "output", position: "head", cursor: first.nextCursor!, maxCharacters: 4096 });
+  expect(second).toMatchObject({ kind: "tool", tool: { toolId: "native-tool-1" }, evidence: { offset: 4096 } });
   expect(calls).toHaveLength(2);
   const unavailable = new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, () => ({ turnEvidence: async () => { throw new Error("Native session is unavailable"); } }));
-  await expect(unavailable.readWorkerEvidence(value.identity(), turn.id)).rejects.toThrow("Native session is unavailable");
+  await expect(unavailable.readWorkerEvidence(value.identity(), { turnId: turn.id })).rejects.toThrow("Native session is unavailable");
 });
 
 test("sequential Worker assignments reuse one native session and pane across controller reconstruction", async () => {
@@ -432,6 +462,7 @@ test("sequential Worker assignments reuse one native session and pane across con
   value.harness.finish(value.harness.dispatched[0]!.messageID);
   await value.controller.recover("task");
   await value.controller.delegateWorker(value.identity(), { plan: "Make the first scoped change", acceptanceCriteria: ["The first change is verified"], instruction: "Implement the first change" });
+  await value.controller.recover("task");
   const firstWorker = value.store.currentSession("task", "worker")!;
   const firstWorkerIntent = value.harness.dispatched.find(intent => intent.agent === "forge-worker")!;
   value.harness.finish(firstWorkerIntent.messageID);
@@ -452,6 +483,7 @@ test("sequential Worker assignments reuse one native session and pane across con
   expect(restartedStore.pendingTurns(root.id)).toHaveLength(1);
 
   await restartedController.delegateWorker({ taskId: "task", sessionId: root.id, generation: root.generation }, { plan: "Make the second scoped change", acceptanceCriteria: ["The second change is verified"], instruction: "Implement the second change" });
+  await restartedController.recover("task");
   const secondWorker = restartedStore.currentSession("task", "worker")!;
   expect(secondWorker).toMatchObject({ id: firstWorker.id, nativeSessionId: firstWorker.nativeSessionId, paneId: firstWorker.paneId, generation: firstWorker.generation + 1 });
   expect(() => restartedStore.recordWorkerResultAndWake({ taskId: "task", sessionId: firstWorker.id, generation: firstWorker.generation, receiptId: firstTurn.resultReceiptId!, observation: firstTurn.terminalObservation! })).toThrow("stale_generation");
@@ -538,6 +570,7 @@ test.each(["delivered", "cancelled"] as const)("a retained idle Worker is stoppe
   value.harness.finish(value.harness.dispatched[0]!.messageID);
   await value.controller.recover("task");
   await value.controller.delegateWorker(value.identity(), { plan: "Make the scoped change", acceptanceCriteria: ["The change is verified"], instruction: "Implement the change" });
+  await value.controller.recover("task");
   const worker = value.store.currentSession("task", "worker")!;
   value.harness.finish(value.harness.dispatched.find(intent => intent.agent === "forge-worker")!.messageID);
   await value.controller.recover("task");
@@ -556,6 +589,7 @@ test("an interrupted Worker preserves dirty files and reports interruption to Co
   const value = await fixture();
   await value.controller.recover("task");
   await value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Edit the file" });
+  await value.controller.recover("task");
   await writeFile(join(value.directory, "dirty.txt"), "keep this work");
   value.harness.finish(value.harness.dispatched[1]!.messageID, "interrupted");
   await value.controller.recover("task");
@@ -573,5 +607,5 @@ test("cancellation prevents recovery and fences late Worker results", async () =
   value.store.cancel("task");
   await value.controller.recover("task");
   await expect(value.controller.recordWorkerResult({ taskId: "task", sessionId: worker.id, generation: worker.generation, receiptId: "late", observation: "Late result" })).rejects.toThrow("stale_generation");
-  expect(value.harness.dispatched).toHaveLength(2);
+  expect(value.harness.dispatched).toHaveLength(1);
 });

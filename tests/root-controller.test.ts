@@ -394,6 +394,38 @@ test("one completed Worker wakes Coordinator once and allows the next assignment
   expect(value.store.currentSession("task", "worker")?.generation).toBe(worker.generation + 1);
 });
 
+test("Coordinator reads bounded authoritative evidence for a historical Worker turn without stored observations", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  await value.controller.recover("task");
+  await value.controller.delegateWorker(value.identity(), { plan: "Make the scoped change", acceptanceCriteria: ["The focused check passes"], instruction: "Implement and check it" });
+  const worker = value.store.currentSession("task", "worker")!;
+  const workerIntent = value.harness.dispatched.find(intent => intent.agent === "forge-worker")!;
+  value.harness.finish(workerIntent.messageID);
+  await value.controller.recover("task");
+  const turn = value.store.turns("task").find(candidate => candidate.sessionId === worker.id)!;
+  value.database.authTransaction(db => db.prepare("UPDATE forge_task_turns SET status = 'unknown', terminal_observation = NULL, native_turn_id = NULL WHERE id = ?").run(turn.id));
+  const calls: string[] = [];
+  const output = "x".repeat(120_000);
+  const controller = new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, () => ({
+    turnEvidence: async (session, turnId) => {
+      calls.push(`${session.id}:${turnId}`);
+      return { tools: [{ id: "native-tool-1", name: "bash", status: "completed" as const, input: { command: "pnpm test" }, output, error: null }], limitation: null };
+    },
+  }));
+  const first = await controller.readWorkerEvidence(value.identity(), turn.id, undefined, 4096);
+  expect(calls).toEqual([`${worker.id}:${turn.id}`]);
+  expect(first.chunks.some(chunk => chunk.toolId === "native-tool-1" && chunk.complete === false)).toBe(true);
+  expect(first.chunks.reduce((total, chunk) => total + chunk.text.length, 0)).toBeLessThanOrEqual(4096);
+  expect(first.nextCursor).not.toBeNull();
+  const second = await controller.readWorkerEvidence(value.identity(), turn.id, first.nextCursor!, 4096);
+  expect(second.chunks[0]?.toolId).toBe("native-tool-1");
+  expect(calls).toHaveLength(2);
+  const unavailable = new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, () => ({ turnEvidence: async () => { throw new Error("Native session is unavailable"); } }));
+  await expect(unavailable.readWorkerEvidence(value.identity(), turn.id)).rejects.toThrow("Native session is unavailable");
+});
+
 test("sequential Worker assignments reuse one native session and pane across controller reconstruction", async () => {
   const value = await fixture();
   await value.controller.recover("task");
@@ -529,7 +561,7 @@ test("an interrupted Worker preserves dirty files and reports interruption to Co
   await value.controller.recover("task");
   expect(await readFile(join(value.directory, "dirty.txt"), "utf8")).toBe("keep this work");
   expect(value.store.currentSession("task", "worker")?.lifecycle).toBe("live");
-  expect(value.store.pendingTurns(value.identity().sessionId).some((turn) => turn.promptText.includes('"state":"interrupted"'))).toBe(true);
+  expect(value.store.pendingTurns(value.identity().sessionId).some((turn) => turn.promptText.includes("Worker reported (interrupted)") && turn.promptText.includes("read_worker_evidence"))).toBe(true);
   expect(value.store.get("task").status).toBe("active");
 });
 

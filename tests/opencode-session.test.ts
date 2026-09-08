@@ -1,8 +1,10 @@
 import { expect, test } from "vitest";
+import { OpenCodeMessageEnvelopeSchema } from "../src/opencode-contracts.js";
 
 import {
   createOpenCodeMessageID,
   createOpenCodePromptIntent,
+  correlatedAssistants,
   reconcileOpenCodePrompt,
   replayOpenCodePrompt,
   type OpenCodePromptReadPort,
@@ -97,6 +99,15 @@ function port(input: {
 }
 
 const allowClaim = async () => true;
+
+test("historical turn correlation excludes tools from a later assignment and needs the admitted prompt", () => {
+  const laterUser = { ...user, id: "msg_later", time: { created: 6 } };
+  const first = assistant({ id: "msg_first", parentID: "msg_task", created: 4, completed: 5, finish: "stop", parts: [{ type: "tool", callID: "first-tool", tool: "bash", state: { status: "completed", input: { command: "pnpm test" }, output: "passed" } }] });
+  const later = assistant({ id: "msg_later_answer", parentID: "msg_later", created: 7, completed: 8, finish: "stop", parts: [{ type: "tool", callID: "later-tool", tool: "bash", state: { status: "completed", input: { command: "pnpm lint" }, output: "passed" } }] });
+  const history = [{ info: user, parts: [{ type: "text", text: intent.prompt }] }, first, { info: laterUser, parts: [{ type: "text", text: "Second assignment" }] }, later].map(value => OpenCodeMessageEnvelopeSchema.parse(value));
+  expect(correlatedAssistants(history, "msg_task")).toMatchObject({ promptFound: true, messages: [{ info: { id: "msg_first" } }] });
+  expect(correlatedAssistants(history, "missing")).toMatchObject({ promptFound: false, messages: [] });
+});
 
 test.each(["pending", "running"])("a final assistant does not complete a turn with a %s tool", async (status) => {
   const result = await reconcileOpenCodePrompt(port({ messages: [

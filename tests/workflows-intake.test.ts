@@ -254,6 +254,24 @@ test("prompt assignments explain the Screenshots setting", () => {
   expect(composeWorkerAssignment({ mode: "planned", purpose: "implementation", plan: "Make the update", acceptanceCriteria: [], instruction: "Implement the plan.", visualEvidence: "required" })).toContain("Screenshots are necessary for this task");
 });
 
+test("Coordinator prompts reuse relevant checks and Advisor prompts assess implementation-turn source evidence", () => {
+  const control = { objective: "Add one type import", deliveryTarget: "pull_request_draft", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", pullRequestNumber: null }, workflow: "independent_review" as const };
+  const context = { configuration: { visualEvidence: "off" as const, runProjectTests: true, verificationCommand: "pnpm test" }, images: [] };
+  const coordinator = initialCoordinatorPrompt(control, context);
+  expect(coordinator).toContain("When runProjectTests is true, the configured project checks are required before delivery");
+  expect(coordinator).toContain("affected checks during development");
+  expect(coordinator).toContain("Reuse successful check evidence");
+  expect(coordinator).not.toMatch(/every Worker assignment.*configured verification command/i);
+
+  const advisor = composeAdvisorAssignment({ role: "reviewer", objective: control.objective, configuration: { runProjectTests: true, verificationCommand: "pnpm test" }, visualEvidence: "off", images: [], repository: "owner/repo", headBranch: "task", baseBranch: "main", pullRequestNumber: null, range, evidenceDirectory: "/tmp/evidence", attachments: [], brief: "Plan and criteria", priorFindings: null, repairEvidence: null });
+  expect(advisor).toContain("implementation or historical turns");
+  expect(advisor).toContain("actual native command inputs and outputs");
+  expect(advisor).toContain("Git source-state evidence");
+  expect(advisor).toContain("Missing verificationRange is not proof that a check is invalid");
+  expect(advisor).toContain("dirty edits after a check");
+  expect(advisor).not.toContain("implementation turns, older turns) do not establish");
+});
+
 test("workflow state with review records encodes for task API responses", () => {
   const range = { baseSha: "a".repeat(40), headSha: "b".repeat(40), files: ["src.ts"], commits: ["b".repeat(40)] };
   const result = { role: "rater" as const, rating: 8, blockingFindings: ["src.ts: null deref"], verification: "missing" as const, verificationSummary: "no checks", summary: "repair" };

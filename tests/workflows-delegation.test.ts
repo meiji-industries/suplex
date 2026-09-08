@@ -78,6 +78,16 @@ function assignmentTurn(f: Awaited<ReturnType<typeof fixture>>, session: { id: s
   return f.store.turns("task").find(turn => turn.sessionId === session.id && turn.generation === session.generation);
 }
 
+test("Standard verification assignments preserve their purpose and pinned clean range", async () => {
+  const f = await fixture("standard");
+  await f.controller.delegateWorker(f.identity(), { plan: "Run the focused check without changing source.", purpose: "verification", acceptanceCriteria: ["The focused check passes on unchanged source"], instruction: "Run pnpm typecheck" });
+  const worker = f.store.currentSession("task", "worker")!;
+  const turn = assignmentTurn(f, worker)!;
+  expect(turn.workflowInput).toMatchObject({ kind: "worker", purpose: "verification", range: { baseSha: f.baseSha, headSha: expect.any(String) } });
+  expect(turn.promptText).toContain("Verify this revision without intentional source edits");
+  expect(f.scopes.at(-1)).toMatchObject({ role: "worker", purpose: "verification" });
+});
+
 test("Direct build has no mandatory Coordinator plan in system, initial, or assignment prompts and direct mode is limited to it", async () => {
   const f = await fixture("direct_build");
   const initial = f.store.turns("task")[0]!.promptText;
@@ -106,7 +116,15 @@ test("Direct build has no mandatory Coordinator plan in system, initial, or assi
   expect(JSON.parse(result.terminalObservation!)).toMatchObject({ state: "completed", tools: [{ name: "bash", output: "1 passed" }] });
   const wake = f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText;
   expect(wake).toContain("Worker result receipt");
+  expect(wake).toContain("Worker reported (completed): Implemented and tested.");
+  expect(wake).toContain(`read_worker_evidence using turnId ${result.id}`);
+  expect(wake).toContain("use nextCursor when more evidence is needed");
+  expect(wake).not.toContain("follow nextCursor until it is null");
+  expect(wake).not.toContain("1 passed");
   expect(wake).toContain("request the selected delivery target");
+  const observed = await f.controller.observe(f.identity());
+  expect(JSON.stringify(observed)).toContain(`\"operation\":\"read_worker_evidence\"`);
+  expect(JSON.stringify(observed)).not.toContain("1 passed");
   await f.controller.delegateWorker(f.identity(), { mode: "direct", acceptanceCriteria: ["The follow-up is complete"], instruction: "Apply the follow-up" });
   const followUp = f.store.currentSession("task", "worker")!;
   expect(followUp).toMatchObject({ id: worker.id, nativeSessionId: worker.nativeSessionId, paneId: worker.paneId });

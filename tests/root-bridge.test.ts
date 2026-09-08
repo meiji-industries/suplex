@@ -78,6 +78,11 @@ class ForgeAdapterFake implements RootBridgeAdapter {
     return { taskId: identity.taskId, observed: true };
   }
 
+  async readWorkerEvidence(identity: RootIdentity, turnId: string, cursor?: string, maxCharacters?: number): Promise<unknown> {
+    this.calls.push(`evidence:${identity.taskId}:${turnId}:${cursor ?? "start"}:${maxCharacters ?? "default"}`);
+    return { turnId, chunks: [], nextCursor: null };
+  }
+
   async delegateWorker(identity: RootIdentity, assignment: Parameters<RootBridgeAdapter["delegateWorker"]>[1]): Promise<unknown> {
     this.calls.push(`delegate:${identity.sessionId}:${assignment.instruction}`);
     return { assignmentId: "worker_1" };
@@ -129,7 +134,8 @@ test("MCP discovery and typed Coordinator calls use the scoped bridge transport"
   const responses: unknown[] = [];
   stdout.on("data", (chunk: Buffer) => responses.push(JSON.parse(chunk.toString())));
   const adapter = new ForgeAdapterFake();
-  const reader = startRootBridgeTransport({ bridge: new RootBridge(root, adapter), stdin, stdout });
+  const bridge = new RootBridge(root, adapter);
+  const reader = startRootBridgeTransport({ bridge, stdin, stdout });
   const call = mcpClient(stdin, responses);
 
   const initialized = await call({ method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } } });
@@ -141,9 +147,11 @@ test("MCP discovery and typed Coordinator calls use the scoped bridge transport"
   expect(listed).toMatchObject({ result: { tools: [expect.objectContaining({ name: "forge_root" })] } });
   const inputSchema = (listed as { result: { tools: Array<{ inputSchema: Record<string, unknown> }> } }).result.tools[0]!.inputSchema;
   expect(["oneOf", "anyOf", "allOf"].filter(key => key in inputSchema)).toEqual([]);
-  expect(inputSchema).toMatchObject({ required: ["kind"], properties: { kind: { enum: ["observe", "read_image", "delegate_worker", "delegate_advisor", "request_delivery", "ask_human"] }, plan: expect.anything(), role: expect.anything(), operation: expect.anything(), question: expect.anything() } });
+  expect(inputSchema).toMatchObject({ required: ["kind"], properties: { kind: { enum: ["observe", "read_image", "read_worker_evidence", "delegate_worker", "delegate_advisor", "request_delivery", "ask_human"] }, turnId: expect.anything(), cursor: expect.anything(), maxCharacters: expect.anything(), plan: expect.anything(), role: expect.anything(), operation: expect.anything(), question: expect.anything() } });
   const observed = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "observe", _meta: { progressToken: "mcp-client" } }, _meta: { progressToken: "request" } } });
   expect(observed).toMatchObject({ result: { structuredContent: { taskId: "task_1", observed: true } } });
+  await expect(bridge.call({ kind: "read_worker_evidence", turnId: "turn_1", maxCharacters: 4096 })).resolves.toMatchObject({ turnId: "turn_1", nextCursor: null });
+  expect(adapter.calls).toContain("evidence:task_1:turn_1:start:4096");
   const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", plan: "Inspect the scoped diff for the requested implementation", acceptanceCriteria: ["The diff contains only requested changes"], instruction: "Inspect the current diff." } } });
   expect(delegated).toMatchObject({ result: { structuredContent: { assignmentId: "worker_1" } } });
   expect(adapter.calls).toContain("delegate:session_1:Inspect the current diff.");

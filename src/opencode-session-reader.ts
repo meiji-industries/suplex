@@ -7,6 +7,7 @@ import type { TaskSession } from "./task-control.js";
 import { TaskPlanItemSchema, type TaskExecution } from "./task-execution-contracts.js";
 import { taskSessionRuntimeDirectory, type NativeSessionReader } from "./task-harness.js";
 import { taskUsage } from "./task-usage.js";
+import { correlatedAssistants } from "./opencode-session.js";
 
 const messageLimit = 100;
 const ToolDetailsSchema = z.object({ input: z.record(z.string(), z.unknown()).default({}), output: z.string().optional(), error: z.string().optional() });
@@ -45,6 +46,17 @@ export class OpenCodeSessionReader implements NativeSessionReader {
     const { server, client, sessionID } = await this.connect(session);
     const messages = await client.getMessages(sessionID, { directory: server.directory, limit: messageLimit });
     return { ...executionFromMessages(messages), limited: messages.length >= messageLimit };
+  }
+
+  async turnEvidence(session: TaskSession, turnId: string) {
+    const { server, client, sessionID } = await this.connect(session);
+    const messages = await client.getMessages(sessionID, { directory: server.directory });
+    const correlated = correlatedAssistants(messages, turnId);
+    if (!correlated.promptFound) return { tools: [], limitation: "The admitted native prompt is not present in the authoritative session history." };
+    return {
+      tools: executionFromMessages(correlated.messages).tools,
+      limitation: correlated.reason === "continuation_ambiguous" ? "Native compaction continuation was ambiguous; only tools with an authoritative parent chain are included." : null,
+    };
   }
 
   async status(session: TaskSession) {

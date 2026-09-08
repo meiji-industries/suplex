@@ -20,7 +20,7 @@ import { ForgeDatabase } from "./database.js";
 import { CliHerdrClient } from "./herdr-client.js";
 import { RootController } from "./root-controller.js";
 import { TaskControlStore } from "./root-session-store.js";
-import { createTaskHarness } from "./task-harness-registry.js";
+import { createTaskHarness, nativeSessionReader } from "./task-harness-registry.js";
 import { ArtifactStore } from "./artifacts.js";
 import { configureProcessLogSink, createDevLogFileSink } from "./logging.js";
 import { taskEvidenceRoot } from "./workflow-evidence.js";
@@ -39,6 +39,7 @@ export interface RootBridgeAdapter {
   releaseToolOwner(root: RootIdentity, token: string): Promise<void>;
   observe(root: RootIdentity): Promise<unknown>;
   readImage(root: RootIdentity, artifactId: string): Promise<RootImageResult>;
+  readWorkerEvidence(root: RootIdentity, turnId: string, cursor?: string, maxCharacters?: number): Promise<unknown>;
   delegateWorker(root: RootIdentity, assignment: WorkerAssignment): Promise<unknown>;
   delegateAdvisor(root: RootIdentity, request: AdvisorRequest): Promise<unknown>;
   requestDelivery(root: RootIdentity, operation: Extract<RootTool, { kind: "request_delivery" }>['operation'], expectedHead?: string, review?: Extract<RootTool, { kind: "request_delivery" }>['review']): Promise<unknown>;
@@ -66,6 +67,8 @@ export class RootBridge {
         return this.adapter.observe(this.root);
       case "read_image":
         return this.adapter.readImage(this.root, tool.artifactId);
+      case "read_worker_evidence":
+        return this.adapter.readWorkerEvidence(this.root, tool.turnId, tool.cursor, tool.maxCharacters);
       case "delegate_worker":
         return this.adapter.delegateWorker(this.root, { plan: tool.plan, acceptanceCriteria: tool.acceptanceCriteria, instruction: tool.instruction, mode: tool.mode, purpose: tool.purpose, advisorTurnId: tool.advisorTurnId, candidateTurnIds: tool.candidateTurnIds, advisorSessionId: tool.advisorSessionId, candidateSessionIds: tool.candidateSessionIds });
       case "delegate_advisor":
@@ -157,11 +160,12 @@ async function runRootBridge(): Promise<void> {
   const fileSink = createDevLogFileSink("worker", join(dirname(bindingPath), "logs"));
   configureProcessLogSink(line => { fileSink(line); process.stderr.write(line); });
   const config = RootBridgeConfigSchema.parse(JSON.parse(await readFile(bindingPath, "utf8")));
-  if (!config.databasePath) throw new Error("Coordinator bridge binding has no server database path");
-  const database = new ForgeDatabase(config.databasePath, { migrate: false });
+  const databasePath = config.databasePath;
+  if (!databasePath) throw new Error("Coordinator bridge binding has no server database path");
+  const database = new ForgeDatabase(databasePath, { migrate: false });
   const herdr = new CliHerdrClient();
   const store = new TaskControlStore(database);
-  const controller = new RootController(store, createTaskHarness(config.databasePath, herdr, { artifactRoot: config.artifactRoot }), undefined, new ArtifactStore(config.artifactRoot), { root: taskEvidenceRoot(config.databasePath) });
+  const controller = new RootController(store, createTaskHarness(databasePath, herdr, { artifactRoot: config.artifactRoot }), undefined, new ArtifactStore(config.artifactRoot), { root: taskEvidenceRoot(databasePath) }, session => nativeSessionReader(databasePath, session));
   startRootBridgeTransport({ bridge: new RootBridge(config.root, controller), stdin: process.stdin, stdout: process.stdout });
 }
 

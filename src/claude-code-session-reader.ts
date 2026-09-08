@@ -1,7 +1,7 @@
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { claudeSessionBusy, claudeDisplayAttached } from "./claude-code-task-runtime.js";
-import { claudeConfigDirectory, claudeExecution, claudeUsage, findClaudeTranscript, readClaudeTranscript } from "./claude-code-transcript.js";
+import { claudeConfigDirectory, claudeExecution, claudeMessageEntries, claudeUsage, findClaudeTranscript, parseJsonLines, readClaudeTranscript } from "./claude-code-transcript.js";
 import { resolveClaudeExecutable } from "./executable-resolver.js";
 import type { TaskSession } from "./task-control.js";
 import { taskSessionRuntimeDirectory, type NativeSessionReader } from "./task-harness.js";
@@ -20,6 +20,14 @@ export class ClaudeCodeSessionReader implements NativeSessionReader {
 
   async execution(session: TaskSession) {
     return { ...claudeExecution(await readClaudeTranscript(this.sessionID(session), this.configDirectory)), limited: false };
+  }
+
+  async turnEvidence(session: TaskSession, turnId: string) {
+    this.sessionID(session);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(turnId)) throw new Error("Invalid task turn identity");
+    const path = join(taskSessionRuntimeDirectory(this.databasePath, session.id), `turn-${turnId}.jsonl`);
+    const tools = claudeExecution(claudeMessageEntries(parseJsonLines(await readFile(path, "utf8")))).tools;
+    return { tools, limitation: null };
   }
 
   async status(session: TaskSession) {

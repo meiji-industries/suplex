@@ -199,6 +199,8 @@ export class HarnessRouter implements TaskHarness {
 /** Read-only observation of a native session for the UI, analytics, diagnostics, and Archive. */
 export interface NativeSessionReader {
   execution(session: TaskSession): Promise<{ tools: TaskExecution["sessions"][number]["tools"]; plan: TaskExecution["sessions"][number]["plan"]; limited: boolean }>;
+  /** Reads one admitted native turn. Stored completion observations are not required for correlation. */
+  turnEvidence(session: TaskSession, turnId: string): Promise<{ tools: TaskExecution["sessions"][number]["tools"]; limitation: string | null }>;
   status(session: TaskSession): Promise<{ status: "busy" | "retry" | "idle"; updatedAt: number }>;
   timeline(session: TaskSession): Promise<{ usage: TaskUsage[]; liveMessageId: string | null }>;
   /** Refuses while the agent is active; returns the display matcher and the stop action for Archive. */

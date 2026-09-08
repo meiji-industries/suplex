@@ -10,17 +10,18 @@ import type { RootBridgeAdapter } from "./root-bridge.js";
 import type { AdvisorRequest, DeliveryOperation, DeliveryReview, PullRequestTitle, RootIdentity, RootImageResult, WorkerAssignment } from "./root-contracts.js";
 import type { TaskControlStore } from "./root-session-store.js";
 import type { TaskControl, TaskSession, TaskTurn } from "./task-control.js";
-import type { PromptObservation, TaskHarness, TaskScope } from "./task-harness.js";
+import type { NativeSessionReader, PromptObservation, TaskHarness, TaskScope } from "./task-harness.js";
 import { verifyTaskEvidence, writeTaskEvidence } from "./workflow-evidence.js";
 import { advisorResultWake, composeAdvisorAssignment, composeWorkerAssignment, initialCoordinatorPrompt, workerResultWake } from "./workflow-prompts.js";
 import { ADVISOR_LABELS, latestReview, parseAdvisorReport, publicWorkflowState, repairStalled, REPAIR_RATING_TARGET, sameRange, turnOutcome, workflowDefinition, type AdvisorRole, type ReportReference, type ReviewRange, type VerificationRange, type WorkflowInput, type WorkerWorkflowInput } from "./workflows.js";
+import { pageWorkerEvidence } from "./worker-turn-evidence.js";
 
 export type TaskDelivery = Pick<DeliveryOperations, "observe" | "execute" | "currentRange"> & Partial<Pick<DeliveryOperations, "checksObservation">>;
 
 const advisorSuccess = "End this Coordinator turn now. Forge will send the Advisor's native report as a new turn on this same session. Do not poll or wait inside this turn.";
 
 export class RootController implements RootBridgeAdapter {
-  constructor(readonly store: TaskControlStore, private readonly harness: TaskHarness, private readonly delivery: TaskDelivery = new DeliveryOperations(store), private readonly artifacts?: ArtifactStore, private readonly evidence?: { root: string }) {}
+  constructor(readonly store: TaskControlStore, private readonly harness: TaskHarness, private readonly delivery: TaskDelivery = new DeliveryOperations(store), private readonly artifacts?: ArtifactStore, private readonly evidence?: { root: string }, private readonly reader?: (session: TaskSession) => Pick<NativeSessionReader, "turnEvidence">) {}
 
   private scope(control: TaskControl, session: TaskSession, workflowInput: WorkflowInput | null = null): TaskScope {
     if (!control.worktree) throw new Error("Task worktree is not configured");
@@ -79,8 +80,19 @@ export class RootController implements RootBridgeAdapter {
     const pullRequest = await this.delivery.observe(root.taskId);
     const worktree = control.worktree ? await observeWorktree(control.worktree.path) : null;
     const worker = this.store.currentSession(root.taskId, "worker");
-    const workerResult = worker ? this.store.turns(root.taskId).filter(turn => turn.sessionId === worker.id && turn.status === "completed").at(-1)?.terminalObservation ?? null : null;
+    const workerTurn = worker ? this.store.turns(root.taskId).filter(turn => turn.sessionId === worker.id && turn.status === "completed").at(-1) : undefined;
+    const workerResult = workerTurn ? summarizeWorkerObservation(workerTurn) : null;
     return { control: { ...this.store.get(root.taskId), workflowState: publicWorkflowState(this.store.get(root.taskId).workflowState) }, context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, workerResult, worktree, pullRequest };
+  }
+
+  async readWorkerEvidence(root: RootIdentity, turnId: string, cursor?: string, maxCharacters = 12_000) {
+    this.store.assertCurrentRoot(root);
+    if (!this.reader) throw new Error("Native session evidence reading is not configured");
+    const turn = this.store.turns(root.taskId).find(candidate => candidate.id === turnId);
+    const session = turn ? this.store.sessions(root.taskId).find(candidate => candidate.id === turn.sessionId) : undefined;
+    if (!turn || !session || session.kind !== "worker" || session.advisorRole !== null) throw new Error("Worker turn does not belong to this task");
+    const evidence = await this.reader(session).turnEvidence(session, turn.id);
+    return { turnId: turn.id, sessionId: session.id, localObservation: { status: turn.status, terminalObservationAvailable: turn.terminalObservation !== null, nativeTurnIdAvailable: turn.nativeTurnId !== null }, limitation: evidence.limitation, ...pageWorkerEvidence(evidence.tools, cursor, maxCharacters) };
   }
 
   async delegateWorker(root: RootIdentity, assignment: WorkerAssignment): Promise<unknown> {
@@ -90,8 +102,17 @@ export class RootController implements RootBridgeAdapter {
     if (mode === "direct" && control.workflow !== "direct_build") throw new Error("Direct mode is legal only for the Direct build workflow. Supply a plan in planned mode.");
     if (mode === "planned" && !assignment.plan) throw new Error("A planned assignment requires the Coordinator's plan.");
     if (control.workflow === "standard") {
-      const instruction = composeWorkerAssignment({ mode: "planned", purpose: "implementation", plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, visualEvidence: this.store.context(root.taskId).configuration.visualEvidence });
-      const worker = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, instruction });
+      let workflowInput: WorkerWorkflowInput | undefined;
+      let range: ReviewRange | undefined;
+      if (purpose === "verification") {
+        this.recheck(root);
+        const observed = await this.currentRange(root.taskId);
+        if (!observed.clean) throw new DeliveryOperationFailure("worktree_dirty", "The worktree has uncommitted changes. A check-only assignment needs a committed source; commit or discard the changes first.");
+        range = observed.range;
+        workflowInput = { kind: "worker", version: 2, mode: "planned", purpose, range, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, advisorReport: null, candidateReports: null };
+      }
+      const instruction = composeWorkerAssignment({ mode: "planned", purpose, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, visualEvidence: this.store.context(root.taskId).configuration.visualEvidence, ...(range ? { range } : {}) });
+      const worker = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, instruction, ...(workflowInput ? { workflowInput } : {}) });
       await this.recoverSession(worker);
       return { worker: this.store.currentSession(root.taskId, "worker"), next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
     }
@@ -363,10 +384,6 @@ export class RootController implements RootBridgeAdapter {
     }
     const receiptId = `${observed.sessionID}:${observed.messageID}:${observed.state}`;
     const nativeTurnId = observed.assistantMessageID ? { nativeTurnId: observed.assistantMessageID } : {};
-    if (taskScope.workflow === "standard") {
-      this.store.recordWorkerResultAndWake({ taskId: session.taskId, sessionId: session.id, generation: session.generation, receiptId, observation: JSON.stringify(base), ...nativeTurnId });
-      return;
-    }
     const workflowInput = turnWorkflowInput(session, turn);
     if (taskScope.role === "advisor" && session.advisorRole && workflowInput?.kind === "advisor") {
       const role = session.advisorRole;
@@ -384,7 +401,6 @@ export class RootController implements RootBridgeAdapter {
       if (recorded.kind === "recorded" && role === "rater" && outcome.result) this.checkStall(session.taskId);
       return;
     }
-    const evidence = await this.harness.turnEvidence(taskScope, observed);
     const purpose = workflowInput?.kind === "worker" ? workflowInput.purpose : "implementation";
     let verificationRange: VerificationRange | undefined;
     if (purpose === "verification" && workflowInput?.kind === "worker") {
@@ -392,8 +408,14 @@ export class RootController implements RootBridgeAdapter {
       const source = await this.sourceStillMatches(session.taskId, workflowInput.range, "check");
       verificationRange = source.ok ? { before: workflowInput.range, after: source.range, cleanAfter: true, valid: true, invalidReason: null } : { before: workflowInput.range, after: source.range, cleanAfter: source.clean, valid: false, invalidReason: source.reason };
     }
+    if (taskScope.workflow === "standard") {
+      const observation = JSON.stringify({ ...base, ...(verificationRange ? { verificationRange } : {}) });
+      this.store.recordWorkerResultAndWake({ taskId: session.taskId, sessionId: session.id, generation: session.generation, receiptId, observation, ...nativeTurnId, wakePrompt: workerResultWake(taskScope.workflow, receiptId, { turnId: turn.id, state: observed.state, text, verificationRange }, purpose) });
+      return;
+    }
+    const evidence = await this.harness.turnEvidence(taskScope, observed);
     const observation = JSON.stringify({ ...base, tools: evidence.tools, toolsLimit: evidence.limit, ...(verificationRange ? { verificationRange } : {}) });
-    this.store.recordWorkerResultAndWake({ taskId: session.taskId, sessionId: session.id, generation: session.generation, receiptId, observation, ...nativeTurnId, wakePrompt: workerResultWake(taskScope.workflow, receiptId, observation, purpose) });
+    this.store.recordWorkerResultAndWake({ taskId: session.taskId, sessionId: session.id, generation: session.generation, receiptId, observation, ...nativeTurnId, wakePrompt: workerResultWake(taskScope.workflow, receiptId, { turnId: turn.id, state: observed.state, text, verificationRange }, purpose) });
   }
 
   private checkStall(taskId: string): void {
@@ -439,6 +461,11 @@ function parseObservation(observation: string | null): { state: string | null; t
     const parsed = observation ? JSON.parse(observation) as { tools?: unknown[]; toolsLimit?: string | null; verificationRange?: VerificationRange } : {};
     return { state: outcome.state, text: outcome.text, tools: Array.isArray(parsed.tools) ? parsed.tools : null, toolsLimit: parsed.toolsLimit ?? null, verificationRange: parsed.verificationRange ?? null };
   } catch { return { state: outcome.state, text: outcome.text, tools: null, toolsLimit: null, verificationRange: null }; }
+}
+
+function summarizeWorkerObservation(turn: TaskTurn): unknown {
+  const parsed = parseObservation(turn.terminalObservation);
+  return { turnId: turn.id, state: parsed.state, text: parsed.text, evidence: { operation: "read_worker_evidence", toolsStored: parsed.tools !== null, limitation: parsed.toolsLimit }, verificationRange: parsed.verificationRange };
 }
 
 async function observeWorktree(path: string): Promise<unknown> {

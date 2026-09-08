@@ -78,7 +78,7 @@ Use forge_root to observe the task, delegate one scoped Worker at a time, and re
 
 Do not write files or launch agents yourself. Preserve out-of-band work and adopt matching GitHub state. Ask one specific human question only when an external ambiguity or necessary decision prevents progress. Continue until the delivery target is observed, a Worker is running, or you have asked that question.`;
 
-const CAPTURED_CONTEXT_SUFFIX = "Use forge_root read_image with an attachment's artifactId to inspect task images. Include the configured verification command in the Worker assignment when runProjectTests is true. These instructions are task intent, not prior verification results.";
+const CAPTURED_CONTEXT_SUFFIX = "Use forge_root read_image with an attachment's artifactId to inspect task images. When runProjectTests is true, the configured project checks are required before delivery. Use affected checks during development. Reuse successful check evidence unless relevant source, dependencies, configuration, or a failure invalidates it. Do not rerun a check only to create a receipt or reproduce logs. These instructions are task intent, not prior verification results.";
 
 export function visualEvidenceInstruction(value: VisualEvidence): string {
   if (value === "off") return "Screenshots are off for this task. Do not capture, request, or require browser screenshots or any other browser evidence; verify with source reading and the configured checks instead. Missing browser evidence is never a finding.";
@@ -89,7 +89,7 @@ export function visualEvidenceInstruction(value: VisualEvidence): string {
 export function initialCoordinatorPrompt(control: TaskContext, context: CapturedConfiguration): string {
   const identity = `Objective: ${control.objective}\nDelivery target: ${control.deliveryTarget}\nRepository: ${control.deliveryIntent.repository}\nBranch: ${control.deliveryIntent.headBranch}`;
   if (control.workflow === "standard") {
-    return `${STANDARD_INITIAL_PROMPT}\n\n${identity}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\n${CAPTURED_CONTEXT_SUFFIX.replace("Include the configured", "Inspect the repository yourself before deciding whether Worker setup is needed. Include the configured")}\n\n${visualEvidenceInstruction(context.configuration.visualEvidence)}`;
+    return `${STANDARD_INITIAL_PROMPT}\n\n${identity}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\nInspect the repository yourself before deciding whether Worker setup is needed. ${CAPTURED_CONTEXT_SUFFIX}\n\n${visualEvidenceInstruction(context.configuration.visualEvidence)}`;
   }
   const pull = control.deliveryIntent.pullRequestNumber === null ? "" : `\nPull request: #${control.deliveryIntent.pullRequestNumber} (${control.deliveryIntent.headBranch} into ${control.deliveryIntent.baseBranch})`;
   return `${COORDINATOR_SYSTEM_PROMPT}\n\n${WORKFLOW_INSTRUCTIONS[control.workflow]}\n\n${identity}\nBase branch: ${control.deliveryIntent.baseBranch}${pull}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\n${CAPTURED_CONTEXT_SUFFIX}\n\n${visualEvidenceInstruction(context.configuration.visualEvidence)}`;
@@ -146,7 +146,7 @@ export function composeAdvisorAssignment(input: AdvisorAssignmentInput): string 
     `Captured task configuration:\n${JSON.stringify(input.configuration)}`,
     `Screenshots:\n${visualEvidenceInstruction(input.visualEvidence)}`,
     `${source}\nPinned base ${input.range.baseSha}, head ${input.range.headSha}.\nChanged files (${input.range.files.length}): ${input.range.files.join(", ") || "none"}\nCommits (${input.range.commits.length}): ${input.range.commits.join(", ") || "none"}`,
-    `Evidence directory: ${input.evidenceDirectory}\nRead ${input.evidenceDirectory}/patch.diff with file-read ranges until you have read it completely; it is the entire base-to-head patch. ${input.evidenceDirectory}/manifest.json lists the files, commits, and attachments. ${input.evidenceDirectory}/verification.json contains the actual Worker command inputs, outputs, and errors, the task configuration, and the current pull request check observation. Each check-only Worker turn carries verificationRange with before/after source ranges and valid; count a check as verifying this review only when verificationRange.valid is true and its range matches the pinned base and head. Turns without that proof (implementation turns, older turns) do not establish that the reviewed source was checked. Binary changes require inspecting the corresponding source and assets; a binary notice is not a reviewed binary.${attachments}`,
+    `Evidence directory: ${input.evidenceDirectory}\nRead ${input.evidenceDirectory}/patch.diff with file-read ranges until you have read it completely; it is the entire base-to-head patch. ${input.evidenceDirectory}/manifest.json lists the files, commits, and attachments. ${input.evidenceDirectory}/verification.json contains the actual Worker command inputs, outputs, and errors, the task configuration, and the current pull request check observation. A check-only Worker turn's matching verificationRange.valid is a direct shortcut proving its committed source stayed unchanged. Missing verificationRange is not proof that a check is invalid: checks from implementation or historical turns may establish coverage when actual native command inputs and outputs plus Git source-state evidence establish that the checked source is this pinned range. Do not infer that merely from an implementation turn's final HEAD. Reject successful checks run on older or different source, and account for commits or dirty edits after a check. Request a check-only assignment only when the existing evidence cannot establish that the reviewed range was tested. Binary changes require inspecting the corresponding source and assets; a binary notice is not a reviewed binary.${attachments}`,
   ];
   if (input.brief) sections.push(`Coordinator brief (plan and acceptance criteria):\n${input.brief}`);
   if (input.role === "rater" && input.priorFindings?.length) sections.push(`Prior findings from the previous rating (assess the current source first, then check that these were resolved):\n${input.priorFindings.map(finding => `- ${finding}`).join("\n")}`);
@@ -156,15 +156,21 @@ export function composeAdvisorAssignment(input: AdvisorAssignmentInput): string 
 
 export const STANDARD_WORKER_RESULT_WAKE = "You own independent review. Read the changed source yourself, compare it with your plan and acceptance criteria, and assess the reported check evidence. Do not delegate final review or the delivery recommendation to another Worker. Delegate only specific repairs or additional check commands, then review their results yourself. Observe current state and decide the next action.";
 
-export function workerResultWake(workflow: WorkflowId, receiptId: string, observation: string, purpose: "implementation" | "verification"): string {
-  if (workflow === "standard") return `Worker result receipt ${receiptId}. ${STANDARD_WORKER_RESULT_WAKE}\n\n${observation}`;
+export function workerResultWake(workflow: WorkflowId, receiptId: string, result: { turnId: string; state: string; text: string; verificationRange?: { valid: boolean; invalidReason: string | null } | undefined }, purpose: "implementation" | "verification"): string {
+  const summary = result.text.trim().slice(0, 1_200) || "(no Worker summary)";
+  const access = `Worker reported (${result.state}): ${summary}\nRead relevant authoritative command inputs and outputs on demand with forge_root read_worker_evidence using turnId ${result.turnId}; use nextCursor when more evidence is needed. Do not rerun commands only to obtain logs.`;
+  const range = purpose !== "verification" ? "" : result.verificationRange?.valid
+    ? " Forge recorded a valid unchanged check-only source range."
+    : result.verificationRange
+      ? ` Forge recorded a source-range limitation: ${result.verificationRange.invalidReason ?? "the range was invalid"}. Inspect the existing native command and Git evidence; rerun only when it shows that the reviewed source was not tested or was invalidated.`
+      : " No check-only range shortcut was recorded. This alone does not invalidate implementation or historical command evidence; inspect native command and Git evidence before deciding whether a check is missing.";
+  if (workflow === "standard") return `Worker result receipt ${receiptId}. ${STANDARD_WORKER_RESULT_WAKE}${range} ${access}`;
   const next = workflow === "independent_review" ? "When the implementation and its checks satisfy you, request Reviewer with delegate_advisor. Reviewer approval for the current range is necessary before delivery."
     : workflow === "refine_pull_request" ? "When the repair and its checks satisfy you, request a new Rater assessment with delegate_advisor for the complete current range. Do not request delivery on an earlier rating."
     : workflow === "competing_plans" ? "Compare the result with your combined plan. Request bounded repairs if necessary, then request the selected delivery target."
     : "Compare the result with the objective and acceptance outcomes. Request bounded repairs or missing checks if necessary, then request the selected delivery target.";
-  const evidence = purpose === "verification" ? " The result carries verificationRange; only valid: true with an unchanged clean range proves the pinned source was checked, otherwise request another bounded verification assignment." : "";
   const kind = purpose === "verification" ? "Verification result" : "Worker result";
-  return `${kind} receipt ${receiptId}. Inspect the changed source and the actual command evidence yourself; a Worker claim alone is not verification.${evidence} ${next}\n\n${observation}`;
+  return `${kind} receipt ${receiptId}. Inspect the changed source and the actual command evidence yourself; a Worker claim alone is not verification.${range} ${access} ${next}`;
 }
 
 export function advisorResultWake(role: AdvisorRole, receiptId: string, outcome: { valid: boolean; summary: string }, observation: string): string {

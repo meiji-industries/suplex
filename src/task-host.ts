@@ -7,7 +7,7 @@ import { CliHerdrClient } from "./herdr-client.js";
 import { StructuredLogger } from "./logging.js";
 import { RootController } from "./root-controller.js";
 import { TaskControlStore } from "./root-session-store.js";
-import { createTaskHarness } from "./task-harness-registry.js";
+import { createTaskHarness, nativeSessionReader } from "./task-harness-registry.js";
 import { prepareTaskWorktree } from "./task-worktree.js";
 import { taskEvidenceRoot } from "./workflow-evidence.js";
 
@@ -26,7 +26,7 @@ export class TaskHost {
     this.store = new TaskControlStore(database);
     this.delivery = options.delivery ?? new DeliveryOperations(this.store);
     const artifactRoot = options.artifactRoot ?? join(dirname(database.filename()), "artifacts");
-    this.controller = options.controller ?? new RootController(this.store, createTaskHarness(database.filename(), new CliHerdrClient(), { artifactRoot }), undefined, new ArtifactStore(artifactRoot), { root: taskEvidenceRoot(database.filename()) });
+    this.controller = options.controller ?? new RootController(this.store, createTaskHarness(database.filename(), new CliHerdrClient(), { artifactRoot }), undefined, new ArtifactStore(artifactRoot), { root: taskEvidenceRoot(database.filename()) }, session => nativeSessionReader(database.filename(), session));
     this.worktree = options.worktree ?? prepareTaskWorktree;
   }
 

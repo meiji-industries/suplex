@@ -98,7 +98,7 @@ export interface OpenCodePromptObservation {
 type UserEnvelope = OpenCodeMessageEnvelope & {
   info: Extract<OpenCodeMessageEnvelope["info"], { role: "user" }>;
 };
-type AssistantEnvelope = OpenCodeMessageEnvelope & {
+export type AssistantEnvelope = OpenCodeMessageEnvelope & {
   info: Extract<OpenCodeMessageEnvelope["info"], { role: "assistant" }>;
 };
 
@@ -175,10 +175,10 @@ function ordered(messages: readonly OpenCodeMessageEnvelope[]): OpenCodeMessageE
   });
 }
 
-function correlatedAssistants(messages: readonly OpenCodeMessageEnvelope[], messageID: string): { messages: AssistantEnvelope[]; reason?: "continuation_ambiguous" | "later_user_boundary" } {
+export function correlatedAssistants(messages: readonly OpenCodeMessageEnvelope[], messageID: string): { messages: AssistantEnvelope[]; promptFound: boolean; reason?: "continuation_ambiguous" | "later_user_boundary" } {
   const history = ordered(messages);
   const targetIndex = history.findIndex((message) => message.info.id === messageID);
-  if (targetIndex < 0) return { messages: [] };
+  if (targetIndex < 0) return { messages: [], promptFound: false };
 
   const parentIDs = new Set([messageID]);
   const assistants: AssistantEnvelope[] = [];
@@ -212,7 +212,7 @@ function correlatedAssistants(messages: readonly OpenCodeMessageEnvelope[], mess
   }
 
   if (reason === undefined && (pendingCompactionID !== undefined || awaitingSynthetic)) reason = "continuation_ambiguous";
-  return { messages: assistants, ...(reason === undefined ? {} : { reason }) };
+  return { messages: assistants, promptFound: true, ...(reason === undefined ? {} : { reason }) };
 }
 
 function isFinalAssistant(message: OpenCodeMessageEnvelope): message is AssistantEnvelope {

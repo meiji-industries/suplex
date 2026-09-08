@@ -7,7 +7,7 @@ import { z } from "zod";
 import { ForgeDatabase } from "../src/database.js";
 import { TaskControlStore } from "../src/root-session-store.js";
 import { TaskSchema } from "../src/task-contracts.js";
-import { IMPLEMENTATION_COMMIT_PROMPT, VERIFICATION_WORKER_PROMPT, workerAssignmentPreamble } from "../src/workflow-prompts.js";
+import { composeAdvisorAssignment, composeWorkerAssignment, IMPLEMENTATION_COMMIT_PROMPT, initialCoordinatorPrompt, VERIFICATION_WORKER_PROMPT, workerAssignmentPreamble } from "../src/workflow-prompts.js";
 import { normalizeWorkflowInput, parseAdvisorReport, PublicWorkflowStateSchema, repairStalled, reviewGate, roleLabel, WORKFLOWS, workflowDefinition, type ReviewRecord } from "../src/workflows.js";
 import { nativeApp } from "./helpers/native-app.js";
 
@@ -239,6 +239,19 @@ test("implementation Workers are told to commit and verification Workers are tol
     expect(workerAssignmentPreamble(mode, "verification")).toContain(VERIFICATION_WORKER_PROMPT);
     expect(workerAssignmentPreamble(mode, "verification")).not.toContain(IMPLEMENTATION_COMMIT_PROMPT);
   }
+});
+
+test("prompt assignments explain the Screenshots setting", () => {
+  const control = (workflow: "standard" | "independent_review") => ({ objective: "Update a button", deliveryTarget: "pull_request_draft", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", pullRequestNumber: null }, workflow });
+  const context = { configuration: { visualEvidence: "off" as const }, images: [] };
+  const standard = initialCoordinatorPrompt(control("standard"), context);
+  const independentReview = initialCoordinatorPrompt(control("independent_review"), context);
+  const worker = composeWorkerAssignment({ mode: "planned", purpose: "implementation", plan: "Make the update", acceptanceCriteria: ["The button is updated"], instruction: "Implement the plan.", visualEvidence: "off" });
+  const advisor = composeAdvisorAssignment({ role: "reviewer", objective: "Update a button", configuration: context.configuration, visualEvidence: "off", images: [], repository: "owner/repo", headBranch: "task", baseBranch: "main", pullRequestNumber: null, range, evidenceDirectory: "/tmp/evidence", attachments: [], brief: "Plan and criteria", priorFindings: null, repairEvidence: null });
+  for (const prompt of [standard, independentReview, worker, advisor]) expect(prompt).toContain("Screenshots are off for this task");
+  expect(standard).not.toContain("Require browser evidence when requested");
+  expect(independentReview).not.toContain("Require browser evidence when requested");
+  expect(composeWorkerAssignment({ mode: "planned", purpose: "implementation", plan: "Make the update", acceptanceCriteria: [], instruction: "Implement the plan.", visualEvidence: "required" })).toContain("Screenshots are necessary for this task");
 });
 
 test("workflow state with review records encodes for task API responses", () => {

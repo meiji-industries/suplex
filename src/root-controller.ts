@@ -90,7 +90,7 @@ export class RootController implements RootBridgeAdapter {
     if (mode === "direct" && control.workflow !== "direct_build") throw new Error("Direct mode is legal only for the Direct build workflow. Supply a plan in planned mode.");
     if (mode === "planned" && !assignment.plan) throw new Error("A planned assignment requires the Coordinator's plan.");
     if (control.workflow === "standard") {
-      const instruction = composeWorkerAssignment({ mode: "planned", purpose: "implementation", plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction });
+      const instruction = composeWorkerAssignment({ mode: "planned", purpose: "implementation", plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, visualEvidence: this.store.context(root.taskId).configuration.visualEvidence });
       const worker = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, instruction });
       await this.recoverSession(worker);
       return { worker: this.store.currentSession(root.taskId, "worker"), next: "End this Coordinator turn now. Forge will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn." };
@@ -134,7 +134,7 @@ export class RootController implements RootBridgeAdapter {
       if (!session?.advisorRole) throw new Error("advisorSessionId does not name an Advisor session of this task.");
       advisorSessionId = session.id;
     }
-    const instruction = composeWorkerAssignment({ mode, purpose, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, range, advisorReport });
+    const instruction = composeWorkerAssignment({ mode, purpose, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, visualEvidence: this.store.context(root.taskId).configuration.visualEvidence, range, advisorReport });
     const workflowInput: Extract<WorkflowInput, { kind: "worker" }> = { kind: "worker", mode, purpose, range, plan: assignment.plan ?? null, acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction, advisorSessionId, candidateSessionIds };
     const worker = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, instruction, workflowInput });
     await this.recoverSession(worker);
@@ -198,7 +198,7 @@ export class RootController implements RootBridgeAdapter {
     const previous = request.role === "rater" ? latestReview(control.workflowState.reviews, "rater") : undefined;
     const repairEvidence = previous ? workerTurns.filter(({ session }) => sessions.indexOf(session) > sessions.findIndex(candidate => candidate.id === previous.sessionId)).map(({ turn }) => `Turn ${turn.id}: ${parseObservation(turn.terminalObservation).text ?? "(no text)"}`) : null;
     const prompt = composeAdvisorAssignment({
-      role: request.role, objective: control.objective, configuration: context.configuration, images, repository: control.deliveryIntent.repository, headBranch: control.deliveryIntent.headBranch, baseBranch: control.deliveryIntent.baseBranch,
+      role: request.role, objective: control.objective, configuration: context.configuration, visualEvidence: context.configuration.visualEvidence, images, repository: control.deliveryIntent.repository, headBranch: control.deliveryIntent.headBranch, baseBranch: control.deliveryIntent.baseBranch,
       pullRequestNumber: control.deliveryIntent.pullRequestNumber, range, evidenceDirectory: evidence.directory, attachments: manifest.attachments, brief: request.brief ?? null,
       priorFindings: previous?.result?.blockingFindings ?? null, repairEvidence,
     });

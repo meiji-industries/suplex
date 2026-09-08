@@ -1,4 +1,5 @@
 import { ADVISOR_LABELS, type AdvisorRole, type ReviewRange, type WorkflowId } from "./workflows.js";
+import type { VisualEvidence } from "./task-contracts.js";
 
 // Workflow prompts and assignment composition. Standard keeps its current prompt and Worker instructions unchanged.
 
@@ -69,7 +70,7 @@ export function workerAssignmentPreamble(mode: "planned" | "direct", purpose: "i
 }
 
 type TaskContext = { objective: string; deliveryTarget: string; deliveryIntent: { repository: string; headBranch: string; baseBranch: string; pullRequestNumber: number | null }; workflow: WorkflowId };
-type CapturedConfiguration = { configuration: unknown; images: unknown };
+type CapturedConfiguration = { configuration: { visualEvidence: VisualEvidence }; images: unknown };
 
 const STANDARD_INITIAL_PROMPT = `You are the continuing read-only Coordinator for this Forge task. You own repository investigation, planning, and independent review of the Worker's output. Read the relevant source yourself and state your implementation plan and acceptance criteria before delegating. Do not delegate planning, design decisions, or the final verification judgment to the Worker. Read-only limits mutations, not your responsibility to reason about the code.
 
@@ -77,15 +78,21 @@ Use forge_root to observe the task, delegate one scoped Worker at a time, and re
 
 Do not write files or launch agents yourself. Preserve out-of-band work and adopt matching GitHub state. Ask one specific human question only when an external ambiguity or necessary decision prevents progress. Continue until the delivery target is observed, a Worker is running, or you have asked that question.`;
 
-const CAPTURED_CONTEXT_SUFFIX = "Use forge_root read_image with an attachment's artifactId to inspect task images. Include the configured verification command in the Worker assignment when runProjectTests is true. Require browser evidence when requested. Review that evidence yourself. These instructions are task intent, not prior verification results.";
+const CAPTURED_CONTEXT_SUFFIX = "Use forge_root read_image with an attachment's artifactId to inspect task images. Include the configured verification command in the Worker assignment when runProjectTests is true. These instructions are task intent, not prior verification results.";
+
+export function visualEvidenceInstruction(value: VisualEvidence): string {
+  if (value === "off") return "Screenshots are off for this task. Do not capture, request, or require browser screenshots or any other browser evidence; verify with source reading and the configured checks instead. Missing browser evidence is never a finding.";
+  if (value === "capture") return "Screenshots are on for this task. Capture browser screenshots of user-visible changes when practical and review them. Missing screenshots are advisory, not blocking.";
+  return "Screenshots are necessary for this task. User-visible changes need browser screenshots as evidence. Missing screenshots are a missing check.";
+}
 
 export function initialCoordinatorPrompt(control: TaskContext, context: CapturedConfiguration): string {
   const identity = `Objective: ${control.objective}\nDelivery target: ${control.deliveryTarget}\nRepository: ${control.deliveryIntent.repository}\nBranch: ${control.deliveryIntent.headBranch}`;
   if (control.workflow === "standard") {
-    return `${STANDARD_INITIAL_PROMPT}\n\n${identity}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\n${CAPTURED_CONTEXT_SUFFIX.replace("Include the configured", "Inspect the repository yourself before deciding whether Worker setup is needed. Include the configured")}`;
+    return `${STANDARD_INITIAL_PROMPT}\n\n${identity}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\n${CAPTURED_CONTEXT_SUFFIX.replace("Include the configured", "Inspect the repository yourself before deciding whether Worker setup is needed. Include the configured")}\n\n${visualEvidenceInstruction(context.configuration.visualEvidence)}`;
   }
   const pull = control.deliveryIntent.pullRequestNumber === null ? "" : `\nPull request: #${control.deliveryIntent.pullRequestNumber} (${control.deliveryIntent.headBranch} into ${control.deliveryIntent.baseBranch})`;
-  return `${COORDINATOR_SYSTEM_PROMPT}\n\n${WORKFLOW_INSTRUCTIONS[control.workflow]}\n\n${identity}\nBase branch: ${control.deliveryIntent.baseBranch}${pull}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\n${CAPTURED_CONTEXT_SUFFIX}`;
+  return `${COORDINATOR_SYSTEM_PROMPT}\n\n${WORKFLOW_INSTRUCTIONS[control.workflow]}\n\n${identity}\nBase branch: ${control.deliveryIntent.baseBranch}${pull}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\n${CAPTURED_CONTEXT_SUFFIX}\n\n${visualEvidenceInstruction(context.configuration.visualEvidence)}`;
 }
 
 export interface WorkerAssignmentText {
@@ -94,6 +101,7 @@ export interface WorkerAssignmentText {
   plan: string | null;
   acceptanceCriteria: string[];
   instruction: string;
+  visualEvidence: VisualEvidence;
   range?: ReviewRange | undefined;
   advisorReport?: { label: string; text: string } | undefined;
 }
@@ -106,6 +114,7 @@ export function composeWorkerAssignment(assignment: WorkerAssignmentText): strin
   if (assignment.advisorReport) sections.push(`${assignment.advisorReport.label} report and surgical plan:\n${assignment.advisorReport.text}`);
   sections.push(`Acceptance criteria:\n${criteria}`);
   sections.push(`Worker instructions:\n${assignment.instruction}`);
+  sections.push(`Screenshots:\n${visualEvidenceInstruction(assignment.visualEvidence)}`);
   if (assignment.range) sections.push(`Pinned revision: base ${assignment.range.baseSha}, head ${assignment.range.headSha}.${assignment.purpose === "verification" ? " Verify this revision without intentional source edits." : ""}`);
   return sections.join("\n\n");
 }
@@ -114,6 +123,7 @@ export interface AdvisorAssignmentInput {
   role: AdvisorRole;
   objective: string;
   configuration: unknown;
+  visualEvidence: VisualEvidence;
   images: Array<{ artifactId: string; filename: string }>;
   repository: string;
   headBranch: string;
@@ -134,6 +144,7 @@ export function composeAdvisorAssignment(input: AdvisorAssignmentInput): string 
     `Role: ${ADVISOR_LABELS[input.role]}.\n\n${ADVISOR_PROMPTS[input.role]}`,
     `Objective:\n${input.objective}`,
     `Captured task configuration:\n${JSON.stringify(input.configuration)}`,
+    `Screenshots:\n${visualEvidenceInstruction(input.visualEvidence)}`,
     `${source}\nPinned base ${input.range.baseSha}, head ${input.range.headSha}.\nChanged files (${input.range.files.length}): ${input.range.files.join(", ") || "none"}\nCommits (${input.range.commits.length}): ${input.range.commits.join(", ") || "none"}`,
     `Evidence directory: ${input.evidenceDirectory}\nRead ${input.evidenceDirectory}/patch.diff with file-read ranges until you have read it completely; it is the entire base-to-head patch. ${input.evidenceDirectory}/manifest.json lists the files, commits, and attachments. ${input.evidenceDirectory}/verification.json contains the actual Worker command inputs, outputs, and errors, the task configuration, and the current pull request check observation. Each check-only Worker turn carries verificationRange with before/after source ranges and valid; count a check as verifying this review only when verificationRange.valid is true and its range matches the pinned base and head. Turns without that proof (implementation turns, older turns) do not establish that the reviewed source was checked. Binary changes require inspecting the corresponding source and assets; a binary notice is not a reviewed binary.${attachments}`,
   ];

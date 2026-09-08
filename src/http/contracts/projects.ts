@@ -26,10 +26,11 @@ export const ProfileResponseSchema = AgentProfileSchema.strip();
 export const ProfileListResponseSchema = z.object({ profiles: z.array(ProfileResponseSchema) });
 export const ModelResponseSchema = z.object({ id: z.string(), provider: z.string(), providerLabel: z.string(), displayName: z.string() });
 export const ModelListResponseSchema = z.object({ models: z.array(ModelResponseSchema) });
-export const TaskSourceQuerySchema = z.object({ kind: z.enum(["pull_request", "branch"]) });
+export const TaskSourceQuerySchema = z.object({ kind: z.enum(["pull_request", "issue", "branch"]) });
 const PullRequestTaskSourceSchema = z.object({ kind: z.literal("pull_request"), number: z.number().int().positive(), url: z.string().url(), title: z.string(), body: z.string(), author: z.string(), headBranch: z.string(), baseBranch: z.string(), headSha: z.string(), updatedAt: z.string().optional(), isDraft: z.boolean() });
+const IssueTaskSourceSchema = z.object({ kind: z.literal("issue"), number: z.number().int().positive(), url: z.string().url(), title: z.string(), body: z.string(), author: z.string(), updatedAt: z.string() });
 const BranchTaskSourceSchema = z.object({ kind: z.literal("branch"), branch: z.string(), headSha: z.string(), subject: z.string(), author: z.string(), updatedAt: z.string() });
-export const TaskSourceListResponseSchema = z.object({ available: z.boolean(), reason: z.string().optional(), sources: z.array(z.discriminatedUnion("kind", [PullRequestTaskSourceSchema, BranchTaskSourceSchema])) });
+export const TaskSourceListResponseSchema = z.object({ available: z.boolean(), reason: z.string().optional(), sources: z.array(z.discriminatedUnion("kind", [PullRequestTaskSourceSchema, IssueTaskSourceSchema, BranchTaskSourceSchema])) });
 
 export type ProfileResponse = z.infer<typeof ProfileResponseSchema>;
 export type ModelResponse = z.infer<typeof ModelResponseSchema>;

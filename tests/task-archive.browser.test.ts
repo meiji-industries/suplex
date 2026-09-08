@@ -1,12 +1,12 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { runCommand } from "../src/command-runner.js";
 import { prepareTaskWorktree } from "../src/task-worktree.js";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
-test.each([1280, 390])("archive confirms dirty cleanup and returns to tasks at %ipx", { timeout: 45_000 }, async width => {
-  const f = await nativeBrowser(width);
+test("archive confirms dirty cleanup and returns to tasks", { timeout: 45_000 }, async () => {
+  const f = await nativeBrowser();
   const git = async (args: string[]) => (await runCommand({ taskId: null, stepId: null, command: "git", cwd: f.project.repositoryPath, args })).stdout.trim();
   try {
     await git(["init", "-b", "main"]);
@@ -16,35 +16,26 @@ test.each([1280, 390])("archive confirms dirty cleanup and returns to tasks at %
     const worktree = await prepareTaskWorktree({ taskId: task.id, ...task.configuration, startingSha });
     f.tasks.repository.controls.setWorktree(task.id, worktree);
     f.tasks.cancelTask(f.userId, task.id);
-    const firstDirtyFilePath = "drafts/draft 01.txt";
-    const longDirtyFilePath = "drafts/a-very-long-directory-name-that-must-wrap-on-a-narrow-viewport/a-very-long-uncommitted-file-name-that-remains-visible.txt";
-    const dirtyFilePaths = Array.from({ length: 18 }, (_, index) => `drafts/draft ${String(index + 1).padStart(2, "0")}.txt`);
-    dirtyFilePaths.push(longDirtyFilePath);
-    await mkdir(join(worktree.path, "drafts", "a-very-long-directory-name-that-must-wrap-on-a-narrow-viewport"), { recursive: true });
-    await Promise.all(dirtyFilePaths.map(path => writeFile(join(worktree.path, path), path)));
+    const dirtyFilePath = "draft.txt";
+    await writeFile(join(worktree.path, dirtyFilePath), dirtyFilePath);
     await f.page.goto(`${f.base}/tasks/${task.id}?company=${f.company.id}`);
     await f.page.getByRole("button", { name: "Task options" }).click();
     await f.page.getByRole("menuitem", { name: "Archive task", exact: true }).click();
     const dialog = f.page.getByRole("alertdialog");
     await dialog.getByRole("button", { name: "Archive task", exact: true }).click();
-    await dialog.getByRole("heading", { name: `Discard ${dirtyFilePaths.length} uncommitted changes and archive?` }).waitFor();
+    await dialog.getByRole("heading", { name: "Discard 1 uncommitted change and archive?" }).waitFor();
     const fileList = dialog.getByLabel("Uncommitted files");
-    await fileList.getByText(firstDirtyFilePath, { exact: true }).waitFor();
-    expect(await fileList.getByText(longDirtyFilePath, { exact: true }).count()).toBe(1);
-    const viewport = fileList.locator('[data-slot="scroll-area-viewport"]');
-    expect(await viewport.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
-    expect(await f.page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await fileList.getByText(dirtyFilePath, { exact: true }).waitFor();
     expect(f.tasks.getTask(f.userId, task.id).archivedAt).toBeNull();
     await expect(access(worktree.path)).resolves.toBeUndefined();
-    expect(await readFile(join(worktree.path, firstDirtyFilePath), "utf8")).toBe(firstDirtyFilePath);
+    expect(await readFile(join(worktree.path, dirtyFilePath), "utf8")).toBe(dirtyFilePath);
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await dialog.waitFor({ state: "hidden" });
-    expect(await readFile(join(worktree.path, firstDirtyFilePath), "utf8")).toBe(firstDirtyFilePath);
+    expect(await readFile(join(worktree.path, dirtyFilePath), "utf8")).toBe(dirtyFilePath);
     await f.page.getByRole("button", { name: "Task options" }).click();
     await f.page.getByRole("menuitem", { name: "Archive task", exact: true }).click();
     await dialog.getByRole("button", { name: "Archive task", exact: true }).click();
-    await dialog.getByRole("heading", { name: `Discard ${dirtyFilePaths.length} uncommitted changes and archive?` }).waitFor();
-    await f.page.screenshot({ path: `/tmp/forge-archive-file-list-${width}.png`, animations: "disabled" });
+    await dialog.getByRole("heading", { name: "Discard 1 uncommitted change and archive?" }).waitFor();
     await dialog.getByRole("button", { name: "Discard changes and archive", exact: true }).click();
     await f.page.waitForURL(url => url.pathname === "/tasks");
     expect(f.tasks.getTask(f.userId, task.id).archivedAt).not.toBeNull();

@@ -158,21 +158,32 @@ export function AdminView(): ReactElement {
   const [editingHermesAgent, setEditingHermesAgent] = useState<ApiHermesAgent | null>(null);
   const [editingHermesProjectIds, setEditingHermesProjectIds] = useState<string[]>([]);
 
-  const reload = useCallback(async (): Promise<void> => {
+  const isAgents = window.location.pathname.endsWith("/agents");
+  const isModels = window.location.pathname.endsWith("/models");
+  const isCompanies = window.location.pathname.endsWith("/companies");
+  const isInvitations = window.location.pathname.endsWith("/invitations");
+  const isPasskeys = window.location.pathname.endsWith("/passkeys");
+
+  const reload = useCallback(async (signal?: AbortSignal): Promise<void> => {
+    const options = signal ? { signal } : {};
+    const needsUsers = isCompanies || isPasskeys || (!isAgents && !isModels && !isInvitations);
+    const needsCredentials = isPasskeys || (!isAgents && !isModels && !isCompanies && !isInvitations);
     try {
       setError("");
       const [userList, invitationList, credentialList, agentList, hermesList, projectList, modelList] = await Promise.all([
-        readJson<{ users: ApiUser[] }>("/api/admin/users"),
-        readJson<{ invitations: ApiInvitation[] }>("/api/admin/invitations"),
-        readJson<{ credentials: ApiCredential[] }>("/api/admin/credentials"),
-        readJson<{ profiles: ApiProfile[] }>("/api/profiles?includeArchived=true"),
-        readJson<{ agents: ApiHermesAgent[] }>(`/api/admin/hermes-agents${currentCompany ? `?companyId=${encodeURIComponent(currentCompany.id)}` : ""}`).catch(() => ({ agents: [] })),
-        currentCompany ? readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(currentCompany.id)}/projects`).catch(() => ({ projects: [] })) : Promise.resolve({ projects: [] }),
-        readJson<{ models: ApiModel[] }>("/api/admin/models").catch(() => {
+        needsUsers ? readJson<{ users: ApiUser[] }>("/api/admin/users", options) : { users: [] },
+        isInvitations ? readJson<{ invitations: ApiInvitation[] }>("/api/admin/invitations", options) : { invitations: [] },
+        needsCredentials ? readJson<{ credentials: ApiCredential[] }>("/api/admin/credentials", options) : { credentials: [] },
+        isAgents ? readJson<{ profiles: ApiProfile[] }>("/api/profiles?includeArchived=true", options) : { profiles: [] },
+        isAgents ? readJson<{ agents: ApiHermesAgent[] }>(`/api/admin/hermes-agents${currentCompany ? `?companyId=${encodeURIComponent(currentCompany.id)}` : ""}`, options).catch(() => ({ agents: [] })) : { agents: [] },
+        isAgents && currentCompany ? readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(currentCompany.id)}/projects`, options).catch(() => ({ projects: [] })) : Promise.resolve({ projects: [] }),
+        isAgents || isModels ? readJson<{ models: ApiModel[] }>("/api/admin/models", options).catch(() => {
+          if (signal?.aborted) return { models: [] };
           setError("Forge cannot read the model configuration. Check OpenCode or Claude Code on the Forge host.");
           return { models: [] };
-        }),
+        }) : { models: [] },
       ]);
+      if (signal?.aborted) return;
       setUsers(userList.users);
       setInvitations(invitationList.invitations);
       setCredentials(credentialList.credentials);
@@ -184,16 +195,18 @@ export function AdminView(): ReactElement {
       setEditingHermesProjectIds((selected) => selected.filter((projectId) => projectIds.has(projectId)));
       setModels(modelList.models);
     } catch (reason) {
+      if (signal?.aborted) return;
       if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
       else setError("Unable to load administration");
     }
-  }, [currentCompany]);
+  }, [currentCompany, isAgents, isCompanies, isInvitations, isModels, isPasskeys]);
 
   useEffect(() => {
     if (loading || user?.role !== "admin") return;
-    let active = true;
-    void reload().finally(() => { if (active) setInitialReloading(false); });
-    return () => { active = false; };
+    const controller = new AbortController();
+    setInitialReloading(true);
+    void reload(controller.signal).finally(() => { if (!controller.signal.aborted) setInitialReloading(false); });
+    return () => { controller.abort(); };
   }, [loading, reload, user?.role]);
 
   const invite = async (): Promise<void> => {
@@ -459,12 +472,7 @@ export function AdminView(): ReactElement {
     } catch { setError("Unable to revoke passkey"); }
   };
 
-  const isAgents = window.location.pathname.endsWith("/agents");
   const sortedAgents = [...agents].sort((left, right) => Number(Boolean(left.archivedAt)) - Number(Boolean(right.archivedAt)));
-  const isModels = window.location.pathname.endsWith("/models");
-  const isCompanies = window.location.pathname.endsWith("/companies");
-  const isInvitations = window.location.pathname.endsWith("/invitations");
-  const isPasskeys = window.location.pathname.endsWith("/passkeys");
   const viewTitle = isAgents ? "Agents" : isModels ? "Models" : isCompanies ? "Companies" : isInvitations ? "Invitations" : isPasskeys ? "Passkeys" : "Users";
   const activeHref = withCompany(window.location.pathname, currentCompany?.id);
   const backHref = withCompany("/projects", currentCompany?.id);

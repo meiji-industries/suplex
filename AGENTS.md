@@ -64,7 +64,31 @@ large rounded containers, excessive whitespace, or a separate card for every
 piece of information.
 
 Before finishing frontend work, run the app and inspect the changed interface
-with the Playwright browser proof at desktop and narrow viewport sizes.
+with Playwright at desktop and narrow viewport sizes. Keep this inspection
+focused on the changed interaction; it does not require a new automated test
+or a full browser-suite run.
+
+## Browser test budget
+
+Browser tests are expensive. Keep the automated suite to essential happy paths:
+session setup, project creation, and creating, starting, answering, editing,
+cancelling, and archiving tasks.
+
+- Use unit or integration tests for validation, failure modes, state permutations,
+  and authoritative-state checks, including the no-mirror-gates cases above.
+- Add browser coverage only when a critical user journey needs real browser
+  behavior to prove it works and an existing smoke test does not cover it.
+  State the specific gap in the change description. Prefer extending an existing
+  journey over adding another browser setup.
+- Keep layout, copy, settings permutations, and extra viewport checks in focused
+  on-demand inspection. Repeat automated journeys at multiple widths only when
+  the interaction differs, such as the core task creation flow.
+- During development, run only the browser test files affected by the change,
+  using a build of the current code. Run the full suite for shared app-shell,
+  routing, session, or browser-test infrastructure changes, and when CI or an
+  explicit verification request requires it. Docs-only changes need no browser run.
+- After a passing run, rerun only for relevant edits, failures, or an unresolved
+  concern. Report what ran and any remaining gap.
 
 ## Dev workflow
 

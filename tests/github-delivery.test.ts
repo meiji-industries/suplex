@@ -35,3 +35,18 @@ test("check observations retain actionable CI names and log links", () => {
     { name: "deploy", status: "pending", url: "https://example.com/deploy" },
   ] });
 });
+
+test("issue context reads every comment page and validates provider data", async () => {
+  const calls: string[][] = [];
+  const issue = { number: 42, url: "https://github.com/owner/repo/issues/42", title: "Search", body: "", author: null, state: "OPEN", labels: [], assignees: [], milestone: null, updatedAt: "2026-09-07" };
+  const comment = { html_url: issue.url + "#issuecomment-1", body: "Detail", user: null, created_at: "2026-09-07" };
+  const port = createGithubReleasePort({ runner: async input => {
+    calls.push(input.args);
+    return { stdout: JSON.stringify(input.args[0] === "api" ? [[comment], [{ ...comment, body: "Last page" }]] : input.args[1] === "list" ? [issue] : issue), stderr: "" };
+  } });
+  expect(await port.listOpenIssues({ repository: "owner/repo", limit: 100 })).toEqual([issue]);
+  expect((await port.getIssue({ repository: "owner/repo", number: 42 })).comments.map(row => row.body)).toEqual(["Detail", "Last page"]);
+  expect(calls[2]).toEqual(["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"]);
+  const malformed = createGithubReleasePort({ runner: async () => ({ stdout: '{"number":"invalid"}', stderr: "" }) });
+  await expect(malformed.getIssue({ repository: "owner/repo", number: 42 })).rejects.toThrow();
+});

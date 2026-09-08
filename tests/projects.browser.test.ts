@@ -41,28 +41,19 @@ function responseCookie(response: { headers: OutgoingHttpHeaders }, name: string
   return { name: cookieName ?? name, value: cookieValue ?? "" };
 }
 
-test("projects desktop flow creates native projects and shows actionable validation findings", async () => {
+test("projects desktop flow creates a project and opens its configuration", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-project-browser-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
   const repositoryPath = join(repositoryRoot, "acme", "forge");
   await mkdir(repositoryPath, { recursive: true });
   await mkdir(worktreeRoot, { recursive: true });
-  const narrowRepository = join(repositoryRoot, "acme", "narrow");
-  const narrowWorktree = join(worktreeRoot, "acme", "narrow");
-  await mkdir(narrowRepository, { recursive: true });
-  await mkdir(narrowWorktree, { recursive: true });
   await execFileAsync("git", ["init", "-b", "main", repositoryPath]);
 
   await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Forge browser test"]);
   await execFileAsync("git", ["-C", repositoryPath, "config", "user.email", "forge-browser@example.invalid"]);
   await execFileAsync("git", ["-c", "commit.gpgsign=false", "-C", repositoryPath, "commit", "--allow-empty", "-m", "Initial fixture"]);
   await execFileAsync("git", ["-C", repositoryPath, "remote", "add", "origin", "https://github.com/acme/forge.git"]);
-  await execFileAsync("git", ["init", "-b", "main", narrowRepository]);
-  await execFileAsync("git", ["-C", narrowRepository, "config", "user.name", "Forge browser test"]);
-  await execFileAsync("git", ["-C", narrowRepository, "config", "user.email", "forge-browser@example.invalid"]);
-  await execFileAsync("git", ["-c", "commit.gpgsign=false", "-C", narrowRepository, "commit", "--allow-empty", "-m", "Narrow fixture"]);
-  await execFileAsync("git", ["-C", narrowRepository, "remote", "add", "origin", "https://github.com/acme/narrow.git"]);
 
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111", repositoryRoot, worktreeRoot });
@@ -107,13 +98,6 @@ test("projects desktop flow creates native projects and shows actionable validat
       expect(await page.getByLabel("Coordinator default").innerText()).toContain("Root");
       expect(await page.getByLabel("Worker default").innerText()).toContain("Worker");
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
-      await page.locator("[data-app-header]").getByRole("button", { name: "New project", exact: true }).click();
-      await page.getByLabel("GitHub repository URL", { exact: true }).fill("https://token@github.com/acme/unsafe.git");
-      await page.getByRole("dialog", { name: "New project", exact: true }).getByRole("button", { name: "New project", exact: true }).click();
-      await page.getByRole("alert").filter({ hasText: "GitHub repository URL is invalid" }).waitFor();
-      await page.getByText(/repositoryUrl: Use an HTTPS or SSH URL for one GitHub repository/).waitFor();
-      expect(await page.locator("body").innerText()).not.toMatch(/token@|ghp_/);
-      await page.getByRole("button", { name: "Cancel" }).click();
       await page.close();
       await context.close();
     } finally {

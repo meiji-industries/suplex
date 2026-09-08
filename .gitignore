@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .forge/
+.scratch/
+.audit/
 logs/
 playwright-report/
 test-results/
@@ -9,3 +11,10 @@ desktop/release/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+/.pnpm-store/
+/.claude/settings.local.json
+/.claude/worktrees/
+/.opencode/package.json
+/.opencode/package-lock.json
+/.opencode/bun.lock
+/.opencode/bun.lockb

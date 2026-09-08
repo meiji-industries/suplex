@@ -512,10 +512,7 @@ async function captureOwnership(options: {
   if (registry) {
     const servers = registry.processes.filter((process) => process.name === "server");
     const server = servers.length === 1 ? servers[0] : undefined;
-    if (!server || server.pid !== process.pid || !processIdentityMatches(server, inspection)) {
-      throw operationFailure("Forge refused to restart because the owned server identity does not match.", "ownership_mismatch");
-    }
-    return { ownership: "registry", serverIdentity: server };
+    if (server && processIdentityMatches(server, inspection)) return { ownership: "registry", serverIdentity: server };
   }
   return { ownership: "direct", serverIdentity: processRecordFromInspection(inspection, options.now().toISOString()) };
 }
@@ -804,15 +801,15 @@ function processIdentityIsCurrent(identity: OwnedProcess, inspection: ProcessIns
 }
 
 async function assertServerOwnership(payload: SelfUpdatePayload, processController: ProcessController, requireRegistry: boolean): Promise<void> {
-  const registryFilename = join(payload.config.runtimeRoot, "owned-processes.json");
-  let registry;
-  try {
-    registry = await readProcessRegistry(registryFilename);
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw operationFailure("Forge could not validate its owned-process registry.", "ownership_registry_invalid");
-  }
-  if (requireRegistry !== Boolean(registry)) throw operationFailure("Forge refused to restart because server ownership changed.", "ownership_changed");
-  if (registry) {
+  if (requireRegistry) {
+    const registryFilename = join(payload.config.runtimeRoot, "owned-processes.json");
+    let registry;
+    try {
+      registry = await readProcessRegistry(registryFilename);
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw operationFailure("Forge could not validate its owned-process registry.", "ownership_registry_invalid");
+    }
+    if (!registry) throw operationFailure("Forge refused to restart because server ownership changed.", "ownership_changed");
     const servers = registry.processes.filter((process) => process.name === "server");
     const recorded = servers.length === 1 ? servers[0] : undefined;
     if (!recorded || !sameCapturedIdentity(recorded, payload.serverIdentity)) throw operationFailure("Forge refused to restart because the owned server registry changed.", "ownership_changed");

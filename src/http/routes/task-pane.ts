@@ -10,10 +10,6 @@ import { TaskIdParamsSchema } from "../contracts/common.js";
 export interface TaskPaneRoutesOptions { tasks: TaskService; config?: ForgeConfig; openBridge?: typeof openHerdrTerminalBridge }
 const Params = TaskIdParamsSchema.extend({ role: TaskSessionKindSchema });
 const Query = z.object({ cols: z.coerce.number().int().min(20).max(300).default(80), rows: z.coerce.number().int().min(5).max(150).default(24) });
-const Control = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("resize"), cols: Query.shape.cols, rows: Query.shape.rows }),
-  z.object({ type: z.literal("scroll"), direction: z.enum(["up", "down"]), lines: z.number().int().min(1).max(65_535) }),
-]);
 
 export function originAllowed(origin: string | undefined, host: string | undefined, reachableAddress: string | undefined): boolean {
   if (!origin) return true;
@@ -44,14 +40,6 @@ const taskPane: FastifyPluginAsync<TaskPaneRoutesOptions> = async (app, options)
     }, 1_000);
     accessCheck.unref();
     socket.send(JSON.stringify({ type: "open", paneId, readOnly: true, cols: request.query.cols, rows: request.query.rows }));
-    socket.on("message", (message: Buffer, isBinary: boolean) => {
-      if (isBinary) return;
-      try {
-        const command = Control.parse(JSON.parse(message.toString()));
-        if (command.type === "resize") bridge.resize(command.cols, command.rows);
-        else bridge.scroll(command.direction, command.lines);
-      } catch { socket.send(JSON.stringify({ type: "error", message: "Use the task note field to send instructions" })); }
-    });
     socket.once("close", () => { clearInterval(accessCheck); bridge.release(); });
   });
 };

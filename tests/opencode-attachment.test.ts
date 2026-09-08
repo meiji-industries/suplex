@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import type { HerdrClient, Pane, PaneProcessInfo } from "../src/herdr-client.js";
+import type { HerdrClient, HerdrPaneMetadataReport, Pane, PaneProcessInfo } from "../src/herdr-client.js";
 import { OpenCodeTaskRuntime, type OpenCodeTaskScope } from "../src/opencode-task-runtime.js";
 import type { OpenCodeServerReference } from "../src/opencode-server.js";
 
@@ -25,12 +25,13 @@ test.each(["live", "failed_command", "old_server", "unrelated", "unknown"])("nat
     let fail = condition === "failed_command";
     const commands: string[] = [];
     const paneCommands: string[] = [];
+    const metadata: HerdrPaneMetadataReport[] = [];
     const herdr: Pick<HerdrClient, "getPane" | "getPaneProcessInfo" | "createWorkspace" | "splitPane" | "renamePane" | "runPaneCommand" | "reportPaneMetadata"> = {
       async getPane(id) { return pane(id); },
       async getPaneProcessInfo(id) { return processes.get(id)!; },
       async createWorkspace() { creates++; processes.set("pane-new", shell("pane-new")); return { workspace: { workspaceId: "workspace", label: "Proof" }, tab: { tabId: "tab", label: "Proof" }, rootPane: pane("pane-new") }; },
       async splitPane() { throw new Error("No split expected"); },
-      async renamePane() {}, async reportPaneMetadata() {},
+      async renamePane() {}, async reportPaneMetadata(report) { metadata.push(report); },
       async runPaneCommand(id, command) { commands.push(id); paneCommands.push(command); if (fail) { fail = false; throw new Error("Command transport failed"); } processes.set(id, attached(id)); },
     };
     const runtime = new OpenCodeTaskRuntime(join(directory, "forge.sqlite"), herdr);
@@ -48,5 +49,12 @@ test.each(["live", "failed_command", "old_server", "unrelated", "unknown"])("nat
     expect(creates).toBe(condition === "old_server" || condition === "unrelated" ? 1 : 0);
     expect(commands).toEqual(condition === "live" ? [] : condition === "failed_command" ? ["pane-old", "pane-old"] : ["pane-new"]);
     expect(paneCommands).toEqual(commands.map(() => expect.stringContaining("--mini")));
+    expect(metadata.at(-1)?.tokens).toMatchObject({
+      forge_binding_id: scope.id,
+      forge_task: scope.taskId,
+      forge_role: "Worker",
+      forge_model: scope.profile.modelID,
+      forge_provider: scope.profile.providerID,
+    });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

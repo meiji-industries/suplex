@@ -1,10 +1,9 @@
 import { expect, test } from "vitest";
 import { nativeBrowser } from "./helpers/native-browser.js";
 
-const narrowViewport = 390;
-
-test("live panes support mounting, resizing, switching, and reconnect status", { timeout: 90_000 }, async () => {
-  const value = await nativeBrowser(narrowViewport);
+for (const width of [1280, 390]) test(`live pane observer fits and reconnects without browser commands at ${width}px`, { timeout: 90_000 }, async () => {
+  const value = await nativeBrowser(width);
+  const sockets: Array<{ url: string; messages: Array<string | Buffer>; close: (options?: { code?: number; reason?: string }) => void; send: (message: string | Buffer) => void }> = [];
   try {
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Live pane restoration", description: "Watch the agent work.", startImmediately: true, idempotencyKey: "live-dock" });
     const store = value.tasks.repository.controls;
@@ -13,7 +12,11 @@ test("live panes support mounting, resizing, switching, and reconnect status", {
     const { page } = value;
     page.setDefaultTimeout(10_000);
     await page.routeWebSocket(/\/pane\/.*\/terminal/, socket => {
-      socket.send(JSON.stringify({ type: "open" }));
+      const messages: Array<string | Buffer> = [];
+      sockets.push({ url: socket.url(), messages, close: options => socket.close(options), send: message => socket.send(message) });
+      socket.onMessage(message => messages.push(message));
+      const url = new URL(socket.url());
+      socket.send(JSON.stringify({ type: "open", cols: Number(url.searchParams.get("cols")), rows: Number(url.searchParams.get("rows")) }));
       socket.send(Buffer.from("\x1b[32mLive agent output\x1b[0m\r\nInspecting the task worktree...\r\n"));
     });
     await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
@@ -23,16 +26,34 @@ test("live panes support mounting, resizing, switching, and reconnect status", {
     store.bindPane({ sessionId: root.id, generation: root.generation, paneId: "wProof:p1" });
     await dock.waitFor();
     await dock.locator(".xterm-screen").waitFor();
+    await expect.poll(() => sockets.length).toBe(1);
     const terminalHost = dock.getByLabel("Live pane output for root", { exact: true });
     const terminalSurface = terminalHost.locator(".xterm-screen");
+    const screenBox = await terminalSurface.boundingBox();
+    expect(screenBox?.width).toBeGreaterThan(100);
+    expect(screenBox?.height).toBeGreaterThan(100);
+    expect(await terminalSurface.locator("canvas").count()).toBeGreaterThan(0);
+    expect(sockets[0]!.messages).toEqual([]);
+    expect(new URL(sockets[0]!.url).searchParams.get("cols")).toMatch(/^\d+$/);
+    expect(new URL(sockets[0]!.url).searchParams.get("rows")).toMatch(/^\d+$/);
     const slider = dock.getByRole("slider", { name: "Resize live agent output" });
     await slider.focus();
     await slider.press("ArrowUp");
     expect(await slider.getAttribute("aria-valuenow")).toBe("344");
-    await page.reload();
-    await dock.waitFor();
-    await dock.locator(".xterm-screen").waitFor();
-    expect(await slider.getAttribute("aria-valuenow")).toBe("344");
+    await expect.poll(() => sockets.length).toBe(2);
+    expect(sockets.flatMap(socket => socket.messages)).toEqual([]);
+    expect(sockets[1]!.url).not.toBe(sockets[0]!.url);
+    sockets[1]!.close({ code: 1011, reason: "Connection lost" });
+    await expect.poll(() => sockets.length).toBe(3);
+    sockets[2]!.close({ code: 1000, reason: "Pane ended" });
+    await page.getByText("Pane ended", { exact: true }).waitFor();
+    await slider.press("ArrowUp");
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(sockets).toHaveLength(3);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect(await terminalHost.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await page.screenshot({ path: `.scratch/herdr-observer-browser-${width}.png`, animations: "disabled" });
+    if (width !== 390) return;
     const worker = store.launchWorker({ taskId: task.id, rootSessionId: root.id, rootGeneration: root.generation, instruction: "Verify the dock" });
     store.bindHarnessSession({ sessionId: worker.id, generation: worker.generation, nativeSessionId: "ses_dock_worker" });
     store.bindPane({ sessionId: worker.id, generation: worker.generation, paneId: "wProof:p2" });
@@ -44,10 +65,6 @@ test("live panes support mounting, resizing, switching, and reconnect status", {
     await dock.getByRole("tab", { name: "Coordinator", exact: true }).click();
     await terminalHost.waitFor();
     await terminalSurface.waitFor();
-    await page.routeWebSocket(/\/pane\/.*\/terminal/, socket => socket.close({ code: 1011, reason: "Connection lost" }));
-    await page.reload();
-    const reconnecting = page.getByRole("status").filter({ hasText: "Reconnecting" });
-    await reconnecting.waitFor();
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }
 });

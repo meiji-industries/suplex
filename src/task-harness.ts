@@ -73,7 +73,11 @@ export function taskSessionRuntimeDirectory(databasePath: string, sessionId: str
 }
 
 export function taskSessionTitle(scope: TaskScope): string {
-  return `${scope.taskId} ${scope.role === "root" ? "Coordinator" : scope.role === "advisor" ? scope.label : "Worker"}`;
+  return `${scope.taskId} ${taskSessionRole(scope)}`;
+}
+
+export function taskSessionRole(scope: TaskScope): string {
+  return scope.role === "root" ? "Coordinator" : scope.role === "advisor" ? scope.label : "Worker";
 }
 
 export function shellQuote(value: string): string {
@@ -126,10 +130,36 @@ export async function attachTaskDisplay(herdr: TaskPanePort, input: {
   command: string;
 }): Promise<string> {
   const { scope } = input;
+  const title = taskSessionTitle(scope);
+  const metadata = (paneId: string) => ({
+    paneId,
+    source: "forge",
+    title,
+    tokens: {
+      forge_binding_id: scope.id,
+      forge_task_id: scope.taskId,
+      forge_native_session_id: input.nativeSessionId,
+      forge_server_generation: input.generation,
+      forge_task: scope.taskId,
+      forge_role: taskSessionRole(scope),
+      forge_model: scope.profile.modelID,
+      forge_provider: scope.profile.providerID,
+    },
+  });
+  const publishMetadata = async (paneId: string): Promise<void> => {
+    await Promise.allSettled([
+      Promise.resolve().then(() => herdr.renamePane(paneId, title)),
+      Promise.resolve().then(() => herdr.reportPaneMetadata(metadata(paneId))),
+    ]);
+  };
   let pane = input.paneId ? await herdr.getPane(input.paneId) : null;
   if (pane) {
     const info = await herdr.getPaneProcessInfo(pane.paneId);
-    if (info.foreground_processes.some(process => process.argv !== undefined && input.isAttached(process.argv))) return pane.paneId;
+    if (info.foreground_processes.some(process => process.argv !== undefined && input.isAttached(process.argv))) {
+      input.persistPane(pane.paneId);
+      await publishMetadata(pane.paneId);
+      return pane.paneId;
+    }
     const owned = pane.tokens?.forge_binding_id === scope.id || !pane.tokens?.forge_binding_id && pane.cwd === scope.directory;
     if (owned && info.foreground_processes.length === 0) throw new Error("The task display process could not be inspected");
     if (!owned || !isInteractiveShell(info)) pane = null;
@@ -138,9 +168,7 @@ export async function attachTaskDisplay(herdr: TaskPanePort, input: {
     ? await splitBalancedPaneRow(herdr, { paneId: input.rootPaneId, cwd: scope.directory })
     : (await herdr.createWorkspace({ label: `forge-${scope.taskId}`, cwd: scope.directory, focus: false })).rootPane;
   input.persistPane(pane.paneId);
-  const title = taskSessionTitle(scope);
-  await herdr.renamePane(pane.paneId, title);
-  await herdr.reportPaneMetadata({ paneId: pane.paneId, source: "forge", title, tokens: { forge_binding_id: scope.id, forge_task_id: scope.taskId, forge_native_session_id: input.nativeSessionId, forge_server_generation: input.generation } });
+  await publishMetadata(pane.paneId);
   const deadline = Date.now() + 2_000;
   for (;;) {
     const info = await herdr.getPaneProcessInfo(pane.paneId);

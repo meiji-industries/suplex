@@ -1,5 +1,34 @@
 # Forge agent guidance
 
+## No mirror gates
+
+Never make a user action depend on a local copy of external state agreeing
+with its source. Observe the authoritative system when deciding whether to
+act. Forge owns task intent and authorization; native runtimes own execution
+evidence; Git and GitHub own repository and delivery facts. Pane IDs, display
+tokens, cached statuses, and progress receipts are observations, not authority.
+
+Restarts, recreated panes, missing display metadata, and stale caches are
+normal. Refresh, rediscover, or ignore obsolete observations automatically.
+Do not require users to repair a mirror, acknowledge drift, or produce a second
+receipt before continuing. For example, Herdr restarting and losing pane
+tokens must not prevent archiving a task. Uncertain pane ownership means leave
+that pane alone; it does not establish that the task cannot be archived.
+
+Before adding or reviewing any blocking condition, identify the concrete harm
+it prevents and the authoritative evidence for that harm. Keep a gate only
+when it is necessary to prevent that harm, and scope it to the affected
+operation. Metadata disagreement alone never qualifies. Missing evidence is
+not proof of safety either; obtain evidence from the owning system instead
+of substituting a mirror check.
+
+For each feature that reads external state, test the user action with the
+authoritative state unchanged and the local observation missing, stale, or
+recreated after restart. Its outcome must remain the same. Test actual unsafe
+conditions separately. Review every new rejection, disabled action, and retry
+requirement against this rule. Fix violations at the source; do not add a
+special-case bypass for each symptom.
+
 For visible sub-agent pane delegation and its verification rules, read
 `docs/agents/subagents-in-herdr-panes.md`.
 For the local Herdr workflow and helper scripts, read `HERDR.md`.

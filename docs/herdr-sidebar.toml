@@ -1,0 +1,7 @@
+[ui.sidebar.agents]
+row_gap = 0
+rows = [
+  ["state_icon", { token = "$forge_task", bold = true }, { token = "$forge_role", rules = [{ equals = "Coordinator", fg = "#89b4fa", bold = true }, { equals = "Worker", fg = "#a6e3a1" }, { contains = "review", ignore_case = true, fg = "#cba6f7" }] }],
+  ["$forge_model", "$forge_provider", { token = "state_text", rules = [{ equals = "blocked", fg = "#f38ba8", bold = true }, { equals = "working", fg = "#a6e3a1" }, { equals = "idle", dim = true }] }],
+  ["machine", "workspace", "tab", "pane"],
+]

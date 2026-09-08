@@ -600,6 +600,73 @@ test("watch-owned servers cannot accept a self-update restart", async () => {
   }
 });
 
+test("a stale registry from an old server does not block direct restart acceptance", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-self-update-stale-registry-"));
+  try {
+    const config = createTestConfig(root);
+    const store = new SelfUpdateStore(config.runtimeRoot);
+    const currentInspection = inspection(process.pid);
+    const processController: ProcessController = {
+      async inspect(pid) { return pid === process.pid ? currentInspection : undefined; },
+      async signal() {},
+    };
+    await writeProcessRegistry(join(config.runtimeRoot, "owned-processes.json"), {
+      version: 1,
+      processes: [{ ...inspection(process.pid + 1), name: "server", startedAt: "2026-08-12T00:00:00.000Z", startId: "old-server" }],
+    });
+    const service = new SelfUpdateService({ config, store, processController, argv: ["node", "src/server.ts"], environment: {} });
+
+    await expect(service.acceptRestart(targetRevision)).resolves.toMatchObject({ accepted: true });
+    await expect(store.readPayload()).resolves.toMatchObject({ ownership: "direct", serverIdentity: { pid: process.pid } });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a stale registry with a reused server PID does not claim managed ownership", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-self-update-reused-registry-pid-"));
+  try {
+    const config = createTestConfig(root);
+    const store = new SelfUpdateStore(config.runtimeRoot);
+    const currentInspection = inspection(process.pid);
+    const processController: ProcessController = {
+      async inspect(pid) { return pid === process.pid ? currentInspection : undefined; },
+      async signal() {},
+    };
+    await writeProcessRegistry(join(config.runtimeRoot, "owned-processes.json"), {
+      version: 1,
+      processes: [{ ...currentInspection, name: "server", startedAt: "2026-08-12T00:00:00.000Z", startId: "old-server", startTime: "Tue 12 Aug 00:00:00 2026" }],
+    });
+    const service = new SelfUpdateService({ config, store, processController, argv: ["node", "src/server.ts"], environment: {} });
+
+    await expect(service.acceptRestart(targetRevision)).resolves.toMatchObject({ accepted: true });
+    await expect(store.readPayload()).resolves.toMatchObject({ ownership: "direct", serverIdentity: { pid: process.pid, startTime: currentInspection.startTime } });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a registry that matches the live server selects managed restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-self-update-managed-registry-"));
+  try {
+    const config = createTestConfig(root);
+    const store = new SelfUpdateStore(config.runtimeRoot);
+    const currentInspection = inspection(process.pid);
+    const managedIdentity = { ...currentInspection, name: "server", startedAt: "2026-09-06T00:00:00.000Z", startId: "managed-server" };
+    const processController: ProcessController = {
+      async inspect(pid) { return pid === process.pid ? currentInspection : undefined; },
+      async signal() {},
+    };
+    await writeProcessRegistry(join(config.runtimeRoot, "owned-processes.json"), { version: 1, processes: [managedIdentity] });
+    const service = new SelfUpdateService({ config, store, processController, argv: ["node", "src/server.ts"], environment: {} });
+
+    await expect(service.acceptRestart(targetRevision)).resolves.toMatchObject({ accepted: true });
+    await expect(store.readPayload()).resolves.toMatchObject({ ownership: "registry", serverIdentity: managedIdentity });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test.each([
   ["Node watch execArgv", ["--watch"], {}],
   ["tsx watch marker", ["--import", "tsx"], { FORGE_WATCH_MODE: "1" }],
@@ -663,6 +730,32 @@ test("restart environment preserves the configured address and development login
       environment: {},
     });
     expect(spawned.options?.env).toMatchObject({ FORGE_TAILSCALE_ADDRESS: "127.0.0.1", FORGE_BIND_ADDRESS: "127.0.0.1", FORGE_DEVELOPMENT_AUTO_LOGIN: "1" });
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a direct restart completes while an old server registry remains", async () => {
+  const fixture = await operationFixture();
+  try {
+    await writeProcessRegistry(join(fixture.config.runtimeRoot, "owned-processes.json"), {
+      version: 1,
+      processes: [{ ...inspection(81610), name: "server", startedAt: "2026-08-12T00:00:00.000Z", startId: "old-server" }],
+    });
+    await runSelfUpdateOperation({
+      operationId: fixture.operationId,
+      config: fixture.config,
+      store: fixture.store,
+      processController: fixture.processController,
+      runGit: gitScript(fixture.root).runGit,
+      runCommand: makeCommandRunner(fixture.root).runCommand,
+      spawn: () => fakeDetachedChild(),
+      fetch: async () => new Response("", { status: 200 }),
+      sleep: async () => undefined,
+      environment: {},
+    });
+
+    await expect(fixture.store.readStatus()).resolves.toMatchObject({ status: "succeeded" });
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }

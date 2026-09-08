@@ -8,16 +8,7 @@ import type { HealthCheck } from "./health.js";
 import { checkGithubAuthentication } from "./provider-readiness.js";
 import { checkBackupHealth } from "./backup.js";
 import { resolveOpenCodeExecutable } from "./executable-resolver.js";
-import { CliHerdrClient } from "./herdr-client.js";
-
-async function checkHerdrReadiness(): Promise<HealthCheck> {
-  try {
-    await new CliHerdrClient().listWorkspaces();
-    return { id: "herdr-readiness", label: "Herdr readiness", status: "healthy", summary: "Herdr API is reachable", details: {} };
-  } catch {
-    return { id: "herdr-readiness", label: "Herdr readiness", status: "unhealthy", summary: "Herdr API is unavailable", details: {} };
-  }
-}
+import { createHerdrReadinessCheck } from "./herdr-readiness.js";
 
 const minimumFreeBytes = 100 * 1024 * 1024;
 
@@ -91,7 +82,7 @@ export function createHostHealthDependencies(config: ForgeConfig, database: Forg
       try { await resolveOpenCodeExecutable(); return { id: "opencode", label: "OpenCode", status: "healthy", summary: "Executable found. Model access is not tested.", details: {} }; }
       catch { return { id: "opencode", label: "OpenCode", status: "unhealthy", summary: "OpenCode is not available on the Forge host", details: {} }; }
     },
-    herdrReadiness: () => checkHerdrReadiness(),
+    herdrReadiness: createHerdrReadinessCheck(),
     ghAuth: checkGithubAuthentication(process.env.FORGE_GH_COMMAND ?? "gh"),
     backup: () => checkBackupHealth(config),
   };

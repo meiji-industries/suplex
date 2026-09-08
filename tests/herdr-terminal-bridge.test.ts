@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { openHerdrTerminalBridge, parseBridgeRecord } from "../src/herdr-terminal-bridge.js";
 
@@ -13,17 +13,28 @@ test("parses Herdr terminal bridge records", () => {
   expect(parseBridgeRecord("not json")).toBeNull();
 });
 
-test("writes bridge commands and only closes once", () => {
-  const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true });
-  const output: string[] = [];
-  child.stdin.on("data", (chunk) => output.push(chunk.toString()));
+test("opens an observer with no command input and releases only that process", () => {
+  const kill = vi.fn(() => true);
+  const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill });
   const events: unknown[] = [];
-  const bridge = openHerdrTerminalBridge({ paneId: "pane", cols: 80, rows: 24, onEvent: (event) => events.push(event), spawn: (() => child) as never });
-  bridge.input(Buffer.from("a\r"));
-  bridge.resize(100, 30);
-  child.stdout.write('{"type":"terminal.closed","reason":"detached"}\n');
+  const spawn = vi.fn(() => child) as never;
+  const bridge = openHerdrTerminalBridge({ paneId: "pane", cols: 80, rows: 24, onEvent: (event) => events.push(event), spawn });
+  expect(spawn).toHaveBeenCalledWith("herdr", ["terminal", "session", "observe", "pane", "--cols", "80", "--rows", "24"], expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }));
+  bridge.release();
+  bridge.release();
+  expect(kill).toHaveBeenCalledTimes(1);
+  expect(kill).toHaveBeenCalledWith("SIGTERM");
   child.emit("exit", 0, null);
-  expect(output).toContain('{"type":"terminal.input","bytes":"YQ0="}\n');
-  expect(output).toContain('{"type":"terminal.resize","cols":100,"rows":30}\n');
-  expect(events).toEqual([{ type: "closed", reason: "detached" }]);
+  expect(events).toEqual([]);
+});
+
+test("reports child spawn errors without an unhandled process error", () => {
+  const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(() => true) });
+  const events: unknown[] = [];
+  openHerdrTerminalBridge({ paneId: "pane", cols: 80, rows: 24, onEvent: event => events.push(event), spawn: (() => child) as never });
+  child.emit("error", new Error("ENOENT"));
+  expect(events).toEqual([
+    { type: "error", message: "Herdr observer could not start: ENOENT" },
+    { type: "closed", reason: "spawn error" },
+  ]);
 });

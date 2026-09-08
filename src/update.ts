@@ -14,6 +14,7 @@ export type GitCommand = (args: readonly string[], cwd: string) => string | Prom
 export interface UpdateDetectorOptions {
   cwd?: string;
   runGit?: GitCommand;
+  currentRevision?: string;
 }
 
 async function defaultGitCommand(args: readonly string[], cwd: string): Promise<string> {
@@ -96,10 +97,12 @@ export async function inspectUpdateAvailability(options: UpdateDetectorOptions =
     if ((await runGit(["symbolic-ref", "--short", "HEAD"], cwd)).trim() !== REMOTE_BRANCH) return { available: false };
     const remote = await matchingRemote(runGit, cwd);
     if (!remote) return { available: false };
-    requiredCommitRevision(await runGit(["rev-parse", "--verify", "HEAD^{commit}"], cwd));
+    let comparisonRevision = "HEAD";
+    if (options.currentRevision) comparisonRevision = requiredCommitRevision(options.currentRevision);
+    else requiredCommitRevision(await runGit(["rev-parse", "--verify", "HEAD^{commit}"], cwd));
     await runGit(["fetch", "--no-tags", remote, `refs/heads/${REMOTE_BRANCH}:refs/remotes/${remote}/${REMOTE_BRANCH}`], cwd);
     const revision = requiredCommitRevision(await runGit(["rev-parse", "--verify", `refs/remotes/${remote}/${REMOTE_BRANCH}^{commit}`], cwd));
-    const count = commitCount(await runGit(["rev-list", "--count", `HEAD..refs/remotes/${remote}/${REMOTE_BRANCH}`], cwd));
+    const count = commitCount(await runGit(["rev-list", "--count", `${comparisonRevision}..refs/remotes/${remote}/${REMOTE_BRANCH}`], cwd));
     return count > 0 ? { available: true, revision } : { available: false };
   } catch {
     return { available: false };

@@ -55,8 +55,9 @@ function inspection(pid: number): ProcessInspection {
   };
 }
 
-function gitScript(root: string, dirty = "", overrides: { branch?: string; remoteUrl?: string; fetchedRevision?: string; diverged?: boolean } = {}): { runGit: (args: readonly string[], cwd: string) => Promise<string>; calls: string[][] } {
+function gitScript(root: string, dirty = "", overrides: { branch?: string; remoteUrl?: string; fetchedRevision?: string; diverged?: boolean; mergeError?: string } = {}): { runGit: (args: readonly string[], cwd: string) => Promise<string>; calls: string[][] } {
   let headReads = 0;
+  const fetchedRevision = overrides.fetchedRevision ?? targetRevision;
   const calls: string[][] = [];
   const runGit = async (args: readonly string[], cwd: string): Promise<string> => {
     expect(cwd).toBe(root);
@@ -68,16 +69,20 @@ function gitScript(root: string, dirty = "", overrides: { branch?: string; remot
     if (command === "remote get-url origin") return `${overrides.remoteUrl ?? "https://github.com/meiji-industries/forge.git"}\n`;
     if (command === "rev-parse --verify HEAD^{commit}") {
       headReads += 1;
-      return `${headReads === 1 ? headRevision : targetRevision}\n`;
+      return `${headReads === 1 ? headRevision : fetchedRevision}\n`;
     }
     if (command === "status --porcelain=v1 --untracked-files=all") return dirty;
     if (command === "fetch --no-tags origin refs/heads/main:refs/remotes/origin/main") return "";
-    if (command === "rev-parse --verify refs/remotes/origin/main^{commit}") return `${overrides.fetchedRevision ?? targetRevision}\n`;
-    if (command === `merge-base --is-ancestor ${headRevision} ${targetRevision}`) {
+    if (command === "rev-parse --verify refs/remotes/origin/main^{commit}") return `${fetchedRevision}\n`;
+    if (command === `rev-list --count ${headRevision}..refs/remotes/origin/main`) return fetchedRevision === headRevision ? "0\n" : "1\n";
+    if (command === `merge-base --is-ancestor ${headRevision} ${fetchedRevision}`) {
       if (overrides.diverged) throw new Error("not an ancestor");
       return "";
     }
-    if (command === `merge --ff-only ${targetRevision}`) return "";
+    if (command === `merge --ff-only ${fetchedRevision}`) {
+      if (overrides.mergeError) throw new Error(overrides.mergeError);
+      return "";
+    }
     throw new Error(`Unexpected git command: ${command}`);
   };
   return { runGit, calls };
@@ -94,7 +99,7 @@ function makeCommandRunner(root: string, failingInstall = false, failingBuild = 
   return { runCommand, calls };
 }
 
-async function operationFixture(dirty = ""): Promise<{
+async function operationFixture(): Promise<{
   root: string;
   config: ReturnType<typeof createTestConfig>;
   store: SelfUpdateStore;
@@ -126,9 +131,6 @@ async function operationFixture(dirty = ""): Promise<{
   await store.writePayload({ version: 1, operationId, targetRevision, ownership: "direct", serverIdentity, workingDirectory: root, config });
   await store.writeStatus({ operationId, status: "pending", targetRevision, acceptedAt: "2026-09-06T00:00:00.000Z", updatedAt: "2026-09-06T00:00:00.000Z" });
   await store.acquireLock(operationId);
-  if (dirty) {
-    // The dirty result is returned by the command seam in the test below.
-  }
   return { root, config, store, operationId, processController };
 }
 
@@ -234,7 +236,7 @@ test("direct self-update refuses to signal after server identity changes", async
 test("install failure records actionable status and leaves the current server running", async () => {
   const fixture = await operationFixture();
   try {
-    const git = gitScript(fixture.root);
+    const git = gitScript(fixture.root, "", { fetchedRevision: newerRevision });
     const commands = makeCommandRunner(fixture.root, true);
     let signalled = false;
     const processController: ProcessController = {
@@ -244,16 +246,16 @@ test("install failure records actionable status and leaves the current server ru
       },
     };
     await expect(runSelfUpdateOperation({ operationId: fixture.operationId, config: fixture.config, store: fixture.store, processController, runGit: git.runGit, runCommand: commands.runCommand, sleep: async () => undefined, environment: {} })).rejects.toThrow(/frozen lockfile/);
-    await expect(fixture.store.readStatus()).resolves.toMatchObject({ status: "failed", error: expect.stringMatching(/frozen lockfile/) });
+    await expect(fixture.store.readStatus()).resolves.toMatchObject({ status: "failed", targetRevision: newerRevision, error: expect.stringMatching(/frozen lockfile/) });
     expect(signalled).toBe(false);
-    expect(git.calls).toContainEqual(["merge", "--ff-only", targetRevision]);
+    expect(git.calls).toContainEqual(["merge", "--ff-only", newerRevision]);
     await expect(fixture.store.readLock()).resolves.toBeUndefined();
     await expect(fixture.store.readPayload()).resolves.toBeUndefined();
 
     const retryController: ProcessController = { async inspect() { return inspection(process.pid); }, async signal() {} };
-    const service = new SelfUpdateService({ config: fixture.config, store: fixture.store, processController: retryController, runGit: git.runGit, runningRevision: headRevision, argv: ["node", "src/server.ts"], environment: {} });
-    await expect(service.readUpdate()).resolves.toMatchObject({ available: true, revision: targetRevision, currentRevision: headRevision, operation: { status: "failed", targetRevision } });
-    await expect(service.acceptRestart(targetRevision)).resolves.toMatchObject({ accepted: true, operation: { status: "pending", targetRevision } });
+    const service = new SelfUpdateService({ config: fixture.config, store: fixture.store, processController: retryController, runGit: git.runGit, runningRevision: headRevision, workingDirectory: fixture.root, argv: ["node", "src/server.ts"], environment: {} });
+    await expect(service.readUpdate()).resolves.toMatchObject({ available: true, revision: newerRevision, currentRevision: headRevision, operation: { status: "failed", targetRevision: newerRevision } });
+    await expect(service.acceptRestart(newerRevision)).resolves.toMatchObject({ accepted: true, operation: { status: "pending", targetRevision: newerRevision } });
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
@@ -262,7 +264,7 @@ test("install failure records actionable status and leaves the current server ru
 test("build failure records actionable status and leaves the current server running", async () => {
   const fixture = await operationFixture();
   try {
-    const git = gitScript(fixture.root);
+    const git = gitScript(fixture.root, "", { fetchedRevision: newerRevision });
     const commands = makeCommandRunner(fixture.root, false, true);
     let signalled = false;
     const processController: ProcessController = {
@@ -270,7 +272,7 @@ test("build failure records actionable status and leaves the current server runn
       async signal() { signalled = true; },
     };
     await expect(runSelfUpdateOperation({ operationId: fixture.operationId, config: fixture.config, store: fixture.store, processController, runGit: git.runGit, runCommand: commands.runCommand, sleep: async () => undefined, environment: {} })).rejects.toThrow(/build failed/);
-    await expect(fixture.store.readStatus()).resolves.toMatchObject({ status: "failed", error: expect.stringMatching(/build failed/) });
+    await expect(fixture.store.readStatus()).resolves.toMatchObject({ status: "failed", targetRevision: newerRevision, error: expect.stringMatching(/build failed/) });
     expect(signalled).toBe(false);
     expect(commands.calls.map((call) => [call.command, ...call.args])).toEqual([
       ["pnpm", "install", "--frozen-lockfile"],
@@ -281,7 +283,7 @@ test("build failure records actionable status and leaves the current server runn
   }
 });
 
-test("dirty checkout records failure before fetch, merge, install, or shutdown", async () => {
+test("local edits do not preempt fetch, build, or restart", async () => {
   const fixture = await operationFixture();
   try {
     const git = gitScript(fixture.root, "?? local.txt\n");
@@ -289,14 +291,44 @@ test("dirty checkout records failure before fetch, merge, install, or shutdown",
     let signalled = false;
     const processController: ProcessController = {
       ...fixture.processController,
-      async signal() {
+      async signal(pid, signal) {
         signalled = true;
+        await fixture.processController.signal(pid, signal);
       },
     };
-    await expect(runSelfUpdateOperation({ operationId: fixture.operationId, config: fixture.config, store: fixture.store, processController, runGit: git.runGit, runCommand: commands.runCommand, sleep: async () => undefined, environment: {} })).rejects.toThrow(/dirty checkout/);
-    await expect(fixture.store.readStatus()).resolves.toMatchObject({ status: "failed", error: expect.stringMatching(/dirty checkout/) });
+    await runSelfUpdateOperation({ operationId: fixture.operationId, config: fixture.config, store: fixture.store, processController, runGit: git.runGit, runCommand: commands.runCommand, spawn: () => fakeDetachedChild(), fetch: async () => new Response("", { status: 200 }), sleep: async () => undefined, environment: {} });
+
+    await expect(fixture.store.readStatus()).resolves.toMatchObject({ status: "succeeded" });
+    expect(signalled).toBe(true);
+    expect(git.calls).not.toContainEqual(["status", "--porcelain=v1", "--untracked-files=all"]);
+    expect(git.calls).toContainEqual(["fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"]);
+    expect(git.calls).toContainEqual(["merge", "--ff-only", targetRevision]);
+    expect(commands.calls.map((call) => [call.command, ...call.args])).toEqual([
+      ["pnpm", "install", "--frozen-lockfile"],
+      ["pnpm", "run", "build"],
+    ]);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a rejected merge records Git detail before shutdown", async () => {
+  const fixture = await operationFixture();
+  try {
+    const git = gitScript(fixture.root, "", { mergeError: "Your local changes to package.json would be overwritten by merge" });
+    const commands = makeCommandRunner(fixture.root);
+    let signalled = false;
+    const processController: ProcessController = {
+      ...fixture.processController,
+      async signal() { signalled = true; },
+    };
+
+    await expect(runSelfUpdateOperation({ operationId: fixture.operationId, config: fixture.config, store: fixture.store, processController, runGit: git.runGit, runCommand: commands.runCommand, sleep: async () => undefined, environment: {} })).rejects.toThrow(/Forge could not fast-forward.*Your local changes to package\.json would be overwritten by merge/);
+    await expect(fixture.store.readStatus()).resolves.toMatchObject({
+      status: "failed",
+      error: expect.stringMatching(/Forge could not fast-forward.*Your local changes to package\.json would be overwritten by merge/),
+    });
     expect(signalled).toBe(false);
-    expect(git.calls.some((call) => call[0] === "fetch" || call[0] === "merge")).toBe(false);
     expect(commands.calls).toHaveLength(0);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
@@ -307,7 +339,6 @@ test.each([
   ["a non-main checkout", { branch: "feature/update" }, /main branch/],
   ["a wrong remote", { remoteUrl: "https://github.com/example/forge.git" }, /pinned GitHub remote/],
   ["a diverged checkout", { diverged: true }, /not an ancestor/],
-  ["a stale requested revision", { fetchedRevision: headRevision }, /freshly fetched main revision/],
 ] as const)("rejects %s before shutdown", async (_label, overrides, error) => {
   const fixture = await operationFixture();
   try {
@@ -321,6 +352,41 @@ test.each([
     await expect(runSelfUpdateOperation({ operationId: fixture.operationId, config: fixture.config, store: fixture.store, processController, runGit: git.runGit, runCommand: commands.runCommand, sleep: async () => undefined, environment: {} })).rejects.toThrow(error);
     expect(signalled).toBe(false);
     await expect(fixture.store.readStatus()).resolves.toMatchObject({ status: "failed" });
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a stale requested revision updates to freshly fetched main and confirms the selected revision", async () => {
+  const fixture = await operationFixture();
+  try {
+    const git = gitScript(fixture.root, "", { fetchedRevision: newerRevision });
+    const commands = makeCommandRunner(fixture.root);
+    await runSelfUpdateOperation({
+      operationId: fixture.operationId,
+      config: fixture.config,
+      store: fixture.store,
+      processController: fixture.processController,
+      runGit: git.runGit,
+      runCommand: commands.runCommand,
+      spawn: () => fakeDetachedChild(),
+      fetch: async () => {
+        const replacement = new SelfUpdateService({
+          config: fixture.config,
+          store: fixture.store,
+          runningRevision: newerRevision,
+          argv: ["node", "src/server.ts"],
+          environment: {},
+        });
+        await replacement.initialize();
+        return new Response("", { status: 200 });
+      },
+      sleep: async () => undefined,
+      environment: {},
+    });
+
+    expect(git.calls).toContainEqual(["merge", "--ff-only", newerRevision]);
+    await expect(fixture.store.readStatus()).resolves.toMatchObject({ status: "succeeded", targetRevision: newerRevision });
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
@@ -500,7 +566,7 @@ test("failed update observations prefer a newer remote revision", async () => {
             return `${headReads === 1 ? headRevision : targetRevision}\n`;
           case "fetch --no-tags origin refs/heads/main:refs/remotes/origin/main": return "";
           case "rev-parse --verify refs/remotes/origin/main^{commit}": return `${newerRevision}\n`;
-          case "rev-list --count HEAD..refs/remotes/origin/main": return "1\n";
+          case `rev-list --count ${headRevision}..refs/remotes/origin/main`: return "1\n";
           default: throw new Error(`unexpected Git observation: ${command.join(" ")}`);
         }
       },
@@ -515,8 +581,8 @@ test("failed update observations prefer a newer remote revision", async () => {
   }
 });
 
-test("failed update observations retain the target when HEAD already reached it", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-self-update-same-target-observation-"));
+test("failed update observations do not advertise an obsolete operation target", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-self-update-obsolete-target-observation-"));
   try {
     const config = createTestConfig(root);
     const store = new SelfUpdateStore(config.runtimeRoot);
@@ -533,10 +599,10 @@ test("failed update observations retain the target when HEAD already reached it"
           case "symbolic-ref --short HEAD": return "main\n";
           case "remote": return "origin\n";
           case "remote get-url origin": return "https://github.com/meiji-industries/forge.git\n";
-          case "rev-parse --verify HEAD^{commit}": return `${targetRevision}\n`;
+          case "rev-parse --verify HEAD^{commit}": return `${newerRevision}\n`;
           case "fetch --no-tags origin refs/heads/main:refs/remotes/origin/main": return "";
-          case "rev-parse --verify refs/remotes/origin/main^{commit}": return `${targetRevision}\n`;
-          case "rev-list --count HEAD..refs/remotes/origin/main": return "0\n";
+          case "rev-parse --verify refs/remotes/origin/main^{commit}": return `${newerRevision}\n`;
+          case `rev-list --count ${headRevision}..refs/remotes/origin/main`: return "1\n";
           default: throw new Error(`unexpected Git observation: ${command.join(" ")}`);
         }
       },
@@ -544,14 +610,14 @@ test("failed update observations retain the target when HEAD already reached it"
       environment: {},
     });
 
-    await expect(service.readUpdate()).resolves.toMatchObject({ available: true, revision: targetRevision, currentRevision: headRevision, operation: { status: "failed", targetRevision } });
+    await expect(service.readUpdate()).resolves.toMatchObject({ available: true, revision: newerRevision, currentRevision: headRevision, operation: { status: "failed", targetRevision } });
     expect(calls).toContainEqual(["fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("update observations keep the revision of the running server after checkout mutation", async () => {
+test("update observations keep the running revision separate from checkout observation", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-self-update-revision-"));
   try {
     const config = createTestConfig(root);
@@ -563,9 +629,18 @@ test("update observations keep the revision of the running server after checkout
       config,
       store,
       runGit: async (args) => {
-        if (args.join(" ") !== "rev-parse --verify HEAD^{commit}") throw new Error("unexpected observation");
-        revisionReads += 1;
-        return `${revisionReads === 1 ? headRevision : targetRevision}\n`;
+        switch (args.join(" ")) {
+          case "rev-parse --verify HEAD^{commit}":
+            revisionReads += 1;
+            return revisionReads === 1 ? `${headRevision}\n` : `${targetRevision}\n`;
+          case "symbolic-ref --short HEAD": return "main\n";
+          case "remote": return "origin\n";
+          case "remote get-url origin": return "https://github.com/meiji-industries/forge.git\n";
+          case "fetch --no-tags origin refs/heads/main:refs/remotes/origin/main": return "";
+          case "rev-parse --verify refs/remotes/origin/main^{commit}": return `${targetRevision}\n`;
+          case `rev-list --count ${headRevision}..refs/remotes/origin/main`: return "1\n";
+          default: throw new Error(`unexpected observation: ${args.join(" ")}`);
+        }
       },
       argv: ["node", "src/server.ts"],
       environment: {},

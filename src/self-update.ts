@@ -419,10 +419,6 @@ async function inspectRunnerClaim(
   return claim.identity && processIdentityMatches(claim.identity, inspection) ? "live" : claim.identity ? "absent" : "live";
 }
 
-function isRevision(value: string): boolean {
-  return /^[0-9a-f]{40}$/.test(value);
-}
-
 function watchOwnership(argv: readonly string[], execArgv: readonly string[], environment: NodeJS.ProcessEnv, parentInspection?: ProcessInspection): boolean {
   if (environment.FORGE_WATCH_MODE === "1") return true;
   const argumentsToInspect = [...argv, ...execArgv, ...(parentInspection?.argv ?? [])];
@@ -455,7 +451,7 @@ async function updateOperationStatus(
   store: SelfUpdateStore,
   operationId: string,
   now: () => Date,
-  patch: Partial<Pick<UpdateOperationStatus, "status" | "message" | "error">>,
+  patch: Partial<Pick<UpdateOperationStatus, "status" | "targetRevision" | "message" | "error">>,
 ): Promise<UpdateOperationStatus> {
   const current = await store.readStatus();
   if (!current || current.operationId !== operationId) throw operationFailure("Forge could not find the active update operation.", "operation_missing");
@@ -623,7 +619,7 @@ export class SelfUpdateService {
     if (!status || status.status !== "restarting") return;
     try {
       if (this.runningRevision !== status.targetRevision) {
-        await markOperationFailed(this.store, status.operationId, this.now, `Forge started at ${this.runningRevision ?? "an unknown revision"}, not the requested revision ${status.targetRevision}.`);
+        await markOperationFailed(this.store, status.operationId, this.now, `Forge started at ${this.runningRevision ?? "an unknown revision"}, not the selected revision ${status.targetRevision}.`);
         return;
       }
       await this.store.writeStatus(UpdateOperationStatusSchema.parse({
@@ -643,12 +639,13 @@ export class SelfUpdateService {
     const operation = await readStatusForView(this.store, this.now);
     const observed = operation && ACTIVE_OPERATION_STATUSES.has(operation.status)
       ? { available: true, revision: operation.targetRevision }
-      : await inspectUpdateAvailability({ cwd: this.workingDirectory, runGit: this.runGit });
-    const availability = !observed.available && operation?.status === "failed" && isRevision(operation.targetRevision)
-      ? { available: true, revision: operation.targetRevision }
-      : observed;
+      : await inspectUpdateAvailability({
+        cwd: this.workingDirectory,
+        runGit: this.runGit,
+        ...(this.runningRevision ? { currentRevision: this.runningRevision } : {}),
+      });
     return {
-      ...availability,
+      ...observed,
       ...(this.runningRevision ? { currentRevision: this.runningRevision } : {}),
       instanceId: this.instanceId,
       ...(operation ? { operation } : {}),
@@ -757,29 +754,30 @@ async function waitForSpawn(child: ChildProcess): Promise<void> {
 
 async function prepareSelfUpdate(input: {
   cwd: string;
-  targetRevision: string;
   runGit: GitCommand;
   runCommand: SelfUpdateCommand;
+  onRevisionSelected: (revision: string) => Promise<void>;
 }): Promise<void> {
-  const targetRevision = normalizedRevision(input.targetRevision);
   const branch = (await input.runGit(["symbolic-ref", "--short", "HEAD"], input.cwd)).trim();
   if (branch !== "main") throw operationFailure("Forge can update only a checkout on the main branch.", "branch_invalid");
   const remote = await matchingRemote(input.runGit, input.cwd);
   if (!remote) throw operationFailure(`Forge could not find the pinned GitHub remote ${FORGE_REPOSITORY}.`, "remote_invalid");
   const head = await readCurrentRevision({ cwd: input.cwd, runGit: input.runGit });
-  const status = await input.runGit(["status", "--porcelain=v1", "--untracked-files=all"], input.cwd);
-  if (status.trim()) throw operationFailure("Forge refused to update a dirty checkout, including untracked files.", "checkout_dirty");
   await input.runGit(["fetch", "--no-tags", remote, "refs/heads/main:refs/remotes/" + remote + "/main"], input.cwd);
-  const fetchedRevision = requiredCommitRevision(await input.runGit(["rev-parse", "--verify", `refs/remotes/${remote}/main^{commit}`], input.cwd));
-  if (fetchedRevision !== targetRevision) throw operationFailure("Forge refused to update because the requested revision is not the freshly fetched main revision.", "revision_not_remote");
+  const targetRevision = requiredCommitRevision(await input.runGit(["rev-parse", "--verify", `refs/remotes/${remote}/main^{commit}`], input.cwd));
+  await input.onRevisionSelected(targetRevision);
   try {
     await input.runGit(["merge-base", "--is-ancestor", head, targetRevision], input.cwd);
   } catch {
-    throw operationFailure("Forge refused to update because the current commit is not an ancestor of the requested revision.", "checkout_diverged");
+    throw operationFailure("Forge refused to update because the current commit is not an ancestor of the selected revision.", "checkout_diverged");
   }
-  await input.runGit(["merge", "--ff-only", targetRevision], input.cwd);
+  try {
+    await input.runGit(["merge", "--ff-only", targetRevision], input.cwd);
+  } catch (error: unknown) {
+    throw operationFailure(`Forge could not fast-forward to the selected revision. Git reported ${errorText(error)}`, "checkout_merge_failed");
+  }
   const mergedRevision = await readCurrentRevision({ cwd: input.cwd, runGit: input.runGit });
-  if (mergedRevision !== targetRevision) throw operationFailure("Forge could not prove that the checkout reached the requested revision.", "revision_unverified");
+  if (mergedRevision !== targetRevision) throw operationFailure("Forge could not prove that the checkout reached the selected revision.", "revision_unverified");
 
   let result: CommandRunResult;
   try {
@@ -950,7 +948,14 @@ export async function runSelfUpdateOperation(options: SelfUpdateRunnerOptions): 
     if (!claimedStatus || claimedStatus.operationId !== options.operationId || claimedStatus.status === "failed" || claimedStatus.status === "succeeded") return;
     await updateOperationStatus(store, options.operationId, now, { status: "preparing", message: "Forge is checking the update." });
     await assertServerOwnership(payload, processController, payload.ownership === "registry");
-    await prepareSelfUpdate({ cwd: payload.workingDirectory, targetRevision: payload.targetRevision, runGit, runCommand });
+    await prepareSelfUpdate({
+      cwd: payload.workingDirectory,
+      runGit,
+      runCommand,
+      onRevisionSelected: async (targetRevision) => {
+        await updateOperationStatus(store, options.operationId, now, { targetRevision });
+      },
+    });
     await updateOperationStatus(store, options.operationId, now, { status: "restarting", message: "Forge prepared the update and is restarting." });
     await assertServerOwnership(payload, processController, payload.ownership === "registry");
     if (payload.ownership === "registry") {

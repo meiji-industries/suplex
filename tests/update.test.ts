@@ -102,6 +102,18 @@ test("fails closed for an invalid commit count and reports no update when the co
   await expect(inspectUpdateAvailability({ cwd: "/forge", runGit: scriptedGit(current).runGit })).resolves.toEqual({ available: false });
 });
 
+test("compares fetched main with the running revision when checkout HEAD has already advanced", async () => {
+  const responses = availableResponses("https://github.com/meiji-industries/forge");
+  responses["rev-parse --verify HEAD^{commit}"] = new Error("HEAD must not be the comparison base");
+  delete responses["rev-list --count HEAD..refs/remotes/origin/main"];
+  responses[`rev-list --count ${headRevision}..refs/remotes/origin/main`] = "2\n";
+  const { runGit, calls } = scriptedGit(responses);
+
+  await expect(inspectUpdateAvailability({ cwd: "/forge", runGit, currentRevision: headRevision })).resolves.toEqual({ available: true, revision: remoteRevision });
+  expect(calls.filter((call) => call.args[0] === "fetch")).toHaveLength(1);
+  expect(calls.map((call) => call.args)).not.toContainEqual(["rev-parse", "--verify", "HEAD^{commit}"]);
+});
+
 test("the update API requires authentication and returns the typed injected observation", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-update-api-test-"));
   const config = createTestConfig(root, { developmentAutoLogin: true });
@@ -143,7 +155,7 @@ test("the update API advertises a newer remote revision after a failed target", 
         case "rev-parse --verify HEAD^{commit}": return `${remoteRevision}\n`;
         case "fetch --no-tags origin refs/heads/main:refs/remotes/origin/main": return "";
         case "rev-parse --verify refs/remotes/origin/main^{commit}": return `${newerRevision}\n`;
-        case "rev-list --count HEAD..refs/remotes/origin/main": return "1\n";
+        case `rev-list --count ${headRevision}..refs/remotes/origin/main`: return "1\n";
         default: throw new Error(`unexpected Git observation: ${[...args].join(" ")}`);
       }
     },

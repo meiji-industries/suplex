@@ -72,6 +72,7 @@ export interface TaskSession {
   stopRequestedAt: string | null;
   stoppedAt: string | null;
   advisorRole: AdvisorRole | null;
+  delegateSlot?: string | null;
   workflowInput: WorkflowInput | null;
 }
 

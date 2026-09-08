@@ -156,7 +156,7 @@ test("Plan A and Plan B are distinct sessions on the same range, Plan B never se
   await f.finishDelegate(json({ summary: "PLAN-A-UNIQUE-SUMMARY: add a helper module" }));
   expect(JSON.parse(f.store.turns("task").find(turn => turn.sessionId === a.id)!.terminalObservation!)).toMatchObject({ advisor: { role: "planner_a", result: { summary: expect.stringContaining("PLAN-A-UNIQUE") }, invalidReason: null } });
   expect(f.store.get("task").workflowState.reviews).toEqual([]);
-  expect(f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText).toContain("Request Plan B");
+  expect(f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText).toContain("individual planner result");
   await f.controller.delegateAdvisor(f.identity(), { role: "planner_b" });
   const b = f.store.currentSession("task", "worker")!;
   expect(b.id).not.toBe(a.id);
@@ -180,6 +180,206 @@ test("Plan A and Plan B are distinct sessions on the same range, Plan B never se
   const build = f.store.currentSession("task", "worker")!;
   expect(assignmentInput(f, build)).toMatchObject({ kind: "worker", mode: "planned", candidateReports: [{ sessionId: a2.id }, { sessionId: b3.id }], plan: "Combined plan: helper module plus tests" });
   expect(f.store.turns("task").find(turn => turn.sessionId === build.id)!.promptText).toContain("Coordinator plan:\nCombined plan");
+});
+
+test.each([["A", "B"], ["B", "A"]] as const)("delegate_planners dispatches both planners and wakes once when %s completes before %s", async (first, second) => {
+  const f = await fixture("competing_plans");
+  const launched = await f.controller.delegatePlanners(f.identity()) as { planners: Array<{ id: string; advisorRole: string; workflowInput: { range: unknown; plannerPairId: string; evidenceDirectory: string; evidenceSha256: string } }> };
+  expect(launched.planners.map(planner => planner.advisorRole)).toEqual(["planner_a", "planner_b"]);
+  expect(launched.planners[0]!.workflowInput.range).toEqual(launched.planners[1]!.workflowInput.range);
+  expect(launched.planners[0]!.workflowInput.plannerPairId).toBe(launched.planners[1]!.workflowInput.plannerPairId);
+  expect(launched.planners[0]!.workflowInput).toMatchObject({ evidenceDirectory: launched.planners[1]!.workflowInput.evidenceDirectory, evidenceSha256: launched.planners[1]!.workflowInput.evidenceSha256 });
+  const [a, b] = launched.planners;
+  const aSession = f.store.currentDelegates("task").find(session => session.id === a!.id)!;
+  const promptA = f.store.turns("task").find(turn => turn.sessionId === a!.id)!.promptText;
+  const promptB = f.store.turns("task").find(turn => turn.sessionId === b!.id)!.promptText;
+  expect(promptA).not.toContain("Plan B");
+  expect(promptB).not.toContain("Plan A");
+  const aTurn = f.store.pendingTurns(a!.id)[0]!;
+  const bTurn = f.store.pendingTurns(b!.id)[0]!;
+  const dispatched = f.harness.dispatched.filter(turn => turn.messageID === aTurn.id || turn.messageID === bTurn.id);
+  expect(dispatched).toHaveLength(2);
+  expect(f.scopes.filter(scope => scope.role === "advisor").slice(-2)).toMatchObject([{ label: "Plan A", profile: { modelID: "gpt-5.6-nova" } }, { label: "Plan B", profile: { modelID: "gpt-5.6-sol" } }]);
+  const wakes = () => f.store.pendingTurns(f.identity().sessionId);
+  const byRole = { A: { turn: aTurn, text: json({ summary: "A-UNIQUE-FULL-REPORT" }) }, B: { turn: bTurn, text: json({ summary: "B-UNIQUE-FULL-REPORT" }) } };
+  f.harness.finish(byRole[first].turn.id, "completed", byRole[first].text);
+  await f.controller.recover("task");
+  expect(wakes()).toHaveLength(0);
+  f.harness.finish(byRole[second].turn.id, "completed", byRole[second].text);
+  await f.controller.recover("task");
+  expect(wakes()).toHaveLength(1);
+  expect(wakes()[0]!.promptText).toContain(a!.id);
+  expect(wakes()[0]!.promptText).toContain(b!.id);
+  expect(wakes()[0]!.promptText).toContain("A-UNIQUE-FULL-REPORT");
+  expect(wakes()[0]!.promptText).toContain("B-UNIQUE-FULL-REPORT");
+  const completedATurn = f.store.turns("task").find(turn => turn.id === aTurn.id)!;
+  await expect(f.controller.recordWorkerResult({ taskId: "task", sessionId: a!.id, generation: aSession.generation, receiptId: completedATurn.resultReceiptId!, observation: completedATurn.terminalObservation! })).resolves.toBeUndefined();
+  await f.controller.recover("task");
+  expect(wakes()).toHaveLength(1);
+});
+
+test("a settled pair can be followed by a new pair after the source changes", async () => {
+  const f = await fixture("competing_plans");
+  await f.controller.delegatePlanners(f.identity());
+  const first = f.store.currentDelegates("task");
+  for (const session of first) { f.harness.finish(f.store.pendingTurns(session.id)[0]!.id, "completed", json({ summary: session.advisorRole! })); await f.controller.recover("task"); }
+  await f.commit("moved.txt");
+  await f.controller.delegatePlanners(f.identity());
+  expect(f.store.currentDelegates("task").map(session => session.id)).not.toEqual(first.map(session => session.id));
+  expect(f.store.turns("task").filter(turn => first.some(session => session.id === turn.sessionId) && turn.status === "completed")).toHaveLength(2);
+});
+
+test("a valid paired Plan A and an individual Plan B retry can build", async () => {
+  const f = await fixture("competing_plans");
+  await f.controller.delegatePlanners(f.identity());
+  const [a, b] = f.store.currentDelegates("task");
+  f.harness.finish(f.store.pendingTurns(a!.id)[0]!.id, "completed", json({ summary: "A valid" })); await f.controller.recover("task");
+  f.harness.finish(f.store.pendingTurns(b!.id)[0]!.id, "completed", "bad"); await f.controller.recover("task");
+  await expect(f.controller.delegateWorker(f.identity(), { plan: "x", acceptanceCriteria: ["x"], instruction: "x", candidateSessionIds: [a!.id, b!.id] })).rejects.toThrow("Plan B");
+  await f.controller.delegateAdvisor(f.identity(), { role: "planner_b" });
+  const retry = f.store.currentSession("task", "worker")!;
+  await f.finishDelegate(json({ summary: "B retry" }));
+  await expect(f.controller.delegateWorker(f.identity(), { plan: "x", acceptanceCriteria: ["x"], instruction: "x", candidateSessionIds: [a!.id, retry.id] })).resolves.toBeTruthy();
+});
+
+test("planner evidence preserves verification source proof, tools, and missing-tool fallback", async () => {
+  const f = await fixture("competing_plans");
+  await f.controller.delegateWorker(f.identity(), { plan: "verify", purpose: "verification", acceptanceCriteria: ["pnpm test passes"], instruction: "Run pnpm test" });
+  const verified = f.store.currentSession("task", "worker")!;
+  const verifiedTurn = f.store.pendingTurns(verified.id)[0]!;
+  f.harness.evidence.set(verifiedTurn.id, { tools: [{ id: "verify:1", name: "bash", status: "completed", input: { command: "pnpm test" }, output: "3 passed", error: null }], limit: "tool output truncated" });
+  await f.finishDelegate("pnpm test passed.");
+  expect(f.store.currentSession("task", "worker")).toMatchObject({ id: verified.id, lifecycle: "live", stopRequestedAt: null });
+
+  await f.controller.delegateWorker(f.identity(), { plan: "verify again", purpose: "verification", acceptanceCriteria: ["pnpm test passes"], instruction: "Run pnpm test again" });
+  const missing = f.store.currentSession("task", "worker")!;
+  const missingTurnId = f.store.pendingTurns(missing.id)[0]!.id;
+  await f.finishDelegate("pnpm test passed again.");
+  const missingTurn = f.store.turns("task").find(turn => turn.id === missingTurnId)!;
+  expect(missingTurn.id).not.toBe(verifiedTurn.id);
+  const missingObservation = JSON.parse(missingTurn.terminalObservation!);
+  delete missingObservation.tools;
+  delete missingObservation.toolsLimit;
+  f.database.authQuery(db => db.prepare("UPDATE forge_task_turns SET terminal_observation = ? WHERE id = ?").run(JSON.stringify(missingObservation), missingTurn.id));
+
+  const launched = await f.controller.delegatePlanners(f.identity()) as { evidenceDirectory: string };
+  const observed = await f.controller.observe(f.identity());
+  expect(JSON.stringify(observed)).toContain(`\"operation\":\"read_worker_evidence\"`);
+  expect(JSON.stringify(observed)).not.toContain("3 passed");
+  const verification = JSON.parse(await readFile(join(launched.evidenceDirectory, "verification.json"), "utf8")) as { configuration: { verificationCommand: string }; pullRequestChecks: unknown; workerTurns: Array<{ turnId: string; sessionId: string; tools: unknown[] | null; limit: string | null; verificationRange: { valid: boolean } | null; sourceRangeProof: string }> };
+  const valid = verification.workerTurns.find(turn => turn.turnId === verifiedTurn.id)!;
+  const fallback = verification.workerTurns.find(turn => turn.turnId === missingTurn.id)!;
+  expect(verification.configuration.verificationCommand).toBe("");
+  expect(verification.pullRequestChecks).toBeNull();
+  expect(valid).toMatchObject({ tools: [{ name: "bash", output: "3 passed" }], limit: "tool output truncated", verificationRange: { valid: true }, sourceRangeProof: "valid" });
+  expect(fallback).toMatchObject({ tools: null, limit: "Native tool evidence was not captured for this turn", verificationRange: { valid: true }, sourceRangeProof: "valid" });
+});
+
+test("active pair rejects overlap and cancellation fences both planners", async () => {
+  const f = await fixture("competing_plans");
+  await f.controller.delegatePlanners(f.identity());
+  const pair = f.store.currentDelegates("task");
+  await expect(f.controller.delegatePlanners(f.identity())).rejects.toThrow("worker_already_assigned");
+  await expect(f.controller.delegateAdvisor(f.identity(), { role: "planner_a" })).rejects.toThrow("worker_already_assigned");
+  await expect(f.controller.delegateWorker(f.identity(), { plan: "x", purpose: "verification", acceptanceCriteria: ["x"], instruction: "x" })).rejects.toThrow("worker_already_assigned");
+  await f.controller.cancel("task");
+  expect(f.harness.stopped).toEqual(expect.arrayContaining(pair.map(session => session.nativeSessionId)));
+  await expect(f.controller.recordWorkerResult({ taskId: "task", sessionId: pair[0]!.id, generation: pair[0]!.generation, receiptId: "late", observation: "late" })).rejects.toThrow("stale_generation");
+});
+
+test("planner reservations and admitted sibling turns survive controller reconstruction", async () => {
+  const f = await fixture("competing_plans");
+  const ensure = f.harness.ensureSession.bind(f.harness);
+  f.harness.ensureSession = async (scope, nativeSessionId) => {
+    if (scope.role === "advisor") throw new Error("native session unavailable");
+    return ensure(scope, nativeSessionId);
+  };
+  const reserved = await f.controller.delegatePlanners(f.identity()) as { planners: Array<{ id: string }>; launches: string[] };
+  expect(reserved.launches).toEqual(["rejected", "rejected"]);
+  const ids = reserved.planners.map(planner => planner.id);
+  f.harness.ensureSession = ensure;
+  const database = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
+  cleanups.push(async () => database.close());
+  const store = new TaskControlStore(database, async () => ({ kind: "running", startTime: "test-process" }));
+  const restarted = new RootController(store, f.harness, f.delivery, f.artifacts, { root: join(f.directory, "evidence") });
+  await restarted.recover("task");
+  expect(store.currentDelegates("task").map(session => session.id)).toEqual(ids);
+  for (const id of ids) expect(f.harness.dispatched.filter(intent => intent.messageID === store.pendingTurns(id)[0]!.id)).toHaveLength(1);
+
+  const [a, b] = store.currentDelegates("task");
+  const aTurn = store.pendingTurns(a!.id)[0]!;
+  const bTurn = store.pendingTurns(b!.id)[0]!;
+  f.harness.finish(aTurn.id, "completed", json({ summary: "A survives restart" }));
+  await restarted.recover("task");
+  const afterA = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
+  cleanups.push(async () => afterA.close());
+  const afterAStore = new TaskControlStore(afterA, async () => ({ kind: "running", startTime: "test-process" }));
+  const afterAController = new RootController(afterAStore, f.harness, f.delivery, f.artifacts, { root: join(f.directory, "evidence") });
+  await afterAController.recover("task");
+  expect(f.harness.dispatched.filter(intent => intent.messageID === bTurn.id)).toHaveLength(1);
+  f.harness.finish(bTurn.id, "completed", json({ summary: "B survives restart" }));
+  await afterAController.recover("task");
+  const root = afterAStore.currentSession("task", "root")!;
+  expect(afterAStore.pendingTurns(root.id)).toHaveLength(1);
+  expect(afterAStore.pendingTurns(root.id)[0]!.promptText).toContain("A survives restart");
+  expect(afterAStore.pendingTurns(root.id)[0]!.promptText).toContain("B survives restart");
+});
+
+test("planner launch failure and lost acknowledgement recover without replaying admitted prompts", async () => {
+  const f = await fixture("competing_plans");
+  const ensure = f.harness.ensureSession.bind(f.harness);
+  let failPlanA = true;
+  f.harness.ensureSession = async (scope, nativeSessionId) => {
+    if (scope.role === "advisor" && scope.label === "Plan A" && failPlanA) {
+      failPlanA = false;
+      throw new Error("Plan A native session unavailable");
+    }
+    return ensure(scope, nativeSessionId);
+  };
+  await f.controller.delegatePlanners(f.identity());
+  const [a, b] = f.store.currentDelegates("task");
+  const aTurn = f.store.pendingTurns(a!.id)[0]!;
+  const bTurn = f.store.pendingTurns(b!.id)[0]!;
+  expect(f.harness.dispatched.filter(intent => intent.messageID === bTurn.id)).toHaveLength(1);
+  expect(f.harness.dispatched.filter(intent => intent.messageID === aTurn.id)).toHaveLength(0);
+  await f.controller.recover("task");
+  expect(f.harness.dispatched.filter(intent => intent.messageID === aTurn.id)).toHaveLength(1);
+  f.harness.finish(aTurn.id, "completed", json({ summary: "A retry" }));
+  f.harness.finish(bTurn.id, "completed", json({ summary: "B first try" }));
+  await f.controller.recover("task");
+  expect(f.store.pendingTurns(f.identity().sessionId)).toHaveLength(1);
+
+  const lost = await fixture("competing_plans");
+  lost.harness.loseAcknowledgement = true;
+  await lost.controller.delegatePlanners(lost.identity());
+  const turns = lost.store.currentDelegates("task").map(session => lost.store.pendingTurns(session.id)[0]!);
+  expect(lost.harness.dispatched.filter(intent => turns.some(turn => turn.id === intent.messageID))).toHaveLength(2);
+  lost.harness.loseAcknowledgement = false;
+  await lost.controller.recover("task");
+  expect(lost.harness.dispatched.filter(intent => turns.some(turn => turn.id === intent.messageID))).toHaveLength(2);
+});
+
+test("two invalid planner rounds require an answer before batch or individual retries", async () => {
+  const f = await fixture("competing_plans");
+  for (let round = 0; round < 2; round += 1) {
+    await f.controller.delegatePlanners(f.identity());
+    for (const session of f.store.currentDelegates("task")) {
+      f.harness.finish(f.store.pendingTurns(session.id)[0]!.id, "completed", "not a report");
+      await f.controller.recover("task");
+    }
+  }
+  expect(await f.controller.delegatePlanners(f.identity())).toMatchObject({ asked: true });
+  f.store.answerHuman("task", f.store.get("task").humanQuestionId!, "Retry the planners");
+  await expect(f.controller.delegatePlanners(f.identity())).resolves.toMatchObject({ planners: expect.any(Array) });
+
+  const individual = await fixture("competing_plans");
+  for (let round = 0; round < 2; round += 1) {
+    await individual.controller.delegateAdvisor(individual.identity(), { role: "planner_a" });
+    await individual.finishDelegate("not a report");
+  }
+  expect(await individual.controller.delegateAdvisor(individual.identity(), { role: "planner_a" })).toMatchObject({ asked: true });
+  individual.store.answerHuman("task", individual.store.get("task").humanQuestionId!, "Retry Plan A");
+  await expect(individual.controller.delegateAdvisor(individual.identity(), { role: "planner_a" })).resolves.toMatchObject({ advisor: expect.any(Object) });
 });
 
 test("each Planner role reuses its own native conversation and pane", async () => {

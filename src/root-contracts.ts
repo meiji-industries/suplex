@@ -70,12 +70,15 @@ export const AdvisorRequestSchema = z.object({
 }).strict();
 export type AdvisorRequest = z.infer<typeof AdvisorRequestSchema>;
 
+export const DelegatePlannersRequestSchema = z.object({ kind: z.literal("delegate_planners") }).strict();
+
 export const RootToolSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("observe") }).strict(),
   z.object({ kind: z.literal("read_image"), artifactId: opaqueId }).strict(),
   z.object({ kind: z.literal("read_worker_evidence"), turnId: opaqueId, cursor: z.string().regex(/^\d+:\d+:\d+$/).optional(), maxCharacters: z.number().int().min(1_000).max(20_000).optional() }).strict(),
   WorkerAssignmentShape.extend({ kind: z.literal("delegate_worker") }).strict().refine(plannedNeedsPlan, "A planned assignment requires the Coordinator's plan"),
   AdvisorRequestSchema.extend({ kind: z.literal("delegate_advisor") }).strict(),
+  DelegatePlannersRequestSchema,
   z.object({ kind: z.literal("request_delivery"), operation: DeliveryOperationSchema, expectedHead: z.string().min(1).optional(), review: DeliveryReviewSchema.optional(), pullRequestTitle: PullRequestTitleSchema.optional().describe("For pull request creation, use concise action-oriented wording based on the final reviewed diff. Do not copy task prose or a commit message."), pullRequestBody: PullRequestBodySchema.optional().describe("For pull request creation, markdown with exactly these headings in order: ## Summary (bullets of what changed), ## Why (the motivation), ## Validation (bullets of checks run and their results), ## Review notes (what a reviewer should look at). Base it on the final reviewed diff; do not copy task prose.") }).strict(),
   z.object({ kind: z.literal("ask_human"), question: z.string().min(1), options: RecommendedQuestionOptionsSchema }).strict(),
 ]);

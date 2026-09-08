@@ -11,7 +11,7 @@ import { createOpenCodeMessageID } from "./opencode-session.js";
 import { TaskConfigurationSchema } from "./task-contracts.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt, type PullRequestReference } from "./task-control.js";
 import { DeliveryIntentSchema, PullRequestReferenceSchema, TaskControlStatusSchema, TaskProfileSchema, TaskSessionKindSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, WorktreeReferenceSchema, type DeliveryIntent, type TaskControl, type TaskProfile, type TaskSession, type TaskSessionKind, type TaskTurn, type WorktreeReference } from "./task-control.js";
-import { AdvisorRoleSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
+import { AdvisorRoleSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, turnOutcome, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
 import { STANDARD_WORKER_RESULT_WAKE, workerAssignmentPreamble } from "./workflow-prompts.js";
 
 const now = (): string => new Date().toISOString();
@@ -49,7 +49,7 @@ function session(row: Row): TaskSession {
   const id = text(row, "id"); const taskId = text(row, "task_id");
   if (!id || !taskId) throw new Error("Invalid persisted task session");
   const launchOwnerPid = row.launch_owner_pid === null || row.launch_owner_pid === undefined ? null : integer(row, "launch_owner_pid");
-  return { id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), launchOwner: text(row, "launch_owner"), launchOwnerPid, launchOwnerStartTime: text(row, "launch_owner_start_time"), stopRequestedAt: text(row, "stop_requested_at"), stoppedAt: text(row, "stopped_at"), advisorRole: text(row, "advisor_role") === null ? null : AdvisorRoleSchema.parse(text(row, "advisor_role")), workflowInput: parseJson(text(row, "workflow_input_json"), WorkflowInputSchema) };
+  return { id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), launchOwner: text(row, "launch_owner"), launchOwnerPid, launchOwnerStartTime: text(row, "launch_owner_start_time"), stopRequestedAt: text(row, "stop_requested_at"), stoppedAt: text(row, "stopped_at"), advisorRole: text(row, "advisor_role") === null ? null : AdvisorRoleSchema.parse(text(row, "advisor_role")), delegateSlot: text(row, "delegate_slot"), workflowInput: parseJson(text(row, "workflow_input_json"), WorkflowInputSchema) };
 }
 function turn(row: Row): TaskTurn {
   const id = text(row, "id"); const taskId = text(row, "task_id"); const sessionId = text(row, "session_id"); const promptHash = text(row, "prompt_hash"); const promptText = text(row, "prompt_text");
@@ -129,7 +129,21 @@ export class TaskControlStore {
     });
   }
   currentSession(taskId: string, kind: TaskSessionKind): TaskSession | null {
-    return this.database.authQuery((db) => { const row = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = ? AND is_current = 1").get(taskId, kind) as Row | undefined; return row ? session(row) : null; });
+    return this.database.authQuery((db) => {
+      if (kind === "worker") {
+        const pointed = db.prepare("SELECT s.* FROM forge_task_controls c JOIN forge_task_sessions s ON s.id = c.worker_session_id WHERE c.task_id = ? AND s.is_current = 1").get(taskId) as Row | undefined;
+        const row = pointed ?? db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND is_current = 1 ORDER BY created_at, id LIMIT 1").get(taskId) as Row | undefined;
+        return row ? session(row) : null;
+      }
+      const row = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = ? AND is_current = 1").get(taskId, kind) as Row | undefined;
+      return row ? session(row) : null;
+    });
+  }
+  currentDelegates(taskId: string): TaskSession[] {
+    return this.database.authQuery(db => (db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND is_current = 1 ORDER BY CASE delegate_slot WHEN 'planner_a' THEN 0 WHEN 'planner_b' THEN 1 ELSE 2 END, created_at, id").all(taskId) as Row[]).map(session));
+  }
+  currentSessionByIdentity(sessionId: string, generation: number): TaskSession | null {
+    return this.database.authQuery(db => { const row = db.prepare("SELECT * FROM forge_task_sessions WHERE id = ? AND generation = ? AND is_current = 1").get(sessionId, generation) as Row | undefined; return row ? session(row) : null; });
   }
   sessions(taskId: string): TaskSession[] {
     return this.database.authQuery(db => (db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? ORDER BY created_at, id").all(taskId) as Row[]).map(session));
@@ -209,20 +223,22 @@ export class TaskControlStore {
   claimRoot(input: { taskId: string }): TaskSession {
     return this.claim(input.taskId);
   }
-  /** Claims the delegated slot for a role conversation and appends its immutable assignment turn. */
+  /** Launches one serial delegate. Combined planning uses launchPlannerPair to reserve both roles atomically. */
   launchWorker(input: { taskId: string; rootSessionId: string; rootGeneration: number } & ({ instruction: string; workflowInput?: Extract<WorkflowInput, { kind: "worker" }> } | { advisor: { role: AdvisorRole; prompt: string; input: Extract<WorkflowInput, { kind: "advisor" }> } })): TaskSession {
     const time = now();
-    const advisor = "advisor" in input ? input.advisor : null;
+      const advisor = "advisor" in input ? input.advisor : null;
     const worker = "advisor" in input ? null : input;
-    const workflowInput: WorkflowInput | null = advisor ? advisor.input : worker?.workflowInput ?? null;
+      const workflowInput: WorkflowInput | null = advisor ? advisor.input : worker?.workflowInput ?? null;
+      const delegateSlot = advisor?.role === "planner_a" || advisor?.role === "planner_b" ? advisor.role : "delegate";
     const promptText = advisor ? advisor.prompt : `${workerAssignmentPreamble(worker?.workflowInput?.mode ?? "planned", worker?.workflowInput?.purpose ?? "implementation")}\n\nAssignment:\n${worker?.instruction ?? ""}`;
     const assignmentHash = hash(advisor ? advisor.prompt : worker?.instruction ?? "");
     if (workflowInput) WorkflowInputSchema.parse(workflowInput);
     return this.database.authTransaction((db) => {
-      const task = db.prepare("SELECT status FROM forge_task_controls WHERE task_id = ?").get(input.taskId) as Row | undefined;
+      const task = db.prepare("SELECT status, workflow FROM forge_task_controls WHERE task_id = ?").get(input.taskId) as Row | undefined;
       const root = db.prepare("SELECT * FROM forge_task_sessions WHERE id = ? AND task_id = ? AND kind = 'root' AND is_current = 1 AND generation = ?").get(input.rootSessionId, input.taskId, input.rootGeneration) as Row | undefined;
       if (!task || TaskControlStatusSchema.parse(text(task, "status")) !== "active" || !root || TaskSessionLifecycleSchema.parse(text(root, "lifecycle")) === "cancelled") throw new Error("root_identity_mismatch");
-      const current = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND is_current = 1").get(input.taskId) as Row | undefined;
+      if (db.prepare("SELECT 1 FROM forge_task_sessions s JOIN forge_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ? AND s.kind = 'worker' AND s.is_current = 1 AND t.status IN ('pending_prompt', 'prompted', 'unknown')").get(input.taskId)) throw new Error("worker_already_assigned");
+      const current = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND delegate_slot = ? AND is_current = 1").get(input.taskId, delegateSlot) as Row | undefined;
       if (current) {
         const activeTurn = db.prepare("SELECT 1 FROM forge_task_turns WHERE session_id = ? AND generation = ? AND status IN ('pending_prompt', 'prompted', 'unknown') LIMIT 1").get(text(current, "id"), integer(current, "generation"));
         const stopInProgress = text(current, "stop_requested_at") !== null && text(current, "stopped_at") === null;
@@ -243,11 +259,34 @@ export class TaskControlStore {
         if (changed !== 1) throw new Error("worker_already_assigned");
       } else {
         if (current) db.prepare("UPDATE forge_task_sessions SET is_current = 0, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1").run(time, text(current, "id"), integer(current, "generation"));
-        db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, native_session_id, lifecycle, assignment_hash, advisor_role, workflow_input_json, created_at, updated_at) VALUES (?, ?, 'worker', ?, 1, NULL, NULL, 'reserved', ?, ?, ?, ?, ?)").run(id, input.taskId, generation, assignmentHash, advisor?.role ?? null, workflowInput ? JSON.stringify(workflowInput) : null, time, time);
+        db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, native_session_id, lifecycle, assignment_hash, advisor_role, delegate_slot, workflow_input_json, created_at, updated_at) VALUES (?, ?, 'worker', ?, 1, NULL, NULL, 'reserved', ?, ?, ?, ?, ?, ?)").run(id, input.taskId, generation, assignmentHash, advisor?.role ?? null, delegateSlot, workflowInput ? JSON.stringify(workflowInput) : null, time, time);
       }
       db.prepare("UPDATE forge_task_controls SET worker_session_id = ?, updated_at = ? WHERE task_id = ? AND status = 'active'").run(id, time, input.taskId);
       db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, workflow_input_json, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_prompt', NULL, NULL, ?, ?, NULL, NULL, ?)").run(createOpenCodeMessageID(), input.taskId, id, generation, assignmentHash, hash(promptText), promptText, workflowInput ? JSON.stringify(workflowInput) : null, time, time);
       return session(db.prepare("SELECT * FROM forge_task_sessions WHERE id = ?").get(id) as Row);
+    });
+  }
+  launchPlannerPair(input: { taskId: string; rootSessionId: string; rootGeneration: number; pairId: string; planners: readonly [{ role: "planner_a"; prompt: string; input: Extract<WorkflowInput, { kind: "advisor" }> }, { role: "planner_b"; prompt: string; input: Extract<WorkflowInput, { kind: "advisor" }> }] }): [TaskSession, TaskSession] {
+    const time = now();
+    for (const planner of input.planners) WorkflowInputSchema.parse(planner.input);
+    return this.database.authTransaction(db => {
+      const task = db.prepare("SELECT status, workflow FROM forge_task_controls WHERE task_id = ?").get(input.taskId) as Row | undefined;
+      const root = db.prepare("SELECT * FROM forge_task_sessions WHERE id = ? AND task_id = ? AND kind = 'root' AND is_current = 1 AND generation = ?").get(input.rootSessionId, input.taskId, input.rootGeneration) as Row | undefined;
+      if (!task || TaskControlStatusSchema.parse(text(task, "status")) !== "active" || !root || TaskSessionLifecycleSchema.parse(text(root, "lifecycle")) === "cancelled") throw new Error("root_identity_mismatch");
+      if (WorkflowIdSchema.parse(text(task, "workflow") ?? "standard") !== "competing_plans") throw new Error("planner_pair_requires_combined_workflow");
+      const [a, b] = input.planners;
+      if (a.role !== "planner_a" || b.role !== "planner_b" || a.input.role !== a.role || b.input.role !== b.role || a.input.plannerPairId !== input.pairId || b.input.plannerPairId !== input.pairId || !sameRange(a.input.range, b.input.range) || a.input.evidenceDirectory !== b.input.evidenceDirectory || a.input.evidenceSha256 !== b.input.evidenceSha256) throw new Error("invalid_planner_pair");
+      if (db.prepare("SELECT 1 FROM forge_task_sessions s WHERE s.task_id = ? AND s.kind = 'worker' AND s.is_current = 1 AND (s.launch_owner IS NOT NULL AND s.stopped_at IS NULL OR s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL OR EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = s.id AND t.generation = s.generation AND t.status IN ('pending_prompt', 'prompted', 'unknown')))").get(input.taskId)) throw new Error("worker_already_assigned");
+      db.prepare("UPDATE forge_task_sessions SET is_current = 0, updated_at = ? WHERE task_id = ? AND kind = 'worker' AND is_current = 1 AND delegate_slot IN ('planner_a', 'planner_b')").run(time, input.taskId);
+      const latest = db.prepare("SELECT COALESCE(MAX(generation), 0) AS generation FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker'").get(input.taskId) as Row;
+      const sessions = input.planners.map((planner, index) => {
+        const id = randomUUID(); const generation = integer(latest, "generation") + index + 1;
+        db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, native_session_id, lifecycle, assignment_hash, advisor_role, delegate_slot, workflow_input_json, created_at, updated_at) VALUES (?, ?, 'worker', ?, 1, NULL, NULL, 'reserved', ?, ?, ?, ?, ?, ?)").run(id, input.taskId, generation, hash(planner.prompt), planner.role, planner.role, JSON.stringify(planner.input), time, time);
+        db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_prompt', NULL, NULL, ?, NULL, NULL, ?)").run(createOpenCodeMessageID(), input.taskId, id, generation, hash(planner.prompt), hash(planner.prompt), planner.prompt, time, time);
+        return session(db.prepare("SELECT * FROM forge_task_sessions WHERE id = ?").get(id) as Row);
+      }) as [TaskSession, TaskSession];
+      db.prepare("UPDATE forge_task_controls SET worker_session_id = ?, updated_at = ? WHERE task_id = ? AND status = 'active'").run(sessions[0].id, time, input.taskId);
+      return sessions;
     });
   }
   private claim(taskId: string): TaskSession {
@@ -273,7 +312,7 @@ export class TaskControlStore {
   markPrompted(input: { turnId: string; generation: number }): void { if (this.database.authTransaction((db) => db.prepare("UPDATE forge_task_turns SET status = 'prompted', prompted_at = ?, updated_at = ? WHERE id = ? AND generation = ? AND status IN ('pending_prompt', 'unknown') AND EXISTS (SELECT 1 FROM forge_task_sessions session WHERE session.id = forge_task_turns.session_id AND session.is_current = 1 AND session.generation = forge_task_turns.generation)").run(now(), now(), input.turnId, input.generation).changes) !== 1) throw new Error("stale_turn"); }
   pendingTurns(sessionId: string): TaskTurn[] { return this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_task_turns WHERE session_id = ? AND status IN ('pending_prompt', 'unknown', 'prompted') ORDER BY created_at, id").all(sessionId) as Row[]).map(turn)); }
   /** Completes the delegate turn, appends a Reviewer/Rater record from its immutable turn input, and wakes Coordinator once. */
-  recordWorkerResultAndWake(input: { taskId: string; sessionId: string; generation: number; receiptId: string; observation: string; nativeTurnId?: string; review?: { result: ReviewerResult | RaterResult | null; invalidReason: string | null }; wakePrompt?: string }): { kind: "recorded"; wake: TaskTurn } | { kind: "duplicate" } {
+  recordWorkerResultAndWake(input: { taskId: string; sessionId: string; generation: number; receiptId: string; observation: string; nativeTurnId?: string; review?: { result: ReviewerResult | RaterResult | null; invalidReason: string | null }; wakePrompt?: string }): { kind: "recorded"; wake: TaskTurn | null } | { kind: "duplicate" } {
     return this.database.authTransaction((db) => {
       const workerTurn = db.prepare("SELECT * FROM forge_task_turns WHERE task_id = ? AND session_id = ? AND generation = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.sessionId, input.generation) as Row | undefined;
       const workerRow = db.prepare("SELECT * FROM forge_task_sessions WHERE id = ? AND kind = 'worker' AND is_current = 1 AND generation = ? AND lifecycle <> 'cancelled'").get(input.sessionId, input.generation) as Row | undefined;
@@ -282,7 +321,7 @@ export class TaskControlStore {
       const worker = session(workerRow);
       const root = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'root' AND is_current = 1").get(input.taskId) as Row | undefined;
       if (!root) throw new Error("root_notification_unavailable");
-      const time = now(); const wakeId = createOpenCodeMessageID(); const promptText = input.wakePrompt ?? `Worker result receipt ${input.receiptId}. ${STANDARD_WORKER_RESULT_WAKE}\n\n${input.observation}`; const promptHash = hash(promptText);
+      const time = now();
       db.prepare("UPDATE forge_task_turns SET status = 'completed', result_receipt_id = ?, terminal_observation = ?, native_turn_id = ?, completed_at = ?, updated_at = ? WHERE id = ?").run(input.receiptId, input.observation, input.nativeTurnId ?? null, time, time, text(workerTurn, "id"));
       const workflowInput = parseJson(text(workerTurn, "workflow_input_json"), WorkflowInputSchema) ?? worker.workflowInput;
       if ((worker.advisorRole === "reviewer" || worker.advisorRole === "rater") && workflowInput?.kind === "advisor") {
@@ -293,6 +332,22 @@ export class TaskControlStore {
         state.reviews.push({ sessionId: worker.id, turnId: text(workerTurn, "id")!, role, range: workflowInput.range, result, invalidReason: result ? null : review.invalidReason ?? "The Advisor result does not match its role", recordedAt: time } as WorkflowState["reviews"][number]);
         this.writeWorkflowState(db, input.taskId, state);
       }
+      const pairId = workflowInput?.kind === "advisor" ? workflowInput.plannerPairId : undefined;
+      if (pairId) {
+        db.prepare("UPDATE forge_task_sessions SET lifecycle = 'stopped', stop_requested_at = ?, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1").run(time, time, input.sessionId, input.generation);
+        const pair = (db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND is_current = 1 AND json_extract(workflow_input_json, '$.plannerPairId') = ? ORDER BY CASE advisor_role WHEN 'planner_a' THEN 0 ELSE 1 END").all(input.taskId, pairId) as Row[]).map(session);
+        const complete = pair.length === 2 && pair.every(member => db.prepare("SELECT 1 FROM forge_task_turns WHERE session_id = ? AND generation = ? AND status = 'completed'").get(member.id, member.generation));
+        if (!complete) return { kind: "recorded", wake: null };
+        const reports = pair.map(member => ({ id: member.id, role: member.advisorRole, observation: db.prepare("SELECT terminal_observation FROM forge_task_turns WHERE session_id = ? AND generation = ? AND status = 'completed'").get(member.id, member.generation) as Row })).map(({ id, role, observation }) => ({ id, role, observation: text(observation, "terminal_observation") }));
+        const valid = reports.every(report => turnOutcome(report.observation).advisor?.result !== null && turnOutcome(report.observation).advisor?.result !== undefined);
+        const next = valid ? "Both reports are valid. Reconcile them into one plan, then delegate Worker with those IDs." : "One or both reports are invalid. Retry only each invalid planner role with delegate_advisor, then reconcile a valid Plan A and Plan B. Do not delegate Worker until both reports are valid.";
+        const promptText = `Combined planning pair ${pairId} completed. Plan A session ${reports[0]!.id} and Plan B session ${reports[1]!.id} are ordered candidateSessionIds. Read both full observations and their validation outcomes. ${next}\n\nPlan A:\n${reports[0]!.observation}\n\nPlan B:\n${reports[1]!.observation}`;
+        const wakeId = createOpenCodeMessageID();
+        db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending_prompt', NULL, NULL, ?, NULL, NULL, ?)").run(wakeId, input.taskId, text(root, "id"), integer(root, "generation"), hash(promptText), promptText, time, time);
+        db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ?").run(time, time, input.taskId);
+        return { kind: "recorded", wake: turn(db.prepare("SELECT * FROM forge_task_turns WHERE id = ?").get(wakeId) as Row) };
+      }
+      const wakeId = createOpenCodeMessageID(); const promptText = input.wakePrompt ?? `Worker result receipt ${input.receiptId}. ${STANDARD_WORKER_RESULT_WAKE}\n\n${input.observation}`; const promptHash = hash(promptText);
       db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending_prompt', NULL, NULL, ?, NULL, NULL, ?)").run(wakeId, input.taskId, text(root, "id"), integer(root, "generation"), promptHash, promptText, time, time);
       db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ?").run(time, time, input.taskId);
       return { kind: "recorded", wake: turn(db.prepare("SELECT * FROM forge_task_turns WHERE id = ?").get(wakeId) as Row) };

@@ -1,6 +1,6 @@
 import { runCommand } from "./command-runner.js";
 import type { HumanQuestionOptions } from "./human-question.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { ArtifactStore } from "./artifacts.js";
 import { DeliveryOperationFailure, DeliveryOperations } from "./delivery-operations.js";
@@ -79,10 +79,14 @@ export class RootController implements RootBridgeAdapter {
     const control = this.store.get(root.taskId);
     const pullRequest = await this.delivery.observe(root.taskId);
     const worktree = control.worktree ? await observeWorktree(control.worktree.path) : null;
+    const workers = this.store.currentDelegates(root.taskId);
     const worker = this.store.currentSession(root.taskId, "worker");
-    const workerTurn = worker ? this.store.turns(root.taskId).filter(turn => turn.sessionId === worker.id && turn.status === "completed").at(-1) : undefined;
-    const workerResult = workerTurn ? summarizeWorkerObservation(workerTurn) : null;
-    return { control: { ...this.store.get(root.taskId), workflowState: publicWorkflowState(this.store.get(root.taskId).workflowState) }, context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, workerResult, worktree, pullRequest };
+    const results = Object.fromEntries(workers.map(session => {
+      const turn = this.store.turns(root.taskId).filter(candidate => candidate.sessionId === session.id && candidate.status === "completed").at(-1);
+      return [session.id, turn ? summarizeWorkerObservation(turn) : null];
+    }));
+    const workerResult = worker ? results[worker.id] ?? null : null;
+    return { control: { ...this.store.get(root.taskId), workflowState: publicWorkflowState(this.store.get(root.taskId).workflowState) }, context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, workerResult, workers, results, worktree, pullRequest };
   }
 
   async readWorkerEvidence(root: RootIdentity, turnId: string, cursor?: string, maxCharacters = 12_000) {
@@ -185,19 +189,7 @@ export class RootController implements RootBridgeAdapter {
     if (request.role === "reviewer" && !request.brief) throw new Error("Reviewer requires a brief with your plan and acceptance criteria.");
     const sessions = this.store.sessions(root.taskId);
     const turns = this.store.turns(root.taskId);
-    // Two consecutive invalid reports since the last human answer become a question instead of another loop.
-    const answerFromEnd = [...turns].reverse().findIndex(turn => turn.sessionId === root.sessionId && isHumanAnswer(turn.promptText));
-    const lastAnswer = answerFromEnd === -1 ? -1 : turns.length - 1 - answerFromEnd;
-    const attempts = turns.slice(lastAnswer + 1).filter(turn => turn.status === "completed" && sessions.find(session => session.id === turn.sessionId)?.advisorRole === request.role).slice(-2);
-    if (attempts.length === 2 && attempts.every(turn => turnOutcome(turn.terminalObservation).advisor?.result === null)) {
-      const reasons = attempts.map(turn => turnOutcome(turn.terminalObservation).advisor?.invalidReason ?? "unknown");
-      const environmental = reasons.every(reason => /source|base|observed|uncommitted|evidence files/i.test(reason));
-      this.store.askHuman(root.taskId, environmental
-        ? `The source, base, or evidence could not be confirmed for the last two ${label} reviews (${reasons.join("; ")}). Resolve the source state, for example by committing or discarding changes or restoring the base branch, then continue.`
-        : `${label} returned two consecutive invalid reports (${reasons.join("; ")}). The selected ${label} profile did not produce the necessary JSON report. How should Forge continue?`, [
-        { label: "Retry", description: `Request ${label} once more with the same captured profile.`, recommended: true },
-        { label: "Revise scope", description: "Describe a change to the objective or evidence before another attempt.", recommended: false },
-      ]);
+    if (this.escalateInvalidAdvisors(root, sessions, turns, [request.role])) {
       return { asked: true, control: this.store.get(root.taskId) };
     }
     if (!control.worktree) throw new Error("The task has no worktree");
@@ -205,36 +197,13 @@ export class RootController implements RootBridgeAdapter {
     const observedSource = await this.currentRange(root.taskId);
     if (!observedSource.clean) throw new DeliveryOperationFailure("worktree_dirty", "The worktree has uncommitted changes. Commit or discard them before requesting an Advisor; Advisors review committed source only.");
     const range = observedSource.range;
-    const context = this.store.context(root.taskId);
-    const images = context.images as Array<{ artifactId: string; filename: string }>;
-    const workerTurns = sessions.filter(session => session.kind === "worker" && session.advisorRole === null).flatMap(session => turns.filter(turn => turn.sessionId === session.id && turn.status === "completed").map(turn => ({ session, turn, input: turnWorkflowInput(session, turn) })));
-    const verification = {
-      configuration: { verificationCommand: context.configuration.verificationCommand, runProjectTests: context.configuration.runProjectTests, visualEvidence: context.configuration.visualEvidence },
-      pullRequest: control.pullRequest,
-      pullRequestChecks: this.delivery.checksObservation ? await this.delivery.checksObservation(root.taskId) : null,
-      workerTurns: workerTurns.map(({ session, turn, input }) => {
-        const parsed = parseObservation(turn.terminalObservation);
-        return { turnId: turn.id, sessionId: session.id, mode: input?.kind === "worker" ? input.mode : "planned", purpose: input?.kind === "worker" ? input.purpose : "implementation", range: input?.kind === "worker" ? input.range : null, state: parsed.state, text: parsed.text, tools: parsed.tools, limit: parsed.toolsLimit ?? (parsed.tools === null ? "Native tool evidence was not captured for this turn" : null), verificationRange: parsed.verificationRange, sourceRangeProof: parsed.verificationRange ? (parsed.verificationRange.valid ? "valid" : "invalid") : "none" };
-      }),
-    };
-    if (!this.evidence) throw new Error("Task evidence storage is not configured");
-    const evidence = await writeTaskEvidence({
-      root: this.evidence.root, taskId: root.taskId, worktree: control.worktree.path, range, verification,
-      attachments: images.map(image => ({ artifactId: image.artifactId, mimeType: this.store.image(root.taskId, image.artifactId).mimeType, read: async () => {
-        if (!this.artifacts) throw new Error("Task image storage is not configured");
-        const artifact = this.store.image(root.taskId, image.artifactId);
-        const bytes = await this.artifacts.getArtifact(artifact);
-        if (createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) throw new Error("The task image changed in storage");
-        return bytes;
-      } })),
-    });
-    const manifest = JSON.parse(await (await import("node:fs/promises")).readFile(join(evidence.directory, "manifest.json"), "utf8")) as { attachments: Array<{ artifactId: string; path: string | null; error: string | null }> };
+    const { context, images, workerTurns, evidence, attachments } = await this.prepareAdvisorEvidence(control, range, sessions, turns);
     const previous = request.role === "rater" ? latestReview(control.workflowState.reviews, "rater") : undefined;
     const previousTurnIndex = previous ? turns.findIndex(turn => turn.id === previous.turnId) : -1;
-    const repairEvidence = previous ? workerTurns.filter(({ turn }) => turns.indexOf(turn) > previousTurnIndex).map(({ turn }) => `Turn ${turn.id}: ${parseObservation(turn.terminalObservation).text ?? "(no text)"}`) : null;
+    const repairEvidence = previous ? workerTurns.filter(({ turn }) => turns.indexOf(turn) > previousTurnIndex).map(({ turn, parsed }) => `Turn ${turn.id}: ${parsed.text ?? "(no text)"}`) : null;
     const prompt = composeAdvisorAssignment({
       role: request.role, objective: control.objective, configuration: context.configuration, visualEvidence: context.configuration.visualEvidence, images, repository: control.deliveryIntent.repository, headBranch: control.deliveryIntent.headBranch, baseBranch: control.deliveryIntent.baseBranch,
-      pullRequestNumber: control.deliveryIntent.pullRequestNumber, range, evidenceDirectory: evidence.directory, attachments: manifest.attachments, brief: request.brief ?? null,
+      pullRequestNumber: control.deliveryIntent.pullRequestNumber, range, evidenceDirectory: evidence.directory, attachments, brief: request.brief ?? null,
       priorFindings: previous?.result?.blockingFindings ?? null, repairEvidence,
     });
     const advisor = this.store.launchWorker({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, advisor: { role: request.role, prompt, input: { kind: "advisor", role: request.role, range, evidenceDirectory: evidence.directory, evidenceSha256: evidence.sha256, verificationTurnIds: workerTurns.map(({ turn }) => turn.id) } } });
@@ -242,10 +211,70 @@ export class RootController implements RootBridgeAdapter {
     return { advisor: this.store.currentSession(root.taskId, "worker"), evidenceDirectory: evidence.directory, next: advisorSuccess };
   }
 
+  async delegatePlanners(root: RootIdentity): Promise<unknown> {
+    this.store.assertCurrentRoot(root);
+    const control = this.store.get(root.taskId);
+    if (control.workflow !== "competing_plans") throw new Error("delegate_planners is legal only for Combined planning.");
+    const sessions = this.store.sessions(root.taskId);
+    const turns = this.store.turns(root.taskId);
+    if (this.escalateInvalidAdvisors(root, sessions, turns, ["planner_a", "planner_b"])) return { asked: true, control: this.store.get(root.taskId) };
+    if (!control.worktree) throw new Error("The task has no worktree");
+    this.recheck(root);
+    const observedSource = await this.currentRange(root.taskId);
+    if (!observedSource.clean) throw new DeliveryOperationFailure("worktree_dirty", "The worktree has uncommitted changes. Commit or discard them before requesting planners; planners inspect committed source only.");
+    const { context, images, workerTurns, evidence, attachments } = await this.prepareAdvisorEvidence(control, observedSource.range, sessions, turns);
+    const pairId = randomUUID();
+    const planners = (["planner_a", "planner_b"] as const).map(role => ({ role, prompt: composeAdvisorAssignment({ role, objective: control.objective, configuration: context.configuration, visualEvidence: context.configuration.visualEvidence, images, repository: control.deliveryIntent.repository, headBranch: control.deliveryIntent.headBranch, baseBranch: control.deliveryIntent.baseBranch, pullRequestNumber: control.deliveryIntent.pullRequestNumber, range: observedSource.range, evidenceDirectory: evidence.directory, attachments, brief: null, priorFindings: null, repairEvidence: null }), input: { kind: "advisor" as const, role, range: observedSource.range, evidenceDirectory: evidence.directory, evidenceSha256: evidence.sha256, verificationTurnIds: workerTurns.map(({ turn }) => turn.id), plannerPairId: pairId } }));
+    const pair = this.store.launchPlannerPair({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, pairId, planners: planners as [{ role: "planner_a"; prompt: string; input: Extract<WorkflowInput, { kind: "advisor" }> }, { role: "planner_b"; prompt: string; input: Extract<WorkflowInput, { kind: "advisor" }> }] });
+    const launches = await Promise.allSettled(pair.map(session => this.recoverSession(session)));
+    return { planners: pair, evidenceDirectory: evidence.directory, launches: launches.map(result => result.status), next: "End this Coordinator turn now. Forge will send one combined planning result after both Plan A and Plan B have terminal reports. Do not poll or wait inside this turn." };
+  }
+
+  private async prepareAdvisorEvidence(control: TaskControl, range: ReviewRange, sessions: TaskSession[], turns: TaskTurn[]) {
+    if (!control.worktree) throw new Error("The task has no worktree");
+    if (!this.evidence) throw new Error("Task evidence storage is not configured");
+    const context = this.store.context(control.taskId);
+    const images = context.images as Array<{ artifactId: string; filename: string }>;
+    const workerTurns = sessions.filter(session => session.kind === "worker" && session.advisorRole === null).flatMap(session => turns.filter(turn => turn.sessionId === session.id && turn.status === "completed").map(turn => ({ session, turn, input: turnWorkflowInput(session, turn), parsed: parseObservation(turn.terminalObservation) })));
+    const verification = {
+      configuration: { verificationCommand: context.configuration.verificationCommand, runProjectTests: context.configuration.runProjectTests, visualEvidence: context.configuration.visualEvidence },
+      pullRequest: control.pullRequest,
+      pullRequestChecks: this.delivery.checksObservation ? await this.delivery.checksObservation(control.taskId) : null,
+      workerTurns: workerTurns.map(({ session, turn, input, parsed }) => ({ turnId: turn.id, sessionId: session.id, mode: input?.kind === "worker" ? input.mode : "planned", purpose: input?.kind === "worker" ? input.purpose : "implementation", range: input?.kind === "worker" ? input.range : null, state: parsed.state, text: parsed.text, tools: parsed.tools, limit: parsed.toolsLimit ?? (parsed.tools === null ? "Native tool evidence was not captured for this turn" : null), verificationRange: parsed.verificationRange, sourceRangeProof: parsed.verificationRange ? (parsed.verificationRange.valid ? "valid" : "invalid") : "none" })),
+    };
+    const evidence = await writeTaskEvidence({
+      root: this.evidence.root, taskId: control.taskId, worktree: control.worktree.path, range, verification,
+      attachments: images.map(image => ({ artifactId: image.artifactId, mimeType: this.store.image(control.taskId, image.artifactId).mimeType, read: async () => {
+        if (!this.artifacts) throw new Error("Task image storage is not configured");
+        const artifact = this.store.image(control.taskId, image.artifactId);
+        const bytes = await this.artifacts.getArtifact(artifact);
+        if (createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) throw new Error("The task image changed in storage");
+        return bytes;
+      } })),
+    });
+    const manifest = JSON.parse(await (await import("node:fs/promises")).readFile(join(evidence.directory, "manifest.json"), "utf8")) as { attachments: Array<{ artifactId: string; path: string | null; error: string | null }> };
+    return { context, images, workerTurns, evidence, attachments: manifest.attachments };
+  }
+
   /** The live range plus whether the worktree is clean; callers decide what an unclean tree means for them. */
   private async currentRange(taskId: string): Promise<{ range: ReviewRange; clean: boolean }> {
     const observed = await this.delivery.currentRange(taskId);
     return { range: { baseSha: observed.baseSha, headSha: observed.headSha, files: observed.files, commits: observed.commits, patchDigest: observed.patchDigest }, clean: observed.clean };
+  }
+
+  private escalateInvalidAdvisors(root: RootIdentity, sessions: TaskSession[], turns: TaskTurn[], roles: AdvisorRole[]): boolean {
+    const answerFromEnd = [...turns].reverse().findIndex(turn => turn.sessionId === root.sessionId && isHumanAnswer(turn.promptText));
+    const afterAnswer = turns.slice(answerFromEnd === -1 ? 0 : turns.length - answerFromEnd);
+    for (const role of roles) {
+      const attempts = afterAnswer.filter(turn => turn.status === "completed" && sessions.find(session => session.id === turn.sessionId)?.advisorRole === role).slice(-2);
+      if (attempts.length !== 2 || !attempts.every(turn => turnOutcome(turn.terminalObservation).advisor?.result === null)) continue;
+      const reasons = attempts.map(turn => turnOutcome(turn.terminalObservation).advisor?.invalidReason ?? "unknown");
+      const environmental = reasons.every(reason => /source|base|observed|uncommitted|evidence files/i.test(reason));
+      const label = ADVISOR_LABELS[role];
+      this.store.askHuman(root.taskId, environmental ? `The source, base, or evidence could not be confirmed for the last two ${label} reviews (${reasons.join("; ")}). Resolve the source state, then continue?` : `${label} returned two consecutive invalid reports (${reasons.join("; ")}). How should Forge continue?`, [{ label: "Retry", description: `Request ${label} once more with the same captured profile.`, recommended: true }, { label: "Revise scope", description: "Describe a change to the objective or evidence before another attempt.", recommended: false }]);
+      return true;
+    }
+    return false;
   }
 
   /** Compares the live committed source with a pinned range; any observation failure is a concrete reason, never an approval. */
@@ -292,8 +321,9 @@ export class RootController implements RootBridgeAdapter {
     if (this.store.get(taskId).status !== "active") return;
     const root = this.prepareRoot(taskId);
     await this.recoverSession(root);
-    const worker = this.store.currentSession(taskId, "worker");
-    if (worker && worker.lifecycle !== "stopped" && worker.lifecycle !== "cancelled") await this.recoverSession(worker);
+    const recovered = await Promise.allSettled(this.store.currentDelegates(taskId).filter(worker => worker.lifecycle !== "stopped" && worker.lifecycle !== "cancelled").map(worker => this.recoverSession(worker)));
+    const failures = recovered.filter((result): result is PromiseRejectedResult => result.status === "rejected").map(result => result.reason);
+    if (failures.length) throw failures[0];
     await this.stopRetiredSessions(taskId);
     const control = this.store.get(taskId);
     if (control.status === "active") {
@@ -338,8 +368,8 @@ export class RootController implements RootBridgeAdapter {
     if (!owner) return;
     try {
       const control = this.store.get(previous.taskId);
-      const current = this.store.currentSession(previous.taskId, previous.kind);
-      if (!current || current.id !== previous.id || current.generation !== previous.generation) return;
+      const current = this.store.currentSessionByIdentity(previous.id, previous.generation);
+      if (!current || current.lifecycle === "stopped" || current.lifecycle === "cancelled") return;
       const currentTurn = this.store.pendingTurns(current.id)[0];
       const taskScope = this.scope(control, current, currentTurn ? turnWorkflowInput(current, currentTurn) : null);
       const nativeSessionId = await this.harness.ensureSession(taskScope, current.nativeSessionId);

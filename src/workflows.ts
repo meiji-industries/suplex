@@ -92,7 +92,7 @@ export type ReviewRecord = z.infer<typeof ReviewRecordSchema>;
 
 export const ReportReferenceSchema = z.object({ sessionId: id, turnId: id }).strict();
 export type ReportReference = z.infer<typeof ReportReferenceSchema>;
-const AdvisorWorkflowInputSchema = z.object({ kind: z.literal("advisor"), role: AdvisorRoleSchema, range: ReviewRangeSchema, evidenceDirectory: z.string().min(1), evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/), verificationTurnIds: z.array(id) }).strict();
+const AdvisorWorkflowInputSchema = z.object({ kind: z.literal("advisor"), role: AdvisorRoleSchema, range: ReviewRangeSchema, evidenceDirectory: z.string().min(1), evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/), verificationTurnIds: z.array(id), plannerPairId: id.optional() }).strict();
 const WorkerInputBase = { kind: z.literal("worker"), mode: z.enum(["planned", "direct"]), purpose: z.enum(["implementation", "verification"]), range: ReviewRangeSchema, plan: z.string().nullable(), acceptanceCriteria: z.array(z.string()), instruction: z.string() };
 const LegacyWorkerWorkflowInputSchema = z.object({ ...WorkerInputBase, advisorSessionId: id.nullable(), candidateSessionIds: z.tuple([id, id]).nullable() }).strict();
 export const WorkerWorkflowInputSchema = z.object({ ...WorkerInputBase, version: z.literal(2), advisorReport: ReportReferenceSchema.nullable(), candidateReports: z.tuple([ReportReferenceSchema, ReportReferenceSchema]).nullable() }).strict();

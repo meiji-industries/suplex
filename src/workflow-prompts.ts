@@ -15,8 +15,8 @@ export const WORKFLOW_INSTRUCTIONS: Record<Exclude<WorkflowId, "standard">, stri
 After Worker returns, inspect its source changes and command evidence. Request bounded repairs or missing checks, then request the selected delivery target. Skipping the initial plan does not skip verification or your independent review.`,
   independent_review: `Use Second opinion. Investigate the source and write your plan and acceptance criteria. Delegate planned implementation to Worker. Inspect the implementation and actual check evidence yourself. Resolve defects or missing checks before requesting Reviewer.
 
-Call delegate_advisor with role reviewer and a brief containing your plan and acceptance criteria. Reviewer independently inspects the complete current range. Address every blocking finding through a bounded Worker assignment, inspect the result, and request a new Reviewer assessment. Delivery requires your own current review and a passing Reviewer result for the same current range. You cannot waive that result.`,
-  competing_plans: `Use Combined planning. Request Plan A, then Plan B, through delegate_advisor without a brief. Both receive the same original objective and pinned input. Do not give either agent the other's plan or your preferred design.
+Call delegate_advisor with role reviewer and a brief containing your plan and acceptance criteria. Reviewer independently inspects the complete current range. Address every blocking finding through a bounded Worker assignment, inspect the result, and request a fresh Reviewer. Delivery requires your own current review and a passing Reviewer result for the same current range. You cannot waive that result.`,
+  competing_plans: `Use Combined planning. Call delegate_planners once, then end your turn. Forge reserves and dispatches Plan A and Plan B together with the same original objective and pinned input. Do not give either agent the other's plan or your preferred design.
 
 Read both complete reports and relevant source. Write one implementation plan with design decisions, affected files, ordered changes, constraints, verification commands, and acceptance criteria. Explain which conflicting suggestions you accepted or rejected and why. Resolve alternatives yourself; do not ask Worker to choose between the two plans.
 
@@ -178,7 +178,7 @@ export function advisorResultWake(role: AdvisorRole, receiptId: string, outcome:
   const next = !outcome.valid ? `The ${label} report was not accepted: ${outcome.summary}. Request a fresh ${label}; after two consecutive invalid reports Forge asks you for a decision instead.`
     : role === "reviewer" ? "If Reviewer approved the current range, request delivery. Otherwise delegate a bounded Worker repair for every blocking finding, inspect the result, and request a new Reviewer assessment."
     : role === "rater" ? "If the rating is at least 9 with no blocking findings and adequate verification, inspect the whole range yourself and continue with delivery. Otherwise delegate planned Worker implementation with advisorTurnId set to this Rater report turn, inspect the result, and request a new Rater assessment. If only verification is missing, delegate a bounded verification assignment first."
-    : role === "planner_a" ? "Request Plan B with delegate_advisor next. Do not share this report with Plan B."
-    : "Read both complete plan reports and relevant source, write one combined plan, and delegate Worker with both candidateTurnIds.";
+    : role === "planner_a" || role === "planner_b" ? "This individual planner result is available for a retry or historical session. When a Combined pair settles, read both complete plan reports and relevant source, write one combined plan, and delegate Worker with both candidateTurnIds."
+    : "";
   return `${label} result receipt ${receiptId}. ${outcome.valid ? outcome.summary : ""} ${next}\n\n${observation}`.replace("  ", " ");
 }

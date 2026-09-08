@@ -35,6 +35,10 @@ const adapter: RootBridgeAdapter = {
     await record({ kind: "delegate_advisor", root, ...request });
     return { assignmentId: "probe-advisor" };
   },
+  async delegatePlanners(root): Promise<unknown> {
+    await record({ kind: "delegate_planners", root });
+    return { assignmentId: "probe-planners" };
+  },
   async requestDelivery(): Promise<unknown> {
     throw new Error("probe does not permit delivery");
   },

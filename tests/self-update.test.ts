@@ -540,7 +540,7 @@ test("an expired pending operation without a helper becomes failed when Forge re
     });
     await expect(fixture.store.readStatus()).resolves.toMatchObject({
       status: "failed",
-      error: "The detached update helper did not finish within the time limit.",
+      error: "Forge could not confirm the restart.",
     });
     await expect(fixture.store.readLock()).resolves.toBeUndefined();
     await expect(fixture.store.readPayload()).resolves.toBeUndefined();
@@ -689,6 +689,50 @@ test("failed update observations prefer a newer remote revision", async () => {
 
     await expect(service.readUpdate()).resolves.toMatchObject({ available: true, revision: newerRevision, currentRevision: headRevision, operation: { status: "failed", targetRevision } });
     expect(calls).toContainEqual(["fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed historical attempt stays in history when its target revision is running", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-self-update-running-target-observation-"));
+  try {
+    const config = createTestConfig(root);
+    const store = new SelfUpdateStore(config.runtimeRoot);
+    const operationId = "88888888-8888-4888-8888-888888888888";
+    await store.writeStatus({ operationId, status: "failed", targetRevision, acceptedAt: "2026-09-06T00:00:00.000Z", updatedAt: "2026-09-06T00:00:01.000Z", error: "helper failed after restart" });
+    const service = new SelfUpdateService({
+      config,
+      store,
+      runningRevision: targetRevision,
+      runGit: async (args) => {
+        switch ([...args].join(" ")) {
+          case "symbolic-ref --short HEAD": return "main\n";
+          case "remote": return "origin\n";
+          case "remote get-url origin": return "https://github.com/meiji-industries/forge.git\n";
+          case "fetch --no-tags origin refs/heads/main:refs/remotes/origin/main": return "";
+          case "rev-parse --verify refs/remotes/origin/main^{commit}": return `${targetRevision}\n`;
+          case `rev-list --count ${targetRevision}..refs/remotes/origin/main`: return "0\n";
+          default: throw new Error(`unexpected Git observation: ${[...args].join(" ")}`);
+        }
+      },
+      argv: ["node", "src/server.ts"],
+      environment: {},
+    });
+
+    await expect(service.readUpdate()).resolves.toEqual({
+      available: false,
+      currentRevision: targetRevision,
+      instanceId: expect.any(String),
+      operation: {
+        operationId,
+        status: "failed",
+        targetRevision,
+        acceptedAt: "2026-09-06T00:00:00.000Z",
+        updatedAt: "2026-09-06T00:00:01.000Z",
+        error: "helper failed after restart",
+      },
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

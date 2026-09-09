@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactElement } from "react";
 
 import { CompanyProvider } from "./company-context.js";
 import { SystemHealthProvider } from "../components/app/system-health.js";
+import { UpdateProvider } from "../components/app/update-provider.js";
 import { isApplicationPath, navigate, shouldNavigate } from "./navigation-state.js";
 import { AuthView } from "../features/auth/auth.js";
 import { AdminView } from "../features/admin/admin.js";
@@ -63,7 +64,7 @@ export function AppRouter(): ReactElement {
     };
   }, []);
   if (window.__FORGE_VIEW__ === "auth") return <AuthView />;
-  return <CompanyProvider><SystemHealthProvider initialSnapshot={window.__FORGE_HEALTH__}><AppView key={route} /></SystemHealthProvider></CompanyProvider>;
+  return <CompanyProvider><UpdateProvider><SystemHealthProvider initialSnapshot={window.__FORGE_HEALTH__}><AppView key={route} /></SystemHealthProvider></UpdateProvider></CompanyProvider>;
 }
 
 export { isApplicationPath };

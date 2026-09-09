@@ -184,8 +184,8 @@ export class SelfUpdateService {
       ...status,
       status: "failed",
       updatedAt: this.now().toISOString(),
-      message: "Forge stopped the stale update operation.",
-      error: "The detached update helper did not finish within the time limit.",
+      message: "Forge could not confirm the restart.",
+      error: "Forge could not confirm the restart.",
     }));
     await this.store.cleanupOperation(status.operationId);
     await this.store.releaseRunnerClaim(status.operationId);

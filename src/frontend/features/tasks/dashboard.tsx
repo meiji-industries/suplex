@@ -5,6 +5,7 @@ import { Button } from "../../components/ui/button.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { HealthCheckSections, healthFreshnessLabel, useSystemHealth } from "../../components/app/system-health.js";
 import { SettingsLayout } from "../settings/settings-layout.js";
+import { UpdateSettings } from "../settings/update-settings.js";
 import { withCompany } from "../../lib/api.js";
 import { relativeTime } from "../../shell/view-shared.js";
 
@@ -36,6 +37,7 @@ export function Dashboard(): ReactElement {
       </div>
       {snapshot?.herdr ? <div className="flex items-center justify-between border-b px-4 py-2 text-xs"><span>Herdr</span><span>{snapshot.herdr.reachable ? "Running" : "Not running"}</span></div> : null}
       <HealthCheckSections snapshot={snapshot} />
+      <div id="updates" className="px-4 pt-5 lg:px-6"><UpdateSettings /></div>
     </SettingsLayout>
   );
 }

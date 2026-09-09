@@ -135,12 +135,23 @@ describe("Coordinator delivery operations", () => {
   it.each(["current", "stale", "missing"])("completes a safe trigger merge with %s observed base metadata", async metadata => {
     const value = await fixture(); try {
       attachTrigger(value); const fake = github(value.local, value.review.baseSha); const direct: Array<{ repository: string; number: number; headSha: string }> = [];
-      fake.port.inspectPullRequest = async () => triggerInspection(value);
+      fake.port.inspectPullRequest = async () => triggerInspection(value, { baseSha: metadata === "current" ? value.review.baseSha : "a".repeat(40) });
       const observe = fake.port.observePullRequest;
       fake.port.observePullRequest = async input => { const observed = await observe(input); return { ...observed, baseSha: metadata === "missing" ? null : metadata === "stale" ? "stale" : observed.baseSha }; };
       fake.port.mergePullRequestDirect = async input => { direct.push(input); fake.setObserved({ exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "merged", isDraft: false, headSha: value.local.headSha, baseSha: value.review.baseSha, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", checks: { total: 1, pending: 0, failing: 0, successful: 1, runs: [] }, author: null, changedFiles: 0, additions: 0, deletions: 0, autoMergeEnabled: false, reviewDecision: "APPROVED" }); return { merged: true, sha: "d".repeat(40) }; };
       await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review)).resolves.toMatchObject({ reviewedHead: value.local.headSha });
       expect(direct).toEqual([{ repository: "owner/repo", number: 7, headSha: value.local.headSha }]); expect(fake.calls).not.toContain("merge"); expect(value.store.get("task").status).toBe("delivered");
+    } finally { value.database.close(); }
+  });
+  it("keeps a trigger task active for repair when GitHub reports a merge conflict", async () => {
+    const value = await fixture();
+    try {
+      attachTrigger(value);
+      const fake = github(value.local, value.review.baseSha);
+      fake.port.inspectPullRequest = async () => triggerInspection(value, { baseSha: "a".repeat(40) });
+      fake.port.mergePullRequestDirect = async () => ({ merged: false, sha: null, disposition: "blocked", message: "GitHub reports merge conflicts in src/templates.py." });
+      await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review)).rejects.toMatchObject({ code: "merge_not_eligible", message: "GitHub reports merge conflicts in src/templates.py." });
+      expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
     } finally { value.database.close(); }
   });
   it("records only confirmed trigger pushes and follows their lineage", async () => {

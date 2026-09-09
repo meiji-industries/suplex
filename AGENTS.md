@@ -15,6 +15,19 @@ receipt before continuing. For example, Herdr restarting and losing pane
 tokens must not prevent archiving a task. Uncertain pane ownership means leave
 that pane alone; it does not establish that the task cannot be archived.
 
+Treat normal development changes as work to adapt to. Other developers advancing
+`main`, stale PR base metadata, and merge conflicts are expected. Read the current
+branch from GitHub, inspect integration with Git, resolve routine conflicts,
+verify the result, and continue the authorized workflow. A changed base SHA is
+not an authorization failure. Compare actual changes and integration results,
+not copies of base metadata.
+
+Prefer recovery and continued agent work over guards. Return actionable repair
+work to the Coordinator instead of moving the task to `waiting_human`. Ask a
+human only when a concrete decision, missing authority, or unavailable access
+prevents progress that a competent developer could otherwise make. A failed
+merge attempt prevents that merge; it does not by itself require human help.
+
 Before adding or reviewing any blocking condition, identify the concrete harm
 it prevents and the authoritative evidence for that harm. Keep a gate only
 when it is necessary to prevent that harm, and scope it to the affected

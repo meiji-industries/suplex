@@ -21,7 +21,7 @@ export type PublicationDependencies = {
   finalRecheck: (control: TaskControl, actual: ReviewRange, recheck: Recheck) => Promise<void>;
   adoptKnownPull: (control: TaskControl, pull: GithubPullRequest, options: { explicit?: boolean; recheck?: Recheck }) => Promise<PullRequestReference>;
   completeRemoteBranch: (control: TaskControl, actual: ReviewRange, recheck: Recheck) => Promise<void>;
-  inspectTriggerPolicy: (control: TaskControl, input: { expectedHead?: string; expectedBase?: string; protectedPaths: boolean }) => Promise<Trigger>;
+  inspectTriggerPolicy: (control: TaskControl, input: { expectedHead?: string; protectedPaths: boolean }) => Promise<Trigger>;
   triggerBlocked: (control: TaskControl, question: string, code: "head_diverged" | "merge_not_eligible") => DeliveryOperationFailure;
   selectDiscoveredPull: (control: TaskControl, pulls: GithubPullRequest[]) => GithubPullRequest | null;
 };

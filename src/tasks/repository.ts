@@ -18,7 +18,7 @@ const ArtifactRowSchema = z.object({
   id: z.string(), companyId: z.string(), kind: z.string(), filename: z.string(), mimeType: z.string(), byteSize: z.number(),
   sha256: z.string(), storagePath: z.string(), createdAt: z.string(),
 });
-const select = "SELECT t.*, MAX(t.updated_at, COALESCE(control.updated_at, t.updated_at)) AS activity_updated_at, control.status_changed_at, c.issue_code FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id LEFT JOIN forge_task_controls control ON control.task_id = t.id";
+const select = "SELECT t.*, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(control.updated_at, t.updated_at)) THEN t.updated_at ELSE control.updated_at END AS activity_updated_at, control.status_changed_at, c.issue_code FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id LEFT JOIN forge_task_controls control ON control.task_id = t.id";
 
 export class TaskConflict extends Error {}
 
@@ -42,7 +42,21 @@ export class TaskRepository {
   }
 
   rows(): TaskRow[] {
-    return this.database.authQuery(db => z.array(RowSchema).parse(db.prepare(`${select} ORDER BY activity_updated_at DESC, t.id`).all()));
+    return this.database.authQuery(db => z.array(RowSchema).parse(db.prepare(`${select} ORDER BY julianday(activity_updated_at) DESC, t.id`).all()));
+  }
+
+  hermesRows(input: { agentId: string; companyId: string; projectId?: string; status?: string; archived?: boolean; attention?: boolean; blocker?: boolean; updatedSince?: string; cursor?: { updatedAt: string; id: string }; limit: number }): TaskRow[] {
+    const conditions = ["t.company_id = ?", "t.creator_agent_id = ?", "a.status = 'paired'", "a.revoked_at IS NULL"];
+    const params: Array<string | number> = [input.companyId, input.agentId];
+    if (input.projectId) { conditions.push("t.project_id = ?"); params.push(input.projectId); }
+    if (input.status) { conditions.push("control.status = ?"); params.push(input.status); }
+    if (input.archived !== undefined) conditions.push(input.archived ? "t.archived_at IS NOT NULL" : "t.archived_at IS NULL");
+    if (input.attention !== undefined) conditions.push(input.attention ? "control.human_question IS NOT NULL AND control.human_question_id IS NOT NULL" : "(control.human_question IS NULL OR control.human_question_id IS NULL)");
+    if (input.blocker !== undefined) conditions.push(input.blocker ? "((control.human_question IS NOT NULL AND control.human_question_id IS NOT NULL) OR json_extract(control.workflow_state_json, '$.deliveryWait') IS NOT NULL)" : "((control.human_question IS NULL OR control.human_question_id IS NULL) AND json_extract(control.workflow_state_json, '$.deliveryWait') IS NULL)");
+    if (input.updatedSince) { conditions.push("julianday(activity_updated_at) >= julianday(?)"); params.push(input.updatedSince); }
+    if (input.cursor) { conditions.push("(julianday(activity_updated_at) < julianday(?) OR (julianday(activity_updated_at) = julianday(?) AND t.id > ?))"); params.push(input.cursor.updatedAt, input.cursor.updatedAt, input.cursor.id); }
+    params.push(input.limit);
+    return this.database.authQuery(db => z.array(RowSchema).parse(db.prepare(`${select} JOIN forge_external_agents a ON a.id = ? AND a.company_id = t.company_id JOIN forge_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = t.company_id AND g.project_id = t.project_id WHERE ${conditions.join(" AND ")} ORDER BY julianday(activity_updated_at) DESC, t.id LIMIT ?`).all(input.agentId, ...params)));
   }
 
   existing(companyId: string, key: string, requestHash: string, creator: TaskCreator): TaskRow | null {

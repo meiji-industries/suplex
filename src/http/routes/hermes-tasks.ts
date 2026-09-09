@@ -2,8 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 
 import { HermesAgentFailure, type HermesAgentService, type HermesPrincipal } from "../../identity/hermes-agents.js";
-import { HermesRuntimeOperations, hermesRuntimeOpenApi } from "../contracts/hermes.js";
-import type { TaskService } from "../../tasks/tasks.js";
+import { HermesIdentityResponseSchema, HermesRuntimeOperations, HermesSafeTaskProjectionSchema, HermesTaskListQuerySchema, HermesTaskListResponseSchema, hermesRuntimeOpenApi } from "../contracts/hermes.js";
+import { TaskFailure, type TaskService } from "../../tasks/tasks.js";
 
 export function authenticateHermesBearer(header: string | undefined, hermes: HermesAgentService): HermesPrincipal {
   if (!header || !header.startsWith("Bearer ")) {
@@ -19,6 +19,13 @@ export function authenticateHermesBearer(header: string | undefined, hermes: Her
 export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes: HermesAgentService; tasks: TaskService }): void {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const authenticate = (header: string | undefined): HermesPrincipal => authenticateHermesBearer(header, options.hermes);
+
+  typed.get("/api/hermes/me", {
+    schema: { response: { 200: HermesIdentityResponseSchema } },
+  }, async (request, reply) => {
+    const principal = authenticate(request.headers.authorization);
+    return reply.header("Cache-Control", "private, no-store").code(200).send(options.tasks.hermesIdentity(principal));
+  });
 
   typed.get("/api/hermes/openapi.json", {
     config: { hermesRuntime: true },
@@ -54,16 +61,39 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
   });
 
   typed.get("/api/hermes/tasks/:taskId", {
-    config: { hermesRuntime: true },
     schema: {
       params: HermesRuntimeOperations.getTask.params,
-      response: HermesRuntimeOperations.getTask.response,
+      response: { ...HermesRuntimeOperations.getTask.response, 304: HermesSafeTaskProjectionSchema.nullable() },
     },
-    preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const task = options.tasks.getHermesTask(principal, request.params.taskId);
+    const etag = `\"${task.revision}\"`;
     reply.header("Cache-Control", "private, no-store");
+    reply.header("ETag", etag);
+    if (request.headers["if-match"] && request.headers["if-match"] !== etag) throw new TaskFailure("Task revision is stale", 412, "revision_stale");
+    if (request.headers["if-none-match"] === etag) return reply.code(304).send(null);
     return reply.code(200).send(task);
+  });
+
+  typed.get("/api/hermes/tasks", {
+    schema: {
+      querystring: HermesTaskListQuerySchema,
+      response: { 200: HermesTaskListResponseSchema },
+    },
+  }, async (request, reply) => {
+    const principal = authenticate(request.headers.authorization);
+    const query = request.query;
+    const result = options.tasks.listHermesTasks(principal, {
+      limit: query.limit,
+      ...(query.projectId === undefined ? {} : { projectId: query.projectId }),
+      ...(query.status === undefined ? {} : { status: query.status }),
+      ...(query.updatedSince === undefined ? {} : { updatedSince: query.updatedSince }),
+      ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+      ...(query.archived === undefined ? {} : { archived: query.archived === "true" }),
+      ...(query.attention === undefined ? {} : { attention: query.attention === "true" }),
+      ...(query.blocker === undefined ? {} : { blocker: query.blocker === "true" }),
+    });
+    return reply.header("Cache-Control", "private, no-store").code(200).send(result);
   });
 }

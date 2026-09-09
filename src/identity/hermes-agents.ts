@@ -27,6 +27,7 @@ export interface HermesPrincipal {
   companyId: string;
   profileId: string;
   projectIds: string[];
+  cursorKey: string;
 }
 
 interface AgentQueryRow {
@@ -255,14 +256,14 @@ export class HermesAgentService {
     if (!credentialPattern.test(rawCredential)) throw authenticationFailure();
     const nowIso = this.now().toISOString();
     return this.database.authTransaction((db) => {
-      const row = db.prepare(`SELECT c.id AS credential_id, a.id AS agent_id, a.company_id, a.hermes_profile_id
+      const row = db.prepare(`SELECT c.id AS credential_id, c.credential_hash, a.id AS agent_id, a.company_id, a.hermes_profile_id
         FROM forge_external_agent_credentials c JOIN forge_external_agents a ON a.id = c.agent_id
-        WHERE c.credential_hash = ? AND c.revoked_at IS NULL AND a.status = 'paired' AND a.revoked_at IS NULL`).get(hashSecret(rawCredential)) as { credential_id: string; agent_id: string; company_id: string; hermes_profile_id: string | null } | undefined;
+        WHERE c.credential_hash = ? AND c.revoked_at IS NULL AND a.status = 'paired' AND a.revoked_at IS NULL`).get(hashSecret(rawCredential)) as { credential_id: string; credential_hash: string; agent_id: string; company_id: string; hermes_profile_id: string | null } | undefined;
       if (!row?.hermes_profile_id) throw authenticationFailure();
       const projectIds = (db.prepare("SELECT project_id FROM forge_external_agent_project_grants WHERE agent_id = ? ORDER BY project_id").all(row.agent_id) as Array<{ project_id: string }>).map(({ project_id }) => project_id);
       db.prepare("UPDATE forge_external_agent_credentials SET last_used_at = ? WHERE id = ?").run(nowIso, row.credential_id);
       db.prepare("UPDATE forge_external_agents SET last_used_at = ?, updated_at = ? WHERE id = ?").run(nowIso, nowIso, row.agent_id);
-      return { agentId: row.agent_id, companyId: row.company_id, profileId: row.hermes_profile_id, projectIds };
+      return { agentId: row.agent_id, companyId: row.company_id, profileId: row.hermes_profile_id, projectIds, cursorKey: row.credential_hash };
     });
   }
 

@@ -11,6 +11,7 @@ import SwaggerParser from "@apidevtools/swagger-parser";
 import { AuthService } from "../src/identity/auth.js";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/platform/config.js";
+import type { ForgeConfig } from "../src/platform/config.js";
 import { ForgeDatabase } from "../src/platform/database.js";
 import type { GithubAdapter } from "../src/integrations/github/client.js";
 import { HermesAgentService } from "../src/identity/hermes-agents.js";
@@ -51,6 +52,7 @@ const github: GithubAdapter = {
 };
 
 let root: string;
+let config: ForgeConfig;
 let database: ForgeDatabase;
 let auth: AuthService;
 let projects: ProjectService;
@@ -62,6 +64,7 @@ let companyId: string;
 let projectId: string;
 let otherProjectId: string;
 let crossCompanyProjectId: string;
+let crossCompanyId: string;
 let agentCredential: string;
 let agentId: string;
 let recoveryWakes: number;
@@ -143,7 +146,7 @@ beforeEach(async () => {
   await git(["commit", "-m", "base"], crossRepoPath);
 
   database = new ForgeDatabase(join(root, "forge.sqlite"));
-  const config = createTestConfig(root, { repositoryRoot, worktreeRoot, reachableAddress: "http://127.0.0.1:4111", developmentAutoLogin: true });
+  config = createTestConfig(root, { repositoryRoot, worktreeRoot, reachableAddress: "http://127.0.0.1:4111", developmentAutoLogin: true });
   auth = new AuthService(database, config);
   adminId = auth.ensureDevelopmentUser().id;
 
@@ -179,6 +182,7 @@ beforeEach(async () => {
   otherProjectId = otherProj.id;
 
   const crossCompany = auth.createCompany(adminId, "Hermes Other Company");
+  crossCompanyId = crossCompany.id;
   const crossProject = await projects.createProject(adminId, crossCompany.id, {
     name: "Cross Company Project",
     repositoryPath: crossRepoPath,
@@ -339,7 +343,7 @@ test("runtime error responses are serialized against the documented status schem
 
 test("router-level long and unmatched URLs stay outside the authenticated runtime envelope", async () => {
   const long = await app.inject({ method: "GET", url: `/api/hermes/tasks/${"a".repeat(101)}`, headers: { Authorization: `Bearer ${agentCredential}` } });
-  const unmatched = await app.inject({ method: "GET", url: "/api/hermes/tasks" });
+  const unmatched = await app.inject({ method: "GET", url: "/api/hermes/unknown" });
   expect(long.statusCode).toBe(414);
   expect(long.json().code).toBe("FST_ERR_MAX_PARAM_LENGTH");
   expect(unmatched.statusCode).toBe(404);
@@ -457,15 +461,17 @@ test("POST /api/hermes/tasks creates task with native status, private no-store h
   expect(response.headers["cache-control"]).toBe("private, no-store");
 
   const body = response.json();
-  const expectedKeys = ["id", "issueKey", "projectId", "title", "status", "humanQuestion", "createdAt", "updatedAt"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt"].sort();
   expect(Object.keys(body).sort()).toEqual(expectedKeys);
   expect(body).toMatchObject({
     issueKey: "HMC-1",
     projectId,
+    project: { id: projectId, name: "Hermes Project" },
     title: "Hermes task creation",
     status: "backlog",
     humanQuestion: null,
   });
+  expect(JSON.stringify(body)).not.toMatch(/Brief content|repositoryPath|worktree|credential|prompt/i);
 
   // Verify creator_agent_id persisted on task and intent
   const taskRow = database.authQuery((db) => db.prepare("SELECT creator_agent_id FROM forge_tasks WHERE id = ?").get(body.id) as { creator_agent_id: string | null });
@@ -559,6 +565,8 @@ test("unauthenticated requests are rejected", async () => {
     },
   });
   expect(badToken.statusCode).toBe(401);
+  expect((await app.inject({ method: "GET", url: "/api/hermes/me" })).statusCode).toBe(401);
+  expect((await app.inject({ method: "GET", url: "/api/hermes/tasks" })).statusCode).toBe(401);
 });
 
 test("bearer authentication failures are identical at the HTTP boundary", async () => {
@@ -598,6 +606,7 @@ test("GET /api/hermes/tasks/:taskId returns safe projection, handles non-enumera
     },
   });
   const taskId = created.json().id;
+  const stalePrincipal = hermes.authenticate(agentCredential);
 
   // GET by creator agent succeeds
   const getSuccess = await app.inject({
@@ -607,7 +616,7 @@ test("GET /api/hermes/tasks/:taskId returns safe projection, handles non-enumera
   });
   expect(getSuccess.statusCode).toBe(200);
   expect(getSuccess.headers["cache-control"]).toBe("private, no-store");
-  const expectedKeys = ["id", "issueKey", "projectId", "title", "status", "humanQuestion", "createdAt", "updatedAt"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt"].sort();
   expect(Object.keys(getSuccess.json()).sort()).toEqual(expectedKeys);
   expect(getSuccess.json().title).toBe("Task For Status Check");
 
@@ -632,10 +641,138 @@ test("GET /api/hermes/tasks/:taskId returns safe projection, handles non-enumera
 
   // Scope revocation: revoke agent's project access -> subsequent GET returns 404
   hermes.replaceProjects(adminId, agentId, []);
+  expect(() => tasks.getHermesTask(stalePrincipal, taskId)).toThrow("Not found");
+  expect(tasks.listHermesTasks(stalePrincipal, { limit: 10 })).toEqual({ tasks: [], nextCursor: null });
   const getAfterRevocation = await app.inject({
     method: "GET",
     url: `/api/hermes/tasks/${taskId}`,
     headers: { Authorization: `Bearer ${agentCredential}` },
   });
   expect(getAfterRevocation.statusCode).toBe(404);
+});
+
+test("real HTTP discovery applies current grants, ownership, pagination, and conditional polling", async () => {
+  const create = async (title: string, idempotencyKey: string) => {
+    const response = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title, idempotencyKey } });
+    expect(response.statusCode, response.body).toBe(201);
+    return response.json() as { id: string; revision: string };
+  };
+  const first = await create("Discovery first", "discovery-001");
+  const second = await create("Discovery second", "discovery-002");
+  const third = await create("Discovery third", "discovery-003");
+  const humanTask = await tasks.createTask(adminId, companyId, { projectId, title: "Human-owned task", description: "Not visible to Hermes", idempotencyKey: "human-discovery-001" });
+
+  const otherIssued = hermes.create(adminId, { name: "Discovery Other", companyId, projectIds: [projectId] });
+  const otherCredential = hermes.exchange({ pairingCode: otherIssued.pairingCode, profileId: "profile-discovery-other" }).credential;
+  const otherTask = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${otherCredential}` }, payload: { projectId, title: "Other agent task", idempotencyKey: "other-agent-001" } });
+  const otherProjectIssued = hermes.create(adminId, { name: "Other project agent", companyId, projectIds: [otherProjectId] });
+  const otherProjectCredential = hermes.exchange({ pairingCode: otherProjectIssued.pairingCode, profileId: "profile-other-project" }).credential;
+  const otherProjectTask = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${otherProjectCredential}` }, payload: { projectId: otherProjectId, title: "Cross-grant task", idempotencyKey: "cross-grant-001" } });
+  const crossCompanyIssued = hermes.create(adminId, { name: "Cross company agent", companyId: crossCompanyId, projectIds: [crossCompanyProjectId] });
+  const crossCompanyCredential = hermes.exchange({ pairingCode: crossCompanyIssued.pairingCode, profileId: "profile-cross-company" }).credential;
+  const crossCompanyTask = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${crossCompanyCredential}` }, payload: { projectId: crossCompanyProjectId, title: "Cross-company task", idempotencyKey: "cross-company-001" } });
+  expect(otherTask.statusCode).toBe(201);
+  expect(otherProjectTask.statusCode).toBe(201);
+  expect(crossCompanyTask.statusCode).toBe(201);
+
+  tasks.repository.controls.start(first.id);
+  tasks.repository.controls.askHuman(first.id, "Need a human decision");
+  tasks.repository.setArchived(second.id, true);
+  tasks.repository.controls.start(third.id);
+  tasks.repository.controls.start(otherTask.json().id);
+  tasks.repository.controls.start(humanTask.task.id);
+  database.authTransaction((db) => {
+    const timestamp = "2030-01-01T00:00:00.000Z";
+    db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id = ?").run(JSON.stringify({ headSha: "a".repeat(40), fingerprint: "delivery-wait", since: timestamp, reason: "checks" }), timestamp, third.id);
+    db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id IN (?, ?)").run(JSON.stringify({ headSha: "a".repeat(40), fingerprint: "unauthorized-delivery-wait", since: timestamp, reason: "checks" }), timestamp, otherTask.json().id, humanTask.task.id);
+    db.prepare("UPDATE forge_task_controls SET updated_at = ? WHERE task_id IN (?, ?)").run(timestamp, first.id, second.id);
+    db.prepare("UPDATE forge_tasks SET updated_at = ? WHERE id = ?").run(timestamp, second.id);
+  });
+
+  let address = await app.listen({ host: "127.0.0.1", port: 0 });
+  const request = async (path: string, credential = agentCredential, headers: HeadersInit = {}) => fetch(new URL(path, address), { headers: { authorization: `Bearer ${credential}`, ...headers } });
+
+  const identity = await request("/api/hermes/me");
+  expect(identity.status).toBe(200);
+  expect(await identity.json()).toMatchObject({ agent: { id: agentId, name: "Hermes Bot", profileId: "profile-bot" }, capabilities: { taskDiscovery: true, taskRead: true, taskCreate: true, taskCommands: [] }, projects: [{ id: projectId, name: "Hermes Project" }] });
+
+  const pageOne = await request("/api/hermes/tasks?limit=2");
+  expect(pageOne.status).toBe(200);
+  const pageOneBody = await pageOne.json() as { tasks: Array<{ id: string; project: { id: string }; revision: string }>; nextCursor: string | null };
+  expect(pageOneBody.tasks).toHaveLength(2);
+  expect(pageOneBody.tasks.every(task => task.project.id === projectId)).toBe(true);
+  expect(pageOneBody.nextCursor).toBeTypeOf("string");
+  await app.close();
+  tasks = new TaskService(database, auth, projects, config);
+  hermes = new HermesAgentService(database, auth);
+  app = createApp({ config, auth, projects, tasks, hermes, host: { async recover() { recoveryWakes++; } }, health: {
+    database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
+    artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
+    opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy", summary: "Ready", details: {} }),
+    ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
+  } });
+  address = await app.listen({ host: "127.0.0.1", port: 0 });
+  const pageTwo = await request(`/api/hermes/tasks?limit=2&cursor=${encodeURIComponent(pageOneBody.nextCursor!)}`);
+  expect(pageTwo.status).toBe(200);
+  const pageTwoBody = await pageTwo.json() as { tasks: Array<{ id: string }> };
+  expect(pageTwoBody.tasks).toHaveLength(1);
+  expect([...pageOneBody.tasks.map(task => task.id), ...pageTwoBody.tasks.map(task => task.id)].sort()).toEqual([first.id, second.id, third.id].sort());
+  expect((await request(`/api/hermes/tasks?limit=2&cursor=${encodeURIComponent(pageOneBody.nextCursor!)}`, otherCredential)).status).toBe(400);
+  expect((await request(`/api/hermes/tasks?limit=2&status=active&cursor=${encodeURIComponent(pageOneBody.nextCursor!)}`)).status).toBe(400);
+  expect((await request("/api/hermes/tasks?projectId=project_unknown")).status).toBe(404);
+  for (const taskId of [otherTask.json().id, otherProjectTask.json().id, crossCompanyTask.json().id, humanTask.task.id]) {
+    const denied = await request(`/api/hermes/tasks/${taskId}`);
+    expect(denied.status).toBe(404);
+    expect(await denied.json()).toEqual({ error: "Not found", code: "resource_not_found" });
+  }
+  expect((await request("/api/hermes/tasks?cursor=not-a-cursor")).status).toBe(400);
+  const [cursorPayload, cursorSignature] = pageOneBody.nextCursor!.split(".");
+  const tamperedSignature = `${cursorSignature!.slice(0, -1)}${cursorSignature!.endsWith("A") ? "B" : "A"}`;
+  expect((await request(`/api/hermes/tasks?cursor=${encodeURIComponent(`${cursorPayload}.${tamperedSignature}`)}`)).status).toBe(400);
+  const unicodeCursor = `${pageOneBody.nextCursor!.split(".")[0]}.${"é".repeat(43)}`;
+  expect((await request(`/api/hermes/tasks?cursor=${encodeURIComponent(unicodeCursor)}`)).status).toBe(400);
+  expect(await (await request(`/api/hermes/tasks?projectId=${projectId}`)).json()).toMatchObject({ tasks: expect.any(Array) });
+  expect(await (await request("/api/hermes/tasks?status=waiting_human")).json()).toMatchObject({ tasks: [{ id: first.id }] });
+  expect(await (await request("/api/hermes/tasks?archived=true")).json()).toMatchObject({ tasks: [{ id: second.id }] });
+  expect(await (await request("/api/hermes/tasks?attention=true")).json()).toMatchObject({ tasks: [{ id: first.id }] });
+  const blockerTasks = await (await request("/api/hermes/tasks?blocker=true")).json() as { tasks: Array<{ id: string }>; nextCursor: string | null };
+  expect(blockerTasks.tasks.map(task => task.id)).toEqual([first.id, third.id].sort());
+  const blockedFirstPage = await (await request("/api/hermes/tasks?blocker=true&limit=1")).json() as { tasks: Array<{ id: string }>; nextCursor: string | null };
+  const blockedSecondPage = await (await request(`/api/hermes/tasks?blocker=true&limit=1&cursor=${encodeURIComponent(blockedFirstPage.nextCursor!)}`)).json() as { tasks: Array<{ id: string }>; nextCursor: string | null };
+  expect([...blockedFirstPage.tasks, ...blockedSecondPage.tasks].map(task => task.id).sort()).toEqual([first.id, third.id].sort());
+  expect(blockedSecondPage.nextCursor).toBeNull();
+  const combinedBlocked = await (await request(`/api/hermes/tasks?projectId=${projectId}&status=active&archived=false&attention=false&blocker=true&updatedSince=2030-01-01T00:00:00Z`)).json() as { tasks: Array<{ id: string }> };
+  expect(combinedBlocked.tasks.map(task => task.id)).toEqual([third.id]);
+  const unblockedTasks = await (await request("/api/hermes/tasks?blocker=false")).json() as { tasks: Array<{ id: string }> };
+  expect(unblockedTasks.tasks.map(task => task.id)).toEqual([second.id]);
+  const updatedTasks = await (await request("/api/hermes/tasks?updatedSince=2030-01-01T00:00:00Z")).json() as { tasks: Array<{ id: string }> };
+  expect(updatedTasks.tasks.map(task => task.id)).toEqual(expect.arrayContaining([first.id, second.id, third.id]));
+
+  const current = await request(`/api/hermes/tasks/${first.id}`);
+  expect(current.status).toBe(200);
+  const etag = current.headers.get("etag");
+  expect(etag).toBe(`\"${(await current.json() as { revision: string }).revision}\"`);
+  const unchanged = await request(`/api/hermes/tasks/${first.id}`, agentCredential, { "if-none-match": etag! });
+  expect(unchanged.status).toBe(304);
+  expect(await unchanged.text()).toBe("");
+  const stale = await request(`/api/hermes/tasks/${first.id}`, agentCredential, { "if-match": "\"stale\"" });
+  expect(stale.status).toBe(412);
+  expect(await stale.json()).toEqual({ error: "Task revision is stale", code: "revision_stale" });
+  const waitingDelivery = await request(`/api/hermes/tasks/${third.id}`);
+  const waitingDeliveryEtag = waitingDelivery.headers.get("etag");
+  expect(await waitingDelivery.json()).toMatchObject({ workflowStage: "waiting_delivery", blocker: { kind: "delivery_wait", reason: "checks" }, delivery: { checks: null, waiting: { reason: "checks" } } });
+  database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null'), '$.completion', json(?)), updated_at = ? WHERE task_id = ?").run(JSON.stringify({ kind: "workflow", reviewedHead: "a".repeat(40), pullRequestNumber: null, observedAt: "2030-01-01T00:00:01.000Z" }), "2030-01-01T00:00:01.000Z", third.id));
+  const completedDelivery = await request(`/api/hermes/tasks/${third.id}`, agentCredential, { "if-none-match": waitingDeliveryEtag! });
+  expect(completedDelivery.status).toBe(200);
+  expect(await completedDelivery.json()).toMatchObject({ workflowStage: "completed", delivery: { completion: { kind: "workflow", observedAt: "2030-01-01T00:00:01.000Z" } } });
+  tasks.repository.controls.cancel(first.id);
+  const changed = await request(`/api/hermes/tasks/${first.id}`, agentCredential, { "if-none-match": etag! });
+  expect(changed.status).toBe(200);
+  expect(changed.headers.get("etag")).not.toBe(etag);
+
+  hermes.replaceProjects(adminId, agentId, []);
+  expect((await request("/api/hermes/me")).status).toBe(200);
+  expect((await (await request("/api/hermes/me")).json() as { projects: unknown[] }).projects).toEqual([]);
+  expect(await (await request("/api/hermes/tasks")).json()).toEqual({ tasks: [], nextCursor: null });
+  expect((await request(`/api/hermes/tasks/${first.id}`, agentCredential, { "if-none-match": etag! })).status).toBe(404);
 });

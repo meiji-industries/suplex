@@ -1,15 +1,16 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { TaskAnalyticsStore } from "./analytics/store.js";
 import { taskAnalytics } from "./analytics/analytics.js";
 import { readTaskTimeline } from "./timeline/timeline.js";
 import { removeTaskWorktree } from "./worktree.js";
 import { stopIdleArchiveSessions } from "./archive/sessions.js";
 import { z } from "zod";
-import { AuthFailure, type AuthService } from "../identity/auth.js";
+import type { AuthService } from "../identity/auth.js";
 import { ArtifactStore, type StoredArtifact } from "../platform/artifacts.js";
 import type { ForgeConfig } from "../platform/config.js";
 import type { ForgeDatabase } from "../platform/database.js";
 import type { HermesPrincipal } from "../identity/hermes-agents.js";
+import type { HermesSafeTaskProjection } from "../http/contracts/hermes.js";
 import type { ProjectService } from "../projects/projects.js";
 import { TaskProfileSchema, type TaskProfile } from "./control.js";
 import { TaskConfigurationSchema, TaskInputSchema, type Task, type TaskInput } from "./contracts.js";
@@ -24,7 +25,10 @@ import { normalizeWorkflowInput, roleLabel, workflowDefinition, WorkflowInputFai
 import type { TaskLimitDecision } from "./limits/limits.js";
 
 export class TaskFailure extends Error {
-  constructor(readonly publicMessage: string, readonly statusCode = 400) { super(publicMessage); }
+  constructor(readonly publicMessage: string, readonly statusCode = 400, readonly code = "task_failure", options?: { cause?: unknown }) {
+    super(publicMessage);
+    this.cause = options?.cause;
+  }
 }
 type Authority = { kind: "user"; userId: string } | { kind: "hermes"; principal: HermesPrincipal };
 type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "resolveTaskSource" | "captureTaskConfiguration">;
@@ -107,8 +111,45 @@ export class TaskService {
   }
 
   getHermesTask(principal: HermesPrincipal, taskId: string) {
-    const task = this.repository.task(this.requireTask({ kind: "hermes", principal }, taskId));
-    return { id: task.id, issueKey: task.issueKey, projectId: task.projectId, title: task.title, status: task.status, humanQuestion: task.humanQuestion?.text ?? null, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    return this.hermesProjection(this.requireTask({ kind: "hermes", principal }, taskId));
+  }
+
+  hermesIdentity(principal: HermesPrincipal) {
+    const projects = this.database.authQuery((db) => db.prepare(`
+      SELECT p.id, p.name
+      FROM forge_external_agent_project_grants g
+      JOIN forge_projects p ON p.id = g.project_id AND p.company_id = g.company_id
+      JOIN forge_external_agents a ON a.id = g.agent_id AND a.company_id = g.company_id
+      WHERE a.id = ? AND a.company_id = ? AND a.status = 'paired'
+      ORDER BY p.name COLLATE NOCASE, p.id
+    `).all(principal.agentId, principal.companyId) as Array<{ id: string; name: string }>);
+    return {
+      agent: { id: principal.agentId, name: this.database.authQuery(db => (db.prepare("SELECT name FROM forge_agents WHERE id = ?").get(principal.agentId) as { name: string }).name), profileId: principal.profileId },
+      capabilities: { taskDiscovery: true as const, taskRead: true as const, taskCreate: true as const, taskCommands: [] as never[] },
+      projects,
+    };
+  }
+
+  listHermesTasks(principal: HermesPrincipal, input: { projectId?: string; status?: string; archived?: boolean; attention?: boolean; blocker?: boolean; updatedSince?: string; cursor?: string; limit: number }) {
+    if (input.projectId) this.requireScope({ kind: "hermes", principal }, principal.companyId, input.projectId);
+    const filter = { projectId: input.projectId ?? null, status: input.status ?? null, archived: input.archived ?? null, attention: input.attention ?? null, blocker: input.blocker ?? null, updatedSince: input.updatedSince ?? null };
+    const cursor = input.cursor ? this.parseHermesCursor(input.cursor, principal, filter) : null;
+    const rows = this.repository.hermesRows({
+      agentId: principal.agentId,
+      companyId: principal.companyId,
+      limit: input.limit + 1,
+      ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+      ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.archived === undefined ? {} : { archived: input.archived }),
+      ...(input.attention === undefined ? {} : { attention: input.attention }),
+      ...(input.blocker === undefined ? {} : { blocker: input.blocker }),
+      ...(input.updatedSince === undefined ? {} : { updatedSince: input.updatedSince }),
+      ...(cursor ? { cursor } : {}),
+    });
+    const hasMore = rows.length > input.limit;
+    const tasks = rows.slice(0, input.limit).map(row => this.hermesProjection(row));
+    const last = tasks.at(-1);
+    return { tasks, nextCursor: last && hasMore ? this.createHermesCursor(principal, filter, last) : null };
   }
 
   private async create(authority: Authority, companyId: string, raw: TaskInput, capturedDispatch?: GithubTriggerDispatch): Promise<{ task: Task; created: boolean }> {
@@ -306,10 +347,46 @@ export class TaskService {
 
   private requireTask(authority: Authority, taskId: string): TaskRow {
     const row = this.repository.row(taskId);
-    if (!row) throw new TaskFailure("Not found", 404);
+    if (!row) throw new TaskFailure("Not found", 404, authority.kind === "hermes" ? "resource_not_found" : "task_failure");
     this.requireScope(authority, row.company_id, row.project_id);
-    if (authority.kind === "hermes" && row.creator_agent_id !== authority.principal.agentId) throw new TaskFailure("Not found", 404);
+    if (authority.kind === "hermes" && row.creator_agent_id !== authority.principal.agentId) throw new TaskFailure("Not found", 404, "resource_not_found");
     return row;
+  }
+
+  private hermesProjection(row: TaskRow): HermesSafeTaskProjection {
+    const task = this.repository.task(row);
+    const project = this.database.authQuery(db => db.prepare("SELECT id, name FROM forge_projects WHERE id = ? AND company_id = ?").get(row.project_id, row.company_id) as { id: string; name: string } | undefined);
+    if (!project) throw new TaskFailure("Not found", 404);
+    const humanQuestion = task.humanQuestion?.text ?? null;
+    const wait = task.workflowState.deliveryWait;
+    const completion = task.workflowState.completion;
+    const blocker = humanQuestion ? { kind: "human_question" as const } : wait ? { kind: "delivery_wait" as const, reason: wait.reason } : null;
+    const workflowStage = task.status === "cancelled" ? "cancelled" : completion || task.status === "delivered" ? "completed" : humanQuestion ? "waiting_human" : wait ? "waiting_delivery" : task.status === "active" ? "working" : "queued";
+    const delivery = task.pullRequest || wait || completion ? { pullRequest: task.pullRequest ? { number: task.pullRequest.number, url: task.pullRequest.url, state: task.pullRequest.state, mergedAt: task.pullRequest.mergedAt } : null, checks: null, waiting: wait ? { reason: wait.reason, since: wait.since } : null, completion: completion ? { kind: completion.kind, pullRequestNumber: completion.pullRequestNumber, observedAt: completion.observedAt } : null } : null;
+    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, archived: task.archivedAt !== null, permittedCommands: [] as never[], humanQuestion, blocker, workflowStage, workflow: task.workflow, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    return { ...value, revision: createHash("sha256").update(JSON.stringify(value)).digest("base64url") };
+  }
+
+  private createHermesCursor(principal: HermesPrincipal, filter: object, task: HermesSafeTaskProjection): string {
+    const payload = Buffer.from(JSON.stringify({ agentId: principal.agentId, filter, updatedAt: task.updatedAt, id: task.id })).toString("base64url");
+    return `${payload}.${createHmac("sha256", principal.cursorKey).update(payload).digest("base64url")}`;
+  }
+
+  private parseHermesCursor(value: string, principal: HermesPrincipal, filter: object): { updatedAt: string; id: string } {
+    try {
+      const [payload, signature, extra] = value.split(".");
+      if (!payload || !signature || extra) throw new TaskFailure("Invalid cursor", 400, "cursor_invalid");
+      const expected = createHmac("sha256", principal.cursorKey).update(payload).digest("base64url");
+      const actualBytes = Buffer.from(signature);
+      const expectedBytes = Buffer.from(expected);
+      if (actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes)) throw new TaskFailure("Invalid cursor", 400, "cursor_invalid");
+      const cursor = z.object({ agentId: z.string(), filter: z.record(z.string(), z.unknown()), updatedAt: z.string().datetime(), id: z.string() }).strict().parse(JSON.parse(Buffer.from(payload, "base64url").toString()));
+      if (cursor.agentId !== principal.agentId || JSON.stringify(cursor.filter) !== JSON.stringify(filter)) throw new TaskFailure("Invalid cursor", 400, "cursor_invalid");
+      return cursor;
+    } catch (error) {
+      if (error instanceof TaskFailure) throw error;
+      throw new TaskFailure("Invalid cursor", 400, "cursor_invalid", { cause: error });
+    }
   }
 
   private requireScope(authority: Authority, companyId: string, projectId: string, active = false): void {
@@ -319,9 +396,9 @@ export class TaskService {
       return;
     }
     const principal = authority.principal;
-    if (principal.companyId !== companyId || !principal.projectIds.includes(projectId)) throw new TaskFailure("Not found", 404);
-    const allowed = this.database.authQuery(db => db.prepare("SELECT c.status FROM forge_external_agents a JOIN forge_external_agent_project_grants g ON g.agent_id = a.id JOIN forge_companies c ON c.id = a.company_id WHERE a.id = ? AND a.company_id = ? AND a.status = 'paired' AND g.project_id = ?").get(principal.agentId, companyId, projectId));
-    if (!allowed) throw new AuthFailure("Not found", 404);
+    if (principal.companyId !== companyId) throw new TaskFailure("Not found", 404, "resource_not_found");
+    const allowed = this.database.authQuery(db => db.prepare("SELECT c.status FROM forge_external_agents a JOIN forge_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = a.company_id JOIN forge_companies c ON c.id = a.company_id WHERE a.id = ? AND a.company_id = ? AND a.status = 'paired' AND a.revoked_at IS NULL AND g.project_id = ?").get(principal.agentId, companyId, projectId));
+    if (!allowed) throw new TaskFailure("Not found", 404, "resource_not_found");
     if (active && z.object({ status: z.string() }).parse(allowed).status !== "active") throw new TaskFailure("The company is not active", 409);
   }
 

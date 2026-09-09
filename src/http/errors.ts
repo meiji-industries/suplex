@@ -61,7 +61,7 @@ function sendDomainFailure(request: FastifyRequest, reply: FastifyReply, error: 
       ? { error: error.publicMessage, code: hermesTaskFailureCode(error) }
     : error instanceof ProjectFailure && runtime
       ? { error: error.publicMessage, code: error.statusCode === 404 ? "not_found" : "task_unavailable", findings: error.findings }
-    : { error: error.publicMessage, ...(error instanceof ProjectFailure ? { findings: error.findings } : {}) };
+    : { error: error.publicMessage, ...(error instanceof TaskFailure && error.code !== "task_failure" ? { code: error.code } : {}), ...(error instanceof ProjectFailure ? { findings: error.findings } : {}) };
   reply.code(error.statusCode).send(body);
 }
 

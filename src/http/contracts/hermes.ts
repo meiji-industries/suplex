@@ -98,22 +98,88 @@ export const HermesTaskIdParamsSchema = z.object({
   taskId: z.string().min(1).max(100),
 });
 
+export const HermesProjectSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+export const HermesIdentityResponseSchema = z.object({
+  agent: z.object({
+    id: z.string(),
+    name: z.string(),
+    profileId: z.string(),
+  }),
+  capabilities: z.object({
+    taskDiscovery: z.literal(true),
+    taskRead: z.literal(true),
+    taskCreate: z.literal(true),
+    taskCommands: z.array(z.never()),
+  }),
+  projects: z.array(HermesProjectSchema),
+});
+
+export const HermesTaskListQuerySchema = z.object({
+  projectId: z.string().min(1).max(128).optional(),
+  status: z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]).optional(),
+  archived: z.enum(["true", "false"]).optional(),
+  attention: z.enum(["true", "false"]).optional(),
+  blocker: z.enum(["true", "false"]).optional(),
+  updatedSince: z.string().datetime().optional(),
+  cursor: z.string().min(1).max(2048).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+}).strict();
+
+export const HermesTaskDeliverySchema = z.object({
+  pullRequest: z.object({
+    number: z.number().int().min(1),
+    url: z.string().url(),
+    state: z.string(),
+    mergedAt: z.string().nullable(),
+  }).nullable(),
+  checks: z.null(),
+  waiting: z.object({
+    reason: z.enum(["checks", "mergeability", "merge_queue", "observation"]),
+    since: z.string(),
+  }).nullable(),
+  completion: z.object({
+    kind: z.enum(["workflow", "external_merge"]),
+    pullRequestNumber: z.number().int().min(1).nullable(),
+    observedAt: z.string(),
+  }).nullable(),
+}).nullable();
+
 export const HermesSafeTaskProjectionSchema = z.object({
   id: z.string(),
   issueKey: z.string().nullable(),
   projectId: z.string(),
+  project: HermesProjectSchema,
   title: z.string(),
   status: z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]),
+  archived: z.boolean(),
+  revision: z.string(),
+  permittedCommands: z.array(z.never()),
   humanQuestion: z.string().nullable(),
+  blocker: z.object({
+    kind: z.enum(["human_question", "delivery_wait"]),
+    reason: z.enum(["checks", "mergeability", "merge_queue", "observation"]).optional(),
+  }).nullable(),
+  workflowStage: z.string(),
+  workflow: z.string(),
+  delivery: HermesTaskDeliverySchema,
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 
 export type HermesSafeTaskProjection = z.infer<typeof HermesSafeTaskProjectionSchema>;
 
+export const HermesTaskListResponseSchema = z.object({
+  tasks: z.array(HermesSafeTaskProjectionSchema),
+  nextCursor: z.string().nullable(),
+});
+
 export const HermesRuntimeErrorSchema = z.object({
   error: z.string(),
-  code: z.enum(["credential_invalid", "not_found", "idempotency_conflict", "request_invalid", "task_unavailable", "payload_too_large", "unsupported_media_type", "internal_error"]),
+  code: z.enum(["credential_invalid", "not_found", "resource_not_found", "idempotency_conflict", "request_invalid", "task_unavailable", "payload_too_large", "unsupported_media_type", "internal_error"]),
   findings: z.array(z.object({ code: z.string(), field: z.string(), message: z.string() })).optional(),
 });
 
@@ -123,6 +189,7 @@ const HermesRuntimeErrorResponses = {
   requestInvalid: runtimeError("request_invalid"),
   credentialInvalid: runtimeError("credential_invalid"),
   notFound: runtimeError("not_found"),
+  resourceNotFound: runtimeError("resource_not_found"),
   idempotencyConflict: runtimeError("idempotency_conflict"),
   taskUnavailable: runtimeError("task_unavailable"),
   payloadTooLarge: runtimeError("payload_too_large"),
@@ -167,7 +234,7 @@ export const HermesRuntimeOperations = {
       201: HermesSafeTaskProjectionSchema,
       400: HermesRuntimeErrorResponses.requestInvalid,
       401: HermesRuntimeErrorResponses.credentialInvalid,
-      404: HermesRuntimeErrorResponses.notFound,
+      404: z.union([HermesRuntimeErrorResponses.notFound, HermesRuntimeErrorResponses.resourceNotFound]),
       409: z.union([HermesRuntimeErrorResponses.idempotencyConflict, HermesRuntimeErrorResponses.taskUnavailable]),
       413: HermesRuntimeErrorResponses.payloadTooLarge,
       415: HermesRuntimeErrorResponses.unsupportedMediaType,
@@ -177,7 +244,7 @@ export const HermesRuntimeOperations = {
   },
   getTask: {
     params: HermesTaskIdParamsSchema,
-    response: { 200: HermesSafeTaskProjectionSchema, 400: HermesRuntimeErrorResponses.requestInvalid, 401: HermesRuntimeErrorResponses.credentialInvalid, 404: HermesRuntimeErrorResponses.notFound, 500: HermesRuntimeErrorResponses.internal },
+    response: { 200: HermesSafeTaskProjectionSchema, 400: HermesRuntimeErrorResponses.requestInvalid, 401: HermesRuntimeErrorResponses.credentialInvalid, 404: z.union([HermesRuntimeErrorResponses.notFound, HermesRuntimeErrorResponses.resourceNotFound]), 500: HermesRuntimeErrorResponses.internal },
   },
 } as const;
 

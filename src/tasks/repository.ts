@@ -11,14 +11,14 @@ export type TaskCreator = { kind: "user"; id: string } | { kind: "agent"; id: st
 const RowSchema = z.object({
   id: z.string(), company_id: z.string(), project_id: z.string(), issue_number: z.number().nullable(), issue_code: z.string().nullable(),
   title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(),
-  creator_user_id: z.string().nullable(), creator_agent_id: z.string().nullable(), created_at: z.string(), updated_at: z.string(), activity_updated_at: z.string(), archived_at: z.string().nullable(),
+  creator_user_id: z.string().nullable(), creator_agent_id: z.string().nullable(), created_at: z.string(), updated_at: z.string(), activity_updated_at: z.string(), status_changed_at: z.string(), archived_at: z.string().nullable(),
 });
 export type TaskRow = z.infer<typeof RowSchema>;
 const ArtifactRowSchema = z.object({
   id: z.string(), companyId: z.string(), kind: z.string(), filename: z.string(), mimeType: z.string(), byteSize: z.number(),
   sha256: z.string(), storagePath: z.string(), createdAt: z.string(),
 });
-const select = "SELECT t.*, MAX(t.updated_at, COALESCE(control.updated_at, t.updated_at)) AS activity_updated_at, c.issue_code FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id LEFT JOIN forge_task_controls control ON control.task_id = t.id";
+const select = "SELECT t.*, MAX(t.updated_at, COALESCE(control.updated_at, t.updated_at)) AS activity_updated_at, control.status_changed_at, c.issue_code FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id LEFT JOIN forge_task_controls control ON control.task_id = t.id";
 
 export class TaskConflict extends Error {}
 
@@ -101,7 +101,7 @@ export class TaskRepository {
         : { kind: "question", id: control.humanQuestionId, text: control.humanQuestion, options: control.humanQuestionOptions ?? [], requiresCommandCleanup: control.recoveryTurnId !== null }
         : null,
       limits: { ...limitState.limits, admittedTurns: limitState.admittedTurns },
-      wakeAt: control.wakeAt, images, createdAt: row.created_at, updatedAt: row.activity_updated_at, archivedAt: row.archived_at,
+      wakeAt: control.wakeAt, images, createdAt: row.created_at, updatedAt: row.activity_updated_at, statusChangedAt: row.status_changed_at, archivedAt: row.archived_at,
     });
   }
 

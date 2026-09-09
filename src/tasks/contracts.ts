@@ -81,6 +81,6 @@ export const TaskSchema = z.object({
   limits: TaskLimitsSchema.extend({ admittedTurns: z.number().int().nonnegative() }).strict(),
   wakeAt: z.string().nullable(),
   images: z.array(TaskImageSchema),
-  createdAt: z.string(), updatedAt: z.string(), archivedAt: z.string().nullable(),
+  createdAt: z.string(), updatedAt: z.string(), statusChangedAt: z.string(), archivedAt: z.string().nullable(),
 }).strict();
 export type Task = z.infer<typeof TaskSchema>;

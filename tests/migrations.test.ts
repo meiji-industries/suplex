@@ -8,6 +8,27 @@ import { describe, expect, test } from "vitest";
 import { applyMigrations, readMigrations } from "../src/platform/database.js";
 
 describe("timestamp migrations", () => {
+  test("tracks task status changes without treating control writes as status changes", () => {
+    const folder = resolve(process.cwd(), "drizzle");
+    const database = new Database(":memory:");
+    try {
+      const migration = readMigrations(folder).find((candidate) => candidate.tag.includes("task_status_change_timestamp"))!;
+      database.exec("CREATE TABLE forge_task_controls (task_id TEXT PRIMARY KEY, status TEXT NOT NULL, wake_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); INSERT INTO forge_task_controls (task_id, status, wake_at, created_at, updated_at) VALUES ('task-1', 'backlog', NULL, '2020-01-01T00:00:00.000Z', '2020-01-02T00:00:00.000Z');");
+
+      for (const statement of readFileSync(`${folder}/${migration.tag}.sql`, "utf8").split("--> statement-breakpoint")) {
+        if (statement.trim()) database.exec(statement);
+      }
+
+      expect(database.prepare("SELECT status_changed_at FROM forge_task_controls WHERE task_id = 'task-1'").get()).toEqual({ status_changed_at: "2020-01-02T00:00:00.000Z" });
+      database.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ?").run("2020-01-03T00:00:00.000Z", "2020-01-03T00:00:00.000Z", "task-1");
+      expect(database.prepare("SELECT status_changed_at FROM forge_task_controls WHERE task_id = 'task-1'").get()).toEqual({ status_changed_at: "2020-01-02T00:00:00.000Z" });
+      database.prepare("UPDATE forge_task_controls SET status = ?, updated_at = ? WHERE task_id = ?").run("active", "2020-01-04T00:00:00.000Z", "task-1");
+      expect(database.prepare("SELECT status_changed_at FROM forge_task_controls WHERE task_id = 'task-1'").get()).not.toEqual({ status_changed_at: "2020-01-02T00:00:00.000Z" });
+    } finally {
+      database.close();
+    }
+  });
+
   test("gives internal agents that share a profile independent settings rows", () => {
     const folder = resolve(process.cwd(), "drizzle");
     const database = new Database(":memory:");

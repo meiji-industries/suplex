@@ -10,8 +10,8 @@ import { RecentPullRequest } from "./recent-pull-request.js";
 import { useTaskCosts } from "../analytics/lib/analytics.js";
 import { CostValue } from "../../components/app/cost-value.js";
 
-export function recentTasks<T extends Pick<Task, "status" | "updatedAt">>(tasks: T[]): T[] {
-  return tasks.filter(task => task.status !== "cancelled").sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 10);
+export function recentTasks<T extends Pick<Task, "status" | "statusChangedAt">>(tasks: T[]): T[] {
+  return tasks.filter(task => task.status !== "cancelled").sort((left, right) => right.statusChangedAt.localeCompare(left.statusChangedAt)).slice(0, 10);
 }
 
 export function showRecentTasks(path: string): boolean {

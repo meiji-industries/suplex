@@ -124,6 +124,17 @@ export class TaskRepository {
       return true;
     });
   }
+
+  rename(taskId: string, title: string): boolean {
+    return this.database.authTransaction(db => {
+      const time = new Date().toISOString();
+      const updated = db.prepare("UPDATE forge_tasks SET title = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL")
+        .run(title, time, taskId);
+      if (updated.changes !== 1) return false;
+      db.prepare("UPDATE forge_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM forge_tasks WHERE id = ?), updated_at = ? WHERE task_id = ? AND status = 'backlog'").run(taskId, time, taskId);
+      return true;
+    });
+  }
 }
 
 export function newTaskId(): string { return `task_${randomUUID().replaceAll("-", "")}`; }

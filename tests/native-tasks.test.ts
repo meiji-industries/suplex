@@ -137,3 +137,12 @@ test("editing details can clear the description without leaving objective whites
   expect(f.tasks.repository.controls.get(task.id).objective).toBe(f.input.title);
   expect(() => f.tasks.updateTaskDetails("alice", task.id, { title: "" })).toThrow();
 });
+
+test("renaming a started task leaves its objective unchanged and rejects an empty title", async () => {
+  const f = await fixture();
+  const { task } = await f.tasks.createTask("alice", "company", f.input);
+  const objective = f.tasks.repository.controls.get(task.id).objective;
+  expect(f.tasks.renameTask("alice", task.id, { title: "Renamed task" })).toMatchObject({ title: "Renamed task" });
+  expect(f.tasks.repository.controls.get(task.id).objective).toBe(objective);
+  expect(() => f.tasks.renameTask("alice", task.id, { title: "   " })).toThrow();
+});

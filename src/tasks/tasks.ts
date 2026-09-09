@@ -29,6 +29,7 @@ export class TaskFailure extends Error {
 type Authority = { kind: "user"; userId: string } | { kind: "hermes"; principal: HermesPrincipal };
 type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "resolveTaskSource" | "captureTaskConfiguration">;
 const DetailsSchema = TaskInputSchema.pick({ title: true }).extend({ description: z.string().trim().optional() }).partial().strict().refine(input => input.title !== undefined || input.description !== undefined);
+const RenameSchema = TaskInputSchema.pick({ title: true });
 
 export class TaskService {
   private readonly archives = new Set<string>();
@@ -231,6 +232,13 @@ export class TaskService {
     const input = DetailsSchema.parse(raw);
     this.getTask(userId, taskId);
     if (!this.repository.updateDetails(taskId, input)) throw new TaskFailure("Only tasks in the backlog can be edited. Open archived tasks before editing them.", 409);
+    return this.getTask(userId, taskId);
+  }
+
+  renameTask(userId: string, taskId: string, raw: z.input<typeof RenameSchema>): Task {
+    const { title } = RenameSchema.parse(raw);
+    this.getTask(userId, taskId);
+    if (!this.repository.rename(taskId, title)) throw new TaskFailure("Open archived tasks before renaming them.", 409);
     return this.getTask(userId, taskId);
   }
 

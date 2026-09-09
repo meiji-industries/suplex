@@ -12,6 +12,7 @@ export type TaskResponse = z.infer<typeof TaskResponseSchema>;
 export const TaskListResponseSchema = z.object({ tasks: z.array(TaskResponseSchema) });
 export type TaskListTask = TaskResponse;
 export const TaskDetailsBodySchema = TaskInputSchema.pick({ title: true }).extend({ description: z.string().trim().optional() }).partial().strict();
+export const TaskRenameBodySchema = TaskInputSchema.pick({ title: true });
 export const TaskArchiveBodySchema = z.object({ confirmDiscardDirty: z.boolean().optional() }).strict();
 export const TaskArchiveResponseSchema = z.union([TaskResponseSchema, z.object({
   status: z.literal("confirmation_required"),

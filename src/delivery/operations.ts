@@ -442,6 +442,7 @@ export class DeliveryOperations {
       if (control.workflow !== "standard" && !current.workflowState.completion && pull.state === "merged") this.store.recordWorkflowOutcome(control.taskId, this.cancelledOutcome(current, pull, options.validatedRange));
       return pull;
     }
+    if (current.workflowState.followUp && !options.explicit && !options.validatedRange) return pull;
     if (control.workflow === "standard") { this.store.markDelivered(control.taskId); return pull; }
     if (current.workflowState.completion) { if (current.status !== "delivered") this.store.markDelivered(control.taskId); return pull; }
     if (pull.state === "merged") {

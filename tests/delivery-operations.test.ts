@@ -154,6 +154,23 @@ describe("Coordinator delivery operations", () => {
       expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
     } finally { value.database.close(); }
   });
+  it("observing an existing draft does not complete a follow-up but explicit delivery does", async () => {
+    const value = await fixture();
+    try {
+      value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = 'task'").run());
+      value.store.markDelivered("task");
+      value.store.sendNote("task", "Fix the failing checks.");
+      const fake = github(value.local, value.review.baseSha);
+      const delivery = new DeliveryOperations(value.store, fake.port);
+      await delivery.observe("task");
+      expect(value.store.get("task").status).toBe("active");
+      expect(value.store.get("task").workflowState.followUp).toBe(true);
+      await delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "create_or_adopt_pull_request", value.local.headSha, value.review);
+      expect(value.store.get("task").status).toBe("delivered");
+      expect(value.store.get("task").workflowState.followUp).toBe(false);
+      expect(value.store.get("task").workflowState.deliveryHistory).toHaveLength(1);
+    } finally { value.database.close(); }
+  });
   it("records only confirmed trigger pushes and follows their lineage", async () => {
     const value = await fixture(); try {
       attachTrigger(value);

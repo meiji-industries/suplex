@@ -104,7 +104,7 @@ export type DeliveryWait = z.infer<typeof DeliveryWaitSchema>;
 export const WorkflowCompletionSchema = z.object({ kind: z.enum(["workflow", "external_merge"]), reviewedHead: z.string().nullable(), pullRequestNumber: z.number().int().positive().nullable(), observedAt: z.string() }).strict();
 export type WorkflowCompletion = z.infer<typeof WorkflowCompletionSchema>;
 export const PublicWorkflowStateSchema = z.object({ version: z.literal(1), reviews: z.array(ReviewRecordSchema), acceptedDelivery: ReviewRangeSchema.nullable(), deliveryWait: DeliveryWaitSchema.nullable(), completion: WorkflowCompletionSchema.nullable() }).strict();
-export const WorkflowStateSchema = PublicWorkflowStateSchema.extend({ toolOwner: z.object({ token: z.string().min(1), pid: z.number().int().positive(), processStartTime: z.string().min(1) }).strict().nullable() }).strict();
+export const WorkflowStateSchema = PublicWorkflowStateSchema.extend({ followUp: z.boolean().optional(), deliveryHistory: z.array(z.object({ resumedAt: z.string(), acceptedDelivery: ReviewRangeSchema.nullable(), completion: WorkflowCompletionSchema.nullable() }).strict()).optional(), toolOwner: z.object({ token: z.string().min(1), pid: z.number().int().positive(), processStartTime: z.string().min(1) }).strict().nullable() }).strict();
 export type WorkflowState = z.infer<typeof WorkflowStateSchema>;
 export type PublicWorkflowState = z.infer<typeof PublicWorkflowStateSchema>;
 

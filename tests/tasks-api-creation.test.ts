@@ -104,6 +104,28 @@ test("notes queue one trimmed message for the current Coordinator", async () => 
   } finally { await f.close(); }
 });
 
+test("a message resumes a delivered task and preserves its Coordinator and delivery history", async () => {
+  const f = await nativeApp();
+  try {
+    const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Continue delivery", idempotencyKey: "continue-delivery", startImmediately: true });
+    const store = f.tasks.repository.controls;
+    const root = store.claimRoot({ taskId: task.id });
+    store.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "retained-coordinator" });
+    const previous = { kind: "workflow", reviewedHead: "a".repeat(40), pullRequestNumber: 1597, observedAt: new Date().toISOString() } as const;
+    store.updateWorkflowState(task.id, state => ({ ...state, completion: previous }));
+    store.markDelivered(task.id);
+    store.retireDeliveredSessions(task.id);
+    store.completeStop(root.id);
+    const response = await f.app.inject({ method: "POST", url: `/api/tasks/${task.id}/note`, headers: f.headers, payload: { note: "Fix the failing checks on the existing PR." } });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({ status: "active", deliveryTarget: task.deliveryTarget });
+    expect(store.currentSession(task.id, "root")).toMatchObject({ id: root.id, nativeSessionId: "retained-coordinator" });
+    expect(JSON.parse(store.pendingTurns(root.id)[0]!.promptText)).toMatchObject({ answer: "Fix the failing checks on the existing PR." });
+    expect(store.get(task.id).workflowState).toMatchObject({ completion: null, acceptedDelivery: null, followUp: true, deliveryHistory: [{ completion: previous }] });
+    expect(f.wakes).toContain(task.id);
+  } finally { await f.close(); }
+});
+
 test("notes reject invalid, unauthorised, and inactive requests without queuing a turn", async () => {
   const f = await nativeApp();
   try {
@@ -111,7 +133,7 @@ test("notes reject invalid, unauthorised, and inactive requests without queuing 
     const url = `/api/tasks/${task.id}/note`;
     expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { note: "Message" } })).statusCode).toBe(409);
     f.tasks.startTask(f.userId, task.id);
-    expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { note: "Message" } })).json()).toMatchObject({ error: "Coordinator is not ready. Retry the message." });
+
     f.tasks.repository.controls.claimRoot({ taskId: task.id });
     expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { note: "   " } })).statusCode).toBe(400);
     expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { note: "x".repeat(20_001) } })).statusCode).toBe(400);

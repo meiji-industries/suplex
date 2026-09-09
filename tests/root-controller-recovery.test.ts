@@ -171,3 +171,23 @@ test.each([true, false])("lost acknowledgement is not replayed when native admis
   const root = value.store.currentSession("task", "root")!;
   expect(value.store.pendingTurns(root.id)[0]?.status).toBe(admitted ? "prompted" : "unknown");
 });
+
+test.each(["missing", "recreated"])("a delivered Coordinator resumes its native conversation with %s pane metadata", async metadata => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  const root = value.store.currentSession("task", "root")!;
+  const original = value.harness.dispatched[0]!;
+  value.store.completeRootTurn(original.messageID, JSON.stringify({ state: "completed", text: "Delivered" }));
+  value.store.markDelivered("task");
+  await value.controller.recover("task");
+  value.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = ? WHERE id = ?").run(metadata === "missing" ? null : "recreated-pane", root.id));
+  value.store.sendNote("task", "Fix the failing checks.");
+  const resumed = new TaskControlStore(value.database);
+  const controller = new RootController(resumed, value.harness, undefined, undefined, undefined, value.reader, async () => undefined);
+  await controller.recover("task");
+  await controller.recover("task");
+  expect(value.harness.dispatched).toHaveLength(2);
+  expect(value.harness.dispatched[1]?.sessionID).toBe(original.sessionID);
+  expect(value.store.get("task").status).toBe("active");
+  expect(value.store.currentSession("task", "root")?.id).toBe(root.id);
+});

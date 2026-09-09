@@ -299,11 +299,9 @@ export class TaskService {
 
   sendNote(userId: string, taskId: string, note: string): Task {
     const task = this.getTask(userId, taskId);
-    const root = this.repository.controls.currentSession(taskId, "root");
-    if (task.archivedAt || task.status !== "active") throw new TaskFailure("Start the task before sending a note", 409);
-    if (!root) throw new TaskFailure("Coordinator is not ready. Retry the message.", 409);
+    if (task.archivedAt || !["active", "delivered"].includes(task.status)) throw new TaskFailure("Start the task or answer its current decision before you send a message.", 409);
     const prompt = z.string().trim().min(1).max(20_000).parse(note);
-    this.repository.controls.wakeRoot({ taskId, rootSessionId: root.id, generation: root.generation, prompt: `Human note:\n${prompt}` });
+    this.repository.controls.sendNote(taskId, prompt);
     return this.getTask(userId, taskId);
   }
 

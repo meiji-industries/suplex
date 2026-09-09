@@ -15,7 +15,7 @@ import { TaskConfigurationSchema } from "../tasks/contracts.js";
 import type { PromptDispatchAttempt, PullRequestReference } from "../tasks/control.js";
 import { DeliveryIntentSchema, PullRequestReferenceSchema, TaskControlStatusSchema, TaskProfileSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, WorktreeReferenceSchema, type DeliveryIntent, type TaskControl, type TaskProfile, type TaskSession, type TaskSessionKind, type TaskTurn, type WorktreeReference } from "../tasks/control.js";
 import { AdvisorRoleSchema, RaterResultSchema, ReviewerResultSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, turnOutcome, type AdvisorResult, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
-import { STANDARD_WORKER_RESULT_WAKE, workerAssignmentPreamble } from "./workflow-prompts.js";
+import { STANDARD_WORKER_RESULT_WAKE, initialCoordinatorPrompt, workerAssignmentPreamble } from "./workflow-prompts.js";
 import { assertPullRequestAvailable, assertTaskPullRequestsAvailable } from "../delivery/pull-request-ownership.js";
 import { authorizedTriggerHead, recordTriggerPush, triggerDeliveryPolicy, type GithubTriggerDeliveryPolicy } from "../integrations/github/trigger-delivery-policy.js";
 import { integer, parseJson, text, type Row } from "./persistence/row-values.js";
@@ -87,6 +87,26 @@ export class TaskControlStore {
     if (changed !== 1) throw new Error("task_not_startable");
     return this.observeLifecycle(taskId);
   }
+  sendNote(taskId: string, note: string): TaskControl {
+    this.database.authImmediateTransaction(db => {
+      const control = this.get(taskId);
+      const time = now();
+      const resuming = control.status === "delivered";
+      if (resuming) {
+        assertTaskPullRequestsAvailable(db, taskId);
+        const state = control.workflowState;
+        this.writeWorkflowState(db, taskId, { ...state, acceptedDelivery: null, completion: null, deliveryWait: null, followUp: true, deliveryHistory: [...state.deliveryHistory ?? [], { resumedAt: time, acceptedDelivery: state.acceptedDelivery, completion: state.completion }] });
+        db.prepare("UPDATE forge_task_controls SET status = 'active', wake_at = ?, updated_at = ? WHERE task_id = ?").run(time, time, taskId);
+        db.prepare("UPDATE forge_task_sessions SET is_current = 1, lifecycle = 'reserved', stop_requested_at = NULL, stopped_at = NULL, updated_at = ? WHERE id = ? AND kind = 'root'").run(time, control.rootSessionId);
+      }
+      const existing = this.currentSession(taskId, "root");
+      const root = existing ?? this.claimRoot({ taskId });
+      if (!existing) this.ensureInitialPrompt(root, initialCoordinatorPrompt(this.get(taskId), this.context(taskId)));
+      const prompt = resuming ? JSON.stringify({ question: "The user has resumed this delivered task. Handle the follow-up below before completing delivery again. Preserve existing work and inspect current GitHub state. Earlier delivery is history, not completion of this request. For failing checks, read the logs, reproduce and repair the failure, verify locally, push, and observe checks on the current head. Keep the delivery target unchanged. Request delivery explicitly only when the follow-up is satisfied.", answer: note }) : `Human note:\n${note}`;
+      this.wakeRoot({ taskId, rootSessionId: root.id, generation: root.generation, prompt });
+    });
+    return this.observeLifecycle(taskId);
+  }
   answerHuman(taskId: string, questionId: string, answer: string, confirmCommandsStopped = false): TaskControl {
     if (!answer.trim()) throw new Error("answer_is_empty");
     this.database.authTransaction((db) => {
@@ -128,7 +148,7 @@ export class TaskControlStore {
     return this.get(taskId);
   }
   markDelivered(taskId: string): TaskControl {
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(now(), taskId).changes);
+    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.followUp', json('false')), status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(now(), taskId).changes);
     if (changed !== 1) throw new Error("task_not_active");
     return this.observeLifecycle(taskId);
   }

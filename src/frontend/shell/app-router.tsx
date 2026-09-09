@@ -17,6 +17,7 @@ import { TaskTemplateSettings } from "../features/settings/task-template-setting
 import { ProviderSettingsView } from "../features/settings/provider-settings.js";
 import { EnvironmentSettingsView } from "../features/settings/environment-settings.js";
 import { WorkflowSettingsView } from "../features/settings/workflow-settings.js";
+import { TriggerSettingsView } from "../features/settings/trigger-settings.js";
 
 function AppView(): ReactElement {
   const pathname = window.location.pathname;
@@ -27,6 +28,7 @@ function AppView(): ReactElement {
   if (pathname === "/admin/providers") return <ProviderSettingsView />;
   if (pathname === "/admin/environment") return <EnvironmentSettingsView />;
   if (pathname === "/admin/workflows") return <WorkflowSettingsView />;
+  if (pathname === "/admin/triggers") return <TriggerSettingsView />;
   if (pathname === "/admin" || pathname === "/admin/agents" || pathname === "/admin/models" || pathname === "/admin/companies" || pathname === "/admin/invitations" || pathname === "/admin/passkeys") return <AdminView />;
   if (/^\/companies\/[^/]+\/settings$/.test(pathname)) return <CompanySettingsView />;
   if (pathname === "/profile") return <ProfileView />;

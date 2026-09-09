@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { recentTasks, showRecentTasks } from "../src/frontend/features/tasks/recent-tasks.js";
+import { currentRecentTasks, recentTasks, showRecentTasks } from "../src/frontend/features/tasks/recent-tasks.js";
 
 describe("recentTasks", () => {
   it("returns the ten most recently status-changed tasks first", () => {
@@ -22,5 +22,13 @@ describe("recentTasks", () => {
     expect(showRecentTasks("/profile")).toBe(false);
     expect(showRecentTasks("/admin/profiles")).toBe(false);
     expect(showRecentTasks("/companies/company-a/settings")).toBe(false);
+  });
+
+  it("does not show an obsolete company's Activity while its response is in flight", () => {
+    const companyATasks = [{ id: "task-a" }];
+
+    expect(currentRecentTasks({ companyId: "company-a", tasks: companyATasks }, "company-b")).toEqual([]);
+    expect(currentRecentTasks({ companyId: "company-b", tasks: [{ id: "task-b" }] }, "company-b")).toEqual([{ id: "task-b" }]);
+    expect(currentRecentTasks({ companyId: "company-b", tasks: [{ id: "task-b", status: "delivered" }] }, "company-b")).toEqual([{ id: "task-b", status: "delivered" }]);
   });
 });

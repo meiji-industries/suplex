@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from "react";
+import { createContext, useContext, type ReactElement, type ReactNode } from "react";
 
 import { Separator } from "../components/ui/separator.js";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "../components/ui/sidebar.js";
@@ -8,12 +8,21 @@ import { UpdateNotice } from "../components/app/update-notice.js";
 import { ThemeToggle } from "../components/app/theme.js";
 import { GlobalNewTaskDialog } from "./global-new-task-dialog.js";
 
-export function ApplicationFrame({ title, headerActions, headerRight, sidebar, children }: { title: string; headerActions?: ReactElement | null | undefined; headerRight?: ReactElement | null | undefined; sidebar?: ReactElement; children: ReactNode }): ReactElement {
-  return (
+const ApplicationShellContext = createContext(false);
+
+export function ApplicationShell({ children }: { children: ReactNode }): ReactElement {
+  return <ApplicationShellContext.Provider value>
     <SidebarProvider style={{ "--sidebar-width": "18rem", "--header-height": "3rem" } as React.CSSProperties}>
-      {sidebar ?? <AppSidebar />}
+      <AppSidebar />
       <GlobalNewTaskDialog />
-      <SidebarInset className="min-w-0">
+      {children}
+    </SidebarProvider>
+  </ApplicationShellContext.Provider>;
+}
+
+export function ApplicationFrame({ title, headerActions, headerRight, sidebar, children }: { title: string; headerActions?: ReactElement | null | undefined; headerRight?: ReactElement | null | undefined; sidebar?: ReactElement; children: ReactNode }): ReactElement {
+  const withinShell = useContext(ApplicationShellContext);
+  const content = <SidebarInset className="min-w-0">
         <header data-app-header className="titlebar-drag titlebar-inset flex h-(--header-height) shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-(--header-height)">
           <div className="flex w-full items-center gap-1 px-4 lg:gap-2 lg:px-6">
             <SidebarTrigger className="-ml-1" aria-label="Open navigation" title="Toggle navigation" />
@@ -26,7 +35,13 @@ export function ApplicationFrame({ title, headerActions, headerRight, sidebar, c
         <UpdateNotice />
         <SystemHealthAlert />
         {children}
-      </SidebarInset>
+      </SidebarInset>;
+  if (withinShell) return content;
+  return (
+    <SidebarProvider style={{ "--sidebar-width": "18rem", "--header-height": "3rem" } as React.CSSProperties}>
+      {sidebar ?? <AppSidebar />}
+      <GlobalNewTaskDialog />
+      {content}
     </SidebarProvider>
   );
 }

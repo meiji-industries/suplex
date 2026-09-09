@@ -92,6 +92,7 @@
     "eslint-plugin-import-x": "^4.17.1",
     "happy-dom": "^20.14.0",
     "isomorphic-git": "^1.41.9",
+    "jsdom": "^30.0.1",
     "playwright": "^1.57.0",
     "shadcn": "^4.16.2",
     "tailwindcss": "^4.3.3",

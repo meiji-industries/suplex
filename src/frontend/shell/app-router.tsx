@@ -18,6 +18,12 @@ import { ProviderSettingsView } from "../features/settings/provider-settings.js"
 import { EnvironmentSettingsView } from "../features/settings/environment-settings.js";
 import { WorkflowSettingsView } from "../features/settings/workflow-settings.js";
 import { TriggerSettingsView } from "../features/settings/trigger-settings.js";
+import { ApplicationShell } from "./application-frame.js";
+
+export function activityShellKey(pathname: string): "activity" | undefined {
+  if (pathname === "/projects" || pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
+  return undefined;
+}
 
 function AppView(): ReactElement {
   const pathname = window.location.pathname;
@@ -66,7 +72,9 @@ export function AppRouter(): ReactElement {
     };
   }, []);
   if (window.__FORGE_VIEW__ === "auth") return <AuthView />;
-  return <CompanyProvider><UpdateProvider><SystemHealthProvider initialSnapshot={window.__FORGE_HEALTH__}><AppView key={route} /></SystemHealthProvider></UpdateProvider></CompanyProvider>;
+  const shellKey = activityShellKey(window.location.pathname);
+  const view = <AppView key={route} />;
+  return <CompanyProvider><UpdateProvider><SystemHealthProvider initialSnapshot={window.__FORGE_HEALTH__}>{shellKey ? <ApplicationShell key={shellKey}>{view}</ApplicationShell> : view}</SystemHealthProvider></UpdateProvider></CompanyProvider>;
 }
 
 export { isApplicationPath };

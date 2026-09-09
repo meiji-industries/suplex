@@ -29,6 +29,7 @@ import {
 } from "./identity/auth-identifiers.js";
 import { installHttpErrorHandlers } from "./http/errors.js";
 import { isLoopbackHost } from "./http/session.js";
+import { isHermesRuntimeRequest } from "./http/hermes-runtime.js";
 import authRoutes from "./http/routes/auth.js";
 import authenticated from "./http/routes/authenticated.js";
 import assets from "./http/routes/assets.js";
@@ -96,6 +97,8 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
   const configuredOrigin = new URL(dependencies.config.reachableAddress).origin;
   const loopbackOrigins = new Set([`http://localhost:${dependencies.config.port}`, `http://127.0.0.1:${dependencies.config.port}`, `http://[::1]:${dependencies.config.port}`]);
   app.addHook("preHandler", async (request: FastifyRequest, reply: FastifyReply) => {
+    // Hermes runtime routes authenticate a bearer credential independently of board sessions and CSRF.
+    if (isHermesRuntimeRequest(request)) return;
     if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
     const hasSession = [SESSION_COOKIE_NAME, LEGACY_SESSION_COOKIE_NAME].some((name) => typeof request.cookies[name] === "string" && request.cookies[name] !== "");
     if (!hasSession) return;

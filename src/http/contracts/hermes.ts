@@ -94,7 +94,8 @@ export const HermesTaskCreateBodySchema = z.object({
 });
 
 export const HermesTaskIdParamsSchema = z.object({
-  taskId: z.string().min(1).max(128),
+  // Fastify's default router rejects longer parameters before the request reaches this schema.
+  taskId: z.string().min(1).max(100),
 });
 
 export const HermesSafeTaskProjectionSchema = z.object({
@@ -109,3 +110,139 @@ export const HermesSafeTaskProjectionSchema = z.object({
 });
 
 export type HermesSafeTaskProjection = z.infer<typeof HermesSafeTaskProjectionSchema>;
+
+export const HermesRuntimeErrorSchema = z.object({
+  error: z.string(),
+  code: z.enum(["credential_invalid", "not_found", "idempotency_conflict", "request_invalid", "task_unavailable", "payload_too_large", "unsupported_media_type", "internal_error"]),
+  findings: z.array(z.object({ code: z.string(), field: z.string(), message: z.string() })).optional(),
+});
+
+const runtimeError = <T extends z.infer<typeof HermesRuntimeErrorSchema>["code"]>(code: T) => HermesRuntimeErrorSchema.extend({ code: z.literal(code) });
+
+const HermesRuntimeErrorResponses = {
+  requestInvalid: runtimeError("request_invalid"),
+  credentialInvalid: runtimeError("credential_invalid"),
+  notFound: runtimeError("not_found"),
+  idempotencyConflict: runtimeError("idempotency_conflict"),
+  taskUnavailable: runtimeError("task_unavailable"),
+  payloadTooLarge: runtimeError("payload_too_large"),
+  unsupportedMediaType: runtimeError("unsupported_media_type"),
+  internal: runtimeError("internal_error"),
+} as const;
+
+export const HermesCapabilitiesSchema = z.object({
+  apiVersion: z.literal("v1"),
+  capabilities: z.object({
+    read: z.object({ task: z.literal(true) }),
+    create: z.object({ backlogTask: z.literal(true) }),
+    taskControl: z.literal(false),
+    delivery: z.literal(false),
+    merge: z.literal(false),
+    humanDecisions: z.literal(false),
+  }),
+  autonomousCommands: z.array(z.literal("create_backlog_task")),
+  humanOnlyRecords: z.array(z.literal("task_human_answer")),
+  unavailableCommands: z.array(z.enum([
+    "start_task",
+    "cancel_task",
+    "answer_human_question",
+    "send_task_note",
+    "deliver_task",
+    "merge_pull_request",
+  ])),
+  pagination: z.object({ supported: z.literal(false), cursor: z.literal(false) }),
+});
+
+export const HermesRuntimeOperations = {
+  openApi: {
+    response: { 200: z.record(z.string(), z.unknown()), 401: HermesRuntimeErrorResponses.credentialInvalid, 500: HermesRuntimeErrorResponses.internal },
+  },
+  capabilities: {
+    response: { 200: HermesCapabilitiesSchema, 401: HermesRuntimeErrorResponses.credentialInvalid, 500: HermesRuntimeErrorResponses.internal },
+  },
+  createTask: {
+    body: HermesTaskCreateBodySchema,
+    response: {
+      200: HermesSafeTaskProjectionSchema,
+      201: HermesSafeTaskProjectionSchema,
+      400: HermesRuntimeErrorResponses.requestInvalid,
+      401: HermesRuntimeErrorResponses.credentialInvalid,
+      404: HermesRuntimeErrorResponses.notFound,
+      409: z.union([HermesRuntimeErrorResponses.idempotencyConflict, HermesRuntimeErrorResponses.taskUnavailable]),
+      413: HermesRuntimeErrorResponses.payloadTooLarge,
+      415: HermesRuntimeErrorResponses.unsupportedMediaType,
+      422: HermesRuntimeErrorResponses.taskUnavailable,
+      500: HermesRuntimeErrorResponses.internal,
+    },
+  },
+  getTask: {
+    params: HermesTaskIdParamsSchema,
+    response: { 200: HermesSafeTaskProjectionSchema, 400: HermesRuntimeErrorResponses.requestInvalid, 401: HermesRuntimeErrorResponses.credentialInvalid, 404: HermesRuntimeErrorResponses.notFound, 500: HermesRuntimeErrorResponses.internal },
+  },
+} as const;
+
+const jsonSchema = (schema: z.ZodType, io: "input" | "output"): Record<string, unknown> => z.toJSONSchema(schema, { target: "openapi-3.0", io }) as Record<string, unknown>;
+const inputSchema = (schema: z.ZodType): Record<string, unknown> => {
+  const result = jsonSchema(schema, "input");
+  // Zod strips unknown object keys by default; OpenAPI expresses that accepted input accurately.
+  if (result.type === "object") result.additionalProperties = true;
+  return result;
+};
+const responseDescription = (status: string): string => status.startsWith("2") ? "Successful response" : "Safe error response";
+const openApiResponses = (responses: Record<number, z.ZodType>): Record<string, unknown> => Object.fromEntries(Object.entries(responses).map(([status, schema]) => [status, {
+  description: responseDescription(status),
+  content: { "application/json": { schema: jsonSchema(schema, "output") } },
+}]));
+
+/** The authenticated runtime contract deliberately excludes pairing and administration. */
+export function hermesRuntimeOpenApi(): Record<string, unknown> {
+  return {
+    openapi: "3.0.3",
+    info: {
+      title: "Forge Hermes Runtime API",
+      version: "v1",
+      description: "Version v1 is additive-only within a major version. Pairing, credential rotation, and administration are separate provisioning APIs and are not part of this contract. Company, project grants, and creator ownership come from current server persistence, never request fields. Denied company, grant, creator, and missing-resource reads are all non-enumerating 404 responses.",
+    },
+    paths: {
+      "/api/hermes/openapi.json": {
+        get: {
+          operationId: "getHermesRuntimeOpenApi",
+          summary: "Read this authenticated runtime contract",
+          security: [{ HermesBearer: [] }],
+          responses: openApiResponses(HermesRuntimeOperations.openApi.response),
+        },
+      },
+      "/api/hermes/capabilities": {
+        get: {
+          operationId: "getHermesCapabilities",
+          summary: "Read paired-agent capabilities and unavailable commands",
+          security: [{ HermesBearer: [] }],
+          responses: openApiResponses(HermesRuntimeOperations.capabilities.response),
+        },
+      },
+      "/api/hermes/tasks": {
+        post: {
+          operationId: "createHermesBacklogTask",
+          summary: "Create a backlog task without starting it",
+          description: "Creates a backlog task and never starts execution. The server defaults description to an empty string and ignores unknown fields. Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. Collections are not supported, so pagination and cursors are unavailable.",
+          security: [{ HermesBearer: [] }],
+          requestBody: { required: true, content: { "application/json": { schema: inputSchema(HermesRuntimeOperations.createTask.body) } } },
+          responses: openApiResponses(HermesRuntimeOperations.createTask.response),
+        },
+      },
+      "/api/hermes/tasks/{taskId}": {
+        get: {
+          operationId: "getHermesCreatedTask",
+          summary: "Read a task created by this paired agent",
+          description: "Only the creating paired agent can read a task. Task states are backlog, active, waiting_human, cancelled, and delivered. Human questions are records only: answering them remains human authority and no agent answer command exists. The server router rejects path parameters longer than 100 characters before this authenticated operation is matched; those router-level responses are outside this contract. Collections are not supported, so pagination and cursors are unavailable.",
+          security: [{ HermesBearer: [] }],
+          parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(HermesRuntimeOperations.getTask.params.shape.taskId, "input") }],
+          responses: openApiResponses(HermesRuntimeOperations.getTask.response),
+        },
+      },
+    },
+    components: {
+      securitySchemes: { HermesBearer: { type: "http", scheme: "bearer", bearerFormat: "Hermes paired-agent credential" } },
+    },
+  };
+}

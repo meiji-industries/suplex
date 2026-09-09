@@ -8,6 +8,7 @@ import { redact } from "../platform/logging.js";
 import { HermesAgentFailure } from "../identity/hermes-agents.js";
 import { ArtifactFailure } from "../platform/artifacts.js";
 import { TaskSourceFailure } from "../tasks/sources.js";
+import { isHermesRuntimeRequest } from "./hermes-runtime.js";
 
 interface ValidationIssue {
   instancePath?: string;
@@ -42,25 +43,41 @@ function bodyParserMessage(code: string): string {
    return Boolean(error && typeof error === "object" && "validation" in error);
  }
 
-function sendDomainFailure(reply: FastifyReply, error: AuthFailure | ProjectFailure | TaskFailure | HermesAgentFailure): void {
-  const body = error instanceof AuthFailure || error instanceof HermesAgentFailure
+function hermesTaskFailureCode(error: TaskFailure): "not_found" | "idempotency_conflict" | "task_unavailable" {
+  if (error.statusCode === 404) return "not_found";
+  if (error.publicMessage === "This idempotency key belongs to a different request") return "idempotency_conflict";
+  return "task_unavailable";
+}
+
+function sendDomainFailure(request: FastifyRequest, reply: FastifyReply, error: AuthFailure | ProjectFailure | TaskFailure | HermesAgentFailure): void {
+  const runtime = isHermesRuntimeRequest(request);
+  const body = error instanceof HermesAgentFailure
     ? { error: error.publicMessage, ...(error.code !== "auth_failure" ? { code: error.code } : {}) }
+    : error instanceof AuthFailure && runtime
+      ? { error: error.publicMessage, code: "not_found" }
+      : error instanceof AuthFailure
+        ? { error: error.publicMessage, ...(error.code !== "auth_failure" ? { code: error.code } : {}) }
+    : error instanceof TaskFailure && runtime
+      ? { error: error.publicMessage, code: hermesTaskFailureCode(error) }
+    : error instanceof ProjectFailure && runtime
+      ? { error: error.publicMessage, code: error.statusCode === 404 ? "not_found" : "task_unavailable", findings: error.findings }
     : { error: error.publicMessage, ...(error instanceof ProjectFailure ? { findings: error.findings } : {}) };
   reply.code(error.statusCode).send(body);
 }
 
 export function installHttpErrorHandlers(app: FastifyInstance): void {
   app.setErrorHandler((error: unknown, request, reply) => {
+    const runtime = isHermesRuntimeRequest(request);
     if (isValidationError(error)) {
       const findings = validationFindings(error);
       request.log.warn({ requestId: request.id, statusCode: 400, findings: redact(findings) }, "Request rejected");
-      reply.code(400).send({ error: "Invalid request", ...(findings.length > 0 ? { findings } : {}) });
+      reply.code(400).send({ error: "Invalid request", ...(runtime ? { code: "request_invalid" } : {}), ...(findings.length > 0 ? { findings } : {}) });
       return;
     }
     if (error instanceof AuthFailure || error instanceof ProjectFailure || error instanceof TaskFailure || error instanceof HermesAgentFailure) {
       const fields = { requestId: request.id, method: request.method, url: request.url, statusCode: error.statusCode, error: redact(error.publicMessage), ...(error instanceof ProjectFailure ? { findings: redact(error.findings) } : {}) };
       if (error.statusCode >= 500) request.log.error({ ...fields, err: error }, "Request failed"); else request.log.warn(fields, "Request rejected");
-      sendDomainFailure(reply, error);
+      sendDomainFailure(request, reply, error);
       return;
     }
     if (error instanceof ArtifactFailure || error instanceof TaskSourceFailure) {
@@ -69,17 +86,20 @@ export function installHttpErrorHandlers(app: FastifyInstance): void {
     }
     if (isBodyParserFailure(error)) {
       request.log.warn({ requestId: request.id, method: request.method, url: request.url, code: error.code, statusCode: error.statusCode }, "Request rejected");
-      if (error.code === "FST_ERR_CTP_BODY_TOO_LARGE") reply.code(error.statusCode).send({ error: "Request is too large", findings: [{ code: "request-too-large", field: "images", message: "Attach fewer or smaller images and submit again" }] });
+      if (runtime) {
+        const code = error.code === "FST_ERR_CTP_BODY_TOO_LARGE" ? "payload_too_large" : error.code === "FST_ERR_CTP_INVALID_MEDIA_TYPE" ? "unsupported_media_type" : "request_invalid";
+        reply.code(error.statusCode).send({ error: bodyParserMessage(error.code), code });
+      } else if (error.code === "FST_ERR_CTP_BODY_TOO_LARGE") reply.code(error.statusCode).send({ error: "Request is too large", findings: [{ code: "request-too-large", field: "images", message: "Attach fewer or smaller images and submit again" }] });
       else reply.code(error.statusCode).send({ error: bodyParserMessage(error.code) });
       return;
     }
     if (isResponseSerializationError(error)) {
       request.log.error({ requestId: request.id, method: error.method, url: error.url, issues: error.cause.issues.map((issue) => ({ path: issue.path.join("."), code: issue.code, message: issue.message })) }, "Response doesn't match the schema");
-      reply.code(500).send({ error: "Internal server error" });
+      reply.code(500).send(runtime ? { error: "Internal server error", code: "internal_error" } : { error: "Internal server error" });
       return;
     }
     request.log.error({ requestId: request.id, method: request.method, url: request.url, error: redact(error instanceof Error ? error.message : String(error)) }, "Unhandled request error");
-    reply.code(500).send({ error: "Internal server error" });
+    reply.code(500).send(runtime ? { error: "Internal server error", code: "internal_error" } : { error: "Internal server error" });
   });
 
   app.setNotFoundHandler((request: FastifyRequest, reply: FastifyReply) => {

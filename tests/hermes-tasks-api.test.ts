@@ -18,6 +18,12 @@ import { HermesAgentService } from "../src/identity/hermes-agents.js";
 import { SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects/projects.js";
 import { TaskService } from "../src/tasks/tasks.js";
+import type { ProjectAgentTaskPolicy } from "../src/http/contracts/projects.js";
+import { TaskInputSchema } from "../src/tasks/contracts.js";
+import { taskRequestHash } from "../src/tasks/repository.js";
+import { normalizeWorkflowInput } from "../src/coordination/workflows.js";
+import { MAX_TASK_IMAGES, MAX_TASK_IMAGE_BASE64_LENGTH, MAX_TASK_IMAGE_BYTES } from "../src/tasks/limits/attachment-limits.js";
+import { decodeTaskImage } from "../src/tasks/images.js";
 
 const execFileAsync = promisify(execFile);
 let inspectionGate: Promise<void> | undefined;
@@ -37,7 +43,7 @@ const localRepository: LocalRepositoryAdapter = {
     }
     return {
       canonicalPath: input.repositoryPath,
-      remoteRepository: input.repositoryPath.includes("project2") ? "meiji/other-test" : input.repositoryPath.includes("project3") ? "meiji/hermes-cross-company-test" : "meiji/hermes-test",
+      remoteRepository: input.repositoryPath.includes("project2") ? "meiji/other-test" : input.repositoryPath.includes("project3") ? "meiji/hermes-cross-company-test" : input.repositoryPath.includes("project4") ? "meiji/human-after-archive" : "meiji/hermes-test",
       clean: true,
       baseSha: "a".repeat(40),
       targetSha: "b".repeat(40),
@@ -68,6 +74,11 @@ let crossCompanyId: string;
 let agentCredential: string;
 let agentId: string;
 let recoveryWakes: number;
+
+async function updateProjectPolicy(agentTaskPolicy: ProjectAgentTaskPolicy): Promise<void> {
+  const current = projects.getProject(adminId, projectId);
+  await projects.updateProject(adminId, projectId, { name: current.name, repositoryPath: current.repositoryPath, worktreeRoot: current.worktreeRoot, repository: current.repository!, baseBranch: current.baseBranch, setupCommand: current.setupCommand, verificationCommand: current.verificationCommand, rootProfileId: current.rootProfileId, workerProfileId: current.workerProfileId, agentTaskPolicy });
+}
 
 function validateDocumentSchema(value: unknown, schema: unknown): void {
   const validate = new Ajv({ allErrors: true, strict: false }).compile(schema as AnySchema);
@@ -508,6 +519,241 @@ test("POST /api/hermes/tasks accepts a title without a description", async () =>
   const taskId = response.json().id as string;
   expect(database.authQuery(db => db.prepare("SELECT description FROM forge_tasks WHERE id = ?").get(taskId))).toEqual({ description: "" });
   expect(database.authQuery(db => db.prepare("SELECT objective FROM forge_task_controls WHERE task_id = ?").get(taskId))).toEqual({ objective: "Hermes title only" });
+});
+
+test("POST /api/hermes/tasks resolves only project-authorized workflow, template, profiles, and attachments", async () => {
+  const policy: ProjectAgentTaskPolicy = {
+    workflowIds: ["workflow_native_standard", "workflow_native_direct_build"], defaultWorkflowId: "workflow_native_standard", templateIds: ["template_hermes_direct"],
+    rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"],
+    advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] },
+    deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off",
+  };
+  database.authTransaction(db => {
+    db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("template_hermes_direct", projectId, "Hermes direct", JSON.stringify({ name: "Hermes direct", description: "", workflow: "direct_build", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString());
+  });
+  const current = projects.getProject(adminId, projectId);
+  await projects.updateProject(adminId, projectId, { name: current.name, repositoryPath: current.repositoryPath, worktreeRoot: current.worktreeRoot, repository: current.repository!, baseBranch: current.baseBranch, setupCommand: current.setupCommand, verificationCommand: current.verificationCommand, rootProfileId: current.rootProfileId, workerProfileId: current.workerProfileId, agentTaskPolicy: policy });
+  const other = projects.getProject(adminId, otherProjectId);
+  await expect(projects.updateProject(adminId, otherProjectId, { name: other.name, repositoryPath: other.repositoryPath, worktreeRoot: other.worktreeRoot, repository: other.repository!, baseBranch: other.baseBranch, setupCommand: other.setupCommand, verificationCommand: other.verificationCommand, rootProfileId: other.rootProfileId, workerProfileId: other.workerProfileId, agentTaskPolicy: { ...policy, templateIds: ["template_hermes_direct"] } })).rejects.toMatchObject({ statusCode: 422 });
+  const request = (payload: object) => app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload });
+  const rich = await request({
+    projectId, title: "Rich Hermes task", description: "# Markdown\n\nSupported content", idempotencyKey: "hermes-rich-001", workflowId: "workflow_native_direct_build",
+    images: [{ filename: "proof.png", mimeType: "image/png", base64: "iVBORw0KGgo=" }], deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off",
+  });
+  expect(rich.statusCode, rich.body).toBe(201);
+  expect(rich.json()).toMatchObject({ workflow: "direct_build" });
+  expect(database.authQuery(db => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts").get())).toEqual({ count: 1 });
+
+  const templated = await request({ projectId, title: "Template task", idempotencyKey: "hermes-template-001", templateId: "template_hermes_direct" });
+  expect(templated.statusCode, templated.body).toBe(201);
+  expect(templated.json().workflow).toBe("direct_build");
+
+  const denied = await request({ projectId, title: "Denied workflow", idempotencyKey: "hermes-denied-001", workflowId: "workflow_native_independent_review" });
+  expect(denied.statusCode).toBe(422);
+  const badImage = await request({ projectId, title: "Bad image", idempotencyKey: "hermes-bad-image-001", images: [{ filename: "bad.png", mimeType: "image/png", base64: "aGVsbG8=" }] });
+  expect(badImage.statusCode).toBe(422);
+  const badFields = await request({ projectId, title: "Bad fields", idempotencyKey: "hermes-bad-fields-001", repositoryPath: "/private/path" });
+  expect(badFields.statusCode).toBe(400);
+});
+
+test("Hermes idempotency hashes the semantic caller request before policy resolution", async () => {
+  const payload = { projectId, title: "Concurrent retry", idempotencyKey: "hermes-concurrent-001" };
+  const responses = await Promise.all(Array.from({ length: 4 }, () => app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload })));
+  expect(responses.map(response => response.statusCode).sort()).toEqual([200, 200, 200, 201]);
+  expect(new Set(responses.map(response => response.json().id)).size).toBe(1);
+  const conflict = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { ...payload, title: "Different task" } });
+  expect(conflict.statusCode).toBe(409);
+  const current = projects.getProject(adminId, projectId);
+  await projects.updateProject(adminId, projectId, { name: current.name, repositoryPath: current.repositoryPath, worktreeRoot: current.worktreeRoot, repository: current.repository!, baseBranch: current.baseBranch, setupCommand: current.setupCommand, verificationCommand: current.verificationCommand, rootProfileId: current.rootProfileId, workerProfileId: current.workerProfileId, agentTaskPolicy: { workflowIds: ["workflow_native_direct_build"], defaultWorkflowId: "workflow_native_direct_build", templateIds: [], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" } });
+  const replay = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload });
+  expect(replay.statusCode).toBe(200);
+});
+
+test("rich conflicts are 409 and template descriptions preserve omission versus explicit override", async () => {
+  const templateId = "template_hermes_description";
+  database.authTransaction(db => db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(templateId, projectId, "Description", JSON.stringify({ name: "Description", description: "Template brief", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString()));
+  await updateProjectPolicy({ workflowIds: ["workflow_native_standard"], defaultWorkflowId: "workflow_native_standard", templateIds: [templateId], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
+  const request = (payload: object) => app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload });
+  const omitted = await request({ projectId, title: "Template omission", idempotencyKey: "hermes-template-description-omitted", templateId });
+  const empty = await request({ projectId, title: "Template empty", description: "", idempotencyKey: "hermes-template-description-empty", templateId });
+  const explicit = await request({ projectId, title: "Template explicit", description: "Caller brief", idempotencyKey: "hermes-template-description-explicit", templateId });
+  expect([omitted.statusCode, empty.statusCode, explicit.statusCode]).toEqual([201, 201, 201]);
+  const description = (response: typeof omitted) => database.authQuery(db => db.prepare("SELECT description FROM forge_tasks WHERE id = ?").get(response.json().id) as { description: string }).description;
+  expect(description(omitted)).toBe("Template brief");
+  expect(description(empty)).toBe("");
+  expect(description(explicit)).toBe("Caller brief");
+  const sameKey = { projectId, title: "Template hash", idempotencyKey: "hermes-template-description-hash", templateId };
+  expect((await request(sameKey)).statusCode).toBe(201);
+  expect((await request({ ...sameKey, description: "" })).statusCode).toBe(409);
+
+  const rich = { projectId, title: "Rich conflict", idempotencyKey: "hermes-rich-conflict", templateId, images: [{ filename: "proof.png", mimeType: "image/png", base64: "iVBORw0KGgo=" }] };
+  expect((await request(rich)).statusCode).toBe(201);
+  for (const changed of [{ ...rich, images: [] }, { ...rich, templateId: undefined, workflowId: "workflow_native_standard" }, { ...rich, runProjectTests: true }, { ...rich, source: { kind: "branch", branch: "feature" } }]) {
+    expect((await request(changed)).statusCode).toBe(409);
+  }
+});
+
+test("Hermes request validation rejects required fields, unapproved choices, and attachment boundaries", async () => {
+  const request = (payload: object) => app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload });
+  expect((await request({ title: "Missing project", idempotencyKey: "missing-project" })).statusCode).toBe(400);
+  expect((await request({ projectId, title: "Missing key" })).statusCode).toBe(400);
+  expect((await request({ projectId, title: "Bad choice", idempotencyKey: "bad-choice-001", workflowId: "unknown" })).statusCode).toBe(422);
+  expect((await request({ projectId, title: "Bad profile", idempotencyKey: "bad-profile-001", rootProfileId: "profile_native_worker" })).statusCode).toBe(422);
+  expect((await request({ projectId, title: "Bad delivery", idempotencyKey: "bad-delivery-001", deliveryTarget: "merged" })).statusCode).toBe(422);
+  expect((await request({ projectId, title: "Bad filename", idempotencyKey: "bad-filename-001", images: [{ filename: "../proof.png", mimeType: "image/png", base64: "iVBORw0KGgo=" }] })).statusCode).toBe(400);
+  expect((await request({ projectId, title: "Too many", idempotencyKey: "too-many-images-001", images: Array.from({ length: MAX_TASK_IMAGES + 1 }, () => ({ filename: "proof.png", mimeType: "image/png", base64: "iVBORw0KGgo=" })) })).statusCode).toBe(400);
+  expect((await request({ projectId, title: "Encoded oversized", idempotencyKey: "encoded-oversized-001", images: [{ filename: "proof.png", mimeType: "image/png", base64: "A".repeat(MAX_TASK_IMAGE_BASE64_LENGTH + 1) }] })).statusCode).toBe(413);
+  const decodedOversized = Buffer.alloc(MAX_TASK_IMAGE_BYTES + 1);
+  decodedOversized.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  expect(() => decodeTaskImage({ filename: "proof.png", mimeType: "image/png", base64: decodedOversized.toString("base64") })).toThrow("Image data is invalid or too large");
+  expect((await request({ projectId, title: "Bad type", idempotencyKey: "bad-type-001", images: [{ filename: "proof.txt", mimeType: "text/plain", base64: "iVBORw0KGgo=" }] })).statusCode).toBe(400);
+  for (const [key, payload] of [
+    ["invalid-enum-001", { visualEvidence: "never" }],
+    ["invalid-advisor-role-001", { advisorProfileIds: { operator: "profile_native_root" } }],
+  ] satisfies Array<[string, object]>) expect((await request({ projectId, title: "Invalid request", idempotencyKey: key, ...payload })).statusCode).toBe(400);
+  expect((await request({ projectId, title: "Tests disabled", idempotencyKey: "tests-disabled-001", runProjectTests: false })).statusCode).toBe(422);
+  database.authTransaction(db => db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES ('template_disallowed', ?, 'Disallowed', ?, ?, ?)").run(projectId, JSON.stringify({ name: "Disallowed", description: "", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString()));
+  for (const templateId of ["template_missing", "template_disallowed"]) expect((await request({ projectId, title: "Unavailable template", idempotencyKey: `template-${templateId}`, templateId })).statusCode).toBe(422);
+});
+
+test("persisted grants remain authoritative when a principal project observation is stale", async () => {
+  const principal = hermes.authenticate(agentCredential);
+  const result = await tasks.createTaskForHermes({ ...principal, projectIds: [] }, { projectId, title: "Stale observation", idempotencyKey: "hermes-stale-observation-001", images: [], advisorProfileIds: {} });
+  expect(result.created).toBe(true);
+  hermes.replaceProjects(adminId, agentId, []);
+  const denied = await tasks.createTaskForHermes({ ...principal, projectIds: [projectId] }, { projectId, title: "Revoked grant", idempotencyKey: "hermes-revoked-grant-001", images: [], advisorProfileIds: {} }).catch(error => error);
+  expect(denied).toMatchObject({ statusCode: 404 });
+});
+
+test("archived Standard does not block unrelated human project creation or updates", async () => {
+  database.authTransaction(db => db.prepare("UPDATE forge_workflows SET archived_at = ? WHERE id = 'workflow_native_standard'").run(new Date().toISOString()));
+  const repositoryPath = join(root, "repositories", "project4");
+  const worktreeRoot = join(root, "worktrees", "project4");
+  await mkdir(repositoryPath, { recursive: true });
+  await mkdir(worktreeRoot, { recursive: true });
+  await expect(projects.createProject(adminId, companyId, { name: "Human after archive", repositoryPath, worktreeRoot, repository: "meiji/human-after-archive", baseBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" })).resolves.toMatchObject({ name: "Human after archive" });
+  const current = projects.getProject(adminId, otherProjectId);
+  await expect(projects.updateProject(adminId, otherProjectId, { name: current.name, repositoryPath: current.repositoryPath, worktreeRoot: current.worktreeRoot, repository: current.repository!, baseBranch: current.baseBranch, setupCommand: current.setupCommand, verificationCommand: current.verificationCommand, rootProfileId: current.rootProfileId, workerProfileId: current.workerProfileId })).resolves.toMatchObject({ id: otherProjectId });
+});
+
+test("Hermes admission rechecks grants, profiles, and relevant project configuration after capture", async () => {
+  const principal = hermes.authenticate(agentCredential);
+  const input = (key: string) => ({ projectId, title: "Delayed admission", idempotencyKey: key, images: [], advisorProfileIds: {} });
+  const delayed = (afterCapture: () => void) => new TaskService(database, auth, {
+    getProject: projects.getProject.bind(projects), getProjectInCompany: projects.getProjectInCompany.bind(projects), resolveTaskSource: projects.resolveTaskSource.bind(projects),
+    async captureTaskConfiguration(project) { const captured = await projects.captureTaskConfiguration(project); afterCapture(); return captured; },
+  }, config);
+
+  const revoked = delayed(() => hermes.replaceProjects(adminId, agentId, []));
+  await expect(revoked.createTaskForHermes(principal, input("hermes-delayed-revoked-001"))).rejects.toMatchObject({ statusCode: 404 });
+  hermes.replaceProjects(adminId, agentId, [projectId]);
+
+  const archived = delayed(() => database.authTransaction(db => db.prepare("UPDATE forge_profiles SET archived_at = ? WHERE id = 'profile_native_root'").run(new Date().toISOString())));
+  await expect(archived.createTaskForHermes(principal, input("hermes-delayed-profile-001"))).rejects.toMatchObject({ statusCode: 422 });
+  database.authTransaction(db => db.prepare("UPDATE forge_profiles SET archived_at = NULL WHERE id = 'profile_native_root'").run());
+
+  for (const [key, sql] of [
+    ["hermes-delayed-setup-001", "UPDATE forge_projects SET setup_command = 'pnpm changed' WHERE id = ?"],
+    ["hermes-delayed-verification-001", "UPDATE forge_projects SET verification_command = 'pnpm changed' WHERE id = ?"],
+    ["hermes-delayed-repository-001", "UPDATE forge_projects SET repository_identity = 'meiji/changed' WHERE id = ?"],
+  ] satisfies Array<[string, string]>) {
+    const changed = delayed(() => database.authTransaction(db => db.prepare(sql).run(projectId)));
+    await expect(changed.createTaskForHermes(principal, input(key))).rejects.toMatchObject({ statusCode: 409 });
+    database.authTransaction(db => db.prepare("UPDATE forge_projects SET setup_command = 'pnpm install', verification_command = 'pnpm test', repository_identity = 'meiji/hermes-test' WHERE id = ?").run(projectId));
+  }
+
+  const metadata = delayed(() => database.authTransaction(db => db.prepare("UPDATE forge_projects SET name = 'Renamed project' WHERE id = ?").run(projectId)));
+  await expect(metadata.createTaskForHermes(principal, input("hermes-delayed-metadata-001"))).resolves.toMatchObject({ created: true });
+});
+
+test("a paused rich Hermes retry returns its concurrent winner after policy changes, but not after grant revocation", async () => {
+  const templateId = "template_hermes_concurrent";
+  database.authTransaction(db => db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(templateId, projectId, "Concurrent", JSON.stringify({ name: "Concurrent", description: "Template brief", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString()));
+  const policy: ProjectAgentTaskPolicy = { workflowIds: ["workflow_native_standard"], defaultWorkflowId: "workflow_native_standard", templateIds: [templateId], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" };
+  await updateProjectPolicy(policy);
+  const principal = hermes.authenticate(agentCredential);
+  const request = (idempotencyKey: string) => ({ projectId, title: "Concurrent rich retry", idempotencyKey, templateId, images: [{ filename: "proof.png", mimeType: "image/png" as const, base64: "iVBORw0KGgo=" }], advisorProfileIds: {} });
+  const paused = () => {
+    let captured!: () => void;
+    let release!: () => void;
+    const capturedPromise = new Promise<void>(resolve => { captured = resolve; });
+    const releasePromise = new Promise<void>(resolve => { release = resolve; });
+    const service = new TaskService(database, auth, {
+      getProject: projects.getProject.bind(projects), getProjectInCompany: projects.getProjectInCompany.bind(projects), resolveTaskSource: projects.resolveTaskSource.bind(projects),
+      async captureTaskConfiguration(project) { const value = await projects.captureTaskConfiguration(project); captured(); await releasePromise; return value; },
+    }, config);
+    return { service, captured: capturedPromise, release };
+  };
+  const count = (table: string, clause = "") => database.authQuery(db => (db.prepare(`SELECT COUNT(*) AS count FROM ${table} ${clause}`).get() as { count: number }).count);
+
+  const retry = paused();
+  const loser = retry.service.createTaskForHermes(principal, request("hermes-concurrent-rich-001"));
+  await retry.captured;
+  const winner = await tasks.createTaskForHermes(principal, request("hermes-concurrent-rich-001"));
+  await updateProjectPolicy({ ...policy, templateIds: [] });
+  retry.release();
+  await expect(loser).resolves.toMatchObject({ created: false, task: { id: winner.task.id } });
+  expect(count("forge_tasks")).toBe(1);
+  expect(count("forge_task_controls")).toBe(1);
+  expect(count("forge_artifacts")).toBe(1);
+  expect(count("forge_task_sessions")).toBe(0);
+  expect(count("forge_audit_events", "WHERE action = 'task_created'")).toBe(1);
+  expect(recoveryWakes).toBe(0);
+
+  await updateProjectPolicy(policy);
+  const revoked = paused();
+  const denied = revoked.service.createTaskForHermes(principal, request("hermes-concurrent-revoked-001"));
+  await revoked.captured;
+  await tasks.createTaskForHermes(principal, request("hermes-concurrent-revoked-001"));
+  hermes.replaceProjects(adminId, agentId, []);
+  revoked.release();
+  await expect(denied).rejects.toMatchObject({ statusCode: 404 });
+});
+
+test("a granted Hermes agent can create from project-scoped resolved source metadata", async () => {
+  const sourceTasks = new TaskService(database, auth, {
+    getProject: projects.getProject.bind(projects), getProjectInCompany: projects.getProjectInCompany.bind(projects), captureTaskConfiguration: projects.captureTaskConfiguration.bind(projects),
+    async resolveTaskSource(_project, source) { expect(source).toEqual({ kind: "branch", branch: "feature" }); return { kind: "branch", branch: "feature", headSha: "b".repeat(40) }; },
+  }, config);
+  const result = await sourceTasks.createTaskForHermes(hermes.authenticate(agentCredential), { projectId, title: "Resolved source", idempotencyKey: "hermes-resolved-source-001", source: { kind: "branch", branch: "feature" }, images: [], advisorProfileIds: {} });
+  expect(tasks.getTask(adminId, result.task.id).configuration.startingSha).toBe("b".repeat(40));
+});
+
+test("basic retries accept pre-feature Hermes request hashes only for the original payload", async () => {
+  const payload = { projectId, title: "Legacy hash", description: "Original", idempotencyKey: "hermes-legacy-hash-001" };
+  const created = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload });
+  expect(created.statusCode, created.body).toBe(201);
+  const legacy = taskRequestHash(TaskInputSchema.parse(normalizeWorkflowInput(payload, { requireSource: true })), { kind: "agent", id: agentId });
+  database.authTransaction(db => db.prepare("UPDATE forge_tasks SET request_hash = ? WHERE id = ?").run(legacy, created.json().id));
+  const replay = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload });
+  expect(replay.statusCode, replay.body).toBe(200);
+  const conflict = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { ...payload, description: "Changed" } });
+  expect(conflict.statusCode).toBe(409);
+});
+
+test("project policy owns the default workflow and implicit Advisor profile", async () => {
+  const update = async (agentTaskPolicy: ProjectAgentTaskPolicy) => {
+    const current = projects.getProject(adminId, projectId);
+    await projects.updateProject(adminId, projectId, { name: current.name, repositoryPath: current.repositoryPath, worktreeRoot: current.worktreeRoot, repository: current.repository!, baseBranch: current.baseBranch, setupCommand: current.setupCommand, verificationCommand: current.verificationCommand, rootProfileId: current.rootProfileId, workerProfileId: current.workerProfileId, agentTaskPolicy });
+  };
+  await update({ workflowIds: ["workflow_native_direct_build"], defaultWorkflowId: "workflow_native_direct_build", templateIds: [], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
+  const direct = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Policy default", idempotencyKey: "hermes-policy-default-001" } });
+  expect(direct.statusCode, direct.body).toBe(201);
+  expect(direct.json().workflow).toBe("direct_build");
+
+  await update({ workflowIds: ["workflow_native_independent_review"], defaultWorkflowId: "workflow_native_independent_review", templateIds: [], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
+  const denied = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Implicit advisor", idempotencyKey: "hermes-policy-advisor-denied" } });
+  expect(denied.statusCode).toBe(422);
+
+  await update({ workflowIds: ["workflow_native_independent_review"], defaultWorkflowId: "workflow_native_independent_review", templateIds: [], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: ["profile_native_root"], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
+  const allowed = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Implicit advisor allowed", idempotencyKey: "hermes-policy-advisor-allowed" } });
+  expect(allowed.statusCode, allowed.body).toBe(201);
+  expect(allowed.json()).toMatchObject({ workflow: "independent_review" });
+
+  database.authTransaction(db => db.prepare("UPDATE forge_projects SET agent_task_policy_json = ? WHERE id = ?").run("{invalid", projectId));
+  const corrupt = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Corrupt policy", idempotencyKey: "hermes-policy-corrupt" } });
+  expect(corrupt.statusCode).toBe(422);
 });
 
 

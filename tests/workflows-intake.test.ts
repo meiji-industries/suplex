@@ -139,9 +139,9 @@ test("repair tasks require an open same-repository pull request and the fixed ta
     expect(service.repository.controls.get(task.id).deliveryIntent.pullRequestNumber).toBe(7);
     const issued = f.hermes.create(f.userId, { name: "Hermes Bot", companyId: f.company.id, projectIds: [f.project.id] });
     const credential = f.hermes.exchange({ pairingCode: issued.pairingCode, profileId: "profile-bot" }).credential;
-    const hermes = await f.app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${credential}` }, payload: { projectId: f.project.id, title: "Hermes", description: "Restricted", idempotencyKey: "hermes-standard", workflow: "refine_pull_request", deliveryTarget: "merged" } });
-    expect(hermes.statusCode, hermes.body).toBe(201);
-    expect(f.tasks.getTask(f.userId, hermes.json().id)).toMatchObject({ workflow: "standard", deliveryTarget: "pull_request_draft", advisorProfiles: {} });
+    const hermes = await f.app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${credential}` }, payload: { projectId: f.project.id, title: "Hermes", description: "Restricted", idempotencyKey: "hermes-repair", workflowId: "workflow_native_refine_pull_request" } });
+    expect(hermes.statusCode, hermes.body).toBe(422);
+    expect(f.tasks.listTasks(f.userId)).toHaveLength(1);
   } finally { await f.close(); }
 });
 

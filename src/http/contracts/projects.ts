@@ -1,5 +1,25 @@
 import { z } from "zod";
 import { AgentProfileInputSchema, AgentProfilePatchSchema, AgentProfileSchema } from "../../profiles/agent-profile-contracts.js";
+import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";
+
+const profileId = z.string().min(1).max(256);
+export const ProjectAgentTaskPolicySchema = z.object({
+  workflowIds: z.array(profileId).min(1),
+  defaultWorkflowId: profileId,
+  templateIds: z.array(profileId).default([]),
+  rootProfileIds: z.array(profileId).min(1),
+  workerProfileIds: z.array(profileId).min(1),
+  advisorProfileIds: z.object({
+    reviewer: z.array(profileId).default([]),
+    planner_a: z.array(profileId).default([]),
+    planner_b: z.array(profileId).default([]),
+    rater: z.array(profileId).default([]),
+  }).default({ reviewer: [], planner_a: [], planner_b: [], rater: [] }),
+  deliveryTarget: DeliveryTargetSchema.default("pull_request_draft"),
+  runProjectTests: z.boolean().default(true),
+  visualEvidence: VisualEvidenceSchema.default("off"),
+}).strict();
+export type ProjectAgentTaskPolicy = z.infer<typeof ProjectAgentTaskPolicySchema>;
 
 export const ProjectBodySchema = z.object({
   name: z.string().min(1),
@@ -11,6 +31,7 @@ export const ProjectBodySchema = z.object({
   verificationCommand: z.string(),
   rootProfileId: z.string().min(1),
   workerProfileId: z.string().min(1),
+  agentTaskPolicy: ProjectAgentTaskPolicySchema.optional(),
 }).strict();
 export const ProjectRepositoryBodySchema = z.object({ repositoryUrl: z.string().min(1) }).strict();
 export const ProjectCreateBodySchema = z.union([ProjectRepositoryBodySchema, ProjectBodySchema]);

@@ -22,6 +22,7 @@ import {
   parseGithubRepositoryUrl as parseRepositoryUrl,
 } from "./repository-provisioning.js";
 import { ProjectFailure, type ProjectFinding } from "./contracts.js";
+import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../http/contracts/projects.js";
 
 export { ProjectFailure, type ProjectFinding } from "./contracts.js";
 
@@ -42,6 +43,7 @@ export interface ProjectInput {
   verificationCommand: string;
   rootProfileId: string;
   workerProfileId: string;
+  agentTaskPolicy?: ProjectAgentTaskPolicy | undefined;
 }
 
 export interface Project {
@@ -56,6 +58,7 @@ export interface Project {
   verificationCommand: string;
   rootProfileId: string;
   workerProfileId: string;
+  agentTaskPolicy?: ProjectAgentTaskPolicy;
   createdAt: string;
   updatedAt: string;
 }
@@ -103,6 +106,7 @@ interface ProjectRow {
   verification_command: string;
   root_profile_id: string;
   worker_profile_id: string;
+  agent_task_policy_json: string;
   created_at: string;
   updated_at: string;
 }
@@ -139,6 +143,10 @@ function normalizedInput(input: ProjectInput, paths: { repositoryPath: string; w
 }
 
 function publicProject(row: ProjectRow): Project {
+  const defaultAgentTaskPolicy: ProjectAgentTaskPolicy = {
+    workflowIds: ["workflow_native_standard"], defaultWorkflowId: "workflow_native_standard", templateIds: [], rootProfileIds: [row.root_profile_id], workerProfileIds: [row.worker_profile_id],
+    advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off",
+  };
   return {
     id: row.id,
     companyId: row.company_id,
@@ -151,9 +159,16 @@ function publicProject(row: ProjectRow): Project {
     verificationCommand: row.verification_command,
     rootProfileId: row.root_profile_id,
     workerProfileId: row.worker_profile_id,
+    agentTaskPolicy: readAgentTaskPolicy(row.agent_task_policy_json, defaultAgentTaskPolicy),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function readAgentTaskPolicy(raw: string, legacyDefault: ProjectAgentTaskPolicy): ProjectAgentTaskPolicy {
+  if (raw === "{}") return legacyDefault;
+  try { return ProjectAgentTaskPolicySchema.parse(JSON.parse(raw)); }
+  catch { throw new ProjectFailure("Project agent policy is invalid", [finding("agent-task-policy-invalid", "agentTaskPolicy", "Project agent task policy must be repaired before it can be used")], 422); }
 }
 
 function finding(code: string, field: string, message: string): ProjectFinding {
@@ -364,12 +379,20 @@ export class ProjectService {
         }
       }
       const id = projectId ?? identifier("project");
+      const defaultPolicy: ProjectAgentTaskPolicy = {
+        workflowIds: ["workflow_native_standard"], defaultWorkflowId: "workflow_native_standard", templateIds: [], rootProfileIds: [normalized.rootProfileId], workerProfileIds: [normalized.workerProfileId], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] },
+        deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off",
+      };
+      const stored = updating ? this.rowForProject(db, id)! : undefined;
+      const storedPolicy = stored ? readAgentTaskPolicy(stored.agent_task_policy_json, defaultPolicy) : undefined;
+      const policy = ProjectAgentTaskPolicySchema.parse(input.agentTaskPolicy ?? storedPolicy ?? defaultPolicy);
+      if (input.agentTaskPolicy) this.validateAgentTaskPolicy(db, policy, id);
       if (updating) {
         const existing = this.rowForProject(db, id);
         if (!existing || existing.company_id !== companyId) throw new ProjectFailure("Not found", [], 404);
-        db.prepare("UPDATE forge_projects SET name = ?, repository_path = ?, worktree_root = ?, repository_identity = ?, base_branch = ?, setup_command = ?, verification_command = ?, root_profile_id = ?, worker_profile_id = ?, updated_at = ? WHERE id = ?").run(normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.setupCommand, normalized.verificationCommand, normalized.rootProfileId, normalized.workerProfileId, now, id);
+        db.prepare("UPDATE forge_projects SET name = ?, repository_path = ?, worktree_root = ?, repository_identity = ?, base_branch = ?, setup_command = ?, verification_command = ?, root_profile_id = ?, worker_profile_id = ?, agent_task_policy_json = ?, updated_at = ? WHERE id = ?").run(normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.setupCommand, normalized.verificationCommand, normalized.rootProfileId, normalized.workerProfileId, JSON.stringify(policy), now, id);
       } else {
-        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.setupCommand, normalized.verificationCommand, normalized.rootProfileId, normalized.workerProfileId, now, now);
+        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.setupCommand, normalized.verificationCommand, normalized.rootProfileId, normalized.workerProfileId, JSON.stringify(policy), now, now);
       }
       this.auth.recordAuditEventInTransaction(db, actorUserId, updating ? "project_updated" : "project_created", undefined, companyId, { projectId: id });
       return { id };
@@ -387,6 +410,14 @@ export class ProjectService {
 
   private rowForProject(db: Database, projectId: string): ProjectRow | undefined {
     return db.prepare(`SELECT ${projectColumns} FROM forge_projects p WHERE p.id = ?`).get(projectId) as ProjectRow | undefined;
+  }
+
+  private validateAgentTaskPolicy(db: Database, policy: ProjectAgentTaskPolicy, projectId: string): void {
+    for (const workflowId of policy.workflowIds) if (!db.prepare("SELECT 1 FROM forge_workflows WHERE id = ? AND archived_at IS NULL").get(workflowId)) throw new ProjectFailure("Project configuration is invalid", [finding("workflow-ineligible", "agentTaskPolicy.workflowIds", "Select active workflows")], 422);
+    if (!policy.workflowIds.includes(policy.defaultWorkflowId)) throw new ProjectFailure("Project configuration is invalid", [finding("workflow-default-ineligible", "agentTaskPolicy.defaultWorkflowId", "Select one allowed workflow as the default")], 422);
+    for (const templateId of policy.templateIds) if (!db.prepare("SELECT 1 FROM forge_task_templates WHERE id = ? AND project_id = ?").get(templateId, projectId)) throw new ProjectFailure("Project configuration is invalid", [finding("template-ineligible", "agentTaskPolicy.templateIds", "Select templates that belong to this project")], 422);
+    for (const [role, ids] of [["root", policy.rootProfileIds], ["worker", policy.workerProfileIds]] as const) for (const profileId of ids) if (!db.prepare("SELECT 1 FROM forge_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(profileId, role)) throw new ProjectFailure("Project configuration is invalid", [finding("profile-ineligible", "agentTaskPolicy", "Select active profiles with matching roles")], 422);
+    for (const ids of Object.values(policy.advisorProfileIds)) for (const profileId of ids) if (!db.prepare("SELECT 1 FROM forge_profiles WHERE id = ? AND role = 'root' AND archived_at IS NULL").get(profileId)) throw new ProjectFailure("Project configuration is invalid", [finding("profile-ineligible", "agentTaskPolicy", "Select active Advisor profiles")], 422);
   }
 
   private user(userId: string): AuthUser {

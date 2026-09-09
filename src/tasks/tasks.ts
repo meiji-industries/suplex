@@ -10,7 +10,10 @@ import { ArtifactStore, type StoredArtifact } from "../platform/artifacts.js";
 import type { ForgeConfig } from "../platform/config.js";
 import type { ForgeDatabase } from "../platform/database.js";
 import type { HermesPrincipal } from "../identity/hermes-agents.js";
-import type { HermesSafeTaskProjection } from "../http/contracts/hermes.js";
+import { HermesTaskCreateBodySchema, type HermesSafeTaskProjection, type HermesTaskCreateBody } from "../http/contracts/hermes.js";
+import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../http/contracts/projects.js";
+import { CreateTaskTemplateBodySchema } from "../http/contracts/task-templates.js";
+import { WorkflowRecordInputSchema } from "../http/contracts/workflows.js";
 import type { ProjectService } from "../projects/projects.js";
 import { TaskProfileSchema, type TaskProfile } from "./control.js";
 import { TaskConfigurationSchema, TaskInputSchema, type Task, type TaskInput } from "./contracts.js";
@@ -105,8 +108,30 @@ export class TaskService {
     });
   }
 
-  async createTaskForHermes(principal: HermesPrincipal, input: Pick<TaskInput, "projectId" | "title" | "description" | "idempotencyKey">) {
-    const result = await this.create({ kind: "hermes", principal }, principal.companyId, input);
+  async createTaskForHermes(principal: HermesPrincipal, input: HermesTaskCreateBody) {
+    const untrusted: Record<string, unknown> = { ...input };
+    delete untrusted.companyId;
+    delete untrusted.agentId;
+    delete untrusted.startImmediately;
+    let raw: HermesTaskCreateBody;
+    try { raw = HermesTaskCreateBodySchema.strict().parse(untrusted); }
+    catch { throw new TaskFailure("Invalid request", 400, "request_invalid"); }
+    const authority: Authority = { kind: "hermes", principal };
+    const creator: TaskCreator = { kind: "agent", id: principal.agentId };
+    const requestHash = this.hermesRequestHash(raw, creator);
+    this.requireScope(authority, principal.companyId, raw.projectId, true);
+    let existing: TaskRow | null;
+    try { existing = this.repository.existing(principal.companyId, raw.idempotencyKey, requestHash, creator); }
+    catch (error) {
+      if (!(error instanceof TaskConflict)) throw error;
+      if (!this.isLegacyHermesRequest(input)) throw new TaskFailure(error.message, 409);
+      const legacy = taskRequestHash(this.legacyHermesRequest(raw), creator);
+      try { existing = this.repository.existing(principal.companyId, raw.idempotencyKey, legacy, creator); }
+      catch (legacyError) { if (legacyError instanceof TaskConflict) throw new TaskFailure(legacyError.message, 409); throw legacyError; }
+    }
+    if (existing) return { created: false, task: this.getHermesTask(principal, existing.id) };
+    const resolved = this.resolveHermesRequest(principal.companyId, raw);
+    const result = await this.create(authority, principal.companyId, resolved.request, undefined, requestHash, resolved.signature, raw);
     return { created: result.created, task: this.getHermesTask(principal, result.task.id) };
   }
 
@@ -152,7 +177,7 @@ export class TaskService {
     return { tasks, nextCursor: last && hasMore ? this.createHermesCursor(principal, filter, last) : null };
   }
 
-  private async create(authority: Authority, companyId: string, raw: TaskInput, capturedDispatch?: GithubTriggerDispatch): Promise<{ task: Task; created: boolean }> {
+  private async create(authority: Authority, companyId: string, raw: TaskInput, capturedDispatch?: GithubTriggerDispatch, requestHashOverride?: string, hermesPolicySignature?: string, hermesRaw?: HermesTaskCreateBody): Promise<{ task: Task; created: boolean }> {
     let normalized: TaskInput;
     try { normalized = normalizeWorkflowInput(raw, { requireSource: true }); }
     catch (error) { if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode); throw error; }
@@ -160,7 +185,7 @@ export class TaskService {
     if (capturedDispatch && (request.startImmediately || request.images.length)) throw new TaskFailure("GitHub trigger dispatch is invalid", 422);
     this.requireScope(authority, companyId, request.projectId, true);
     const creator: TaskCreator = authority.kind === "user" ? { kind: "user", id: authority.userId } : { kind: "agent", id: authority.principal.agentId };
-    const requestHash = taskRequestHash(request, creator);
+    const requestHash = requestHashOverride ?? taskRequestHash(request, creator);
     try {
       const existing = this.repository.existing(companyId, request.idempotencyKey, requestHash, creator);
       if (existing) {
@@ -173,12 +198,12 @@ export class TaskService {
         });
       }
       const project = this.projects.getProjectInCompany(companyId, request.projectId);
-      const projectSnapshot = JSON.stringify(project);
+      const projectSnapshot = this.projectConfigurationSignature(project);
       if (!project.repository) throw new TaskFailure("Configure the project repository before creating a task", 422);
       const defaults = this.database.authQuery(db => z.object({ root: z.string(), worker: z.string() }).parse(db.prepare("SELECT root_profile_id AS root, worker_profile_id AS worker FROM forge_projects WHERE id = ? AND company_id = ?").get(project.id, companyId)));
-      const rootProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.root.profileId, "root"), capturedDispatch.profiles.root) : this.profile(request.rootProfileId ?? defaults.root, "root");
-      const workerProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.worker.profileId, "worker"), capturedDispatch.profiles.worker) : this.profile(request.workerProfileId ?? defaults.worker, "worker");
-      const advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>> = {};
+      let rootProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.root.profileId, "root"), capturedDispatch.profiles.root) : this.profile(request.rootProfileId ?? defaults.root, "root");
+      let workerProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.worker.profileId, "worker"), capturedDispatch.profiles.worker) : this.profile(request.workerProfileId ?? defaults.worker, "worker");
+      let advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>> = {};
       for (const role of workflowDefinition(request.workflow).advisorRoles) advisorProfiles[role] = capturedDispatch ? (this.profile(capturedDispatch.profiles.advisors[role]!.profileId, "root"), capturedDispatch.profiles.advisors[role]!) : this.profile(request.advisorProfileIds[role] ?? rootProfile.profileId, "root");
       const images = request.images.map(image => ({ filename: image.filename, mimeType: image.mimeType, bytes: decodeTaskImage(image) }));
       const source = request.source ? await this.projects.resolveTaskSource(project, request.source) : null;
@@ -196,9 +221,21 @@ export class TaskService {
       });
       return this.database.authImmediateTransaction(() => {
         this.requireScope(authority, companyId, request.projectId, true);
+        // A concurrent identical Hermes request is already admitted; only its current scope remains relevant.
+        if (authority.kind === "hermes") {
+          const existing = this.repository.existing(companyId, request.idempotencyKey, requestHash, creator);
+          if (existing) return { task: this.repository.task(existing), created: false };
+        }
+        if (authority.kind === "hermes" && hermesPolicySignature && hermesRaw) {
+          const current = this.resolveHermesRequest(companyId, hermesRaw);
+          if (current.signature !== hermesPolicySignature || this.projectConfigurationSignature(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project task configuration changed", 409);
+          rootProfile = this.profile(current.request.rootProfileId!, "root");
+          workerProfile = this.profile(current.request.workerProfileId!, "worker");
+          advisorProfiles = this.hermesAdvisorProfiles(current.request, rootProfile);
+        }
         if (capturedDispatch) {
           this.requireGithubTriggerAdmission(capturedDispatch);
-          if (JSON.stringify(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project configuration changed", 409);
+          if (this.projectConfigurationSignature(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project configuration changed", 409);
         }
         const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images });
         if (capturedDispatch) new GithubTriggerDispatchRepository(this.database).linkTask(capturedDispatch.id, result.task.id);
@@ -343,6 +380,77 @@ export class TaskService {
     const value = this.database.authQuery(db => db.prepare("SELECT id AS profileId, provider, model, reasoning_level AS reasoningLevel, service_tier AS serviceTier FROM forge_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(profileId, role));
     if (!value) throw new TaskFailure("The selected agent profile does not exist", 422);
     return TaskProfileSchema.parse(value);
+  }
+
+  private resolveHermesRequest(companyId: string, raw: HermesTaskCreateBody): { request: TaskInput; signature: string } {
+    const project = this.projects.getProjectInCompany(companyId, raw.projectId);
+    const policy = ProjectAgentTaskPolicySchema.parse(project.agentTaskPolicy);
+    const template = raw.templateId ? this.templateForHermes(project.id, policy, raw.templateId) : undefined;
+    const workflow = template ? undefined : this.workflowForHermes(policy, raw.workflowId ?? policy.defaultWorkflowId);
+    const selected = template ?? workflow!;
+    let request: ReturnType<typeof TaskInputSchema.parse>;
+    try {
+      request = TaskInputSchema.parse(normalizeWorkflowInput({
+        projectId: raw.projectId, title: raw.title, description: raw.description === undefined ? selected.description ?? "" : raw.description, idempotencyKey: raw.idempotencyKey, images: raw.images, source: raw.source,
+        workflow: selected.workflow ?? "standard", rootProfileId: raw.rootProfileId ?? selected.rootProfileId, workerProfileId: raw.workerProfileId ?? selected.workerProfileId,
+        advisorProfileIds: Object.keys(raw.advisorProfileIds).length ? raw.advisorProfileIds : selected.advisorProfileIds ?? {},
+        deliveryTarget: policy.deliveryTarget, runProjectTests: policy.runProjectTests, visualEvidence: policy.visualEvidence, startImmediately: false,
+      }, { requireSource: true }));
+    } catch (error) {
+      if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode);
+      throw error;
+    }
+    if (raw.deliveryTarget !== undefined && raw.deliveryTarget !== policy.deliveryTarget || raw.runProjectTests !== undefined && raw.runProjectTests !== policy.runProjectTests || raw.visualEvidence !== undefined && raw.visualEvidence !== policy.visualEvidence) throw new TaskFailure("The requested delivery or check configuration is not permitted", 422);
+    const root = request.rootProfileId ?? project.rootProfileId;
+    const worker = request.workerProfileId ?? project.workerProfileId;
+    if (!policy.rootProfileIds.includes(root) || !policy.workerProfileIds.includes(worker)) throw new TaskFailure("The selected agent profile is not permitted", 422);
+    for (const role of workflowDefinition(request.workflow).advisorRoles) {
+      const profileId = request.advisorProfileIds[role] ?? root;
+      if (!policy.advisorProfileIds[role].includes(profileId)) throw new TaskFailure("The selected Advisor profile is not permitted", 422);
+    }
+    const resolved = { ...request, rootProfileId: root, workerProfileId: worker };
+    return { request: resolved, signature: JSON.stringify(resolved) };
+  }
+
+  private workflowForHermes(policy: ProjectAgentTaskPolicy, workflowId: string): Partial<z.infer<typeof CreateTaskTemplateBodySchema>> {
+    if (!policy.workflowIds.includes(workflowId)) throw new TaskFailure("The selected workflow is not permitted", 422);
+    const row = this.database.authQuery(db => db.prepare("SELECT name, description, configuration_json, engine FROM forge_workflows WHERE id = ? AND archived_at IS NULL").get(workflowId) as { name: string; description: string; configuration_json: string; engine: string } | undefined);
+    if (!row) throw new TaskFailure("The selected workflow is not available", 422);
+    const record = WorkflowRecordInputSchema.parse({ ...JSON.parse(row.configuration_json), name: row.name, description: row.description, engine: row.engine });
+    return {
+      workflow: record.engine,
+      advisorProfileIds: record.advisorProfileIds,
+      ...(record.rootProfileId ? { rootProfileId: record.rootProfileId } : {}),
+      ...(record.workerProfileId ? { workerProfileId: record.workerProfileId } : {}),
+    };
+  }
+
+  private templateForHermes(projectId: string, policy: ProjectAgentTaskPolicy, templateId: string): z.infer<typeof CreateTaskTemplateBodySchema> {
+    if (!policy.templateIds.includes(templateId)) throw new TaskFailure("The selected template is not permitted", 422);
+    const row = this.database.authQuery(db => db.prepare("SELECT configuration_json FROM forge_task_templates WHERE id = ? AND project_id = ?").get(templateId, projectId) as { configuration_json: string } | undefined);
+    if (!row) throw new TaskFailure("The selected template is not available", 422);
+    return CreateTaskTemplateBodySchema.parse(JSON.parse(row.configuration_json));
+  }
+
+  private hermesRequestHash(input: HermesTaskCreateBody, creator: TaskCreator): string {
+    const sort = (value: unknown): unknown => Array.isArray(value) ? value.map(sort) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => [key, sort(entry)])) : value;
+    return createHash("sha256").update(JSON.stringify(sort({ input, creator }))).digest("hex");
+  }
+
+  private isLegacyHermesRequest(input: HermesTaskCreateBody): boolean {
+    return !input.images.length && !input.source && !input.workflowId && !input.templateId && !input.rootProfileId && !input.workerProfileId && Object.keys(input.advisorProfileIds).length === 0 && input.deliveryTarget === undefined && input.runProjectTests === undefined && input.visualEvidence === undefined;
+  }
+
+  private legacyHermesRequest(input: HermesTaskCreateBody): TaskInput {
+    return TaskInputSchema.parse(normalizeWorkflowInput({ projectId: input.projectId, title: input.title, description: input.description ?? "", idempotencyKey: input.idempotencyKey }, { requireSource: true }));
+  }
+
+  private hermesAdvisorProfiles(request: TaskInput, rootProfile: TaskProfile): Partial<Record<AdvisorRole, TaskProfile>> {
+    return Object.fromEntries(workflowDefinition(request.workflow ?? "standard").advisorRoles.map(role => [role, this.profile(request.advisorProfileIds?.[role] ?? rootProfile.profileId, "root")])) as Partial<Record<AdvisorRole, TaskProfile>>;
+  }
+
+  private projectConfigurationSignature(project: { repository: string | undefined; repositoryPath: string; worktreeRoot: string; baseBranch: string; setupCommand: string; verificationCommand: string }): string {
+    return JSON.stringify({ repository: project.repository, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot, baseBranch: project.baseBranch, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand });
   }
 
   private requireTask(authority: Authority, taskId: string): TaskRow {

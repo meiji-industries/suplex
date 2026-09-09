@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { AdvisorProfileIdsSchema } from "../../coordination/workflows.js";
+import { DeliveryTargetSchema, TaskImageInputSchema, TaskSourceInputSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";
+import { MAX_TASK_IMAGES } from "../../tasks/limits/attachment-limits.js";
 
 export const HermesAdminAgentSchema = z.object({
   id: z.string(),
@@ -89,9 +92,20 @@ export const HermesPairingExchangeResponseSchema = z.object({
 export const HermesTaskCreateBodySchema = z.object({
   projectId: z.string().min(1).max(128),
   title: z.string().trim().min(1),
-  description: z.string().trim().default(""),
+  description: z.string().trim().optional().meta({ default: "" }),
   idempotencyKey: z.string().trim().min(1).max(128),
-});
+  images: z.array(TaskImageInputSchema).max(MAX_TASK_IMAGES).default([]),
+  source: TaskSourceInputSchema.optional(),
+  workflowId: z.string().min(1).max(256).optional(),
+  templateId: z.string().min(1).max(256).optional(),
+  rootProfileId: z.string().min(1).max(256).optional(),
+  workerProfileId: z.string().min(1).max(256).optional(),
+  advisorProfileIds: AdvisorProfileIdsSchema.default({}),
+  deliveryTarget: DeliveryTargetSchema.optional(),
+  runProjectTests: z.boolean().optional(),
+  visualEvidence: VisualEvidenceSchema.optional(),
+}).passthrough().refine(input => !(input.workflowId && input.templateId), { message: "Select either a workflow or a template" });
+export type HermesTaskCreateBody = z.infer<typeof HermesTaskCreateBodySchema>;
 
 export const HermesTaskIdParamsSchema = z.object({
   // Fastify's default router rejects longer parameters before the request reaches this schema.

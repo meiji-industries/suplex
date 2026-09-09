@@ -7,7 +7,14 @@ export function decodeTaskImage(image: NonNullable<TaskInput["images"]>[number])
   const encoded = dataUri?.[2] ?? image.base64;
   const invalid = (): never => { throw new ArtifactFailure("invalid-image-data", "Image data is invalid or too large"); };
   if (dataUri && dataUri[1] !== image.mimeType) return invalid();
-  if (!encoded || encoded.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) return invalid();
+  if (!encoded || encoded.length % 4 !== 0) return invalid();
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  for (let index = 0; index < encoded.length - padding; index += 1) {
+    const code = encoded.charCodeAt(index);
+    if (!(code >= 48 && code <= 57 || code >= 65 && code <= 90 || code >= 97 && code <= 122 || code === 43 || code === 47)) return invalid();
+  }
+  if (padding && encoded.slice(0, -padding).includes("=")) return invalid();
+  if (encoded.length / 4 * 3 - padding > MAX_TASK_IMAGE_BYTES) return invalid();
   const bytes = Buffer.from(encoded, "base64");
   if (bytes.toString("base64") !== encoded || !bytes.length || bytes.length > MAX_TASK_IMAGE_BYTES) return invalid();
   const magic = image.mimeType === "image/png"

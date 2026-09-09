@@ -43,9 +43,10 @@ function bodyParserMessage(code: string): string {
    return Boolean(error && typeof error === "object" && "validation" in error);
  }
 
-function hermesTaskFailureCode(error: TaskFailure): "not_found" | "idempotency_conflict" | "task_unavailable" {
+function hermesTaskFailureCode(error: TaskFailure): "not_found" | "idempotency_conflict" | "request_invalid" | "task_unavailable" {
   if (error.statusCode === 404) return "not_found";
   if (error.publicMessage === "This idempotency key belongs to a different request") return "idempotency_conflict";
+  if (error.code === "request_invalid") return "request_invalid";
   return "task_unavailable";
 }
 
@@ -81,7 +82,8 @@ export function installHttpErrorHandlers(app: FastifyInstance): void {
       return;
     }
     if (error instanceof ArtifactFailure || error instanceof TaskSourceFailure) {
-      reply.code(error instanceof TaskSourceFailure ? error.statusCode : 422).send({ error: error.message, code: error.code });
+      if (runtime) reply.code(error instanceof TaskSourceFailure ? error.statusCode : 422).send({ error: error.message, code: "task_unavailable" });
+      else reply.code(error instanceof TaskSourceFailure ? error.statusCode : 422).send({ error: error.message, code: error.code });
       return;
     }
     if (isBodyParserFailure(error)) {

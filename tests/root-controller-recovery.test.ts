@@ -95,11 +95,37 @@ test("Coordinator resumes the same native session without reposting its prompt",
   const value = await fixture();
   await value.controller.recover("task");
   const root = value.store.currentSession("task", "root");
-  await new RootController(new TaskControlStore(value.database), value.harness).recover("task");
+  await new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, value.reader, async () => undefined).recover("task");
   expect(value.store.currentSession("task", "root")?.nativeSessionId).toBe(root?.nativeSessionId);
   expect(value.harness.dispatched).toHaveLength(1);
   expect(value.harness.dispatched[0]).toMatchObject({ agent: "forge-root", variant: "max", model: { providerID: "openai", modelID: "gpt-5.6-luna" } });
   expect(value.harness.dispatched[0]?.messageID).toMatch(/^msg_/);
+});
+
+test("a queued human note recovers without pane metadata or duplicate native dispatch", async () => {
+  const value = await fixture();
+  const root = value.store.claimRoot({ taskId: "task" });
+  const note = value.store.wakeRoot({ taskId: "task", rootSessionId: root.id, generation: root.generation, prompt: "Human note:\nCheck the current result." });
+  await value.controller.recover("task");
+  expect(value.harness.dispatched).toMatchObject([{ messageID: note.id, prompt: note.promptText }]);
+  value.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = NULL WHERE id = ?").run(root.id));
+  await new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, value.reader, async () => undefined).recover("task");
+  expect(value.harness.dispatched).toHaveLength(1);
+});
+
+test("a queued human note dispatches while Coordinator and Worker are busy after display metadata is recreated", async () => {
+  const value = await fixture();
+  const root = value.controller.prepareRoot("task");
+  await value.controller.recover("task");
+  value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Continue the assigned work." });
+  const note = value.store.wakeRoot({ taskId: "task", rootSessionId: root.id, generation: root.generation, prompt: "Human note:\nKeep the current work moving." });
+  value.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = NULL WHERE id = ?").run(root.id));
+  expect(value.store.pendingTurns(root.id).map(turn => turn.id)).toContain(note.id);
+  value.store.completeRootTurn(value.harness.dispatched[0]!.messageID, "root receipt", "Coordinator is busy");
+  await new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, value.reader, async () => undefined).recover("task");
+  expect(value.harness.dispatched.filter(intent => intent.messageID === note.id)).toHaveLength(1);
+  await new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, value.reader, async () => undefined).recover("task");
+  expect(value.harness.dispatched.filter(intent => intent.messageID === note.id)).toHaveLength(1);
 });
 
 test("concurrent controllers own only one native launch and prompt", async () => {

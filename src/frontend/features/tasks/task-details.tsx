@@ -66,7 +66,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
             {task.humanQuestion ? <TaskQuestion key={task.humanQuestion.id} question={task.humanQuestion} busy={busy} onAnswer={answer => act("answer", { questionId: task.humanQuestion?.id, ...answer })} onLimitDecision={limitDecision => act("answer", { questionId: task.humanQuestion?.id, limitDecision })} /> : null}
           </div></div> : null}
           {task.workflow !== "standard" ? <WorkflowHistory task={task} activity={activity} /> : null}
-          <TaskWork task={task} activity={activity} />
+          <TaskWork task={task} activity={activity} onChange={onChange} />
         </div></div>
       </div>
       <aside aria-label="Task properties" className="min-w-0 border-t px-4 py-5 lg:border-l lg:border-t-0">

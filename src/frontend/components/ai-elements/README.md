@@ -1,11 +1,17 @@
 # AI Elements
 
-Tool, Plan, Test Results, and Shimmer come from the [Vercel AI Elements source](https://github.com/vercel/ai-elements/tree/main/packages/elements/src).
+Tool, Plan, Prompt Input, Test Results, and Shimmer come from the [Vercel AI Elements source](https://github.com/vercel/ai-elements/tree/main/packages/elements/src).
 Code Block comes from the [AI Elements registry](https://registry.ai-sdk.dev/code-block.json).
 
-Local adaptations use Forge imports, Base UI Collapsible instead of Radix,
+`prompt-input.tsx` is the current [AI Elements PromptInput registry source](https://ai-sdk.dev/elements/api/registry/prompt-input.json).
+Its only adaptations are Forge import paths, Base UI compatibility wrappers in
+`prompt-input-primitives.tsx`, and `Array.from` for this project's DOM iterable
+TypeScript configuration. `input-group.tsx` is the shipped Base Vega source
+with Forge import paths. The task composer disables attachment intake.
+
+Other local adaptations use Forge imports, Base UI Collapsible instead of Radix,
 and explicit optional types for this project's TypeScript configuration.
 Code Block cancels obsolete highlighting updates when its input changes.
 Component styles remain upstream defaults.
 
-These components display observations. They do not control task execution.
+These components render observations and message controls. They do not control task execution.

@@ -23,7 +23,7 @@ export const TaskAnswerBodySchema = z.union([
   z.object({ questionId: z.string().min(1), answer: z.string().trim().min(1), confirmCommandsStopped: z.boolean().optional() }).strict(),
   z.object({ questionId: z.string().min(1), limitDecision: TaskLimitDecisionSchema }).strict(),
 ]);
-export const TaskNoteBodySchema = z.object({ note: z.string().trim().min(1) }).strict();
+export const TaskNoteBodySchema = z.object({ note: z.string().trim().min(1).max(20_000) }).strict(); // bound: task note transport limit
 export const TaskActivityResponseSchema = z.object({
   sessions: z.array(z.object({ id: z.string(), kind: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable(), label: z.string(), profileId: z.string(), generation: z.number(), nativeSessionId: z.string().nullable(), paneId: z.string().nullable(), current: z.boolean() })),
   turns: z.array(z.object({ id: z.string(), sessionId: z.string(), prompt: z.string(), status: TaskTurnStatusSchema, result: z.string().nullable() })),

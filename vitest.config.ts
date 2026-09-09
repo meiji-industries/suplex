@@ -21,7 +21,7 @@ export default defineConfig({
         test: {
           ...shared,
           name: "unit",
-          include: ["tests/**/*.test.ts", "desktop/tests/**/*.test.ts"],
+          include: ["tests/**/*.test.{ts,tsx}", "desktop/tests/**/*.test.ts"],
           exclude: [
             "tests/**/*.browser.test.ts",
             "tests/**/*.real.test.ts",

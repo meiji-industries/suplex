@@ -92,6 +92,34 @@ test("backlog tasks stay idle until Start and answers target an exact question",
   } finally { await f.close(); }
 });
 
+test("notes queue one trimmed message for the current Coordinator", async () => {
+  const f = await nativeApp();
+  try {
+    const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Message task", idempotencyKey: "message-task", startImmediately: true });
+    const root = f.tasks.repository.controls.claimRoot({ taskId: task.id });
+    const response = await f.app.inject({ method: "POST", url: `/api/tasks/${task.id}/note`, headers: f.headers, payload: { note: "  Check the current result.  " } });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(f.wakes).toContain(task.id);
+    expect(f.tasks.repository.controls.pendingTurns(root.id)).toMatchObject([{ promptText: "Human note:\nCheck the current result.", status: "pending_prompt" }]);
+  } finally { await f.close(); }
+});
+
+test("notes reject invalid, unauthorised, and inactive requests without queuing a turn", async () => {
+  const f = await nativeApp();
+  try {
+    const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Restricted message task", idempotencyKey: "restricted-message-task", startImmediately: false });
+    const url = `/api/tasks/${task.id}/note`;
+    expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { note: "Message" } })).statusCode).toBe(409);
+    f.tasks.startTask(f.userId, task.id);
+    expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { note: "Message" } })).json()).toMatchObject({ error: "Coordinator is not ready. Retry the message." });
+    f.tasks.repository.controls.claimRoot({ taskId: task.id });
+    expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { note: "   " } })).statusCode).toBe(400);
+    expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { note: "x".repeat(20_001) } })).statusCode).toBe(400);
+    expect((await f.app.inject({ method: "POST", url, payload: { note: "Message" } })).statusCode).toBe(401);
+    expect(f.tasks.repository.controls.turns(task.id)).toEqual([]);
+  } finally { await f.close(); }
+});
+
 test("task APIs reject old phase commands and cross-company reads", async () => {
   const f = await nativeApp();
   try {

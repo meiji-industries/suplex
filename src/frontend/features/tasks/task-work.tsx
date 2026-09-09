@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { CircleDashed } from "lucide-react";
 import type { Task } from "../../../tasks/contracts.js";
@@ -14,6 +14,8 @@ import { WorkflowPlan } from "./workflow-plan.js";
 import { TaskCheckResults } from "./task-check-results.js";
 import { DeveloperDiff } from "../../components/app/developer-diff.js";
 import { TaskActivityTimeline } from "./task-activity-timeline.js";
+import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from "../../components/ai-elements/prompt-input.js";
+const MAX_TASK_NOTE_LENGTH = 20_000;
 
 export type TaskActivity = z.infer<typeof TaskActivityResponseSchema>;
 const turnLabels = { pending_prompt: "Queued", prompted: "In progress", unknown: "Observation not available", completed: "Turn ended", cancelled: "Cancelled" };
@@ -34,7 +36,7 @@ function humanMessage(prompt: string): string {
   } catch { return ""; }
 }
 
-export function TaskWork({ task, activity }: { task: Task; activity: TaskActivity }) {
+export function TaskWork({ task, activity, onChange }: { task: Task; activity: TaskActivity; onChange: (task: Task) => void }) {
   const [tab, setTab] = useState("chat");
   const { execution, error: executionError } = useTaskExecution(task.id);
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
@@ -49,12 +51,58 @@ export function TaskWork({ task, activity }: { task: Task; activity: TaskActivit
         return <div key={turn.id} className="grid min-w-0 gap-5">{humanMessage(turn.prompt) ? <article className="space-y-2 border-l-2 pl-3"><header className="flex items-center gap-2 text-xs"><span className="font-medium">You</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={humanMessage(turn.prompt)} /></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={session?.profileId ?? task.rootProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabels[turn.status]}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
       })}
       {!activity.turns.some(turn => resultText(turn.result) || humanMessage(turn.prompt)) ? <p className="text-xs text-muted-foreground">{task.status === "backlog" ? "Start the task to work with Coordinator." : "Agent replies appear here."}</p> : null}
+      <TaskNoteInput key={task.id} task={task} onChange={onChange} />
     </div></TabsContent>
     <TabsContent value="activity"><section aria-label="Task activity" className="grid min-w-0 gap-0 pt-3">{activity.turns.map(turn => <div key={turn.id} className="flex gap-3 border-b py-3 text-xs"><CircleDashed className="size-4 shrink-0 text-muted-foreground" /><span className="font-medium">{activity.sessions.find(session => session.id === turn.sessionId)?.label ?? "Coordinator"}</span><span className="text-muted-foreground">{turnLabels[turn.status]}</span></div>)}{!activity.turns.length && !execution?.sessions.some(session => session.tools.length) ? <p className="text-xs text-muted-foreground">No activity yet.</p> : null}<TaskTools execution={execution} error={executionError} /></section></TabsContent>
     <TabsContent value="diffs">{tab === "diffs" ? <TaskDiff task={task} /> : null}</TabsContent>
     <TabsContent value="checks">{tab === "checks" ? <TaskChecks task={task} /> : null}</TabsContent>
     <TabsContent value="other"><div className="grid min-w-0 gap-4 pt-3 text-xs"><details><summary className="cursor-pointer font-medium">Runtime diagnostics</summary><section aria-label="Sessions" className="grid gap-3 pt-3">{activity.sessions.map(session => <div key={session.id}><p>{session.label} {session.generation}</p><code className="break-all text-muted-foreground">{session.nativeSessionId ?? "Not started"}</code></div>)}</section>{activity.turns.map(turn => <details key={turn.id} className="border-b py-2"><summary className="cursor-pointer">{turnLabels[turn.status]} · Prompt</summary><Markdown source={turn.prompt} /></details>)}</details></div></TabsContent>
   </Tabs>;
+}
+
+export function TaskNoteInput({ task, onChange }: { task: Task; onChange: (task: Task) => void }) {
+  const [text, setText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const revision = useRef(0);
+  const mounted = useRef(true);
+  const currentTaskId = useRef(task.id);
+  const inFlight = useRef(false);
+  currentTaskId.current = task.id;
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const eligible = task.status === "active" && !task.archivedAt;
+  const trimmed = text.trim();
+  const invalid = !trimmed || trimmed.length > MAX_TASK_NOTE_LENGTH;
+  const submit = async ({ text: submittedText }: { text: string }) => {
+    if (inFlight.current || !submittedText.trim() || submittedText.trim().length > MAX_TASK_NOTE_LENGTH || !eligible) return;
+    inFlight.current = true;
+    const submittedTaskId = task.id;
+    const submittedRevision = revision.current;
+    setSubmitting(true); setError("");
+    try {
+      const next = await readJson<Task>(`/api/tasks/${submittedTaskId}/note`, { method: "POST", body: JSON.stringify({ note: submittedText }) });
+      if (!mounted.current || submittedTaskId !== currentTaskId.current) return;
+      onChange(next);
+      if (submittedRevision === revision.current) setText("");
+    } catch (error) {
+      if (mounted.current && submittedTaskId === currentTaskId.current) setError(error instanceof Error ? error.message : "Forge could not send the message. Retry the message.");
+      throw error;
+    } finally {
+      inFlight.current = false;
+      if (mounted.current && submittedTaskId === currentTaskId.current) setSubmitting(false);
+    }
+  };
+  if (!eligible) return <p className="text-xs text-muted-foreground">{task.archivedAt ? "Open the archived task before you send a message." : task.status === "backlog" ? "Start the task before you send a message." : task.status === "waiting_human" ? "Answer the current decision before you send a message." : "This task cannot receive messages."}</p>;
+  return <section className="border-t pt-3" aria-label="Message Coordinator">
+    {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+    <div className={error ? "mt-2" : undefined}><PromptInput maxFiles={0} onError={() => setError("Attachments are not supported. Send text only.")} onSubmit={submit}>
+      <PromptInputTextarea aria-label="Message Coordinator" value={text} onChange={event => { revision.current += 1; setText(event.currentTarget.value); }} onPaste={event => { if (Array.from(event.clipboardData.items).some(item => item.kind === "file")) { event.preventDefault(); setError("Attachments are not supported. Send text only."); } }} aria-invalid={trimmed.length > MAX_TASK_NOTE_LENGTH || undefined} />
+      <PromptInputFooter><span className="mr-auto text-xs text-muted-foreground">{trimmed.length.toLocaleString()} / {MAX_TASK_NOTE_LENGTH.toLocaleString()}</span><PromptInputSubmit status={submitting ? "submitted" : "ready"} disabled={invalid || submitting} /></PromptInputFooter>
+    </PromptInput></div>
+  </section>;
 }
 
 function TaskDiff({ task }: { task: Task }) {

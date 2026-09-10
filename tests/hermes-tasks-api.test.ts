@@ -10,6 +10,8 @@ import { Ajv, type AnySchema } from "ajv";
 import SwaggerParser from "@apidevtools/swagger-parser";
 
 import { AuthService } from "../src/identity/auth.js";
+import { mapGithubPullRequestObservation, type GithubPullRequestObservation } from "../src/integrations/github/delivery.js";
+import { GithubReleaseFailure } from "../src/integrations/github/failure.js";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/platform/config.js";
 import type { ForgeConfig } from "../src/platform/config.js";
@@ -76,6 +78,55 @@ let crossCompanyId: string;
 let agentCredential: string;
 let agentId: string;
 let recoveryWakes: number;
+let observations: Map<string, GithubPullRequestObservation | Error>;
+
+const ABSENT: GithubPullRequestObservation = { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, mergeStateStatus: null, checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }, autoMergeEnabled: null, reviewDecision: null };
+
+/** A realistic `gh pr view --json` payload, mapped through the production mapper so fixtures cannot drift from the provider shape. */
+function ghPullRequest(input: { number: number; state: "OPEN" | "CLOSED" | "MERGED"; headSha: string; mergeable?: string; mergeStateStatus?: string; reviewDecision?: string | null; checks?: Array<{ name: string; status: string; conclusion: string | null }> }): GithubPullRequestObservation {
+  return mapGithubPullRequestObservation({
+    number: input.number,
+    url: `https://github.com/meiji/hermes-test/pull/${input.number}`,
+    state: input.state,
+    isDraft: false,
+    headRefOid: input.headSha,
+    baseRefOid: "c".repeat(40),
+    mergeable: input.mergeable ?? "MERGEABLE",
+    mergeStateStatus: input.mergeStateStatus ?? "CLEAN",
+    autoMergeRequest: null,
+    reviewDecision: input.reviewDecision === undefined ? "APPROVED" : input.reviewDecision,
+    author: { login: "forge-bot", avatarUrl: "https://avatars.githubusercontent.com/forge-bot" },
+    changedFiles: 3,
+    additions: 40,
+    deletions: 2,
+    statusCheckRollup: (input.checks ?? [{ name: "build", status: "COMPLETED", conclusion: "SUCCESS" }]).map(check => ({ ...check, detailsUrl: "https://github.com/meiji/hermes-test/actions/runs/1" })),
+  });
+}
+
+async function createHermesTask(title: string, idempotencyKey: string): Promise<string> {
+  const response = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title, idempotencyKey } });
+  expect(response.statusCode, response.body).toBe(201);
+  return response.json().id as string;
+}
+
+/** Drives a task to delivered with a recorded pull request, and registers what GitHub answers for its branch. */
+async function deliverTask(title: string, idempotencyKey: string, pullRequestNumber: number, answer: GithubPullRequestObservation | Error, recordedHeadSha = "d".repeat(40)): Promise<string> {
+  const taskId = await createHermesTask(title, idempotencyKey);
+  tasks.startTask(adminId, taskId);
+  tasks.repository.controls.setPullRequest(taskId, { repository: "meiji/hermes-test", number: pullRequestNumber, url: `https://github.com/meiji/hermes-test/pull/${pullRequestNumber}`, headSha: recordedHeadSha, state: "open", mergedAt: null });
+  tasks.repository.controls.markDelivered(taskId);
+  observations.set(tasks.getTask(adminId, taskId).configuration.branch, answer);
+  return taskId;
+}
+
+/** Repoints a task at an upstream task's head branch, the way a source selection would. */
+function branchFrom(taskId: string, upstreamTaskId: string): void {
+  const configuration = { ...tasks.getTask(adminId, taskId).configuration, source: { kind: "branch", branch: tasks.getTask(adminId, upstreamTaskId).configuration.branch } };
+  database.authTransaction(db => db.prepare("UPDATE forge_tasks SET configuration_json = ? WHERE id = ?").run(JSON.stringify(configuration), taskId));
+}
+
+const listTasks = async (query = "") => app.inject({ method: "GET", url: `/api/hermes/tasks${query}`, headers: { Authorization: `Bearer ${agentCredential}` } });
+const readTask = async (taskId: string) => app.inject({ method: "GET", url: `/api/hermes/tasks/${taskId}`, headers: { Authorization: `Bearer ${agentCredential}` } });
 
 async function updateProjectPolicy(agentTaskPolicy: ProjectAgentTaskPolicy): Promise<void> {
   const current = projects.getProject(adminId, projectId);
@@ -210,6 +261,7 @@ beforeEach(async () => {
   crossCompanyProjectId = crossProject.id;
 
   recoveryWakes = 0;
+  observations = new Map();
   tasks = new TaskService(database, auth, projects, config);
   hermes = new HermesAgentService(database, auth);
 
@@ -225,6 +277,13 @@ beforeEach(async () => {
     projects,
     tasks,
     hermes,
+    hermesGithub: {
+      async observePullRequest(input) {
+        const answer = observations.get(input.branch) ?? ABSENT;
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+    },
     host: { async recover() { recoveryWakes++; } },
     health: {
       database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
@@ -474,7 +533,7 @@ test("POST /api/hermes/tasks creates task with native status, private no-store h
   expect(response.headers["cache-control"]).toBe("private, no-store");
 
   const body = response.json();
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(body).sort()).toEqual(expectedKeys);
   expect(body).toMatchObject({
     issueKey: "HMC-1",
@@ -501,7 +560,9 @@ test("POST /api/hermes/tasks creates task with native status, private no-store h
   });
   expect(replay.statusCode).toBe(200);
   expect(replay.headers["cache-control"]).toBe("private, no-store");
-  expect(replay.json()).toEqual(body);
+  // The projection carries a live observation timestamp, so compare everything except when GitHub was read.
+  const withoutObservedAt = (value: Record<string, any>) => ({ ...value, integration: { ...value.integration, observedAt: "" } });
+  expect(withoutObservedAt(replay.json())).toEqual(withoutObservedAt(body));
   const count = (table: string, clause = ""): number => database.authQuery((db) => (db.prepare(`SELECT COUNT(*) AS count FROM ${table} ${clause}`).get() as { count: number }).count);
   expect(count("forge_tasks")).toBe(1);
   expect(count("forge_task_controls")).toBe(1);
@@ -906,11 +967,11 @@ test("GET /api/hermes/tasks/:taskId returns safe projection, handles non-enumera
   });
   expect(getSuccess.statusCode).toBe(200);
   expect(getSuccess.headers["cache-control"]).toBe("private, no-store");
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(getSuccess.json()).sort()).toEqual(expectedKeys);
   expect(getSuccess.json().title).toBe("Task For Status Check");
 
-  // GET by a different agent returns 404
+  // Another agent granted the same project still reads nothing: a task belongs to the agent that created it.
   const otherAgentIssued = hermes.create(adminId, { name: "Hermes Bot Other", companyId, projectIds: [projectId] });
   const otherPaired = hermes.exchange({ pairingCode: otherAgentIssued.pairingCode, profileId: "profile-other" });
 
@@ -939,6 +1000,102 @@ test("GET /api/hermes/tasks/:taskId returns safe projection, handles non-enumera
     headers: { Authorization: `Bearer ${agentCredential}` },
   });
   expect(getAfterRevocation.statusCode).toBe(404);
+});
+
+
+test("a delivered task with a conflicting pull request blocks its downstream task, and filters separate them", async () => {
+  const foundation = await deliverTask("Foundation delivery", "integration-foundation-001", 41, ghPullRequest({ number: 41, state: "OPEN", headSha: "d".repeat(40), mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }));
+  const downstream = await createHermesTask("Downstream work", "integration-downstream-001");
+  branchFrom(downstream, foundation);
+
+  const foundationBody = (await readTask(foundation)).json();
+  expect(foundationBody.status).toBe("delivered");
+  expect(foundationBody.implementation).toEqual({ status: "delivered" });
+  expect(foundationBody.integration.integrated).toBe(false);
+  expect(foundationBody.integration.observation).toBe("observed");
+  expect(foundationBody.integration.pullRequest).toMatchObject({ state: "conflicting", number: 41, mergeable: "CONFLICTING", mergeStateStatus: "DIRTY", targetBranch: "main" });
+  expect(foundationBody.integration.deployed).toEqual({ included: null, reason: "not_determinable" });
+  expect(foundationBody.actionRequired).toMatchObject({ owner: "agent", reasonCode: "conflicting_pull_request", upstream: null, humanApprovalRequired: false });
+  expect(foundationBody.actionRequired.suggestedCommands.length).toBeGreaterThan(0);
+
+  const downstreamBody = (await readTask(downstream)).json();
+  expect(downstreamBody.integration.integrated).toBe(false);
+  expect(downstreamBody.integration.pullRequest.state).toBe("absent");
+  expect(downstreamBody.actionRequired).toMatchObject({ owner: "upstream", reasonCode: "blocked_by_dependency", upstream: { taskId: foundation, pullRequestNumber: 41 } });
+
+  const ids = async (query: string) => ((await listTasks(query)).json().tasks as Array<{ id: string }>).map(task => task.id);
+  expect(await ids("?filter=conflicting_pull_request")).toEqual([foundation]);
+  expect(await ids("?filter=blocked_by_dependency")).toEqual([downstream]);
+  expect((await ids("?filter=not_integrated")).sort()).toEqual([foundation, downstream].sort());
+});
+
+test("a merged pull request reports integration with no action required", async () => {
+  const taskId = await deliverTask("Merged delivery", "integration-merged-001", 42, ghPullRequest({ number: 42, state: "MERGED", headSha: "d".repeat(40) }));
+  const body = (await readTask(taskId)).json();
+  expect(body.integration.integrated).toBe(true);
+  expect(body.integration.pullRequest.state).toBe("merged");
+  expect(body.actionRequired).toBeNull();
+  expect(((await listTasks("?filter=not_integrated")).json().tasks as Array<{ id: string }>).map(task => task.id)).not.toContain(taskId);
+});
+
+test("failed checks, pending review, and a base branch behind the pull request each report their own action", async () => {
+  const failing = await deliverTask("Failing checks", "integration-failing-001", 43, ghPullRequest({ number: 43, state: "OPEN", headSha: "d".repeat(40), checks: [{ name: "build", status: "COMPLETED", conclusion: "FAILURE" }] }));
+  const review = await deliverTask("Pending review", "integration-review-001", 44, ghPullRequest({ number: 44, state: "OPEN", headSha: "d".repeat(40), reviewDecision: "REVIEW_REQUIRED" }));
+  const stale = await deliverTask("Stale delivery", "integration-stale-001", 45, ghPullRequest({ number: 45, state: "OPEN", headSha: "d".repeat(40), mergeStateStatus: "BEHIND" }));
+
+  expect((await readTask(failing)).json().actionRequired).toMatchObject({ owner: "agent", reasonCode: "failed_checks" });
+  expect((await readTask(failing)).json().integration.pullRequest.checks).toEqual({ total: 1, pending: 0, failing: 1, successful: 0 });
+  expect((await readTask(review)).json().actionRequired).toMatchObject({ owner: "human", reasonCode: "pending_review", humanApprovalRequired: true });
+  expect((await readTask(stale)).json().actionRequired).toMatchObject({ owner: "agent", reasonCode: "stale_delivery" });
+
+  const pending = await deliverTask("Pending checks", "integration-pending-001", 47, ghPullRequest({ number: 47, state: "OPEN", headSha: "d".repeat(40), checks: [{ name: "build", status: "IN_PROGRESS", conclusion: null }] }));
+  expect((await readTask(pending)).json().actionRequired).toMatchObject({ owner: "forge", reasonCode: "pending_checks" });
+
+  const missing = await deliverTask("Missing pull request", "integration-missing-001", 48, ABSENT);
+  expect((await readTask(missing)).json().actionRequired).toMatchObject({ owner: "agent", reasonCode: "pull_request_missing" });
+
+  const approved = await deliverTask("Approved and not merged", "integration-approved-001", 49, ghPullRequest({ number: 49, state: "OPEN", headSha: "d".repeat(40) }));
+  expect((await readTask(approved)).json().actionRequired).toMatchObject({ owner: "human", reasonCode: "waiting_human", humanApprovalRequired: true });
+
+  const ids = async (query: string) => ((await listTasks(query)).json().tasks as Array<{ id: string }>).map(task => task.id);
+  expect(await ids("?filter=failed_checks")).toEqual([failing]);
+  expect(await ids("?filter=pending_review")).toEqual([review]);
+  expect(await ids("?filter=stale_delivery")).toEqual([stale]);
+});
+
+test("a GitHub read failure returns 200 with an unavailable observation and no integration claim", async () => {
+  const taskId = await deliverTask("GitHub unavailable", "integration-unavailable-001", 46, new GithubReleaseFailure("provider-unavailable", "GitHub did not answer"));
+  const response = await readTask(taskId);
+  expect(response.statusCode).toBe(200);
+  expect(response.json().integration).toMatchObject({ integrated: false, observation: "unavailable", observationReason: "provider-unavailable" });
+  expect(response.json().actionRequired).toMatchObject({ owner: "forge", reasonCode: "observation_unavailable" });
+});
+
+test("GET /api/hermes/tasks scopes the list, rejects an unknown filter, and exposes no build internals", async () => {
+  const granted = await createHermesTask("Granted project task", "list-granted-001");
+  const outOfGrant = (await tasks.createTask(adminId, companyId, { projectId: otherProjectId, title: "Out of grant", idempotencyKey: "list-out-of-grant-001" })).task;
+  const crossCompany = (await tasks.createTask(adminId, auth.listVisibleCompanies(adminId).find(company => company.id !== companyId)!.id, { projectId: crossCompanyProjectId, title: "Cross company", idempotencyKey: "list-cross-company-001" })).task;
+
+  const response = await listTasks();
+  expect(response.statusCode).toBe(200);
+  expect(response.headers["cache-control"]).toBe("private, no-store");
+  const listed = response.json().tasks as Array<Record<string, unknown>>;
+  const ids = listed.map(task => task.id);
+  expect(ids).toContain(granted);
+  expect(ids).not.toContain(outOfGrant.id);
+  expect(ids).not.toContain(crossCompany.id);
+
+  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
+  expect(JSON.stringify(listed)).not.toMatch(/worktree|repositoryPath|session|turn|prompt|transcript|credential|objective/i);
+
+  expect((await listTasks(`?projectId=${projectId}`)).json().tasks.map((task: { id: string }) => task.id)).toContain(granted);
+  expect((await listTasks(`?projectId=${otherProjectId}`)).statusCode).toBe(404);
+  expect((await listTasks("?filter=not_a_filter")).statusCode).toBe(400);
+
+  // An archived task keeps its place on the agent surface, flagged and reduced to a single command.
+  await tasks.archiveTask(adminId, granted);
+  expect(((await listTasks()).json().tasks as Array<{ id: string; archived: boolean }>).find(task => task.id === granted)).toMatchObject({ archived: true });
+  expect((await readTask(granted)).json()).toMatchObject({ archived: true, permittedCommands: ["unarchive_task"] });
 });
 
 test("real HTTP discovery applies current grants, ownership, pagination, and conditional polling", async () => {

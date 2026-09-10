@@ -11,7 +11,9 @@ import { ArtifactStore, type StoredArtifact } from "../platform/artifacts.js";
 import type { ForgeConfig } from "../platform/config.js";
 import type { ForgeDatabase } from "../platform/database.js";
 import type { HermesPrincipal } from "../identity/hermes-agents.js";
-import { HermesSafeTaskProjectionSchema, HermesTaskCommandBodySchema, HermesTaskCreateBodySchema, type HermesSafeTaskProjection, type HermesTaskCreateBody } from "../http/contracts/hermes.js";
+import { HermesSafeTaskProjectionSchema, HermesTaskCommandBodySchema, HermesTaskCreateBodySchema, type HermesSafeTaskProjection, type HermesTaskCreateBody, type HermesTaskFilter, type HermesTaskReadProjection } from "../http/contracts/hermes.js";
+import { createGithubReleasePort, GithubReleaseFailure, type GithubReleasePort } from "../integrations/github/delivery.js";
+import { deriveActionRequired, deriveTaskIntegration, isUpstreamOf, matchesHermesFilter, observableDelivery, type PullRequestObservationResult } from "./integration.js";
 import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../http/contracts/projects.js";
 import { CreateTaskTemplateBodySchema } from "../http/contracts/task-templates.js";
 import { TaskDetailsBodySchema } from "../http/contracts/tasks.js";
@@ -37,6 +39,7 @@ export class TaskFailure extends Error {
   }
 }
 type Authority = { kind: "user"; userId: string } | { kind: "hermes"; principal: HermesPrincipal };
+export type HermesGithubPort = Pick<Required<GithubReleasePort>, "observePullRequest">;
 type HermesCommand = z.infer<typeof HermesTaskCommandBodySchema>;
 const HERMES_COMMAND_AUDITS: Record<HermesCommand["command"], string> = {
   start_task: "task_started", cancel_task: "task_cancelled", archive_task: "task_archived", unarchive_task: "task_unarchived",
@@ -48,6 +51,8 @@ const hermesCommandsInFlight = new Set<string>();
 const archivesInProgress = new Set<string>();
 const hermesCommandKey = (agentId: string, taskId: string, key: string): string => JSON.stringify([agentId, taskId, key]);
 const hermesDuplicateKey = (taskId: string, key: string): string => `duplicate-${createHash("sha256").update(`${taskId}:${key}`).digest("hex")}`;
+/** ponytail: one page of the agent's own tasks feeds upstream dependency lookup; page it if an agent ever owns more. */
+const HERMES_UPSTREAM_POOL = 200;
 type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "resolveTaskSource" | "captureTaskConfiguration">;
 /** Worktree removal defaults to the real host; tests drive a controlled one. */
 export type TaskServicePorts = { removeWorktree?: typeof removeTaskWorktree };
@@ -155,6 +160,50 @@ export class TaskService {
 
   getHermesTask(principal: HermesPrincipal, taskId: string) {
     return this.hermesProjection(this.requireTask({ kind: "hermes", principal }, taskId));
+  }
+
+  /** The read path adds observed delivery integration health to the stored projection. */
+  async readHermesTask(principal: HermesPrincipal, taskId: string, github: HermesGithubPort = createGithubReleasePort()): Promise<HermesTaskReadProjection> {
+    const [projection] = await this.withHermesIntegration(principal, [this.getHermesTask(principal, taskId)], github);
+    return projection!;
+  }
+
+  async readHermesTasks(principal: HermesPrincipal, input: Parameters<TaskService["listHermesTasks"]>[1] & { filter?: HermesTaskFilter }, github: HermesGithubPort = createGithubReleasePort()): Promise<{ tasks: HermesTaskReadProjection[]; nextCursor: string | null }> {
+    const page = this.listHermesTasks(principal, input);
+    const tasks = await this.withHermesIntegration(principal, page.tasks, github);
+    // Integration health comes from GitHub, not the query, so the filter narrows a page already drawn. The cursor still walks every task.
+    return { tasks: input.filter ? tasks.filter(projection => matchesHermesFilter(projection, input.filter!)) : tasks, nextCursor: page.nextCursor };
+  }
+
+  private async withHermesIntegration(principal: HermesPrincipal, projections: HermesSafeTaskProjection[], github: HermesGithubPort): Promise<HermesTaskReadProjection[]> {
+    if (!projections.length) return [];
+    const targets = projections.map(projection => this.repository.task(this.repository.row(projection.id)!));
+    const pool = this.repository.hermesRows({ agentId: principal.agentId, companyId: principal.companyId, limit: HERMES_UPSTREAM_POOL }).map(row => this.repository.task(row));
+    const upstreams = new Map(targets.map(task => [task.id, pool.filter(other => isUpstreamOf(other, task))] as const));
+    const observed = new Map<string, Task>();
+    for (const task of [...targets, ...[...upstreams.values()].flat()]) observed.set(task.id, task);
+    const observedAt = new Date().toISOString();
+    const integrations = new Map(await Promise.all([...observed.values()].map(async task => [task.id, deriveTaskIntegration(task, await this.observeTaskPullRequest(task, github), observedAt)] as const)));
+    return projections.map((projection, index) => {
+      const task = targets[index]!;
+      const integration = integrations.get(task.id)!;
+      const blocking = upstreams.get(task.id)!.find(other => !integrations.get(other.id)?.integrated);
+      return {
+        ...projection,
+        implementation: { status: projection.status },
+        integration,
+        actionRequired: deriveActionRequired(task, integration, blocking ? { taskId: blocking.id, pullRequestNumber: blocking.pullRequest?.number ?? null } : null),
+      };
+    });
+  }
+
+  private async observeTaskPullRequest(task: Task, github: HermesGithubPort): Promise<PullRequestObservationResult> {
+    if (!observableDelivery(task)) return { observation: null, failureCode: null };
+    try {
+      return { observation: await github.observePullRequest({ repository: task.configuration.repository, branch: task.configuration.branch, pullRequestNumber: task.pullRequest?.number ?? null }), failureCode: null };
+    } catch (error) {
+      return { observation: null, failureCode: error instanceof GithubReleaseFailure ? error.code : "provider-unavailable" };
+    }
   }
 
   async commandHermesTask(principal: HermesPrincipal, taskId: string, raw: unknown): Promise<HermesSafeTaskProjection> {

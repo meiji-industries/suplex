@@ -12,9 +12,10 @@ capabilities, and `{ id, name }` metadata for currently granted projects.
 
 `GET /api/hermes/tasks` returns only the caller's tasks. It accepts these query
 parameters: `projectId`, `status`, `archived`, `attention`, `blocker`,
-`updatedSince` (ISO-8601 timestamp), `limit` (1 through 100, default 50), and
-`cursor`. Results are ordered by `updatedAt` descending and task ID ascending.
-`updatedSince` is inclusive. The response has `tasks` and `nextCursor`.
+`updatedSince` (ISO-8601 timestamp), `limit` (1 through 100, default 50),
+`cursor`, and `filter`. Results are ordered by `updatedAt` descending and task
+ID ascending. `updatedSince` is inclusive. The response has `tasks` and
+`nextCursor`.
 
 The cursor binds the authenticated agent and all filters. It is opaque:
 malformed, modified, cross-agent, and filter-mismatched cursors return `400`
@@ -31,6 +32,21 @@ only safe task, project, workflow progress, question, and delivery observations.
 `POST /api/hermes/tasks/:taskId/commands` accepts for the task right now.
 `checks` is `null`, which means Forge has no persisted check observation to
 report.
+
+Read responses (`GET` and `POST /api/hermes/tasks`) also carry `implementation`,
+`integration`, and `actionRequired`. `integration` is what GitHub reported about
+the task's pull request when the request was served, with `observation` set to
+`unavailable` and `integrated` left `false` when GitHub could not answer. Forge
+never observes deployed runtimes, so `integration.deployed.included` is always
+`null`. `actionRequired` names the owner and the reason the task is not
+integrated, or is `null` when nothing is outstanding. Command replies omit these
+three fields: a command reports stored task state and reads no provider.
+
+`filter` selects on that observed health: `stale_delivery`,
+`conflicting_pull_request`, `failed_checks`, `pending_review`,
+`blocked_by_dependency`, or `not_integrated`. GitHub is read after the page is
+drawn, so `filter` narrows the returned page rather than the scan; keep
+following `nextCursor` to see every matching task.
 
 Missing, out-of-grant, cross-company, and other-creator tasks all return `404`
 with `{ "code": "resource_not_found" }`. This intentionally conceals which

@@ -112,6 +112,42 @@ export const HermesTaskIdParamsSchema = z.object({
   taskId: z.string().min(1).max(100),
 });
 
+const HermesTaskStatusSchema = z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]);
+
+export const HermesIntegrationSchema = z.object({
+  integrated: z.boolean(),
+  pullRequest: z.object({
+    state: z.enum(["absent", "open", "draft", "ready", "conflicting", "merged", "closed"]),
+    number: z.number().int().min(1).nullable(),
+    url: z.string().nullable(),
+    targetBranch: z.string(),
+    headSha: z.string().nullable(),
+    baseSha: z.string().nullable(),
+    mergeable: z.string().nullable(),
+    mergeStateStatus: z.string().nullable(),
+    reviewDecision: z.string().nullable(),
+    checks: z.object({ total: z.number().int().nonnegative(), pending: z.number().int().nonnegative(), failing: z.number().int().nonnegative(), successful: z.number().int().nonnegative() }).strict(),
+  }).strict(),
+  observedAt: z.string(),
+  observation: z.enum(["observed", "unavailable"]),
+  observationReason: z.string().nullable(),
+  deployed: z.object({ included: z.boolean().nullable(), reason: z.string() }).strict(),
+}).strict();
+
+export const HermesActionReasonCodeSchema = z.enum([
+  "conflicting_pull_request", "failed_checks", "pending_checks", "pending_review", "stale_delivery",
+  "pull_request_missing", "blocked_by_dependency", "waiting_human", "observation_unavailable",
+]);
+
+export const HermesActionRequiredSchema = z.object({
+  owner: z.enum(["agent", "human", "forge", "upstream"]),
+  reasonCode: HermesActionReasonCodeSchema,
+  summary: z.string(),
+  upstream: z.object({ taskId: z.string(), pullRequestNumber: z.number().int().min(1).nullable() }).strict().nullable(),
+  evidenceAt: z.string(),
+  suggestedCommands: z.array(z.string()),
+  humanApprovalRequired: z.boolean(),
+}).strict();
 export const HermesTaskCommandSchema = z.enum(["start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"]);
 export const HermesTaskCommandBodySchema = z.object({
   command: HermesTaskCommandSchema,
@@ -143,6 +179,8 @@ export const HermesIdentityResponseSchema = z.object({
   projects: z.array(HermesProjectSchema),
 });
 
+export const HermesTaskFilterSchema = z.enum(["stale_delivery", "conflicting_pull_request", "failed_checks", "pending_review", "blocked_by_dependency", "not_integrated"]);
+
 export const HermesTaskListQuerySchema = z.object({
   projectId: z.string().min(1).max(128).optional(),
   status: z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]).optional(),
@@ -152,6 +190,7 @@ export const HermesTaskListQuerySchema = z.object({
   updatedSince: z.string().datetime().optional(),
   cursor: z.string().min(1).max(2048).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
+  filter: HermesTaskFilterSchema.optional(),
 }).strict();
 
 export const HermesTaskDeliverySchema = z.object({
@@ -179,7 +218,7 @@ export const HermesSafeTaskProjectionSchema = z.object({
   projectId: z.string(),
   project: HermesProjectSchema,
   title: z.string(),
-  status: z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]),
+  status: HermesTaskStatusSchema,
   archived: z.boolean(),
   revision: z.string(),
   permittedCommands: z.array(HermesTaskCommandSchema),
@@ -195,10 +234,21 @@ export const HermesSafeTaskProjectionSchema = z.object({
   updatedAt: z.string(),
 });
 
+/** Read paths add observed delivery integration health. Command replies stay on stored task state, which needs no GitHub read. */
+export const HermesTaskReadProjectionSchema = HermesSafeTaskProjectionSchema.extend({
+  implementation: z.object({ status: HermesTaskStatusSchema }).strict(),
+  integration: HermesIntegrationSchema,
+  actionRequired: HermesActionRequiredSchema.nullable(),
+});
+
+export type HermesIntegration = z.infer<typeof HermesIntegrationSchema>;
+export type HermesActionRequired = z.infer<typeof HermesActionRequiredSchema>;
+export type HermesTaskFilter = z.infer<typeof HermesTaskFilterSchema>;
 export type HermesSafeTaskProjection = z.infer<typeof HermesSafeTaskProjectionSchema>;
+export type HermesTaskReadProjection = z.infer<typeof HermesTaskReadProjectionSchema>;
 
 export const HermesTaskListResponseSchema = z.object({
-  tasks: z.array(HermesSafeTaskProjectionSchema),
+  tasks: z.array(HermesTaskReadProjectionSchema),
   nextCursor: z.string().nullable(),
 });
 
@@ -255,8 +305,8 @@ export const HermesRuntimeOperations = {
   createTask: {
     body: HermesTaskCreateBodySchema,
     response: {
-      200: HermesSafeTaskProjectionSchema,
-      201: HermesSafeTaskProjectionSchema,
+      200: HermesTaskReadProjectionSchema,
+      201: HermesTaskReadProjectionSchema,
       400: HermesRuntimeErrorResponses.requestInvalid,
       401: HermesRuntimeErrorResponses.credentialInvalid,
       404: z.union([HermesRuntimeErrorResponses.notFound, HermesRuntimeErrorResponses.resourceNotFound]),
@@ -269,7 +319,7 @@ export const HermesRuntimeOperations = {
   },
   getTask: {
     params: HermesTaskIdParamsSchema,
-    response: { 200: HermesSafeTaskProjectionSchema, 400: HermesRuntimeErrorResponses.requestInvalid, 401: HermesRuntimeErrorResponses.credentialInvalid, 404: z.union([HermesRuntimeErrorResponses.notFound, HermesRuntimeErrorResponses.resourceNotFound]), 500: HermesRuntimeErrorResponses.internal },
+    response: { 200: HermesTaskReadProjectionSchema, 400: HermesRuntimeErrorResponses.requestInvalid, 401: HermesRuntimeErrorResponses.credentialInvalid, 404: z.union([HermesRuntimeErrorResponses.notFound, HermesRuntimeErrorResponses.resourceNotFound]), 500: HermesRuntimeErrorResponses.internal },
   },
   commandTask: {
     params: HermesTaskIdParamsSchema,

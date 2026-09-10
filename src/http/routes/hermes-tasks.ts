@@ -2,8 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 
 import { HermesAgentFailure, type HermesAgentService, type HermesPrincipal } from "../../identity/hermes-agents.js";
-import { HermesIdentityResponseSchema, HermesRuntimeOperations, HermesSafeTaskProjectionSchema, HermesTaskListQuerySchema, HermesTaskListResponseSchema, hermesRuntimeOpenApi } from "../contracts/hermes.js";
-import { TaskFailure, type TaskService } from "../../tasks/tasks.js";
+import { HermesIdentityResponseSchema, HermesRuntimeOperations, HermesTaskListQuerySchema, HermesTaskListResponseSchema, HermesTaskReadProjectionSchema, hermesRuntimeOpenApi } from "../contracts/hermes.js";
+import { TaskFailure, type HermesGithubPort, type TaskService } from "../../tasks/tasks.js";
 import type { TaskHost } from "../../tasks/host.js";
 
 export function authenticateHermesBearer(header: string | undefined, hermes: HermesAgentService): HermesPrincipal {
@@ -17,7 +17,7 @@ export function authenticateHermesBearer(header: string | undefined, hermes: Her
   return hermes.authenticate(token);
 }
 
-export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes: HermesAgentService; tasks: TaskService; host?: Pick<TaskHost, "recover"> }): void {
+export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes: HermesAgentService; tasks: TaskService; host?: Pick<TaskHost, "recover">; github?: HermesGithubPort }): void {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const authenticate = (header: string | undefined): HermesPrincipal => authenticateHermesBearer(header, options.hermes);
 
@@ -58,17 +58,17 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     const principal = authenticate(request.headers.authorization);
     const result = await options.tasks.createTaskForHermes(principal, request.body);
     reply.header("Cache-Control", "private, no-store");
-    return reply.code(result.created ? 201 : 200).send(result.task);
+    return reply.code(result.created ? 201 : 200).send(await options.tasks.readHermesTask(principal, result.task.id, options.github));
   });
 
   typed.get("/api/hermes/tasks/:taskId", {
     schema: {
       params: HermesRuntimeOperations.getTask.params,
-      response: { ...HermesRuntimeOperations.getTask.response, 304: HermesSafeTaskProjectionSchema.nullable() },
+      response: { ...HermesRuntimeOperations.getTask.response, 304: HermesTaskReadProjectionSchema.nullable() },
     },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
-    const task = options.tasks.getHermesTask(principal, request.params.taskId);
+    const task = await options.tasks.readHermesTask(principal, request.params.taskId, options.github);
     const etag = `\"${task.revision}\"`;
     reply.header("Cache-Control", "private, no-store");
     reply.header("ETag", etag);
@@ -95,7 +95,7 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const query = request.query;
-    const result = options.tasks.listHermesTasks(principal, {
+    const result = await options.tasks.readHermesTasks(principal, {
       limit: query.limit,
       ...(query.projectId === undefined ? {} : { projectId: query.projectId }),
       ...(query.status === undefined ? {} : { status: query.status }),
@@ -104,7 +104,8 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
       ...(query.archived === undefined ? {} : { archived: query.archived === "true" }),
       ...(query.attention === undefined ? {} : { attention: query.attention === "true" }),
       ...(query.blocker === undefined ? {} : { blocker: query.blocker === "true" }),
-    });
+      ...(query.filter === undefined ? {} : { filter: query.filter }),
+    }, options.github);
     return reply.header("Cache-Control", "private, no-store").code(200).send(result);
   });
 }

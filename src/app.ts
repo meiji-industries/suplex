@@ -37,6 +37,7 @@ import health from "./http/routes/health.js";
 import pages from "./http/routes/pages.js";
 import hermesPairing from "./http/routes/hermes-pairing.js";
 import { registerHermesTaskRoutes } from "./http/routes/hermes-tasks.js";
+import type { HermesGithubPort } from "./tasks/tasks.js";
 import taskTemplates from "./http/routes/task-templates.js";
 import workflowRoutes from "./http/routes/workflows.js";
 import githubTriggerRoutes from "./http/routes/github-triggers.js";
@@ -58,6 +59,7 @@ export interface AppDependencies {
   database?: ForgeDatabase;
   logger?: Logger | false;
   hermes?: HermesAgentService;
+  hermesGithub?: HermesGithubPort;
   readProviders?: ReadProviders;
   readUpdate?: (user: AuthUser) => Promise<UpdateAvailability | UpdateObservation>;
   requestUpdateRestart?: (revision: string) => Promise<UpdateRestartResponse>;
@@ -130,7 +132,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
   if (auth) {
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
     if (dependencies.hermes) void app.register(hermesPairing, { hermes: dependencies.hermes });
-    if (dependencies.hermes && taskService) registerHermesTaskRoutes(app, { hermes: dependencies.hermes, tasks: taskService, ...(dependencies.host ? { host: dependencies.host } : {}) });
+    if (dependencies.hermes && taskService) registerHermesTaskRoutes(app, { hermes: dependencies.hermes, tasks: taskService, ...(dependencies.host ? { host: dependencies.host } : {}), ...(dependencies.hermesGithub ? { github: dependencies.hermesGithub } : {}) });
     void app.register(authenticated, { auth, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), readUpdate, ...(dependencies.requestUpdateRestart ? { requestUpdateRestart: dependencies.requestUpdateRestart } : {}), ...(dependencies.launchUpdateRestart ? { launchUpdateRestart: dependencies.launchUpdateRestart } : {}), ...(dependencies.instanceId ? { instanceId: dependencies.instanceId } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(dependencies.host ? { host: dependencies.host } : {}), ...(database ? { database } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
     if (templateService) void app.register(taskTemplates, { auth, config: dependencies.config, templates: templateService });
     if (dependencies.workflows) void app.register(workflowRoutes, { auth, config: dependencies.config, workflows: dependencies.workflows });

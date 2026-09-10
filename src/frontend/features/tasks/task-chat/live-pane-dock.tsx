@@ -3,7 +3,6 @@ import type { TaskActivity } from "../task-work.js";
 import { LivePaneTerminal } from "./live-pane-terminal.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs.js";
 import { roleLabel } from "../../../../coordination/workflows.js";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../components/ui/select.js";
 import { SessionHistory } from "./session-history.js";
 import { sessionHistoryLabels } from "./session-history-state.js";
 
@@ -52,15 +51,17 @@ export function LivePaneDock({ taskId, activity }: { taskId: string; activity: T
     setHeight(next); saveHeight(next);
   };
   if (!selected) return null;
-  return <section data-live-pane-dock className="dark sticky bottom-0 z-10 mt-auto flex w-full shrink-0 flex-col bg-background text-foreground" aria-label="Live agent output" style={{ height, maxHeight: "75dvh", colorScheme: "dark" }}>
+  return <section data-live-pane-dock className="dark sticky bottom-0 z-10 mt-auto flex w-full max-w-full shrink-0 flex-col overflow-hidden bg-background text-foreground" aria-label="Live agent output" style={{ height, maxHeight: "75dvh", colorScheme: "dark" }}>
     <div role="slider" tabIndex={0} aria-label="Resize live agent output" aria-orientation="vertical" aria-valuemin={160} aria-valuemax={720} aria-valuenow={height} aria-valuetext={`${height} pixels`} className="flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center border-t focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" title="Drag to resize live output" onKeyDown={adjustResize} onPointerDown={startResize} onPointerMove={updateResize} onPointerUp={endResize} onPointerCancel={endResize}><span aria-hidden="true" className="h-px w-8 bg-muted-foreground" /></div>
-    <Tabs className="min-h-0 flex-1" value={view === "terminal" && !selected.paneId ? "history" : view} onValueChange={value => setView(String(value))}>
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b px-2" aria-label="Session output toolbar">
-        <Select value={selected.id} onValueChange={value => { setSelectedSessionId(String(value)); setView("history"); }}><SelectTrigger size="sm" aria-label="Select a session"><SelectValue>{labels.get(selected.id) ?? roleLabel(selected)}</SelectValue></SelectTrigger><SelectContent>{sessions.map(session => <SelectItem key={session.id} value={session.id}>{labels.get(session.id) ?? roleLabel(session)}</SelectItem>)}</SelectContent></Select>
-        <TabsList variant="line"><TabsTrigger value="history">History</TabsTrigger><TabsTrigger value="terminal" disabled={!selected.current || !selected.paneId}>Terminal</TabsTrigger></TabsList>
-      </div>
-      <TabsContent className="mt-0 flex min-h-0" value="history"><SessionHistory key={selected.id} taskId={taskId} sessionId={selected.id} assistantLabel={labels.get(selected.id) ?? roleLabel(selected)} poll={selected.current} /></TabsContent>
-      <TabsContent className="mt-0 min-h-0" value="terminal">{selected.current && selected.paneId ? <LivePaneTerminal key={selected.id} taskId={taskId} role={selected.kind} paneId={selected.paneId} /> : null}</TabsContent>
+    <Tabs className="min-h-0 min-w-0 flex-1 gap-0" value={selected.id} onValueChange={value => { setSelectedSessionId(String(value)); setView("history"); }}>
+      <div className="min-w-0 shrink-0 overflow-x-auto border-b px-1" aria-label="Sessions"><TabsList variant="line">{sessions.map(session => <TabsTrigger key={session.id} value={session.id}>{labels.get(session.id) ?? roleLabel(session)}</TabsTrigger>)}</TabsList></div>
+      {sessions.map(session => <TabsContent key={session.id} className="mt-0 flex min-h-0 min-w-0 overflow-hidden" value={session.id}>
+        <Tabs className="min-h-0 min-w-0 flex-1 gap-0" value={view === "terminal" && (!session.current || !session.paneId) ? "history" : view} onValueChange={value => setView(String(value))}>
+          <div className="flex shrink-0 justify-end border-b px-2" aria-label="Session output"><TabsList variant="line"><TabsTrigger value="history">History</TabsTrigger><TabsTrigger value="terminal" disabled={!session.current || !session.paneId}>Terminal</TabsTrigger></TabsList></div>
+          <TabsContent className="mt-0 flex min-h-0 max-h-full overflow-hidden" value="history"><SessionHistory taskId={taskId} sessionId={session.id} assistantLabel={labels.get(session.id) ?? roleLabel(session)} poll={session.current} /></TabsContent>
+          <TabsContent className="mt-0 min-h-0 overflow-hidden" value="terminal">{session.current && session.paneId ? <LivePaneTerminal taskId={taskId} role={session.kind} paneId={session.paneId} /> : null}</TabsContent>
+        </Tabs>
+      </TabsContent>)}
     </Tabs>
   </section>;
 }

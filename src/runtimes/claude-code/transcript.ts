@@ -1,5 +1,4 @@
 import { readdir, readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -117,10 +116,9 @@ export function claudeHistoryMessages(entries: readonly ClaudeMessageEntry[]): N
   for (const entry of entries) for (const block of blocks(entry)) if (block.type === "tool_result") results.set(block.tool_use_id, block);
   return entries.flatMap(entry => {
     const content: NativeHistoryMessage["content"] = [];
-    for (const block of blocks(entry)) {
+    for (const [originalBlockIndex, block] of blocks(entry).entries()) {
       if (block.type === "text") {
-        const identity = createHash("sha256").update(block.text).digest("hex").slice(0, 16);
-        content.push({ id: `${entry.uuid}:text:${identity}`, type: "text", text: block.text });
+        content.push({ id: `${entry.uuid}:text:${originalBlockIndex}`, type: "text", text: block.text });
         continue;
       }
       if (block.type !== "tool_use") continue;

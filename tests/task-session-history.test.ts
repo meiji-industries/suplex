@@ -55,3 +55,22 @@ test("task history distinguishes an invalid cursor from an unavailable native re
     expect(unavailable.json()).toEqual({ error: "Session history is not available" });
   } finally { await value.close(); }
 });
+
+test("task history preserves an authorization failure after the native read", async () => {
+  const value = await nativeApp();
+  try {
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "History revoked", description: "Recheck access", startImmediately: true, idempotencyKey: "history-revoked" });
+    const store = value.tasks.repository.controls;
+    const reserved = store.claimRoot({ taskId: task.id });
+    const session = store.bindHarnessSession({ sessionId: reserved.id, generation: reserved.generation, nativeSessionId: "ses_history" });
+    vi.spyOn(executables, "resolveOpenCodeExecutable").mockResolvedValue("/bin/opencode");
+    vi.spyOn(commands, "readCommandOutput").mockImplementation(async () => {
+      value.database.authQuery(db => db.prepare("UPDATE forge_users SET status = 'revoked' WHERE id = ?").run(value.userId));
+      return JSON.stringify({ info: { id: "ses_history" }, messages: [] });
+    });
+
+    const response = await value.app.inject({ url: `/api/tasks/${task.id}/sessions/${session.id}/history`, headers: value.headers });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: "Authentication required" });
+  } finally { await value.close(); }
+});

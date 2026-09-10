@@ -46,6 +46,14 @@ test("history omits thinking and joins completed, failed, and running tools by n
   expect(claudeHistoryMessages(entries)[2]?.content).toEqual([{ id: "toolu_3", type: "tool", name: "Bash", status: "error", input: { command: "false" }, output: null, error: "exit 1" }]);
 });
 
+test("history text identities use the immutable transcript block slot", () => {
+  const entry = (content: unknown[]) => claudeMessageEntries([{ type: "assistant", uuid: "a-slots", timestamp: "2026-09-07T15:37:28.000Z", message: { role: "assistant", content } }]);
+  const duplicated = claudeHistoryMessages(entry([{ type: "text", text: "same" }, { type: "thinking", thinking: "hidden" }, { type: "text", text: "same" }]));
+  expect(duplicated[0]?.content.map(part => part.id)).toEqual(["a-slots:text:0", "a-slots:text:2"]);
+  const changed = claudeHistoryMessages(entry([{ type: "text", text: "expanded text" }, { type: "thinking", thinking: "hidden" }, { type: "text", text: "same" }]));
+  expect(changed[0]?.content[0]?.id).toBe("a-slots:text:0");
+});
+
 test("usage records one entry per API response, keyed by the prompt that started the turn", () => {
   const pricing = new Map<string, ModelPricing>([["anthropic/claude-haiku-4-5-20251001", { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }]]);
   const usage = claudeUsage(claudeMessageEntries(parseJsonLines(text)), "11111111-2222-4333-8444-555555555555", "worker", pricing);

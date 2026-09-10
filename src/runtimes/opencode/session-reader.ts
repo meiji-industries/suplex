@@ -1,5 +1,4 @@
 import { readOpenCodeHistory } from "./session-history.js";
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import { OpenCodeClient } from "./client.js";
 import { OpenCodeTextPartSchema, OpenCodeToolPartSchema, type OpenCodeMessageEnvelope } from "./contracts.js";
@@ -39,12 +38,11 @@ export function executionFromMessages(messages: OpenCodeMessageEnvelope[]) {
 export function historyFromOpenCodeMessages(messages: readonly OpenCodeMessageEnvelope[]): NativeHistoryMessage[] {
   return messages.map((message, position) => ({ message, position })).sort((left, right) => left.message.info.time.created - right.message.info.time.created || left.position - right.position).flatMap(({ message }) => {
     const content: NativeHistoryMessage["content"] = [];
-    for (const part of message.parts) {
+    for (const [originalBlockIndex, part] of message.parts.entries()) {
       const text = OpenCodeTextPartSchema.safeParse(part);
       if (text.success) {
         if (text.data.ignored) continue;
-        const fallback = createHash("sha256").update(JSON.stringify(text.data)).digest("hex").slice(0, 16);
-        content.push({ id: text.data.id ?? `${message.info.id}:text:${fallback}`, type: "text", text: text.data.text });
+        content.push({ id: text.data.id ?? `${message.info.id}:text:${originalBlockIndex}`, type: "text", text: text.data.text });
         continue;
       }
       const parsed = OpenCodeToolPartSchema.safeParse(part);

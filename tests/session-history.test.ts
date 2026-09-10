@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { NativeHistoryMessage } from "../src/tasks/history/contracts.js";
 import { pageSessionHistory, SessionHistoryCursorError } from "../src/tasks/history/history.js";
-import { anchoredScrollTop, historyAtBottom, mergeNativeHistory, sessionHistoryLabels } from "../src/frontend/features/tasks/task-chat/session-history-state.js";
+import { anchoredScrollTop, historyAtBottom, mergeNativeHistory, readLatestHistory, sessionHistoryLabels } from "../src/frontend/features/tasks/task-chat/session-history-state.js";
 
 const message = (id: string, text = id): NativeHistoryMessage => ({ id, role: "assistant", createdAt: null, content: [{ id: `${id}-text`, type: "text", text }] });
 
@@ -31,6 +31,26 @@ test("polling replaces evolving messages without dropping loaded history", () =>
 test("the authoritative page order places a newly visible streaming message correctly", () => {
   const current = [message("old"), message("latest")];
   expect(mergeNativeHistory(current, [message("streamed"), message("latest")], "latest").map(item => item.id)).toEqual(["old", "streamed", "latest"]);
+});
+
+test("latest history bridges every page back to the loaded messages", async () => {
+  const current = Array.from({ length: 40 }, (_, index) => message(String(index)));
+  const cursors: Array<string | undefined> = [];
+  const result = await readLatestHistory(current, async before => {
+    cursors.push(before);
+    if (before === undefined) return { messages: Array.from({ length: 40 }, (_, index) => message(String(index + 60))), olderCursor: "60" };
+    if (before === "60") return { messages: Array.from({ length: 40 }, (_, index) => message(String(index + 20))), olderCursor: "20" };
+    throw new Error(`Unexpected cursor ${before}`);
+  });
+  expect(cursors).toEqual([undefined, "60"]);
+  expect(result.messages.map(item => item.id)).toEqual(Array.from({ length: 100 }, (_, index) => String(index)));
+  expect(new Set(result.messages.map(item => item.id))).toHaveProperty("size", 100);
+});
+
+test("latest history exposes pagination after an initially empty response", async () => {
+  expect(await readLatestHistory([], async () => ({ messages: [], olderCursor: null }))).toEqual({ messages: [], olderCursor: null });
+  const populated = await readLatestHistory([], async () => ({ messages: [message("latest")], olderCursor: "earlier" }));
+  expect(populated).toEqual({ messages: [message("latest")], olderCursor: "earlier" });
 });
 
 test("scroll helpers pause follow and preserve the earlier-message anchor", () => {

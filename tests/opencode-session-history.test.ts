@@ -50,3 +50,14 @@ test("history maps stable text and tool identities with complete native output",
     ] },
   ]);
 });
+
+test("history text fallback identities use the immutable native block slot", () => {
+  const envelope = (parts: unknown[]) => OpenCodeMessageEnvelopeSchema.parse({
+    info: { id: "msg_slots", sessionID: "ses_old", role: "assistant", time: { created: 10 }, parentID: "msg_user", modelID: "model", providerID: "openai", mode: "primary", agent: "forge-worker", path: { cwd: "/repo", root: "/repo" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+    parts,
+  });
+  const duplicated = historyFromOpenCodeMessages([envelope([{ type: "text", text: "same" }, { type: "text", text: "same" }])]);
+  expect(duplicated[0]?.content.map(part => part.id)).toEqual(["msg_slots:text:0", "msg_slots:text:1"]);
+  const changed = historyFromOpenCodeMessages([envelope([{ type: "text", text: "expanded text" }, { type: "text", text: "same" }])]);
+  expect(changed[0]?.content[0]?.id).toBe("msg_slots:text:0");
+});

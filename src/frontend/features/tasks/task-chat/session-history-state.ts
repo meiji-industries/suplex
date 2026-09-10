@@ -1,4 +1,4 @@
-import type { NativeHistoryMessage } from "../../../../tasks/history/contracts.js";
+import type { NativeHistoryMessage, SessionHistoryPage } from "../../../../tasks/history/contracts.js";
 
 export function mergeNativeHistory(current: readonly NativeHistoryMessage[], incoming: readonly NativeHistoryMessage[], placement: "earlier" | "latest"): NativeHistoryMessage[] {
   const messages = new Map(current.map(message => [message.id, message]));
@@ -8,6 +8,24 @@ export function mergeNativeHistory(current: readonly NativeHistoryMessage[], inc
     ? [...incoming.map(message => message.id), ...current.filter(message => !incomingIds.has(message.id)).map(message => message.id)]
     : [...current.filter(message => !incomingIds.has(message.id)).map(message => message.id), ...incoming.map(message => message.id)];
   return [...new Set(ids)].map(id => messages.get(id)!);
+}
+
+export async function readLatestHistory(current: readonly NativeHistoryMessage[], loadPage: (before?: string) => Promise<SessionHistoryPage>): Promise<SessionHistoryPage> {
+  const latest = await loadPage();
+  const pages = [latest];
+  const currentIds = new Set(current.map(message => message.id));
+  let overlaps = latest.messages.some(message => currentIds.has(message.id));
+  let cursor = latest.olderCursor;
+  const readCursors = new Set<string>();
+  while (current.length && !overlaps && cursor && !readCursors.has(cursor)) {
+    readCursors.add(cursor);
+    const page = await loadPage(cursor);
+    pages.push(page);
+    overlaps = page.messages.some(message => currentIds.has(message.id));
+    cursor = page.olderCursor;
+  }
+  const incoming = [...pages].reverse().flatMap(page => page.messages);
+  return { messages: mergeNativeHistory(current, incoming, "latest"), olderCursor: latest.olderCursor };
 }
 
 export function historyAtBottom(input: { scrollHeight: number; scrollTop: number; clientHeight: number }, tolerance = 24): boolean {

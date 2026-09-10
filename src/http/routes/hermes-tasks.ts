@@ -4,6 +4,7 @@ import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { HermesAgentFailure, type HermesAgentService, type HermesPrincipal } from "../../identity/hermes-agents.js";
 import { HermesIdentityResponseSchema, HermesRuntimeOperations, HermesSafeTaskProjectionSchema, HermesTaskListQuerySchema, HermesTaskListResponseSchema, hermesRuntimeOpenApi } from "../contracts/hermes.js";
 import { TaskFailure, type TaskService } from "../../tasks/tasks.js";
+import type { TaskHost } from "../../tasks/host.js";
 
 export function authenticateHermesBearer(header: string | undefined, hermes: HermesAgentService): HermesPrincipal {
   if (!header || !header.startsWith("Bearer ")) {
@@ -16,7 +17,7 @@ export function authenticateHermesBearer(header: string | undefined, hermes: Her
   return hermes.authenticate(token);
 }
 
-export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes: HermesAgentService; tasks: TaskService }): void {
+export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes: HermesAgentService; tasks: TaskService; host?: Pick<TaskHost, "recover"> }): void {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const authenticate = (header: string | undefined): HermesPrincipal => authenticateHermesBearer(header, options.hermes);
 
@@ -39,10 +40,10 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (_request, reply) => reply.header("Cache-Control", "private, no-store").send({
     apiVersion: "v1",
-    capabilities: { read: { task: true }, create: { backlogTask: true }, taskControl: false, delivery: false, merge: false, humanDecisions: false },
-    autonomousCommands: ["create_backlog_task"],
+    capabilities: { read: { task: true }, create: { backlogTask: true }, taskControl: true, delivery: false, merge: false, humanDecisions: false },
+    autonomousCommands: ["create_backlog_task", "start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"],
     humanOnlyRecords: ["task_human_answer"],
-    unavailableCommands: ["start_task", "cancel_task", "answer_human_question", "send_task_note", "deliver_task", "merge_pull_request"],
+    unavailableCommands: ["answer_human_question", "deliver_task", "merge_pull_request"],
     pagination: { supported: false, cursor: false },
   }));
 
@@ -74,6 +75,16 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     if (request.headers["if-match"] && request.headers["if-match"] !== etag) throw new TaskFailure("Task revision is stale", 412, "revision_stale");
     if (request.headers["if-none-match"] === etag) return reply.code(304).send(null);
     return reply.code(200).send(task);
+  });
+
+  typed.post("/api/hermes/tasks/:taskId/commands", {
+    config: { hermesRuntime: true },
+    schema: { params: HermesRuntimeOperations.commandTask.params, body: HermesRuntimeOperations.commandTask.body, response: HermesRuntimeOperations.commandTask.response },
+    preValidation: async (request) => { authenticate(request.headers.authorization); },
+  }, async (request, reply) => {
+    const task = await options.tasks.commandHermesTask(authenticate(request.headers.authorization), request.params.taskId, request.body);
+    if (["start_task", "cancel_task", "send_task_note", "recheck_delivery_wait"].includes(request.body.command)) void options.host?.recover(task.id).catch(error => app.log.warn({ taskId: task.id, err: error }, "Task recovery will be retried"));
+    return reply.header("Cache-Control", "private, no-store").code(200).send(task);
   });
 
   typed.get("/api/hermes/tasks", {

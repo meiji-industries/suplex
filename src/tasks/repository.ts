@@ -12,7 +12,7 @@ const RowSchema = z.object({
   id: z.string(), company_id: z.string(), project_id: z.string(), issue_number: z.number().nullable(), issue_code: z.string().nullable(),
   title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(), blocked_by_task_id: z.string().nullable(),
   blocked_task_id: z.string().nullable(), blocked_task_title: z.string().nullable(), blocked_task_status: z.string().nullable(),
-  creator_user_id: z.string().nullable(), creator_agent_id: z.string().nullable(), created_at: z.string(), updated_at: z.string(), activity_updated_at: z.string(), status_changed_at: z.string(), archived_at: z.string().nullable(),
+  creator_user_id: z.string().nullable(), creator_agent_id: z.string().nullable(), copied_from_task_id: z.string().nullable(), command_revision: z.number(), created_at: z.string(), updated_at: z.string(), activity_updated_at: z.string(), status_changed_at: z.string(), archived_at: z.string().nullable(),
 });
 export type TaskRow = z.infer<typeof RowSchema>;
 const ArtifactRowSchema = z.object({
@@ -74,6 +74,8 @@ export class TaskRepository {
     taskId: string; companyId: string; creator: TaskCreator; request: TaskRequest;
     requestHash: string; configuration: TaskConfiguration; rootProfile: TaskProfile; workerProfile: TaskProfile; advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>>;
     images: Array<{ filename: string; mimeType: string; bytes: Buffer }>;
+    /** Provenance written with the row itself, so a copy is identifiable without a second write. */
+    copiedFromTaskId?: string;
   }): { task: Task; created: boolean } {
     const written: StoredArtifact[] = [];
     try {
@@ -82,8 +84,8 @@ export class TaskRepository {
         if (existing) return { task: this.task(existing), created: false };
         const time = new Date().toISOString();
         const configuration = TaskConfigurationSchema.parse(input.configuration);
-        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, creator_agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, time, time);
+        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, creator_agent_id, copied_from_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, input.copiedFromTaskId ?? null, time, time);
         for (const image of input.images) written.push(this.artifacts.putArtifactSync(db, input.companyId, "task-image", { ...image, taskId: input.taskId }));
         this.controls.create({
           taskId: input.taskId, startImmediately: input.request.startImmediately, objective: input.request.description ? `${input.request.title}\n\n${input.request.description}` : input.request.title, deliveryTarget: input.request.deliveryTarget,

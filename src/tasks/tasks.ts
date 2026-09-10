@@ -11,13 +11,14 @@ import { ArtifactStore, type StoredArtifact } from "../platform/artifacts.js";
 import type { ForgeConfig } from "../platform/config.js";
 import type { ForgeDatabase } from "../platform/database.js";
 import type { HermesPrincipal } from "../identity/hermes-agents.js";
-import { HermesTaskCreateBodySchema, type HermesSafeTaskProjection, type HermesTaskCreateBody } from "../http/contracts/hermes.js";
+import { HermesSafeTaskProjectionSchema, HermesTaskCommandBodySchema, HermesTaskCreateBodySchema, type HermesSafeTaskProjection, type HermesTaskCreateBody } from "../http/contracts/hermes.js";
 import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../http/contracts/projects.js";
 import { CreateTaskTemplateBodySchema } from "../http/contracts/task-templates.js";
 import { WorkflowRecordInputSchema } from "../http/contracts/workflows.js";
 import type { ProjectService } from "../projects/projects.js";
 import { TaskProfileSchema, type TaskProfile } from "./control.js";
-import { TaskConfigurationSchema, TaskInputSchema, type Task, type TaskInput } from "./contracts.js";
+import { TaskConfigurationSchema, TaskImageInputSchema, TaskInputSchema, type Task, type TaskInput } from "./contracts.js";
+import { duplicateTitle } from "./duplicate-title.js";
 import { decodeTaskImage } from "./images.js";
 import { taskBranchName } from "./branch.js";
 import { newTaskId, TaskConflict, TaskRepository, taskRequestHash, type TaskCreator, type TaskRow } from "./repository.js";
@@ -35,18 +36,32 @@ export class TaskFailure extends Error {
   }
 }
 type Authority = { kind: "user"; userId: string } | { kind: "hermes"; principal: HermesPrincipal };
+type HermesCommand = z.infer<typeof HermesTaskCommandBodySchema>;
+const HERMES_COMMAND_AUDITS: Record<HermesCommand["command"], string> = {
+  start_task: "task_started", cancel_task: "task_cancelled", archive_task: "task_archived", unarchive_task: "task_unarchived",
+  send_task_note: "task_note_added", duplicate_task: "task_duplicated", recheck_delivery_wait: "delivery_wait_recheck_requested",
+};
+/** Commands running anywhere in this process. Keyed without the service instance so siblings sharing a database agree. */
+const hermesCommandsInFlight = new Set<string>();
+/** Tasks whose worktree is being removed anywhere in this process. Start and unarchive refuse while a task is listed. */
+const archivesInProgress = new Set<string>();
+const hermesCommandKey = (agentId: string, taskId: string, key: string): string => JSON.stringify([agentId, taskId, key]);
+const hermesDuplicateKey = (taskId: string, key: string): string => `duplicate-${createHash("sha256").update(`${taskId}:${key}`).digest("hex")}`;
 type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "resolveTaskSource" | "captureTaskConfiguration">;
+/** Worktree removal defaults to the real host; tests drive a controlled one. */
+export type TaskServicePorts = { removeWorktree?: typeof removeTaskWorktree };
 const DetailsSchema = TaskInputSchema.pick({ title: true }).extend({ description: z.string().trim().optional() }).partial().strict().refine(input => input.title !== undefined || input.description !== undefined);
 const RenameSchema = TaskInputSchema.pick({ title: true });
 const BlockedBySchema = z.object({ blockedByTaskId: z.string().min(1).max(256).nullable() }).strict();
 
 export class TaskService {
-  private readonly archives = new Set<string>();
+  private readonly removeWorktree: typeof removeTaskWorktree;
   readonly repository: TaskRepository;
   private readonly artifacts: ArtifactStore;
-  constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService, private readonly projects: Projects, config: Pick<ForgeConfig, "artifactRoot">) {
+  constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService, private readonly projects: Projects, config: Pick<ForgeConfig, "artifactRoot">, ports: TaskServicePorts = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot, database);
     this.repository = new TaskRepository(database, this.artifacts);
+    this.removeWorktree = ports.removeWorktree ?? removeTaskWorktree;
   }
 
   getTask(userId: string, taskId: string): Task {
@@ -110,7 +125,7 @@ export class TaskService {
     });
   }
 
-  async createTaskForHermes(principal: HermesPrincipal, input: HermesTaskCreateBody) {
+  async createTaskForHermes(principal: HermesPrincipal, input: HermesTaskCreateBody, copiedFromTaskId?: string) {
     const untrusted: Record<string, unknown> = { ...input };
     delete untrusted.companyId;
     delete untrusted.agentId;
@@ -133,12 +148,58 @@ export class TaskService {
     }
     if (existing) return { created: false, task: this.getHermesTask(principal, existing.id) };
     const resolved = this.resolveHermesRequest(principal.companyId, raw);
-    const result = await this.create(authority, principal.companyId, resolved.request, undefined, requestHash, resolved.signature, raw);
+    const result = await this.create(authority, principal.companyId, resolved.request, undefined, requestHash, resolved.signature, raw, copiedFromTaskId);
     return { created: result.created, task: this.getHermesTask(principal, result.task.id) };
   }
 
   getHermesTask(principal: HermesPrincipal, taskId: string) {
     return this.hermesProjection(this.requireTask({ kind: "hermes", principal }, taskId));
+  }
+
+  async commandHermesTask(principal: HermesPrincipal, taskId: string, raw: unknown): Promise<HermesSafeTaskProjection> {
+    let input: HermesCommand;
+    try { input = HermesTaskCommandBodySchema.parse(raw); }
+    catch { throw new TaskFailure("Invalid request", 400, "request_invalid"); }
+    const requestHash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+    const authority: Authority = { kind: "hermes", principal };
+    this.requireTask(authority, taskId);
+    const stored = this.database.authQuery(db => db.prepare("SELECT request_hash, result_json FROM forge_hermes_task_command_receipts WHERE agent_id = ? AND task_id = ? AND idempotency_key = ?").get(principal.agentId, taskId, input.idempotencyKey) as { request_hash: string; result_json: string } | undefined);
+    if (stored) {
+      if (stored.request_hash !== requestHash) throw new TaskFailure("This idempotency key belongs to a different request", 409, "idempotency_conflict");
+      return HermesSafeTaskProjectionSchema.parse(JSON.parse(stored.result_json));
+    }
+    const inFlight = hermesCommandKey(principal.agentId, taskId, input.idempotencyKey);
+    if (hermesCommandsInFlight.has(inFlight)) throw new TaskFailure("This command is still being processed", 409, "command_in_progress");
+    hermesCommandsInFlight.add(inFlight);
+    try {
+      const row = this.requireTask(authority, taskId);
+      const before = this.hermesProjection(row);
+      if (before.revision !== input.revision) throw new TaskFailure("Task revision is stale", 412, "revision_stale");
+      if (!before.permittedCommands.includes(input.command)) throw new TaskFailure("This command is not legal for the current task", 409, "illegal_command");
+      // The revision claim is the optimistic lock: a concurrent command on the same revision loses here.
+      const claimed = this.database.authImmediateTransaction(db => db.prepare("UPDATE forge_tasks SET command_revision = command_revision + 1 WHERE id = ? AND command_revision = ?").run(taskId, row.command_revision).changes);
+      if (claimed !== 1) throw new TaskFailure("Task revision is stale", 412, "revision_stale");
+      let resultTaskId = taskId;
+      switch (input.command) {
+        case "start_task":
+          if (archivesInProgress.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409, "illegal_command");
+          this.repository.controls.start(taskId);
+          break;
+        case "cancel_task": this.repository.controls.cancel(taskId); break;
+        case "unarchive_task": this.unarchive(authority, taskId); break;
+        case "send_task_note": this.note(authority, taskId, input.note!, `Agent note (${principal.agentId})`); break;
+        // TaskHost owns delivery observation; the route schedules that recovery after this returns.
+        case "recheck_delivery_wait": break;
+        case "archive_task":
+          if ("dirtyFileCount" in await this.archive(authority, taskId, false)) throw new TaskFailure("Discard dirty worktree changes before archiving", 409, "illegal_command");
+          break;
+        case "duplicate_task": resultTaskId = await this.duplicateTaskForHermes(principal, taskId, input.idempotencyKey); break;
+      }
+      const result = this.getHermesTask(principal, resultTaskId);
+      this.database.authTransaction(db => db.prepare("INSERT INTO forge_hermes_task_command_receipts (agent_id, task_id, idempotency_key, request_hash, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(principal.agentId, taskId, input.idempotencyKey, requestHash, JSON.stringify(result), new Date().toISOString()));
+      this.audit(authority, principal.companyId, HERMES_COMMAND_AUDITS[input.command], taskId);
+      return result;
+    } finally { hermesCommandsInFlight.delete(inFlight); }
   }
 
   hermesIdentity(principal: HermesPrincipal) {
@@ -152,7 +213,7 @@ export class TaskService {
     `).all(principal.agentId, principal.companyId) as Array<{ id: string; name: string }>);
     return {
       agent: { id: principal.agentId, name: this.database.authQuery(db => (db.prepare("SELECT name FROM forge_agents WHERE id = ?").get(principal.agentId) as { name: string }).name), profileId: principal.profileId },
-      capabilities: { taskDiscovery: true as const, taskRead: true as const, taskCreate: true as const, taskCommands: [] as never[] },
+      capabilities: { taskDiscovery: true as const, taskRead: true as const, taskCreate: true as const, taskCommands: ["start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"] as Array<z.infer<typeof HermesTaskCommandBodySchema>["command"]> },
       projects,
     };
   }
@@ -179,7 +240,7 @@ export class TaskService {
     return { tasks, nextCursor: last && hasMore ? this.createHermesCursor(principal, filter, last) : null };
   }
 
-  private async create(authority: Authority, companyId: string, raw: TaskInput, capturedDispatch?: GithubTriggerDispatch, requestHashOverride?: string, hermesPolicySignature?: string, hermesRaw?: HermesTaskCreateBody): Promise<{ task: Task; created: boolean }> {
+  private async create(authority: Authority, companyId: string, raw: TaskInput, capturedDispatch?: GithubTriggerDispatch, requestHashOverride?: string, hermesPolicySignature?: string, hermesRaw?: HermesTaskCreateBody, copiedFromTaskId?: string): Promise<{ task: Task; created: boolean }> {
     let normalized: TaskInput;
     try { normalized = normalizeWorkflowInput(raw, { requireSource: true }); }
     catch (error) { if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode); throw error; }
@@ -239,7 +300,8 @@ export class TaskService {
           this.requireGithubTriggerAdmission(capturedDispatch);
           if (this.projectConfigurationSignature(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project configuration changed", 409);
         }
-        const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images });
+        // A copy commits with the source it was authorized against, and carries that provenance from its first row.
+        const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images, ...(copiedFromTaskId ? { copiedFromTaskId } : {}) });
         if (capturedDispatch) new GithubTriggerDispatchRepository(this.database).linkTask(capturedDispatch.id, result.task.id);
         if (result.created) this.audit(authority, companyId, "task_created", result.task.id);
         return result;
@@ -265,8 +327,8 @@ export class TaskService {
   }
 
   startTask(userId: string, taskId: string): Task {
-    if (this.archives.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
     const task = this.getTask(userId, taskId);
+    if (archivesInProgress.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
     if (task.archivedAt || !["backlog", "active"].includes(task.status)) throw new TaskFailure("This task cannot be started", 409);
     this.repository.controls.start(taskId);
     this.audit({ kind: "user", userId }, task.companyId, "task_started", taskId);
@@ -307,11 +369,16 @@ export class TaskService {
   }
 
   sendNote(userId: string, taskId: string, note: string): Task {
-    const task = this.getTask(userId, taskId);
-    if (task.archivedAt || !["active", "delivered"].includes(task.status)) throw new TaskFailure("Start the task or answer its current decision before you send a message.", 409);
-    const prompt = z.string().trim().min(1).max(20_000).parse(note);
-    this.repository.controls.sendNote(taskId, prompt);
+    this.note({ kind: "user", userId }, taskId, note, "Human note");
     return this.getTask(userId, taskId);
+  }
+
+  /** Wakes the Coordinator with a note from either authority. Hermes replays are already deduped by their receipt. */
+  private note(authority: Authority, taskId: string, note: string, label: string): void {
+    const task = this.repository.task(this.requireTask(authority, taskId));
+    if (task.archivedAt || !["active", "delivered"].includes(task.status)) throw new TaskFailure("Start the task or answer its current decision before you send a message.", 409, authority.kind === "hermes" ? "illegal_command" : "task_failure");
+    const prompt = z.string().trim().min(1).max(20_000).parse(note);
+    this.repository.controls.sendNote(taskId, prompt, label);
   }
 
   updateTaskDetails(userId: string, taskId: string, raw: z.input<typeof DetailsSchema>): Task {
@@ -340,35 +407,45 @@ export class TaskService {
   }
 
   unarchiveTask(userId: string, taskId: string): Task {
-    const task = this.getTask(userId, taskId);
-    if (this.archives.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
+    return this.unarchive({ kind: "user", userId }, taskId);
+  }
+
+  private unarchive(authority: Authority, taskId: string): Task {
+    const task = this.repository.task(this.requireTask(authority, taskId));
+    if (archivesInProgress.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
     this.database.authImmediateTransaction(db => { if (["backlog", "active", "waiting_human"].includes(task.status)) assertTaskPullRequestsAvailable(db, taskId); this.repository.setArchived(taskId, false); });
-    return this.getTask(userId, taskId);
+    return this.repository.task(this.requireTask(authority, taskId));
   }
 
   async archiveTask(userId: string, taskId: string, confirmDiscardDirty = false): Promise<Task | { status: "confirmation_required"; dirtyFileCount: number; dirtyFilePaths: string[] }> {
-    const task = this.getTask(userId, taskId);
-    if (this.archives.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
+    return this.archive({ kind: "user", userId }, taskId, confirmDiscardDirty);
+  }
+
+  /** Removes the task worktree and archives the task. The in-memory archive set blocks start and unarchive meanwhile. */
+  private async archive(authority: Authority, taskId: string, confirmDiscardDirty = false): Promise<Task | { status: "confirmation_required"; dirtyFileCount: number; dirtyFilePaths: string[] }> {
+    const task = this.repository.task(this.requireTask(authority, taskId));
+    if (archivesInProgress.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
     if (!["backlog", "cancelled", "delivered"].includes(task.status)) throw new TaskFailure("Cancel the task before archiving it", 409);
-    this.archives.add(taskId);
+    archivesInProgress.add(taskId);
     try {
       const sessions = this.repository.controls.sessions(taskId);
       const closeDisplays = await stopIdleArchiveSessions(this.database.filename(), sessions);
-      this.getTask(userId, taskId);
-      const result = await removeTaskWorktree({ taskId, ...task.configuration }, task.worktree, confirmDiscardDirty, () => { this.getTask(userId, taskId); });
+      this.requireTask(authority, taskId);
+      const result = await this.removeWorktree({ taskId, ...task.configuration }, task.worktree, confirmDiscardDirty, () => { this.requireTask(authority, taskId); });
       if (result.status === "confirmation_required") return result;
-      this.getTask(userId, taskId);
+      this.requireTask(authority, taskId);
       await closeDisplays();
-      this.getTask(userId, taskId);
+      const current = this.repository.task(this.requireTask(authority, taskId));
+      if (!["backlog", "cancelled", "delivered"].includes(current.status)) throw new TaskFailure("The task changed while its worktree was removed", 409, "illegal_command");
       this.database.authTransaction(db => {
         db.prepare("UPDATE forge_task_controls SET worktree_json = NULL WHERE task_id = ?").run(taskId);
         this.repository.setArchived(taskId, true);
       });
-      return this.getTask(userId, taskId);
+      return this.repository.task(this.requireTask(authority, taskId));
     } catch (error) {
       if (error instanceof TaskFailure) throw error;
       throw new TaskFailure(error instanceof Error ? error.message : "Worktree cleanup failed", 409);
-    } finally { this.archives.delete(taskId); }
+    } finally { archivesInProgress.delete(taskId); }
   }
 
   async getTaskArtifact(userId: string, taskId: string, artifactId: string): Promise<{ artifact: StoredArtifact; bytes: Buffer }> {
@@ -490,13 +567,47 @@ export class TaskService {
     const blocker = humanQuestion ? { kind: "human_question" as const } : wait ? { kind: "delivery_wait" as const, reason: wait.reason } : null;
     const workflowStage = task.status === "cancelled" ? "cancelled" : completion || task.status === "delivered" ? "completed" : humanQuestion ? "waiting_human" : wait ? "waiting_delivery" : task.status === "active" ? "working" : "queued";
     const delivery = task.pullRequest || wait || completion ? { pullRequest: task.pullRequest ? { number: task.pullRequest.number, url: task.pullRequest.url, state: task.pullRequest.state, mergedAt: task.pullRequest.mergedAt } : null, checks: null, waiting: wait ? { reason: wait.reason, since: wait.since } : null, completion: completion ? { kind: completion.kind, pullRequestNumber: completion.pullRequestNumber, observedAt: completion.observedAt } : null } : null;
-    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, archived: task.archivedAt !== null, permittedCommands: [] as never[], humanQuestion, blocker, workflowStage, workflow: task.workflow, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
-    return { ...value, revision: createHash("sha256").update(JSON.stringify(value)).digest("base64url") };
+    const recheck = !task.archivedAt && wait && task.status === "active" ? ["recheck_delivery_wait"] as const : [] as const;
+    const permittedCommands = task.archivedAt ? ["unarchive_task"] as const
+      : task.status === "backlog" ? ["start_task", "cancel_task", "archive_task", "duplicate_task"] as const
+      : task.status === "active" ? ["cancel_task", "duplicate_task", "send_task_note"] as const
+      : task.status === "waiting_human" ? ["cancel_task", "duplicate_task"] as const
+      : task.status === "cancelled" ? ["archive_task", "duplicate_task"] as const
+      : task.status === "delivered" ? ["archive_task", "duplicate_task"] as const
+      : ["duplicate_task"] as const;
+    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, archived: task.archivedAt !== null, permittedCommands: [...permittedCommands, ...recheck], humanQuestion, blocker, workflowStage, workflow: task.workflow, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    return { ...value, revision: createHash("sha256").update(JSON.stringify({ value, commandRevision: row.command_revision })).digest("base64url") };
   }
 
   private createHermesCursor(principal: HermesPrincipal, filter: object, task: HermesSafeTaskProjection): string {
     const payload = Buffer.from(JSON.stringify({ agentId: principal.agentId, filter, updatedAt: task.updatedAt, id: task.id })).toString("base64url");
     return `${payload}.${createHmac("sha256", principal.cursorKey).update(payload).digest("base64url")}`;
+  }
+
+  /** The copy carries the source configuration this project still permits, with provenance written by its creation. */
+  private async duplicateTaskForHermes(principal: HermesPrincipal, taskId: string, key: string): Promise<string> {
+    const row = this.requireTask({ kind: "hermes", principal }, taskId);
+    const source = this.repository.task(row);
+    const policy = ProjectAgentTaskPolicySchema.parse(this.projects.getProjectInCompany(principal.companyId, source.projectId).agentTaskPolicy);
+    const images = await Promise.all(source.images.map(async image => {
+      const artifact = this.repository.artifact(row, image.artifactId);
+      if (!artifact) throw new TaskFailure("A source task image is no longer available", 409, "illegal_command");
+      return TaskImageInputSchema.parse({ filename: artifact.filename, mimeType: artifact.mimeType, base64: (await this.artifacts.getArtifact(artifact)).toString("base64") });
+    }));
+    const created = await this.createTaskForHermes(principal, {
+      projectId: source.projectId, title: duplicateTitle(source.title, new Set()), description: source.description, idempotencyKey: hermesDuplicateKey(taskId, key),
+      workflowId: this.hermesWorkflowIdForEngine(policy, source.workflow), templateId: undefined,
+      rootProfileId: source.rootProfile.profileId, workerProfileId: source.workerProfile.profileId,
+      advisorProfileIds: Object.fromEntries(Object.entries(source.advisorProfiles).map(([role, profile]) => [role, profile.profileId])), images,
+      ...(source.configuration.source ? { source: source.configuration.source } : {}),
+    }, taskId);
+    return created.task.id;
+  }
+
+  /** Keeps the copy on the source workflow engine when the project still permits a record that runs it. */
+  private hermesWorkflowIdForEngine(policy: ProjectAgentTaskPolicy, engine: string): string {
+    const engines = this.database.authQuery(db => new Map(policy.workflowIds.map(id => [id, (db.prepare("SELECT engine FROM forge_workflows WHERE id = ? AND archived_at IS NULL").get(id) as { engine: string } | undefined)?.engine])));
+    return policy.workflowIds.find(id => engines.get(id) === engine) ?? policy.defaultWorkflowId;
   }
 
   private parseHermesCursor(value: string, principal: HermesPrincipal, filter: object): { updatedAt: string; id: string } {
@@ -530,7 +641,9 @@ export class TaskService {
   }
 
   private audit(authority: Authority, companyId: string, action: string, taskId: string): void {
-    if (authority.kind === "user") this.auth.recordAuditEvent(authority.userId, action, undefined, companyId, { taskId });
-    else this.auth.recordAgentAuditEvent(authority.principal.agentId, action, undefined, companyId, { taskId });
+    const task = this.repository.row(taskId);
+    const resultingState = task ? JSON.stringify({ status: this.repository.task(task).status, archived: task.archived_at !== null }) : "unknown";
+    if (authority.kind === "user") this.auth.recordAuditEvent(authority.userId, action, undefined, companyId, { taskId, resultingState });
+    else this.auth.recordAgentAuditEvent(authority.principal.agentId, action, undefined, companyId, { taskId, resultingState });
   }
 }

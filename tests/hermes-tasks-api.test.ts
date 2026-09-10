@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +19,7 @@ import { HermesAgentService } from "../src/identity/hermes-agents.js";
 import { SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects/projects.js";
 import { TaskService } from "../src/tasks/tasks.js";
+import type { WorktreeReference } from "../src/tasks/control.js";
 import type { ProjectAgentTaskPolicy } from "../src/http/contracts/projects.js";
 import { TaskInputSchema } from "../src/tasks/contracts.js";
 import { taskRequestHash } from "../src/tasks/repository.js";
@@ -254,7 +256,7 @@ test("authenticated runtime contract uses the live task schemas and states its a
   const document = documentResponse.json() as { openapi: string; info: { version: string }; paths: Record<string, unknown>; components: Record<string, unknown> };
   expect(document.openapi).toBe("3.0.3");
   expect(document.info.version).toBe("v1");
-  expect(Object.keys(document.paths).sort()).toEqual(["/api/hermes/capabilities", "/api/hermes/openapi.json", "/api/hermes/tasks", "/api/hermes/tasks/{taskId}"].sort());
+  expect(Object.keys(document.paths).sort()).toEqual(["/api/hermes/capabilities", "/api/hermes/openapi.json", "/api/hermes/tasks", "/api/hermes/tasks/{taskId}", "/api/hermes/tasks/{taskId}/commands"].sort());
   expect(JSON.stringify(document)).not.toMatch(/pairingCode|credentialCreatedAt|credential_hash|board session/i);
   const createOperation = (document.paths["/api/hermes/tasks"] as CreateOperationDocument).post;
   expect(createOperation.requestBody.content["application/json"].schema.required).toEqual(expect.arrayContaining(["projectId", "title", "idempotencyKey"]));
@@ -265,7 +267,7 @@ test("authenticated runtime contract uses the live task schemas and states its a
   expect(capabilities.statusCode).toBe(200);
   expect(capabilities.json()).toMatchObject({
     apiVersion: "v1",
-    capabilities: { read: { task: true }, create: { backlogTask: true }, taskControl: false, delivery: false, merge: false, humanDecisions: false },
+    capabilities: { read: { task: true }, create: { backlogTask: true }, taskControl: true, delivery: false, merge: false, humanDecisions: false },
     pagination: { supported: false, cursor: false },
   });
   expect(capabilities.json().unavailableCommands).toContain("answer_human_question");
@@ -732,6 +734,48 @@ test("basic retries accept pre-feature Hermes request hashes only for the origin
   expect(conflict.statusCode).toBe(409);
 });
 
+test("agent lifecycle commands use current revisions, durable receipts, note attribution, and duplicate provenance", async () => {
+  const created = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Command target", idempotencyKey: "command-target-001" } });
+  expect(created.statusCode).toBe(201);
+  const task = created.json() as { id: string; revision: string };
+  const command = (payload: object) => app.inject({ method: "POST", url: `/api/hermes/tasks/${task.id}/commands`, headers: { Authorization: `Bearer ${agentCredential}` }, payload });
+
+  const started = await command({ command: "start_task", revision: task.revision, idempotencyKey: "start-001" });
+  expect(started.statusCode, started.body).toBe(200);
+  expect(started.json()).toMatchObject({ status: "active" });
+  const replay = await command({ command: "start_task", revision: task.revision, idempotencyKey: "start-001" });
+  expect(replay.statusCode).toBe(200);
+  expect(replay.json()).toEqual(started.json());
+  const stale = await command({ command: "cancel_task", revision: task.revision, idempotencyKey: "stale-001" });
+  expect(stale.statusCode).toBe(412);
+  expect(stale.json().code).toBe("revision_stale");
+
+  tasks.repository.controls.claimRoot({ taskId: task.id });
+  const noteRevision = tasks.getHermesTask(hermes.authenticate(agentCredential), task.id).revision;
+  const noted = await command({ command: "send_task_note", revision: noteRevision, idempotencyKey: "note-001", note: "Machine progress note" });
+  expect(noted.statusCode, noted.body).toBe(200);
+  expect(database.authQuery(db => (db.prepare("SELECT prompt_text FROM forge_task_turns WHERE task_id = ? ORDER BY created_at DESC LIMIT 1").get(task.id) as { prompt_text: string }).prompt_text)).toContain(`Agent note (${agentId}):\nMachine progress note`);
+  expect((await command({ command: "send_task_note", revision: noteRevision, idempotencyKey: "note-001", note: "Machine progress note" })).statusCode).toBe(200);
+  expect(database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_task_turns WHERE task_id = ? AND prompt_text LIKE '%Machine progress note%'").get(task.id) as { count: number }).count)).toBe(1);
+
+  const duplicate = await command({ command: "duplicate_task", revision: noted.json().revision, idempotencyKey: "duplicate-001" });
+  expect(duplicate.statusCode, duplicate.body).toBe(200);
+  const copyId = duplicate.json().id as string;
+  expect(duplicate.json()).toMatchObject({ status: "backlog" });
+  expect(database.authQuery(db => db.prepare("SELECT copied_from_task_id FROM forge_tasks WHERE id = ?").get(copyId))).toEqual({ copied_from_task_id: task.id });
+
+  const cancelRevision = tasks.getHermesTask(hermes.authenticate(agentCredential), task.id).revision;
+  const cancelled = await command({ command: "cancel_task", revision: cancelRevision, idempotencyKey: "cancel-001" });
+  expect(cancelled.statusCode, cancelled.body).toBe(200);
+  const archived = await command({ command: "archive_task", revision: cancelled.json().revision, idempotencyKey: "archive-001" });
+  expect(archived.statusCode, archived.body).toBe(200);
+  expect(archived.json()).toMatchObject({ archived: true });
+  const unarchived = await command({ command: "unarchive_task", revision: archived.json().revision, idempotencyKey: "unarchive-001" });
+  expect(unarchived.statusCode, unarchived.body).toBe(200);
+  expect(unarchived.json()).toMatchObject({ archived: false });
+  expect(database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_audit_events WHERE actor_agent_id = ? AND action IN ('task_started', 'task_note_added', 'task_duplicated', 'task_cancelled', 'task_archived', 'task_unarchived')").get(agentId) as { count: number }).count)).toBe(6);
+});
+
 test("project policy owns the default workflow and implicit Advisor profile", async () => {
   const update = async (agentTaskPolicy: ProjectAgentTaskPolicy) => {
     const current = projects.getProject(adminId, projectId);
@@ -940,7 +984,7 @@ test("real HTTP discovery applies current grants, ownership, pagination, and con
 
   const identity = await request("/api/hermes/me");
   expect(identity.status).toBe(200);
-  expect(await identity.json()).toMatchObject({ agent: { id: agentId, name: "Hermes Bot", profileId: "profile-bot" }, capabilities: { taskDiscovery: true, taskRead: true, taskCreate: true, taskCommands: [] }, projects: [{ id: projectId, name: "Hermes Project" }] });
+  expect(await identity.json()).toMatchObject({ agent: { id: agentId, name: "Hermes Bot", profileId: "profile-bot" }, capabilities: { taskDiscovery: true, taskRead: true, taskCreate: true, taskCommands: expect.arrayContaining(["start_task", "cancel_task", "duplicate_task"]) }, projects: [{ id: projectId, name: "Hermes Project" }] });
 
   const pageOne = await request("/api/hermes/tasks?limit=2");
   expect(pageOne.status).toBe(200);
@@ -1021,4 +1065,316 @@ test("real HTTP discovery applies current grants, ownership, pagination, and con
   expect((await (await request("/api/hermes/me")).json() as { projects: unknown[] }).projects).toEqual([]);
   expect(await (await request("/api/hermes/tasks")).json()).toEqual({ tasks: [], nextCursor: null });
   expect((await request(`/api/hermes/tasks/${first.id}`, agentCredential, { "if-none-match": etag! })).status).toBe(404);
+});
+
+const duplicateKey = (taskId: string, key: string): string => `duplicate-${createHash("sha256").update(`${taskId}:${key}`).digest("hex")}`;
+const revisionOf = (taskId: string): string => tasks.getHermesTask(hermes.authenticate(agentCredential), taskId).revision;
+const commandRevision = (taskId: string): number => database.authQuery(db => (db.prepare("SELECT command_revision FROM forge_tasks WHERE id = ?").get(taskId) as { command_revision: number }).command_revision);
+const receipt = (taskId: string, key: string) => database.authQuery(db => db.prepare("SELECT result_json FROM forge_hermes_task_command_receipts WHERE agent_id = ? AND task_id = ? AND idempotency_key = ?").get(agentId, taskId, key) as { result_json: string } | undefined);
+const auditCount = (action: string, taskId: string): number => database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_audit_events WHERE actor_agent_id = ? AND action = ? AND metadata_json LIKE ?").get(agentId, action, `%${taskId}%`) as { count: number }).count);
+const rowCount = (sql: string, ...params: unknown[]): number => database.authQuery(db => (db.prepare(sql).get(...params as never[]) as { count: number }).count);
+
+/** Builds a second TaskService over the same database, the way a second Forge process or instance would. */
+function siblingService(): TaskService {
+  return new TaskService(database, auth, projects, config);
+}
+
+async function createTask(title: string, idempotencyKey: string): Promise<{ id: string; revision: string }> {
+  const response = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title, idempotencyKey } });
+  expect(response.statusCode, response.body).toBe(201);
+  return response.json() as { id: string; revision: string };
+}
+
+const command = (taskId: string, payload: object) => app.inject({ method: "POST", url: `/api/hermes/tasks/${taskId}/commands`, headers: { Authorization: `Bearer ${agentCredential}` }, payload });
+
+test("a receipt another writer completed replays on a stale revision without rerunning the effect", async () => {
+  const task = await createTask("Completed elsewhere", "completed-elsewhere-001");
+  const body = { command: "cancel_task", revision: revisionOf(task.id), idempotencyKey: "elsewhere-cancel" };
+  const requestHash = createHash("sha256").update(JSON.stringify(body)).digest("hex");
+  const stale = revisionOf(task.id);
+
+  // The other writer cancelled the task and completed its receipt; this request still holds the pre-command revision.
+  tasks.repository.controls.cancel(task.id);
+  const winner = tasks.getHermesTask(hermes.authenticate(agentCredential), task.id);
+  database.authImmediateTransaction(db => {
+    db.prepare("UPDATE forge_tasks SET command_revision = command_revision + 1 WHERE id = ?").run(task.id);
+    db.prepare("INSERT INTO forge_hermes_task_command_receipts (agent_id, task_id, idempotency_key, request_hash, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(agentId, task.id, body.idempotencyKey, requestHash, JSON.stringify(winner), new Date().toISOString());
+  });
+  const claimedBefore = commandRevision(task.id);
+
+  const replay = await command(task.id, { ...body, revision: stale });
+  expect(replay.statusCode, replay.body).toBe(200);
+  expect(replay.json()).toEqual(winner);
+  // The replay neither reran the effect nor kept a revision claim of its own.
+  expect(commandRevision(task.id)).toBe(claimedBefore);
+  expect(auditCount("task_cancelled", task.id)).toBe(0);
+});
+
+test("concurrent commands admit one, hold the in-flight replay, and report the loser as stale", async () => {
+  const task = await createTask("Concurrent commands", "concurrent-commands-001");
+  const revision = revisionOf(task.id);
+  const held = new Promise<void>(resolve => { inspectionStarted = resolve; });
+  let release!: () => void;
+  inspectionGate = new Promise<void>(resolve => { release = resolve; });
+
+  const winner = command(task.id, { command: "duplicate_task", revision, idempotencyKey: "concurrent-duplicate" });
+  await held;
+  const replay = await command(task.id, { command: "duplicate_task", revision, idempotencyKey: "concurrent-duplicate" });
+  expect(replay.statusCode).toBe(409);
+  expect(replay.json().code).toBe("command_in_progress");
+  const loser = await command(task.id, { command: "cancel_task", revision, idempotencyKey: "concurrent-cancel" });
+  expect(loser.statusCode).toBe(412);
+  expect(loser.json().code).toBe("revision_stale");
+  release();
+  expect((await winner).statusCode, (await winner).body).toBe(200);
+  expect(rowCount("SELECT COUNT(*) AS count FROM forge_tasks WHERE copied_from_task_id = ?", task.id)).toBe(1);
+
+  const conflicting = await command(task.id, { command: "cancel_task", revision: revisionOf(task.id), idempotencyKey: "concurrent-duplicate" });
+  expect(conflicting.statusCode).toBe(409);
+  expect(conflicting.json().code).toBe("idempotency_conflict");
+});
+
+test("duplicates carry the source configuration, attachments, and provenance the project still permits", async () => {
+  // A stubbed source resolver keeps this focused on what the duplicate inherits, not on live repository reads.
+  const sourceTasks = new TaskService(database, auth, {
+    getProject: projects.getProject.bind(projects), getProjectInCompany: projects.getProjectInCompany.bind(projects), captureTaskConfiguration: projects.captureTaskConfiguration.bind(projects),
+    async resolveTaskSource() { return { kind: "branch", branch: "feature", headSha: "b".repeat(40) } as never; },
+  }, config);
+  const principal = hermes.authenticate(agentCredential);
+  const created = await sourceTasks.createTaskForHermes(principal, {
+    projectId, title: "Source task", description: "Carry me", idempotencyKey: "duplicate-source-001",
+    images: [{ filename: "shot.png", mimeType: "image/png", base64: "iVBORw0KGgo=" }], source: { kind: "branch", branch: "feature" }, advisorProfileIds: {},
+  });
+  const task = created.task;
+
+  const duplicated = await sourceTasks.commandHermesTask(principal, task.id, { command: "duplicate_task", revision: task.revision, idempotencyKey: "duplicate-configuration" });
+  const copy = tasks.getTask(adminId, duplicated.id);
+  const source = tasks.getTask(adminId, task.id);
+  expect(copy.title).toBe("Source task (2)");
+  expect(copy.description).toBe("Carry me");
+  expect(copy.configuration.source).toEqual({ kind: "branch", branch: "feature" });
+  expect(copy.configuration.startingSha).toBe("b".repeat(40));
+  expect(copy.workflow).toBe(source.workflow);
+  expect(copy.deliveryTarget).toBe(source.deliveryTarget);
+  expect(copy.configuration.runProjectTests).toBe(source.configuration.runProjectTests);
+  expect(copy.configuration.visualEvidence).toBe(source.configuration.visualEvidence);
+  expect(copy.rootProfile.profileId).toBe(source.rootProfile.profileId);
+  expect(copy.workerProfile.profileId).toBe(source.workerProfile.profileId);
+  expect(copy.advisorProfiles).toEqual(source.advisorProfiles);
+  expect(copy.images.map(item => item.filename)).toEqual(["shot.png"]);
+  expect(copy.status).toBe("backlog");
+  expect(database.authQuery(db => db.prepare("SELECT copied_from_task_id, idempotency_key FROM forge_tasks WHERE id = ?").get(copy.id))).toEqual({ copied_from_task_id: task.id, idempotency_key: duplicateKey(task.id, "duplicate-configuration") });
+});
+
+test("delivery rechecks stay bounded to active waiting tasks and never grant human, delivery, or merge powers", async () => {
+  const task = await createTask("Recheck target", "recheck-target-001");
+  await command(task.id, { command: "start_task", revision: task.revision, idempotencyKey: "recheck-start" });
+  expect(tasks.getHermesTask(hermes.authenticate(agentCredential), task.id).permittedCommands).not.toContain("recheck_delivery_wait");
+
+  const setWait = (value: string | null) => database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id = ?").run(value ?? "null", new Date().toISOString(), task.id));
+  setWait(JSON.stringify({ headSha: "a".repeat(40), fingerprint: "recheck", since: "2030-01-01T00:00:00.000Z", reason: "checks" }));
+  expect(tasks.getHermesTask(hermes.authenticate(agentCredential), task.id).permittedCommands).toContain("recheck_delivery_wait");
+
+  const before = recoveryWakes;
+  const recheckBody = { command: "recheck_delivery_wait", revision: revisionOf(task.id), idempotencyKey: "recheck-001" };
+  const rechecked = await command(task.id, recheckBody);
+  expect(rechecked.statusCode, rechecked.body).toBe(200);
+  expect(recoveryWakes).toBe(before + 1);
+  expect(auditCount("delivery_wait_recheck_requested", task.id)).toBe(1);
+  // A retry of the same request replays the stored receipt: no second audited command, though asking the host
+  // to observe delivery again is safe and is not a receipt-guarded effect.
+  const replay = await command(task.id, recheckBody);
+  expect(replay.statusCode).toBe(200);
+  expect(replay.json()).toEqual(rechecked.json());
+  expect(auditCount("delivery_wait_recheck_requested", task.id)).toBe(1);
+  expect(recoveryWakes).toBe(before + 2);
+
+  // An archived task is never rechecked, whatever its recorded wait says.
+  tasks.repository.setArchived(task.id, true);
+  const archived = await command(task.id, { command: "recheck_delivery_wait", revision: revisionOf(task.id), idempotencyKey: "recheck-002" });
+  expect(archived.statusCode).toBe(409);
+  expect(archived.json().code).toBe("illegal_command");
+  tasks.repository.setArchived(task.id, false);
+
+  // Human decisions, delivery, releases and merges remain outside the runtime vocabulary.
+  tasks.repository.controls.askHuman(task.id, "Which option do you want?");
+  const waiting = tasks.getHermesTask(hermes.authenticate(agentCredential), task.id);
+  expect(waiting.permittedCommands).toEqual(["cancel_task", "duplicate_task"]);
+  for (const blocked of ["answer_human_question", "deliver_task", "merge_pull_request", "release_task"]) {
+    const rejected = await command(task.id, { command: blocked, revision: waiting.revision, idempotencyKey: `blocked-${blocked}` });
+    expect(rejected.statusCode, blocked).toBe(400);
+    expect(rejected.json().code).toBe("request_invalid");
+  }
+  expect(rowCount("SELECT COUNT(*) AS count FROM forge_hermes_task_command_receipts WHERE task_id = ? AND idempotency_key LIKE 'blocked-%'", task.id)).toBe(0);
+});
+
+test("archiving observes authoritative task state, not pane or session mirrors", async () => {
+  const task = await createTask("No mirror archive", "no-mirror-archive-001");
+  await command(task.id, { command: "start_task", revision: task.revision, idempotencyKey: "mirror-start" });
+  tasks.repository.controls.claimRoot({ taskId: task.id });
+  // A restarted Herdr leaves recreated or missing pane tokens behind; they never decide whether archiving is legal.
+  database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = ?, native_session_id = NULL WHERE task_id = ?").run("pane-from-a-previous-run", task.id));
+
+  const cancelled = await command(task.id, { command: "cancel_task", revision: revisionOf(task.id), idempotencyKey: "mirror-cancel" });
+  expect(cancelled.statusCode, cancelled.body).toBe(200);
+  const archived = await command(task.id, { command: "archive_task", revision: revisionOf(task.id), idempotencyKey: "mirror-archive" });
+  expect(archived.statusCode, archived.body).toBe(200);
+  expect(archived.json()).toMatchObject({ archived: true });
+  const unarchived = await command(task.id, { command: "unarchive_task", revision: revisionOf(task.id), idempotencyKey: "mirror-unarchive" });
+  expect(unarchived.statusCode, unarchived.body).toBe(200);
+  expect(unarchived.json()).toMatchObject({ archived: false });
+});
+
+test("a revoked grant stops replays of a completed receipt without changing it", async () => {
+  const task = await createTask("Revoked replay", "revoked-replay-001");
+  const started = await command(task.id, { command: "start_task", revision: task.revision, idempotencyKey: "revoked-start" });
+  expect(started.statusCode, started.body).toBe(200);
+  const stored = receipt(task.id, "revoked-start")!;
+
+  hermes.replaceProjects(adminId, agentId, []);
+  const denied = await command(task.id, { command: "start_task", revision: task.revision, idempotencyKey: "revoked-start" });
+  expect(denied.statusCode).toBe(404);
+  expect(denied.json().code).toBe("not_found");
+  expect(receipt(task.id, "revoked-start")).toEqual(stored);
+});
+
+test("delivery rechecks follow the authoritative wait: an unchanged observation keeps it, a changed one ends it", async () => {
+  const task = await createTask("Recheck observation", "recheck-observation-001");
+  await command(task.id, { command: "start_task", revision: task.revision, idempotencyKey: "observation-start" });
+  const wait = { headSha: "a".repeat(40), fingerprint: "checks-pending", since: "2030-01-01T00:00:00.000Z", reason: "checks" as const };
+  database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id = ?").run(JSON.stringify(wait), new Date().toISOString(), task.id));
+
+  const rechecked = await command(task.id, { command: "recheck_delivery_wait", revision: revisionOf(task.id), idempotencyKey: "observation-recheck" });
+  expect(rechecked.statusCode, rechecked.body).toBe(200);
+  expect(rechecked.json()).toMatchObject({ workflowStage: "waiting_delivery", blocker: { kind: "delivery_wait", reason: "checks" } });
+
+  // The observation came back unchanged: its fingerprint no longer matches, so the domain refuses to end the wait.
+  expect(tasks.repository.controls.clearDeliveryWait(task.id, { ...wait, fingerprint: "an-older-observation" })).toBe(false);
+  expect(tasks.getHermesTask(hermes.authenticate(agentCredential), task.id).permittedCommands).toContain("recheck_delivery_wait");
+
+  // The observation changed: the domain clears exactly the wait it observed, and the recheck is no longer offered.
+  expect(tasks.repository.controls.clearDeliveryWait(task.id, wait)).toBe(true);
+  const cleared = tasks.getHermesTask(hermes.authenticate(agentCredential), task.id);
+  expect(cleared.blocker).toBeNull();
+  expect(cleared.permittedCommands).not.toContain("recheck_delivery_wait");
+  const late = await command(task.id, { command: "recheck_delivery_wait", revision: cleared.revision, idempotencyKey: "observation-late" });
+  expect(late.statusCode).toBe(409);
+  expect(late.json().code).toBe("illegal_command");
+
+  // A delivery that needs a person becomes a human question, and the agent still holds no power to answer it.
+  tasks.repository.controls.claimRoot({ taskId: task.id });
+  database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id = ?").run(JSON.stringify(wait), new Date().toISOString(), task.id));
+  expect(tasks.repository.controls.failDeliveryWait(task.id, wait, "Delivery checks failed. How do you want to continue?")).toBe(true);
+  const blocked = tasks.getHermesTask(hermes.authenticate(agentCredential), task.id);
+  expect(blocked).toMatchObject({ workflowStage: "waiting_human", blocker: { kind: "human_question" } });
+  expect(blocked.permittedCommands).toEqual(["cancel_task", "duplicate_task"]);
+});
+
+/** A cancelled task with a recorded worktree, ready to be archived. */
+async function archivableTask(title: string, key: string, service: TaskService = tasks): Promise<{ id: string; worktree: WorktreeReference }> {
+  const principal = hermes.authenticate(agentCredential);
+  const created = await service.createTaskForHermes(principal, { projectId, title, idempotencyKey: key, images: [], advisorProfileIds: {} });
+  const id = created.task.id;
+  service.repository.controls.start(id);
+  const worktree = { path: join(root, "worktrees", "project1", id), branch: `task/${key}`, baseSha: "a".repeat(40), headSha: "b".repeat(40), dirty: false };
+  service.repository.controls.setWorktree(id, worktree);
+  service.repository.controls.cancel(id);
+  return { id, worktree };
+}
+
+test("a start during archive cleanup is refused by every authority, and the archive then completes once", async () => {
+  let reachedCleanup!: () => void;
+  const cleanupStarted = new Promise<void>(resolve => { reachedCleanup = resolve; });
+  let releaseCleanup!: () => void;
+  const cleanupGate = new Promise<void>(resolve => { releaseCleanup = resolve; });
+  const removals: string[] = [];
+  const archiving = new TaskService(database, auth, projects, config, {
+    async removeWorktree(intent, _reference, _confirm, authorize) {
+      reachedCleanup();
+      await cleanupGate;
+      authorize();
+      removals.push(intent.taskId);
+      return { status: "cleaned" };
+    },
+  });
+  // A backlog task is both archivable and startable, so every refusal below comes from the cleanup guard itself.
+  const principal = hermes.authenticate(agentCredential);
+  const task = (await archiving.createTaskForHermes(principal, { projectId, title: "Cleanup exclusion", idempotencyKey: "cleanup-exclusion-001", images: [], advisorProfileIds: {} })).task;
+  expect(archiving.getHermesTask(principal, task.id).permittedCommands).toContain("start_task");
+
+  // The archive is genuinely mid-cleanup when every start path tries to reactivate.
+  const dispatching = archiving.commandHermesTask(principal, task.id, { command: "archive_task", revision: archiving.getHermesTask(principal, task.id).revision, idempotencyKey: "cleanup-archive" });
+  await cleanupStarted;
+  expect(() => tasks.startTask(adminId, task.id)).toThrow("Archive cleanup is in progress");
+  const agentStart = await command(task.id, { command: "start_task", revision: revisionOf(task.id), idempotencyKey: "cleanup-agent-start" });
+  expect(agentStart.statusCode, agentStart.body).toBe(409);
+  expect(agentStart.json()).toMatchObject({ error: "Archive cleanup is in progress", code: "illegal_command" });
+  expect(tasks.getTask(adminId, task.id).status).toBe("backlog");
+  expect(receipt(task.id, "cleanup-agent-start")).toBeUndefined();
+
+  releaseCleanup();
+  const archived = await dispatching;
+  expect(archived).toMatchObject({ archived: true });
+  expect(removals).toEqual([task.id]);
+  expect(tasks.getTask(adminId, task.id).status).toBe("backlog");
+  expect(auditCount("task_archived", task.id)).toBe(1);
+});
+
+test("a dirty worktree stops the agent archive with no effect, and only a human confirmation discards it", async () => {
+  let confirmed = false;
+  const archiving = new TaskService(database, auth, projects, config, {
+    async removeWorktree(_intent, _reference, confirmDiscardDirty) {
+      if (!confirmDiscardDirty) return { status: "confirmation_required", dirtyFileCount: 2, dirtyFilePaths: ["notes.md", "scratch.txt"] };
+      confirmed = true;
+      return { status: "cleaned" };
+    },
+  });
+  const task = await archivableTask("Dirty cleanup", "dirty-cleanup-001", archiving);
+  const principal = hermes.authenticate(agentCredential);
+
+  // The agent has no power to discard a person's uncommitted work, so its archive stops with nothing changed.
+  await expect(archiving.commandHermesTask(principal, task.id, { command: "archive_task", revision: archiving.getHermesTask(principal, task.id).revision, idempotencyKey: "dirty-archive" }))
+    .rejects.toMatchObject({ statusCode: 409, code: "illegal_command", publicMessage: "Discard dirty worktree changes before archiving" });
+  expect(confirmed).toBe(false);
+  expect(tasks.getTask(adminId, task.id)).toMatchObject({ archivedAt: null });
+  expect(tasks.getTask(adminId, task.id).worktree).toEqual(task.worktree);
+  expect(receipt(task.id, "dirty-archive")).toBeUndefined();
+  expect(auditCount("task_archived", task.id)).toBe(0);
+
+  // A person sees the same dirty files, and only their explicit confirmation discards them.
+  expect(await archiving.archiveTask(adminId, task.id)).toMatchObject({ status: "confirmation_required", dirtyFileCount: 2, dirtyFilePaths: ["notes.md", "scratch.txt"] });
+  expect(await archiving.archiveTask(adminId, task.id, true)).toMatchObject({ archivedAt: expect.any(String) });
+  expect(confirmed).toBe(true);
+  expect(tasks.getTask(adminId, task.id).worktree).toBeNull();
+});
+
+test("identical concurrent requests for one key produce one effect and replay the same completed result", async () => {
+  const task = await createTask("Concurrent identical", "concurrent-identical-001");
+  const principal = hermes.authenticate(agentCredential);
+  const service = siblingService();
+  const body = { command: "cancel_task", revision: revisionOf(task.id), idempotencyKey: "identical-cancel" };
+  const before = commandRevision(task.id);
+
+  // Both calls read no receipt, then the winner commits before the loser reaches its own admission.
+  const [first, second] = await Promise.all([
+    service.commandHermesTask(principal, task.id, body),
+    service.commandHermesTask(principal, task.id, body),
+  ]);
+  expect(first).toEqual(second);
+  expect(first).toMatchObject({ status: "cancelled" });
+  // One effect, one audit, one receipt, and exactly one revision claim: the loser replayed without writing.
+  expect(auditCount("task_cancelled", task.id)).toBe(1);
+  expect(receipt(task.id, "identical-cancel")).toBeDefined();
+  expect(commandRevision(task.id)).toBe(before + 1);
+  expect(rowCount("SELECT COUNT(*) AS count FROM forge_hermes_task_command_receipts WHERE task_id = ?", task.id)).toBe(1);
+
+  // A different key on the now-stale revision is still stale, and a mismatched payload on this key is still a conflict.
+  const stale = await command(task.id, { command: "cancel_task", revision: body.revision, idempotencyKey: "identical-other-key" });
+  expect(stale.statusCode).toBe(412);
+  expect(stale.json().code).toBe("revision_stale");
+  const mismatched = await command(task.id, { command: "archive_task", revision: revisionOf(task.id), idempotencyKey: "identical-cancel" });
+  expect(mismatched.statusCode).toBe(409);
+  expect(mismatched.json().code).toBe("idempotency_conflict");
+  expect(auditCount("task_cancelled", task.id)).toBe(1);
 });

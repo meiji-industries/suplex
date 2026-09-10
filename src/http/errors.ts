@@ -43,9 +43,12 @@ function bodyParserMessage(code: string): string {
    return Boolean(error && typeof error === "object" && "validation" in error);
  }
 
-function hermesTaskFailureCode(error: TaskFailure): "not_found" | "idempotency_conflict" | "request_invalid" | "task_unavailable" {
+function hermesTaskFailureCode(error: TaskFailure): "not_found" | "idempotency_conflict" | "command_in_progress" | "revision_stale" | "illegal_command" | "request_invalid" | "task_unavailable" {
   if (error.statusCode === 404) return "not_found";
   if (error.publicMessage === "This idempotency key belongs to a different request") return "idempotency_conflict";
+  if (error.code === "revision_stale") return "revision_stale";
+  if (error.code === "command_in_progress") return "command_in_progress";
+  if (error.code === "illegal_command") return "illegal_command";
   if (error.code === "request_invalid") return "request_invalid";
   return "task_unavailable";
 }

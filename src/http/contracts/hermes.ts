@@ -112,6 +112,17 @@ export const HermesTaskIdParamsSchema = z.object({
   taskId: z.string().min(1).max(100),
 });
 
+export const HermesTaskCommandSchema = z.enum(["start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"]);
+export const HermesTaskCommandBodySchema = z.object({
+  command: HermesTaskCommandSchema,
+  revision: z.string().min(1).max(256),
+  idempotencyKey: z.string().trim().min(1).max(128),
+  note: z.string().trim().min(1).optional(),
+}).strict().superRefine((input, context) => {
+  if (input.command === "send_task_note" && !input.note) context.addIssue({ code: "custom", path: ["note"], message: "A note is required" });
+  if (input.command !== "send_task_note" && input.note !== undefined) context.addIssue({ code: "custom", path: ["note"], message: "Notes are only accepted by send_task_note" });
+});
+
 export const HermesProjectSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -127,7 +138,7 @@ export const HermesIdentityResponseSchema = z.object({
     taskDiscovery: z.literal(true),
     taskRead: z.literal(true),
     taskCreate: z.literal(true),
-    taskCommands: z.array(z.never()),
+    taskCommands: z.array(HermesTaskCommandSchema),
   }),
   projects: z.array(HermesProjectSchema),
 });
@@ -171,7 +182,7 @@ export const HermesSafeTaskProjectionSchema = z.object({
   status: z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]),
   archived: z.boolean(),
   revision: z.string(),
-  permittedCommands: z.array(z.never()),
+  permittedCommands: z.array(HermesTaskCommandSchema),
   humanQuestion: z.string().nullable(),
   blocker: z.object({
     kind: z.enum(["human_question", "delivery_wait"]),
@@ -193,7 +204,7 @@ export const HermesTaskListResponseSchema = z.object({
 
 export const HermesRuntimeErrorSchema = z.object({
   error: z.string(),
-  code: z.enum(["credential_invalid", "not_found", "resource_not_found", "idempotency_conflict", "request_invalid", "task_unavailable", "payload_too_large", "unsupported_media_type", "internal_error"]),
+  code: z.enum(["credential_invalid", "not_found", "resource_not_found", "idempotency_conflict", "command_in_progress", "revision_stale", "illegal_command", "request_invalid", "task_unavailable", "payload_too_large", "unsupported_media_type", "internal_error"]),
   findings: z.array(z.object({ code: z.string(), field: z.string(), message: z.string() })).optional(),
 });
 
@@ -205,6 +216,9 @@ const HermesRuntimeErrorResponses = {
   notFound: runtimeError("not_found"),
   resourceNotFound: runtimeError("resource_not_found"),
   idempotencyConflict: runtimeError("idempotency_conflict"),
+  commandInProgress: runtimeError("command_in_progress"),
+  revisionStale: runtimeError("revision_stale"),
+  illegalCommand: runtimeError("illegal_command"),
   taskUnavailable: runtimeError("task_unavailable"),
   payloadTooLarge: runtimeError("payload_too_large"),
   unsupportedMediaType: runtimeError("unsupported_media_type"),
@@ -216,18 +230,15 @@ export const HermesCapabilitiesSchema = z.object({
   capabilities: z.object({
     read: z.object({ task: z.literal(true) }),
     create: z.object({ backlogTask: z.literal(true) }),
-    taskControl: z.literal(false),
+    taskControl: z.literal(true),
     delivery: z.literal(false),
     merge: z.literal(false),
     humanDecisions: z.literal(false),
   }),
-  autonomousCommands: z.array(z.literal("create_backlog_task")),
+  autonomousCommands: z.array(z.enum(["create_backlog_task", "start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"])),
   humanOnlyRecords: z.array(z.literal("task_human_answer")),
   unavailableCommands: z.array(z.enum([
-    "start_task",
-    "cancel_task",
     "answer_human_question",
-    "send_task_note",
     "deliver_task",
     "merge_pull_request",
   ])),
@@ -259,6 +270,11 @@ export const HermesRuntimeOperations = {
   getTask: {
     params: HermesTaskIdParamsSchema,
     response: { 200: HermesSafeTaskProjectionSchema, 400: HermesRuntimeErrorResponses.requestInvalid, 401: HermesRuntimeErrorResponses.credentialInvalid, 404: z.union([HermesRuntimeErrorResponses.notFound, HermesRuntimeErrorResponses.resourceNotFound]), 500: HermesRuntimeErrorResponses.internal },
+  },
+  commandTask: {
+    params: HermesTaskIdParamsSchema,
+    body: HermesTaskCommandBodySchema,
+    response: { 200: HermesSafeTaskProjectionSchema, 400: HermesRuntimeErrorResponses.requestInvalid, 401: HermesRuntimeErrorResponses.credentialInvalid, 404: z.union([HermesRuntimeErrorResponses.notFound, HermesRuntimeErrorResponses.resourceNotFound]), 409: z.union([HermesRuntimeErrorResponses.idempotencyConflict, HermesRuntimeErrorResponses.commandInProgress, HermesRuntimeErrorResponses.illegalCommand, HermesRuntimeErrorResponses.taskUnavailable]), 412: HermesRuntimeErrorResponses.revisionStale, 500: HermesRuntimeErrorResponses.internal },
   },
 } as const;
 
@@ -320,6 +336,9 @@ export function hermesRuntimeOpenApi(): Record<string, unknown> {
           parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(HermesRuntimeOperations.getTask.params.shape.taskId, "input") }],
           responses: openApiResponses(HermesRuntimeOperations.getTask.response),
         },
+      },
+      "/api/hermes/tasks/{taskId}/commands": {
+        post: { operationId: "commandHermesTask", summary: "Apply an authorized task lifecycle command", description: "Every command requires the current task revision and an idempotency key. Human answers, delivery, releases, and merges remain unavailable.", security: [{ HermesBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(HermesRuntimeOperations.commandTask.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: inputSchema(HermesRuntimeOperations.commandTask.body) } } }, responses: openApiResponses(HermesRuntimeOperations.commandTask.response) },
       },
     },
     components: {

@@ -88,7 +88,7 @@ export class TaskControlStore {
     if (changed !== 1) throw new Error("task_not_startable");
     return this.observeLifecycle(taskId);
   }
-  sendNote(taskId: string, note: string): TaskControl {
+  sendNote(taskId: string, note: string, label = "Human note"): TaskControl {
     this.database.authImmediateTransaction(db => {
       const control = this.get(taskId);
       const time = now();
@@ -103,7 +103,7 @@ export class TaskControlStore {
       const existing = this.currentSession(taskId, "root");
       const root = existing ?? this.claimRoot({ taskId });
       if (!existing) this.ensureInitialPrompt(root, initialCoordinatorPrompt(this.get(taskId), this.context(taskId)));
-      const prompt = resuming ? JSON.stringify({ question: "The user has resumed this delivered task. Handle the follow-up below before completing delivery again. Preserve existing work and inspect current GitHub state. Earlier delivery is history, not completion of this request. For failing checks, read the logs, reproduce and repair the failure, verify locally, push, and observe checks on the current head. Keep the delivery target unchanged. Request delivery explicitly only when the follow-up is satisfied.", answer: note }) : `Human note:\n${note}`;
+      const prompt = resuming ? JSON.stringify({ question: "The user has resumed this delivered task. Handle the follow-up below before completing delivery again. Preserve existing work and inspect current GitHub state. Earlier delivery is history, not completion of this request. For failing checks, read the logs, reproduce and repair the failure, verify locally, push, and observe checks on the current head. Keep the delivery target unchanged. Request delivery explicitly only when the follow-up is satisfied.", answer: note }) : `${label}:\n${note}`;
       this.wakeRoot({ taskId, rootSessionId: root.id, generation: root.generation, prompt });
     });
     return this.observeLifecycle(taskId);

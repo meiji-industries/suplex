@@ -1,9 +1,10 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { AuthService, type WebAuthnAdapter } from "../../src/identity/auth.js";
 import { AgentProfileService } from "../../src/profiles/agent-profiles.js";
 import { createApp } from "../../src/app.js";
+import { createFastifyLogger } from "../../src/platform/logging.js";
 import { createTestConfig } from "../../src/platform/config.js";
 import { createTestDatabase } from "./test-database.js";
 import { ProjectService } from "../../src/projects/projects.js";
@@ -29,7 +30,7 @@ const webAuthn: WebAuthnAdapter = {
   async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; },
 };
 
-export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort } = {}) {
+export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; logSink?: (line: string) => void } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "forge-native-app-"));
   const config = createTestConfig(directory, { reachableAddress: "http://127.0.0.1:4111" });
   const database = createTestDatabase(config.databasePath);
@@ -37,7 +38,8 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
   const profiles = new AgentProfileService(database, auth);
   const projects = new ProjectService(database, auth, config, {
     validateProjectConfiguration: true,
-    localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "owner/repo", clean: false, baseSha: "a".repeat(40) }; } },
+    // The remote identity follows the directory name, so a fixture can hold more than one project.
+    localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: `owner/${basename(input.repositoryPath)}`, clean: false, baseSha: "a".repeat(40) }; } },
     github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } },
     readProviders: async () => ({ directory, observedAt: new Date().toISOString(), providers: [{ id: "openai", label: "OpenAI", status: "configured", modelCount: 2, models: [{ id: "gpt-5.6-sol", label: "Sol" }, { id: "gpt-5.6-luna", label: "Luna" }] }] }),
   });
@@ -53,7 +55,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
   } satisfies GithubTriggerPort;
   const githubTriggers = new GithubTriggerService(database, auth, projects, workflows, githubTrigger, tasks);
   const wakes: string[] = [];
-  const app = createApp({ config, database, auth, profiles, projects, tasks, taskTemplates: templates, workflows, githubTriggers, hermes, health: healthyHost, readUpdate: async () => ({ available: false }), host: { async recover(id) { wakes.push(id); } } });
+  const app = createApp({ ...(fixtureOptions.logSink ? { logger: createFastifyLogger(fixtureOptions.logSink) } : {}), config, database, auth, profiles, projects, tasks, taskTemplates: templates, workflows, githubTriggers, hermes, health: healthyHost, readUpdate: async () => ({ available: false }), host: { async recover(id) { wakes.push(id); } } });
   const invitation = auth.ensureBootstrapInvitation();
   if (!invitation) throw new Error("Fresh database did not create an invitation");
   const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });

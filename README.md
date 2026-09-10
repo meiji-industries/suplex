@@ -8,6 +8,13 @@ The [product guide](docs/product.md) describes the workflow. [CONTEXT.md](CONTEX
 defines its terms. The [cutover plan](docs/plans/2026-09-04-resumable-delivery.md)
 records the architecture decisions and verification.
 
+An agent that never opens the web application starts at
+[machine discovery and the operator handoff](docs/agents/machine-discovery.md).
+Forge serves `/llms.txt`, `/.well-known/forge/api-catalog.json`, and
+`/.well-known/forge/agent-skills.json` without authentication. That document also
+holds the operator handoff: issue, rotate, and revoke a pairing, restrict project
+grants, and verify an agent integration after an upgrade.
+
 ## State ownership
 
 | Owner | Authoritative state |

@@ -143,6 +143,12 @@ Need a change? Create a new migration.
 
 ## Agent skills
 
+### Machine discovery and pairing
+
+Public discovery artifacts, the paired-agent runtime, and the operator handoff:
+`docs/agents/machine-discovery.md`. Serve new public artifacts from
+`src/http/routes/discovery.ts`. Keep them free of task and company data.
+
 ### Issue tracker
 
 GitHub Issues on `meiji-industries/forge` via the `gh` CLI. See `docs/agents/issue-tracker.md`.

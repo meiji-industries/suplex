@@ -36,6 +36,7 @@ import authenticated from "./http/routes/authenticated.js";
 import assets from "./http/routes/assets.js";
 import health from "./http/routes/health.js";
 import pages from "./http/routes/pages.js";
+import discovery from "./http/routes/discovery.js";
 import hermesPairing from "./http/routes/hermes-pairing.js";
 import { registerHermesTaskRoutes } from "./http/routes/hermes-tasks.js";
 import type { HermesGithubPort } from "./tasks/tasks.js";
@@ -130,6 +131,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
     config: dependencies.config,
     ...(dependencies.frontendDevelopment ? { transformHtml: dependencies.frontendDevelopment.transformIndexHtml } : {}),
   });
+  void app.register(discovery);
   void app.register(health, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config, ...(dependencies.healthNow ? { now: dependencies.healthNow } : {}) });
   if (auth) {
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });

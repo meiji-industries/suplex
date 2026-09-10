@@ -1,9 +1,12 @@
+// eslint-disable-next-line no-restricted-imports -- The regression needs a detached process that outlives its launcher.
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { runCommand } from "../src/platform/command-runner.js";
-import { prepareTaskWorktree } from "../src/tasks/worktree.js";
+import { prepareTaskWorktree, removeTaskWorktree } from "../src/tasks/worktree.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
@@ -105,4 +108,16 @@ test("concurrent materialization converges on the same Git worktree", async () =
 test("worktree roots cannot overlap the repository", async () => {
   const intent = await fixture();
   await expect(prepareTaskWorktree({ ...intent, worktreeRoot: join(intent.repositoryPath, "worktrees") })).rejects.toThrow("overlap");
+});
+
+test("archive stops detached worktree commands while preserving unrelated processes", async () => {
+  const intent = await fixture();
+  const worktree = await prepareTaskWorktree(intent);
+  const owned = spawn("sleep", ["300"], { cwd: worktree.path, detached: true, stdio: "ignore" });
+  const unrelated = spawn("sleep", ["300"], { cwd: intent.repositoryPath, detached: true, stdio: "ignore" });
+  await Promise.all([once(owned, "spawn"), once(unrelated, "spawn")]);
+  cleanups.unshift(async () => { owned.kill("SIGKILL"); unrelated.kill("SIGKILL"); });
+  await expect(removeTaskWorktree(intent, worktree, false, () => {})).resolves.toEqual({ status: "cleaned" });
+  expect(() => process.kill(owned.pid!, 0)).toThrow();
+  expect(() => process.kill(unrelated.pid!, 0)).not.toThrow();
 });

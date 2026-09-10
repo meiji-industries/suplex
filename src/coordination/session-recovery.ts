@@ -132,7 +132,7 @@ async function finishTurn(dependencies: SessionRecoveryDependencies, taskScope: 
   const text = await harness.resultText(taskScope, observed);
   const base = { state: observed.state, native: observed.native, reason: observed.reason, interruptedExecution: observed.interruptedExecution, text };
   if (session.kind === "root") {
-    store.completeRootTurn(turn.id, JSON.stringify(base), observed.interruptedExecution ? "The previous execution stopped when its agent process exited. Its admitted message will not be replayed. Observe current task, worktree and GitHub state, preserve any partial work, and continue from that evidence." : undefined);
+    store.completeRootTurn(turn.id, JSON.stringify(base), observed.interruptedExecution ? "The previous execution stopped before a final response. Its admitted message will not be replayed. Observe current task, worktree and GitHub state, preserve any partial work, and continue from that evidence." : undefined);
     if (observed.state !== "completed" && !observed.interruptedExecution && store.get(session.taskId).status === "active") {
       store.askHuman(session.taskId, `The agent stopped the Coordinator turn (${observed.state}). ${observed.reason ?? text} Can you resolve the failure and continue?`);
     }

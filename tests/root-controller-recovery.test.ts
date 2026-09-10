@@ -71,12 +71,12 @@ test("fence receipts cannot requeue another attempt or bypass the current sessio
   expect(value.store.requeueFencedPrompt({ turnId: turn.id, attempt, owner: owner! })).toBe(false);
 });
 
-test("a proven stopped Coordinator execution queues one new continuation on the same native session", async () => {
+test.each(["process_stopped", "native_idle"])("a %s Coordinator execution queues one new continuation on the same native session", async reason => {
   const value = await fixture();
   await value.controller.recover("task");
   const original = value.harness.dispatched[0]!;
   const observed = value.harness.observations.get(original.messageID)!;
-  value.harness.observations.set(original.messageID, { ...observed, state: "interrupted", reason: "dispatch_process_stopped", interruptedExecution: { stoppedServerGeneration: value.harness.serverGeneration } });
+  value.harness.observations.set(original.messageID, { ...observed, state: "interrupted", reason: reason === "native_idle" ? "native_idle_incomplete" : "dispatch_process_stopped", interruptedExecution: reason === "native_idle" ? { lastActivityAt: 4 } : { stoppedServerGeneration: value.harness.serverGeneration } });
   await Promise.all([value.controller.recover("task"), value.controller.recover("task")]);
   const pending = value.store.pendingTurns(value.identity().sessionId);
   expect(pending).toHaveLength(1);

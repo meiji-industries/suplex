@@ -89,7 +89,7 @@ export interface OpenCodePromptObservation {
   assistantMessageID?: string;
   status?: OpenCodeSessionStatus;
   native?: OpenCodeNativeEvidence;
-  interruptedExecution?: { stoppedServerGeneration: string };
+  interruptedExecution?: { stoppedServerGeneration: string } | { lastActivityAt: number };
   executionUncertain?: { stoppedServerGeneration: string };
   unsettledTools?: boolean;
   reason?: string;
@@ -306,7 +306,24 @@ export async function reconcileOpenCodePrompt(client: OpenCodePromptReadPort, in
     } catch {
       // Status only supplies liveness. Message evidence remains authoritative.
     }
-    return classify(intent, parsedMessages, parsedStatus, statusKnown);
+    const observed = classify(intent, parsedMessages, parsedStatus, statusKnown);
+    if (!statusKnown || parsedStatus?.type !== "idle" || observed.unsettledTools || !["running", "admitted"].includes(observed.state)) return observed;
+    if (correlatedAssistants(parsedMessages, intent.messageID).reason) return observed;
+    const activityTimes = parsedMessages.flatMap(message => [
+      message.info.time.created,
+      property(message.info.time, "completed"),
+      ...message.parts.flatMap(part => {
+        const time = property(property(part, "state"), "time");
+        return [property(time, "start"), property(time, "end")];
+      }),
+    ]).filter((value): value is number => typeof value === "number");
+    const lastActivityAt = Math.max(parsedSession.time.updated, ...activityTimes);
+    if (Date.now() - lastActivityAt < 30_000) return observed;
+    const confirmedMessages = (await client.getMessages(intent.sessionID, { directory: intent.directory })).map(message => OpenCodeMessageEnvelopeSchema.parse(message));
+    const confirmedStatuses = OpenCodeSessionStatusMapSchema.parse(await client.getStatus(intent.directory));
+    const confirmedStatus = OpenCodeSessionStatusSchema.parse(confirmedStatuses[intent.sessionID] ?? { type: "idle" });
+    if (confirmedStatus.type !== "idle" || JSON.stringify(confirmedMessages) !== JSON.stringify(parsedMessages)) return classify(intent, confirmedMessages, confirmedStatus, true);
+    return { ...observed, state: "interrupted", reason: "native_idle_incomplete", interruptedExecution: { lastActivityAt } };
   } catch {
     return baseObservation(intent, { state: "unknown", admission: "unknown", retry: "forbidden", reason: "native_read_unavailable" });
   }

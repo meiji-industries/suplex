@@ -18,6 +18,7 @@ type Trigger = { policy: { dispatchId: string; repositoryId: number; repositoryN
 export type PublicationDependencies = {
   github: DeliveryGithubPort;
   store: TaskControlStore;
+  publicationRecheck: (control: TaskControl, actual: ReviewRange, recheck: Recheck) => Promise<void>;
   finalRecheck: (control: TaskControl, actual: ReviewRange, recheck: Recheck) => Promise<void>;
   adoptKnownPull: (control: TaskControl, pull: GithubPullRequest, options: { explicit?: boolean; recheck?: Recheck }) => Promise<PullRequestReference>;
   completeRemoteBranch: (control: TaskControl, actual: ReviewRange, recheck: Recheck) => Promise<void>;
@@ -28,7 +29,7 @@ export type PublicationDependencies = {
 export async function pushPublication(dependencies: PublicationDependencies, recheck: Recheck, control: TaskControl, repository: string, local: { branch: string; headSha: string; clean: boolean }, actual: ReviewRange): Promise<unknown> {
   const trigger = await dependencies.inspectTriggerPolicy(control, { protectedPaths: false });
   const remoteHead = await dependencies.github.getBranchHead({ repository, branch: local.branch });
-  await dependencies.finalRecheck(control, actual, recheck);
+  await dependencies.publicationRecheck(control, actual, recheck);
   if (remoteHead === local.headSha) {
     if (control.deliveryTarget === "remote_branch") await dependencies.completeRemoteBranch(control, actual, recheck);
     return { kind: "adopted", headSha: local.headSha };

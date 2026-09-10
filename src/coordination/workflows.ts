@@ -246,13 +246,14 @@ export function freshReviewHint(workflow: WorkflowId): string {
  * no delegate is reserved, live, or unknown, and the workflow's own obligations hold. Pre-publication guards and the completion transaction both call it
  * with freshly observed local facts; the transaction reloads sessions, turns, and reviews so a change after those facts were read is still seen.
  */
-export function deliveryDecision(control: ControlLike & { deliveryIntent: { headBranch: string } }, sessions: DeliverySessionLike[], turns: TurnLike[], range: ReviewRange, local: LocalSourceFacts): DeliveryDecision {
+export function deliveryDecision(control: ControlLike & { deliveryIntent: { headBranch: string } }, sessions: DeliverySessionLike[], turns: TurnLike[], range: ReviewRange, local: LocalSourceFacts, requireReview = true): DeliveryDecision {
   if (control.workflow === "standard") return { ok: true };
   if (local.branch !== undefined && local.branch !== control.deliveryIntent.headBranch) return { ok: false, code: "head_diverged", reason: `The worktree is on ${local.branch}, not the task branch ${control.deliveryIntent.headBranch}.` };
   if (local.headSha !== undefined && local.headSha !== range.headSha) return { ok: false, code: "head_diverged", reason: `The worktree head ${local.headSha.slice(0, 12)} is not the reviewed head ${range.headSha.slice(0, 12)}.${freshReviewHint(control.workflow)}` };
   if (!local.clean) return { ok: false, code: "worktree_dirty", reason: "The worktree has uncommitted changes. Commit or discard them, inspect delivery again, and review the committed range." };
   const delegate = sessions.find(session => session.kind === "worker" && session.current === true && (session.launchOwner || turns.some(turn => turn.sessionId === session.id && (turn.generation === undefined || session.generation === undefined || turn.generation === session.generation) && ["pending_prompt", "prompted", "unknown"].includes(turn.status))));
   if (delegate) return { ok: false, code: "delegate_active", reason: `${delegate.advisorRole ? ADVISOR_LABELS[delegate.advisorRole] : "Worker"} is still active. Wait for its result before requesting delivery.` };
+  if (!requireReview) return { ok: true };
   const ready = workflowReadyForDelivery(control, sessions, turns, range);
   return ready.ok ? { ok: true } : { ok: false, code: "workflow_review_required", reason: ready.reason };
 }

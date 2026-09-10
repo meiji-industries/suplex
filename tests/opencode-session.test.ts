@@ -129,7 +129,7 @@ test("a later user does not hide an exact-parent final response", async () => {
 });
 
 test("a final assistant does not hide an unfinished correlated assistant", async () => {
-  const result = await reconcileOpenCodePrompt(port({ messages: [
+  const result = await reconcileOpenCodePrompt(port({ status: { type: "busy" }, messages: [
     { info: user, parts: [{ type: "text", text: intent.prompt }] },
     assistant({ id: "msg_unfinished", created: 4 }),
     assistant({ id: "msg_final", created: 5, completed: 6, finish: "stop" }),
@@ -182,7 +182,7 @@ test("a completed tool step is not a completed turn while its tool is running", 
   expect(result.reason).toBe("tool_pending_or_running");
 });
 
-test("a completed tool step without a final response stays admitted when idle", async () => {
+test("a completed tool step without a final response is recovered after native activity stops", async () => {
   const result = await reconcileOpenCodePrompt(port({
     messages: [
       { info: user, parts: [{ type: "text", text: intent.prompt }] },
@@ -190,9 +190,9 @@ test("a completed tool step without a final response stays admitted when idle", 
     ],
   }), intent);
 
-  expect(result.state).toBe("admitted");
+  expect(result.state).toBe("interrupted");
   expect(result.assistantMessageID).toBe("msg_tool_step");
-  expect(result.reason).toBe("final_response_not_observed");
+  expect(result.reason).toBe("native_idle_incomplete");
 });
 
 test("native assistant errors distinguish provider failure from interruption", async () => {
@@ -351,7 +351,7 @@ test("an ambiguous lost acknowledgement stays fenced while native admission is d
   const delayed = port({ messages: [], status: { type: "idle" }, prompts });
   delayed.getMessages = async () => {
     reads += 1;
-    return reads === 1 ? [] : [{ info: user, parts: [{ type: "text", text: intent.prompt }] }];
+    return reads === 1 ? [] : [{ info: { ...user, time: { created: Date.now() } }, parts: [{ type: "text", text: intent.prompt }] }];
   };
   const ambiguous = { ...intent, dispatch: "ambiguous" as const };
 
@@ -439,4 +439,27 @@ test("the same native session history remains authoritative after a client resta
   const afterRestart = await reconcileOpenCodePrompt(port({ messages: history }), intent);
 
   expect(afterRestart).toMatchObject({ state: "completed", assistantMessageID: first.assistantMessageID, native: first.native });
+});
+
+test("an idle unfinished assistant becomes an interrupted turn without replay", async () => {
+  const reader = port({ messages: [{ info: user, parts: [{ type: "text", text: intent.prompt }] }, assistant({ id: "msg_empty", created: 4 })] });
+  await expect(reconcileOpenCodePrompt(reader, intent)).resolves.toMatchObject({ state: "interrupted", reason: "native_idle_incomplete", admission: "observed", retry: "forbidden", interruptedExecution: { lastActivityAt: 4 } });
+});
+
+test.each(["busy", "retry", "unavailable", "recent"])("does not recover an unfinished turn while native state is %s", async condition => {
+  const reader = port({ messages: [{ info: user, parts: [{ type: "text", text: intent.prompt }] }, assistant({ id: "msg_empty", created: condition === "recent" ? Date.now() : 4 })], ...(condition === "busy" ? { status: { type: "busy" as const } } : condition === "retry" ? { status: { type: "retry" as const, attempt: 1, message: "retry", next: Date.now() } } : {}), failStatus: condition === "unavailable" });
+  expect((await reconcileOpenCodePrompt(reader, intent)).state).not.toBe("interrupted");
+});
+
+
+test("native activity appearing during the idle confirmation prevents recovery", async () => {
+  let checks = 0;
+  const reader = port({ messages: [{ info: user, parts: [{ type: "text", text: intent.prompt }] }, assistant({ id: "msg_empty", created: 4 })] });
+  reader.getStatus = async () => ({ ses_task: { type: ++checks === 1 ? "idle" : "busy" } });
+  expect((await reconcileOpenCodePrompt(reader, intent)).state).toBe("running");
+});
+
+test("a failed tool receipt alone does not prove execution stopped", async () => {
+  const reader = port({ messages: [{ info: user, parts: [{ type: "text", text: intent.prompt }] }, assistant({ id: "msg_tool", created: 4, completed: 5, finish: "tool-calls", parts: [{ type: "tool", callID: "call-1", tool: "bash", state: { status: "error", input: {}, error: "Command timed out", time: { start: 4, end: 5 } } }] }), assistant({ id: "msg_empty", created: 6 })] });
+  expect(await reconcileOpenCodePrompt(reader, intent)).toMatchObject({ state: "running", unsettledTools: true, retry: "forbidden" });
 });

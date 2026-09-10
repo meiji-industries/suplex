@@ -1,5 +1,6 @@
 import { lstat, mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { stopWorktreeProcesses } from "./archive/processes.js";
 import { runCommand } from "../platform/command-runner.js";
 import type { WorktreeReference } from "./control.js";
 
@@ -96,10 +97,10 @@ export async function removeTaskWorktree(intent: TaskWorktreeIntent, reference: 
   const path = join(root, intent.taskId);
   if (reference && (resolve(reference.path) !== path || reference.branch !== intent.branch)) throw new Error("Recorded worktree does not match the task path and branch");
   const existing = await lstat(path).catch(missing);
-  if (!existing && !await lstat(repository).catch(missing)) return { status: "already_absent" };
+  if (!existing && !await lstat(repository).catch(missing)) { authorize(); await stopWorktreeProcesses(path); return { status: "already_absent" }; }
   const registry = await registeredWorktrees(repository);
   const registered = registry.find(entry => entry.path === path);
-  if (!existing && !registered) return { status: "already_absent" };
+  if (!existing && !registered) { authorize(); await stopWorktreeProcesses(path); return { status: "already_absent" }; }
   if (!registered || registered.branch !== intent.branch || existing && (existing.isSymbolicLink() || !existing.isDirectory())) throw new Error("Task worktree path has a conflicting owner");
   if (existing) {
     await observe(path, repository, intent);
@@ -110,6 +111,8 @@ export async function removeTaskWorktree(intent: TaskWorktreeIntent, reference: 
       dirtyFilePaths: changes.map(change => change.slice(3)),
     };
   }
+  authorize();
+  await stopWorktreeProcesses(path);
   authorize();
   await git(repository, ["worktree", "remove", ...(confirmDiscardDirty ? ["--force"] : []), path]);
   if (await lstat(path).catch(missing) || (await registeredWorktrees(repository)).some(entry => entry.path === path)) throw new Error("Git did not remove the task worktree");

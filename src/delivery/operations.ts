@@ -134,12 +134,12 @@ export class DeliveryOperations {
         if (!equivalent.ok) throw new DeliveryOperationFailure("delivery_review_required", `${equivalent.reason} Inspect delivery again and review the new range before retrying.`);
         actual = equivalent.range;
       }
-      this.gateWorkflow(refreshed, actual, { clean: local.clean });
+      this.gateWorkflow(refreshed, actual, { clean: local.clean }, operation !== "push_branch");
       recheck();
     }
     const pull = operation === "push_branch" ? null : await this.observePull(refreshed, repository, local.branch);
     if (pull?.state === "merged") return this.adoptKnownPull(refreshed, await this.github.getPullRequest({ repository, number: pull.number }), { recheck });
-    if (mutation && actual) this.store.updateWorkflowState(root.taskId, state => ({ ...state, acceptedDelivery: actual! }));
+    if (mutation && actual && this.workflowDecision(refreshed, actual, local).ok) this.store.updateWorkflowState(root.taskId, state => ({ ...state, acceptedDelivery: actual! }));
     switch (operation) {
       case "observe_pull_request":
         return pull;
@@ -158,20 +158,20 @@ export class DeliveryOperations {
   }
 
   /** Every review-gated publication path for non-Standard workflows applies the one shared policy to fresh state. */
-  private gateWorkflow(control: TaskControl, actual: ReviewRange, local: LocalSourceFacts): void {
-    const decision = this.workflowDecision(control, actual, local);
+  private gateWorkflow(control: TaskControl, actual: ReviewRange, local: LocalSourceFacts, requireReview = true): void {
+    const decision = this.workflowDecision(control, actual, local, requireReview);
     if (!decision.ok) throw new DeliveryOperationFailure(decision.code, decision.reason);
   }
 
-  private workflowDecision(control: TaskControl, actual: ReviewRange, local: LocalSourceFacts): Decision {
-    return deliveryDecision(this.store.get(control.taskId), this.store.sessions(control.taskId), this.store.turns(control.taskId), actual, local);
+  private workflowDecision(control: TaskControl, actual: ReviewRange, local: LocalSourceFacts, requireReview = true): Decision {
+    return deliveryDecision(this.store.get(control.taskId), this.store.sessions(control.taskId), this.store.turns(control.taskId), actual, local, requireReview);
   }
 
   /** The final guard before a mutation: after every provider await, the local source must still be the reviewed head on the task branch, clean, without a delegate, and still gated; then the root and tool ownership must still hold. */
-  private async finalRecheck(control: TaskControl, actual: ReviewRange, recheck: Recheck): Promise<void> {
+  private async finalRecheck(control: TaskControl, actual: ReviewRange, recheck: Recheck, requireReview = true): Promise<void> {
     if (control.workflow !== "standard") {
       const local = await this.github.inspectLocalRevision({ cwd: control.worktree!.path });
-      this.gateWorkflow(control, actual, local);
+      this.gateWorkflow(control, actual, local, requireReview);
     }
     recheck();
   }
@@ -268,6 +268,7 @@ export class DeliveryOperations {
       github: this.github,
       store: this.store,
       finalRecheck: (control, actual, recheck) => this.finalRecheck(control, actual, recheck),
+      publicationRecheck: (control, actual, recheck) => this.finalRecheck(control, actual, recheck, false),
       adoptKnownPull: (control, pull, options) => this.adoptKnownPull(control, pull, options),
       completeRemoteBranch: (control, actual, recheck) => this.completeRemoteBranch(control, actual, recheck),
       inspectTriggerPolicy: (control, input) => this.inspectTriggerPolicy(control, input),
@@ -282,6 +283,9 @@ export class DeliveryOperations {
   /** The remote-branch target completes after the published or adopted head is observed, through the same final boundary as every other completion. */
   private async completeRemoteBranch(control: TaskControl, actual: ReviewRange, recheck: Recheck): Promise<void> {
     if (control.workflow === "standard") { this.store.markDelivered(control.taskId); return; }
+    const local = await this.github.inspectLocalRevision({ cwd: control.worktree!.path });
+    const ready = this.workflowDecision(control, actual, local);
+    if (!ready.ok && ready.code === "workflow_review_required") return;
     const decision = await this.commitCompletion(control, actual, null, { requireAccepted: true, recheck });
     if (!decision.ok) {
       if ("cancelled" in decision) recheck();

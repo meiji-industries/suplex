@@ -654,14 +654,15 @@ test("F2a/F2b/F2c/F2e: push revalidates source, branch, delegate, and review aft
   await f.finishDelegate("pnpm test passed.");
   // F2c: a rejecting Rater completed during the observation.
   hook = duringBranchHead(f, "feature", async () => { await f.controller.delegateAdvisor(f.identity(), { role: "rater" }); await f.finishDelegate(rater(6, ["src.ts: still wrong"])); });
-  await expect(f.request("push_branch")).rejects.toMatchObject({ code: "workflow_review_required" });
-  expect(pushes()).toEqual([]);
+  await expect(f.request("push_branch")).resolves.toMatchObject({ kind: "pushed" });
+  expect(hook.fired()).toBe(true);
+  expect(f.store.get("task").status).toBe("active");
+  await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "workflow_review_required" });
   hook.restore();
-  expect(await git(f.bare, ["rev-parse", "refs/heads/feature"])).toBe(f.featureSha);
   // F2e: no race, committed clean candidate, current 9.
   await rateNine(f);
   const head = await git(f.worktree.path, ["rev-parse", "HEAD"]);
-  expect(await f.request("push_branch")).toMatchObject({ kind: "pushed", headSha: head });
+  expect(await f.request("push_branch")).toMatchObject({ kind: "adopted", headSha: head });
   expect(pushes()).toEqual([`push:${head}`]);
   expect(await git(f.bare, ["rev-parse", "refs/heads/feature"])).toBe(head);
   expect(f.store.get("task")).toMatchObject({ status: "active", workflowState: { completion: null, acceptedDelivery: { headSha: head } } });
@@ -687,7 +688,8 @@ test("F2d/F2e: adoption of an already published head is guarded the same way, an
   expect(r.store.get("task")).toMatchObject({ status: "active", workflowState: { completion: null } });
   hook.restore(); await restoreSource(r);
   hook = duringBranchHead(r, "feature", async () => { await r.controller.delegateAdvisor(r.identity(), { role: "reviewer", brief: "Plan." }); await r.finishDelegate(reviewer(false, ["src.ts: regression"])); });
-  await expect(r.request("push_branch")).rejects.toMatchObject({ code: "workflow_review_required" });
+  await expect(r.request("push_branch")).resolves.toMatchObject({ kind: "adopted" });
+  expect(hook.fired()).toBe(true);
   expect(r.store.get("task")).toMatchObject({ status: "active", workflowState: { completion: null } });
   hook.restore();
   expect(mutations(r)).toEqual([]);

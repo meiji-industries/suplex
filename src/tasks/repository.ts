@@ -10,7 +10,8 @@ import { advisorKeysSorted, publicWorkflowState, type AdvisorRole } from "../coo
 export type TaskCreator = { kind: "user"; id: string } | { kind: "agent"; id: string };
 const RowSchema = z.object({
   id: z.string(), company_id: z.string(), project_id: z.string(), issue_number: z.number().nullable(), issue_code: z.string().nullable(),
-  title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(),
+  title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(), blocked_by_task_id: z.string().nullable(),
+  blocked_task_id: z.string().nullable(), blocked_task_title: z.string().nullable(), blocked_task_status: z.string().nullable(),
   creator_user_id: z.string().nullable(), creator_agent_id: z.string().nullable(), created_at: z.string(), updated_at: z.string(), activity_updated_at: z.string(), status_changed_at: z.string(), archived_at: z.string().nullable(),
 });
 export type TaskRow = z.infer<typeof RowSchema>;
@@ -18,7 +19,7 @@ const ArtifactRowSchema = z.object({
   id: z.string(), companyId: z.string(), kind: z.string(), filename: z.string(), mimeType: z.string(), byteSize: z.number(),
   sha256: z.string(), storagePath: z.string(), createdAt: z.string(),
 });
-const select = "SELECT t.*, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(control.updated_at, t.updated_at)) THEN t.updated_at ELSE control.updated_at END AS activity_updated_at, control.status_changed_at, c.issue_code FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id LEFT JOIN forge_task_controls control ON control.task_id = t.id";
+const select = "SELECT t.*, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(control.updated_at, t.updated_at)) THEN t.updated_at ELSE control.updated_at END AS activity_updated_at, control.status_changed_at, c.issue_code, blocked.id AS blocked_task_id, blocked.title AS blocked_task_title, blocked_control.status AS blocked_task_status FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id LEFT JOIN forge_task_controls control ON control.task_id = t.id LEFT JOIN forge_tasks blocked ON blocked.id = t.blocked_by_task_id LEFT JOIN forge_task_controls blocked_control ON blocked_control.task_id = blocked.id";
 
 export class TaskConflict extends Error {}
 
@@ -114,6 +115,7 @@ export class TaskRepository {
         ? { kind: "task_limit", id: control.humanQuestionId, text: control.humanQuestion, options: [], requiresCommandCleanup: false, pause: control.limitPause }
         : { kind: "question", id: control.humanQuestionId, text: control.humanQuestion, options: control.humanQuestionOptions ?? [], requiresCommandCleanup: control.recoveryTurnId !== null }
         : null,
+      blockedBy: row.blocked_task_id && row.blocked_task_title && row.blocked_task_status ? { id: row.blocked_task_id, title: row.blocked_task_title, status: row.blocked_task_status } : null,
       limits: { ...limitState.limits, admittedTurns: limitState.admittedTurns },
       wakeAt: control.wakeAt, images, createdAt: row.created_at, updatedAt: row.activity_updated_at, statusChangedAt: row.status_changed_at, archivedAt: row.archived_at,
     });
@@ -137,6 +139,10 @@ export class TaskRepository {
       db.prepare("UPDATE forge_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM forge_tasks WHERE id = ?), updated_at = ? WHERE task_id = ?").run(taskId, time, taskId);
       return true;
     });
+  }
+
+  setBlockedBy(taskId: string, blockedByTaskId: string | null): boolean {
+    return this.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET blocked_by_task_id = ?, updated_at = ? WHERE id = ?").run(blockedByTaskId, new Date().toISOString(), taskId).changes === 1);
   }
 
   rename(taskId: string, title: string): boolean {

@@ -58,6 +58,7 @@ export const TaskConfigurationSchema = z.object({
 export type TaskConfiguration = z.infer<typeof TaskConfigurationSchema>;
 
 export const TaskImageSchema = z.object({ artifactId: id, filename: z.string(), mimeType: z.string(), byteSize: z.number().int().nonnegative() }).strict();
+export const TaskReferenceSchema = z.object({ id, title: z.string(), status: TaskControlStatusSchema }).strict();
 const TaskQuestionBaseSchema = z.object({ id, text: z.string(), options: HumanQuestionOptionsSchema.default([]), requiresCommandCleanup: z.boolean() });
 const TaskHumanQuestionSchema = z.discriminatedUnion("kind", [
   TaskQuestionBaseSchema.extend({ kind: z.literal("question") }).strict(),
@@ -78,6 +79,7 @@ export const TaskSchema = z.object({
   worktree: WorktreeReferenceSchema.nullable(),
   pullRequest: PullRequestReferenceSchema.nullable(),
   humanQuestion: TaskHumanQuestionSchema.nullable(),
+  blockedBy: TaskReferenceSchema.nullable(),
   limits: TaskLimitsSchema.extend({ admittedTurns: z.number().int().nonnegative() }).strict(),
   wakeAt: z.string().nullable(),
   images: z.array(TaskImageSchema),

@@ -37,6 +37,7 @@ type Authority = { kind: "user"; userId: string } | { kind: "hermes"; principal:
 type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "resolveTaskSource" | "captureTaskConfiguration">;
 const DetailsSchema = TaskInputSchema.pick({ title: true }).extend({ description: z.string().trim().optional() }).partial().strict().refine(input => input.title !== undefined || input.description !== undefined);
 const RenameSchema = TaskInputSchema.pick({ title: true });
+const BlockedBySchema = z.object({ blockedByTaskId: z.string().min(1).max(256).nullable() }).strict();
 
 export class TaskService {
   private readonly archives = new Set<string>();
@@ -316,6 +317,17 @@ export class TaskService {
     const { title } = RenameSchema.parse(raw);
     this.getTask(userId, taskId);
     if (!this.repository.rename(taskId, title)) throw new TaskFailure("Open archived tasks before renaming them.", 409);
+    return this.getTask(userId, taskId);
+  }
+
+  setTaskBlockedBy(userId: string, taskId: string, raw: z.input<typeof BlockedBySchema>): Task {
+    const { blockedByTaskId } = BlockedBySchema.parse(raw);
+    const task = this.getTask(userId, taskId);
+    if (blockedByTaskId !== null) {
+      const blocked = this.requireTask({ kind: "user", userId }, blockedByTaskId);
+      if (blocked.id === task.id || blocked.company_id !== task.companyId || blocked.project_id !== task.projectId) throw new TaskFailure("The blocked task is not available", 404);
+    }
+    if (!this.repository.setBlockedBy(taskId, blockedByTaskId)) throw new TaskFailure("Not found", 404);
     return this.getTask(userId, taskId);
   }
 

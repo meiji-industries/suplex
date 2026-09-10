@@ -15,7 +15,7 @@ import { TaskExecutionResponseSchema } from "../../tasks/execution/contracts.js"
 import { TaskChecksResponseSchema, TaskDiffResponseSchema } from "../contracts/tasks.js";
 import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { normalizeWorkflowInput, WorkflowInputFailure } from "../../coordination/workflows.js";
-import { MAX_TASK_REQUEST_BYTES, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { MAX_TASK_REQUEST_BYTES, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBlockedByBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions { tasks: TaskService; host?: Pick<TaskHost, "recover">; config?: Pick<ForgeConfig, "databasePath"> }
 
@@ -69,6 +69,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   });
   typed.get("/api/tasks/:taskId", { schema: taskResponse }, async (request, reply) => reply.header("Cache-Control", "private, no-store").send(tasks.getTask(request.forgeUser.id, request.params.taskId)));
   typed.patch("/api/tasks/:taskId", { schema: { ...taskResponse, body: TaskDetailsBodySchema } }, async request => tasks.updateTaskDetails(request.forgeUser.id, request.params.taskId, request.body));
+  typed.patch("/api/tasks/:taskId/blocked-by", { schema: { ...taskResponse, body: TaskBlockedByBodySchema } }, async request => tasks.setTaskBlockedBy(request.forgeUser.id, request.params.taskId, request.body));
   typed.post("/api/tasks/:taskId/rename", { schema: { ...taskResponse, body: TaskRenameBodySchema } }, async request => tasks.renameTask(request.forgeUser.id, request.params.taskId, request.body));
   typed.post("/api/tasks/:taskId/start", { schema: taskResponse }, async request => {
     const task = tasks.startTask(request.forgeUser.id, request.params.taskId);

@@ -1,8 +1,9 @@
+import { stopSessionProcesses, stopExecutionProcesses } from "../../platform/process-manager.js";
 import { randomUUID } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveOpenCodeExecutable } from "../../platform/executable-resolver.js";
-import { ensureOpenCodeServer, OpenCodeServerReferenceSchema, openCodeAttachCommand, openCodeProcessAlive, openCodeRoleConfig, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer, type OpenCodeServerReference } from "./server.js";
+import { ensureOpenCodeServer, OpenCodeServerReferenceSchema, openCodeAttachCommand, openCodeServerRunning, openCodeRoleConfig, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer, type OpenCodeServerReference } from "./server.js";
 import { reconcileOpenCodePrompt, replayOpenCodePrompt } from "./session.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
 import { taskSessionRuntimeDirectory, taskSessionTitle, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
@@ -76,17 +77,15 @@ export class OpenCodeTaskRuntime implements TaskHarness {
 
   async stop(scope: Pick<TaskScope, "id">, nativeSessionId: string | null): Promise<void> {
     const reference = await readOpenCodeServer(this.runtimeDirectory(scope));
-    if (!reference) {
-      if (nativeSessionId) throw new Error("OpenCode server reference is missing");
-      return;
-    }
-    if (nativeSessionId && openCodeProcessAlive(reference.pid)) {
+    if (!reference) { await stopSessionProcesses(this.runtimeDirectory(scope)); return; }
+    if (nativeSessionId && await openCodeServerRunning(reference)) {
       const client = openCodeServerClient(reference);
       await client.abortSession(nativeSessionId, reference.directory);
       const status = (await client.getStatus(reference.directory))[nativeSessionId];
       if (status && status.type !== "idle") throw new Error("OpenCode session has not stopped");
     }
     await stopOpenCodeServer(reference);
+    await stopSessionProcesses(this.runtimeDirectory(scope));
   }
 
   async recoverDispatch(scope: TaskScope, intent: PromptIntent, attempt: PromptDispatchAttempt): Promise<PromptObservation> {
@@ -95,6 +94,7 @@ export class OpenCodeTaskRuntime implements TaskHarness {
     const reference = OpenCodeServerReferenceSchema.parse(JSON.parse(await readFile(filename, "utf8")));
     if (reference.generation !== attempt.serverGeneration) throw new Error("OpenCode dispatch server identity changed");
     await stopOpenCodeServer(reference);
+    await stopExecutionProcesses(this.runtimeDirectory(scope), attempt.serverGeneration);
     await this.ensureSession(scope, intent.sessionID);
     const observed = await this.observe(scope, { ...intent, dispatch: "not_submitted" });
     if (observed.admission === "observed" && (["admitted", "running"].includes(observed.state) || observed.reason === "native_abort") && observed.status?.type === "idle") {

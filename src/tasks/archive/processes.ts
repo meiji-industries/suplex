@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { runCommand } from "../../platform/command-runner.js";
-import { defaultProcessController, inspectProcessOnce, stopOwnedProcesses, type OwnedProcess } from "../../platform/process-manager.js";
+import { stopDiscoveredProcesses, taskOwnedProcessIds } from "../../platform/process-manager.js";
 
 async function observe(command: string, args: string[]): Promise<string> {
   const result = await runCommand({ taskId: null, stepId: null, command, args });
@@ -10,7 +10,7 @@ async function observe(command: string, args: string[]): Promise<string> {
 
 async function worktreeProcesses(path: string): Promise<Set<number>> {
   const stdout = await observe("lsof", ["-a", "-u", String(process.getuid!()), "-d", "cwd", "-Fpn"]);
-  const result = new Set<number>();
+  const result = new Set<number>(await taskOwnedProcessIds(path));
   let pid = 0;
   for (const line of stdout.split("\n")) {
     if (line.startsWith("p")) pid = Number(line.slice(1));
@@ -31,16 +31,5 @@ async function worktreeProcesses(path: string): Promise<Set<number>> {
 }
 
 export async function stopWorktreeProcesses(path: string): Promise<void> {
-  const candidates = await worktreeProcesses(path);
-  const identities: OwnedProcess[] = [];
-  for (const pid of candidates) {
-    const identity = await inspectProcessOnce(pid);
-    if (identity && identity.ownerUid === process.getuid!()) identities.push({ ...identity, name: path, startedAt: identity.startTime });
-  }
-  const confirmed = await worktreeProcesses(path);
-  // Signal each confirmed process, never its group, which can contain unrelated work.
-  await stopOwnedProcesses({ version: 1, processes: identities.filter(identity => confirmed.has(identity.pid)) }, {
-    inspect: inspectProcessOnce,
-    signal: defaultProcessController.signal,
-  });
+  await stopDiscoveredProcesses(() => worktreeProcesses(path));
 }

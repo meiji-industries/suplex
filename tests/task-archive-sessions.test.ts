@@ -1,4 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { inspectProcessOnce } from "../src/platform/process-manager.js";
 import type { TaskSession } from "../src/tasks/control.js";
 import { stopIdleArchiveSessions } from "../src/tasks/archive/sessions.js";
 import * as servers from "../src/runtimes/opencode/server.js";
@@ -9,13 +10,13 @@ const server: servers.OpenCodeServerReference = { pid: process.pid, baseUrl: "ht
 
 afterEach(() => vi.restoreAllMocks());
 
-test("archive refuses a live operation even if its start time is missing", async () => {
-  await expect(stopIdleArchiveSessions("/unused/forge.db", [{ ...session, launchOwnerPid: process.pid }])).rejects.toThrow("operation is still active");
+test("an incomplete operation identity does not block archive", async () => {
+  await expect(stopIdleArchiveSessions("/unused/forge.db", [{ ...session, launchOwnerPid: process.pid }])).resolves.toBeTypeOf("function");
 });
 
-test("archive refuses missing server identity for a native session", async () => {
+test("a missing server record does not block archive", async () => {
   vi.spyOn(servers, "readOpenCodeServer").mockResolvedValue(null);
-  await expect(stopIdleArchiveSessions("/unused/forge.db", [session])).rejects.toThrow("server identity is missing");
+  await expect(stopIdleArchiveSessions("/unused/forge.db", [session])).resolves.toBeTypeOf("function");
 });
 
 test("a reused pid is not treated as a live server", async () => {
@@ -43,4 +44,10 @@ test("an idle native server can be stopped", async () => {
   const stop = vi.spyOn(servers, "stopOpenCodeServer").mockResolvedValue();
   await stopIdleArchiveSessions("/unused/forge.db", [session]);
   expect(stop).toHaveBeenCalledWith(server);
+});
+
+test("a confirmed live task operation still prevents concurrent archive cleanup", async () => {
+  const owner = await inspectProcessOnce(process.pid);
+  expect(owner).toBeDefined();
+  await expect(stopIdleArchiveSessions("/unused/forge.db", [{ ...session, launchOwnerPid: process.pid, launchOwnerStartTime: owner!.startTime }])).rejects.toThrow("operation is still active");
 });

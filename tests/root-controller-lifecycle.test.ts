@@ -1,5 +1,6 @@
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { cleanupRootControllerFixtures, fixture } from "./helpers/root-controller-fixture.js";
+import * as processes from "../src/tasks/archive/processes.js";
 import { RootController } from "../src/coordination/root-controller.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
 import { ForgeDatabase } from "../src/platform/database.js";
@@ -226,4 +227,28 @@ test.each(["delivered", "cancelled"] as const)("a retained idle Worker is stoppe
 
   expect(value.harness.stopped).toHaveLength(2);
   expect(value.harness.stopped).toEqual(expect.arrayContaining([root.nativeSessionId, worker.nativeSessionId]));
+});
+
+test("cancellation retries detached command cleanup before recording the session stopped", async () => {
+  const value = await fixture(true);
+  await value.controller.recover("task");
+  const cleanup = vi.spyOn(processes, "stopWorktreeProcesses").mockRejectedValueOnce(new Error("Command is still exiting")).mockResolvedValue();
+  try {
+    await expect(value.controller.cancel("task")).rejects.toThrow("Command is still exiting");
+    expect(value.store.get("task").status).toBe("cancelled");
+    expect(await value.store.pendingStops("task")).not.toHaveLength(0);
+    await value.controller.recover("task");
+    expect(cleanup).toHaveBeenCalledWith(value.directory);
+    expect(await value.store.pendingStops("task")).toHaveLength(0);
+  } finally { cleanup.mockRestore(); }
+});
+
+test("cancellation does not wait on an incomplete launch-owner record", async () => {
+  const value = await fixture(true);
+  await value.controller.recover("task");
+  const root = value.store.currentSession("task", "root")!;
+  value.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET launch_owner_pid = ?, launch_owner_start_time = NULL WHERE id = ?").run(process.pid, root.id));
+  await value.controller.cancel("task");
+  expect(value.harness.stopped).toContain(root.nativeSessionId);
+  expect(await value.store.pendingStops("task")).toHaveLength(0);
 });

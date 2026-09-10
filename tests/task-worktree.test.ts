@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
+import { taskProcessEnvironment, sessionProcessEnvironment, stopSessionProcesses, executionProcessEnvironment, stopExecutionProcesses } from "../src/platform/process-manager.js";
 import { runCommand } from "../src/platform/command-runner.js";
 import { prepareTaskWorktree, removeTaskWorktree } from "../src/tasks/worktree.js";
 
@@ -120,4 +121,62 @@ test("archive stops detached worktree commands while preserving unrelated proces
   await expect(removeTaskWorktree(intent, worktree, false, () => {})).resolves.toEqual({ status: "cleaned" });
   expect(() => process.kill(owned.pid!, 0)).toThrow();
   expect(() => process.kill(unrelated.pid!, 0)).not.toThrow();
+});
+
+test.each([false, true])("archive finds a detached command outside the worktree, already removed=%s", async removed => {
+  const intent = await fixture();
+  const worktree = await prepareTaskWorktree(intent);
+  const owned = spawn("sleep", ["300"], { cwd: intent.repositoryPath, env: { ...process.env, ...taskProcessEnvironment(worktree.path) }, detached: true, stdio: "ignore" });
+  const marker = taskProcessEnvironment(worktree.path).FORGE_TASK_PROCESS_OWNER!;
+  const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", `FORGE_TASK_PROCESS_OWNER=${marker}`], { cwd: intent.repositoryPath, stdio: "ignore" });
+  await Promise.all([once(owned, "spawn"), once(unrelated, "spawn")]);
+  cleanups.unshift(async () => { owned.kill("SIGKILL"); unrelated.kill("SIGKILL"); });
+  if (removed) await git(intent.repositoryPath, ["worktree", "remove", worktree.path]);
+  await expect(removeTaskWorktree(intent, worktree, false, () => {})).resolves.toEqual({ status: removed ? "already_absent" : "cleaned" });
+  expect(() => process.kill(owned.pid!, 0)).toThrow();
+  expect(() => process.kill(unrelated.pid!, 0)).not.toThrow();
+});
+
+test("retired session cleanup preserves another session in the same worktree", async () => {
+  const intent = await fixture();
+  const worktree = await prepareTaskWorktree(intent);
+  const retiredDirectory = join(intent.repositoryPath, "retired-session");
+  const currentDirectory = join(intent.repositoryPath, "current-session");
+  const retired = spawn("sleep", ["300"], { cwd: intent.repositoryPath, env: { ...process.env, ...taskProcessEnvironment(worktree.path), ...sessionProcessEnvironment(retiredDirectory) }, detached: true, stdio: "ignore" });
+  const current = spawn("sleep", ["300"], { cwd: intent.repositoryPath, env: { ...process.env, ...taskProcessEnvironment(worktree.path), ...sessionProcessEnvironment(currentDirectory) }, detached: true, stdio: "ignore" });
+  await Promise.all([once(retired, "spawn"), once(current, "spawn")]);
+  cleanups.unshift(async () => { retired.kill("SIGKILL"); current.kill("SIGKILL"); });
+  await stopSessionProcesses(retiredDirectory);
+  expect(() => process.kill(retired.pid!, 0)).toThrow();
+  expect(() => process.kill(current.pid!, 0)).not.toThrow();
+});
+
+test("dispatch recovery stops the old execution without stopping its replacement", async () => {
+  const intent = await fixture();
+  const runtime = join(intent.repositoryPath, "session");
+  const launch = (generation: string) => spawn("sleep", ["300"], { cwd: intent.repositoryPath, env: { ...process.env, ...sessionProcessEnvironment(runtime), ...executionProcessEnvironment(runtime, generation) }, detached: true, stdio: "ignore" });
+  const old = launch("old");
+  const replacement = launch("replacement");
+  await Promise.all([once(old, "spawn"), once(replacement, "spawn")]);
+  cleanups.unshift(async () => { old.kill("SIGKILL"); replacement.kill("SIGKILL"); });
+  await stopExecutionProcesses(runtime, "old");
+  expect(() => process.kill(old.pid!, 0)).toThrow();
+  expect(() => process.kill(replacement.pid!, 0)).not.toThrow();
+});
+
+test("cleanup also stops a detached child created during shutdown", async () => {
+  const intent = await fixture();
+  const runtime = join(intent.repositoryPath, "session");
+  const pidFile = join(intent.repositoryPath, "child-pid");
+  const script = `const {spawn}=require("node:child_process"); const {writeFileSync}=require("node:fs"); process.on("SIGTERM",()=>{const child=spawn("sleep",["300"],{detached:true,stdio:"ignore"}); writeFileSync(process.argv[1],String(child.pid)); child.unref(); process.exit(0);}); console.log("ready"); setInterval(()=>{},1000);`;
+  const parent = spawn(process.execPath, ["-e", script, pidFile], { cwd: intent.repositoryPath, env: { ...process.env, ...sessionProcessEnvironment(runtime) }, stdio: ["ignore", "pipe", "ignore"] });
+  await once(parent.stdout!, "data");
+  cleanups.unshift(async () => {
+    parent.kill("SIGKILL");
+    try { process.kill(Number(await readFile(pidFile, "utf8")), "SIGKILL"); } catch {}
+  });
+  await stopSessionProcesses(runtime);
+  const childPid = Number(await readFile(pidFile, "utf8"));
+  expect(() => process.kill(parent.pid!, 0)).toThrow();
+  expect(() => process.kill(childPid, 0)).toThrow();
 });

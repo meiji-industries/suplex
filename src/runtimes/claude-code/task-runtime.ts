@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { claudeAssistantText, claudeConfigDirectory, claudeExecution, claudeMessageEntries, ClaudeStreamInitSchema, ClaudeStreamResultSchema, claudeUnsettledToolIds, findClaudeTranscript, parseJsonLines, type ClaudeStreamResult } from "./transcript.js";
 import { resolveClaudeExecutable } from "../../platform/executable-resolver.js";
-import { compareProcessIdentity, inspectProcessOnce, stopOwnedProcesses, type OwnedProcess } from "../../platform/process-manager.js";
+import { compareProcessIdentity, inspectProcessOnce, stopOwnedProcesses, taskProcessEnvironment, sessionProcessEnvironment, executionProcessEnvironment, stopSessionProcesses, stopExecutionProcesses, type OwnedProcess } from "../../platform/process-manager.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
 import { shellQuote, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
 import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
@@ -202,7 +202,7 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
     let exited = false;
     let child: ChildProcess;
     try {
-      child = spawn(executable, args, { cwd: scope.directory, env: withWorktreeMiseTrust(guard?.env ?? process.env, scope.directory), detached: true, stdio: [promptFile.fd, log.fd, stderr.fd] });
+      child = spawn(executable, args, { cwd: scope.directory, env: { ...withWorktreeMiseTrust(guard?.env ?? process.env, scope.directory), ...taskProcessEnvironment(scope.directory), ...sessionProcessEnvironment(runtimeDirectory), ...executionProcessEnvironment(runtimeDirectory, generation) }, detached: true, stdio: [promptFile.fd, log.fd, stderr.fd] });
       child.once("exit", () => { exited = true; });
       await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
     } finally { await Promise.all([promptFile.close(), log.close(), stderr.close()]); }
@@ -226,13 +226,15 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
     PromptDispatchAttemptSchema.parse(attempt);
     const record = await readClaudeTurnRecord(join(this.runtimeDirectory(scope), `dispatch-${attempt.serverGeneration}.json`));
     if (record && await claudeTurnRunning(record)) await stopOwnedProcesses({ version: 1, processes: [ownedTurn(record)] });
+    await stopExecutionProcesses(this.runtimeDirectory(scope), attempt.serverGeneration);
     return this.observe(scope, { ...intent, dispatch: "not_submitted" }, attempt);
   }
 
   async stop(scope: Pick<TaskScope, "id">, nativeSessionId: string | null): Promise<void> {
     const record = await readClaudeTurnRecord(join(this.runtimeDirectory(scope), "turn.json"));
-    if (!record || nativeSessionId !== null && record.sessionID !== nativeSessionId) return;
-    if (await claudeTurnRunning(record)) await stopOwnedProcesses({ version: 1, processes: [ownedTurn(record)] });
+    if (record && nativeSessionId !== null && record.sessionID !== nativeSessionId) return;
+    if (record && await claudeTurnRunning(record)) await stopOwnedProcesses({ version: 1, processes: [ownedTurn(record)] });
+    await stopSessionProcesses(this.runtimeDirectory(scope));
   }
 
   async resultText(scope: TaskScope, observation: PromptObservation): Promise<string> {

@@ -72,6 +72,6 @@ it("never signals a reused server PID", async () => {
     inspect: async () => ({ pid: reference.pid, ...reference.processIdentity, startTime: "replacement" }),
     signal: async pid => { signalled.push(pid); },
     signalGroup: async pid => { signalled.push(pid); },
-  })).rejects.toThrow("wrong start time");
+  })).resolves.toBeUndefined();
   expect(signalled).toEqual([]);
 });

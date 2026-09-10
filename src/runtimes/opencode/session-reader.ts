@@ -75,7 +75,6 @@ export class OpenCodeSessionReader implements NativeSessionReader {
 
   async archive(session: TaskSession) {
     const server = await readOpenCodeServer(taskSessionRuntimeDirectory(this.databasePath, session.id));
-    if (!server && session.nativeSessionId) throw new Error("The task server identity is missing. Confirm that its commands have stopped before cleanup.");
     // ponytail: a bare pid check mistakes a reused pid for the server; compare identity like startup does
     if (server && await openCodeServerRunning(server)) {
       const statuses = await openCodeServerClient(server).getStatus(server.directory);

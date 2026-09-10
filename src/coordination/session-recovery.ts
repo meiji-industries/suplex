@@ -1,3 +1,4 @@
+import { stopWorktreeProcesses } from "../tasks/archive/processes.js";
 import { StructuredLogger } from "../platform/logging.js";
 import { z } from "zod";
 import type { ModelPricingCatalog } from "../profiles/model-pricing.js";
@@ -25,14 +26,21 @@ export type SessionRecoveryDependencies = {
 
 export async function stopRetiredSessions(dependencies: Pick<SessionRecoveryDependencies, "store" | "harness">, taskId: string): Promise<void> {
   const failures: unknown[] = [];
+  const stopped: TaskSession[] = [];
   for (const session of await dependencies.store.pendingStops(taskId)) {
     try {
       await dependencies.harness.stop({ id: session.id }, session.nativeSessionId);
-      dependencies.store.completeStop(session.id);
+      stopped.push(session);
     } catch (error) {
       failures.push(error);
     }
   }
+  const control = dependencies.store.get(taskId);
+  const outstanding = dependencies.store.sessions(taskId).filter(session => session.stopRequestedAt && !session.stoppedAt);
+  if (!failures.length && control.status === "cancelled" && control.worktree && stopped.length > 0 && outstanding.length === stopped.length) {
+    await stopWorktreeProcesses(control.worktree.path);
+  }
+  for (const session of stopped) dependencies.store.completeStop(session.id);
   if (failures.length) {
     const error = new AggregateError(failures, "Some agent sessions could not be stopped");
     if (["cancelled", "delivered"].includes(dependencies.store.get(taskId).status)) throw error;

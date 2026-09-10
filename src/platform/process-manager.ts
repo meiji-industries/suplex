@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 
@@ -303,4 +304,75 @@ export async function readProcessRegistry(filename: string): Promise<ProcessRegi
     throw new Error(`Forge process registry is invalid: ${parsed.error.issues[0]?.message ?? "unknown error"}`);
   }
   return parsed.data;
+}
+
+export function taskProcessEnvironment(directory: string): Record<string, string> {
+  let canonical = resolve(directory);
+  try { canonical = realpathSync(canonical); } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+  }
+  return { FORGE_TASK_PROCESS_OWNER: createHash("sha256").update(canonical).digest("hex") };
+}
+
+export function sessionProcessEnvironment(directory: string): Record<string, string> {
+  return { FORGE_SESSION_PROCESS_OWNER: taskProcessEnvironment(directory).FORGE_TASK_PROCESS_OWNER! };
+}
+
+export function executionProcessEnvironment(runtimeDirectory: string, generation: string): Record<string, string> {
+  return { FORGE_EXECUTION_PROCESS_OWNER: taskProcessEnvironment(join(runtimeDirectory, generation)).FORGE_TASK_PROCESS_OWNER! };
+}
+
+export async function taskOwnedProcessIds(directory: string, scope: "task" | "session" | "execution" = "task"): Promise<number[]> {
+  const key = `FORGE_${scope.toUpperCase()}_PROCESS_OWNER`;
+  const marker = taskProcessEnvironment(directory).FORGE_TASK_PROCESS_OWNER;
+  // Process environments may contain credentials. Parse locally without logging the output.
+  const [plain, environments] = await Promise.all([
+    execFileAsync("ps", ["ww", "-axo", "pid=,command="], { maxBuffer: 64 * 1024 * 1024 }),
+    execFileAsync("ps", ["eww", "-axo", "pid=,command="], { maxBuffer: 64 * 1024 * 1024 }),
+  ]);
+  const commands = new Map(plain.stdout.split("\n").map(line => {
+    const match = line.match(/^\s*(\d+)\s+(.*)$/);
+    return [Number(match?.[1]), match?.[2] ?? ""] as const;
+  }));
+  const pattern = new RegExp(`(?:^|\\s)${key}=${marker}(?:\\s|$)`);
+  const owned: number[] = [];
+  for (const line of environments.stdout.split("\n")) {
+    const match = line.match(/^\s*(\d+)\s+(.*)$/);
+    const pid = Number(match?.[1]);
+    const command = commands.get(pid);
+    const expanded = match?.[2];
+    if (pid !== process.pid && command && expanded?.startsWith(command) && pattern.test(expanded.slice(command.length))) owned.push(pid);
+  }
+  return owned;
+}
+
+export async function stopDiscoveredProcesses(discover: () => Promise<Iterable<number>>): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const identities: OwnedProcess[] = [];
+    for (const pid of await discover()) {
+      const identity = await inspectProcessOnce(pid);
+      if (identity && identity.ownerUid === process.getuid!()) identities.push({ ...identity, name: "task command", startedAt: identity.startTime });
+    }
+    const confirmed = new Set(await discover());
+    const owned = identities.filter(identity => confirmed.has(identity.pid));
+    if (!owned.length) return;
+    if (Date.now() >= deadline) throw new Error("Task commands are still running after cleanup. Cleanup will be retried.");
+    await stopOwnedProcesses({ version: 1, processes: owned }, {
+      inspect: async pid => {
+        const current = await inspectProcessOnce(pid);
+        const original = owned.find(identity => identity.pid === pid);
+        return original && compareProcessIdentity(original, current).kind === "exact_match" ? current : undefined;
+      },
+      signal: defaultProcessController.signal,
+    });
+  }
+}
+
+export async function stopSessionProcesses(runtimeDirectory: string): Promise<void> {
+  await stopDiscoveredProcesses(() => taskOwnedProcessIds(runtimeDirectory, "session"));
+}
+
+export async function stopExecutionProcesses(runtimeDirectory: string, generation: string): Promise<void> {
+  await stopDiscoveredProcesses(() => taskOwnedProcessIds(join(runtimeDirectory, generation), "execution"));
 }

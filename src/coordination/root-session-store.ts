@@ -211,7 +211,7 @@ export class TaskControlStore {
     const stoppedOwners = await Promise.all(sessions.map(async session => {
       if (session.launchOwnerPid === null) return true;
       const owner = await this.inspectOwner(session.launchOwnerPid);
-      return owner.kind === "absent" || owner.kind === "running" && session.launchOwnerStartTime !== null && owner.startTime !== session.launchOwnerStartTime;
+      return owner.kind === "absent" || owner.kind === "running" && (session.launchOwnerStartTime === null || owner.startTime !== session.launchOwnerStartTime);
     }));
     return sessions.filter((_, index) => stoppedOwners[index]);
   }

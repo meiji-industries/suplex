@@ -1,0 +1,227 @@
+---
+name: forge
+version: 1
+description: Work with Forge tasks from Hermes as a paired agent. Use when the person you work for asks to create, find, check, or command a task in Forge, or to confirm this profile's Forge pairing.
+---
+
+# Forge
+
+Forge owns task intent and authorization. This skill only asks Forge to do
+things; it never decides task rules locally, and it never reads Forge's
+storage.
+
+Two transports, same API:
+
+- **Prefer the Forge MCP tools** when the bridge is registered (`forge mcp`,
+  or `pnpm run forge mcp` from a source checkout). Check for tools named
+  `forge_whoami`, `forge_capabilities`, `forge_list_tasks`, `forge_get_task`,
+  `forge_get_task_delivery`, `forge_create_task`, `forge_command_task`.
+- **Otherwise use `forge_client.py`** in this directory. It is standard
+  library only and speaks the same routes.
+
+```python
+from forge_client import ForgeClient, ForgeError, ForgeCredentialInvalid
+client = ForgeClient()            # reads the environment at call time
+identity = client.whoami()
+```
+
+## Guardrails
+
+- A task you create stays in `backlog`. Send `start_task` only when the person
+  you work for explicitly asks to start it.
+- Never approve, release, merge, cancel, archive, or make any other
+  consequential commitment unless Forge reports the command as permitted **and**
+  the requesting person approved that exact action. `start_task`,
+  `cancel_task`, and `archive_task` are not reversible by this agent.
+- Never scrape the Forge web UI, and never read the Forge SQLite database,
+  worktrees, logs, or artifact files. The HTTP API and the MCP tools are the
+  only supported reads.
+- Never print, log, store, or repeat the credential or a pairing code. Report
+  outcomes, not secrets.
+
+## Configuration
+
+Two variables, read from the environment at runtime and kept in the active
+profile's `$HERMES_HOME/.env`:
+
+- `FORGE_BASE_URL` — the Forge origin, for example `http://127.0.0.1:4111`.
+- `FORGE_AGENT_CREDENTIAL` — the paired-agent credential.
+
+Never pass either on a command line. Every Forge request carries
+`Authorization: Bearer <credential>`; `forge_client.py` adds it for you.
+
+## Pairing and credential rotation
+
+An administrator creates the agent in Forge admin and hands over a one-time
+pairing code. To pair, or to re-pair after a rotation:
+
+1. `POST {FORGE_BASE_URL}/api/hermes/pairing/exchange` with
+   `{"pairingCode": "…", "profileId": "<this Hermes profile>"}`. This is the
+   only unauthenticated route the skill uses.
+2. Store `credential` from the response as `FORGE_AGENT_CREDENTIAL` in
+   `$HERMES_HOME/.env`, replacing any existing value rather than adding a
+   duplicate. Keep the file readable by the current user only.
+3. Verify with `python3 smoke_test.py` in this directory.
+
+Do not echo the pairing code, the raw exchange response, or the credential.
+
+**Rotation.** When any call fails with HTTP 401 and code `credential_invalid`,
+the credential is revoked or replaced. Do not retry it. Tell the person you
+work for that Forge rejected the credential and that an administrator must
+issue a new pairing code (Forge admin, "rotate" on this agent), then repeat the
+exchange above with the new code and the same `profileId`. `forge_client.py`
+raises `ForgeCredentialInvalid` with exactly that instruction. There is no
+agent-side rotation endpoint: issuing codes is an administrator action.
+
+## Capability discovery
+
+Call `forge_capabilities` (`GET /api/hermes/capabilities`) before assuming any
+command exists. It reports `apiVersion`, `capabilities`, `autonomousCommands`,
+`unavailableCommands`, and `humanOnlyRecords`. A deployment can leave the agent
+delivery surface off, in which case `capabilities.delivery` and
+`capabilities.merge` are `false` and the delivery routes are not registered at
+all. Treat the served list as authoritative and never call a command it omits.
+
+`GET /api/hermes/openapi.json` returns the authenticated runtime contract if
+you need the exact request shapes.
+
+**Not available to this agent, in any transport:**
+
+- Answering a human question. `answer_human_question` does not exist; human
+  answers are a human-only record. Surface the question to the person you work
+  for and let them answer in Forge.
+- `deliver_task` — delivery is not an agent command.
+- Merging, when `capabilities.merge` is `false`.
+- Editing a task's title or description after creation, deleting a task, and
+  reading session transcripts or artifacts: no route exists. Do not attempt a
+  workaround.
+- `capabilities.pagination` reports `supported: false`. `GET /api/hermes/tasks`
+  does accept `cursor` and returns `nextCursor`; follow the cursor if a listing
+  is truncated, and do not rely on the capability flag for this.
+
+## Project selection
+
+`forge_whoami` (`GET /api/hermes/me`) returns the agent identity and the
+`projects` this agent was granted. Forge's persisted grants are authoritative:
+
+- One granted project — use it.
+- Several — ask the person you work for which one. Do not guess.
+- None — stop and report that project access is required. Do not create a task.
+
+`projectId` is always explicit in a create request. Forge rejects a project
+this agent was not granted with a non-enumerating `404`.
+
+## Before you create: list first
+
+Duplicate tasks are expensive. Before creating, list existing tasks for the
+project and check for one that already covers the request:
+
+```python
+existing = client.list_tasks(projectId=project_id, limit=50)["tasks"]
+```
+
+Useful filters: `status` (`backlog`, `active`, `waiting_human`, `cancelled`,
+`delivered`), `archived`, `attention`, `blocker`, `updatedSince`, and `filter`
+(`stale_delivery`, `conflicting_pull_request`, `failed_checks`,
+`pending_review`, `blocked_by_dependency`, `not_integrated`). If a matching
+task exists, report it instead of creating another.
+
+## Creating a task
+
+`POST /api/hermes/tasks` creates a **backlog** task and never starts execution.
+
+```python
+task = client.create_task(project_id, "Add saved searches", "Users want …")
+```
+
+`idempotencyKey` is required. `forge_client.py` derives it from the payload, so
+a retry of the same request reuses the key and a changed payload gets a new
+one. Keep that property whichever transport you use:
+
+- Same request, retried after a timeout or a `5xx` → **same key**. Forge
+  returns `200` with the task it already created.
+- Different title, description, or project → **new key**. Reusing a key for a
+  different payload fails with `409 idempotency_conflict`, which means your key
+  is wrong, not that the task is wrong.
+
+Optional fields Forge accepts: `dependsOn`, `images`, `source`, `workflowId` or
+`templateId` (never both), `rootProfileId`, `workerProfileId`,
+`advisorProfileIds`, `deliveryTarget`, `runProjectTests`, `visualEvidence`.
+Send them only when the project policy allows them; omitting a workflow and a
+template uses the policy default. Omit `description` to keep a template's
+description; sending it, even as `""`, overrides it. Never send local paths,
+URLs, credentials, or file references.
+
+`PUT /api/hermes/tasks/{taskId}/dependencies` replaces `dependsOn` on an
+existing task.
+
+## Status polling
+
+`GET /api/hermes/tasks/{taskId}` returns the task with `status`, `revision`,
+`permittedCommands`, `blocker`, `humanQuestion`, `workflowStage`, `delivery`,
+`integration`, and `actionRequired`.
+
+Poll with backoff, not in a tight loop — `client.poll_task(task_id, until=…)`
+doubles its delay up to 60 seconds. Over MCP, pass `knownRevision` to
+`forge_get_task`: an unchanged task answers `{"unchanged": true, "revision":
+"…"}` and costs nothing.
+
+## Lifecycle commands
+
+`POST /api/hermes/tasks/{taskId}/commands` with `command`, the task's current
+`revision`, an `idempotencyKey`, and `note` only for `send_task_note`.
+
+Commands: `start_task`, `cancel_task`, `archive_task`, `unarchive_task`,
+`duplicate_task`, `send_task_note`, `recheck_delivery_wait`. Send only what the
+task's `permittedCommands` lists.
+
+```python
+task = client.get_task(task_id)
+if "send_task_note" in task["permittedCommands"]:
+    client.command_task(task_id, "send_task_note", task["revision"], note="…")
+```
+
+Failures worth handling:
+
+- `412 revision_stale` — someone changed the task. Read it again and retry with
+  the current `revision`. Never invent one.
+- `409 command_in_progress` — a command is running. Wait and re-read.
+- `409 illegal_command` / `409 task_unavailable` — the command does not apply
+  to this task now. Report it; do not force it.
+
+## Reading approval, blocked, waiting_human, and stale answers
+
+- **`status: "waiting_human"`** — Forge is waiting for a person, not for you.
+  Read `humanQuestion` and `blocker`. If `blocker.kind` is `"human_question"`,
+  relay the question to the person you work for. You cannot answer it.
+- **`blocker.kind: "delivery_wait"`** — Forge is waiting on delivery.
+  `blocker.reason` is `checks`, `mergeability`, `merge_queue`, or
+  `observation`. `recheck_delivery_wait` asks Forge to look again; it is safe
+  and does not commit anything.
+- **`actionRequired`** — the authoritative read of who must act next. `owner`
+  is `agent`, `human`, `forge`, or `upstream`. Act only when `owner` is
+  `agent`, and even then stop and ask first if `humanApprovalRequired` is
+  `true`. `suggestedCommands` are suggestions, not authorization.
+- **`reasonCode`** values: `conflicting_pull_request`, `failed_checks`,
+  `pending_checks`, `pending_review`, `stale_delivery`, `pull_request_missing`,
+  `blocked_by_dependency`, `waiting_human`, `observation_unavailable`.
+- **Stale.** `stale_delivery` means the delivered branch fell behind its base;
+  it is routine and is repaired inside Forge, not by this agent.
+  `observation_unavailable` (`integration.observation == "unavailable"`, with
+  `observationReason`) means Forge could not read GitHub — the state is
+  unknown, not bad. Report the reason and re-read later. `revision_stale` on a
+  command is a different thing: it means your copy of the task is old.
+- **`dependsOn` / `blocked_by_dependency`** — the task waits on another task.
+  Report the blocking task; do not cancel or force anything.
+
+## Reporting back
+
+Report the agent name and ID, the profile ID, the granted project IDs, the task
+issue key or ID, and the status. Never the pairing code or the credential.
+
+## Verify this skill
+
+```bash
+python3 forge_client.py --self-check   # redaction and idempotency keys, no server
+python3 smoke_test.py                  # live pairing check against Forge
+```

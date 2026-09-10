@@ -18,3 +18,4 @@ desktop/release/
 /.opencode/package-lock.json
 /.opencode/bun.lock
 /.opencode/bun.lockb
+__pycache__/

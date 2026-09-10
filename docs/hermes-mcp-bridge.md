@@ -5,6 +5,9 @@ API as typed tools. It maps each tool onto an existing `/api/hermes/*` route.
 It holds no task rules of its own: Forge stays the sole authority on grants,
 permitted commands, idempotency, and revisions.
 
+The paired-agent skill that uses these tools, and its HTTP fallback client,
+ship in `hermes/skills/forge/`. See `docs/hermes-skill.md`.
+
 ## Local stdio configuration
 
 The bridge reads two variables from the process environment and nothing else.

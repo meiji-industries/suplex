@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { claudeSessionBusy } from "./task-runtime.js";
-import { claudeConfigDirectory, claudeExecution, claudeMessageEntries, claudeUsage, findClaudeTranscript, parseJsonLines, readClaudeTranscript } from "./transcript.js";
+import { claudeConfigDirectory, claudeExecution, claudeHistoryMessages, claudeMessageEntries, claudeUsage, findClaudeTranscript, parseJsonLines, readClaudeTranscript } from "./transcript.js";
 import type { TaskSession } from "../../tasks/control.js";
 import { taskSessionRuntimeDirectory, type NativeSessionReader } from "../task-harness.js";
 import type { ModelPricingCatalog } from "../../profiles/model-pricing.js";
@@ -16,6 +16,11 @@ export class ClaudeCodeSessionReader implements NativeSessionReader {
 
   private busy(session: TaskSession): Promise<boolean> {
     return claudeSessionBusy(taskSessionRuntimeDirectory(this.databasePath, session.id));
+  }
+
+  async history(session: TaskSession) {
+    if (!session.nativeSessionId) return [];
+    return claudeHistoryMessages(await readClaudeTranscript(session.nativeSessionId, this.configDirectory));
   }
 
   async execution(session: TaskSession) {

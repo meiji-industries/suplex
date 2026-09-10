@@ -1,10 +1,12 @@
 import { readdir, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { estimateUsageCost, modelPricingKey, type ModelPricingCatalog } from "../../profiles/model-pricing.js";
 import { TaskPlanItemSchema, type TaskExecution } from "../../tasks/execution/contracts.js";
 import { emptyTokens, TaskUsageSchema, type TaskUsage } from "../../tasks/usage.js";
+import type { NativeHistoryMessage } from "../../tasks/history/contracts.js";
 
 // Claude Code owns the transcript at <config dir>/projects/<project>/<session>.jsonl
 // and the stream-json output of every headless turn. Forge reads both; it
@@ -108,6 +110,36 @@ function resultText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return content === undefined ? "" : JSON.stringify(content);
   return content.map(block => { const text = TextBlockSchema.safeParse(block); return text.success ? text.data.text : JSON.stringify(block); }).join("\n");
+}
+
+export function claudeHistoryMessages(entries: readonly ClaudeMessageEntry[]): NativeHistoryMessage[] {
+  const results = new Map<string, ToolResultBlock>();
+  for (const entry of entries) for (const block of blocks(entry)) if (block.type === "tool_result") results.set(block.tool_use_id, block);
+  return entries.flatMap(entry => {
+    const content: NativeHistoryMessage["content"] = [];
+    for (const block of blocks(entry)) {
+      if (block.type === "text") {
+        const identity = createHash("sha256").update(block.text).digest("hex").slice(0, 16);
+        content.push({ id: `${entry.uuid}:text:${identity}`, type: "text", text: block.text });
+        continue;
+      }
+      if (block.type !== "tool_use") continue;
+      const result = results.get(block.id);
+      const text = result ? resultText(result.content) : null;
+      content.push({
+        id: block.id,
+        type: "tool",
+        name: block.name,
+        status: result ? result.is_error ? "error" : "completed" : "running",
+        input: block.input,
+        output: result && !result.is_error ? text : null,
+        error: result?.is_error ? text : null,
+      });
+    }
+    if (!content.length) return [];
+    const createdAt = entry.timestamp ? Date.parse(entry.timestamp) : Number.NaN;
+    return [{ id: entry.uuid, role: entry.type, createdAt: Number.isFinite(createdAt) ? createdAt : null, content }];
+  });
 }
 
 const PlanInputSchema = z.object({ todos: z.array(z.object({ content: z.string(), status: z.enum(["pending", "in_progress", "completed", "cancelled"]) }).passthrough()) });

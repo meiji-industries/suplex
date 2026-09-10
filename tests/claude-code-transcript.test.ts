@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { claudeExecution, claudeMessageEntries, claudeUnsettledToolIds, claudeUsage, findClaudeTranscript, parseJsonLines, readClaudeTranscript } from "../src/runtimes/claude-code/transcript.js";
+import { claudeExecution, claudeHistoryMessages, claudeMessageEntries, claudeUnsettledToolIds, claudeUsage, findClaudeTranscript, parseJsonLines, readClaudeTranscript } from "../src/runtimes/claude-code/transcript.js";
 import type { ModelPricing } from "../src/profiles/model-pricing.js";
 
 const usage = { input_tokens: 9, output_tokens: 82, cache_read_input_tokens: 5, cache_creation_input_tokens: 6053, output_tokens_details: { thinking_tokens: 74 } };
@@ -31,6 +31,19 @@ test("execution reads tool results, plans, and unsettled tools from a transcript
   expect(execution.plan).toEqual([{ content: "Inspect", status: "completed" }, { content: "Reply", status: "in_progress" }]);
   expect(claudeUnsettledToolIds(entries)).toEqual([]);
   expect(claudeUnsettledToolIds(entries.slice(0, 5))).toEqual(["toolu_3"]);
+});
+
+test("history omits thinking and joins completed, failed, and running tools by native id", () => {
+  const entries = claudeMessageEntries(parseJsonLines(text));
+  const history = claudeHistoryMessages(entries.slice(0, 5));
+  expect(history.map(message => message.id)).toEqual(["u1", "a2", "a3"]);
+  expect(history[0]).toMatchObject({ role: "user", createdAt: Date.parse("2026-09-07T15:37:02.162Z"), content: [{ type: "text", text: "Read the id file" }] });
+  expect(history[1]?.content).toEqual([
+    { id: "toolu_1", type: "tool", name: "Read", status: "completed", input: { file_path: "/repo/id" }, output: "1\tabc\n", error: null },
+    expect.objectContaining({ id: "toolu_2", status: "completed", output: "Todos have been modified" }),
+  ]);
+  expect(history[2]?.content).toEqual([{ id: "toolu_3", type: "tool", name: "Bash", status: "running", input: { command: "false" }, output: null, error: null }]);
+  expect(claudeHistoryMessages(entries)[2]?.content).toEqual([{ id: "toolu_3", type: "tool", name: "Bash", status: "error", input: { command: "false" }, output: null, error: "exit 1" }]);
 });
 
 test("usage records one entry per API response, keyed by the prompt that started the turn", () => {

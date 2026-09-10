@@ -7,6 +7,7 @@ import type { PromptDispatchAttempt, TaskSession } from "../tasks/control.js";
 import type { TaskExecution } from "../tasks/execution/contracts.js";
 import type { TaskUsage } from "../tasks/usage.js";
 import type { ModelPricingCatalog } from "../profiles/model-pricing.js";
+import type { NativeHistoryMessage } from "../tasks/history/contracts.js";
 import type { AdvisorRole, WorkflowId } from "../coordination/workflows.js";
 
 // The prompt intent and observation vocabulary was designed against OpenCode
@@ -135,6 +136,8 @@ export class HarnessRouter implements TaskHarness {
 
 /** Read-only observation of a native session for the UI, analytics, diagnostics, and Archive. */
 export interface NativeSessionReader {
+  /** Reads the authoritative native conversation snapshot without changing session state. */
+  history(session: TaskSession): Promise<NativeHistoryMessage[]>;
   execution(session: TaskSession): Promise<{ tools: TaskExecution["sessions"][number]["tools"]; plan: TaskExecution["sessions"][number]["plan"]; limited: boolean }>;
   /** Reads one admitted native turn. Stored completion observations are not required for correlation. */
   turnEvidence(session: TaskSession, turnId: string): Promise<{ tools: TaskExecution["sessions"][number]["tools"]; limitation: string | null }>;

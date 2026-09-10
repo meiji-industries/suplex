@@ -2,7 +2,8 @@ import { afterEach, expect, test, vi } from "vitest";
 import * as commands from "../src/platform/command-runner.js";
 import * as executables from "../src/platform/executable-resolver.js";
 import { readOpenCodeHistory } from "../src/runtimes/opencode/session-history.js";
-import { OpenCodeSessionReader } from "../src/runtimes/opencode/session-reader.js";
+import { historyFromOpenCodeMessages, OpenCodeSessionReader } from "../src/runtimes/opencode/session-reader.js";
+import { OpenCodeMessageEnvelopeSchema } from "../src/runtimes/opencode/contracts.js";
 import type { TaskSession } from "../src/tasks/control.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -27,4 +28,25 @@ test("an export from another session cannot replace spend history", async () => 
 test("native machine output survives an immediate process exit after a large write", async () => {
   const stdout = await commands.readCommandOutput(process.execPath, ["-e", "require('node:fs').writeSync(1, JSON.stringify({text: 'x'.repeat(200000)})); process.exit(0)"]);
   expect(JSON.parse(stdout).text).toHaveLength(200000);
+});
+
+test("history maps stable text and tool identities with complete native output", () => {
+  const output = "x".repeat(100_000);
+  const messages = [
+    OpenCodeMessageEnvelopeSchema.parse({
+      info: { id: "msg_user", sessionID: "ses_old", role: "user", time: { created: 10 }, agent: "forge-worker", model: { providerID: "openai", modelID: "model" } },
+      parts: [{ id: "prt_user", type: "text", text: "Inspect the repository" }],
+    }),
+    OpenCodeMessageEnvelopeSchema.parse({
+      ...message,
+      parts: [{ id: "prt_text", type: "text", text: "Complete" }, { id: "prt_tool", type: "tool", callID: "call_1", tool: "read", state: { status: "completed", input: { path: "/repo/file" }, output } }],
+    }),
+  ];
+  expect(historyFromOpenCodeMessages([messages[1]!, messages[0]!])).toEqual([
+    { id: "msg_user", role: "user", createdAt: 10, content: [{ id: "prt_user", type: "text", text: "Inspect the repository" }] },
+    { id: "msg_result", role: "assistant", createdAt: 100, content: [
+      { id: "prt_text", type: "text", text: "Complete" },
+      { id: "prt_tool", type: "tool", name: "read", status: "completed", input: { path: "/repo/file" }, output, error: null },
+    ] },
+  ]);
 });

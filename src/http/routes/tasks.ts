@@ -3,19 +3,21 @@ import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 import { AnalyticsResponseSchema, TaskCostsResponseSchema } from "../../tasks/analytics/contracts.js";
 import { usageMetrics } from "../../tasks/analytics/metrics.js";
-import type { TaskService } from "../../tasks/tasks.js";
+import { TaskFailure, type TaskService } from "../../tasks/tasks.js";
 import type { TaskHost } from "../../tasks/host.js";
 import type { ForgeConfig } from "../../platform/config.js";
 import { readTaskAgentStatuses } from "../../tasks/agent-status.js";
 import { TaskAgentsResponseSchema, TaskArchiveBodySchema, TaskArchiveResponseSchema } from "../contracts/tasks.js";
 import { readTaskChecks, readTaskDiff } from "../../tasks/inspection.js";
 import { readTaskExecution } from "../../tasks/execution/execution.js";
+import { readTaskSessionHistory } from "../../tasks/history/read.js";
+import { SessionHistoryCursorError } from "../../tasks/history/history.js";
 import { TaskTimelineResponseSchema } from "../../tasks/timeline/contracts.js";
 import { TaskExecutionResponseSchema } from "../../tasks/execution/contracts.js";
 import { TaskChecksResponseSchema, TaskDiffResponseSchema } from "../contracts/tasks.js";
 import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { normalizeWorkflowInput, WorkflowInputFailure } from "../../coordination/workflows.js";
-import { MAX_TASK_REQUEST_BYTES, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBlockedByBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskWorkerReplacementBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { MAX_TASK_REQUEST_BYTES, SessionHistoryPageSchema, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBlockedByBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskSessionHistoryParamsSchema, TaskSessionHistoryQuerySchema, TaskWorkerReplacementBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions { tasks: TaskService; host?: Pick<TaskHost, "recover">; config?: Pick<ForgeConfig, "databasePath"> }
 
@@ -41,6 +43,22 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
     const task = tasks.getTask(request.forgeUser.id, request.params.taskId);
     if (!config) return reply.code(503).send({ error: "Agent activity is not available" });
     const result = await readTaskExecution(config.databasePath, tasks.repository.controls.sessions(task.id));
+    tasks.getTask(request.forgeUser.id, task.id);
+    return reply.header("Cache-Control", "private, no-store").send(result);
+  });
+  typed.get("/api/tasks/:taskId/sessions/:sessionId/history", { schema: { params: TaskSessionHistoryParamsSchema, querystring: TaskSessionHistoryQuerySchema, response: { 200: SessionHistoryPageSchema, 503: z.object({ error: z.string() }) } } }, async (request, reply) => {
+    const task = tasks.getTask(request.forgeUser.id, request.params.taskId);
+    const session = tasks.repository.controls.sessions(task.id).find(candidate => candidate.id === request.params.sessionId);
+    if (!session) throw new TaskFailure("Not found", 404);
+    if (!config) return reply.code(503).send({ error: "Session history is not available" });
+    let result;
+    try {
+      result = await readTaskSessionHistory(config.databasePath, session, request.query.before);
+    } catch (error) {
+      if (error instanceof SessionHistoryCursorError) throw new TaskFailure(error.message, 400, "cursor_invalid");
+      request.log.warn({ taskId: task.id, sessionId: session.id, err: error }, "Native session history read failed");
+      return reply.code(503).send({ error: "Session history is not available" });
+    }
     tasks.getTask(request.forgeUser.id, task.id);
     return reply.header("Cache-Control", "private, no-store").send(result);
   });

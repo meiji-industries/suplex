@@ -1,7 +1,8 @@
 import { readOpenCodeHistory } from "./session-history.js";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { OpenCodeClient } from "./client.js";
-import { OpenCodeToolPartSchema, type OpenCodeMessageEnvelope } from "./contracts.js";
+import { OpenCodeTextPartSchema, OpenCodeToolPartSchema, type OpenCodeMessageEnvelope } from "./contracts.js";
 import { openCodeServerClient, openCodeServerRunning, readOpenCodeServer, stopOpenCodeServer, type OpenCodeServerReference } from "./server.js";
 import type { TaskSession } from "../../tasks/control.js";
 import { TaskPlanItemSchema, type TaskExecution } from "../../tasks/execution/contracts.js";
@@ -9,6 +10,7 @@ import { taskSessionRuntimeDirectory, type NativeSessionReader } from "../task-h
 import { taskUsage } from "../../tasks/usage.js";
 import { correlatedAssistants } from "./session.js";
 import type { ModelPricingCatalog } from "../../profiles/model-pricing.js";
+import type { NativeHistoryMessage } from "../../tasks/history/contracts.js";
 
 const messageLimit = 100;
 const ToolDetailsSchema = z.object({ input: z.record(z.string(), z.unknown()).default({}), output: z.string().optional(), error: z.string().optional() });
@@ -34,6 +36,35 @@ export function executionFromMessages(messages: OpenCodeMessageEnvelope[]) {
   return { tools, plan };
 }
 
+export function historyFromOpenCodeMessages(messages: readonly OpenCodeMessageEnvelope[]): NativeHistoryMessage[] {
+  return messages.map((message, position) => ({ message, position })).sort((left, right) => left.message.info.time.created - right.message.info.time.created || left.position - right.position).flatMap(({ message }) => {
+    const content: NativeHistoryMessage["content"] = [];
+    for (const part of message.parts) {
+      const text = OpenCodeTextPartSchema.safeParse(part);
+      if (text.success) {
+        if (text.data.ignored) continue;
+        const fallback = createHash("sha256").update(JSON.stringify(text.data)).digest("hex").slice(0, 16);
+        content.push({ id: text.data.id ?? `${message.info.id}:text:${fallback}`, type: "text", text: text.data.text });
+        continue;
+      }
+      const parsed = OpenCodeToolPartSchema.safeParse(part);
+      if (!parsed.success) continue;
+      const tool = parsed.data;
+      const details = ToolDetailsSchema.parse(tool.state);
+      content.push({
+        id: tool.id ?? `${message.info.id}:${tool.callID}`,
+        type: "tool",
+        name: tool.tool,
+        status: tool.state.status,
+        input: details.input,
+        output: details.output ?? null,
+        error: details.error ?? null,
+      });
+    }
+    return content.length ? [{ id: message.info.id, role: message.info.role, createdAt: message.info.time.created, content }] : [];
+  });
+}
+
 export class OpenCodeSessionReader implements NativeSessionReader {
   constructor(private readonly databasePath: string) {}
 
@@ -41,6 +72,16 @@ export class OpenCodeSessionReader implements NativeSessionReader {
     const server = await readOpenCodeServer(taskSessionRuntimeDirectory(this.databasePath, session.id));
     if (!server || !session.nativeSessionId) throw new Error("Session is not available");
     return { server, client: new OpenCodeClient({ baseUrl: server.baseUrl, password: server.password, timeoutMs: 2000 }), sessionID: session.nativeSessionId };
+  }
+
+  async history(session: TaskSession) {
+    if (!session.nativeSessionId) return [];
+    let messages: OpenCodeMessageEnvelope[];
+    if (session.current) {
+      try { messages = await this.liveMessages(session); }
+      catch { messages = await readOpenCodeHistory(session.nativeSessionId); }
+    } else messages = await readOpenCodeHistory(session.nativeSessionId);
+    return historyFromOpenCodeMessages(messages);
   }
 
   async execution(session: TaskSession) {

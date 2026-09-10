@@ -326,6 +326,20 @@ export async function taskOwnedProcessIds(directory: string, scope: "task" | "se
   const key = `FORGE_${scope.toUpperCase()}_PROCESS_OWNER`;
   const marker = taskProcessEnvironment(directory).FORGE_TASK_PROCESS_OWNER;
   // Process environments may contain credentials. Parse locally without logging the output.
+  if (process.platform === "linux") {
+    const plain = await execFileAsync("ps", ["-eww", "-o", "pid=,command="], { maxBuffer: 64 * 1024 * 1024 });
+    const commands = new Map(plain.stdout.split("\n").map(line => {
+      const match = line.match(/^\s*(\d+)\s+(.*)$/);
+      return [Number(match?.[1]), match?.[2] ?? ""] as const;
+    }));
+    const pattern = `${key}=${marker}`;
+    const owned = await Promise.all([...commands].map(async ([pid, command]) => {
+      if (pid === process.pid || !command) return undefined;
+      const environment = await readFile(`/proc/${pid}/environ`).catch(() => undefined);
+      return environment?.toString("utf8").split("\0").includes(pattern) ? pid : undefined;
+    }));
+    return owned.filter((pid): pid is number => pid !== undefined);
+  }
   const [plain, environments] = await Promise.all([
     execFileAsync("ps", ["ww", "-axo", "pid=,command="], { maxBuffer: 64 * 1024 * 1024 }),
     execFileAsync("ps", ["eww", "-axo", "pid=,command="], { maxBuffer: 64 * 1024 * 1024 }),

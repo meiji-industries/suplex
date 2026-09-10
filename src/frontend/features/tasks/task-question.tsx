@@ -5,19 +5,19 @@ import { Badge } from "../../components/ui/badge.js";
 import { Checkbox } from "../../components/ui/checkbox.js";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
-import type { TaskLimitDecision } from "../../../tasks/limits/limits.js";
+import { roundSuggestedBudget, taskLimitQuestion, type TaskLimitDecision } from "../../../tasks/limits/limits.js";
 
 export function TaskQuestion({ question, busy, onAnswer, onLimitDecision }: { question: NonNullable<Task["humanQuestion"]>; busy: boolean; onAnswer: (answer: { answer: string; confirmCommandsStopped: boolean }) => Promise<void>; onLimitDecision: (decision: TaskLimitDecision) => Promise<void> }) {
   const [answered, setAnswered] = useState(false);
   const [commandsStopped, setCommandsStopped] = useState(false);
-  const [budgetUsd, setBudgetUsd] = useState(question.kind === "task_limit" ? String(question.pause.proposedLimits.budgetUsd) : "0");
+  const [budgetUsd, setBudgetUsd] = useState(question.kind === "task_limit" ? String(question.pause.reason === "turns" ? question.pause.proposedLimits.budgetUsd : roundSuggestedBudget(question.pause.proposedLimits.budgetUsd, question.pause.usage.estimatedCostUsd ?? 0)) : "0");
   const [maxTurns, setMaxTurns] = useState(question.kind === "task_limit" ? String(question.pause.proposedLimits.maxTurns) : "0");
   if (question.kind === "task_limit") {
     const budget = Number(budgetUsd);
     const turns = Number(maxTurns);
     const validLimits = budgetUsd.trim() !== "" && Number.isFinite(budget) && budget >= 0 && maxTurns.trim() !== "" && Number.isInteger(turns) && turns >= 0;
     return <section aria-label="Task limit" className="space-y-3">
-      <div className="space-y-1"><h3 className="text-sm font-medium">Task limit reached</h3><p className="text-xs text-muted-foreground">{question.text}</p></div>
+      <div className="space-y-1"><h3 className="text-sm font-medium">Task limit reached</h3><p className="text-xs text-muted-foreground">{taskLimitQuestion(question.pause)}</p></div>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" disabled={busy} onClick={() => void onLimitDecision({ kind: "add_allowance" })}>Add allowance and continue</Button>
         <Button size="sm" variant="outline" disabled={busy} onClick={() => void onLimitDecision({ kind: "cancel_task" })}>Cancel task</Button>

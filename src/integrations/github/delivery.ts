@@ -1,3 +1,5 @@
+import { readPullRequestStates, type PullRequestIdentity } from "./pull-request-states.js";
+import type { PullRequestReference } from "../../tasks/control.js";
 import { GithubIssueSchema, GithubIssueCommentSchema, issueFields, type GithubIssue, type GithubIssueDetails } from "./issues.js";
 
 import { z } from "zod";
@@ -98,6 +100,7 @@ export interface GithubReleasePort {
   listOpenPullRequests?(input: { repository: string; limit: number }): Promise<GithubPullRequest[]>;
   createDraftPullRequest(input: DraftPullRequestCreate): Promise<GithubPullRequest>;
   updateDraftPullRequest(input: DraftPullRequestUpdate): Promise<GithubPullRequest>;
+  getPullRequestStates?(inputs: PullRequestIdentity[]): Promise<PullRequestReference[]>;
   getPullRequest(input: { repository: string; number: number }): Promise<GithubPullRequest>;
   observePullRequest?(input: { repository: string; branch: string; pullRequestNumber?: number | null }): Promise<GithubPullRequestObservation>;
   mergePullRequest?(input: { repository: string; number: number; headSha: string }): Promise<GithubConditionalMergeResult | void>;
@@ -327,11 +330,11 @@ function classifyCommandFailure(error: unknown, operation: string): GithubReleas
 const defaultRunner: GithubCommandRunner = async ({ command, args, cwd, timeout, maxBuffer: _maxBuffer }) => {
   try {
     const result = await runCommand({ taskId: null, stepId: null, command, args, ...(cwd ? { cwd } : {}), timeout });
-    if (result.exitCode === 0 && !result.timedOut) return { stdout: bounded(result.stdout), stderr: bounded(result.stderr) };
+    if (result.exitCode === 0 && !result.timedOut) return { stdout: result.stdout, stderr: bounded(result.stderr) };
     throw Object.assign(new Error(`${command} exited with status ${result.exitCode ?? "unknown"}`), { stdout: result.stdout, stderr: result.stderr, killed: result.timedOut, signal: result.timedOut ? "SIGTERM" : undefined });
   } catch (error) {
     const failure = error as { stdout?: string; stderr?: string; killed?: boolean; signal?: string };
-    throw new GithubCommandFailure({ stdout: bounded(failure.stdout ?? ""), stderr: bounded(failure.stderr ?? "") }, Boolean(failure.killed || failure.signal === "SIGTERM"));
+    throw new GithubCommandFailure({ stdout: failure.stdout ?? "", stderr: bounded(failure.stderr ?? "") }, Boolean(failure.killed || failure.signal === "SIGTERM"));
   }
 };
 
@@ -341,8 +344,8 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
   const runner = options.runner ?? (options.taskId && options.stepId
     ? async ({ command, args, cwd, timeout, maxBuffer: _maxBuffer }) => {
       const result = await runCommand({ taskId: options.taskId!, stepId: options.stepId!, command, args, ...(cwd ? { cwd } : {}), timeout });
-      if (result.exitCode === 0 && !result.timedOut) return { stdout: bounded(result.stdout), stderr: bounded(result.stderr) };
-      throw new GithubCommandFailure({ stdout: bounded(result.stdout), stderr: bounded(result.stderr) }, result.timedOut);
+      if (result.exitCode === 0 && !result.timedOut) return { stdout: result.stdout, stderr: bounded(result.stderr) };
+      throw new GithubCommandFailure({ stdout: result.stdout, stderr: bounded(result.stderr) }, result.timedOut);
     }
     : defaultRunner);
   const run = async (command: string, args: string[], commandOptions: { cwd?: string; timeout?: number; maxBuffer?: number } = {}): Promise<GithubCommandResult> => {
@@ -351,7 +354,7 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
     } catch (error) {
       if (error instanceof GithubCommandFailure) throw error;
       const result = error as { stdout?: unknown; stderr?: unknown };
-      throw new GithubCommandFailure({ stdout: bounded(typeof result.stdout === "string" ? result.stdout : ""), stderr: bounded(typeof result.stderr === "string" ? result.stderr : String(error)) });
+      throw new GithubCommandFailure({ stdout: typeof result.stdout === "string" ? result.stdout : "", stderr: bounded(typeof result.stderr === "string" ? result.stderr : String(error)) });
     }
   };
   const runGh = (args: string[], commandOptions: { cwd?: string; timeout?: number; maxBuffer?: number } = {}) => run(ghCommand, args, commandOptions);
@@ -496,6 +499,18 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
         if (error instanceof GithubReleaseFailure) throw error;
         throw providerFailure("local-revision-unavailable", "Local Git revision could not be inspected");
       }
+    },
+    async getPullRequestStates(inputs) {
+      return readPullRequestStates(inputs, async query => {
+        try { return parseJson((await runGh(["api", "graphql", "-f", `query=${query}`])).stdout); }
+        catch (error) {
+          if (error instanceof GithubCommandFailure && error.result.stdout.trim().startsWith("{")) {
+            const partial = z.object({ data: z.record(z.string(), z.unknown()) }).safeParse(parseJson(error.result.stdout));
+            if (partial.success) return partial.data;
+          }
+          throw classifyCommandFailure(error, "pull request batch observation");
+        }
+      });
     },
     async pushNormal(input) {
       if (!shaPattern.test(input.headSha)) throw providerFailure("invalid-provider-response", "The push commit is invalid");

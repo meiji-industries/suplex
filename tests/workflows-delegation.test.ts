@@ -498,7 +498,7 @@ test("Rater results keep their launch range, invalid or stale reports record nul
   await f.controller.recover("task"); await f.controller.recover("task");
   expect(f.store.get("task").workflowState.reviews).toHaveLength(1);
   expect(f.store.pendingTurns(f.identity().sessionId)).toHaveLength(1);
-  // Repair requires the latest valid Rater below 9 and carries its full report.
+  // Repair requires the latest valid Rater and carries its full report.
   await expect(f.controller.delegateWorker(f.identity(), { plan: "fix", acceptanceCriteria: ["x"], instruction: "y", advisorSessionId: f.identity().sessionId })).rejects.toThrow("latest valid Rater");
   await f.controller.delegateWorker(f.identity(), { plan: "Guard the dereference", acceptanceCriteria: ["No null dereference"], instruction: "Add the guard", advisorSessionId: first.id });
   const repair = f.store.currentSession("task", "worker")!;
@@ -557,7 +557,6 @@ test("Rater results keep their launch range, invalid or stale reports record nul
   expect(f.store.get("task").workflowState.reviews).toHaveLength(before + 1);
   expect(f.store.get("task").workflowState.reviews.at(-1)).toMatchObject({ sessionId: fifth.id, result: { rating: 9 } });
   expect(f.store.turns("task").filter(turn => turn.sessionId === f.identity().sessionId)).toHaveLength(wakesBefore + 1);
-  await expect(f.controller.delegateWorker(f.identity(), { plan: "more", acceptanceCriteria: ["x"], instruction: "y", advisorSessionId: fifth.id })).rejects.toThrow("already at least 9");
   // Cancellation stops the Advisor's native session like a Worker's and fences late results.
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   const sixth = f.store.currentSession("task", "worker")!;

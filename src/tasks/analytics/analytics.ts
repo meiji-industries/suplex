@@ -19,7 +19,7 @@ export function taskAnalytics(task: Task, sessions: TaskSession[], data: ReturnT
   const delivered = start ? events.find(event => event.status === "delivered" && event.observedAt >= start.observedAt) : null;
   return {
     id: task.id, title: task.title, issueKey: task.issueKey ?? null, projectId: task.projectId,
-    status: task.status, deliveryTarget: task.deliveryTarget, archived: task.archivedAt !== null, createdAt: task.createdAt,
+    status: task.status, pullRequestState: task.pullRequest?.state, deliveryTarget: task.deliveryTarget, archived: task.archivedAt !== null, createdAt: task.createdAt,
     usage: data.usage, sessions: new Set([...sessions.filter(session => session.nativeSessionId !== null).map(session => session.id), ...data.sessions.map(session => session.sessionId)]).size,
     observedSessions: data.sessions.filter(session => session.observedAt !== null).length,
     staleSessions: data.sessions.filter(session => session.errorAt !== null).length,

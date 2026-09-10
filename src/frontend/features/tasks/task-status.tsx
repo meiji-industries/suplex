@@ -1,5 +1,6 @@
+import { useId } from "react";
 import { CheckCircle2, CircleDashed, CircleDotDashed, CircleHelp, CircleSlash } from "lucide-react";
-import type { TaskControlStatus } from "../../../tasks/control.js";
+import type { PullRequestReference, TaskControlStatus } from "../../../tasks/control.js";
 import { Badge } from "../../components/ui/badge.js";
 
 export const taskStatusLabels = { backlog: "Backlog", active: "Active", waiting_human: "Answer necessary", cancelled: "Cancelled", delivered: "Delivered" } satisfies Record<TaskControlStatus, string>;
@@ -11,11 +12,18 @@ const appearances = {
   delivered: { icon: CheckCircle2, color: "text-emerald-500" },
 } satisfies Record<TaskControlStatus, { icon: typeof CircleDashed; color: string }>;
 
-export function TaskStatusIcon({ status }: { status: TaskControlStatus }) {
+type TaskStatusProps = { status: TaskControlStatus; pullRequestState?: PullRequestReference["state"] | undefined };
+
+export function TaskStatusIcon({ status, pullRequestState }: TaskStatusProps) {
+  const maskId = useId();
   const { icon: Icon, color } = appearances[status];
+  if (status === "delivered" && pullRequestState === "merged") return <svg role="img" aria-label="Delivered, merged" viewBox="0 0 24 24" className="size-3.5 shrink-0 text-emerald-500">
+    <defs><mask id={maskId}><rect width="24" height="24" fill="white" /><path d="m9 12 2 2 4-4" fill="none" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></mask></defs>
+    <circle cx="12" cy="12" r="11" fill="currentColor" mask={`url(#${maskId})`} />
+  </svg>;
   return <Icon aria-hidden="true" className={`size-3.5 shrink-0 ${color}`} />;
 }
 
-export function TaskStatus({ status }: { status: TaskControlStatus }) {
-  return <Badge variant={status === "waiting_human" ? "destructive" : "secondary"}><TaskStatusIcon status={status} />{taskStatusLabels[status]}</Badge>;
+export function TaskStatus({ status, pullRequestState }: TaskStatusProps) {
+  return <Badge variant={status === "waiting_human" ? "destructive" : "secondary"}><TaskStatusIcon status={status} pullRequestState={pullRequestState} />{taskStatusLabels[status]}</Badge>;
 }

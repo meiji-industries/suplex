@@ -109,11 +109,33 @@ afterAll(async () => {
 });
 
 describe("Coordinator delivery operations", () => {
-  it("blocks an external trigger head before push and asks for review", async () => {
-    const value = await fixture(); try {
-      attachTrigger(value); const fake = github(value.local); fake.port.inspectPullRequest = async () => triggerInspection(value, { headSha: "c".repeat(40) });
-      await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", value.local.headSha, value.review)).rejects.toMatchObject({ code: "head_diverged" });
-      expect(fake.calls).not.toContain("push"); expect(value.store.get("task").status).toBe("waiting_human");
+  it("keeps a teammate push as reconciliation work without asking the human", async () => {
+    const value = await fixture();
+    try {
+      attachTrigger(value);
+      const fake = github(value.local);
+      fake.port.inspectPullRequest = async () => triggerInspection(value, { headSha: "c".repeat(40) });
+      fake.port.getBranchHead = async input => input.branch === "main" ? value.local.headSha : "c".repeat(40);
+      fake.port.pushNormal = async () => { throw new Error("non-fast-forward: fetch first"); };
+      await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", value.local.headSha, value.review)).rejects.toThrow(/fetch|reconcil/i);
+      expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
+    } finally { value.database.close(); }
+  });
+  it("adopts a reviewed teammate commit without a Forge push receipt", async () => {
+    const value = await fixture();
+    try {
+      attachTrigger(value);
+      const admitted = value.local.headSha;
+      await writeFile(join(value.directory, "repair.ts"), "export const repaired = true;\n");
+      await commitGitFixture(value.directory, "Teammate repair", ["repair.ts"]);
+      const current = await revision(value.directory);
+      const review = await inspectDeliveryDiff(value.directory, admitted, current.headSha);
+      const fake = github(current, admitted);
+      fake.port.getBranchHead = async input => input.branch === "main" ? admitted : current.headSha;
+      fake.port.inspectPullRequest = async () => triggerInspection(value, { headSha: current.headSha });
+      await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", current.headSha, review)).resolves.toMatchObject({ kind: "adopted", headSha: current.headSha });
+      expect(fake.calls).not.toContain("push");
+      expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
     } finally { value.database.close(); }
   });
   it("blocks protected renamed paths before a trigger merge", async () => {
@@ -171,26 +193,27 @@ describe("Coordinator delivery operations", () => {
       expect(value.store.get("task").workflowState.deliveryHistory).toHaveLength(1);
     } finally { value.database.close(); }
   });
-  it("records only confirmed trigger pushes and follows their lineage", async () => {
+  it("records confirmed trigger pushes as observations", async () => {
     const value = await fixture(); try {
       attachTrigger(value);
       const admitted = value.local.headSha;
+      await commitGitFixture(value.directory, "teammate", []);
+      const teammate = (await revision(value.directory)).headSha;
       await commitGitFixture(value.directory, "repair", []);
       const repaired = await revision(value.directory);
       const diff = await inspectDeliveryDiff(value.directory, admitted, repaired.headSha);
       const review = { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest };
-      const fake = github(repaired, admitted); let remoteHead = admitted; let pushes = 0;
+      const fake = github(repaired, admitted); let remoteHead = teammate; let pushes = 0;
       fake.port.inspectLocalRevision = async () => repaired;
       fake.port.getBranchHead = async input => input.branch === "main" ? admitted : remoteHead;
       fake.port.inspectPullRequest = async () => triggerInspection(value, { headSha: remoteHead, baseSha: admitted });
       fake.port.pushNormal = async () => { pushes += 1; remoteHead = repaired.headSha; };
       const delivery = new DeliveryOperations(value.store, fake.port);
       await expect(delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", repaired.headSha, review)).resolves.toMatchObject({ kind: "pushed", headSha: repaired.headSha });
-      expect(value.store.authorizedTriggerHead("task")).toBe(repaired.headSha);
-      expect(value.database.authQuery(db => db.prepare("SELECT from_head_sha, to_head_sha, review_json FROM forge_github_trigger_delivery_operations").get() as { from_head_sha: string; to_head_sha: string; review_json: string })).toMatchObject({ from_head_sha: admitted, to_head_sha: repaired.headSha });
+      expect(value.database.authQuery(db => db.prepare("SELECT from_head_sha, to_head_sha, review_json FROM forge_github_trigger_delivery_operations").get() as { from_head_sha: string; to_head_sha: string; review_json: string })).toMatchObject({ from_head_sha: teammate, to_head_sha: repaired.headSha });
       await delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", repaired.headSha, review);
       expect(pushes).toBe(1);
-      value.store.recordTriggerPush({ taskId: "task", dispatchId: "dispatch_trigger_test", fromHeadSha: admitted, toHeadSha: repaired.headSha, review });
+      value.store.recordTriggerPush({ taskId: "task", dispatchId: "dispatch_trigger_test", fromHeadSha: teammate, toHeadSha: repaired.headSha, review });
       expect(() => value.store.recordTriggerPush({ taskId: "task", dispatchId: "dispatch_trigger_test", fromHeadSha: "c".repeat(40), toHeadSha: repaired.headSha, review })).toThrow();
     } finally { value.database.close(); }
   });

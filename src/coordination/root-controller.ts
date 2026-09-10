@@ -10,7 +10,7 @@ import type { TaskControl, TaskSession } from "../tasks/control.js";
 import type { NativeSessionReader, TaskHarness, TaskScope } from "../runtimes/task-harness.js";
 import { writeTaskEvidence } from "./workflow-evidence.js";
 import { composeAdvisorAssignment, composeWorkerAssignment, initialCoordinatorPrompt } from "./workflow-prompts.js";
-import { ADVISOR_LABELS, latestReview, publicWorkflowState, REPAIR_RATING_TARGET, sameRange, turnOutcome, workflowDefinition, type ReportReference, type ReviewRange, type WorkflowInput, type WorkerWorkflowInput } from "./workflows.js";
+import { ADVISOR_LABELS, latestReview, publicWorkflowState, sameRange, turnOutcome, workflowDefinition, type ReportReference, type ReviewRange, type WorkflowInput, type WorkerWorkflowInput } from "./workflows.js";
 import { readWorkerEvidence } from "./worker-turn-evidence.js";
 import type { ModelPricingCatalog } from "../profiles/model-pricing.js";
 import { ModelsDevCatalogReader } from "../profiles/models-dev-catalog.js";
@@ -167,12 +167,10 @@ export class RootController implements RootBridgeAdapter {
     let advisorReportReference: ReportReference | null = null;
     if (control.workflow === "refine_pull_request" && purpose === "implementation") {
       const requested = assignment.advisorTurnId ?? assignment.advisorSessionId;
-      if (!requested) throw new Error("Pull request repair implementation requires advisorSessionId or advisorTurnId for the latest valid current-range Rater report below 9.");
+      if (!requested) throw new Error("Pull request repair implementation requires advisorSessionId or advisorTurnId for the latest valid Rater report.");
       const latest = latestReview(control.workflowState.reviews, "rater");
       const matches = assignment.advisorTurnId ? latest?.turnId === requested : latest?.sessionId === requested;
       if (!latest || !matches || !latest.result) throw new Error("advisorTurnId must be the latest valid Rater report for this task.");
-      if (!sameRange(latest.range, range)) throw new Error("The latest Rater report concerns a different source range. Request a new Rater assessment for the current range.");
-      if (latest.result.role === "rater" && latest.result.rating >= REPAIR_RATING_TARGET) throw new Error("The current Rater rating is already at least 9. Continue with delivery instead of another repair.");
       const report = turns.find(turn => turn.id === latest.turnId && turn.sessionId === latest.sessionId && turn.status === "completed");
       if (!report) throw new Error("The latest Rater report turn is missing.");
       advisorReport = { label: "Rater", text: turnOutcome(report?.terminalObservation ?? null).text ?? "" };

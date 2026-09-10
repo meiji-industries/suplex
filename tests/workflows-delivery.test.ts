@@ -130,9 +130,8 @@ test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI
 test("an initial 9 needs no repair commit, and repeated defects stay active without opening the gate", { timeout: 60_000 }, async () => {
   const f = await fixture("refine_pull_request");
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
-  const nine = f.store.currentSession("task", "worker")!;
   await f.finishDelegate(rater(9));
-  await expect(f.controller.delegateWorker(f.identity(), { plan: "x", acceptanceCriteria: ["y"], instruction: "z", advisorSessionId: nine.id })).rejects.toThrow("already at least 9");
+
   expect(await f.request("push_branch")).toMatchObject({ kind: "adopted", headSha: f.featureSha });
   expect(await git(f.worktree.path, ["rev-list", "--count", "HEAD"])).toBe("2");
 
@@ -302,4 +301,20 @@ test("root tool calls are serialized per task through the tool owner and a dead 
   expect(await okBridge.call({ kind: "observe" })).toMatchObject({ control: { taskId: "task" } });
   expect(JSON.stringify(await okBridge.call({ kind: "observe" }))).not.toContain("toolOwner");
   expect(f.store.get("task").workflowState.toolOwner).toBeNull();
+});
+
+test("a passing rating permits teammate reconciliation and the integrated revision needs a fresh rating", { timeout: 60_000 }, async () => {
+  const f = await fixture("refine_pull_request");
+  await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
+  const nine = f.store.currentSession("task", "worker")!;
+  await f.finishDelegate(rater(9));
+  await f.commit("teammate.ts");
+  await f.controller.delegateWorker(f.identity(), { plan: "Integrate teammate work", acceptanceCriteria: ["Preserve both changes"], instruction: "Compare and integrate the remote repair, then verify.", advisorSessionId: nine.id });
+  await f.commit("integrated.ts");
+  await f.finishDelegate("Integrated and verified.");
+  await expect(f.request("push_branch")).rejects.toMatchObject({ code: "workflow_review_required" });
+  await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
+  await f.finishDelegate(rater(9));
+  await expect(f.request("push_branch")).resolves.toMatchObject({ kind: "pushed" });
+  expect(f.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
 });

@@ -271,7 +271,6 @@ export class DeliveryOperations {
       adoptKnownPull: (control, pull, options) => this.adoptKnownPull(control, pull, options),
       completeRemoteBranch: (control, actual, recheck) => this.completeRemoteBranch(control, actual, recheck),
       inspectTriggerPolicy: (control, input) => this.inspectTriggerPolicy(control, input),
-      triggerBlocked: (control, question, code) => this.triggerBlocked(control, question, code),
       selectDiscoveredPull,
     };
   }
@@ -371,14 +370,15 @@ export class DeliveryOperations {
     return { ...await this.completeIfTargetMatches(control, pullReference(final), { validatedRange: actual, recheck }), checkSummary: checkSummary(observed), reviewedHead: observed.headSha };
   }
   private triggerBlocked(control: TaskControl, question: string, code: "head_diverged" | "merge_not_eligible"): DeliveryOperationFailure { if (control.status === "active") this.store.askHuman(control.taskId, question); return new DeliveryOperationFailure(code, question); }
-  private async inspectTriggerPolicy(control: TaskControl, input: { expectedHead?: string; protectedPaths: boolean }): Promise<{ policy: { dispatchId: string; repositoryId: number; repositoryName: string; pullRequestNumber: number; headSha: string; baseSha: string; headBranch: string; baseBranch: string; protectedPaths: string[] }; authorizedHead: string; pull: GithubTriggerPullRequestInspection } | null> {
+  private async inspectTriggerPolicy(control: TaskControl, input: { expectedHead?: string; protectedPaths: boolean }): Promise<{ policy: { dispatchId: string; repositoryId: number; repositoryName: string; pullRequestNumber: number; headSha: string; baseSha: string; headBranch: string; baseBranch: string; protectedPaths: string[] }; pull: GithubTriggerPullRequestInspection } | null> {
     const policy = this.store.readTriggerDeliveryPolicy(control.taskId); if (!policy) return null;
-    const authorizedHead = this.store.authorizedTriggerHead(control.taskId); if (!authorizedHead || !this.github.inspectPullRequest) throw new DeliveryOperationFailure("head_diverged", "GitHub trigger delivery policy could not be inspected");
+    if (!this.github.inspectPullRequest) throw new DeliveryOperationFailure("head_diverged", "GitHub trigger delivery policy could not be inspected");
     let pull: GithubTriggerPullRequestInspection; try { pull = await this.github.inspectPullRequest({ repository: policy.repositoryName, number: policy.pullRequestNumber }); } catch { throw new DeliveryOperationFailure("head_diverged", "GitHub trigger delivery policy could not be inspected"); }
-    const valid = pull.number === policy.pullRequestNumber && pull.state === "open" && !pull.isDraft && !pull.isCrossRepository && pull.baseRepository.id === policy.repositoryId && pull.baseRepository.fullName.toLowerCase() === policy.repositoryName && pull.headRepository?.id === policy.repositoryId && pull.headRepository.fullName.toLowerCase() === policy.repositoryName && pull.headBranch === policy.headBranch && pull.baseBranch === policy.baseBranch && pull.headSha === authorizedHead && (!input.expectedHead || pull.headSha === input.expectedHead);
-    if (!valid) throw this.triggerBlocked(control, "The trigger pull request changed outside Forge-authorized delivery. Review delivery manually.", "head_diverged");
+    const valid = pull.number === policy.pullRequestNumber && pull.state === "open" && !pull.isDraft && !pull.isCrossRepository && pull.baseRepository.id === policy.repositoryId && pull.baseRepository.fullName.toLowerCase() === policy.repositoryName && pull.headRepository?.id === policy.repositoryId && pull.headRepository.fullName.toLowerCase() === policy.repositoryName && pull.headBranch === policy.headBranch && pull.baseBranch === policy.baseBranch;
+    if (!valid) throw this.triggerBlocked(control, "The trigger pull request identity or open reviewable state changed. Review delivery manually.", "head_diverged");
     if (input.protectedPaths && pull.files.some(file => [file.filename, file.previousFilename].some(path => path && matchesGithubTriggerProtectedPaths(policy.protectedPaths, { filename: path })))) throw this.triggerBlocked(control, "The trigger pull request changes a protected path. Review delivery manually.", "merge_not_eligible");
-    return { policy, authorizedHead, pull };
+    if (input.expectedHead && pull.headSha !== input.expectedHead) throw new DeliveryOperationFailure("head_diverged", "The pull request has new commits. Fetch and reconcile the branch, verify the result, and request a fresh review before delivery.");
+    return { policy, pull };
   }
 
   /** A merge result is adopted only for the requested repository and number, the captured number when one exists, the intended branches, and the same repository. */

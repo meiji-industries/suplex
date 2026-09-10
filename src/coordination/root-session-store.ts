@@ -17,7 +17,7 @@ import { DeliveryIntentSchema, PullRequestReferenceSchema, TaskControlStatusSche
 import { AdvisorRoleSchema, RaterResultSchema, ReviewerResultSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, turnOutcome, type AdvisorResult, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
 import { STANDARD_WORKER_RESULT_WAKE, initialCoordinatorPrompt, workerAssignmentPreamble } from "./workflow-prompts.js";
 import { assertPullRequestAvailable, assertTaskPullRequestsAvailable } from "../delivery/pull-request-ownership.js";
-import { authorizedTriggerHead, recordTriggerPush, triggerDeliveryPolicy, type GithubTriggerDeliveryPolicy } from "../integrations/github/trigger-delivery-policy.js";
+import { recordTriggerPush, triggerDeliveryPolicy, type GithubTriggerDeliveryPolicy } from "../integrations/github/trigger-delivery-policy.js";
 import { integer, parseJson, text, type Row } from "./persistence/row-values.js";
 import { bindHarnessSession, bindPane, currentDelegates, currentSession, currentSessionByIdentity, hasTurns, markPrompted, pendingTurns, requeueFencedPrompt, releaseSessionOperation, session, sessions, turn, turns } from "./persistence/session-operations.js";
 
@@ -53,7 +53,6 @@ export class TaskControlStore {
   private readonly limitStore: TaskLimitStore;
   constructor(private readonly database: ForgeDatabase, private readonly inspectOwner: (pid: number) => Promise<ProcessOwnerObservation> = observeProcessOwner) { this.limitStore = new TaskLimitStore(database); }
   readTriggerDeliveryPolicy(taskId: string): GithubTriggerDeliveryPolicy | null { return this.database.authQuery(db => triggerDeliveryPolicy(db, taskId)); }
-  authorizedTriggerHead(taskId: string): string | null { return this.database.authQuery(db => authorizedTriggerHead(db, taskId)); }
   recordTriggerPush(input: { taskId: string; dispatchId: string; fromHeadSha: string; toHeadSha: string; review: unknown }): void { this.database.authImmediateTransaction(db => recordTriggerPush(db, input)); }
   taskSpend(taskId: string): { costUsd: number; turns: number } {
     return this.database.authQuery((db) => ({

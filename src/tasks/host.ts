@@ -1,3 +1,4 @@
+import { CompletedPullRequests } from "../delivery/completed-pull-requests.js";
 import { z } from "zod";
 import { dirname, join } from "node:path";
 import { ArtifactStore } from "../platform/artifacts.js";
@@ -21,9 +22,13 @@ export class TaskHost {
   private readonly running = new Map<string, Promise<void>>();
   private timer: NodeJS.Timeout | undefined;
   private stopping = false;
+  private readonly completedPullRequests: Pick<CompletedPullRequests, "refresh">;
+  private completedRefresh: Promise<void> | undefined;
+  private nextCompletedRefresh = 0;
 
-  constructor(private readonly database: ForgeDatabase, options: { artifactRoot?: string; controller?: Controller; delivery?: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>; worktree?: typeof prepareTaskWorktree } = {}) {
+  constructor(private readonly database: ForgeDatabase, options: { completedPullRequests?: Pick<CompletedPullRequests, "refresh">; artifactRoot?: string; controller?: Controller; delivery?: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>; worktree?: typeof prepareTaskWorktree } = {}) {
     this.store = new TaskControlStore(database);
+    this.completedPullRequests = options.completedPullRequests ?? new CompletedPullRequests(database);
     this.delivery = options.delivery ?? new DeliveryOperations(this.store);
     const artifactRoot = options.artifactRoot ?? join(dirname(database.filename()), "artifacts");
     this.controller = options.controller ?? new RootController(this.store, createTaskHarness(database.filename(), new CliHerdrClient(), { artifactRoot }), undefined, new ArtifactStore(artifactRoot), { root: taskEvidenceRoot(database.filename()) }, session => nativeSessionReader(database.filename(), session));
@@ -44,6 +49,12 @@ export class TaskHost {
 
   private tick(): void {
     if (this.stopping) return;
+    if (!this.completedRefresh && Date.now() >= this.nextCompletedRefresh) {
+      this.nextCompletedRefresh = Date.now() + 60_000;
+      this.completedRefresh = this.completedPullRequests.refresh()
+        .catch(error => new StructuredLogger().warn("Completed pull request refresh will be retried", {}, { error: error instanceof Error ? error.message : String(error) }))
+        .finally(() => { this.completedRefresh = undefined; });
+    }
     const ids = this.database.authQuery(db => z.array(z.object({ task_id: z.string() })).parse(db.prepare("SELECT c.task_id FROM forge_task_controls c JOIN forge_tasks t ON t.id = c.task_id WHERE (t.archived_at IS NULL AND c.status IN ('active', 'waiting_human') AND (c.wake_at IS NULL OR c.wake_at <= ?)) OR EXISTS (SELECT 1 FROM forge_task_sessions s WHERE s.task_id = c.task_id AND s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL) ORDER BY COALESCE(c.wake_at, c.created_at)").all(new Date().toISOString())));
     for (const row of ids) {
       if (this.running.has(row.task_id)) continue;
@@ -62,6 +73,11 @@ export class TaskHost {
   }
 
   private async recoverOne(taskId: string): Promise<void> {
+    if (this.store.get(taskId).status === "delivered") {
+      try { await this.completedPullRequests.refresh(); }
+      finally { await this.controller.recover(taskId); }
+      return;
+    }
     let observationError: unknown;
     try { await this.delivery.observe(taskId); } catch (error) { observationError = error; }
     if (this.store.get(taskId).status === "active") {
@@ -93,6 +109,6 @@ export class TaskHost {
     this.stopping = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
-    await Promise.allSettled(this.running.values());
+    await Promise.allSettled([...this.running.values(), ...(this.completedRefresh ? [this.completedRefresh] : [])]);
   }
 }

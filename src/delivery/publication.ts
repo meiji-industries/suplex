@@ -13,7 +13,7 @@ export type DeliveryGithubPort = Required<Pick<GithubReleaseAdapter,
 >> & Partial<Pick<GithubReleaseAdapter, "mergePullRequestDirect">> & Partial<Pick<GithubTriggerPort, "inspectPullRequest">>;
 
 type Recheck = () => void;
-type Trigger = { policy: { dispatchId: string; repositoryId: number; repositoryName: string; pullRequestNumber: number; headSha: string; baseSha: string; headBranch: string; baseBranch: string; protectedPaths: string[] }; authorizedHead: string; pull: GithubTriggerPullRequestInspection } | null;
+type Trigger = { policy: { dispatchId: string; repositoryId: number; repositoryName: string; pullRequestNumber: number; headSha: string; baseSha: string; headBranch: string; baseBranch: string; protectedPaths: string[] }; pull: GithubTriggerPullRequestInspection } | null;
 
 export type PublicationDependencies = {
   github: DeliveryGithubPort;
@@ -22,7 +22,6 @@ export type PublicationDependencies = {
   adoptKnownPull: (control: TaskControl, pull: GithubPullRequest, options: { explicit?: boolean; recheck?: Recheck }) => Promise<PullRequestReference>;
   completeRemoteBranch: (control: TaskControl, actual: ReviewRange, recheck: Recheck) => Promise<void>;
   inspectTriggerPolicy: (control: TaskControl, input: { expectedHead?: string; protectedPaths: boolean }) => Promise<Trigger>;
-  triggerBlocked: (control: TaskControl, question: string, code: "head_diverged" | "merge_not_eligible") => DeliveryOperationFailure;
   selectDiscoveredPull: (control: TaskControl, pulls: GithubPullRequest[]) => GithubPullRequest | null;
 };
 
@@ -30,16 +29,14 @@ export async function pushPublication(dependencies: PublicationDependencies, rec
   const trigger = await dependencies.inspectTriggerPolicy(control, { protectedPaths: false });
   const remoteHead = await dependencies.github.getBranchHead({ repository, branch: local.branch });
   await dependencies.finalRecheck(control, actual, recheck);
-  if (trigger && remoteHead !== trigger.authorizedHead) throw dependencies.triggerBlocked(control, "The trigger pull request head is not an authorized Forge delivery head.", "head_diverged");
   if (remoteHead === local.headSha) {
-    if (trigger && remoteHead !== trigger.authorizedHead) throw dependencies.triggerBlocked(control, "The trigger pull request head is not an authorized Forge delivery head.", "head_diverged");
     if (control.deliveryTarget === "remote_branch") await dependencies.completeRemoteBranch(control, actual, recheck);
     return { kind: "adopted", headSha: local.headSha };
   }
   await dependencies.github.pushNormal({ cwd: control.worktree!.path, branch: local.branch, headSha: local.headSha });
   const observed = await dependencies.github.getBranchHead({ repository, branch: local.branch });
   if (observed !== local.headSha) throw new DeliveryOperationFailure("head_diverged", "The remote branch does not match the observed worktree head");
-  if (trigger) dependencies.store.recordTriggerPush({ taskId: control.taskId, dispatchId: trigger.policy.dispatchId, fromHeadSha: trigger.authorizedHead, toHeadSha: local.headSha, review: actual });
+  if (trigger) dependencies.store.recordTriggerPush({ taskId: control.taskId, dispatchId: trigger.policy.dispatchId, fromHeadSha: remoteHead ?? trigger.pull.headSha, toHeadSha: local.headSha, review: actual });
   recheck();
   if (control.deliveryTarget === "remote_branch") await dependencies.completeRemoteBranch(control, actual, recheck);
   return { kind: "pushed", headSha: observed };

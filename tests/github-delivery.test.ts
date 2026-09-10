@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile, chmod, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "vitest";
 import { createGithubReleasePort, mapGithubPullRequestObservation } from "../src/integrations/github/delivery.js";
 
@@ -165,4 +168,18 @@ test("issue context reads every comment page and validates provider data", async
   expect(calls[2]).toEqual(["api", "--paginate", "--slurp", "repos/owner/repo/issues/42/comments?per_page=100"]);
   const malformed = createGithubReleasePort({ runner: async () => ({ stdout: '{"number":"invalid"}', stderr: "" }) });
   await expect(malformed.getIssue({ repository: "owner/repo", number: 42 })).rejects.toThrow();
+});
+
+test.each([false, true])("trigger inspection preserves large JSON through the real command runner (task-bound: %s)", async taskBound => {
+  const directory = await mkdtemp(join(tmpdir(), "forge-large-github-"));
+  try {
+    const command = join(directory, "gh-fixture");
+    const repo = { id: 9, full_name: "owner/repo" };
+    const pull = { number: 7, html_url: "https://github.com/owner/repo/pull/7", state: "open", draft: false, changed_files: 1, labels: [{ name: "needs review" }], title: "Large patch", head: { ref: "feature", sha: "a".repeat(40), repo }, base: { ref: "main", sha: "b".repeat(40), repo } };
+    const files = [{ sha: "c".repeat(40), filename: "large.ts", status: "added", additions: 1, deletions: 0, changes: 1, blob_url: "https://github.com/owner/repo/blob/large.ts", raw_url: "https://github.com/owner/repo/raw/large.ts", contents_url: "https://api.github.com/repos/owner/repo/contents/large.ts", patch: "x".repeat(400_000) }];
+    await writeFile(command, `#!${process.execPath}\nprocess.stdout.write(JSON.stringify(process.argv.some(arg => arg.includes('/files?')) ? ${JSON.stringify(files)} : ${JSON.stringify(pull)}));\n`);
+    await chmod(command, 0o755);
+    const port = createGithubReleasePort({ ghCommand: command, ...(taskBound ? { taskId: "task", stepId: "inspection" } : {}) });
+    await expect(port.inspectPullRequest({ repository: "owner/repo", number: 7 })).resolves.toMatchObject({ number: 7, changedFiles: 1, files: [{ filename: "large.ts" }] });
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

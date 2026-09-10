@@ -1,8 +1,9 @@
+import { CompletedPullRequests } from "../src/delivery/completed-pull-requests.js";
 import { runCommand } from "../src/platform/command-runner.js";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { ForgeDatabase } from "../src/platform/database.js";
 import { RootController } from "../src/coordination/root-controller.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
@@ -141,4 +142,94 @@ test("out-of-band delivery is adopted before any worktree or session is started"
     expect(f.store.get("task").status).toBe("delivered");
     expect(f.harness.dispatched).toHaveLength(0);
   } finally { await host.stop(); }
+});
+
+
+test("delivered PR refresh updates facts in a batch without restarting agents or rewriting completion", async () => {
+  const f = await fixture();
+  const pull = { repository: "owner/repo", number: 183, url: "https://github.com/owner/repo/pull/183", headSha: "a".repeat(40), state: "open", mergedAt: null };
+  f.store.setPullRequest("task", pull);
+  f.store.markDelivered("task");
+  f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = 'task'").run());
+  const before = f.store.get("task");
+  let calls = 0;
+  const refresh = new CompletedPullRequests(f.database, { getPullRequestStates: async inputs => {
+    calls += 1;
+    expect(inputs).toMatchObject([{ repository: "owner/repo", number: 183 }]);
+    return [{ ...pull, state: "merged", mergedAt: "2026-09-10T02:32:47Z" }];
+  } });
+  const host = new TaskHost(f.database, { completedPullRequests: refresh, controller: f.controller, delivery: f.delivery });
+  try {
+    await host.recover("task");
+    expect(f.store.get("task")).toMatchObject({ status: "delivered", deliveryTarget: "pull_request_draft", pullRequest: { state: "merged" }, workflowState: before.workflowState, wakeAt: null });
+    expect(f.harness.dispatched).toHaveLength(0);
+    await refresh.refresh();
+    expect(calls).toBe(1);
+  } finally { await host.stop(); }
+});
+
+test("a delivered PR refresh preserves a task resumed while the request was in flight", async () => {
+  const f = await fixture();
+  const pull = { repository: "owner/repo", number: 183, url: "https://github.com/owner/repo/pull/183", headSha: "a".repeat(40), state: "open", mergedAt: null };
+  f.store.setPullRequest("task", pull);
+  f.store.markDelivered("task");
+  const refresh = new CompletedPullRequests(f.database, { getPullRequestStates: async () => {
+    f.store.sendNote("task", "Continue with the requested follow-up");
+    return [{ ...pull, state: "merged", mergedAt: "2026-09-10T02:32:47Z" }];
+  } });
+  await refresh.refresh();
+  expect(f.store.get("task")).toMatchObject({ status: "active", pullRequest: { state: "open" } });
+});
+
+
+test("completed PR polling runs once per minute without agent recovery", async () => {
+  const f = await fixture();
+  f.store.markDelivered("task");
+  const refresh = vi.fn(async () => {});
+  const recover = vi.fn(async () => {});
+  const host = new TaskHost(f.database, { completedPullRequests: { refresh }, controller: { prepareRoot: f.controller.prepareRoot.bind(f.controller), recover }, delivery: f.delivery });
+  vi.useFakeTimers();
+  try {
+    host.start();
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(recover).not.toHaveBeenCalled();
+  } finally { await host.stop(); vi.useRealTimers(); }
+});
+
+test("failed or missing PR observations preserve facts and closed PRs can reopen", async () => {
+  const f = await fixture();
+  const pull = { repository: "owner/repo", number: 183, url: "https://github.com/owner/repo/pull/183", headSha: "a".repeat(40), state: "closed", mergedAt: null };
+  f.store.setPullRequest("task", pull);
+  f.store.markDelivered("task");
+  const before = f.store.get("task");
+  let attempt = 0;
+  const refresh = new CompletedPullRequests(f.database, { getPullRequestStates: async () => {
+    attempt += 1;
+    if (attempt === 1) throw new Error("GitHub is not available");
+    return attempt === 2 ? [] : [{ ...pull, state: "open" }];
+  } });
+  await expect(refresh.refresh()).rejects.toThrow("GitHub is not available");
+  await refresh.refresh();
+  expect(f.store.get("task")).toEqual(before);
+  await refresh.refresh();
+  expect(f.store.get("task")).toMatchObject({ status: "delivered", pullRequest: { state: "open" } });
+  f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET archived_at = ? WHERE id = 'task'").run(new Date().toISOString()));
+  await refresh.refresh();
+  expect(attempt).toBe(3);
+});
+
+
+test("delivered PR refresh rediscovers missing observations from task intent", async () => {
+  const f = await fixture();
+  f.store.markDelivered("task");
+  f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 183) WHERE task_id = 'task'").run());
+  const refresh = new CompletedPullRequests(f.database, { getPullRequestStates: async inputs => {
+    expect(inputs).toEqual([{ repository: "owner/repo", number: 183 }]);
+    return [{ repository: "owner/repo", number: 183, url: "https://github.com/owner/repo/pull/183", headSha: "a".repeat(40), state: "merged", mergedAt: "2026-09-10T02:32:47Z" }];
+  } });
+  await refresh.refresh();
+  expect(f.store.get("task")).toMatchObject({ status: "delivered", pullRequest: { number: 183, state: "merged" } });
 });

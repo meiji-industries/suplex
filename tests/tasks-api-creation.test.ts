@@ -49,6 +49,23 @@ test("task details can clear a description but not its title", async () => {
   } finally { await f.close(); }
 });
 
+test("task details accept the editable settings and refuse an edit once the task starts", async () => {
+  const f = await nativeApp();
+  try {
+    const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Editable settings", description: "Edit me", idempotencyKey: "edit-settings-1" });
+    const payload = { title: "Edited settings", workflow: "independent_review", advisorProfileIds: { reviewer: "profile_native_root" }, deliveryTarget: "remote_branch", runProjectTests: false, visualEvidence: "capture" };
+    const response = await f.app.inject({ method: "PATCH", url: `/api/tasks/${task.id}`, headers: f.headers, payload });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(TaskSchema.parse(response.json())).toMatchObject({
+      title: "Edited settings", description: "Edit me", workflow: "independent_review", deliveryTarget: "remote_branch",
+      advisorProfiles: { reviewer: { profileId: "profile_native_root" } }, configuration: { runProjectTests: false, visualEvidence: "capture" },
+    });
+    expect((await f.app.inject({ method: "PATCH", url: `/api/tasks/${task.id}`, headers: f.headers, payload: { projectId: f.project.id } })).statusCode).toBe(400);
+    f.tasks.startTask(f.userId, task.id);
+    expect((await f.app.inject({ method: "PATCH", url: `/api/tasks/${task.id}`, headers: f.headers, payload: { title: "Too late" } })).statusCode).toBe(409);
+  } finally { await f.close(); }
+});
+
 test("task limit answers require an explicit decision and expose the approved limits", async () => {
   const f = await nativeApp();
   try {

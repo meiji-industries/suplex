@@ -28,10 +28,22 @@ export async function duplicateTaskDraft(task: Task): Promise<NewTaskDraft> {
     if (!sourceSummary) throw new Error("The original task source is not available. Select a source in a new task.");
   }
   return {
-    projectId: task.projectId, title: duplicateTitle(task.title, new Set(tasks.filter(candidate => candidate.projectId === task.projectId).map(candidate => candidate.title))), description: task.description,
+    ...taskDraftFields(task), title: duplicateTitle(task.title, new Set(tasks.filter(candidate => candidate.projectId === task.projectId).map(candidate => candidate.title))),
+    startImmediately: false, images, ...(source && sourceSummary ? { source, sourceSummary } : {}),
+  };
+}
+
+/** The settings a Task carries into a draft. Synchronous: the edit dialog needs no images and no source lookup. */
+export function taskDraftFields(task: Task): Omit<NewTaskDraft, "title" | "idempotencyKey"> {
+  return {
+    projectId: task.projectId, description: task.description,
     rootProfileId: task.rootProfile.profileId, workerProfileId: task.workerProfile.profileId,
     deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence,
     workflow: task.workflow, advisorProfileIds: Object.fromEntries(Object.entries(task.advisorProfiles).map(([role, profile]) => [role, profile.profileId])),
-    startImmediately: false, images, ...(source && sourceSummary ? { source, sourceSummary } : {}),
   };
+}
+
+/** The draft the Edit task dialog opens with; the task's own source keeps the repair workflow rules satisfied. */
+export function editTaskDraft(task: Task): NewTaskDraft {
+  return { ...taskDraftFields(task), title: task.title, ...(task.configuration.source ? { source: task.configuration.source } : {}) };
 }

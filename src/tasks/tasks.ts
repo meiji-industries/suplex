@@ -14,6 +14,7 @@ import type { HermesPrincipal } from "../identity/hermes-agents.js";
 import { HermesSafeTaskProjectionSchema, HermesTaskCommandBodySchema, HermesTaskCreateBodySchema, type HermesSafeTaskProjection, type HermesTaskCreateBody } from "../http/contracts/hermes.js";
 import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../http/contracts/projects.js";
 import { CreateTaskTemplateBodySchema } from "../http/contracts/task-templates.js";
+import { TaskDetailsBodySchema } from "../http/contracts/tasks.js";
 import { WorkflowRecordInputSchema } from "../http/contracts/workflows.js";
 import type { ProjectService } from "../projects/projects.js";
 import { TaskProfileSchema, type TaskProfile } from "./control.js";
@@ -50,7 +51,7 @@ const hermesDuplicateKey = (taskId: string, key: string): string => `duplicate-$
 type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "resolveTaskSource" | "captureTaskConfiguration">;
 /** Worktree removal defaults to the real host; tests drive a controlled one. */
 export type TaskServicePorts = { removeWorktree?: typeof removeTaskWorktree };
-const DetailsSchema = TaskInputSchema.pick({ title: true }).extend({ description: z.string().trim().optional() }).partial().strict().refine(input => input.title !== undefined || input.description !== undefined);
+const DetailsSchema = TaskDetailsBodySchema.refine(input => Object.keys(input).length > 0);
 const RenameSchema = TaskInputSchema.pick({ title: true });
 const BlockedBySchema = z.object({ blockedByTaskId: z.string().min(1).max(256).nullable() }).strict();
 
@@ -383,8 +384,37 @@ export class TaskService {
 
   updateTaskDetails(userId: string, taskId: string, raw: z.input<typeof DetailsSchema>): Task {
     const input = DetailsSchema.parse(raw);
-    this.getTask(userId, taskId);
-    if (!this.repository.updateDetails(taskId, input)) throw new TaskFailure("Only tasks in the backlog can be edited. Open archived tasks before editing them.", 409);
+    const task = this.getTask(userId, taskId);
+    // The task keeps the source it was created from, so the workflow rules judge the edit against that source.
+    let normalized;
+    try {
+      normalized = normalizeWorkflowInput({
+        workflow: input.workflow ?? task.workflow, advisorProfileIds: input.advisorProfileIds ?? {}, source: task.configuration.source ?? undefined,
+        ...(input.deliveryTarget !== undefined ? { deliveryTarget: input.deliveryTarget } : {}),
+        ...(input.runProjectTests !== undefined ? { runProjectTests: input.runProjectTests } : {}),
+      }, { requireSource: true });
+    } catch (error) { if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode); throw error; }
+    // An unchanged selection keeps its stored snapshot, so an archived profile never blocks an unrelated edit.
+    const selected = (profileId: string, current: TaskProfile | undefined, role: "root" | "worker"): TaskProfile =>
+      current && current.profileId === profileId ? current : this.profile(profileId, role);
+    const rootProfile = selected(input.rootProfileId ?? task.rootProfile.profileId, task.rootProfile, "root");
+    const workerProfile = selected(input.workerProfileId ?? task.workerProfile.profileId, task.workerProfile, "worker");
+    const advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>> = {};
+    for (const role of workflowDefinition(normalized.workflow).advisorRoles) {
+      // A request that names its Advisors states them all: a role it leaves out falls back to the Coordinator profile, exactly like creation.
+      // Only a request without any Advisor selection, such as a title-only edit, keeps the stored Advisors.
+      const stored = input.advisorProfileIds === undefined ? task.advisorProfiles[role]?.profileId : undefined;
+      const profileId = normalized.advisorProfileIds[role] ?? stored ?? rootProfile.profileId;
+      advisorProfiles[role] = profileId === rootProfile.profileId ? rootProfile : selected(profileId, task.advisorProfiles[role], "root");
+    }
+    const updated = this.repository.updateDetails(taskId, {
+      title: input.title ?? task.title, description: input.description ?? task.description, workflow: normalized.workflow,
+      deliveryTarget: normalized.deliveryTarget ?? task.deliveryTarget,
+      runProjectTests: normalized.runProjectTests ?? task.configuration.runProjectTests,
+      visualEvidence: input.visualEvidence ?? task.configuration.visualEvidence,
+      rootProfile, workerProfile, advisorProfiles,
+    });
+    if (!updated) throw new TaskFailure("Only tasks in the backlog can be edited. Open archived tasks before editing them.", 409);
     return this.getTask(userId, taskId);
   }
 

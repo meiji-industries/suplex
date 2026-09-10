@@ -34,7 +34,8 @@ test("backlog details save through the interface", { timeout: 90_000 }, async ()
   try {
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Original title", description: "Original description", startImmediately: false, idempotencyKey: "backlog-edit" });
     await value.page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
-    await value.page.getByRole("button", { name: "Edit task title" }).click();
+    await value.page.getByRole("button", { name: "Edit task", exact: true }).click();
+    await value.page.getByRole("dialog").getByText("Edit task", { exact: true }).waitFor();
     await value.page.getByLabel("Task title", { exact: true }).fill("Updated title");
     await value.page.getByLabel("Task description", { exact: true }).fill("Updated objective");
     await value.page.getByRole("button", { name: "Save task", exact: true }).click();

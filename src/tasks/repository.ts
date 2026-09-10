@@ -3,9 +3,9 @@ import { z } from "zod";
 import type { ArtifactStore, StoredArtifact } from "../platform/artifacts.js";
 import type { ForgeDatabase } from "../platform/database.js";
 import { TaskControlStore } from "../coordination/root-session-store.js";
-import { TaskConfigurationSchema, TaskImageSchema, TaskSchema, type Task, type TaskConfiguration, type TaskInput, type TaskRequest } from "./contracts.js";
+import { TaskConfigurationSchema, TaskImageSchema, TaskSchema, type DeliveryTarget, type Task, type TaskConfiguration, type TaskInput, type TaskRequest, type VisualEvidence } from "./contracts.js";
 import type { TaskProfile } from "./control.js";
-import { advisorKeysSorted, publicWorkflowState, type AdvisorRole } from "../coordination/workflows.js";
+import { advisorKeysSorted, publicWorkflowState, type AdvisorRole, type WorkflowId } from "../coordination/workflows.js";
 
 export type TaskCreator = { kind: "user"; id: string } | { kind: "agent"; id: string };
 const RowSchema = z.object({
@@ -132,13 +132,18 @@ export class TaskRepository {
     this.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET archived_at = ?, updated_at = ? WHERE id = ?").run(archived ? new Date().toISOString() : null, new Date().toISOString(), taskId));
   }
 
-  updateDetails(taskId: string, details: { title?: string | undefined; description?: string | undefined }): boolean {
+  /** The caller resolves every field against the current task, so an edit writes one consistent snapshot of the editable settings. */
+  updateDetails(taskId: string, details: {
+    title: string; description: string; deliveryTarget: DeliveryTarget; runProjectTests: boolean; visualEvidence: VisualEvidence;
+    workflow: WorkflowId; rootProfile: TaskProfile; workerProfile: TaskProfile; advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>>;
+  }): boolean {
     return this.database.authTransaction(db => {
       const time = new Date().toISOString();
-      const updated = db.prepare("UPDATE forge_tasks SET title = COALESCE(?, title), description = COALESCE(?, description), updated_at = ? WHERE id = ? AND archived_at IS NULL AND EXISTS (SELECT 1 FROM forge_task_controls WHERE task_id = forge_tasks.id AND status = 'backlog')")
-        .run(details.title ?? null, details.description ?? null, time, taskId);
+      const updated = db.prepare("UPDATE forge_tasks SET title = ?, description = ?, configuration_json = json_set(configuration_json, '$.runProjectTests', json(?), '$.visualEvidence', ?), updated_at = ? WHERE id = ? AND archived_at IS NULL AND EXISTS (SELECT 1 FROM forge_task_controls WHERE task_id = forge_tasks.id AND status = 'backlog')")
+        .run(details.title, details.description, details.runProjectTests ? "true" : "false", details.visualEvidence, time, taskId);
       if (updated.changes !== 1) return false;
-      db.prepare("UPDATE forge_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM forge_tasks WHERE id = ?), updated_at = ? WHERE task_id = ?").run(taskId, time, taskId);
+      db.prepare("UPDATE forge_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM forge_tasks WHERE id = ?), delivery_target = ?, workflow = ?, root_profile_json = ?, worker_profile_json = ?, advisor_profiles_json = ?, updated_at = ? WHERE task_id = ?")
+        .run(taskId, details.deliveryTarget, details.workflow, JSON.stringify(details.rootProfile), JSON.stringify(details.workerProfile), JSON.stringify(details.advisorProfiles), time, taskId);
       return true;
     });
   }

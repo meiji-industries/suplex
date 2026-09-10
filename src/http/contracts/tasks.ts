@@ -1,8 +1,8 @@
 import { WorkerReplacementRequestSchema, WorkerReplacementSchema } from "../../coordination/worker-replacement-contracts.js";
 import { z } from "zod";
-import { TaskInputSchema, TaskSchema } from "../../tasks/contracts.js";
+import { DeliveryTargetSchema as DeliveryTarget, TaskInputSchema, TaskSchema, VisualEvidenceSchema as VisualEvidence } from "../../tasks/contracts.js";
 import { TaskSessionKindSchema, TaskTurnStatusSchema } from "../../tasks/control.js";
-import { AdvisorRoleSchema } from "../../coordination/workflows.js";
+import { AdvisorProfileIdsSchema, AdvisorRoleSchema, WorkflowIdSchema } from "../../coordination/workflows.js";
 import { TaskLimitDecisionSchema } from "../../tasks/limits/limits.js";
 
 export { DeliveryTargetSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";
@@ -12,7 +12,18 @@ export const TaskResponseSchema = TaskSchema.strip();
 export type TaskResponse = z.infer<typeof TaskResponseSchema>;
 export const TaskListResponseSchema = z.object({ tasks: z.array(TaskResponseSchema) });
 export type TaskListTask = TaskResponse;
-export const TaskDetailsBodySchema = TaskInputSchema.pick({ title: true }).extend({ description: z.string().trim().optional() }).partial().strict();
+/** The fields the Edit task dialog may change. Every field is optional and carries no default, so an edit only writes what it names. */
+export const TaskDetailsBodySchema = z.object({
+  title: TaskInputSchema.shape.title,
+  description: z.string().trim(),
+  rootProfileId: z.string().min(1).max(256),
+  workerProfileId: z.string().min(1).max(256),
+  deliveryTarget: DeliveryTarget,
+  runProjectTests: z.boolean(),
+  visualEvidence: VisualEvidence,
+  workflow: WorkflowIdSchema,
+  advisorProfileIds: AdvisorProfileIdsSchema,
+}).partial().strict();
 export const TaskBlockedByBodySchema = z.object({ blockedByTaskId: z.string().min(1).max(256).nullable() }).strict();
 export const TaskRenameBodySchema = TaskInputSchema.pick({ title: true });
 export const TaskArchiveBodySchema = z.object({ confirmDiscardDirty: z.boolean().optional() }).strict();

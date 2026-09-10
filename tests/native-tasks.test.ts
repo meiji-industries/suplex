@@ -121,13 +121,58 @@ test("editing the objective checks backlog ownership in the same transaction as 
   expect(f.tasks.updateTaskDetails("alice", task.id, { title: "Updated title" })).toMatchObject({ title: "Updated title", description: f.input.description });
   expect(f.tasks.repository.controls.get(task.id).objective).toBe(`Updated title\n\n${f.input.description}`);
   f.tasks.repository.setArchived(task.id, true);
-  expect(f.tasks.repository.updateDetails(task.id, { title: "Archived edit" })).toBe(false);
+  expect(() => f.tasks.updateTaskDetails("alice", task.id, { title: "Archived edit" })).toThrow("Only tasks in the backlog");
   f.tasks.unarchiveTask("alice", task.id);
   f.tasks.startTask("alice", task.id);
-  expect(f.tasks.repository.updateDetails(task.id, { title: "Late edit" })).toBe(false);
+  expect(() => f.tasks.updateTaskDetails("alice", task.id, { title: "Late edit" })).toThrow("Only tasks in the backlog");
   expect(() => f.tasks.updateTaskDetails("alice", task.id, { description: "Late edit" })).toThrow("Only tasks in the backlog");
   expect(f.tasks.getTask("alice", task.id).title).toBe("Updated title");
   expect(f.tasks.repository.controls.get(task.id).objective).toBe(`Updated title\n\n${f.input.description}`);
+});
+
+test("editing a backlog task saves its profiles, workflow, delivery target and checks", async () => {
+  const f = await fixture();
+  const stamp = new Date().toISOString();
+  f.database.authTransaction(db => db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('profile_review', 'Review', 'root', 'review', 'anthropic', 'claude-opus-5', 'high', 'default', ?, ?)").run(stamp, stamp));
+  const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false });
+  const edited = f.tasks.updateTaskDetails("alice", task.id, {
+    title: "Edited title", description: "Edited objective", rootProfileId: "profile_review", workerProfileId: "profile_native_worker",
+    workflow: "independent_review", advisorProfileIds: { reviewer: "profile_review" }, deliveryTarget: "merged", runProjectTests: false, visualEvidence: "required",
+  });
+  expect(edited).toMatchObject({
+    title: "Edited title", description: "Edited objective", deliveryTarget: "merged", workflow: "independent_review",
+    rootProfile: { profileId: "profile_review", model: "claude-opus-5" }, advisorProfiles: { reviewer: { profileId: "profile_review" } },
+    configuration: { runProjectTests: false, visualEvidence: "required" },
+  });
+  const control = f.tasks.repository.controls.get(task.id);
+  expect(control).toMatchObject({ objective: "Edited title\n\nEdited objective", deliveryTarget: "merged", workflow: "independent_review" });
+  expect(control.advisorProfiles.reviewer?.profileId).toBe("profile_review");
+  // The Reviewer now differs from the Coordinator, so the next two edits show which one an Advisor resolves to.
+  const distinct = f.tasks.updateTaskDetails("alice", task.id, { rootProfileId: "profile_native_root", advisorProfileIds: { reviewer: "profile_review" } });
+  expect(distinct.advisorProfiles.reviewer).toMatchObject({ profileId: "profile_review" });
+  // An edit that names no Advisor at all, such as a title-only edit, keeps every stored Advisor.
+  expect(f.tasks.updateTaskDetails("alice", task.id, { title: "Kept Advisors" }).advisorProfiles.reviewer).toMatchObject({ profileId: "profile_review" });
+  // Clearing the Reviewer in the dialog sends an Advisor selection without that role, which resets it to the Coordinator profile.
+  const cleared = f.tasks.updateTaskDetails("alice", task.id, { workflow: "independent_review", advisorProfileIds: {} });
+  expect(cleared.advisorProfiles.reviewer).toMatchObject({ profileId: "profile_native_root" });
+  // A role the request never names on a new workflow starts at the workflow's default, which is the Coordinator profile.
+  const combined = f.tasks.updateTaskDetails("alice", task.id, { workflow: "competing_plans" });
+  expect(combined.advisorProfiles).toMatchObject({ planner_a: { profileId: "profile_native_root" }, planner_b: { profileId: "profile_native_root" } });
+  expect(combined.advisorProfiles.reviewer).toBeUndefined();
+  expect(() => f.tasks.updateTaskDetails("alice", task.id, { rootProfileId: "profile_missing" })).toThrow("The selected agent profile does not exist");
+  expect(() => f.tasks.updateTaskDetails("alice", task.id, { workflow: "competing_plans", advisorProfileIds: { reviewer: "profile_review" } })).toThrow("Reviewer");
+});
+
+test("editing to pull request repair needs a pull request source and forces its delivery rules", async () => {
+  const f = await fixture();
+  const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false });
+  expect(task.configuration.source).toBeNull();
+  expect(() => f.tasks.updateTaskDetails("alice", task.id, { workflow: "refine_pull_request" })).toThrow("Select a pull request source");
+  f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.source', json(?)) WHERE id = ?").run(JSON.stringify({ kind: "pull_request", number: 7 }), task.id));
+  const repaired = f.tasks.updateTaskDetails("alice", task.id, { workflow: "refine_pull_request", visualEvidence: "capture" });
+  expect(repaired).toMatchObject({ workflow: "refine_pull_request", deliveryTarget: "merged", configuration: { runProjectTests: true, visualEvidence: "capture" } });
+  expect(() => f.tasks.updateTaskDetails("alice", task.id, { deliveryTarget: "remote_branch" })).toThrow("merged pull request");
+  expect(() => f.tasks.updateTaskDetails("alice", task.id, { runProjectTests: false })).toThrow("runs the project tests");
 });
 
 test("editing details can clear the description without leaving objective whitespace", async () => {

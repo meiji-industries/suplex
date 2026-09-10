@@ -5,9 +5,10 @@ import { TaskActivityResponseSchema } from "../../../http/contracts/tasks.js";
 import { readJson } from "../../lib/api.js";
 import { adminDate, type ApiProject } from "../../shell/view-shared.js";
 import { Button } from "../../components/ui/button.js";
-import { Textarea } from "../../components/ui/textarea.js";
 import { Input } from "../../components/ui/input.js";
 import { TaskQuestion } from "./task-question.js";
+import { NewTaskDialog } from "./new-task-dialog.js";
+import { editTaskDraft, type NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
@@ -44,15 +45,8 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [image, setImage] = useState<Task["images"][number] | null>(null);
-  const [edit, setEdit] = useState<{ title: string; description: string } | null>(null);
+  const [edit, setEdit] = useState<NewTaskDraft | null>(null);
   const editable = task.status === "backlog" && !task.archivedAt;
-  const saveDetails = async () => {
-    if (!edit || busy) return;
-    setBusy(true); setError("");
-    try { onChange(await readJson<Task>(`/api/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify(edit) })); setEdit(null); }
-    catch (error) { setError(error instanceof Error ? error.message : "The task could not be saved"); }
-    finally { setBusy(false); }
-  };
   useEffect(() => {
     let closed = false;
     const load = async () => { try { const result = TaskActivityResponseSchema.parse(await readJson(`/api/tasks/${task.id}/activity`)); if (!closed) setActivity(result); } catch (error) { if (!closed) setError(error instanceof Error ? error.message : "Task activity is not available"); } };
@@ -70,13 +64,13 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
   return <article data-task-detail className="flex h-[calc(100dvh-var(--header-height))] min-h-0 min-w-0 flex-none flex-col overflow-hidden md:h-[calc(100dvh-var(--header-height)-1rem)]">
     <div data-task-body className="grid min-h-0 min-w-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_260px]">
       <div data-task-main className="flex min-w-0 flex-col">
-        <header className="px-4 pb-3 pt-4 sm:px-6 lg:px-10"><div className="mx-auto flex max-w-4xl min-w-0 items-start justify-between gap-3"><h2 className="min-w-0 flex-1 text-xl font-semibold leading-8" aria-label={task.title}>{editable ? <button className="text-left hover:text-muted-foreground focus-visible:outline" type="button" aria-label="Edit task title" onClick={() => setEdit({ title: task.title, description: task.description })}>{task.title}</button> : task.title}</h2>{task.worktree ? <TaskWorktreeMenu taskId={task.id} path={task.worktree.path} onError={setError} /> : null}</div></header>
+        <header className="px-4 pb-3 pt-4 sm:px-6 lg:px-10"><div className="mx-auto flex max-w-4xl min-w-0 items-start justify-between gap-3"><h2 className="min-w-0 flex-1 text-xl font-semibold leading-8" aria-label={task.title}>{task.title}</h2>{task.worktree ? <TaskWorktreeMenu taskId={task.id} path={task.worktree.path} onError={setError} /> : null}</div></header>
         <div data-task-content className="min-w-0 px-4 pb-6 pt-4 sm:px-6 lg:px-10"><div data-task-content-inner className="mx-auto max-w-4xl space-y-7">
           {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-          {edit ? <form className="grid gap-2" aria-label="Task details" onSubmit={event => { event.preventDefault(); void saveDetails(); }}><Input aria-label="Task title" value={edit.title} onChange={event => setEdit({ ...edit, title: event.target.value })} required /><Textarea aria-label="Task description" value={edit.description} onChange={event => setEdit({ ...edit, description: event.target.value })} /><div className="flex gap-2"><Button type="submit" size="sm" disabled={busy}>Save task</Button><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setEdit(null)}>Cancel</Button></div></form> : <div className="space-y-2"><Markdown source={task.description} />{editable ? <Button size="xs" variant="ghost" onClick={() => setEdit({ title: task.title, description: task.description })}>Edit task description</Button> : null}</div>}
+          <Markdown source={task.description} />
           {task.images.length ? <ul className="flex flex-wrap gap-2" aria-label="Task images">{task.images.map(item => <li key={item.artifactId}><button type="button" className="size-16 overflow-hidden rounded-md border bg-muted/30 focus-visible:outline" aria-label={`Open ${item.filename}`} onClick={() => setImage(item)}><img className="size-full object-cover" src={`/api/tasks/${task.id}/images/${item.artifactId}`} alt={item.filename} /></button></li>)}</ul> : null}
           {task.status !== "active" || task.pullRequest || task.humanQuestion ? <div data-task-current className="-mx-4 border-y px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10"><div className="mx-auto max-w-4xl space-y-3">
-            {task.pullRequest ? <a data-active-pull-request href={task.pullRequest.url} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-3 rounded-md border p-3 hover:bg-muted/30">{task.pullRequest.state === "merged" ? <GitMerge className="size-5 shrink-0 text-violet-500" /> : <GitPullRequest className="size-5 shrink-0 text-emerald-500" />}<span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{task.configuration.repository} #{task.pullRequest.number}</span></span><Badge variant="secondary">{task.pullRequest.state === "merged" ? "Merged" : task.pullRequest.state === "closed" ? "Closed" : "Open"}</Badge><ExternalLink className="size-3.5 shrink-0 text-muted-foreground" /></a> : task.status === "active" ? null : <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-muted-foreground">{task.status === "backlog" ? "The task is ready to start." : task.status === "delivered" ? "The delivery target is complete." : task.status === "cancelled" ? "The task is cancelled." : "Coordinator needs your answer."}</p>{editable ? <Button size="sm" disabled={busy} onClick={() => void act("start")}>Start task</Button> : null}</div>}
+            {task.pullRequest ? <a data-active-pull-request href={task.pullRequest.url} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-3 rounded-md border p-3 hover:bg-muted/30">{task.pullRequest.state === "merged" ? <GitMerge className="size-5 shrink-0 text-violet-500" /> : <GitPullRequest className="size-5 shrink-0 text-emerald-500" />}<span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{task.configuration.repository} #{task.pullRequest.number}</span></span><Badge variant="secondary">{task.pullRequest.state === "merged" ? "Merged" : task.pullRequest.state === "closed" ? "Closed" : "Open"}</Badge><ExternalLink className="size-3.5 shrink-0 text-muted-foreground" /></a> : task.status === "active" ? null : <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-muted-foreground">{task.status === "backlog" ? "The task is ready to start." : task.status === "delivered" ? "The delivery target is complete." : task.status === "cancelled" ? "The task is cancelled." : "Coordinator needs your answer."}</p>{editable ? <span className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setEdit(editTaskDraft(task))}>Edit task</Button><Button size="sm" disabled={busy} onClick={() => void act("start")}>Start task</Button></span> : null}</div>}
             {task.humanQuestion ? <TaskQuestion key={task.humanQuestion.id} question={task.humanQuestion} busy={busy} onAnswer={answer => act("answer", { questionId: task.humanQuestion?.id, ...answer })} onLimitDecision={limitDecision => act("answer", { questionId: task.humanQuestion?.id, limitDecision })} /> : null}
           </div></div> : null}
           {task.workflow !== "standard" ? <WorkflowHistory task={task} activity={activity} /> : null}
@@ -103,6 +97,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
         </dl>
       </aside>
     </div>
+    {edit ? <NewTaskDialog open editTask={task} initialDraft={edit} companyId={task.companyId} onOpenChange={open => { if (!open) setEdit(null); }} onCreated={saved => { setEdit(null); onChange(saved); }} /> : null}
     <LivePaneDock taskId={task.id} activity={activity} />
     <Dialog open={image !== null} onOpenChange={open => { if (!open) setImage(null); }}><DialogContent><DialogHeader><DialogTitle>{image?.filename ?? "Image preview"}</DialogTitle></DialogHeader>{image ? <img className="max-h-[70dvh] w-full object-contain" src={`/api/tasks/${task.id}/images/${image.artifactId}`} alt={image.filename} /> : null}</DialogContent></Dialog>
   </article>;

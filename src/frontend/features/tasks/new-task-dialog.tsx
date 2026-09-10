@@ -19,7 +19,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group.js";
 import { TaskSourcePicker, prefillForTaskSource, type TaskSourceSelector, type TaskSourceSummary } from "./task-source-picker.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
-import { readNewTaskMemory, writeNewTaskMemory } from "./new-task-memory.js";
+import { readNewTaskMemory, writeNewTaskMemory, type NewTaskMemory } from "./new-task-memory.js";
 import { TaskRoleSelector } from "./task-role-selectors.js";
 import type { NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 
@@ -39,8 +39,12 @@ function findRecord(records: ApiWorkflow[], id: string | undefined, engine: Work
   return records.find(record => record.id === id) ?? records.find(record => record.id === `workflow_native_${engine}`) ?? records.find(record => record.engine === engine && !record.archivedAt);
 }
 
-export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initialDraft }: { open: boolean; onOpenChange: (open: boolean) => void; companyId: string; onCreated: (task: Task) => void; initialDraft?: Partial<NewTaskDraft> | undefined }): ReactElement {
-  const [remembered] = useState(readNewTaskMemory);
+/** With editTask the dialog edits that task instead of creating one: it saves with PATCH and leaves the task's project, source and images alone. */
+export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initialDraft, editTask }: { open: boolean; onOpenChange: (open: boolean) => void; companyId: string; onCreated: (task: Task) => void; initialDraft?: Partial<NewTaskDraft> | undefined; editTask?: Task | undefined }): ReactElement {
+  const editing = editTask !== undefined;
+  // An edit is about one task, never a preference: it neither reads nor writes the new task memory.
+  const memory = (): NewTaskMemory => editing ? {} : readNewTaskMemory();
+  const [remembered] = useState(memory);
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   const [templates, setTemplates] = useState<ApiTaskTemplate[]>([]);
@@ -89,7 +93,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     setSettingsLoaded(false);
     if (!open) return;
     // Explicit draft fields apply over the remembered general settings; workflow selections are never remembered.
-    const saved = { ...readNewTaskMemory(), ...initialDraft };
+    const saved = { ...memory(), ...initialDraft };
     if (!initialDraft && selectedProject.current !== saved.projectId) { setSource(undefined); setSourceSummary(undefined); }
     setProjectId(saved.projectId ?? "");
     setStartImmediately(saved.startImmediately ?? true);
@@ -102,7 +106,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     setAdvisorProfileIds(admittedAdvisors(nextWorkflow, initialDraft?.advisorProfileIds ?? {}));
     previousDelivery.current = null;
     if (nextWorkflow === REPAIR) {
-      previousDelivery.current = { deliveryTarget: readNewTaskMemory().deliveryTarget ?? "pull_request_draft", runProjectTests: readNewTaskMemory().runProjectTests ?? true };
+      previousDelivery.current = { deliveryTarget: memory().deliveryTarget ?? "pull_request_draft", runProjectTests: memory().runProjectTests ?? true };
       setDeliveryTarget("merged"); setRunProjectTests(true);
       if (initialDraft?.source?.kind !== "pull_request") { setSource(undefined); setSourceSummary(undefined); }
     } else {
@@ -115,7 +119,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       setProjects(projectResult.projects); setProfiles(profileResult.profiles); setWorkflows(workflowResult.workflows);
       // The workflow record supplies its engine and defaults once it is known; explicit draft fields still win.
       const record = findRecord(workflowResult.workflows, initialDraft?.workflowId, nextWorkflow);
-      if (record) { setWorkflow(record.engine); setWorkflowId(record.id); applyRecord(record, initialDraft ?? {}, readNewTaskMemory()); }
+      if (record) { setWorkflow(record.engine); setWorkflowId(record.id); applyRecord(record, initialDraft ?? {}, memory()); }
       setRootProfileId(current => profileResult.profiles.some(profile => profile.id === current && profile.role === "root") ? current : "");
       setWorkerProfileId(current => profileResult.profiles.some(profile => profile.id === current && profile.role === "worker") ? current : "");
       setAdvisorProfileIds(current => Object.fromEntries(Object.entries(current).filter(([, id]) => profileResult.profiles.some(profile => profile.id === id && profile.role === "root"))) as AdvisorProfileIds);
@@ -132,16 +136,16 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     return () => { cancelled = true; };
   }, [projectId, open]);
   useEffect(() => {
-    if (!open || !settingsLoaded || !projects.some(project => project.id === projectId)) return;
+    if (editing || !open || !settingsLoaded || !projects.some(project => project.id === projectId)) return;
     // Repair forces target/tests; remember the draft's own general settings instead of the forced values.
     const general = repair && previousDelivery.current ? previousDelivery.current : { deliveryTarget, runProjectTests };
     // A workflow's default agent is not a general preference: keep the earlier remembered profile instead.
     const defaults: { rootProfileId?: string | undefined; workerProfileId?: string | undefined } = workflows.find(record => record.id === workflowId) ?? {};
-    const remembered = readNewTaskMemory();
+    const remembered = memory();
     const rootProfile = rootProfileId && rootProfileId === defaults.rootProfileId ? remembered.rootProfileId : rootProfileId || undefined;
     const workerProfile = workerProfileId && workerProfileId === defaults.workerProfileId ? remembered.workerProfileId : workerProfileId || undefined;
     writeNewTaskMemory({ projectId, rootProfileId: rootProfile, workerProfileId: workerProfile, startImmediately, deliveryTarget: general.deliveryTarget, runProjectTests: general.runProjectTests, visualEvidence });
-  }, [open, settingsLoaded, projects, projectId, rootProfileId, workerProfileId, startImmediately, deliveryTarget, runProjectTests, visualEvidence, repair, workflows, workflowId]);
+  }, [open, settingsLoaded, projects, projectId, rootProfileId, workerProfileId, startImmediately, deliveryTarget, runProjectTests, visualEvidence, repair, workflows, workflowId, editing]);
   const selectRecord = (record: ApiWorkflow) => {
     if (record.id === workflowId) return;
     const next = record.engine;
@@ -170,6 +174,11 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     if (busy || imageRead.current.pending || !projectId || !title.trim() || missingSource) return;
     setBusy(true); setError("");
     try {
+      if (editTask) {
+        const saved = await readJson<Task>(`/api/tasks/${editTask.id}`, { method: "PATCH", body: JSON.stringify({ title, description, deliveryTarget, runProjectTests, visualEvidence, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}) }) });
+        onCreated(saved);
+        return;
+      }
       const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(source ? { source } : {}) };
       const serialized = JSON.stringify(body);
       if (request.current?.body !== serialized) request.current = { body: serialized, key: crypto.randomUUID() };
@@ -203,33 +212,33 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     <DialogContent className="max-h-[min(85vh,460px)] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto rounded-xl p-0 shadow-2xl sm:max-w-[936px]" showCloseButton={false}>
       <DialogHeader className="px-4 py-3 sm:px-5">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2"><Breadcrumb><BreadcrumbList className="gap-2 text-sm"><BreadcrumbItem>
-          <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" aria-label="Project" disabled={busy || !projects.length} />}>
+          <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" aria-label="Project" disabled={busy || editing || !projects.length} />}>
             {project ? <EntityAvatar kind="project" id={project.id} name={project.name} size="xs" /> : <FolderKanban className="size-3.5 text-muted-foreground" />}<span className="max-w-40 truncate">{project?.name ?? "Project"}</span>
           </DropdownMenuTrigger><DropdownMenuContent align="start">{projects.map(candidate => <DropdownMenuItem key={candidate.id} onClick={() => { setProjectId(candidate.id); setSource(undefined); setSourceSummary(undefined); }}><EntityAvatar kind="project" id={candidate.id} name={candidate.name} size="xs" /><span className="min-w-0 flex-1 truncate">{candidate.name}</span>{candidate.id === projectId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
-        </BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><DialogTitle className="font-normal">New task</DialogTitle></BreadcrumbItem></BreadcrumbList></Breadcrumb>
+        </BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><DialogTitle className="font-normal">{editing ? "Edit task" : "New task"}</DialogTitle></BreadcrumbItem></BreadcrumbList></Breadcrumb>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
-          <TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy} pullRequestsOnly={repair} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
+          <TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy || editing} pullRequestsOnly={repair} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
           <label className="flex items-center gap-1.5 text-xs"><span className="text-muted-foreground">Workflow</span><Select value={workflowId} onValueChange={value => { const record = workflows.find(candidate => candidate.id === value); if (record) selectRecord(record); }}><SelectTrigger aria-label="Workflow" size="sm" disabled={busy}><SelectValue /></SelectTrigger><SelectContent>{workflows.filter(record => !record.archivedAt || record.id === workflowId).map(record => <SelectItem key={record.id} value={record.id}>{record.name}</SelectItem>)}</SelectContent></Select></label>
           <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={busy || !projectId} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.length ? templates.map(template => <DropdownMenuItem key={template.id} onClick={() => applyTemplate(template)}>{template.name}</DropdownMenuItem>) : <DropdownMenuItem render={<a href={withCompany(`/projects/${encodeURIComponent(projectId)}/templates`, companyId)} />}>Open templates</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu>
         </div></div>
       </DialogHeader>
-      <form className="flex min-h-[310px] min-w-0 flex-col" onPaste={event => { const files = Array.from(event.clipboardData.files); if (files.length && !busy) { event.preventDefault(); void addImages(files); } }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.requestSubmit(); } }} onSubmit={event => { event.preventDefault(); void submit(); }}>
+      <form className="flex min-h-[310px] min-w-0 flex-col" onPaste={event => { const files = Array.from(event.clipboardData.files); if (files.length && !busy && !editing) { event.preventDefault(); void addImages(files); } }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.requestSubmit(); } }} onSubmit={event => { event.preventDefault(); void submit(); }}>
         <div className="px-5 pt-1">
           <Input aria-label="Task title" autoFocus placeholder="Task title" value={title} onChange={event => setTitle(event.target.value)} className="h-10 border-0 bg-transparent px-0 text-lg font-semibold placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-lg dark:bg-transparent" />
           <Textarea aria-label="Task description" placeholder="Write a description" value={description} onChange={event => setDescription(event.target.value)} className="min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-sm font-normal placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-sm dark:bg-transparent" />
         </div>
         {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
         <div className="mt-auto flex flex-wrap items-end gap-2 px-5 pb-4">
-          <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} />
+          {editing ? null : <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} />}
           <TaskRoleSelector role="root" profiles={profiles} assignment={rootProfileId} defaultProfileId={project?.rootProfileId} busy={busy} onChange={setRootProfileId} />
           <TaskRoleSelector role="worker" profiles={profiles} assignment={workerProfileId} defaultProfileId={project?.workerProfileId} busy={busy} onChange={setWorkerProfileId} />
           {definition.advisorRoles.map(role => <TaskRoleSelector key={role} role="root" label={ADVISOR_LABELS[role]} profiles={profiles} assignment={advisorProfileIds[role] ?? ""} defaultProfileId={rootProfileId || project?.rootProfileId} busy={busy} onChange={profileId => setAdvisorProfileIds(current => ({ ...current, [role]: profileId || undefined }))} />)}
-          <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">{repair ? <span className="text-xs text-muted-foreground" data-repair-note>{missingSource ? "Select a pull request source." : repairNote}</span> : null}<NewButton type="submit" disabled={busy || readingImages || !projectId || !title.trim() || missingSource} title="New task (⌘Enter)">{busy ? "Forge saves" : "New task"}</NewButton></DialogFooter>
+          <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">{repair ? <span className="text-xs text-muted-foreground" data-repair-note>{missingSource ? "Select a pull request source." : repairNote}</span> : null}<NewButton type="submit" disabled={busy || readingImages || !projectId || !title.trim() || missingSource} title={editing ? "Save task (⌘Enter)" : "New task (⌘Enter)"}>{busy ? "Forge saves" : editing ? "Save task" : "New task"}</NewButton></DialogFooter>
         </div>
         <fieldset className="min-w-0 border-t border-border/70 bg-muted/30 px-5 py-3"><legend className="px-0 text-xs font-medium text-muted-foreground">Delivery &amp; checks</legend>
           <RadioGroup aria-label="Delivery target" value={deliveryTarget} disabled={repair} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))} className="mt-2.5 flex flex-wrap gap-x-4 gap-y-2">{taskDeliveryTargetOptions.map(option => <label className="flex items-center gap-1.5 text-xs" key={option.value}><RadioGroupItem value={option.value} disabled={repair} />{option.label}</label>)}</RadioGroup>
           <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border/60 pt-2.5 text-xs">
-            <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={startImmediately} onCheckedChange={value => setStartImmediately(value === true)} />Start immediately</label>
+            {editing ? null : <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={startImmediately} onCheckedChange={value => setStartImmediately(value === true)} />Start immediately</label>}
             {project?.verificationCommand.trim() || repair ? <label className="flex items-center gap-2"><Checkbox checked={runProjectTests} disabled={repair} onCheckedChange={value => setRunProjectTests(value === true)} />Run project tests</label> : <span className="text-muted-foreground">No project test command configured.</span>}
             <label className="flex items-center gap-2">Screenshots<Select value={visualEvidence} onValueChange={value => setVisualEvidence(VisualEvidenceSchema.parse(value))}><SelectTrigger aria-label="Screenshots" size="sm"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="off">Off</SelectItem><SelectItem value="capture">Capture</SelectItem><SelectItem value="required">Necessary</SelectItem></SelectContent></Select></label>
           </div>

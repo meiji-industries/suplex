@@ -18,6 +18,8 @@ import { AgentProfileService } from "./profiles/agent-profiles.js";
 import { ProjectService } from "./projects/projects.js";
 import { TaskService } from "./tasks/tasks.js";
 import { HermesAgentService } from "./identity/hermes-agents.js";
+import { AgentDeliveryService } from "./delivery/agent-delivery.js";
+import { DeliveryOperations } from "./delivery/operations.js";
 import { TaskHost } from "./tasks/host.js";
 import { createSelfUpdateService } from "./platform/updates/self-update.js";
 import { TaskAnalyticsStore } from "./tasks/analytics/store.js";
@@ -45,6 +47,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   await seedDevelopmentData(auth, config);
   const profiles = new AgentProfileService(database, auth);
   const tasks = new TaskService(database, auth, projects, config);
+  const agentDelivery = new AgentDeliveryService({ database, tasks, store: tasks.repository.controls, delivery: new DeliveryOperations(tasks.repository.controls), auth });
   const taskTemplates = new TaskTemplateService(database, auth, tasks);
   const workflows = new WorkflowRecordService(database, auth);
   const githubTriggers = new GithubTriggerService(database, auth, projects, workflows, createGithubReleasePort(), tasks);
@@ -56,6 +59,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     health: createHostHealthDependencies(config, database),
     auth,
     hermes,
+    agentDelivery,
     projects,
     profiles,
     tasks,

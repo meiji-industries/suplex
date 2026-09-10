@@ -281,3 +281,23 @@ test("workflow state with review records encodes for task API responses", () => 
   const record: ReviewRecord = { sessionId: "s", turnId: "t", role: "rater", range, invalidReason: null, recordedAt: "2026-09-07T00:00:00.000Z", result };
   expect(z.encode(PublicWorkflowStateSchema, { version: 1, reviews: [record], acceptedDelivery: null, deliveryWait: null, completion: null })).toMatchObject({ reviews: [{ result: { rating: 8 } }] });
 });
+
+test("the initial Coordinator prompt names undelivered dependencies and stays silent without them", () => {
+  const context = { configuration: { visualEvidence: "off" as const }, images: [] };
+  const control = (workflow: "standard" | "independent_review") => ({ objective: "Add the caller", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", pullRequestNumber: null }, workflow });
+  const dependencies = [{ id: "task_upstream", title: "Add the shared parser", status: "active" }, { id: "task_done", title: "Add the flag", status: "delivered" }];
+
+  for (const workflow of ["standard", "independent_review"] as const) {
+    const blocked = initialCoordinatorPrompt(control(workflow), context, dependencies);
+    expect(blocked).toContain('This task depends on these tasks: task_upstream "Add the shared parser" (active).');
+    expect(blocked).not.toContain("task_done");
+    expect(blocked).toContain("Wait for the delivery of every dependency before you integrate this task.");
+    expect(blocked).toContain("Forge merges their work into main. Integrate that work. Do not reimplement it.");
+    expect(blocked).toContain("Forge wakes this task when the dependencies deliver.");
+
+    // A task with no dependency, and a task whose dependencies are all delivered, read the same.
+    const free = initialCoordinatorPrompt(control(workflow), context);
+    expect(free).not.toContain("This task depends on these tasks");
+    expect(initialCoordinatorPrompt(control(workflow), context, [dependencies[1]!])).toBe(free);
+  }
+});

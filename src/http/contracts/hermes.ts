@@ -89,11 +89,17 @@ export const HermesPairingExchangeResponseSchema = z.object({
   credential: z.string(),
 });
 
+const taskId = z.string().min(1).max(128);
+const sha = z.string().regex(/^[a-f0-9]{40,64}$/);
+/** bound: dependency fan-out per task */
+const MAX_DEPENDENCIES = 50;
+
 export const HermesTaskCreateBodySchema = z.object({
   projectId: z.string().min(1).max(128),
   title: z.string().trim().min(1),
   description: z.string().trim().optional().meta({ default: "" }),
   idempotencyKey: z.string().trim().min(1).max(128),
+  dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).optional(),
   images: z.array(TaskImageInputSchema).max(MAX_TASK_IMAGES).default([]),
   source: TaskSourceInputSchema.optional(),
   workflowId: z.string().min(1).max(256).optional(),
@@ -106,6 +112,10 @@ export const HermesTaskCreateBodySchema = z.object({
   visualEvidence: VisualEvidenceSchema.optional(),
 }).passthrough().refine(input => !(input.workflowId && input.templateId), { message: "Select either a workflow or a template" });
 export type HermesTaskCreateBody = z.infer<typeof HermesTaskCreateBodySchema>;
+
+export const HermesTaskDependenciesBodySchema = z.object({
+  dependsOn: z.array(taskId).max(MAX_DEPENDENCIES),
+}).strict();
 
 export const HermesTaskIdParamsSchema = z.object({
   // Fastify's default router rejects longer parameters before the request reaches this schema.
@@ -219,6 +229,7 @@ export const HermesSafeTaskProjectionSchema = z.object({
   project: HermesProjectSchema,
   title: z.string(),
   status: HermesTaskStatusSchema,
+  dependsOn: z.array(z.string()),
   archived: z.boolean(),
   revision: z.string(),
   permittedCommands: z.array(HermesTaskCommandSchema),
@@ -245,6 +256,109 @@ export type HermesIntegration = z.infer<typeof HermesIntegrationSchema>;
 export type HermesActionRequired = z.infer<typeof HermesActionRequiredSchema>;
 export type HermesTaskFilter = z.infer<typeof HermesTaskFilterSchema>;
 export type HermesSafeTaskProjection = z.infer<typeof HermesSafeTaskProjectionSchema>;
+
+const HermesChecksSchema = z.object({
+  total: z.number().int().nonnegative(), pending: z.number().int().nonnegative(),
+  failing: z.number().int().nonnegative(), successful: z.number().int().nonnegative(),
+  runs: z.array(z.object({ name: z.string(), status: z.enum(["pending", "failing", "successful"]), url: z.string().nullable(), conclusion: z.string().optional() })),
+});
+
+export const HermesPullRequestObservationSchema = z.object({
+  exists: z.boolean(),
+  number: z.number().int().nullable(),
+  url: z.string().nullable(),
+  state: z.enum(["open", "closed", "merged"]).nullable(),
+  isDraft: z.boolean().nullable(),
+  headSha: z.string().nullable(),
+  baseSha: z.string().nullable(),
+  mergeable: z.string().nullable(),
+  mergeStateStatus: z.string().nullable(),
+  reviewDecision: z.string().nullable(),
+  checks: HermesChecksSchema,
+});
+
+export const HermesDeliveryRefreshResponseSchema = z.object({
+  taskId: z.string(),
+  pullRequest: z.object({ repository: z.string(), number: z.number().int(), url: z.string(), headSha: z.string(), state: z.string(), mergedAt: z.string().nullable() }).nullable(),
+  observation: HermesPullRequestObservationSchema.nullable(),
+});
+
+export const HermesDeliveryRepairResponseSchema = z.object({
+  taskId: z.string(),
+  attemptId: z.string(),
+  observation: HermesPullRequestObservationSchema,
+});
+
+export const HermesDeliveryDecisionBodySchema = z.object({
+  decision: z.enum(["wait_for_dependency", "resume"]),
+}).strict();
+
+export const HermesDeliveryDecisionResponseSchema = z.object({
+  taskId: z.string(),
+  decision: z.enum(["wait_for_dependency", "resume"]),
+  blockingTaskIds: z.array(z.string()),
+});
+
+export const HermesMergeTrainQuerySchema = z.object({ projectId: z.string().min(1).max(128).optional() });
+
+export const HermesMergeTrainResponseSchema = z.object({
+  entries: z.array(z.object({
+    taskId: z.string(),
+    title: z.string(),
+    status: z.string(),
+    dependsOn: z.array(z.string()),
+    pullRequestNumber: z.number().int().nullable(),
+    headSha: z.string().nullable(),
+    baseSha: z.string().nullable(),
+    isDraft: z.boolean().nullable(),
+    reviewDecision: z.string().nullable(),
+    checks: z.object({ total: z.number().int(), pending: z.number().int(), failing: z.number().int(), successful: z.number().int() }),
+    blocker: z.string().nullable(),
+  })),
+});
+
+export const HermesMergeApprovalBodySchema = z.object({
+  pullRequestNumber: z.number().int().positive(),
+  headSha: sha,
+  baseSha: sha,
+}).strict();
+
+export const HermesMergeApprovalResponseSchema = z.object({
+  taskId: z.string(),
+  receipt: z.string(),
+  expiresAt: z.string(),
+  pullRequestNumber: z.number().int(),
+  headSha: z.string().nullable(),
+  baseSha: z.string().nullable(),
+});
+
+export const HermesMergeBodySchema = z.object({
+  pullRequestNumber: z.number().int().positive(),
+  expectedHeadSha: sha,
+  expectedBaseSha: sha,
+  approvalReceipt: z.string().min(1).max(128),
+}).strict();
+
+export const HermesMergeResponseSchema = z.object({
+  taskId: z.string(),
+  pullRequestNumber: z.number().int(),
+  result: z.unknown(),
+});
+
+export const HermesProvenanceResponseSchema = z.object({
+  records: z.array(z.object({
+    id: z.string(),
+    attemptId: z.string().nullable(),
+    kind: z.string(),
+    pullRequestNumber: z.number().int().nullable(),
+    originalHeadSha: z.string().nullable(),
+    headSha: z.string().nullable(),
+    baseSha: z.string().nullable(),
+    checks: z.unknown().nullable(),
+    merge: z.unknown().nullable(),
+    recordedAt: z.string(),
+  })),
+});
 export type HermesTaskReadProjection = z.infer<typeof HermesTaskReadProjectionSchema>;
 
 export const HermesTaskListResponseSchema = z.object({
@@ -281,11 +395,12 @@ export const HermesCapabilitiesSchema = z.object({
     read: z.object({ task: z.literal(true) }),
     create: z.object({ backlogTask: z.literal(true) }),
     taskControl: z.literal(true),
-    delivery: z.literal(false),
-    merge: z.literal(false),
+    // Delivery and merge follow the configured agent delivery surface, which a deployment can leave off.
+    delivery: z.boolean(),
+    merge: z.boolean(),
     humanDecisions: z.literal(false),
   }),
-  autonomousCommands: z.array(z.enum(["create_backlog_task", "start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"])),
+  autonomousCommands: z.array(z.enum(["create_backlog_task", "start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait", "observe_delivery", "request_delivery_repair", "decide_delivery_wait", "read_merge_train", "request_merge_approval", "merge_pull_request"])),
   humanOnlyRecords: z.array(z.literal("task_human_answer")),
   unavailableCommands: z.array(z.enum([
     "answer_human_question",

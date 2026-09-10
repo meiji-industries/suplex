@@ -6,6 +6,8 @@ import { AdvisorProfileIdsSchema, AdvisorRoleSchema, PublicWorkflowStateSchema, 
 import { TaskLimitPauseSchema, TaskLimitsSchema } from "./limits/limits.js";
 
 const id = z.string().min(1).max(256);
+/** bound: dependency fan-out per task */
+export const MAX_TASK_DEPENDENCIES = 50;
 const commit = z.string().regex(/^[a-f0-9]{40,64}$/i);
 export const DeliveryTargetSchema = z.enum(["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"]);
 export const VisualEvidenceSchema = z.enum(["off", "capture", "required"]);
@@ -36,6 +38,7 @@ export const TaskInputSchema = z.object({
   source: TaskSourceInputSchema.optional(),
   workflow: WorkflowIdSchema.default("standard"),
   advisorProfileIds: AdvisorProfileIdsSchema.default({}),
+  dependsOn: z.array(id).max(MAX_TASK_DEPENDENCIES).default([]),
 }).strict();
 export type TaskInput = z.input<typeof TaskInputSchema>;
 export type TaskRequest = z.output<typeof TaskInputSchema>;
@@ -75,6 +78,7 @@ export const TaskSchema = z.object({
   workflow: WorkflowIdSchema,
   advisorProfiles: z.partialRecord(AdvisorRoleSchema, TaskProfileSchema),
   workflowState: PublicWorkflowStateSchema,
+  dependsOn: z.array(id).default([]),
   configuration: TaskConfigurationSchema,
   worktree: WorktreeReferenceSchema.nullable(),
   pullRequest: PullRequestReferenceSchema.nullable(),

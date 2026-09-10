@@ -27,6 +27,7 @@ export const TaskDetailsBodySchema = z.object({
 }).partial().strict();
 export const TaskBlockedByBodySchema = z.object({ blockedByTaskId: z.string().min(1).max(256).nullable() }).strict();
 export const TaskRenameBodySchema = TaskInputSchema.pick({ title: true });
+export const TaskDependenciesBodySchema = TaskInputSchema.pick({ dependsOn: true }).required().strict();
 export const TaskArchiveBodySchema = z.object({ confirmDiscardDirty: z.boolean().optional() }).strict();
 export const TaskArchiveResponseSchema = z.union([TaskResponseSchema, z.object({
   status: z.literal("confirmation_required"),

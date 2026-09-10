@@ -312,7 +312,7 @@ export class RootController implements RootBridgeAdapter {
     const root = this.store.currentSession(taskId, "root") ?? this.store.claimRoot({ taskId });
     if (!this.store.hasTurns(root.id)) {
       const context = this.store.context(taskId);
-      this.store.ensureInitialPrompt(root, initialCoordinatorPrompt(this.store.get(taskId), context));
+      this.store.ensureInitialPrompt(root, initialCoordinatorPrompt(this.store.get(taskId), context, this.store.dependencySummaries(taskId)));
     }
     return root;
   }

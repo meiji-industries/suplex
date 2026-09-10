@@ -21,6 +21,8 @@ import { HermesAgentService } from "../src/identity/hermes-agents.js";
 import { SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects/projects.js";
 import { TaskService } from "../src/tasks/tasks.js";
+import { AgentDeliveryService } from "../src/delivery/agent-delivery.js";
+import { DeliveryOperations } from "../src/delivery/operations.js";
 import type { WorktreeReference } from "../src/tasks/control.js";
 import type { ProjectAgentTaskPolicy } from "../src/http/contracts/projects.js";
 import { TaskInputSchema } from "../src/tasks/contracts.js";
@@ -329,7 +331,8 @@ test("authenticated runtime contract uses the live task schemas and states its a
     capabilities: { read: { task: true }, create: { backlogTask: true }, taskControl: true, delivery: false, merge: false, humanDecisions: false },
     pagination: { supported: false, cursor: false },
   });
-  expect(capabilities.json().unavailableCommands).toContain("answer_human_question");
+  expect(capabilities.json().unavailableCommands).toEqual(["answer_human_question", "deliver_task", "merge_pull_request"]);
+  expect(capabilities.json().autonomousCommands).not.toContain("read_merge_train");
 
   const invalid = await app.inject({
     method: "POST",
@@ -533,9 +536,10 @@ test("POST /api/hermes/tasks creates task with native status, private no-store h
   expect(response.headers["cache-control"]).toBe("private, no-store");
 
   const body = response.json();
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(body).sort()).toEqual(expectedKeys);
   expect(body).toMatchObject({
+    dependsOn: [],
     issueKey: "HMC-1",
     projectId,
     project: { id: projectId, name: "Hermes Project" },
@@ -967,7 +971,7 @@ test("GET /api/hermes/tasks/:taskId returns safe projection, handles non-enumera
   });
   expect(getSuccess.statusCode).toBe(200);
   expect(getSuccess.headers["cache-control"]).toBe("private, no-store");
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(getSuccess.json()).sort()).toEqual(expectedKeys);
   expect(getSuccess.json().title).toBe("Task For Status Check");
 
@@ -1085,7 +1089,7 @@ test("GET /api/hermes/tasks scopes the list, rejects an unknown filter, and expo
   expect(ids).not.toContain(outOfGrant.id);
   expect(ids).not.toContain(crossCompany.id);
 
-  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
+  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
   expect(JSON.stringify(listed)).not.toMatch(/worktree|repositoryPath|session|turn|prompt|transcript|credential|objective/i);
 
   expect((await listTasks(`?projectId=${projectId}`)).json().tasks.map((task: { id: string }) => task.id)).toContain(granted);
@@ -1534,4 +1538,109 @@ test("identical concurrent requests for one key produce one effect and replay th
   expect(mismatched.statusCode).toBe(409);
   expect(mismatched.json().code).toBe("idempotency_conflict");
   expect(auditCount("task_cancelled", task.id)).toBe(1);
+});
+
+const createDependencyTask = async (title: string, idempotencyKey: string, dependsOn?: string[]) => {
+  const response = await app.inject({
+    method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` },
+    payload: { projectId, title, idempotencyKey, ...(dependsOn ? { dependsOn } : {}) },
+  });
+  return response;
+};
+
+test("task dependencies are declared on create, replaced through the agent route, and visible on the projection", async () => {
+  const first = await createDependencyTask("Dependency root", "dependency-root-001");
+  expect(first.statusCode, first.body).toBe(201);
+  const firstId = first.json().id as string;
+
+  const second = await createDependencyTask("Dependency follower", "dependency-follower-001", [firstId]);
+  expect(second.statusCode, second.body).toBe(201);
+  expect(second.json().dependsOn).toEqual([firstId]);
+  const secondId = second.json().id as string;
+  expect(tasks.getTask(adminId, secondId).dependsOn).toEqual([firstId]);
+
+  const third = await createDependencyTask("Dependency third", "dependency-third-001");
+  const thirdId = third.json().id as string;
+  const replaced = await app.inject({
+    method: "PUT", url: `/api/hermes/tasks/${thirdId}/dependencies`,
+    headers: { Authorization: `Bearer ${agentCredential}` }, payload: { dependsOn: [secondId, firstId] },
+  });
+  expect(replaced.statusCode, replaced.body).toBe(200);
+  expect(replaced.json().dependsOn).toEqual([firstId, secondId].sort());
+
+  const cleared = await app.inject({
+    method: "PUT", url: `/api/hermes/tasks/${thirdId}/dependencies`,
+    headers: { Authorization: `Bearer ${agentCredential}` }, payload: { dependsOn: [] },
+  });
+  expect(cleared.json().dependsOn).toEqual([]);
+
+  // The user route replaces the same edges under user authority.
+  expect(tasks.setTaskDependencies(adminId, thirdId, [firstId]).dependsOn).toEqual([firstId]);
+});
+
+test("a cycle, a self-dependency, and a dependency outside the agent scope are rejected", async () => {
+  const first = await createDependencyTask("Cycle a", "cycle-a-001");
+  const second = await createDependencyTask("Cycle b", "cycle-b-001");
+  const firstId = first.json().id as string;
+  const secondId = second.json().id as string;
+  const dependencies = (taskId: string, dependsOn: string[], credential = agentCredential) => app.inject({
+    method: "PUT", url: `/api/hermes/tasks/${taskId}/dependencies`,
+    headers: { Authorization: `Bearer ${credential}` }, payload: { dependsOn },
+  });
+
+  expect((await dependencies(secondId, [firstId])).statusCode).toBe(200);
+  const cycle = await dependencies(firstId, [secondId]);
+  expect(cycle.statusCode).toBe(422);
+  expect(cycle.json().error).toBe("The dependency creates a cycle");
+  expect(tasks.getTask(adminId, firstId).dependsOn).toEqual([]);
+
+  const self = await dependencies(firstId, [firstId]);
+  expect(self.statusCode).toBe(422);
+  expect(self.json().error).toBe("A task cannot depend on itself");
+
+  // Another agent's task is not enumerable, so it cannot become a dependency.
+  const otherIssued = hermes.create(adminId, { name: "Scope Bot", companyId, projectIds: [projectId] });
+  const otherCredential = hermes.exchange({ pairingCode: otherIssued.pairingCode, profileId: "profile-scope" }).credential;
+  const foreign = await app.inject({
+    method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${otherCredential}` },
+    payload: { projectId, title: "Foreign task", idempotencyKey: "foreign-task-001" },
+  });
+  const outOfScope = await dependencies(firstId, [foreign.json().id as string]);
+  expect(outOfScope.statusCode).toBe(404);
+  expect(tasks.getTask(adminId, firstId).dependsOn).toEqual([]);
+
+  const unknown = await dependencies(firstId, ["task_unknown"]);
+  expect(unknown.statusCode).toBe(404);
+});
+
+test("configured agent delivery reports delivery, merge, and the agent delivery commands", async () => {
+  const health = {
+    database: async () => ({ id: "database" as const, label: "Database", status: "healthy" as const, summary: "Ready", details: {} }),
+    artifactRoot: async () => ({ id: "artifact-root" as const, label: "Artifacts", status: "healthy" as const, summary: "Ready", details: {} }),
+    opencode: async () => ({ id: "opencode" as const, label: "OpenCode", status: "healthy" as const, summary: "Ready", details: {} }),
+    ghAuth: async () => ({ id: "gh-auth" as const, label: "GitHub", status: "healthy" as const, summary: "Ready", details: {} }),
+  };
+  const config = createTestConfig(root, { repositoryRoot: join(root, "repositories"), worktreeRoot: join(root, "worktrees"), reachableAddress: "http://127.0.0.1:4111", developmentAutoLogin: true });
+  const read = (instance: ReturnType<typeof createApp>) => instance.inject({ method: "GET", url: "/api/hermes/capabilities", headers: { Authorization: `Bearer ${agentCredential}` } });
+
+  const unconfigured = await read(app);
+  expect(unconfigured.json()).toMatchObject({ capabilities: { delivery: false, merge: false, humanDecisions: false } });
+  expect(unconfigured.json().unavailableCommands).toContain("merge_pull_request");
+
+  const store = tasks.repository.controls;
+  const agentDelivery = new AgentDeliveryService({ database, tasks, store, delivery: new DeliveryOperations(store), auth });
+  const configured = createApp({ config, auth, projects, tasks, hermes, agentDelivery, health });
+  try {
+    const response = await read(configured);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ capabilities: { read: { task: true }, create: { backlogTask: true }, taskControl: true, delivery: true, merge: true, humanDecisions: false } });
+    expect(response.json().unavailableCommands).toEqual(["answer_human_question", "deliver_task"]);
+    expect(response.json().autonomousCommands).toEqual(expect.arrayContaining(["observe_delivery", "request_delivery_repair", "decide_delivery_wait", "read_merge_train", "request_merge_approval", "merge_pull_request"]));
+
+    // The published contract still describes the reply it now sends.
+    const document = (await configured.inject({ method: "GET", url: "/api/hermes/openapi.json", headers: { Authorization: `Bearer ${agentCredential}` } })).json() as { paths: Record<string, { get?: { responses: Record<string, { content: { "application/json": { schema: unknown } } }> } }> };
+    validateDocumentSchema(response.json(), document.paths["/api/hermes/capabilities"]!.get!.responses["200"]!.content["application/json"].schema);
+  } finally {
+    await configured.close();
+  }
 });

@@ -14,6 +14,7 @@ import type Database from "better-sqlite3";
 import type { ForgeDatabase } from "../platform/database.js";
 import { createOpenCodeMessageID } from "../runtimes/opencode/session.js";
 import { TaskConfigurationSchema } from "../tasks/contracts.js";
+import { taskDependencySummaries, type TaskDependencySummary } from "../tasks/dependencies.js";
 import type { PromptDispatchAttempt, PullRequestReference } from "../tasks/control.js";
 import { DeliveryIntentSchema, PullRequestReferenceSchema, TaskControlStatusSchema, TaskProfileSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, WorktreeReferenceSchema, type DeliveryIntent, type TaskControl, type TaskProfile, type TaskSession, type TaskSessionKind, type TaskTurn, type WorktreeReference } from "../tasks/control.js";
 import { AdvisorRoleSchema, RaterResultSchema, ReviewerResultSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, turnOutcome, type AdvisorResult, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
@@ -165,6 +166,7 @@ export class TaskControlStore {
       return { configuration: TaskConfigurationSchema.parse(JSON.parse(configuration)), images };
     });
   }
+  dependencySummaries(taskId: string): TaskDependencySummary[] { return taskDependencySummaries(this.database, taskId); }
   image(taskId: string, artifactId: string) {
     return this.database.authQuery(db => {
       const row = db.prepare("SELECT a.filename, a.mime_type AS mimeType, a.company_id AS companyId, a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_tasks t ON t.id = a.task_id AND t.company_id = a.company_id WHERE t.id = ? AND a.id = ? AND a.kind = 'task-image'").get(taskId, artifactId);

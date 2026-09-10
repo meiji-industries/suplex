@@ -6,6 +6,7 @@ import { TaskControlStore } from "../coordination/root-session-store.js";
 import { TaskConfigurationSchema, TaskImageSchema, TaskSchema, type DeliveryTarget, type Task, type TaskConfiguration, type TaskInput, type TaskRequest, type VisualEvidence } from "./contracts.js";
 import type { TaskProfile } from "./control.js";
 import { advisorKeysSorted, publicWorkflowState, type AdvisorRole, type WorkflowId } from "../coordination/workflows.js";
+import { taskDependencies } from "./dependencies.js";
 
 export type TaskCreator = { kind: "user"; id: string } | { kind: "agent"; id: string };
 const RowSchema = z.object({
@@ -24,10 +25,12 @@ const select = "SELECT t.*, CASE WHEN julianday(t.updated_at) >= julianday(COALE
 export class TaskConflict extends Error {}
 
 export function taskRequestHash(input: TaskInput, creator: TaskCreator): string {
-  // A Standard request with no Advisor selections hashes exactly like a pre-workflow request.
-  const { workflow, advisorProfileIds, ...legacy } = input;
+  // A Standard request with no Advisor selections and no dependencies hashes exactly like a pre-workflow request.
+  const { workflow, advisorProfileIds, dependsOn, ...legacy } = input;
   const advisors = advisorKeysSorted(advisorProfileIds ?? {});
-  const hashed = (workflow ?? "standard") === "standard" && Object.keys(advisors).length === 0 ? legacy : { ...legacy, workflow, advisorProfileIds: advisors };
+  const dependencies = [...new Set(dependsOn ?? [])].sort();
+  const base = dependencies.length ? { ...legacy, dependsOn: dependencies } : legacy;
+  const hashed = (workflow ?? "standard") === "standard" && Object.keys(advisors).length === 0 ? base : { ...base, workflow, advisorProfileIds: advisors };
   return createHash("sha256").update(JSON.stringify({ input: hashed, creator })).digest("hex");
 }
 
@@ -111,7 +114,7 @@ export class TaskRepository {
       id: row.id, companyId: row.company_id, projectId: row.project_id,
       issueKey: row.issue_code && row.issue_number ? `${row.issue_code}-${row.issue_number}` : null,
       title: row.title, description: row.description, status: control.status, deliveryTarget: control.deliveryTarget,
-      rootProfile: control.rootProfile, workerProfile: control.workerProfile, workflow: control.workflow, advisorProfiles: control.advisorProfiles, workflowState: publicWorkflowState(control.workflowState), configuration: JSON.parse(row.configuration_json),
+      rootProfile: control.rootProfile, workerProfile: control.workerProfile, workflow: control.workflow, advisorProfiles: control.advisorProfiles, workflowState: publicWorkflowState(control.workflowState), dependsOn: taskDependencies(this.database, row.id), configuration: JSON.parse(row.configuration_json),
       worktree: control.worktree, pullRequest: control.pullRequest,
       humanQuestion: control.humanQuestion && control.humanQuestionId ? control.limitPause
         ? { kind: "task_limit", id: control.humanQuestionId, text: control.humanQuestion, options: [], requiresCommandCleanup: false, pause: control.limitPause }

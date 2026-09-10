@@ -85,6 +85,7 @@ export function workerAssignmentPreamble(mode: "planned" | "direct", purpose: "i
 
 type TaskContext = { objective: string; deliveryTarget: string; deliveryIntent: { repository: string; headBranch: string; baseBranch: string; pullRequestNumber: number | null }; workflow: WorkflowId };
 type CapturedConfiguration = { configuration: { visualEvidence: VisualEvidence }; images: unknown };
+type TaskDependency = { id: string; title: string; status: string };
 
 const STANDARD_INITIAL_PROMPT = `You are the continuing read-only Coordinator for this Forge task. You own repository investigation and independent review of the Worker's output. Read-only limits mutations, not your responsibility to reason about the code.
 
@@ -102,13 +103,31 @@ export function visualEvidenceInstruction(value: VisualEvidence): string {
   return "Screenshots are necessary for this task. User-visible changes need browser screenshots as evidence. Missing screenshots are a missing check.";
 }
 
-export function initialCoordinatorPrompt(control: TaskContext, context: CapturedConfiguration): string {
+/**
+ * The dependency section of the initial prompt. Only an undelivered dependency produces text, so a
+ * task that nothing blocks reads exactly as it did before dependencies existed.
+ */
+export function dependencyInstruction(baseBranch: string, dependencies: TaskDependency[]): string {
+  const undelivered = dependencies.filter(dependency => dependency.status !== "delivered");
+  if (!undelivered.length) return "";
+  const list = undelivered.map(dependency => `${dependency.id} "${dependency.title}" (${dependency.status})`).join(", ");
+  return [
+    `This task depends on these tasks: ${list}.`,
+    "Wait for the delivery of every dependency before you integrate this task.",
+    `Forge merges their work into ${baseBranch}. Integrate that work. Do not reimplement it.`,
+    "Forge wakes this task when the dependencies deliver.",
+  ].join(" ");
+}
+
+export function initialCoordinatorPrompt(control: TaskContext, context: CapturedConfiguration, dependencies: TaskDependency[] = []): string {
   const identity = `Objective: ${control.objective}\nDelivery target: ${control.deliveryTarget}\nRepository: ${control.deliveryIntent.repository}\nBranch: ${control.deliveryIntent.headBranch}`;
+  const blocked = dependencyInstruction(control.deliveryIntent.baseBranch, dependencies);
+  const suffix = blocked ? `\n\n${blocked}` : "";
   if (control.workflow === "standard") {
-    return `${STANDARD_INITIAL_PROMPT}\n\n${identity}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\nInspect the repository yourself before deciding whether Worker setup is needed. ${CAPTURED_CONTEXT_SUFFIX}\n\n${visualEvidenceInstruction(context.configuration.visualEvidence)}`;
+    return `${STANDARD_INITIAL_PROMPT}\n\n${identity}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\nInspect the repository yourself before deciding whether Worker setup is needed. ${CAPTURED_CONTEXT_SUFFIX}\n\n${visualEvidenceInstruction(context.configuration.visualEvidence)}${suffix}`;
   }
   const pull = control.deliveryIntent.pullRequestNumber === null ? "" : `\nPull request: #${control.deliveryIntent.pullRequestNumber} (${control.deliveryIntent.headBranch} into ${control.deliveryIntent.baseBranch})`;
-  return `${COORDINATOR_SYSTEM_PROMPT}\n\n${WORKFLOW_INSTRUCTIONS[control.workflow]}\n\n${identity}\nBase branch: ${control.deliveryIntent.baseBranch}${pull}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\n${CAPTURED_CONTEXT_SUFFIX}\n\n${visualEvidenceInstruction(context.configuration.visualEvidence)}`;
+  return `${COORDINATOR_SYSTEM_PROMPT}\n\n${WORKFLOW_INSTRUCTIONS[control.workflow]}\n\n${identity}\nBase branch: ${control.deliveryIntent.baseBranch}${pull}\n\nCaptured task configuration:\n${JSON.stringify(context)}\n\n${CAPTURED_CONTEXT_SUFFIX}\n\n${visualEvidenceInstruction(context.configuration.visualEvidence)}${suffix}`;
 }
 
 export interface WorkerAssignmentText {

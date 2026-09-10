@@ -9,6 +9,7 @@ import type { ForgeDatabase } from "./platform/database.js";
 import type { ForgeConfig } from "./platform/config.js";
 import type { TaskHost } from "./tasks/host.js";
 import type { HermesAgentService } from "./identity/hermes-agents.js";
+import type { AgentDeliveryService } from "./delivery/agent-delivery.js";
 import type { ReadProviders } from "./profiles/provider-catalog.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./platform/health.js";
 import { inspectUpdateAvailability, type UpdateAvailability } from "./platform/updates/update.js";
@@ -59,6 +60,7 @@ export interface AppDependencies {
   database?: ForgeDatabase;
   logger?: Logger | false;
   hermes?: HermesAgentService;
+  agentDelivery?: AgentDeliveryService;
   hermesGithub?: HermesGithubPort;
   readProviders?: ReadProviders;
   readUpdate?: (user: AuthUser) => Promise<UpdateAvailability | UpdateObservation>;
@@ -132,7 +134,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
   if (auth) {
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
     if (dependencies.hermes) void app.register(hermesPairing, { hermes: dependencies.hermes });
-    if (dependencies.hermes && taskService) registerHermesTaskRoutes(app, { hermes: dependencies.hermes, tasks: taskService, ...(dependencies.host ? { host: dependencies.host } : {}), ...(dependencies.hermesGithub ? { github: dependencies.hermesGithub } : {}) });
+    if (dependencies.hermes && taskService) registerHermesTaskRoutes(app, { hermes: dependencies.hermes, tasks: taskService, ...(dependencies.host ? { host: dependencies.host } : {}), ...(dependencies.hermesGithub ? { github: dependencies.hermesGithub } : {}), ...(dependencies.agentDelivery ? { agentDelivery: dependencies.agentDelivery } : {}) });
     void app.register(authenticated, { auth, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), readUpdate, ...(dependencies.requestUpdateRestart ? { requestUpdateRestart: dependencies.requestUpdateRestart } : {}), ...(dependencies.launchUpdateRestart ? { launchUpdateRestart: dependencies.launchUpdateRestart } : {}), ...(dependencies.instanceId ? { instanceId: dependencies.instanceId } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(dependencies.host ? { host: dependencies.host } : {}), ...(database ? { database } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
     if (templateService) void app.register(taskTemplates, { auth, config: dependencies.config, templates: templateService });
     if (dependencies.workflows) void app.register(workflowRoutes, { auth, config: dependencies.config, workflows: dependencies.workflows });

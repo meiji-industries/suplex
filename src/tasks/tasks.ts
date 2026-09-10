@@ -20,7 +20,8 @@ import { TaskDetailsBodySchema } from "../http/contracts/tasks.js";
 import { WorkflowRecordInputSchema } from "../http/contracts/workflows.js";
 import type { ProjectService } from "../projects/projects.js";
 import { TaskProfileSchema, type TaskProfile } from "./control.js";
-import { TaskConfigurationSchema, TaskImageInputSchema, TaskInputSchema, type Task, type TaskInput } from "./contracts.js";
+import { MAX_TASK_DEPENDENCIES, TaskConfigurationSchema, TaskImageInputSchema, TaskInputSchema, type Task, type TaskInput } from "./contracts.js";
+import { replaceTaskDependencies, TaskDependencyFailure } from "./dependencies.js";
 import { duplicateTitle } from "./duplicate-title.js";
 import { decodeTaskImage } from "./images.js";
 import { taskBranchName } from "./branch.js";
@@ -58,6 +59,7 @@ type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "res
 export type TaskServicePorts = { removeWorktree?: typeof removeTaskWorktree };
 const DetailsSchema = TaskDetailsBodySchema.refine(input => Object.keys(input).length > 0);
 const RenameSchema = TaskInputSchema.pick({ title: true });
+const DependsOnSchema = z.array(z.string().min(1).max(256)).max(MAX_TASK_DEPENDENCIES);
 const BlockedBySchema = z.object({ blockedByTaskId: z.string().min(1).max(256).nullable() }).strict();
 
 export class TaskService {
@@ -160,6 +162,40 @@ export class TaskService {
 
   getHermesTask(principal: HermesPrincipal, taskId: string) {
     return this.hermesProjection(this.requireTask({ kind: "hermes", principal }, taskId));
+  }
+
+  /** The authorized task row for a Hermes agent command. Every agent command resolves its task through this check. */
+  hermesTaskRow(principal: HermesPrincipal, taskId: string): TaskRow {
+    return this.requireTask({ kind: "hermes", principal }, taskId);
+  }
+
+  /** Every task the agent created inside its granted projects, newest activity first. */
+  listHermesTaskRows(principal: HermesPrincipal): TaskRow[] {
+    return this.repository.rows().filter(row => row.company_id === principal.companyId && row.creator_agent_id === principal.agentId && principal.projectIds.includes(row.project_id) && !row.archived_at);
+  }
+
+  setTaskDependencies(userId: string, taskId: string, dependsOn: unknown): Task {
+    const task = this.getTask(userId, taskId);
+    this.applyDependencies({ kind: "user", userId }, task.companyId, taskId, DependsOnSchema.parse(dependsOn));
+    this.audit({ kind: "user", userId }, task.companyId, "task_dependencies_updated", taskId);
+    return this.getTask(userId, taskId);
+  }
+
+  setHermesTaskDependencies(principal: HermesPrincipal, taskId: string, dependsOn: unknown) {
+    const authority: Authority = { kind: "hermes", principal };
+    const row = this.requireTask(authority, taskId);
+    this.applyDependencies(authority, row.company_id, taskId, DependsOnSchema.parse(dependsOn));
+    this.audit(authority, row.company_id, "task_dependencies_updated", taskId);
+    return this.getHermesTask(principal, taskId);
+  }
+
+  private applyDependencies(authority: Authority, companyId: string, taskId: string, dependsOn: string[]): void {
+    for (const dependency of dependsOn) this.requireTask(authority, dependency);
+    try { replaceTaskDependencies(this.database, { taskId, companyId, dependsOn }); }
+    catch (error) {
+      if (error instanceof TaskDependencyFailure) throw new TaskFailure(error.publicMessage, error.statusCode);
+      throw error;
+    }
   }
 
   /** The read path adds observed delivery integration health to the stored projection. */
@@ -353,7 +389,11 @@ export class TaskService {
         // A copy commits with the source it was authorized against, and carries that provenance from its first row.
         const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images, ...(copiedFromTaskId ? { copiedFromTaskId } : {}) });
         if (capturedDispatch) new GithubTriggerDispatchRepository(this.database).linkTask(capturedDispatch.id, result.task.id);
-        if (result.created) this.audit(authority, companyId, "task_created", result.task.id);
+        if (result.created) {
+          if (request.dependsOn.length) this.applyDependencies(authority, companyId, result.task.id, request.dependsOn);
+          this.audit(authority, companyId, "task_created", result.task.id);
+          return { task: this.repository.task(this.repository.row(result.task.id)!), created: true };
+        }
         return result;
       });
     } catch (error) {
@@ -566,7 +606,7 @@ export class TaskService {
     let request: ReturnType<typeof TaskInputSchema.parse>;
     try {
       request = TaskInputSchema.parse(normalizeWorkflowInput({
-        projectId: raw.projectId, title: raw.title, description: raw.description === undefined ? selected.description ?? "" : raw.description, idempotencyKey: raw.idempotencyKey, images: raw.images, source: raw.source,
+        projectId: raw.projectId, title: raw.title, description: raw.description === undefined ? selected.description ?? "" : raw.description, idempotencyKey: raw.idempotencyKey, images: raw.images, source: raw.source, dependsOn: raw.dependsOn,
         workflow: selected.workflow ?? "standard", rootProfileId: raw.rootProfileId ?? selected.rootProfileId, workerProfileId: raw.workerProfileId ?? selected.workerProfileId,
         advisorProfileIds: Object.keys(raw.advisorProfileIds).length ? raw.advisorProfileIds : selected.advisorProfileIds ?? {},
         deliveryTarget: policy.deliveryTarget, runProjectTests: policy.runProjectTests, visualEvidence: policy.visualEvidence, startImmediately: false,
@@ -613,7 +653,7 @@ export class TaskService {
   }
 
   private isLegacyHermesRequest(input: HermesTaskCreateBody): boolean {
-    return !input.images.length && !input.source && !input.workflowId && !input.templateId && !input.rootProfileId && !input.workerProfileId && Object.keys(input.advisorProfileIds).length === 0 && input.deliveryTarget === undefined && input.runProjectTests === undefined && input.visualEvidence === undefined;
+    return !input.dependsOn?.length && !input.images.length && !input.source && !input.workflowId && !input.templateId && !input.rootProfileId && !input.workerProfileId && Object.keys(input.advisorProfileIds).length === 0 && input.deliveryTarget === undefined && input.runProjectTests === undefined && input.visualEvidence === undefined;
   }
 
   private legacyHermesRequest(input: HermesTaskCreateBody): TaskInput {
@@ -654,7 +694,7 @@ export class TaskService {
       : task.status === "cancelled" ? ["archive_task", "duplicate_task"] as const
       : task.status === "delivered" ? ["archive_task", "duplicate_task"] as const
       : ["duplicate_task"] as const;
-    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, archived: task.archivedAt !== null, permittedCommands: [...permittedCommands, ...recheck], humanQuestion, blocker, workflowStage, workflow: task.workflow, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, dependsOn: task.dependsOn, archived: task.archivedAt !== null, permittedCommands: [...permittedCommands, ...recheck], humanQuestion, blocker, workflowStage, workflow: task.workflow, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
     return { ...value, revision: createHash("sha256").update(JSON.stringify({ value, commandRevision: row.command_revision })).digest("base64url") };
   }
 

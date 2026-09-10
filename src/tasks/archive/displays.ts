@@ -65,16 +65,21 @@ export async function prepareArchiveDisplays(sessions: ArchiveSession[], herdr: 
     if (!await waitForShell(2_000)) return true;
     throw new Error("The task terminal command could not be stopped.");
   };
-  for (const session of sessions) {
-    const pane = session.paneId ? await herdr.getPane(session.paneId) : null;
-    if (!pane || !await inspectOwned(pane, session)) continue;
-    owned.set(pane.paneId, session);
-    if (pane.workspaceId) workspaces.add(pane.workspaceId);
-  }
-  if (sessions.some(session => session.paneId)) {
-    for (const workspace of await herdr.listWorkspaces()) {
-      if (sessions.some(session => workspace.label === `forge-${session.taskId}`)) workspaces.add(workspace.workspaceId);
+  try {
+    for (const session of sessions) {
+      const pane = session.paneId ? await herdr.getPane(session.paneId) : null;
+      if (!pane || !await inspectOwned(pane, session)) continue;
+      owned.set(pane.paneId, session);
+      if (pane.workspaceId) workspaces.add(pane.workspaceId);
     }
+    if (sessions.some(session => session.paneId)) {
+      for (const workspace of await herdr.listWorkspaces()) {
+        if (sessions.some(session => workspace.label === `forge-${session.taskId}`)) workspaces.add(workspace.workspaceId);
+      }
+    }
+  } catch (error) {
+    if (error instanceof HerdrFailure && error.retryable) return async () => {};
+    throw error;
   }
   for (const workspaceId of workspaces) {
     for (const pane of await herdr.listPanes(workspaceId)) {

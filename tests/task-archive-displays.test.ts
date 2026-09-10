@@ -80,6 +80,13 @@ test("archive succeeds when a recorded pane is missing", async () => {
   expect(f.herdr.closePane).not.toHaveBeenCalled();
 });
 
+test("archive ignores unavailable display observations", async () => {
+  const f = fixture();
+  f.herdr.getPane = async () => { throw new HerdrFailure("unavailable", true, "Herdr is unavailable"); };
+  await expect((await prepareArchiveDisplays(f.sessions, f.herdr))()).resolves.toBeUndefined();
+  expect(f.herdr.closePane).not.toHaveBeenCalled();
+});
+
 test("archive terminates an active command and closes its task workspace", async () => {
   const f = fixture();
   let running = true;

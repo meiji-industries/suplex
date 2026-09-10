@@ -18,7 +18,7 @@ export type { DeliveryGithubPort } from "./publication.js";
 
 export const DELIVERY_WAIT_NEXT = "End this Coordinator turn. Forge will resume it when delivery state changes.";
 type Recheck = () => void;
-type AdoptionOptions = { explicit?: boolean | undefined; recheck?: Recheck | undefined };
+type AdoptionOptions = { publication?: boolean | undefined; explicit?: boolean | undefined; recheck?: Recheck | undefined };
 type CompletionOptions = AdoptionOptions & { isDraft?: boolean | undefined; validatedRange?: ReviewRange | undefined };
 type Decision = DeliveryDecision;
 type CommitDecision = Decision | { ok: false; code: DeliveryFailureCode; reason: string; cancelled: true };
@@ -134,7 +134,7 @@ export class DeliveryOperations {
         if (!equivalent.ok) throw new DeliveryOperationFailure("delivery_review_required", `${equivalent.reason} Inspect delivery again and review the new range before retrying.`);
         actual = equivalent.range;
       }
-      this.gateWorkflow(refreshed, actual, { clean: local.clean }, operation !== "push_branch");
+      this.gateWorkflow(refreshed, actual, { clean: local.clean }, operation !== "push_branch" && operation !== "create_or_adopt_pull_request");
       recheck();
     }
     const pull = operation === "push_branch" ? null : await this.observePull(refreshed, repository, local.branch);
@@ -252,7 +252,7 @@ export class DeliveryOperations {
 
   private async adoptKnownPull(control: TaskControl, pull: GithubPullRequest, options: AdoptionOptions = {}): Promise<PullRequestReference> {
     if (!matchesDeliveryIntent(control, pull)) throw new DeliveryOperationFailure("pull_request_ambiguous", "The stored pull request no longer matches this task intent");
-    return this.completeIfTargetMatches(control, pullReference(pull), { isDraft: pull.isDraft, explicit: options.explicit, recheck: options.recheck });
+    return this.completeIfTargetMatches(control, pullReference(pull), { ...options, isDraft: pull.isDraft });
   }
 
   private async observePull(control: TaskControl, repository: string, branch: string): Promise<PullRequestReference | null> {
@@ -460,7 +460,7 @@ export class DeliveryOperations {
     }
     const decision = await this.openCompletionDecision(current, pull, options.recheck);
     if (decision.ok) return pull;
-    if (options.explicit) throw new DeliveryOperationFailure(decision.code, decision.reason);
+    if (options.explicit && !options.publication) throw new DeliveryOperationFailure(decision.code, decision.reason);
     return pull;
   }
 

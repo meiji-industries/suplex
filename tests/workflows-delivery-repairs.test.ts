@@ -657,7 +657,7 @@ test("F2a/F2b/F2c/F2e: push revalidates source, branch, delegate, and review aft
   await expect(f.request("push_branch")).resolves.toMatchObject({ kind: "pushed" });
   expect(hook.fired()).toBe(true);
   expect(f.store.get("task").status).toBe("active");
-  await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "workflow_review_required" });
+  await expect(f.request("request_review")).rejects.toMatchObject({ code: "workflow_review_required" });
   hook.restore();
   // F2e: no race, committed clean candidate, current 9.
   await rateNine(f);

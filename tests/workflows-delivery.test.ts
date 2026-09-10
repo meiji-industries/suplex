@@ -47,10 +47,10 @@ test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI
   const rate = async (rating: number, findings: string[] = []) => { await f.controller.delegateAdvisor(f.identity(), { role: "rater" }); const session = f.store.currentSession("task", "worker")!; await f.finishDelegate(rater(rating, findings)); return session; };
   const repair = async (session: { id: string }, name: string) => { await f.controller.delegateWorker(f.identity(), { plan: `Repair ${name}`, acceptanceCriteria: ["Tests pass"], instruction: `Apply ${name}`, advisorSessionId: session.id }); const head = await f.commit(name); await f.finishDelegate(`Committed ${name} and ran pnpm test.`); return head; };
   const first = await rate(7, ["src.ts: off by one"]);
-  await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("7/10") });
+  await expect(f.request("request_review")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("7/10") });
   await repair(first, "fix-one.ts");
   const second = await rate(8, ["src.ts: missing test"]);
-  await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("8/10") });
+  await expect(f.request("request_review")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("8/10") });
   expect(f.calls.filter(call => call.startsWith("push"))).toEqual([]);
   const head9 = await repair(second, "fix-two.test.ts");
   await rate(9);
@@ -101,7 +101,7 @@ test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI
   const evidence = JSON.parse(await readFile(join(ciRaterInput.evidenceDirectory, "verification.json"), "utf8"));
   expect(evidence.pullRequestChecks).toMatchObject({ checks: { failing: 1, runs: [{ name: "unit", conclusion: "FAILURE" }] } });
   await f.finishDelegate(rater(6, ["src.ts: unit check fails on the new head"]));
-  await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "workflow_review_required" });
+  await expect(f.request("request_review")).rejects.toMatchObject({ code: "workflow_review_required" });
   const head9b = await repair(ciRater, "fix-ci.ts");
   await rate(9);
   f.github.onPush = () => { f.github.checks = pending; f.github.mergeStateStatus = "UNKNOWN"; };
@@ -142,10 +142,10 @@ test("an initial 9 needs no repair commit, and repeated defects stay active with
     await g.controller.delegateAdvisor(g.identity(), { role: "rater" });
     previous = g.store.currentSession("task", "worker")!;
     await g.finishDelegate(rater(5, ["src.ts: race condition"]));
-    await expect(g.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "workflow_review_required" });
+    await expect(g.request("request_review")).rejects.toMatchObject({ code: "workflow_review_required" });
   }
   expect(g.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
-  await expect(g.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "workflow_review_required" });
+  await expect(g.request("request_review")).rejects.toMatchObject({ code: "workflow_review_required" });
   await g.controller.delegateWorker(g.identity(), { plan: "again", acceptanceCriteria: ["x"], instruction: "y", advisorSessionId: previous!.id }); await g.commit("attempt-final.ts"); await g.finishDelegate("Fifth attempt.");
   await g.controller.delegateAdvisor(g.identity(), { role: "rater" }); await g.finishDelegate(rater(9));
   expect(g.store.get("task").workflowState.reviews).toHaveLength(5);
@@ -158,10 +158,10 @@ test("an existing open pull request does not complete Second opinion before Revi
   f.github.headSha = f.featureSha;
   expect(await f.delivery.observe("task")).toMatchObject({ number: 7, state: "open" });
   expect(f.store.get("task").status).toBe("active");
-  await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("No Reviewer result") });
+  await expect(f.request("request_review")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("No Reviewer result") });
   await f.controller.delegateAdvisor(f.identity(), { role: "reviewer", brief: "Plan and criteria." });
   await f.finishDelegate(reviewer(false, ["src.ts: off by one"]));
-  await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("did not approve") });
+  await expect(f.request("request_review")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("did not approve") });
   await f.controller.delegateAdvisor(f.identity(), { role: "reviewer", brief: "Plan and criteria." });
   await f.finishDelegate(reviewer(true));
   const adopted = await f.request("create_or_adopt_pull_request");
@@ -184,7 +184,7 @@ test("changed heads, dirty trees, active delegates, newer negative reviews, dive
   const { headSha, review } = await f.inspect();
   await f.commit("late.ts");
   await expect(f.controller.requestDelivery(f.identity(), "push_branch", headSha, review)).rejects.toMatchObject({ code: "delivery_review_required" });
-  await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("not the current range") });
+  await expect(f.request("request_review")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("not the current range") });
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" }); await f.finishDelegate(rater(9));
   await writeFile(join(f.worktree.path, "scratch.txt"), "dirty");
   await expect(f.request("push_branch")).rejects.toMatchObject({ code: "worktree_dirty" });
@@ -193,7 +193,7 @@ test("changed heads, dirty trees, active delegates, newer negative reviews, dive
   await expect(f.request("push_branch")).rejects.toMatchObject({ code: "delegate_active" });
   await f.finishDelegate("pnpm test passed.");
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" }); await f.finishDelegate("garbage without json");
-  await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("invalid") });
+  await expect(f.request("request_review")).rejects.toMatchObject({ code: "workflow_review_required", message: expect.stringContaining("invalid") });
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" }); const repeated = f.store.currentSession("task", "worker")!; await f.finishDelegate(rater(9));
   expect(repeated).toMatchObject({ id: good.id, nativeSessionId: good.nativeSessionId, paneId: good.paneId });
   expect(repeated.generation).toBeGreaterThan(good.generation);
@@ -312,7 +312,7 @@ test("a passing rating permits teammate reconciliation and the integrated revisi
   await f.controller.delegateWorker(f.identity(), { plan: "Integrate teammate work", acceptanceCriteria: ["Preserve both changes"], instruction: "Compare and integrate the remote repair, then verify.", advisorSessionId: nine.id });
   await f.commit("integrated.ts");
   await f.finishDelegate("Integrated and verified.");
-  await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "workflow_review_required" });
+  await expect(f.request("request_review")).rejects.toMatchObject({ code: "workflow_review_required" });
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   await f.finishDelegate(rater(9));
   await expect(f.request("push_branch")).resolves.toMatchObject({ kind: "pushed" });
@@ -330,5 +330,20 @@ test("a passing rating permits teammate reconciliation and the integrated revisi
   await f.controller.delegateAdvisor(f.identity(), { role: "reviewer", brief: "CI now passes." });
   await f.finishDelegate(reviewer(true));
   await expect(f.request("push_branch")).resolves.toMatchObject({ kind: "adopted", headSha: head });
+  expect(f.store.get("task").status).toBe("delivered");
+});
+
+test("draft creation obtains CI evidence before final review without completing the task", { timeout: 60_000 }, async () => {
+  const f = await fixture("independent_review");
+  const listPullRequests = f.port.listPullRequests;
+  f.port.listPullRequests = async () => [];
+  const inspected = await f.inspect();
+  await expect(f.controller.requestDelivery(f.identity(), "create_or_adopt_pull_request", inspected.headSha, inspected.review, "Repair the feature", "## Summary\nRepair the feature.\n## Why\nFix the defect.\n## Validation\nCI pending.\n## Review notes\nReview src.ts.")).resolves.toMatchObject({ number: 7 });
+  expect(f.calls).toContain("create");
+  f.port.listPullRequests = listPullRequests;
+  expect(f.store.get("task")).toMatchObject({ status: "active", workflowState: { acceptedDelivery: null, completion: null } });
+  await f.controller.delegateAdvisor(f.identity(), { role: "reviewer", brief: "CI now passes." });
+  await f.finishDelegate(reviewer(true));
+  await expect(f.request("create_or_adopt_pull_request")).resolves.toMatchObject({ number: 7 });
   expect(f.store.get("task").status).toBe("delivered");
 });

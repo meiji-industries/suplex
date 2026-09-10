@@ -1,5 +1,5 @@
 import type { ForgeDatabase } from "../../platform/database.js";
-import { PromptDispatchAttemptSchema, TaskSessionKindSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, type PromptDispatchAttempt, type TaskSession, type TaskSessionKind, type TaskTurn } from "../../tasks/control.js";
+import { PromptDispatchAttemptSchema, TaskProfileSchema, TaskSessionKindSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, type PromptDispatchAttempt, type TaskSession, type TaskSessionKind, type TaskTurn } from "../../tasks/control.js";
 import { AdvisorRoleSchema, WorkflowInputSchema } from "../workflows.js";
 import { integer, parseJson, text, type Row } from "./row-values.js";
 
@@ -7,7 +7,7 @@ export const session = (row: Row): TaskSession => {
   const id = text(row, "id"); const taskId = text(row, "task_id");
   if (!id || !taskId) throw new Error("Invalid persisted task session");
   const launchOwnerPid = row.launch_owner_pid === null || row.launch_owner_pid === undefined ? null : integer(row, "launch_owner_pid");
-  return { id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), launchOwner: text(row, "launch_owner"), launchOwnerPid, launchOwnerStartTime: text(row, "launch_owner_start_time"), stopRequestedAt: text(row, "stop_requested_at"), stoppedAt: text(row, "stopped_at"), advisorRole: text(row, "advisor_role") === null ? null : AdvisorRoleSchema.parse(text(row, "advisor_role")), delegateSlot: text(row, "delegate_slot"), workflowInput: parseJson(text(row, "workflow_input_json"), WorkflowInputSchema) };
+  return { profile: parseJson(text(row, "profile_json"), TaskProfileSchema), replacement: row.replaces_session_id ? { sessionId: String(row.replaces_session_id), reason: String(row.replacement_reason), handoff: String(row.replacement_handoff) } : null, id, taskId, kind: TaskSessionKindSchema.parse(text(row, "kind")), generation: integer(row, "generation"), current: integer(row, "is_current") === 1, paneId: text(row, "pane_id"), nativeSessionId: text(row, "native_session_id"), lifecycle: TaskSessionLifecycleSchema.parse(text(row, "lifecycle")), assignmentHash: text(row, "assignment_hash"), launchOwner: text(row, "launch_owner"), launchOwnerPid, launchOwnerStartTime: text(row, "launch_owner_start_time"), stopRequestedAt: text(row, "stop_requested_at"), stoppedAt: text(row, "stopped_at"), advisorRole: text(row, "advisor_role") === null ? null : AdvisorRoleSchema.parse(text(row, "advisor_role")), delegateSlot: text(row, "delegate_slot"), workflowInput: parseJson(text(row, "workflow_input_json"), WorkflowInputSchema) };
 };
 
 export const turn = (row: Row): TaskTurn => {

@@ -1,3 +1,4 @@
+import { TaskWorker } from "./task-worker.js";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { CircleDashed } from "lucide-react";
@@ -40,6 +41,7 @@ export function TaskWork({ task, activity, onChange }: { task: Task; activity: T
   const [tab, setTab] = useState("chat");
   const { execution, error: executionError } = useTaskExecution(task.id);
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
+    <TaskWorker key={task.id} task={task} activity={activity} onChange={onChange} />
     <TaskActivityTimeline taskId={task.id} />
     <div className="max-w-full border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
     <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3" aria-label="Conversation">

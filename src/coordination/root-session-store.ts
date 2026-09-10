@@ -1,3 +1,5 @@
+import { replaceWorker, workerReplacementReady } from "./worker-replacement.js";
+import { WorkerReplacementRequestSchema, type WorkerReplacementRequest } from "./worker-replacement-contracts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { HumanQuestionOptionsSchema, type HumanQuestionOptions } from "./human-question.js";
@@ -512,6 +514,10 @@ export class TaskControlStore {
       db.prepare("UPDATE forge_task_controls SET recovery_turn_id = ? WHERE task_id = ?").run(turn.id, turn.taskId);
     });
   }
+  replaceWorker(taskId: string, request: WorkerReplacementRequest): TaskSession { return replaceWorker(this.database, taskId, WorkerReplacementRequestSchema.parse(request)); }
+  workerReplacementReady(sessionId: string): boolean { return workerReplacementReady(this.database, sessionId); }
+  workerProfiles(): TaskProfile[] { return this.database.authQuery(db => TaskProfileSchema.array().parse(db.prepare("SELECT id AS profileId, provider, model, reasoning_level AS reasoningLevel, service_tier AS serviceTier FROM forge_profiles WHERE role = 'worker' AND archived_at IS NULL ORDER BY name").all())); }
+
   cancel(taskId: string): void {
     this.database.authTransaction((db) => {
       const changed = db.prepare("UPDATE forge_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ? WHERE task_id = ? AND status <> 'delivered'").run(now(), taskId).changes;

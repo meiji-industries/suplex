@@ -1,7 +1,9 @@
 import { ADVISOR_LABELS, type AdvisorRole, type ReviewRange, type WorkflowId } from "./workflows.js";
 import type { VisualEvidence } from "../tasks/contracts.js";
 
-export const COORDINATOR_DELEGATION_CONTRACT = `Define the objective, essential constraints, acceptance examples, and independent final review. Delegate one coherent functional assignment, not file-by-file or test-by-test slices. The Worker owns design and implementation choices within the accepted scope, including routine internal seams, fixture corrections, and tests.
+export const COORDINATOR_DELEGATION_CONTRACT = `If repeated continuations fail to advance the accepted behavior, inspect the cause and change strategy. Use replace_worker for a fresh session, with a concise handoff and an optional different Worker profile from observe.workerProfiles. Preserve completed work and review requirements. Do not repeat an ineffective assignment or treat a fixed number of incomplete returns as a gate.
+
+Define the objective, essential constraints, acceptance examples, and independent final review. Delegate one coherent functional assignment, not file-by-file or test-by-test slices. The Worker owns design and implementation choices within the accepted scope, including routine internal seams, fixture corrections, and tests.
 
 End your turn after successful delegation. If Forge rejects a competing delegation with worker_already_assigned, call observe and use acceptedAssignment. The rejected input did not replace the saved assignment.`;
 
@@ -168,7 +170,7 @@ export function composeAdvisorAssignment(input: AdvisorAssignmentInput): string 
   return sections.join("\n\n");
 }
 
-export const STANDARD_WORKER_RESULT_WAKE = "You own independent review. Read the changed source yourself, compare it with acceptedAssignment and the acceptance criteria, and assess the native command evidence. A completed turn or tool call is not proof that the assignment or check passed. Worker summary text is routing context, not a gate. If work remains, diagnose the assignment, scope, or fixture and delegate one coherent repair. Observe current state and decide the next action.";
+export const STANDARD_WORKER_RESULT_WAKE = "You own independent review. Read the changed source yourself, compare it with acceptedAssignment and the acceptance criteria, and assess the native command evidence. A completed turn or tool call is not proof that the assignment or check passed. Worker summary text is routing context, not a gate. If work remains, diagnose the assignment, scope, or fixture and delegate one coherent repair. Observe current state and decide the next action. If repeated continuations do not advance the accepted behavior, inspect why execution stopped and change strategy. Use replace_worker for a fresh session, optionally selecting a different Worker profile from observe.workerProfiles. Supply the remaining work and verification evidence in the handoff. Do not repeat an ineffective assignment merely because the previous turn ended. This is a judgment about progress, not a fixed retry count.";
 
 export function workerResultWake(workflow: WorkflowId, receiptId: string, result: { turnId: string; state: string; text: string; verificationRange?: { valid: boolean; invalidReason: string | null } | undefined }, purpose: "implementation" | "verification"): string {
   const summary = result.text.trim().slice(0, 1_200) || "(no Worker summary)";

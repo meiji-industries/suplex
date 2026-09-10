@@ -1,3 +1,4 @@
+import type { WorkerReplacementRequest } from "../coordination/worker-replacement-contracts.js";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { TaskAnalyticsStore } from "./analytics/store.js";
 import { taskAnalytics } from "./analytics/analytics.js";
@@ -298,6 +299,13 @@ export class TaskService {
     return this.getTask(userId, taskId);
   }
 
+  replaceWorker(userId: string, taskId: string, request: WorkerReplacementRequest): Task {
+    this.getTask(userId, taskId);
+    try { this.repository.controls.replaceWorker(taskId, request); }
+    catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Forge could not replace the Worker.", 409); }
+    return this.getTask(userId, taskId);
+  }
+
   sendNote(userId: string, taskId: string, note: string): Task {
     const task = this.getTask(userId, taskId);
     if (task.archivedAt || !["active", "delivered"].includes(task.status)) throw new TaskFailure("Start the task or answer its current decision before you send a message.", 409);
@@ -376,12 +384,13 @@ export class TaskService {
   getTaskActivity(userId: string, taskId: string) {
     const task = this.getTask(userId, taskId);
     return {
-      sessions: this.repository.controls.sessions(taskId).map(session => ({ id: session.id, kind: session.kind, advisorRole: session.advisorRole, label: roleLabel(session), profileId: this.sessionProfile(task, session).profileId, generation: session.generation, nativeSessionId: session.nativeSessionId, paneId: session.paneId, current: session.current })),
+      sessions: this.repository.controls.sessions(taskId).map(session => ({ id: session.id, kind: session.kind, advisorRole: session.advisorRole, label: roleLabel(session), profileId: this.sessionProfile(task, session).profileId, generation: session.generation, nativeSessionId: session.nativeSessionId, paneId: session.paneId, current: session.current, replacement: session.replacement })),
       turns: this.repository.controls.turns(taskId).map(turn => ({ id: turn.id, sessionId: turn.sessionId, prompt: turn.promptText, status: turn.status, result: turn.terminalObservation })),
     };
   }
 
-  private sessionProfile(task: Task, session: { kind: "root" | "worker"; advisorRole: AdvisorRole | null }): TaskProfile {
+  private sessionProfile(task: Task, session: { kind: "root" | "worker"; advisorRole: AdvisorRole | null; profile?: TaskProfile | null }): TaskProfile {
+    if (session.profile) return session.profile;
     if (session.kind === "root") return task.rootProfile;
     return (session.advisorRole && task.advisorProfiles[session.advisorRole]) || (session.advisorRole ? task.rootProfile : task.workerProfile);
   }

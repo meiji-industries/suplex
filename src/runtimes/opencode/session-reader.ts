@@ -1,3 +1,4 @@
+import { readOpenCodeHistory } from "./session-history.js";
 import { z } from "zod";
 import { OpenCodeClient } from "./client.js";
 import { OpenCodeToolPartSchema, type OpenCodeMessageEnvelope } from "./contracts.js";
@@ -43,20 +44,25 @@ export class OpenCodeSessionReader implements NativeSessionReader {
   }
 
   async execution(session: TaskSession) {
+    if (!session.current && session.nativeSessionId) { const messages = await readOpenCodeHistory(session.nativeSessionId); return { ...executionFromMessages(messages.slice(-messageLimit)), limited: messages.length >= messageLimit }; }
     const { server, client, sessionID } = await this.connect(session);
     const messages = await client.getMessages(sessionID, { directory: server.directory, limit: messageLimit });
     return { ...executionFromMessages(messages), limited: messages.length >= messageLimit };
   }
 
   async turnEvidence(session: TaskSession, turnId: string) {
-    const { server, client, sessionID } = await this.connect(session);
-    const messages = await client.getMessages(sessionID, { directory: server.directory });
+    const messages = !session.current && session.nativeSessionId ? await readOpenCodeHistory(session.nativeSessionId) : await this.liveMessages(session);
     const correlated = correlatedAssistants(messages, turnId);
     if (!correlated.promptFound) return { tools: [], limitation: "The admitted native prompt is not present in the authoritative session history." };
     return {
       tools: executionFromMessages(correlated.messages).tools,
       limitation: correlated.reason === "continuation_ambiguous" ? "Native compaction continuation was ambiguous; only tools with an authoritative parent chain are included." : null,
     };
+  }
+
+  private async liveMessages(session: TaskSession) {
+    const { server, client, sessionID } = await this.connect(session);
+    return client.getMessages(sessionID, { directory: server.directory });
   }
 
   async status(session: TaskSession) {
@@ -66,6 +72,7 @@ export class OpenCodeSessionReader implements NativeSessionReader {
   }
 
   async timeline(session: TaskSession, pricing?: ModelPricingCatalog) {
+    if (!session.current && session.nativeSessionId) return { usage: taskUsage(await readOpenCodeHistory(session.nativeSessionId), session.kind, pricing), liveMessageId: null };
     const { server, client, sessionID } = await this.connect(session);
     const [messages, statuses] = await Promise.all([client.getMessages(sessionID, { directory: server.directory }), client.getStatus(server.directory)]);
     const latest = [...messages].sort((a, b) => a.info.time.created - b.info.time.created).at(-1)?.info;

@@ -76,7 +76,7 @@ export async function reconcileCompletedAdvisorReport(dependencies: SessionRecov
 
 export async function recoverSession(dependencies: SessionRecoveryDependencies, previous: TaskSession): Promise<void> {
   const { store, harness } = dependencies;
-  if (store.get(previous.taskId).status !== "active") return;
+  if (store.get(previous.taskId).status !== "active" || !store.workerReplacementReady(previous.id)) return;
   const owner = await store.claimSessionOperation({ sessionId: previous.id, generation: previous.generation });
   if (!owner) return;
   try {

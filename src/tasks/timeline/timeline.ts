@@ -5,10 +5,10 @@ import type { TaskTimeline, TimelineTask } from "./contracts.js";
 import type { TaskUsage } from "../usage.js";
 import { roleLabel } from "../../coordination/workflows.js";
 
-export function timelineActivity(task: Pick<Task, "rootProfile" | "workerProfile"> & Partial<Pick<Task, "advisorProfiles">>, session: Pick<TaskSession, "id" | "kind" | "generation"> & Partial<Pick<TaskSession, "advisorRole">>, usage: TaskUsage[], liveMessageId: string | null): TimelineTask["activity"] {
+export function timelineActivity(task: Pick<Task, "rootProfile" | "workerProfile"> & Partial<Pick<Task, "advisorProfiles">>, session: Pick<TaskSession, "id" | "kind" | "generation"> & Partial<Pick<TaskSession, "advisorRole" | "profile">>, usage: TaskUsage[], liveMessageId: string | null): TimelineTask["activity"] {
   const advisorRole = session.advisorRole ?? null;
   // Advisors keep the worker slot for usage totals but show their actual role and captured profile.
-  const profile = session.kind === "root" ? task.rootProfile : advisorRole ? task.advisorProfiles?.[advisorRole] ?? task.rootProfile : task.workerProfile;
+  const profile = session.profile ?? (session.kind === "root" ? task.rootProfile : advisorRole ? task.advisorProfiles?.[advisorRole] ?? task.rootProfile : task.workerProfile);
   const roleKey = advisorRole ?? session.kind;
   const turns = new Map<string, TimelineTask["activity"][number]>();
   const ordered = [...usage].sort((left, right) => left.startedAt - right.startedAt);

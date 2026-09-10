@@ -27,6 +27,7 @@ const adapter: RootBridgeAdapter = {
     await record({ kind: "read_worker_evidence", root, ...request });
     return { turnId: request.turnId, kind: "index", tools: [], nextCursor: null };
   },
+  async replaceWorker() { return {}; },
   async delegateWorker(root, assignment): Promise<unknown> {
     await record({ kind: "delegate_worker", root, ...assignment });
     return { assignmentId: "probe-worker" };

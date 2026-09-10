@@ -1,3 +1,4 @@
+import { WorkerReplacementRequestSchema } from "./worker-replacement-contracts.js";
 import { z } from "zod";
 import { RecommendedQuestionOptionsSchema } from "./human-question.js";
 import { AdvisorRoleSchema } from "./workflows.js";
@@ -97,6 +98,7 @@ export type WorkerEvidenceRequest = z.infer<typeof WorkerEvidenceRequestShape>;
 
 export const RootToolSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("observe") }).strict(),
+  WorkerReplacementRequestSchema.extend({ kind: z.literal("replace_worker") }).strict().describe("Replace an ineffective Worker with a fresh native session on the same worktree. Supply its sessionId, the reason for changing strategy, and optional handoff and workerProfileId from observe.workerProfiles. Preserves task limits and history."),
   z.object({ kind: z.literal("read_image"), artifactId: opaqueId }).strict(),
   WorkerEvidenceRequestShape.extend({ kind: z.literal("read_worker_evidence") }),
   WorkerAssignmentShape.extend({ kind: z.literal("delegate_worker") }).strict().refine(plannedNeedsPlan, "A planned assignment requires the Coordinator's plan").describe("acceptanceCriteria and instruction are required. plan is also required when mode is planned or omitted."),

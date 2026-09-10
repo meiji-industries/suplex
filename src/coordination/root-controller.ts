@@ -1,3 +1,4 @@
+import type { WorkerReplacementRequest } from "./worker-replacement-contracts.js";
 import type { HumanQuestionOptions } from "./human-question.js";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -32,7 +33,7 @@ export class RootController implements RootBridgeAdapter {
   private scope(control: TaskControl, session: TaskSession, workflowInput: WorkflowInput | null = null): TaskScope {
     if (!control.worktree) throw new Error("Task worktree is not configured");
     const advisorRole = session.kind === "worker" ? session.advisorRole : null;
-    const selected = session.kind === "root" ? control.rootProfile : advisorRole ? control.advisorProfiles[advisorRole] ?? control.rootProfile : control.workerProfile;
+    const selected = session.profile ?? (session.kind === "root" ? control.rootProfile : advisorRole ? control.advisorProfiles[advisorRole] ?? control.rootProfile : control.workerProfile);
     const common = {
       id: session.id, taskId: control.taskId, directory: control.worktree.path, workflow: control.workflow, evidenceRoot: this.evidenceRoot(control.taskId),
       profile: { providerID: selected.provider, modelID: selected.model, reasoningEffort: selected.reasoningLevel, serviceTier: selected.serviceTier },
@@ -93,7 +94,7 @@ export class RootController implements RootBridgeAdapter {
     }));
     const workerResult = worker ? results[worker.id] ?? null : null;
     const acceptedAssignment = worker?.advisorRole === null ? this.acceptedWorkerAssignment(root.taskId, worker) : null;
-    return { control: { ...this.store.get(root.taskId), workflowState: publicWorkflowState(this.store.get(root.taskId).workflowState) }, context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, acceptedAssignment, workerResult, workers, results, worktree, pullRequest };
+    return { workerProfiles: this.store.workerProfiles(), control: { ...this.store.get(root.taskId), workflowState: publicWorkflowState(this.store.get(root.taskId).workflowState) }, context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, acceptedAssignment, workerResult, workers, results, worktree, pullRequest };
   }
 
   private acceptedWorkerAssignment(taskId: string, worker: TaskSession): AcceptedWorkerAssignment | null {
@@ -110,6 +111,12 @@ export class RootController implements RootBridgeAdapter {
     if (!turn || !session || session.kind !== "worker" || session.advisorRole !== null) throw new Error("Worker turn does not belong to this task");
     const evidence = await this.reader(session).turnEvidence(session, turn.id);
     return { turnId: turn.id, sessionId: session.id, localObservation: { status: turn.status, terminalObservationAvailable: turn.terminalObservation !== null, nativeTurnIdAvailable: turn.nativeTurnId !== null }, limitation: evidence.limitation, ...readWorkerEvidence(evidence.tools, { toolId: request.toolId, field: request.field, position: request.position, cursor: request.cursor, maxCharacters: request.maxCharacters ?? 12_000 }) };
+  }
+
+  async replaceWorker(root: RootIdentity, request: WorkerReplacementRequest): Promise<unknown> {
+    this.recheck(root);
+    const worker = this.store.replaceWorker(root.taskId, request);
+    return { worker, acceptedAssignment: this.acceptedWorkerAssignment(root.taskId, worker), next: "End this Coordinator turn. Forge will stop the outgoing execution before starting this fresh Worker. Existing task limits remain in effect." };
   }
 
   async delegateWorker(root: RootIdentity, assignment: WorkerAssignment): Promise<unknown> {

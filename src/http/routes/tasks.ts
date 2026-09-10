@@ -15,7 +15,7 @@ import { TaskExecutionResponseSchema } from "../../tasks/execution/contracts.js"
 import { TaskChecksResponseSchema, TaskDiffResponseSchema } from "../contracts/tasks.js";
 import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { normalizeWorkflowInput, WorkflowInputFailure } from "../../coordination/workflows.js";
-import { MAX_TASK_REQUEST_BYTES, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBlockedByBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { MAX_TASK_REQUEST_BYTES, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBlockedByBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskWorkerReplacementBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions { tasks: TaskService; host?: Pick<TaskHost, "recover">; config?: Pick<ForgeConfig, "databasePath"> }
 
@@ -80,6 +80,11 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
     const task = "limitDecision" in request.body
       ? tasks.answerTaskLimit(request.forgeUser.id, request.params.taskId, request.body.questionId, request.body.limitDecision)
       : tasks.answerTask(request.forgeUser.id, request.params.taskId, request.body.questionId, request.body.answer, request.body.confirmCommandsStopped);
+    wake(task.id);
+    return task;
+  });
+  typed.post("/api/tasks/:taskId/replace-worker", { schema: { ...taskResponse, body: TaskWorkerReplacementBodySchema } }, async request => {
+    const task = tasks.replaceWorker(request.forgeUser.id, request.params.taskId, request.body);
     wake(task.id);
     return task;
   });

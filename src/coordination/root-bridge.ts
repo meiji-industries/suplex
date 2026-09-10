@@ -1,3 +1,4 @@
+import type { WorkerReplacementRequest } from "./worker-replacement-contracts.js";
 import { createInterface, type Interface } from "node:readline";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -41,6 +42,7 @@ export interface RootBridgeAdapter {
   observe(root: RootIdentity): Promise<unknown>;
   readImage(root: RootIdentity, artifactId: string): Promise<RootImageResult>;
   readWorkerEvidence(root: RootIdentity, request: WorkerEvidenceRequest): Promise<unknown>;
+  replaceWorker(root: RootIdentity, request: WorkerReplacementRequest): Promise<unknown>;
   delegateWorker(root: RootIdentity, assignment: WorkerAssignment): Promise<unknown>;
   delegateAdvisor(root: RootIdentity, request: AdvisorRequest): Promise<unknown>;
   delegatePlanners(root: RootIdentity): Promise<unknown>;
@@ -70,6 +72,8 @@ export class RootBridge {
         return this.adapter.readImage(this.root, tool.artifactId);
       case "read_worker_evidence":
         return this.adapter.readWorkerEvidence(this.root, { turnId: tool.turnId, toolId: tool.toolId, field: tool.field, position: tool.position, cursor: tool.cursor, maxCharacters: tool.maxCharacters });
+      case "replace_worker":
+        return this.adapter.replaceWorker(this.root, { sessionId: tool.sessionId, reason: tool.reason, handoff: tool.handoff, workerProfileId: tool.workerProfileId });
       case "delegate_worker":
         return this.adapter.delegateWorker(this.root, { plan: tool.plan, acceptanceCriteria: tool.acceptanceCriteria, instruction: tool.instruction, mode: tool.mode, purpose: tool.purpose, advisorTurnId: tool.advisorTurnId, candidateTurnIds: tool.candidateTurnIds, advisorSessionId: tool.advisorSessionId, candidateSessionIds: tool.candidateSessionIds });
       case "delegate_advisor":

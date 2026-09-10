@@ -1,5 +1,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -58,6 +61,22 @@ export type RunCommandInput = {
 
 export function runCommandSync(input: Pick<RunCommandInput, "command" | "args" | "cwd">): string {
   return execFileSync(input.command, [...input.args], { cwd: input.cwd, encoding: "utf8" });
+}
+
+/** File-backed stdout also supports CLIs that exit before flushing a large pipe. */
+export async function readCommandOutput(command: string, args: readonly string[]): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "forge-command-"));
+  const output = join(directory, "stdout");
+  const file = await open(output, "w", 0o600);
+  try {
+    const child = spawn(command, [...args], { stdio: ["ignore", file.fd, "ignore"], timeout: 30_000, killSignal: "SIGKILL" });
+    const [code] = await once(child, "exit");
+    if (code !== 0) throw new Error("Command could not read native data");
+    return await readFile(output, "utf8");
+  } finally {
+    await file.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 let database: ForgeDatabase | undefined;

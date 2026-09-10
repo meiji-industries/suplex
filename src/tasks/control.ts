@@ -59,6 +59,8 @@ export interface TaskControl {
 }
 
 export interface TaskSession {
+  profile?: TaskProfile | null;
+  replacement?: { sessionId: string; reason: string; handoff: string } | null;
   id: string;
   taskId: string;
   kind: TaskSessionKind;

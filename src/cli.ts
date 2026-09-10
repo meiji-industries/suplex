@@ -15,6 +15,7 @@ import { formatDoctor, runDoctor } from "./platform/diagnostics/doctor.js";
 import { formatTaskDiagnostic, inspectTask, writeTaskBundle } from "./platform/diagnostics/task.js";
 import { runLogViewer } from "./platform/log-viewer.js";
 import { runCommand } from "./platform/command-runner.js";
+import { HermesMcpBridge, readHermesBridgeSettings, startHermesMcpTransport } from "./integrations/hermes/mcp-bridge.js";
 
 const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
 const commandArgs = process.argv.slice(process.argv[2] === "--" ? 4 : 3);
@@ -65,8 +66,14 @@ async function main(): Promise<void> {
     } finally { database.close(); }
     return;
   }
+  if (command === "mcp") {
+    // Hermes drives the runtime API over stdio; the bridge never starts a Forge server and never takes the credential on the command line.
+    const settings = readHermesBridgeSettings(process.env);
+    startHermesMcpTransport({ bridge: new HermesMcpBridge(settings), stdin: process.stdin, stdout: process.stdout });
+    return;
+  }
   if (command === "help") {
-    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|migrate|task|doctor|start|stop|restart|logs> [--foreground]\n");
+    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|migrate|task|doctor|mcp|start|stop|restart|logs> [--foreground]\n");
     return;
   }
   const config = loadConfig();

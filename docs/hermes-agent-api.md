@@ -1,4 +1,4 @@
-# Hermes agent read API
+# Hermes agent API
 
 Hermes credentials use bearer authentication. Every request reads the current
 persisted credential and project grants. A revoked credential returns `401`.
@@ -27,8 +27,10 @@ ID and revision.
 `attention` selects tasks with a current human question. `blocker` selects a
 current human question or a persisted delivery wait. A task projection includes
 only safe task, project, workflow progress, question, and delivery observations.
-`permittedCommands` is empty because Hermes has no task command API. `checks`
-is `null`, which means Forge has no persisted check observation to report.
+`permittedCommands` lists the lifecycle commands that
+`POST /api/hermes/tasks/:taskId/commands` accepts for the task right now.
+`checks` is `null`, which means Forge has no persisted check observation to
+report.
 
 Missing, out-of-grant, cross-company, and other-creator tasks all return `404`
 with `{ "code": "resource_not_found" }`. This intentionally conceals which
@@ -46,3 +48,15 @@ read, send its exact ETag in `If-Match`; a different current revision returns
 the current projection.
 
 All successful Hermes responses use `Cache-Control: private, no-store`.
+
+## Task commands
+
+`POST /api/hermes/tasks/:taskId/commands` applies one lifecycle command. The
+body takes `command`, the task's current `revision`, an `idempotencyKey`, and
+`note` for `send_task_note` only. A stale revision returns `412` with
+`{ "code": "revision_stale" }`; a command outside `permittedCommands` returns
+`409` with `{ "code": "illegal_command" }`. Human answers, delivery, and merges
+have no command and stay human authority.
+
+`docs/hermes-mcp-bridge.md` describes the stdio MCP bridge that exposes these
+routes as tools.

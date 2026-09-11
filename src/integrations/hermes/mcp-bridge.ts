@@ -24,12 +24,12 @@ const toolSchema = (schema: z.ZodType): Record<string, unknown> => z.toJSONSchem
 
 /** Every tool maps onto one existing Hermes runtime route; the server stays the sole authority on task rules. */
 export const HERMES_MCP_TOOLS: readonly McpTool[] = [
-  { name: "forge_whoami", description: `Read this paired agent's identity, capabilities, and granted projects. ${AUTHORITY}`, inputSchema: toolSchema(NoArgumentsSchema) },
+  { name: "forge_whoami", description: `Read this paired agent's identity, capabilities, and granted projects with the create-time agentTaskPolicy each one permits. ${AUTHORITY}`, inputSchema: toolSchema(NoArgumentsSchema) },
   { name: "forge_capabilities", description: `Read the runtime capability contract, autonomous commands, and unavailable commands. ${AUTHORITY}`, inputSchema: toolSchema(NoArgumentsSchema) },
   { name: "forge_list_tasks", description: "List tasks this agent created, newest update first. Filters and the opaque cursor come from the runtime contract.", inputSchema: toolSchema(HermesTaskListQuerySchema) },
   { name: "forge_get_task", description: "Read one task. Pass knownRevision to poll conditionally: an unchanged task returns { unchanged: true, revision } instead of the projection.", inputSchema: toolSchema(GetTaskSchema) },
   { name: "forge_get_task_delivery", description: `Read the delivery and blocker state of one task, including any pull request, delivery wait, and completion observation. Forge reports no persisted check observation. ${AUTHORITY}`, inputSchema: toolSchema(TaskOnlySchema) },
-  { name: "forge_create_task", description: `Create a backlog task. It never starts execution; use forge_command_task with start_task for that. idempotencyKey is required and scoped to this agent: an identical replay returns the same task, and reusing the key for a different request fails with idempotency_conflict. ${AUTHORITY}`, inputSchema: toolSchema(HermesTaskCreateBodySchema) },
+  { name: "forge_create_task", description: `Create a backlog task. It never starts execution; use forge_command_task with start_task for that. idempotencyKey is required and scoped to this agent: an identical replay returns the same task, and reusing the key for a different request fails with idempotency_conflict. deliveryTarget, runProjectTests, and visualEvidence must match the project agentTaskPolicy from forge_whoami; anything else fails with delivery_policy_rejected. ${AUTHORITY}`, inputSchema: toolSchema(HermesTaskCreateBodySchema) },
   { name: "forge_command_task", description: `Apply one lifecycle command to a task. revision must be the task's current revision (a stale one fails with revision_stale) and idempotencyKey is required. start_task, cancel_task, and archive_task are not reversible by this agent. note is only accepted by send_task_note. ${AUTHORITY}`, inputSchema: toolSchema(CommandTaskSchema) },
 ];
 

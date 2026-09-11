@@ -43,7 +43,7 @@ separately.
 
 | Tool | Route | Notes |
 | --- | --- | --- |
-| `forge_whoami` | `GET /api/hermes/me` | Agent identity, capabilities, and granted projects. |
+| `forge_whoami` | `GET /api/hermes/me` | Agent identity, capabilities, and granted projects with the create-time policy each one permits. |
 | `forge_capabilities` | `GET /api/hermes/capabilities` | Autonomous commands and unavailable commands. |
 | `forge_list_tasks` | `GET /api/hermes/tasks` | Filters and the opaque cursor come from the runtime contract. |
 | `forge_get_task` | `GET /api/hermes/tasks/{taskId}` | Pass `knownRevision` to poll conditionally. An unchanged task returns `{ "unchanged": true, "revision": "…" }`. |

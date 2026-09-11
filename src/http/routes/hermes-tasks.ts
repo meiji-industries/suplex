@@ -12,6 +12,7 @@ import {
 import type { AgentDeliveryService } from "../../delivery/agent-delivery.js";
 import { TaskFailure, type HermesGithubPort, type TaskService } from "../../tasks/tasks.js";
 import type { TaskHost } from "../../tasks/host.js";
+import { DeliveryTargetSchema } from "../../tasks/contracts.js";
 
 export function authenticateHermesBearer(header: string | undefined, hermes: HermesAgentService): HermesPrincipal {
   if (!header || !header.startsWith("Bearer ")) {
@@ -50,7 +51,7 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (_request, reply) => reply.header("Cache-Control", "private, no-store").send({
     apiVersion: "v1",
-    capabilities: { read: { task: true }, create: { backlogTask: true }, taskControl: true, delivery: agentDelivery, merge: agentDelivery, humanDecisions: false },
+    capabilities: { read: { task: true }, create: { backlogTask: true, deliveryTargets: DeliveryTargetSchema.options }, taskControl: true, delivery: agentDelivery, merge: agentDelivery, humanDecisions: false },
     autonomousCommands: [
       "create_backlog_task", "start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait",
       ...(agentDelivery ? ["observe_delivery", "request_delivery_repair", "decide_delivery_wait", "read_merge_train", "request_merge_approval", "merge_pull_request"] as const : []),

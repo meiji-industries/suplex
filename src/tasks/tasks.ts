@@ -297,10 +297,15 @@ export class TaskService {
       WHERE a.id = ? AND a.company_id = ? AND a.status = 'paired'
       ORDER BY p.name COLLATE NOCASE, p.id
     `).all(principal.agentId, principal.companyId) as Array<{ id: string; name: string }>);
+    const withPolicy = projects.map((project) => {
+      const policy = ProjectAgentTaskPolicySchema.parse(this.projects.getProjectInCompany(principal.companyId, project.id).agentTaskPolicy);
+      // A project fixes exactly one permitted delivery target; the list keeps room for a policy that ever permits several.
+      return { ...project, agentTaskPolicy: { deliveryTargets: [policy.deliveryTarget], runProjectTests: policy.runProjectTests, visualEvidence: policy.visualEvidence } };
+    });
     return {
       agent: { id: principal.agentId, name: this.database.authQuery(db => (db.prepare("SELECT name FROM forge_agents WHERE id = ?").get(principal.agentId) as { name: string }).name), profileId: principal.profileId },
       capabilities: { taskDiscovery: true as const, taskRead: true as const, taskCreate: true as const, taskCommands: ["start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"] as Array<z.infer<typeof HermesTaskCommandBodySchema>["command"]> },
-      projects,
+      projects: withPolicy,
     };
   }
 
@@ -615,7 +620,7 @@ export class TaskService {
       if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode);
       throw error;
     }
-    if (raw.deliveryTarget !== undefined && raw.deliveryTarget !== policy.deliveryTarget || raw.runProjectTests !== undefined && raw.runProjectTests !== policy.runProjectTests || raw.visualEvidence !== undefined && raw.visualEvidence !== policy.visualEvidence) throw new TaskFailure("The requested delivery or check configuration is not permitted", 422);
+    if (raw.deliveryTarget !== undefined && raw.deliveryTarget !== policy.deliveryTarget || raw.runProjectTests !== undefined && raw.runProjectTests !== policy.runProjectTests || raw.visualEvidence !== undefined && raw.visualEvidence !== policy.visualEvidence) throw new TaskFailure(`This project permits deliveryTarget "${policy.deliveryTarget}", runProjectTests ${policy.runProjectTests}, and visualEvidence "${policy.visualEvidence}"`, 422, "delivery_policy_rejected");
     const root = request.rootProfileId ?? project.rootProfileId;
     const worker = request.workerProfileId ?? project.workerProfileId;
     // The allowlist governs what a caller may choose; server-chosen defaults (project defaults, workflow and template records) are already trusted.
@@ -695,7 +700,7 @@ export class TaskService {
       : task.status === "cancelled" ? ["archive_task", "duplicate_task"] as const
       : task.status === "delivered" ? ["archive_task", "duplicate_task"] as const
       : ["duplicate_task"] as const;
-    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, dependsOn: task.dependsOn, archived: task.archivedAt !== null, permittedCommands: [...permittedCommands, ...recheck], humanQuestion, blocker, workflowStage, workflow: task.workflow, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, dependsOn: task.dependsOn, archived: task.archivedAt !== null, permittedCommands: [...permittedCommands, ...recheck], humanQuestion, blocker, workflowStage, workflow: task.workflow, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
     return { ...value, revision: createHash("sha256").update(JSON.stringify({ value, commandRevision: row.command_revision })).digest("base64url") };
   }
 

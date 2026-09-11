@@ -174,6 +174,15 @@ export const HermesProjectSchema = z.object({
   name: z.string(),
 });
 
+/** Identity adds the create-time policy so an agent can see what a project permits before it asks for it. */
+export const HermesIdentityProjectSchema = HermesProjectSchema.extend({
+  agentTaskPolicy: z.object({
+    deliveryTargets: z.array(DeliveryTargetSchema),
+    runProjectTests: z.boolean(),
+    visualEvidence: VisualEvidenceSchema,
+  }),
+});
+
 export const HermesIdentityResponseSchema = z.object({
   agent: z.object({
     id: z.string(),
@@ -186,7 +195,7 @@ export const HermesIdentityResponseSchema = z.object({
     taskCreate: z.literal(true),
     taskCommands: z.array(HermesTaskCommandSchema),
   }),
-  projects: z.array(HermesProjectSchema),
+  projects: z.array(HermesIdentityProjectSchema),
 });
 
 export const HermesTaskFilterSchema = z.enum(["stale_delivery", "conflicting_pull_request", "failed_checks", "pending_review", "blocked_by_dependency", "not_integrated"]);
@@ -240,6 +249,9 @@ export const HermesSafeTaskProjectionSchema = z.object({
   }).nullable(),
   workflowStage: z.string(),
   workflow: z.string(),
+  deliveryTarget: DeliveryTargetSchema,
+  runProjectTests: z.boolean(),
+  visualEvidence: VisualEvidenceSchema,
   delivery: HermesTaskDeliverySchema,
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -368,7 +380,7 @@ export const HermesTaskListResponseSchema = z.object({
 
 export const HermesRuntimeErrorSchema = z.object({
   error: z.string(),
-  code: z.enum(["credential_invalid", "not_found", "resource_not_found", "idempotency_conflict", "command_in_progress", "revision_stale", "illegal_command", "request_invalid", "task_unavailable", "payload_too_large", "unsupported_media_type", "internal_error"]),
+  code: z.enum(["credential_invalid", "not_found", "resource_not_found", "idempotency_conflict", "command_in_progress", "revision_stale", "illegal_command", "request_invalid", "delivery_policy_rejected", "task_unavailable", "payload_too_large", "unsupported_media_type", "internal_error"]),
   findings: z.array(z.object({ code: z.string(), field: z.string(), message: z.string() })).optional(),
 });
 
@@ -383,6 +395,7 @@ const HermesRuntimeErrorResponses = {
   commandInProgress: runtimeError("command_in_progress"),
   revisionStale: runtimeError("revision_stale"),
   illegalCommand: runtimeError("illegal_command"),
+  deliveryPolicyRejected: runtimeError("delivery_policy_rejected"),
   taskUnavailable: runtimeError("task_unavailable"),
   payloadTooLarge: runtimeError("payload_too_large"),
   unsupportedMediaType: runtimeError("unsupported_media_type"),
@@ -393,7 +406,7 @@ export const HermesCapabilitiesSchema = z.object({
   apiVersion: z.literal("v1"),
   capabilities: z.object({
     read: z.object({ task: z.literal(true) }),
-    create: z.object({ backlogTask: z.literal(true) }),
+    create: z.object({ backlogTask: z.literal(true), deliveryTargets: z.array(DeliveryTargetSchema) }),
     taskControl: z.literal(true),
     // Delivery and merge follow the configured agent delivery surface, which a deployment can leave off.
     delivery: z.boolean(),
@@ -428,7 +441,7 @@ export const HermesRuntimeOperations = {
       409: z.union([HermesRuntimeErrorResponses.idempotencyConflict, HermesRuntimeErrorResponses.taskUnavailable]),
       413: HermesRuntimeErrorResponses.payloadTooLarge,
       415: HermesRuntimeErrorResponses.unsupportedMediaType,
-      422: HermesRuntimeErrorResponses.taskUnavailable,
+      422: z.union([HermesRuntimeErrorResponses.deliveryPolicyRejected, HermesRuntimeErrorResponses.taskUnavailable]),
       500: HermesRuntimeErrorResponses.internal,
     },
   },

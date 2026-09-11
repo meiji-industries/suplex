@@ -102,7 +102,9 @@ you need the exact request shapes.
 ## Project selection
 
 `forge_whoami` (`GET /api/hermes/me`) returns the agent identity and the
-`projects` this agent was granted. Forge's persisted grants are authoritative:
+`projects` this agent was granted, each with its `agentTaskPolicy`
+(`deliveryTargets`, `runProjectTests`, `visualEvidence`) — the create-time
+configuration that project permits. Forge's persisted grants are authoritative:
 
 - One granted project — use it.
 - Several — ask the person you work for which one. Do not guess.
@@ -148,7 +150,11 @@ Optional fields Forge accepts: `dependsOn`, `images`, `source`, `workflowId` or
 `templateId` (never both), `rootProfileId`, `workerProfileId`,
 `advisorProfileIds`, `deliveryTarget`, `runProjectTests`, `visualEvidence`.
 Send them only when the project policy allows them; omitting a workflow and a
-template uses the policy default. Omit `description` to keep a template's
+template uses the policy default. `deliveryTarget`, `runProjectTests`, and
+`visualEvidence` must match the project's `agentTaskPolicy` from
+`forge_whoami`; anything else fails with `422 delivery_policy_rejected` and a
+message naming the permitted values. Omit them to take the policy default — the
+created task reports the applied values back. Omit `description` to keep a template's
 description; sending it, even as `""`, overrides it. Never send local paths,
 URLs, credentials, or file references.
 
@@ -158,7 +164,8 @@ existing task.
 ## Status polling
 
 `GET /api/hermes/tasks/{taskId}` returns the task with `status`, `revision`,
-`permittedCommands`, `blocker`, `humanQuestion`, `workflowStage`, `delivery`,
+`permittedCommands`, `blocker`, `humanQuestion`, `workflowStage`,
+`deliveryTarget`, `runProjectTests`, `visualEvidence`, `delivery`,
 `integration`, and `actionRequired`.
 
 Poll with backoff, not in a tight loop — `client.poll_task(task_id, until=…)`

@@ -8,7 +8,15 @@ current grant for the task project in the agent's company.
 ## Discovery
 
 `GET /api/hermes/me` returns the authenticated agent identity, actual supported
-capabilities, and `{ id, name }` metadata for currently granted projects.
+capabilities, and `{ id, name, agentTaskPolicy }` metadata for currently granted
+projects. `agentTaskPolicy` reports the create-time configuration the project
+permits: `deliveryTargets` (the delivery targets a create request may ask for),
+`runProjectTests`, and `visualEvidence`. Read it before creating a task; a
+create request that asks for anything else is rejected.
+
+`GET /api/hermes/capabilities` reports the deployment-wide surface. Its
+`capabilities.create.deliveryTargets` is the full set of delivery targets the
+route accepts; each project narrows that to the single value its policy fixes.
 
 `GET /api/hermes/tasks` returns only the caller's tasks. It accepts these query
 parameters: `projectId`, `status`, `archived`, `attention`, `blocker`,
@@ -31,7 +39,8 @@ only safe task, project, workflow progress, question, and delivery observations.
 `permittedCommands` lists the lifecycle commands that
 `POST /api/hermes/tasks/:taskId/commands` accepts for the task right now.
 `checks` is `null`, which means Forge has no persisted check observation to
-report.
+report. `deliveryTarget`, `runProjectTests`, and `visualEvidence` report the
+configuration the project policy applied to the task.
 
 Read responses (`GET` and `POST /api/hermes/tasks`) also carry `implementation`,
 `integration`, and `actionRequired`. `integration` is what GitHub reported about
@@ -73,6 +82,16 @@ body takes `command`, the task's current `revision`, an `idempotencyKey`, and
 `{ "code": "revision_stale" }`; a command outside `permittedCommands` returns
 `409` with `{ "code": "illegal_command" }`. Human answers, delivery, and merges
 have no command and stay human authority.
+
+## Creating a task
+
+`POST /api/hermes/tasks` creates a backlog task. `deliveryTarget`,
+`runProjectTests`, and `visualEvidence` are optional; sending a value the
+project policy does not permit returns `422` with
+`{ "code": "delivery_policy_rejected" }` and a message naming the permitted
+values. Read `agentTaskPolicy` from `GET /api/hermes/me` to avoid the round
+trip, or omit the fields and let the policy default apply. The created task
+reports the applied `deliveryTarget`, `runProjectTests`, and `visualEvidence`.
 
 `docs/hermes-mcp-bridge.md` describes the stdio MCP bridge that exposes these
 routes as tools.

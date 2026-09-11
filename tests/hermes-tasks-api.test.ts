@@ -328,7 +328,7 @@ test("authenticated runtime contract uses the live task schemas and states its a
   expect(capabilities.statusCode).toBe(200);
   expect(capabilities.json()).toMatchObject({
     apiVersion: "v1",
-    capabilities: { read: { task: true }, create: { backlogTask: true }, taskControl: true, delivery: false, merge: false, humanDecisions: false },
+    capabilities: { read: { task: true }, create: { backlogTask: true, deliveryTargets: ["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"] }, taskControl: true, delivery: false, merge: false, humanDecisions: false },
     pagination: { supported: false, cursor: false },
   });
   expect(capabilities.json().unavailableCommands).toEqual(["answer_human_question", "deliver_task", "merge_pull_request"]);
@@ -536,7 +536,7 @@ test("POST /api/hermes/tasks creates task with native status, private no-store h
   expect(response.headers["cache-control"]).toBe("private, no-store");
 
   const body = response.json();
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(body).sort()).toEqual(expectedKeys);
   expect(body).toMatchObject({
     dependsOn: [],
@@ -611,6 +611,12 @@ test("POST /api/hermes/tasks resolves only project-authorized workflow, template
   expect(rich.statusCode, rich.body).toBe(201);
   expect(rich.json()).toMatchObject({ workflow: "direct_build" });
   expect(database.authQuery(db => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts").get())).toEqual({ count: 1 });
+
+  // An omitted delivery configuration reports back the policy the project applied.
+  const defaulted = await request({ projectId, title: "Policy default task", idempotencyKey: "hermes-policy-default-001" });
+  expect(defaulted.statusCode, defaulted.body).toBe(201);
+  expect(defaulted.json()).toMatchObject({ deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
+  expect((await app.inject({ method: "GET", url: `/api/hermes/tasks/${defaulted.json().id}`, headers: { Authorization: `Bearer ${agentCredential}` } })).json()).toMatchObject({ deliveryTarget: "pull_request_draft" });
 
   const templated = await request({ projectId, title: "Template task", idempotencyKey: "hermes-template-001", templateId: "template_hermes_direct" });
   expect(templated.statusCode, templated.body).toBe(201);
@@ -701,7 +707,11 @@ test("Hermes request validation rejects required fields, unapproved choices, and
   expect((await request({ projectId, title: "Missing key" })).statusCode).toBe(400);
   expect((await request({ projectId, title: "Bad choice", idempotencyKey: "bad-choice-001", workflowId: "unknown" })).statusCode).toBe(422);
   expect((await request({ projectId, title: "Bad profile", idempotencyKey: "bad-profile-001", rootProfileId: "profile_native_worker" })).statusCode).toBe(422);
-  expect((await request({ projectId, title: "Bad delivery", idempotencyKey: "bad-delivery-001", deliveryTarget: "merged" })).statusCode).toBe(422);
+  for (const [key, deliveryTarget] of [["bad-delivery-001", "merged"], ["bad-delivery-002", "pull_request_ready"]] as const) {
+    const rejected = await request({ projectId, title: "Bad delivery", idempotencyKey: key, deliveryTarget });
+    expect(rejected.statusCode).toBe(422);
+    expect(rejected.json()).toMatchObject({ code: "delivery_policy_rejected" });
+  }
   expect((await request({ projectId, title: "Bad filename", idempotencyKey: "bad-filename-001", images: [{ filename: "../proof.png", mimeType: "image/png", base64: "iVBORw0KGgo=" }] })).statusCode).toBe(400);
   expect((await request({ projectId, title: "Too many", idempotencyKey: "too-many-images-001", images: Array.from({ length: MAX_TASK_IMAGES + 1 }, () => ({ filename: "proof.png", mimeType: "image/png", base64: "iVBORw0KGgo=" })) })).statusCode).toBe(400);
   expect((await request({ projectId, title: "Encoded oversized", idempotencyKey: "encoded-oversized-001", images: [{ filename: "proof.png", mimeType: "image/png", base64: "A".repeat(MAX_TASK_IMAGE_BASE64_LENGTH + 1) }] })).statusCode).toBe(413);
@@ -713,7 +723,9 @@ test("Hermes request validation rejects required fields, unapproved choices, and
     ["invalid-enum-001", { visualEvidence: "never" }],
     ["invalid-advisor-role-001", { advisorProfileIds: { operator: "profile_native_root" } }],
   ] satisfies Array<[string, object]>) expect((await request({ projectId, title: "Invalid request", idempotencyKey: key, ...payload })).statusCode).toBe(400);
-  expect((await request({ projectId, title: "Tests disabled", idempotencyKey: "tests-disabled-001", runProjectTests: false })).statusCode).toBe(422);
+  const testsDisabled = await request({ projectId, title: "Tests disabled", idempotencyKey: "tests-disabled-001", runProjectTests: false });
+  expect(testsDisabled.statusCode).toBe(422);
+  expect(testsDisabled.json()).toMatchObject({ code: "delivery_policy_rejected" });
   database.authTransaction(db => db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES ('template_disallowed', ?, 'Disallowed', ?, ?, ?)").run(projectId, JSON.stringify({ name: "Disallowed", description: "", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString()));
   for (const templateId of ["template_missing", "template_disallowed"]) expect((await request({ projectId, title: "Unavailable template", idempotencyKey: `template-${templateId}`, templateId })).statusCode).toBe(422);
 });
@@ -1005,7 +1017,7 @@ test("GET /api/hermes/tasks/:taskId returns safe projection, handles non-enumera
   });
   expect(getSuccess.statusCode).toBe(200);
   expect(getSuccess.headers["cache-control"]).toBe("private, no-store");
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(getSuccess.json()).sort()).toEqual(expectedKeys);
   expect(getSuccess.json().title).toBe("Task For Status Check");
 
@@ -1123,7 +1135,7 @@ test("GET /api/hermes/tasks scopes the list, rejects an unknown filter, and expo
   expect(ids).not.toContain(outOfGrant.id);
   expect(ids).not.toContain(crossCompany.id);
 
-  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
+  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
   expect(JSON.stringify(listed)).not.toMatch(/worktree|repositoryPath|session|turn|prompt|transcript|credential|objective/i);
 
   expect((await listTasks(`?projectId=${projectId}`)).json().tasks.map((task: { id: string }) => task.id)).toContain(granted);
@@ -1179,7 +1191,7 @@ test("real HTTP discovery applies current grants, ownership, pagination, and con
 
   const identity = await request("/api/hermes/me");
   expect(identity.status).toBe(200);
-  expect(await identity.json()).toMatchObject({ agent: { id: agentId, name: "Hermes Bot", profileId: "profile-bot" }, capabilities: { taskDiscovery: true, taskRead: true, taskCreate: true, taskCommands: expect.arrayContaining(["start_task", "cancel_task", "duplicate_task"]) }, projects: [{ id: projectId, name: "Hermes Project" }] });
+  expect(await identity.json()).toMatchObject({ agent: { id: agentId, name: "Hermes Bot", profileId: "profile-bot" }, capabilities: { taskDiscovery: true, taskRead: true, taskCreate: true, taskCommands: expect.arrayContaining(["start_task", "cancel_task", "duplicate_task"]) }, projects: [{ id: projectId, name: "Hermes Project", agentTaskPolicy: { deliveryTargets: ["pull_request_draft"], runProjectTests: true, visualEvidence: "off" } }] });
 
   const pageOne = await request("/api/hermes/tasks?limit=2");
   expect(pageOne.status).toBe(200);

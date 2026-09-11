@@ -17,18 +17,21 @@ vi.mock("../src/frontend/features/analytics/lib/analytics.js", () => ({ useTaskC
 vi.mock("../src/frontend/features/tasks/task-details.js", () => ({ TaskDetailsPage: () => null }));
 vi.mock("../src/frontend/features/tasks/task-options.js", () => ({ TaskOptions: () => null }));
 vi.mock("../src/frontend/components/ui/select.js", () => {
-  const context = createContext<{ onValueChange?: ((value: string) => void) | undefined; label: { current: string } }>({ label: { current: "" } });
+  const context = createContext<{ value?: string | undefined; onValueChange?: ((value: string) => void) | undefined; label: { current: string } }>({ label: { current: "" } });
   return {
-    Select: ({ onValueChange, children }: { onValueChange?: (value: string) => void; children: ReactNode }) => {
+    Select: ({ value, onValueChange, children }: { value?: string | undefined; onValueChange?: (value: string) => void; children: ReactNode }) => {
       const label = useRef("");
-      return <context.Provider value={{ onValueChange, label }}>{children}</context.Provider>;
+      return <context.Provider value={{ value, onValueChange, label }}>{children}</context.Provider>;
     },
     SelectTrigger: ({ children, ...props }: { children: ReactNode; "aria-label"?: string }) => {
       const { label } = useContext(context);
       label.current = props["aria-label"] ?? "";
       return <div {...props}>{children}</div>;
     },
-    SelectValue: () => null,
+    SelectValue: ({ children }: { children?: ReactNode | ((value: string) => ReactNode) }) => {
+      const { value } = useContext(context);
+      return typeof children === "function" ? children(value ?? "") : children;
+    },
     SelectContent: ({ children }: { children: ReactNode }) => children,
     SelectItem: ({ value, children }: { value: string; children: ReactNode }) => {
       const { onValueChange, label } = useContext(context);
@@ -62,7 +65,10 @@ test("the board status filter narrows the visible columns and tasks", async () =
   document.body.append(container);
   await act(async () => { createRoot(container).render(<TasksView mode="board" />); });
 
+  const trigger = () => container.querySelector<HTMLElement>('[aria-label="Filter by status"]');
+  const iconThenLabel = () => [trigger()?.firstElementChild?.tagName.toLowerCase(), trigger()?.textContent];
   const columns = () => Array.from(container.querySelectorAll("section")).map(section => section.getAttribute("aria-label"));
+  expect(iconThenLabel()).toEqual(["svg", "All statuses"]);
   expect(columns()).toEqual(["Backlog", "Active"]);
   expect(container.textContent).toContain("Plan the migration");
 
@@ -71,6 +77,7 @@ test("the board status filter narrows the visible columns and tasks", async () =
   await act(async () => { option?.click(); });
 
   expect(columns()).toEqual(["Active"]);
+  expect(iconThenLabel()).toEqual(["svg", "Active"]);
   expect(container.textContent).toContain("Repair the poller");
   expect(container.textContent).not.toContain("Plan the migration");
 

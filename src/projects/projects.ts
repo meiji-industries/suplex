@@ -171,6 +171,8 @@ function readAgentTaskPolicy(raw: string, legacyDefault: ProjectAgentTaskPolicy)
   catch { throw new ProjectFailure("Project agent policy is invalid", [finding("agent-task-policy-invalid", "agentTaskPolicy", "Project agent task policy must be repaired before it can be used")], 422); }
 }
 
+const withProfile = (ids: string[], profileId: string): string[] => ids.includes(profileId) ? ids : [...ids, profileId];
+
 function finding(code: string, field: string, message: string): ProjectFinding {
   return { code, field, message };
 }
@@ -385,7 +387,8 @@ export class ProjectService {
       };
       const stored = updating ? this.rowForProject(db, id)! : undefined;
       const storedPolicy = stored ? readAgentTaskPolicy(stored.agent_task_policy_json, defaultPolicy) : undefined;
-      const policy = ProjectAgentTaskPolicySchema.parse(input.agentTaskPolicy ?? storedPolicy ?? defaultPolicy);
+      // Without an explicit policy body the stored allowlists still have to admit the project's own defaults, or agent creates without profile ids would be refused.
+      const policy = ProjectAgentTaskPolicySchema.parse(input.agentTaskPolicy ?? (storedPolicy ? { ...storedPolicy, rootProfileIds: withProfile(storedPolicy.rootProfileIds, normalized.rootProfileId), workerProfileIds: withProfile(storedPolicy.workerProfileIds, normalized.workerProfileId) } : defaultPolicy));
       if (input.agentTaskPolicy) this.validateAgentTaskPolicy(db, policy, id);
       if (updating) {
         const existing = this.rowForProject(db, id);

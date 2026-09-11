@@ -624,6 +624,40 @@ test("POST /api/hermes/tasks resolves only project-authorized workflow, template
   expect(badFields.statusCode).toBe(400);
 });
 
+test("server-chosen default profiles outlive a policy that still lists the old ones", async () => {
+  const stamp = new Date().toISOString();
+  database.authTransaction(db => {
+    db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('profile_drift_worker', 'Drift Worker', 'worker', '00000000000000000000000000000009', 'openai', 'gpt-5.6-luna', 'medium', 'default', ?, ?)").run(stamp, stamp);
+    db.prepare("INSERT INTO forge_workflows (id, name, description, engine, configuration_json, created_at, updated_at) VALUES ('workflow_drift_record', 'Drift record', '', 'standard', ?, ?, ?)").run(JSON.stringify({ advisorProfileIds: {}, rootProfileId: "profile_native_root", workerProfileId: "profile_drift_worker" }), stamp, stamp);
+  });
+  await updateProjectPolicy({ workflowIds: ["workflow_native_standard", "workflow_drift_record"], defaultWorkflowId: "workflow_native_standard", templateIds: [], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
+
+  // The admin changes the project default without sending a policy body, the way the project form does.
+  const current = projects.getProject(adminId, projectId);
+  await projects.updateProject(adminId, projectId, { name: current.name, repositoryPath: current.repositoryPath, worktreeRoot: current.worktreeRoot, repository: current.repository!, baseBranch: current.baseBranch, setupCommand: current.setupCommand, verificationCommand: current.verificationCommand, rootProfileId: current.rootProfileId, workerProfileId: "profile_drift_worker" });
+  expect(projects.getProject(adminId, projectId).agentTaskPolicy).toMatchObject({ rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker", "profile_drift_worker"] });
+
+  const request = (payload: object) => app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload });
+  const plain = await request({ projectId, title: "Plain request", idempotencyKey: "hermes-drift-plain-001" });
+  expect(plain.statusCode, plain.body).toBe(201);
+  expect(tasks.getTask(adminId, plain.json().id as string).workerProfile.profileId).toBe("profile_drift_worker");
+
+  // A stored policy that never learned the new default still must not block a caller who chose nothing.
+  database.authTransaction(db => db.prepare("UPDATE forge_projects SET agent_task_policy_json = json_set(agent_task_policy_json, '$.workerProfileIds', json_array('profile_native_worker')) WHERE id = ?").run(projectId));
+  const drifted = await request({ projectId, title: "Drifted policy", idempotencyKey: "hermes-drift-stored-001" });
+  expect(drifted.statusCode, drifted.body).toBe(201);
+  expect(tasks.getTask(adminId, drifted.json().id as string).workerProfile.profileId).toBe("profile_drift_worker");
+
+  // A workflow record carrying its own profiles is a server choice too.
+  const viaRecord = await request({ projectId, title: "Workflow record profiles", idempotencyKey: "hermes-drift-record-001", workflowId: "workflow_drift_record" });
+  expect(viaRecord.statusCode, viaRecord.body).toBe(201);
+  expect(tasks.getTask(adminId, viaRecord.json().id as string).workerProfile.profileId).toBe("profile_drift_worker");
+
+  const chosen = await request({ projectId, title: "Caller choice", idempotencyKey: "hermes-drift-chosen-001", workerProfileId: "profile_drift_worker" });
+  expect(chosen.statusCode).toBe(422);
+  expect(chosen.body).toContain("The selected agent profile is not permitted");
+});
+
 test("Hermes idempotency hashes the semantic caller request before policy resolution", async () => {
   const payload = { projectId, title: "Concurrent retry", idempotencyKey: "hermes-concurrent-001" };
   const responses = await Promise.all(Array.from({ length: 4 }, () => app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload })));

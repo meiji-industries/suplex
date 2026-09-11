@@ -618,7 +618,8 @@ export class TaskService {
     if (raw.deliveryTarget !== undefined && raw.deliveryTarget !== policy.deliveryTarget || raw.runProjectTests !== undefined && raw.runProjectTests !== policy.runProjectTests || raw.visualEvidence !== undefined && raw.visualEvidence !== policy.visualEvidence) throw new TaskFailure("The requested delivery or check configuration is not permitted", 422);
     const root = request.rootProfileId ?? project.rootProfileId;
     const worker = request.workerProfileId ?? project.workerProfileId;
-    if (!policy.rootProfileIds.includes(root) || !policy.workerProfileIds.includes(worker)) throw new TaskFailure("The selected agent profile is not permitted", 422);
+    // The allowlist governs what a caller may choose; server-chosen defaults (project defaults, workflow and template records) are already trusted.
+    if (raw.rootProfileId !== undefined && !policy.rootProfileIds.includes(raw.rootProfileId) || raw.workerProfileId !== undefined && !policy.workerProfileIds.includes(raw.workerProfileId)) throw new TaskFailure("The selected agent profile is not permitted", 422);
     for (const role of workflowDefinition(request.workflow).advisorRoles) {
       const profileId = request.advisorProfileIds[role] ?? root;
       if (!policy.advisorProfileIds[role].includes(profileId)) throw new TaskFailure("The selected Advisor profile is not permitted", 422);
@@ -716,8 +717,9 @@ export class TaskService {
     const created = await this.createTaskForHermes(principal, {
       projectId: source.projectId, title: duplicateTitle(source.title, new Set()), description: source.description, idempotencyKey: hermesDuplicateKey(taskId, key),
       workflowId: this.hermesWorkflowIdForEngine(policy, source.workflow), templateId: undefined,
-      rootProfileId: source.rootProfile.profileId, workerProfileId: source.workerProfile.profileId,
-      advisorProfileIds: Object.fromEntries(Object.entries(source.advisorProfiles).map(([role, profile]) => [role, profile.profileId])), images,
+      rootProfileId: policy.rootProfileIds.includes(source.rootProfile.profileId) ? source.rootProfile.profileId : undefined,
+      workerProfileId: policy.workerProfileIds.includes(source.workerProfile.profileId) ? source.workerProfile.profileId : undefined,
+      advisorProfileIds: Object.fromEntries(Object.entries(source.advisorProfiles).filter(([role, profile]) => policy.advisorProfileIds[role as AdvisorRole]?.includes(profile.profileId)).map(([role, profile]) => [role, profile.profileId])), images,
       ...(source.configuration.source ? { source: source.configuration.source } : {}),
     }, taskId);
     return created.task.id;

@@ -61,7 +61,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
     catch (error) { setError(error instanceof Error ? error.message : "The action failed"); }
     finally { setBusy(false); }
   };
-  return <article data-task-detail className="flex h-[calc(100dvh-var(--header-height))] min-h-0 min-w-0 flex-none flex-col overflow-hidden md:h-[calc(100dvh-var(--header-height)-1rem)]">
+  return <article data-task-detail className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     <div data-task-body className="grid min-h-0 min-w-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_260px]">
       <div data-task-main className="flex min-w-0 flex-col">
         <header className="px-4 pb-3 pt-4 sm:px-6 lg:px-10"><div className="mx-auto flex max-w-4xl min-w-0 items-start justify-between gap-3"><h2 className="min-w-0 flex-1 text-xl font-semibold leading-8" aria-label={task.title}>{task.title}</h2>{task.worktree ? <TaskWorktreeMenu taskId={task.id} path={task.worktree.path} onError={setError} /> : null}</div></header>

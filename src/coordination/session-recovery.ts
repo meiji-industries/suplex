@@ -93,7 +93,9 @@ export async function recoverSession(dependencies: SessionRecoveryDependencies, 
         nativeSessionId,
         paneId: session.paneId,
         rootPaneId: session.kind === "worker" ? store.currentSession(control.taskId, "root")?.paneId ?? null : null,
+        shellPaneId: control.shellPaneId,
         persistPane: (paneId) => store.bindPane({ sessionId: session.id, generation: session.generation, paneId }),
+        persistShellPane: (paneId) => store.bindShellPane(control.taskId, paneId),
       });
     } catch (error) {
       new StructuredLogger().warn("Task display attachment is unavailable; native work is retained", { taskId: control.taskId }, { error: error instanceof Error ? error.message : String(error) });

@@ -1,7 +1,7 @@
 // eslint-disable-next-line no-restricted-imports -- the Herdr terminal bridge is a long-lived streaming child process, not a one-shot command.
 import { type ChildProcessByStdio, spawn as nodeSpawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 
 import { json } from "../../shared/json.js";
 
@@ -23,7 +23,12 @@ export function parseBridgeRecord(line: string): BridgeEvent | null {
   return null;
 }
 
-export interface HerdrTerminalBridge { release(): void }
+export interface HerdrTerminalBridge {
+  input(bytes: Buffer): void;
+  resize(cols: number, rows: number): void;
+  scroll(direction: "up" | "down", lines: number): void;
+  release(): void;
+}
 
 type Spawn = typeof nodeSpawn;
 
@@ -31,13 +36,17 @@ export function openHerdrTerminalBridge(input: {
   paneId: string;
   cols: number;
   rows: number;
+  mode?: "observe" | "control";
   onEvent: (event: BridgeEvent) => void;
   binary?: string;
   spawn?: Spawn;
 }): HerdrTerminalBridge {
   const cols = clamp(input.cols, 20, 500);
   const rows = clamp(input.rows, 5, 200);
-  const child = (input.spawn ?? nodeSpawn)(input.binary ?? "herdr", ["terminal", "session", "observe", input.paneId, "--cols", String(cols), "--rows", String(rows)], { stdio: ["ignore", "pipe", "pipe"], env: process.env }) as ChildProcessByStdio<null, Readable, Readable>;
+  const control = input.mode === "control";
+  const child = (input.spawn ?? nodeSpawn)(input.binary ?? "herdr", control
+    ? ["terminal", "session", "control", input.paneId, "--takeover", "--cols", String(cols), "--rows", String(rows)]
+    : ["terminal", "session", "observe", input.paneId, "--cols", String(cols), "--rows", String(rows)], { stdio: [control ? "pipe" : "ignore", "pipe", "pipe"], env: process.env }) as ChildProcessByStdio<Writable | null, Readable, Readable>;
   let settled = false;
   let released = false;
   let releaseTimer: NodeJS.Timeout | undefined;
@@ -52,6 +61,10 @@ export function openHerdrTerminalBridge(input: {
     output.close();
     errors.close();
   };
+  const write = (record: Record<string, unknown>): void => {
+    if (settled || released || !control) return;
+    try { child.stdin?.write(`${JSON.stringify(record)}\n`); } catch { /* stdin already closed */ }
+  };
   const output = createInterface({ input: child.stdout });
   output.on("line", (line) => {
     const event = parseBridgeRecord(line);
@@ -60,10 +73,10 @@ export function openHerdrTerminalBridge(input: {
   });
   const errors = createInterface({ input: child.stderr });
   errors.on("line", (message) => {
-    if (message.trim()) emit({ type: "error", message });
+    if (message.trim() && (!control || /input ignored|error/i.test(message))) emit({ type: "error", message });
   });
   child.once("error", (error) => {
-    emit({ type: "error", message: `Herdr observer could not start: ${error.message}` });
+    emit({ type: "error", message: `Herdr ${control ? "terminal controller" : "observer"} could not start: ${error.message}` });
     emit({ type: "closed", reason: "spawn error" });
     cleanup();
   });
@@ -72,14 +85,27 @@ export function openHerdrTerminalBridge(input: {
     cleanup();
   });
   return {
+    input(bytes: Buffer) { write({ type: "terminal.input", bytes: bytes.toString("base64") }); },
+    resize(cols: number, rows: number) { write({ type: "terminal.resize", cols: clamp(cols, 20, 500), rows: clamp(rows, 5, 200) }); },
+    scroll(direction: "up" | "down", lines: number) { if (direction === "up" || direction === "down") write({ type: "terminal.scroll", direction, lines: clamp(lines, 1, 65_535) }); },
     release() {
       if (released || settled) return;
       released = true;
-      try { child.kill("SIGTERM"); } catch { cleanup(); return; }
+      if (control) {
+        try { child.stdin?.write('{"type":"terminal.release"}\n'); child.stdin?.end(); } catch { /* stdin already closed */ }
+      } else {
+        try { child.kill("SIGTERM"); } catch { cleanup(); return; }
+      }
       releaseTimer = setTimeout(() => {
         releaseTimer = undefined;
-        try { child.kill("SIGKILL"); } catch { /* The observer already stopped. */ }
-        cleanup();
+        try { child.kill(control ? "SIGTERM" : "SIGKILL"); } catch { /* The bridge already stopped. */ }
+        if (!control) { cleanup(); return; }
+        releaseTimer = setTimeout(() => {
+          releaseTimer = undefined;
+          try { child.kill("SIGKILL"); } catch { /* The bridge already stopped. */ }
+          cleanup();
+        }, 500);
+        releaseTimer.unref();
       }, 500);
       releaseTimer.unref();
     },

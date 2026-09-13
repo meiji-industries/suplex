@@ -49,7 +49,7 @@ function control(row: Row): TaskControl {
   const workflow = WorkflowIdSchema.parse(text(row, "workflow") ?? "standard");
   const advisorProfiles = z.partialRecord(AdvisorRoleSchema, TaskProfileSchema).parse(JSON.parse(text(row, "advisor_profiles_json") ?? "{}"));
   const workflowState = parseJson(text(row, "workflow_state_json"), WorkflowStateSchema) ?? emptyWorkflowState();
-  return { workflow, advisorProfiles, workflowState, humanQuestionOptions: HumanQuestionOptionsSchema.parse(JSON.parse(text(row, "human_question_options_json") ?? "[]")), taskId, objective, deliveryTarget, deliveryIntent, status, wakeAt: text(row, "wake_at"), humanQuestion: text(row, "human_question"), humanQuestionId: text(row, "human_question_id"), recoveryTurnId: text(row, "recovery_turn_id"), limitPause: parseJson(text(row, "limit_pause_json"), TaskLimitPauseSchema), worktree: parseJson(text(row, "worktree_json"), WorktreeReferenceSchema), pullRequest: parseJson(text(row, "pull_request_json"), PullRequestReferenceSchema), rootSessionId: text(row, "root_session_id"), workerSessionId: text(row, "worker_session_id"), rootProfile, workerProfile };
+  return { workflow, advisorProfiles, workflowState, humanQuestionOptions: HumanQuestionOptionsSchema.parse(JSON.parse(text(row, "human_question_options_json") ?? "[]")), taskId, objective, deliveryTarget, deliveryIntent, status, wakeAt: text(row, "wake_at"), humanQuestion: text(row, "human_question"), humanQuestionId: text(row, "human_question_id"), recoveryTurnId: text(row, "recovery_turn_id"), limitPause: parseJson(text(row, "limit_pause_json"), TaskLimitPauseSchema), worktree: parseJson(text(row, "worktree_json"), WorktreeReferenceSchema), pullRequest: parseJson(text(row, "pull_request_json"), PullRequestReferenceSchema), rootSessionId: text(row, "root_session_id"), workerSessionId: text(row, "worker_session_id"), shellPaneId: text(row, "shell_pane_id"), rootProfile, workerProfile };
 }
 
 export class TaskControlStore {
@@ -198,6 +198,9 @@ export class TaskControlStore {
   }
   bindPane(input: { sessionId: string; generation: number; paneId: string }): void {
     bindPane(this.database, input, now);
+  }
+  bindShellPane(taskId: string, paneId: string): void {
+    this.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET shell_pane_id = ?, updated_at = ? WHERE task_id = ?").run(paneId, now(), taskId));
   }
   hasTurns(sessionId: string): boolean {
     return hasTurns(this.database, sessionId);

@@ -24,7 +24,7 @@ export function paneForNextRow(layout: PaneLayout, fallbackPaneId: string): stri
     right.rect.height - left.rect.height
       || depth(left) - depth(right)
       || right.rect.width - left.rect.width
-      || left.rect.y - right.rect.y
+      || right.rect.y - left.rect.y
       || left.rect.x - right.rect.x,
   )[0]?.paneId ?? fallbackPaneId;
 }

@@ -15,6 +15,7 @@ import { HermesAgentService } from "../../src/identity/hermes-agents.js";
 import { GithubTriggerService } from "../../src/integrations/github/triggers.js";
 import type { GithubTriggerPort } from "../../src/integrations/github/trigger-inspection.js";
 import type { HostHealthDependencies } from "../../src/platform/health.js";
+import type { TaskPanePort } from "../../src/runtimes/task-display.js";
 
 export const healthyHost: HostHealthDependencies = {
   database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
@@ -30,7 +31,7 @@ const webAuthn: WebAuthnAdapter = {
   async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; },
 };
 
-export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; logSink?: (line: string) => void } = {}) {
+export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; herdr?: TaskPanePort; logSink?: (line: string) => void } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "forge-native-app-"));
   const config = createTestConfig(directory, { reachableAddress: "http://127.0.0.1:4111" });
   const database = createTestDatabase(config.databasePath);
@@ -43,7 +44,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
     github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } },
     readProviders: async () => ({ directory, observedAt: new Date().toISOString(), providers: [{ id: "openai", label: "OpenAI", status: "configured", modelCount: 2, models: [{ id: "gpt-5.6-sol", label: "Sol" }, { id: "gpt-5.6-luna", label: "Luna" }] }] }),
   });
-  const tasks = new TaskService(database, auth, projects, config);
+  const tasks = new TaskService(database, auth, projects, config, fixtureOptions.herdr ? { herdr: fixtureOptions.herdr } : {});
   const templates = new TaskTemplateService(database, auth, tasks);
   const workflows = new WorkflowRecordService(database, auth);
   const hermes = new HermesAgentService(database, auth);

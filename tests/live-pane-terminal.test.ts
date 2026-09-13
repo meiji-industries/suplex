@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { observerDimensionsChanged, observerViewport, reconnectDelayMs, terminalCloseStatus } from "../src/frontend/features/tasks/task-chat/live-pane-terminal.js";
+import { observerDimensionsChanged, observerViewport, reconnectDelayMs, terminalCloseStatus, wheelToScroll } from "../src/frontend/features/tasks/task-chat/live-pane-terminal.js";
 
 test("live pane terminal reopens an observer only when its viewport changes", () => {
   expect(observerDimensionsChanged(undefined, { cols: 80, rows: 24 })).toBe(true);
@@ -25,4 +25,16 @@ test("terminal authorization and attachment closures do not enter a reconnect lo
   expect(terminalCloseStatus(4404)).toBe("ended");
   expect(terminalCloseStatus(1000)).toBe("ended");
   expect(terminalCloseStatus(1006)).toBeNull();
+});
+
+test("a takeover closure is reported as taken over, not ended", () => {
+  expect(terminalCloseStatus(4498)).toBe("taken_over");
+});
+
+test("wheel deltas convert to terminal scroll lines", () => {
+  expect(wheelToScroll(-120, 16)).toEqual({ direction: "up", lines: 8 });
+  expect(wheelToScroll(3, 16)).toEqual({ direction: "down", lines: 1 });
+  expect(wheelToScroll(0.5, 16)).toBeNull();
+  expect(wheelToScroll(-33, 0)).toBeNull();
+  expect(wheelToScroll(48, 16)).toEqual({ direction: "down", lines: 3 });
 });

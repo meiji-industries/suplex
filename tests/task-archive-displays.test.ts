@@ -73,6 +73,30 @@ test("archive preserves a recorded pane whose ownership metadata is missing befo
   expect([...f.panes.keys()]).toEqual(["w1:p1"]);
 });
 
+test("archive closes a Forge-owned shell pane", async () => {
+  const f = fixture();
+  f.panes.set("w1:shell", { paneId: "w1:shell", workspaceId: "w1", cwd: process.cwd(), label: "Shell", tokens: { forge_task_id: "task", forge_binding_id: "task:shell", forge_role: "shell" } });
+  const sessions = [...f.sessions, { id: "task:shell", taskId: "task", paneId: "w1:shell", nativeSessionId: null }];
+  await (await prepareArchiveDisplays(sessions, f.herdr))();
+  expect(f.herdr.closeWorkspace).toHaveBeenCalledWith("w1");
+  expect(f.panes.size).toBe(0);
+});
+
+test("archive rediscovers a shell pane when its recorded id is stale", async () => {
+  const f = fixture();
+  f.panes.set("w1:shell-new", { paneId: "w1:shell-new", workspaceId: "w1", cwd: process.cwd(), label: "Shell", tokens: { forge_task_id: "task", forge_binding_id: "task:shell", forge_role: "shell" } });
+  const sessions = [...f.sessions, { id: "task:shell", taskId: "task", paneId: "w1:shell-old", nativeSessionId: null }];
+  await (await prepareArchiveDisplays(sessions, f.herdr))();
+  expect(f.panes.size).toBe(0);
+});
+
+test("archive does not block when the shell pane is already gone", async () => {
+  const f = fixture();
+  const sessions = [...f.sessions, { id: "task:shell", taskId: "task", paneId: "w1:missing", nativeSessionId: null }];
+  await expect((await prepareArchiveDisplays(sessions, f.herdr))()).resolves.toBeUndefined();
+  expect(f.panes.size).toBe(0);
+});
+
 test("archive succeeds when a recorded pane is missing", async () => {
   const f = fixture();
   f.panes.delete("w1:p1");

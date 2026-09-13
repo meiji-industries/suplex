@@ -55,7 +55,7 @@ export class OpenCodeTaskRuntime implements TaskHarness {
     return native.id;
   }
 
-  async attach(input: { scope: TaskScope; nativeSessionId: string; paneId: string | null; rootPaneId?: string | null; persistPane: (paneId: string) => void }): Promise<string> {
+  async attach(input: { scope: TaskScope; nativeSessionId: string; paneId: string | null; rootPaneId?: string | null; shellPaneId?: string | null; persistPane: (paneId: string) => void; persistShellPane?: (paneId: string) => void }): Promise<string> {
     const reference = await readOpenCodeServer(this.runtimeDirectory(input.scope));
     if (!reference) throw new Error("OpenCode server reference is missing");
     return attachTaskDisplay(this.herdr, {

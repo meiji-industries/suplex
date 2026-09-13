@@ -41,7 +41,7 @@ export function TaskBlockedByProperty({ task, save }: { task: Pick<Task, "compan
 export function TaskDetailsPage({ task, project, onChange }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void }): ReactElement {
   const cost = useTaskCosts(task.companyId).get(task.id);
   const costTitle = cost ? undefined : "OpenCode estimates are not bills. Zero does not verify free usage.";
-  const [activity, setActivity] = useState<TaskActivity>({ sessions: [], turns: [] });
+  const [activity, setActivity] = useState<TaskActivity>({ sessions: [], turns: [], shellPaneId: null });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [image, setImage] = useState<Task["images"][number] | null>(null);

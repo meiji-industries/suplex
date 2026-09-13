@@ -22,6 +22,7 @@ test.each(["live", "failed_command", "old_server", "unrelated", "unknown"])("nat
     if (condition === "unknown") original = { pane_id: "pane-old", foreground_processes: [] };
     const processes = new Map<string, PaneProcessInfo>([["pane-old", original]]);
     let creates = 0;
+    let splits = 0;
     let fail = condition === "failed_command";
     const commands: string[] = [];
     const paneCommands: string[] = [];
@@ -30,7 +31,7 @@ test.each(["live", "failed_command", "old_server", "unrelated", "unknown"])("nat
       async getPane(id) { return pane(id); },
       async getPaneProcessInfo(id) { return processes.get(id)!; },
       async createWorkspace() { creates++; processes.set("pane-new", shell("pane-new")); return { workspace: { workspaceId: "workspace", label: "Proof" }, tab: { tabId: "tab", label: "Proof" }, rootPane: pane("pane-new") }; },
-      async splitPane() { throw new Error("No split expected"); },
+      async splitPane() { splits++; const id = `pane-split-${splits}`; processes.set(id, shell(id)); return pane(id); },
       async renamePane() {}, async reportPaneMetadata(report) { metadata.push(report); },
       async runPaneCommand(id, command) { commands.push(id); paneCommands.push(command); if (fail) { fail = false; throw new Error("Command transport failed"); } processes.set(id, attached(id)); },
     };
@@ -47,7 +48,7 @@ test.each(["live", "failed_command", "old_server", "unrelated", "unknown"])("nat
     const result = await attach();
     expect(await attach()).toBe(result);
     expect(creates).toBe(condition === "old_server" || condition === "unrelated" ? 1 : 0);
-    expect(commands).toEqual(condition === "live" ? [] : condition === "failed_command" ? ["pane-old", "pane-old"] : ["pane-new"]);
+    expect(commands).toEqual(condition === "live" ? [] : condition === "failed_command" ? ["pane-old", "pane-old"] : ["pane-split-1"]);
     expect(paneCommands).toEqual(commands.map(() => expect.stringContaining("--mini")));
     expect(metadata.at(-1)?.tokens).toMatchObject({
       forge_binding_id: scope.id,

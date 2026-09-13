@@ -32,6 +32,8 @@ import type { GithubTriggerPort } from "../integrations/github/trigger-inspectio
 import { matchesGithubTriggerProtectedPaths } from "../integrations/github/trigger-paths.js";
 import { normalizeWorkflowInput, roleLabel, workflowDefinition, WorkflowInputFailure, type AdvisorRole } from "../coordination/workflows.js";
 import type { TaskLimitDecision } from "./limits/limits.js";
+import { CliHerdrClient } from "../integrations/herdr/client.js";
+import { ensureTaskShellPane, type TaskPanePort } from "../runtimes/task-display.js";
 
 export class TaskFailure extends Error {
   constructor(readonly publicMessage: string, readonly statusCode = 400, readonly code = "task_failure", options?: { cause?: unknown }) {
@@ -56,7 +58,7 @@ const hermesDuplicateKey = (taskId: string, key: string): string => `duplicate-$
 const HERMES_UPSTREAM_POOL = 200;
 type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "resolveTaskSource" | "captureTaskConfiguration">;
 /** Worktree removal defaults to the real host; tests drive a controlled one. */
-export type TaskServicePorts = { removeWorktree?: typeof removeTaskWorktree };
+export type TaskServicePorts = { removeWorktree?: typeof removeTaskWorktree; herdr?: TaskPanePort };
 const DetailsSchema = TaskDetailsBodySchema.refine(input => Object.keys(input).length > 0);
 const RenameSchema = TaskInputSchema.pick({ title: true });
 const DependsOnSchema = z.array(z.string().min(1).max(256)).max(MAX_TASK_DEPENDENCIES);
@@ -64,12 +66,14 @@ const BlockedBySchema = z.object({ blockedByTaskId: z.string().min(1).max(256).n
 
 export class TaskService {
   private readonly removeWorktree: typeof removeTaskWorktree;
+  private readonly herdr: TaskPanePort;
   readonly repository: TaskRepository;
   private readonly artifacts: ArtifactStore;
   constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService, private readonly projects: Projects, config: Pick<ForgeConfig, "artifactRoot">, ports: TaskServicePorts = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot, database);
     this.repository = new TaskRepository(database, this.artifacts);
     this.removeWorktree = ports.removeWorktree ?? removeTaskWorktree;
+    this.herdr = ports.herdr ?? new CliHerdrClient();
   }
 
   getTask(userId: string, taskId: string): Task {
@@ -553,7 +557,8 @@ export class TaskService {
     archivesInProgress.add(taskId);
     try {
       const sessions = this.repository.controls.sessions(taskId);
-      const closeDisplays = await stopIdleArchiveSessions(this.database.filename(), sessions);
+      const shellPaneId = this.database.authQuery(db => (db.prepare("SELECT shell_pane_id AS id FROM forge_task_controls WHERE task_id = ?").get(taskId) as { id: string | null } | undefined)?.id ?? null);
+      const closeDisplays = await stopIdleArchiveSessions(this.database.filename(), taskId, sessions, shellPaneId);
       this.requireTask(authority, taskId);
       const result = await this.removeWorktree({ taskId, ...task.configuration }, task.worktree, confirmDiscardDirty, () => { this.requireTask(authority, taskId); });
       if (result.status === "confirmation_required") return result;
@@ -587,7 +592,23 @@ export class TaskService {
     return {
       sessions: this.repository.controls.sessions(taskId).map(session => ({ id: session.id, kind: session.kind, advisorRole: session.advisorRole, label: roleLabel(session), profileId: this.sessionProfile(task, session).profileId, generation: session.generation, nativeSessionId: session.nativeSessionId, paneId: session.paneId, current: session.current, replacement: session.replacement })),
       turns: this.repository.controls.turns(taskId).map(turn => ({ id: turn.id, sessionId: turn.sessionId, prompt: turn.promptText, status: turn.status, result: turn.terminalObservation })),
+      shellPaneId: this.database.authQuery(db => (db.prepare("SELECT shell_pane_id AS id FROM forge_task_controls WHERE task_id = ?").get(taskId) as { id: string | null } | undefined)?.id ?? null),
     };
+  }
+
+  /** Resolves the task's Shell pane from Herdr, rediscovering or recreating it when the persisted binding is stale. */
+  async taskShellPane(userId: string, taskId: string): Promise<string | null> {
+    this.requireTask({ kind: "user", userId }, taskId);
+    const control = this.repository.controls.get(taskId);
+    const pane = await ensureTaskShellPane(this.herdr, {
+      taskId,
+      cwd: control.worktree?.path ?? process.cwd(),
+      paneId: control.shellPaneId,
+      persist: paneId => this.repository.controls.bindShellPane(taskId, paneId),
+      excludePaneIds: this.repository.controls.sessions(taskId).map(session => session.paneId),
+      create: false,
+    }).catch(() => null);
+    return pane?.paneId ?? null;
   }
 
   private sessionProfile(task: Task, session: { kind: "root" | "worker"; advisorRole: AdvisorRole | null; profile?: TaskProfile | null }): TaskProfile {

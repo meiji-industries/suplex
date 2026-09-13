@@ -85,7 +85,7 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
     return nativeSessionId ?? randomUUID();
   }
 
-  async attach(input: { scope: TaskScope; nativeSessionId: string; paneId: string | null; rootPaneId?: string | null; persistPane: (paneId: string) => void }): Promise<string> {
+  async attach(input: { scope: TaskScope; nativeSessionId: string; paneId: string | null; rootPaneId?: string | null; shellPaneId?: string | null; persistPane: (paneId: string) => void; persistShellPane?: (paneId: string) => void }): Promise<string> {
     if (!await this.transcript(input.nativeSessionId)) throw new Error("Claude Code session has not started; the display attaches after its first turn");
     const executable = await this.executable();
     const guard = await this.guard(input.scope);

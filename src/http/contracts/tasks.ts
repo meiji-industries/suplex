@@ -43,6 +43,7 @@ export const TaskNoteBodySchema = z.object({ note: z.string().trim().min(1).max(
 export const TaskActivityResponseSchema = z.object({
   sessions: z.array(z.object({ id: z.string(), kind: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable(), label: z.string(), profileId: z.string(), generation: z.number(), nativeSessionId: z.string().nullable(), paneId: z.string().nullable(), current: z.boolean(), replacement: WorkerReplacementSchema.nullable().optional() })),
   turns: z.array(z.object({ id: z.string(), sessionId: z.string(), prompt: z.string(), status: TaskTurnStatusSchema, result: z.string().nullable() })),
+  shellPaneId: z.string().nullable(),
 });
 export const TaskSessionHistoryParamsSchema = z.object({ taskId: z.string().min(1), sessionId: z.string().min(1) });
 export const TaskSessionHistoryQuerySchema = z.object({ before: z.string().min(1).max(512).optional() });

@@ -51,6 +51,7 @@ export interface TaskControl {
   pullRequest: PullRequestReference | null;
   rootSessionId: string | null;
   workerSessionId: string | null;
+  shellPaneId: string | null;
   rootProfile: TaskProfile;
   workerProfile: TaskProfile;
   workflow: WorkflowId;

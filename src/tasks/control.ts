@@ -10,7 +10,7 @@ export const TaskSessionLifecycleSchema = z.enum(["reserved", "live", "stopped",
 export const TaskTurnStatusSchema = z.enum(["pending_prompt", "prompted", "unknown", "completed", "cancelled"]);
 export const PromptDispatchAttemptSchema = z.object({ serverGeneration: z.string().uuid(), claimedAt: z.string().datetime() }).strict();
 export type PromptDispatchAttempt = z.infer<typeof PromptDispatchAttemptSchema>;
-export const TaskProfileSchema = z.object({ profileId: z.string().min(1), provider: z.string().min(1), model: z.string().min(1), reasoningLevel: z.enum(["low", "medium", "high", "xhigh", "max"]), serviceTier: z.enum(["default", "priority"]) }).strict();
+export const TaskProfileSchema = z.object({ profileId: z.string().min(1), provider: z.string().min(1), model: z.string().min(1), reasoningLevel: z.enum(["low", "medium", "high", "xhigh", "max"]), serviceTier: z.enum(["default", "priority"]), instanceHomeDirectory: z.string().nullable().optional() }).strict();
 
 export const WorktreeReferenceSchema = z.object({
   path: z.string().min(1), branch: z.string().min(1), baseSha: z.string().min(1), headSha: z.string().min(1), dirty: z.boolean(),

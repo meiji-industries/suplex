@@ -104,11 +104,11 @@ export function checkGithubAuthentication(command: string, runner: CommandRunner
 }
 
 export type ProviderProbeResult = { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean };
-export type ProviderProbeRunner = (command: string, args: readonly string[], options: { timeout: number }) => Promise<ProviderProbeResult>;
+export type ProviderProbeRunner = (command: string, args: readonly string[], options: { timeout: number; env?: NodeJS.ProcessEnv }) => Promise<ProviderProbeResult>;
 
 /** Resolves on non-zero exits; rejects only when the process cannot run at all. */
 export const probeCommand: ProviderProbeRunner = (command, args, options) => new Promise((resolve, reject) => {
-  const child = spawn(command, [...args], { stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(command, [...args], { stdio: ["ignore", "pipe", "pipe"], env: options.env });
   let stdout = "";
   let stderr = "";
   let settled = false;
@@ -140,6 +140,7 @@ export interface ProviderReadinessOptions {
   resolveExecutable?: () => Promise<string>;
   runCommand?: ProviderProbeRunner;
   platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
 }
 
 const stripAnsi = (value: string): string => value.replace(/\x1b\[[0-9;]*m/g, "");
@@ -208,7 +209,7 @@ export function createProviderReadinessCheck(kind: ProviderHarnessKind, options:
     }
     let result: ProviderProbeResult;
     try {
-      result = await runCommand(executable, probe.authArgs, { timeout: 5_000 });
+      result = await runCommand(executable, probe.authArgs, { timeout: 5_000, ...(options.env ? { env: options.env } : {}) });
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
         return { ...base, status: "unhealthy", summary: `${label} is not installed`, ...probe.installRemedy(platform), details: { state: "absent" satisfies ProviderState } };

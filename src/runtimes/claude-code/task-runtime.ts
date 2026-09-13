@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { claudeAssistantText, claudeConfigDirectory, claudeExecution, claudeMessageEntries, ClaudeStreamInitSchema, ClaudeStreamResultSchema, claudeUnsettledToolIds, findClaudeTranscript, parseJsonLines, type ClaudeStreamResult } from "./transcript.js";
 import { resolveClaudeExecutable } from "../../platform/executable-resolver.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
-import { shellQuote, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
+import { instanceEnvironment, shellQuote, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
 import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
 import { taskRolePrompt } from "../../tasks/execution/role-prompt.js";
 import { createGitCommandGuard, type GitCommandGuard } from "../../coordination/worker-environment.js";
@@ -61,8 +61,8 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
     return resolveClaudeExecutable(this.options.executable ? { executable: this.options.executable } : {});
   }
 
-  private transcript(sessionID: string): Promise<string | null> {
-    return findClaudeTranscript(sessionID, this.options.configDirectory ?? claudeConfigDirectory());
+  private transcript(sessionID: string, scope?: TaskScope): Promise<string | null> {
+    return findClaudeTranscript(sessionID, scope?.profile.instanceHomeDirectory ?? this.options.configDirectory ?? claudeConfigDirectory());
   }
 
   private async guard(scope: TaskScope): Promise<GitCommandGuard | undefined> {
@@ -86,12 +86,13 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
   }
 
   async attach(input: { scope: TaskScope; nativeSessionId: string; paneId: string | null; rootPaneId?: string | null; shellPaneId?: string | null; persistPane: (paneId: string) => void; persistShellPane?: (paneId: string) => void }): Promise<string> {
-    if (!await this.transcript(input.nativeSessionId)) throw new Error("Claude Code session has not started; the display attaches after its first turn");
+    if (!await this.transcript(input.nativeSessionId, input.scope)) throw new Error("Claude Code session has not started; the display attaches after its first turn");
     const executable = await this.executable();
     const guard = await this.guard(input.scope);
     // ponytail: the interactive display resumes the same transcript but does not
     // refresh while a headless turn appends to it; reopen the pane to catch up.
-    const environment = guard ? `PATH=${shellQuote(guard.directory)}:"$PATH" FORGE_GIT_REAL_BIN=${shellQuote(guard.env.FORGE_GIT_REAL_BIN ?? "")} FORGE_GH_REAL_BIN=${shellQuote(guard.env.FORGE_GH_REAL_BIN ?? "")} ` : "";
+    const instance = instanceEnvironment(input.scope.profile.providerID, input.scope.profile.instanceHomeDirectory ?? null);
+    const environment = `${instance.CLAUDE_CONFIG_DIR ? `CLAUDE_CONFIG_DIR=${shellQuote(instance.CLAUDE_CONFIG_DIR)} ` : ""}${guard ? `PATH=${shellQuote(guard.directory)}:"$PATH" FORGE_GIT_REAL_BIN=${shellQuote(guard.env.FORGE_GIT_REAL_BIN ?? "")} FORGE_GH_REAL_BIN=${shellQuote(guard.env.FORGE_GH_REAL_BIN ?? "")} ` : ""}`;
     const command = environment + [executable, ...claudeArguments({ scope: input.scope, sessionID: input.nativeSessionId, resume: true, print: false, runtimeDirectory: this.runtimeDirectory(input.scope) })].map(shellQuote).join(" ");
     return attachTaskDisplay(this.herdr, { ...input, generation: input.nativeSessionId, isAttached: args => claudeDisplayAttached(executable, input.nativeSessionId, args), command });
   }
@@ -126,10 +127,10 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
     const before = await this.observe(scope, intent);
     if (before.retry !== "allowed") throw new Error("Claude Code prompt was not proven absent; replay is blocked");
     const executable = await this.executable();
-    const resume = await this.transcript(intent.sessionID) !== null;
+    const resume = await this.transcript(intent.sessionID, scope) !== null;
     const guard = await this.guard(scope);
     const args = claudeArguments({ scope, sessionID: intent.sessionID, resume, print: true, runtimeDirectory });
-    const record = await dispatchHeadless({ runtimeDirectory, scope, intent, executable, args, prompt: intent.prompt, environment: guard?.env, claim, label: "Claude Code" });
+    const record = await dispatchHeadless({ runtimeDirectory, scope, intent, executable, args, prompt: intent.prompt, environment: { ...guard?.env, ...instanceEnvironment(scope.profile.providerID, scope.profile.instanceHomeDirectory ?? null) }, claim, label: "Claude Code" });
     return this.observe(scope, { ...intent, dispatch: "ambiguous" }, { serverGeneration: record.generation, claimedAt: new Date().toISOString() });
   }
 

@@ -55,6 +55,10 @@ Projects choose repository paths, worktree roots, verification commands,
 delivery targets, and Root and Worker defaults. Templates reuse task intent.
 Agent profiles select models from the host's OpenCode configuration.
 
+Claude Code profiles can use the global configuration or a local Forge-owned
+instance. A local instance has its own sign-in. The provider page shows the
+exact `CLAUDE_CONFIG_DIR='<directory>' claude auth login` command for it.
+
 OpenCode owns model-provider authentication. Forge's provider page reports
 configuration, not a successful inference request. GitHub operations use the
 host's existing GitHub CLI authentication.

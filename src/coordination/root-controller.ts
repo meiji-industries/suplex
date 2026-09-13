@@ -36,7 +36,7 @@ export class RootController implements RootBridgeAdapter {
     const selected = session.profile ?? (session.kind === "root" ? control.rootProfile : advisorRole ? control.advisorProfiles[advisorRole] ?? control.rootProfile : control.workerProfile);
     const common = {
       id: session.id, taskId: control.taskId, directory: control.worktree.path, workflow: control.workflow, evidenceRoot: this.evidenceRoot(control.taskId),
-      profile: { providerID: selected.provider, modelID: selected.model, reasoningEffort: selected.reasoningLevel, serviceTier: selected.serviceTier },
+      profile: { providerID: selected.provider, modelID: selected.model, reasoningEffort: selected.reasoningLevel, serviceTier: selected.serviceTier, instanceHomeDirectory: selected.instanceHomeDirectory ?? null },
     };
     if (session.kind === "root") return { ...common, role: "root", identity: { taskId: control.taskId, sessionId: session.id, generation: session.generation } };
     if (advisorRole) return { ...common, role: "advisor", advisorRole, label: ADVISOR_LABELS[advisorRole] };

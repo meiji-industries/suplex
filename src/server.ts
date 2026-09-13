@@ -15,6 +15,7 @@ import { TaskTemplateService } from "./tasks/templates.js";
 import { WorkflowRecordService } from "./coordination/workflow-records.js";
 import { createFastifyLogger, StructuredLogger } from "./platform/logging.js";
 import { AgentProfileService } from "./profiles/agent-profiles.js";
+import { ProviderInstanceService } from "./profiles/provider-instances.js";
 import { ProjectService } from "./projects/projects.js";
 import { TaskService } from "./tasks/tasks.js";
 import { HermesAgentService } from "./identity/hermes-agents.js";
@@ -46,6 +47,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   const projects = new ProjectService(database, auth, config);
   await seedDevelopmentData(auth, config);
   const profiles = new AgentProfileService(database, auth);
+  const providerInstances = new ProviderInstanceService(database, auth);
   const tasks = new TaskService(database, auth, projects, config);
   const agentDelivery = new AgentDeliveryService({ database, tasks, store: tasks.repository.controls, delivery: new DeliveryOperations(tasks.repository.controls), auth });
   const taskTemplates = new TaskTemplateService(database, auth, tasks);
@@ -62,6 +64,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     agentDelivery,
     projects,
     profiles,
+    providerInstances,
     tasks,
     taskTemplates,
     workflows,

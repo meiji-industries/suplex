@@ -4,7 +4,7 @@ import { AuthFailure, type AuthService } from "../identity/auth.js";
 import type { ForgeDatabase } from "../platform/database.js";
 import { AgentProfileInputSchema, AgentProfilePatchSchema, AgentProfileSchema, type AgentProfile } from "./agent-profile-contracts.js";
 
-const selection = "SELECT id, name, role, avatar_seed AS avatarSeed, provider, model, reasoning_level AS reasoningLevel, service_tier AS serviceTier, archived_at AS archivedAt, created_at AS createdAt, updated_at AS updatedAt FROM forge_profiles";
+const selection = "SELECT id, name, role, avatar_seed AS avatarSeed, provider, model, reasoning_level AS reasoningLevel, service_tier AS serviceTier, provider_instance_id AS providerInstanceId, archived_at AS archivedAt, created_at AS createdAt, updated_at AS updatedAt FROM forge_profiles";
 
 export class AgentProfileService {
   constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService) {}
@@ -21,7 +21,8 @@ export class AgentProfileService {
     const now = new Date().toISOString();
     this.database.authTransaction(db => {
       this.assertName(values.name);
-      db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, values.name, values.role, values.avatarSeed, values.provider, values.model, values.reasoningLevel, values.serviceTier, now, now);
+      this.assertInstance(values.provider, values.providerInstanceId ?? null);
+      db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, provider_instance_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, values.name, values.role, values.avatarSeed, values.provider, values.model, values.reasoningLevel, values.serviceTier, values.providerInstanceId ?? null, now, now);
       this.auth.recordAuditEvent(userId, "agent_profile_created", undefined, undefined, { profileId: id });
     });
     return this.get(id);
@@ -40,7 +41,8 @@ export class AgentProfileService {
         if (project) throw new AuthFailure("Select another project default before changing this profile's role or archiving it", 409);
       }
       const now = new Date().toISOString();
-      db.prepare("UPDATE forge_profiles SET name = ?, role = ?, avatar_seed = ?, provider = ?, model = ?, reasoning_level = ?, service_tier = ?, archived_at = ?, updated_at = ? WHERE id = ?").run(values.name, values.role, values.avatarSeed, values.provider, values.model, values.reasoningLevel, values.serviceTier, archived === undefined ? current.archivedAt : archived ? now : null, now, id);
+      this.assertInstance(values.provider, values.providerInstanceId ?? null);
+      db.prepare("UPDATE forge_profiles SET name = ?, role = ?, avatar_seed = ?, provider = ?, model = ?, reasoning_level = ?, service_tier = ?, provider_instance_id = ?, archived_at = ?, updated_at = ? WHERE id = ?").run(values.name, values.role, values.avatarSeed, values.provider, values.model, values.reasoningLevel, values.serviceTier, values.providerInstanceId ?? null, archived === undefined ? current.archivedAt : archived ? now : null, now, id);
       this.auth.recordAuditEvent(userId, "agent_profile_updated", undefined, undefined, { profileId: id });
       return this.get(id);
     });
@@ -64,6 +66,13 @@ export class AgentProfileService {
 
   private assertName(name: string, id = ""): void {
     if (this.database.authQuery(db => db.prepare("SELECT 1 FROM forge_profiles WHERE name = ? AND id <> ?").get(name, id))) throw new AuthFailure("This agent name is already in use", 409);
+  }
+
+  private assertInstance(provider: string, instanceId: string | null): void {
+    if (!instanceId) return;
+    const instance = this.database.authQuery(db => db.prepare("SELECT provider FROM forge_provider_instances WHERE id = ?").get(instanceId) as { provider: string } | undefined);
+    if (!instance) throw new AuthFailure("The selected provider instance does not exist", 422);
+    if (instance.provider !== provider) throw new AuthFailure("The selected provider instance belongs to a different provider", 422);
   }
 
   private requireAdmin(userId: string): void {

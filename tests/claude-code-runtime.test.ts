@@ -8,6 +8,8 @@ import type { HerdrClient, Pane, PaneProcessInfo } from "../src/integrations/her
 import { createOpenCodePromptIntent } from "../src/runtimes/opencode/session.js";
 import { CLAUDE_CODE_PROVIDER, HarnessRouter, profileHarness, sessionHarness, taskSessionRuntimeDirectory, taskSessionTitle, type TaskScope } from "../src/runtimes/task-harness.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
+import { findClaudeTranscript } from "../src/runtimes/claude-code/transcript.js";
+import { ClaudeCodeSessionReader } from "../src/runtimes/claude-code/session-reader.js";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -29,9 +31,10 @@ async function fixture(behaviour: "complete" | "hang" | "crash" | "startup_failu
     crash: [line({ type: "system", subtype: "init", session_id: sessionID, cwd: worktree, model: "m", tools: [] }), "exit 1"],
     startup_failure: ["echo 'Error: Not logged in' >&2", "exit 1"],
   }[behaviour];
-  await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' "$@" > "$FORGE_TEST_ARGS"\ncat > "$FORGE_TEST_PROMPT"\n${script.join("\n")}\n`, { mode: 0o700 });
+  await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' "$@" > "$FORGE_TEST_ARGS"\nprintf '%s' "$CLAUDE_CONFIG_DIR" > "$FORGE_TEST_CONFIG_DIR"\ncat > "$FORGE_TEST_PROMPT"\n${script.join("\n")}\n`, { mode: 0o700 });
   process.env.FORGE_TEST_ARGS = join(root, "args.txt");
   process.env.FORGE_TEST_PROMPT = join(root, "prompt.txt");
+  process.env.FORGE_TEST_CONFIG_DIR = join(root, "config-dir.txt");
   const scope: TaskScope = { id: "session-claude", taskId: "task-claude", directory: worktree, role: "worker", workerMode: "planned", purpose: "implementation", workflow: "standard", evidenceRoot: null, profile: { providerID: CLAUDE_CODE_PROVIDER, modelID: "haiku", reasoningEffort: "low", serviceTier: "default" } };
   const runtime = new ClaudeCodeTaskRuntime(join(root, "forge.sqlite"), {} as HerdrClient, { executable, configDirectory });
   const intent = createOpenCodePromptIntent({ sessionID, directory: worktree, prompt: "Implement the change", model: { providerID: CLAUDE_CODE_PROVIDER, modelID: "haiku" }, agent: "forge-worker", variant: "low" });
@@ -58,6 +61,31 @@ test("a headless turn is dispatched once, observed from its stream, and reported
   await expect(f.runtime.dispatch(f.scope, f.intent, async () => true)).rejects.toThrow("replay is blocked");
   expect(await f.runtime.observe(f.scope, { ...f.intent, dispatch: "ambiguous" })).toMatchObject({ state: "completed" });
   expect(await claudeSessionBusy(f.runtimeDirectory)).toBe(false);
+});
+
+test("a local Claude instance supplies its config directory to dispatch and transcript lookup", async () => {
+  const f = await fixture("complete");
+  const local = join(f.root, "provider-instances", "local");
+  await mkdir(join(local, "projects", "worktree"), { recursive: true });
+  const scope = { ...f.scope, profile: { ...f.scope.profile, instanceHomeDirectory: local } };
+  await f.runtime.dispatch(scope, f.intent, async () => true);
+  await delay(100);
+  expect(await readFile(join(f.root, "config-dir.txt"), "utf8")).toBe(local);
+  await writeFile(join(local, "projects", "worktree", `${sessionID}.jsonl`), "");
+  expect(await findClaudeTranscript(sessionID, local)).toBe(join(local, "projects", "worktree", `${sessionID}.jsonl`));
+});
+
+test("the session reader discovers a local instance transcript without a session profile", async () => {
+  const f = await fixture("complete");
+  const local = join(f.root, "provider-instances", "instance");
+  await mkdir(join(local, "projects", "worktree"), { recursive: true });
+  await writeFile(join(local, "projects", "worktree", `${sessionID}.jsonl`), JSON.stringify({ type: "assistant", uuid: "message", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "Local transcript" }] } }));
+  const reader = new ClaudeCodeSessionReader(join(f.root, "forge.sqlite"), f.configDirectory);
+  const session = { id: f.scope.id, taskId: f.scope.taskId, kind: "worker" as const, generation: 1, current: true, paneId: null, nativeSessionId: sessionID, lifecycle: "live" as const, assignmentHash: null, launchOwner: null, launchOwnerPid: null, launchOwnerStartTime: null, stopRequestedAt: null, stoppedAt: null, advisorRole: null, workflowInput: null, profile: null };
+  expect((await reader.history(session))[0]?.content[0]).toMatchObject({ text: "Local transcript" });
+  expect((await reader.execution(session)).tools).toEqual([]);
+  expect((await reader.status(session)).status).toBe("idle");
+  expect((await reader.timeline(session)).usage).toEqual([]);
 });
 
 test("a running turn is busy until stopped, then reads as an uncertain execution when tools were open", async () => {

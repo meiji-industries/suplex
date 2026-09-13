@@ -26,6 +26,8 @@ import { HermesNewAgentDialog } from "./hermes-new-agent-dialog.js";
 import { HermesPairingCodeDialog } from "./hermes-pairing-code-dialog.js";
 import { HermesProjectGrantsDialog } from "./hermes-project-grants-dialog.js";
 import { createHermesActions } from "./hermes-actions.js";
+import type { ProviderInstanceSchema } from "../../../http/contracts/providers.js";
+import type { z } from "zod";
 
 export function AdminView(): ReactElement {
   const { user, companies, currentCompany, loading } = useCompanyContext();
@@ -46,6 +48,8 @@ export function AdminView(): ReactElement {
   const [agentProvider, setAgentProvider] = useState<string>("openai");
   const [agentReasoning, setAgentReasoning] = useState("medium");
   const [agentPriority, setAgentPriority] = useState("default");
+  const [agentInstanceId, setAgentInstanceId] = useState<string | null>(null);
+  const [providerInstances, setProviderInstances] = useState<z.infer<typeof ProviderInstanceSchema>[]>([]);
   const [agentOpen, setAgentOpen] = useState(false);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<ApiProfile | null>(null);
@@ -102,6 +106,7 @@ export function AdminView(): ReactElement {
           invitationList,
           credentialList,
           agentList,
+          instanceList,
           hermesList,
           projectList,
           modelList,
@@ -127,6 +132,7 @@ export function AdminView(): ReactElement {
                 options,
               )
             : { profiles: [] },
+          isAgents ? readJson<{ instances: z.infer<typeof ProviderInstanceSchema>[] }>("/api/admin/provider-instances", options).catch(() => ({ instances: [] })) : { instances: [] },
           isAgents
             ? readJson<{ agents: ApiHermesAgent[] }>(
                 `/api/admin/hermes-agents${currentCompany ? `?companyId=${encodeURIComponent(currentCompany.id)}` : ""}`,
@@ -157,6 +163,7 @@ export function AdminView(): ReactElement {
         setInvitations(invitationList.invitations);
         setCredentials(credentialList.credentials);
         setAgents(agentList.profiles);
+        setProviderInstances(instanceList.instances);
         setHermesAgents(hermesList.agents);
         setCompanyProjects(projectList.projects);
         const projectIds = new Set(
@@ -237,6 +244,7 @@ export function AdminView(): ReactElement {
     setAgentModel("gpt-5.6-sol");
     setAgentReasoning("medium");
     setAgentPriority("default");
+    setAgentInstanceId(null);
     setAgentOpen(true);
   };
   const openEditAgent = (agent: ApiProfile): void => {
@@ -248,6 +256,7 @@ export function AdminView(): ReactElement {
     setAgentModel(agent.model);
     setAgentReasoning(agent.reasoningLevel);
     setAgentPriority(agent.serviceTier);
+    setAgentInstanceId(agent.providerInstanceId ?? null);
     setAgentOpen(true);
   };
   const saveAgent = async (): Promise<void> => {
@@ -267,6 +276,7 @@ export function AdminView(): ReactElement {
             model: agentModel,
             reasoningLevel: agentReasoning,
             serviceTier: agentPriority,
+            providerInstanceId: agentInstanceId,
           }),
         },
       );
@@ -522,6 +532,8 @@ export function AdminView(): ReactElement {
               agentProvider={agentProvider}
               agentReasoning={agentReasoning}
               agentPriority={agentPriority}
+              agentInstanceId={agentInstanceId}
+              instances={providerInstances}
               models={models}
               providerOptions={providerOptions}
               onOpenChange={(open) => {
@@ -535,6 +547,7 @@ export function AdminView(): ReactElement {
               onAgentProviderChange={setAgentProvider}
               onAgentReasoningChange={setAgentReasoning}
               onAgentPriorityChange={setAgentPriority}
+              onAgentInstanceIdChange={setAgentInstanceId}
               onSave={saveAgent}
             />
             <HermesAvatarDialog

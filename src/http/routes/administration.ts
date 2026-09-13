@@ -11,6 +11,9 @@ import { AuditEventListResponseSchema, CredentialIdParamsSchema, CredentialListR
 import { DisplayNameBodySchema } from "../contracts/auth.js";
 import { ProfileBodySchema, ProfilePatchBodySchema, ProfileResponseSchema, ProfileListQuerySchema, ProfileListResponseSchema, ModelListResponseSchema } from "../contracts/projects.js";
 import { ProviderListResponseSchema, type ProviderListResponse } from "../contracts/providers.js";
+import { ProviderInstanceCreateBodySchema, ProviderInstanceListResponseSchema, ProviderInstanceSchema, type ProviderInstance } from "../contracts/providers.js";
+import type { ProviderInstanceService } from "../../profiles/provider-instances.js";
+import { createProviderReadinessCheck } from "../../profiles/provider-readiness.js";
 import { readProviders as readHostProviders, type ReadProviders } from "../../profiles/provider-catalog.js";
 import { MAX_MIN_FREE_DISK_GB, readEnvironmentSettings, updateEnvironmentSettings } from "../../platform/environment-settings.js";
 
@@ -24,6 +27,8 @@ export interface AdministrationRoutesOptions {
   database?: ForgeDatabase;
   config?: ForgeConfig;
   readProviders?: ReadProviders;
+  providerInstances?: ProviderInstanceService;
+  readProviderInstanceReadiness?: (homeDirectory: string) => Promise<{ status: "healthy" | "warning" | "unhealthy"; summary: string }>;
 }
 
 const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (app, options) => {
@@ -60,6 +65,20 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
       return reply.code(503).send({ error: "Provider configuration is not available. Check OpenCode or Claude Code on the Forge host." });
     }
   });
+  if (options.providerInstances) {
+    let instanceObservation: Promise<ProviderInstance[]> | undefined;
+    const readiness = options.readProviderInstanceReadiness ?? (async (homeDirectory: string) => {
+      const check = await createProviderReadinessCheck("claude-code", { env: { ...process.env, CLAUDE_CONFIG_DIR: homeDirectory } })();
+      return { status: check.status, summary: check.summary };
+    });
+    typed.get("/api/admin/provider-instances", { schema: { response: { 200: ProviderInstanceListResponseSchema } } }, async request => {
+      instanceObservation ??= Promise.resolve(options.providerInstances!.list(request.forgeUser.id)).finally(() => { instanceObservation = undefined; });
+      const instances = await instanceObservation;
+      return { instances: await Promise.all(instances.map(async instance => ({ ...instance, readiness: await readiness(instance.homeDirectory) }))) };
+    });
+    typed.post("/api/admin/provider-instances", { schema: { body: ProviderInstanceCreateBodySchema, response: { 201: ProviderInstanceSchema } } }, async (request, reply) => reply.code(201).send(await options.providerInstances!.create(request.forgeUser.id, request.body)));
+    typed.delete("/api/admin/provider-instances/:instanceId", { schema: { params: z.object({ instanceId: z.string() }), response: { 204: z.null() } } }, async (request, reply) => { await options.providerInstances!.delete(request.forgeUser.id, request.params.instanceId); return reply.code(204).send(null); });
+  }
   typed.post("/api/admin/invitations", { schema: { body: DisplayNameBodySchema, response: { 201: InvitationResponseSchema } } }, async (request, reply) => reply.code(201).send(auth.inviteUser(request.forgeUser.id, { displayName: request.body.displayName })));
   typed.get("/api/admin/invitations", { schema: { response: { 200: InvitationSummaryListResponseSchema } } }, async (request, reply) => reply.send({ invitations: auth.listInvitations(request.forgeUser.id) }));
   typed.get("/api/admin/users", { schema: { response: { 200: UserListResponseSchema } } }, async (request, reply) => reply.send({ users: auth.listUsers(request.forgeUser.id) }));

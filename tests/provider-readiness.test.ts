@@ -92,6 +92,16 @@ test("provider checks probe their documented sign-in commands", async () => {
   expect(calls).toEqual([["auth", "status", "--json"]]);
 });
 
+test("Claude Code readiness passes the local instance environment to its probe", async () => {
+  let environment: NodeJS.ProcessEnv | undefined;
+  const runCommand: ProviderProbeRunner = async (_command, _args, options) => {
+    environment = options.env;
+    return ok(JSON.stringify({ loggedIn: true }));
+  };
+  await createProviderReadinessCheck("claude-code", { resolveExecutable: present("claude"), runCommand, env: { CLAUDE_CONFIG_DIR: "/tmp/instance" } })();
+  expect(environment?.CLAUDE_CONFIG_DIR).toBe("/tmp/instance");
+});
+
 test("a failing probe that later succeeds reports healthy without state reset", async () => {
   let installed = false;
   const resolveExecutable = async (): Promise<string> => {

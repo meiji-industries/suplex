@@ -39,6 +39,8 @@ export function InternalAgentDialog({
   agentProvider,
   agentReasoning,
   agentPriority,
+  agentInstanceId,
+  instances,
   models,
   providerOptions,
   onOpenChange,
@@ -49,6 +51,7 @@ export function InternalAgentDialog({
   onAgentProviderChange,
   onAgentReasoningChange,
   onAgentPriorityChange,
+  onAgentInstanceIdChange,
   onSave,
 }: {
   open: boolean;
@@ -60,6 +63,8 @@ export function InternalAgentDialog({
   agentProvider: string;
   agentReasoning: string;
   agentPriority: string;
+  agentInstanceId: string | null;
+  instances: { id: string; provider: string; label: string }[];
   models: ApiModel[];
   providerOptions: { id: string; label: string; status: ApiModel["providerStatus"] }[];
   onOpenChange: (open: boolean) => void;
@@ -70,11 +75,13 @@ export function InternalAgentDialog({
   onAgentProviderChange: (value: string) => void;
   onAgentReasoningChange: (value: string) => void;
   onAgentPriorityChange: (value: string) => void;
+  onAgentInstanceIdChange: (value: string | null) => void;
   onSave: () => Promise<void>;
 }): ReactElement {
   const providerModels = models.filter(
     (model) => model.provider === agentProvider,
   );
+  const supportsInstances = agentProvider === "claude-code";
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -127,6 +134,16 @@ export function InternalAgentDialog({
                 </Button>
               </span>
             </Field>
+            {supportsInstances ? <Field>
+              <FieldLabel htmlFor="agent-instance">Instance</FieldLabel>
+              <Select value={agentInstanceId ?? "global"} onValueChange={(value) => onAgentInstanceIdChange(value === "global" ? null : value ?? null)}>
+                <SelectTrigger id="agent-instance"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Global (your configuration)</SelectItem>
+                  {instances.filter(instance => instance.provider === agentProvider).map(instance => <SelectItem key={instance.id} value={instance.id}>{instance.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </Field> : null}
             <Field>
               <FieldLabel htmlFor="agent-name">Agent name</FieldLabel>
               <Input

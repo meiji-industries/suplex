@@ -20,6 +20,7 @@ export interface TaskProfileSelection {
   modelID: string;
   reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max";
   serviceTier: "default" | "priority";
+  instanceHomeDirectory?: string | null;
 }
 
 export type TaskScope = {
@@ -61,6 +62,15 @@ export const DEVIN_MODELS = [{ id: "swe", label: "SWE (latest)" }, { id: "swe-2"
 
 export function profileHarness(providerID: string): HarnessKind {
   return providerID === CLAUDE_CODE_PROVIDER ? "claude-code" : providerID === DEVIN_PROVIDER ? "devin" : "opencode";
+}
+
+/** Provider-owned configuration directories are opt-in per harness. */
+export function instanceEnvironment(providerID: string, homeDirectory: string | null): NodeJS.ProcessEnv {
+  return providerID === CLAUDE_CODE_PROVIDER && homeDirectory ? { CLAUDE_CONFIG_DIR: homeDirectory } : {};
+}
+
+export function supportsProviderInstances(providerID: string): boolean {
+  return profileHarness(providerID) === "claude-code";
 }
 
 // Forge reserves Devin identities with this prefix. Native IDs otherwise remain

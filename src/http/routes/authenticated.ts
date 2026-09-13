@@ -4,6 +4,7 @@ import type { AuthService, AuthUser } from "../../identity/auth.js";
 import type { ForgeConfig } from "../../platform/config.js";
 import type { ForgeDatabase } from "../../platform/database.js";
 import type { AgentProfileService } from "../../profiles/agent-profiles.js";
+import type { ProviderInstanceService } from "../../profiles/provider-instances.js";
 import { AvatarService } from "../../identity/avatars.js";
 import type { ProjectService } from "../../projects/projects.js";
 import type { TaskService } from "../../tasks/tasks.js";
@@ -31,6 +32,8 @@ export interface AuthenticatedRoutesOptions {
   config?: ForgeConfig;
   projects?: ProjectService;
   profiles?: AgentProfileService;
+  providerInstances?: ProviderInstanceService;
+  readProviderInstanceReadiness?: (homeDirectory: string) => Promise<{ status: "healthy" | "warning" | "unhealthy"; summary: string }>;
   tasks?: TaskService;
   host?: Pick<TaskHost, "recover">;
   database?: ForgeDatabase;
@@ -55,7 +58,7 @@ const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app
 
   await app.register(authMe, { prefix: "/api/auth", auth: options.auth });
   await app.register(companies, { auth: options.auth });
-  await app.register(administration, { auth: options.auth, ...(options.profiles ? { profiles: options.profiles } : {}), ...(options.readProviders ? { readProviders: options.readProviders } : {}), ...(options.config ? { config: options.config } : {}), ...(options.projects ? { projects: options.projects } : {}), ...(options.database ? { database: options.database } : {}) });
+  await app.register(administration, { auth: options.auth, ...(options.profiles ? { profiles: options.profiles } : {}), ...(options.providerInstances ? { providerInstances: options.providerInstances } : {}), ...(options.readProviderInstanceReadiness ? { readProviderInstanceReadiness: options.readProviderInstanceReadiness } : {}), ...(options.readProviders ? { readProviders: options.readProviders } : {}), ...(options.config ? { config: options.config } : {}), ...(options.projects ? { projects: options.projects } : {}), ...(options.database ? { database: options.database } : {}) });
   if (options.hermes) await app.register(hermesAdministration, { hermes: options.hermes });
   if (options.database) await app.register(avatars, { avatars: new AvatarService(options.database, options.auth), ...(options.projects ? { projects: options.projects } : {}) });
   if (options.projects) await app.register(projects, { projects: options.projects });

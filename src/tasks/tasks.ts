@@ -618,7 +618,7 @@ export class TaskService {
   }
 
   private profile(profileId: string, role: "root" | "worker"): TaskProfile {
-    const value = this.database.authQuery(db => db.prepare("SELECT id AS profileId, provider, model, reasoning_level AS reasoningLevel, service_tier AS serviceTier FROM forge_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(profileId, role));
+    const value = this.database.authQuery(db => db.prepare("SELECT p.id AS profileId, p.provider, p.model, p.reasoning_level AS reasoningLevel, p.service_tier AS serviceTier, i.home_directory AS instanceHomeDirectory FROM forge_profiles p LEFT JOIN forge_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ? AND p.role = ? AND p.archived_at IS NULL").get(profileId, role));
     if (!value) throw new TaskFailure("The selected agent profile does not exist", 422);
     return TaskProfileSchema.parse(value);
   }

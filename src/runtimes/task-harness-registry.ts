@@ -13,7 +13,7 @@ export const HARNESS_KINDS = ["opencode", "claude-code"] as const satisfies read
 
 /** One harness per supported agent CLI; the router selects by task profile. */
 export function createTaskHarness(databasePath: string, herdr: TaskPanePort, options: { artifactRoot?: string } = {}): TaskHarness {
-  return new HarnessRouter({ opencode: new OpenCodeTaskRuntime(databasePath, herdr, options), "claude-code": new ClaudeCodeTaskRuntime(databasePath, herdr, options), devin: new DevinTaskRuntime(databasePath, herdr) });
+  return new HarnessRouter({ opencode: new OpenCodeTaskRuntime(databasePath, herdr, options), "claude-code": new ClaudeCodeTaskRuntime(databasePath, herdr, options), devin: new DevinTaskRuntime(databasePath, herdr, options) });
 }
 
 export function nativeSessionReader(databasePath: string, session: Pick<TaskSession, "nativeSessionId">): NativeSessionReader {

@@ -4,6 +4,12 @@ const text = z.string().trim().min(1);
 
 export const AdvisorRoleSchema = z.enum(["reviewer", "planner_a", "planner_b", "rater"]);
 export type AdvisorRole = z.infer<typeof AdvisorRoleSchema>;
+export const AdvisorBridgeBindingSchema = z.object({
+  version: z.literal(1),
+  token: z.string().uuid(),
+  role: AdvisorRoleSchema,
+  server: z.object({ command: z.string().min(1), args: z.array(z.string()) }).strict(),
+}).strict();
 export const REPAIR_RATING_TARGET = 9;
 
 const VerificationSchema = z.enum(["passed", "not_applicable", "missing", "failed"]);

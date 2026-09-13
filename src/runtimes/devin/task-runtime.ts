@@ -1,16 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { runCommand } from "../../platform/command-runner.js";
+import { z } from "zod";
 import { resolveDevinExecutable } from "../../platform/executable-resolver.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
 import { taskRolePrompt } from "../../tasks/execution/role-prompt.js";
-import { dispatchHeadless, headlessObservationPrelude, headlessSessionBusy, headlessTurnFiles, headlessTurnRunning, readHeadlessText, recoverHeadlessDispatch, stopHeadlessSession } from "../headless/turn-process.js";
-import { shellQuote, taskSessionRuntimeDirectory, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
+import { dispatchHeadless, headlessObservationPrelude, headlessSessionBusy, headlessTurnFiles, headlessTurnRunning, readHeadlessText, readHeadlessTurnRecord, recoverHeadlessDispatch, stopHeadlessSession, warmUpHeadlessSession } from "../headless/turn-process.js";
+import { advisorBridgeResultPath, shellQuote, taskBridgeEnvironment, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskBridgeServer, type TaskHarness, type TaskScope } from "../task-harness.js";
 import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
 import { devinResultText } from "./transcript.js";
+import { TASK_BRIDGE_ENVIRONMENT_KEYS } from "../../coordination/bridge-auth.js";
+import { ensureDevinMcpConfig } from "./mcp-config.js";
+import { readDevinAdvisorEvidence } from "./advisor-evidence.js";
 
-type DevinSessionList = { id?: unknown; session_id?: unknown }[];
+const DevinExportSchema = z.object({ session_id: z.string().trim().min(1) }).passthrough();
 
 export async function readDevinSessionId(runtimeDirectory: string): Promise<string | null> {
   try {
@@ -22,17 +25,38 @@ export async function readDevinSessionId(runtimeDirectory: string): Promise<stri
   }
 }
 
-// docs.devin.ai/cli/reference/commands documents `devin list --format json` as
-// the machine-readable listing for sessions in the current directory.
-async function discoverDevinSessionId(executable: string, directory: string): Promise<string | null> {
-  const result = await runCommand({ taskId: null, stepId: null, command: executable, args: ["list", "--format", "json"], cwd: directory, expectNonZero: true });
-  if (result.exitCode !== 0) return null;
-  try {
-    const sessions = JSON.parse(result.stdout) as DevinSessionList;
-    const newest = sessions.at(-1);
-    const id = newest?.id ?? newest?.session_id;
-    return typeof id === "string" && id ? id : null;
-  } catch { return null; }
+// A missing or malformed export yields null so observe() reports the turn
+// rather than throwing on every poll; the next turn writes a fresh export.
+async function readDevinExportSessionId(path: string): Promise<string | null> {
+  let text: string;
+  try { text = await readFile(path, "utf8"); } catch { return null; }
+  await chmod(path, 0o600);
+  const exported = DevinExportSchema.safeParse((() => { try { return JSON.parse(text); } catch { return null; } })());
+  return exported.success ? exported.data.session_id : null;
+}
+
+async function persistDevinSessionId(runtimeDirectory: string, sessionId: string): Promise<void> {
+  const path = join(runtimeDirectory, "session.json");
+  const pending = `${path}.${randomUUID()}.pending`;
+  await writeFile(pending, JSON.stringify({ sessionId }), { mode: 0o600 });
+  await rename(pending, path);
+}
+
+async function recoverDevinSessionId(runtimeDirectory: string): Promise<string | null> {
+  const stored = await readDevinSessionId(runtimeDirectory);
+  if (stored) return stored;
+  const turn = await readHeadlessTurnRecord(join(runtimeDirectory, "turn.json"));
+  const candidates = [
+    ...(turn ? [join(runtimeDirectory, `turn-${turn.turnId}.export.json`)] : []),
+    join(runtimeDirectory, "warmup.export.json"),
+  ];
+  for (const path of candidates) {
+    const sessionId = await readDevinExportSessionId(path);
+    if (!sessionId) continue;
+    await persistDevinSessionId(runtimeDirectory, sessionId);
+    return sessionId;
+  }
+  return null;
 }
 
 export async function devinSessionBusy(runtimeDirectory: string): Promise<boolean> {
@@ -44,11 +68,12 @@ export function devinDisplayAttached(executable: string, sessionID: string | nul
 }
 
 /** Arguments are restricted to the documented Devin CLI flags. A null promptFile builds the interactive display invocation. */
-export function devinArguments(input: { scope: TaskScope; resumeSessionId: string | null; promptFile: string | null }): string[] {
+export function devinArguments(input: { scope: TaskScope; resumeSessionId: string | null; promptFile: string | null; exportFile?: string }): string[] {
   return [
     ...(input.promptFile === null ? [] : ["--print"]),
     ...(input.resumeSessionId ? ["--resume", input.resumeSessionId] : []),
     ...(input.promptFile === null ? [] : ["--prompt-file", input.promptFile]),
+    ...(input.promptFile === null ? [] : ["--export", input.exportFile ?? `${input.promptFile}.export.json`]),
     "--model", input.scope.profile.modelID,
     "--permission-mode", "dangerous",
     "--respect-workspace-trust", "false",
@@ -61,7 +86,7 @@ function rolePrompt(scope: TaskScope, intent: PromptIntent): string {
 }
 
 export class DevinTaskRuntime implements TaskHarness {
-  constructor(private readonly databasePath: string, private readonly herdr: TaskPanePort, private readonly options: { executable?: string } = {}) {}
+  constructor(private readonly databasePath: string, private readonly herdr: TaskPanePort, private readonly options: { executable?: string; artifactRoot?: string } = {}) {}
 
   private runtimeDirectory(scope: Pick<TaskScope, "id">): string {
     return taskSessionRuntimeDirectory(this.databasePath, scope.id);
@@ -71,24 +96,54 @@ export class DevinTaskRuntime implements TaskHarness {
     return resolveDevinExecutable(this.options.executable ? { executable: this.options.executable } : {});
   }
 
-  private supported(scope: TaskScope): void {
-    if (scope.role !== "worker") throw new Error("Devin CLI cannot run Forge Coordinator or Advisor roles: its documented CLI has no per-invocation MCP configuration.");
+  private async bridge(scope: TaskScope): Promise<TaskBridgeServer | undefined> {
+    const runtimeDirectory = this.runtimeDirectory(scope);
+    if (scope.role === "root") return writeRootBridgeBinding({ runtimeDirectory, identity: scope.identity, databasePath: this.databasePath, artifactRoot: this.options.artifactRoot });
+    if (scope.role === "advisor") return writeAdvisorReportBridgeBinding({ runtimeDirectory, role: scope.advisorRole });
+    return undefined;
+  }
+
+  private async prepare(scope: TaskScope): Promise<TaskBridgeServer | undefined> {
+    const bridge = await this.bridge(scope);
+    if (bridge) await ensureDevinMcpConfig(scope.directory);
+    return bridge;
+  }
+
+  private async paneCommand(scope: TaskScope, executable: string, args: string[], bridge: TaskBridgeServer | undefined): Promise<string> {
+    const clear = TASK_BRIDGE_ENVIRONMENT_KEYS.flatMap(key => ["-u", key]);
+    if (!bridge) return ["/usr/bin/env", ...clear, executable, ...args].map(shellQuote).join(" ");
+    const environmentPath = join(this.runtimeDirectory(scope), "display-bridge.env");
+    const contents = Object.entries(bridge.environment).map(([key, value]) => `${key}=${shellQuote(value)}`).join("\n");
+    await writeFile(environmentPath, `${contents}\n`, { mode: 0o600 });
+    await chmod(environmentPath, 0o600);
+    return ["/usr/bin/env", ...clear, "/bin/sh", "-c", "set -a; . \"$1\"; set +a; shift; exec \"$@\"", "forge-devin-environment", environmentPath, executable, ...args].map(shellQuote).join(" ");
   }
 
   async ensureSession(scope: TaskScope, nativeSessionId: string | null): Promise<string> {
-    this.supported(scope);
     await mkdir(this.runtimeDirectory(scope), { recursive: true, mode: 0o700 });
     await this.executable();
+    await this.prepare(scope);
+    await recoverDevinSessionId(this.runtimeDirectory(scope));
     return nativeSessionId ?? `devin-${randomUUID()}`;
   }
 
-  // Devin assigns its own session id, which observe() only persists after the
-  // first completed turn, so the display cannot attach before then.
+  // Devin assigns its own session id inside a turn. A no-op warm-up turn
+  // materializes the session so the display attaches while the first
+  // assignment is still queued instead of after it completes.
   async attach(input: { scope: TaskScope; nativeSessionId: string; paneId: string | null; rootPaneId?: string | null; persistPane: (paneId: string) => void }): Promise<string> {
-    const sessionId = await readDevinSessionId(this.runtimeDirectory(input.scope));
-    if (!sessionId) throw new Error("Devin session has not started; the display attaches after its first turn");
+    const runtimeDirectory = this.runtimeDirectory(input.scope);
     const executable = await this.executable();
-    const command = [executable, ...devinArguments({ scope: input.scope, resumeSessionId: sessionId, promptFile: null })].map(shellQuote).join(" ");
+    const bridge = await this.prepare(input.scope);
+    const environment = taskBridgeEnvironment(bridge);
+    let sessionId = await recoverDevinSessionId(runtimeDirectory);
+    if (!sessionId) {
+      const promptFile = join(runtimeDirectory, "warmup.prompt");
+      const exportFile = join(runtimeDirectory, "warmup.export.json");
+      await warmUpHeadlessSession({ runtimeDirectory, taskId: input.scope.taskId, cwd: input.scope.directory, executable, args: devinArguments({ scope: input.scope, resumeSessionId: null, promptFile, exportFile }), promptFile, environment, label: "Devin" });
+      sessionId = await recoverDevinSessionId(runtimeDirectory);
+    }
+    if (!sessionId) throw new Error("Devin session has not started; the display attaches after its first turn");
+    const command = await this.paneCommand(input.scope, executable, devinArguments({ scope: input.scope, resumeSessionId: sessionId, promptFile: null }), bridge);
     return attachTaskDisplay(this.herdr, { ...input, generation: sessionId, isAttached: args => devinDisplayAttached(executable, sessionId, args), command });
   }
 
@@ -101,7 +156,7 @@ export class DevinTaskRuntime implements TaskHarness {
       ...base,
       admission: "observed" as const,
       retry: "forbidden" as const,
-      native: { messageID: intent.messageID, parentID: intent.messageID, providerID: "devin", modelID: scope.profile.modelID, mode: "forge-worker", agent: "forge-worker", cwd: scope.directory, root: scope.directory },
+      native: { messageID: intent.messageID, parentID: intent.messageID, providerID: "devin", modelID: scope.profile.modelID, mode: `forge-${scope.role}`, agent: `forge-${scope.role}`, cwd: scope.directory, root: scope.directory },
     };
     if (await headlessTurnRunning(record)) return { ...common, state: "running" as const, reason: "dispatch_process_running" };
     const exit = await readHeadlessText(files.exit);
@@ -109,21 +164,22 @@ export class DevinTaskRuntime implements TaskHarness {
     if (!log?.trim()) return { ...common, state: "error" as const, reason: "native_startup_failed" };
     if (exit.trim() !== "0") return { ...common, state: "error" as const, reason: "native_error" };
     if (!await readDevinSessionId(runtimeDirectory)) {
-      const sessionId = await discoverDevinSessionId(await this.executable(), scope.directory);
-      if (sessionId) await writeFile(join(runtimeDirectory, "session.json"), JSON.stringify({ sessionId }), { mode: 0o600 });
+      const sessionId = await readDevinExportSessionId(join(runtimeDirectory, `turn-${intent.messageID}.export.json`));
+      if (sessionId) await persistDevinSessionId(runtimeDirectory, sessionId);
     }
     return { ...common, state: "completed" as const, assistantMessageID: intent.messageID };
   }
 
   async dispatch(scope: TaskScope, intent: PromptIntent, claim: (generation: string) => Promise<boolean>): Promise<PromptObservation> {
-    this.supported(scope);
     const runtimeDirectory = this.runtimeDirectory(scope);
     const before = await this.observe(scope, intent);
     if (before.retry !== "allowed") throw new Error("Devin prompt was not proven absent; replay is blocked");
     const executable = await this.executable();
+    const bridge = await this.prepare(scope);
     const files = headlessTurnFiles(runtimeDirectory, intent.messageID);
-    const resumeSessionId = await readDevinSessionId(runtimeDirectory);
-    const record = await dispatchHeadless({ runtimeDirectory, scope, intent, executable, args: devinArguments({ scope, resumeSessionId, promptFile: files.prompt }), prompt: rolePrompt(scope, intent), claim, label: "Devin" });
+    const resumeSessionId = await recoverDevinSessionId(runtimeDirectory);
+    const additions = scope.role === "advisor" ? { FORGE_ADVISOR_RESULT: advisorBridgeResultPath(runtimeDirectory, intent.messageID) } : {};
+    const record = await dispatchHeadless({ runtimeDirectory, scope, intent, executable, args: devinArguments({ scope, resumeSessionId, promptFile: files.prompt, exportFile: join(runtimeDirectory, `turn-${intent.messageID}.export.json`) }), prompt: rolePrompt(scope, intent), environment: taskBridgeEnvironment(bridge, process.env, additions), claim, label: "Devin" });
     return this.observe(scope, { ...intent, dispatch: "ambiguous" }, { serverGeneration: record.generation, claimedAt: new Date().toISOString() });
   }
 
@@ -142,7 +198,8 @@ export class DevinTaskRuntime implements TaskHarness {
     return devinResultText(await readHeadlessText(files.log) ?? "") || (await readHeadlessText(files.stderr) ?? "").trim().slice(-2_000);
   }
 
-  async turnEvidence(): Promise<{ tools: []; limit: string }> {
-    return { tools: [], limit: "Devin CLI --print does not document machine-readable tool evidence." };
+  async turnEvidence(scope: TaskScope, observation: PromptObservation): ReturnType<TaskHarness["turnEvidence"]> {
+    const evidence = await readDevinAdvisorEvidence(this.runtimeDirectory(scope), observation.messageID);
+    return { tools: evidence.tools, limit: evidence.limitation };
   }
 }

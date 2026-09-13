@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { OpenCodeClient } from "./client.js";
 import { compareProcessIdentity, defaultProcessController, inspectProcessOnce, stopOwnedProcesses, taskProcessEnvironment, sessionProcessEnvironment, executionProcessEnvironment, type ProcessController } from "../../platform/process-manager.js";
+import type { TaskBridgeServer } from "../task-harness.js";
 
 export const OpenCodeServerReferenceSchema = z.object({
   pid: z.number().int().positive(),
@@ -37,7 +38,7 @@ export interface OpenCodeProfile {
 export function openCodeRoleConfig(input: {
   role: "root" | "worker" | "advisor";
   profile: OpenCodeProfile;
-  bridge?: { command: string; args: string[] };
+  bridge?: TaskBridgeServer;
   /** The one external directory a read-only role can read: the task's evidence directory. Everything else stays denied. */
   evidenceDirectory?: string;
   /** The task worktree; listed so an alias of the working directory (macOS /var vs /private/var) is not treated as external. */
@@ -72,7 +73,7 @@ export function openCodeRoleConfig(input: {
         [profile.modelID]: { options: { reasoningEffort: profile.reasoningEffort, serviceTier: profile.serviceTier } },
       } },
     },
-    ...(input.bridge && role !== "worker" ? { mcp: { [role === "root" ? "forge_root" : "forge_advisor"]: { type: "local", command: [input.bridge.command, ...input.bridge.args], enabled: true } } } : {}),
+    ...(input.bridge && role !== "worker" ? { mcp: { [role === "root" ? "forge_root" : "forge_advisor"]: { type: "local", command: [input.bridge.command, ...input.bridge.args], environment: input.bridge.environment, enabled: true } } } : {}),
   };
 }
 
@@ -140,9 +141,13 @@ export async function ensureOpenCodeServer(input: {
   const configHash = createHash("sha256").update(JSON.stringify(input.config)).digest("hex");
   const previous = await readOpenCodeServer(input.runtimeDirectory);
   if (previous && await openCodeServerRunning(previous)) {
-    if (previous.directory !== directory || previous.executable !== input.executable || previous.configHash !== configHash) throw new Error("OpenCode runtime scope changed");
-    await openCodeServerClient(previous).health();
-    return previous;
+    if (previous.directory !== directory || previous.executable !== input.executable) throw new Error("OpenCode runtime scope changed");
+    const client = openCodeServerClient(previous);
+    await client.health();
+    if (previous.configHash === configHash) return previous;
+    const statuses = await client.getStatus(directory);
+    if (Object.values(statuses).some(status => status.type !== "idle")) return previous;
+    await stopOpenCodeServer(previous);
   }
   await mkdir(input.runtimeDirectory, { recursive: true, mode: 0o700 });
   await chmod(input.runtimeDirectory, 0o700);

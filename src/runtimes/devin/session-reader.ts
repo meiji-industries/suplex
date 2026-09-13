@@ -5,6 +5,7 @@ import type { TaskSession } from "../../tasks/control.js";
 import { taskSessionRuntimeDirectory, type NativeSessionReader } from "../task-harness.js";
 import { devinSessionBusy } from "./task-runtime.js";
 import { devinHistory, devinResultText, devinUsage } from "./transcript.js";
+import { readDevinAdvisorEvidence } from "./advisor-evidence.js";
 
 export class DevinSessionReader implements NativeSessionReader {
   constructor(private readonly databasePath: string) {}
@@ -37,8 +38,8 @@ export class DevinSessionReader implements NativeSessionReader {
     return { tools: [], plan: null, limited: true };
   }
 
-  async turnEvidence(_session: TaskSession, _turnId: string) {
-    return { tools: [], limitation: "Devin CLI --print does not document machine-readable tool evidence." };
+  async turnEvidence(session: TaskSession, turnId: string) {
+    return readDevinAdvisorEvidence(this.directory(session), turnId);
   }
 
   async status(session: TaskSession) {

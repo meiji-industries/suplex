@@ -1,10 +1,43 @@
 import { PassThrough } from "node:stream";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { advisorReportFromTurn, advisorReportInputSchema, parseAdvisorReport } from "../src/coordination/advisor-report.js";
 import { startAdvisorReportBridgeTransport } from "../src/coordination/advisor-report-bridge.js";
+import { writeAdvisorReportBridgeBinding } from "../src/runtimes/task-harness.js";
+import { initializeAndList, runMcpProcess } from "./helpers/mcp-process.js";
 
 const report = { rating: 9, blockingFindings: [], verification: "passed", verificationSummary: "Focused tests passed", summary: "Ready" };
 const tool = (value: unknown, overrides: Partial<{ name: string; status: "pending" | "running" | "completed" | "error"; output: string | null }> = {}) => ({ name: "forge_advisor_submit_report", status: "completed" as const, output: JSON.stringify(value), ...overrides });
+
+it("the Advisor bridge process authenticates and atomically retains its latest valid submission", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "forge-advisor-bridge-auth-"));
+  try {
+    const server = await writeAdvisorReportBridgeBinding({ runtimeDirectory: directory, role: "rater" });
+    const resultPath = join(directory, "turn-result.json");
+    const cleanEnvironment = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => !["FORGE_ADVISOR_TOKEN", "FORGE_ADVISOR_RESULT"].includes(key) && value !== undefined));
+    for (const token of [undefined, "00000000-0000-4000-8000-000000000000"]) {
+      const attempt = await runMcpProcess(server, { ...cleanEnvironment, FORGE_ADVISOR_BINDING: server.environment.FORGE_ADVISOR_BINDING!, ...(token ? { FORGE_ADVISOR_TOKEN: token } : {}) }, initializeAndList);
+      expect(attempt.responses).toEqual([]);
+      expect(attempt.stderr).toContain("authentication failed");
+    }
+    const first = { ...report, rating: 8, summary: "Revise" };
+    const second = { ...report, rating: 10, summary: "Ready after revision" };
+    const requests = [
+      ...initializeAndList,
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "submit_report", arguments: first } },
+      { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "submit_report", arguments: { rating: 9 } } },
+      { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "submit_report", arguments: second } },
+    ];
+    const accepted = await runMcpProcess(server, { ...cleanEnvironment, ...server.environment, FORGE_ADVISOR_RESULT: resultPath }, requests);
+    expect(accepted.responses).toHaveLength(5);
+    expect(accepted.responses.slice(0, 2)).toMatchObject([{ result: { serverInfo: { name: "forge-advisor-report" } } }, { result: { tools: [{ name: "submit_report" }] } }]);
+    expect(await readFile(resultPath, "utf8").then(JSON.parse)).toEqual({ ...second, role: "rater" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 describe("Advisor report parsing", () => {
   it("derives the role-bound MCP input schema without accepting a role argument", () => {

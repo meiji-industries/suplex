@@ -141,7 +141,8 @@ test("the display resumes the transcript in a Herdr pane only after the session 
   };
   const runtime = new ClaudeCodeTaskRuntime(join(f.root, "forge.sqlite"), herdr, { executable: f.executable, configDirectory: f.configDirectory });
   await runtime.ensureSession(rootScope, sessionID);
-  expect(JSON.parse(await readFile(join(taskSessionRuntimeDirectory(join(f.root, "forge.sqlite"), rootScope.id), "mcp.json"), "utf8")).mcpServers.forge_root.args).toContain("--binding");
+  const rootMcp = JSON.parse(await readFile(join(taskSessionRuntimeDirectory(join(f.root, "forge.sqlite"), rootScope.id), "mcp.json"), "utf8")).mcpServers.forge_root;
+  expect(rootMcp.env).toMatchObject({ FORGE_ROOT_BINDING: expect.stringContaining("root.binding.json"), FORGE_ROOT_TOKEN: expect.stringMatching(/^[0-9a-f-]{36}$/) });
   const attach = () => runtime.attach({ scope: rootScope, nativeSessionId: sessionID, paneId: "pane", persistPane: () => {} });
   await expect(attach()).rejects.toThrow("has not started");
   await mkdir(join(f.configDirectory, "projects", "-worktree"), { recursive: true });
@@ -186,8 +187,9 @@ test("Claude workflow roles retain their prompts, read-only Advisor tools, and e
   expect(args[args.indexOf("--tools") + 1]).toBe("Read,Glob,Grep,WebFetch,WebSearch,TodoWrite");
   expect(args[args.indexOf("--mcp-config") + 1]).toBe(join(f.runtimeDirectory, "mcp.json"));
   expect(args).toEqual(expect.arrayContaining(["--allowedTools", "mcp__forge_advisor__submit_report,WebFetch,WebSearch"]));
-  expect(JSON.parse(await readFile(join(f.runtimeDirectory, "advisor.binding.json"), "utf8"))).toEqual({ version: 1, role: "reviewer" });
+  expect(JSON.parse(await readFile(join(f.runtimeDirectory, "advisor.binding.json"), "utf8"))).toMatchObject({ version: 1, role: "reviewer", token: expect.stringMatching(/^[0-9a-f-]{36}$/), server: { command: process.execPath } });
   expect(Object.keys(JSON.parse(await readFile(join(f.runtimeDirectory, "mcp.json"), "utf8")).mcpServers)).toEqual(["forge_advisor"]);
+  expect(JSON.parse(await readFile(join(f.runtimeDirectory, "mcp.json"), "utf8")).mcpServers.forge_advisor.env).toMatchObject({ FORGE_ADVISOR_BINDING: expect.stringContaining("advisor.binding.json"), FORGE_ADVISOR_TOKEN: expect.stringMatching(/^[0-9a-f-]{36}$/) });
   expect(args[args.indexOf("--add-dir") + 1]).toBe(scope.evidenceRoot);
   expect(args).not.toContain("--dangerously-skip-permissions");
   expect(args).not.toContain("mcp__forge_root");

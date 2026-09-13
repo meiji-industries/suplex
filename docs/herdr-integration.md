@@ -1,6 +1,8 @@
 # Herdr integration
 
-Forge uses Herdr panes to display native OpenCode and Claude Code sessions. Herdr owns the pane and its current process observations. Forge owns task intent, task status, and completion.
+Forge uses Herdr panes to display native OpenCode, Claude Code, and Devin CLI sessions. Herdr owns the pane and its current process observations. Forge owns task intent, task status, and completion.
+
+A provider that only assigns its native session identity inside a turn cannot attach a display before work starts. For those providers Forge runs one bounded no-op warm-up turn first so the pane can attach immediately; the warm-up runs at most once per session.
 
 ## Observe a task terminal
 

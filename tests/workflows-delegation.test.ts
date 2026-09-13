@@ -600,10 +600,10 @@ test("Reviewer requires the Coordinator brief, records approvals against its ran
 
 test("advisor native configuration is read-only with only the report bridge and task evidence directory", () => {
   const profile = { providerID: "openai", modelID: "gpt-5.6-nova", reasoningEffort: "high" as const, serviceTier: "default" as const };
-  const config = openCodeRoleConfig({ role: "advisor", profile, bridge: { command: "/node", args: ["bridge"] }, evidenceDirectory: "/data/runtime/task-evidence/task" }) as { mcp?: unknown; agent: Record<string, { permission: Record<string, unknown>; tools: Record<string, boolean> }> };
-  expect(config.mcp).toEqual({ forge_advisor: { type: "local", command: ["/node", "bridge"], enabled: true } });
+  const config = openCodeRoleConfig({ role: "advisor", profile, bridge: { command: "/node", args: ["bridge"], environment: { FORGE_ADVISOR_TOKEN: "token" } }, evidenceDirectory: "/data/runtime/task-evidence/task" }) as { mcp?: unknown; agent: Record<string, { permission: Record<string, unknown>; tools: Record<string, boolean> }> };
+  expect(config.mcp).toEqual({ forge_advisor: { type: "local", command: ["/node", "bridge"], environment: { FORGE_ADVISOR_TOKEN: "token" }, enabled: true } });
   expect(config.agent["forge-advisor"]).toMatchObject({ permission: { edit: "deny", bash: "deny", task: "deny", question: "deny", "forge_root_*": "deny", external_directory: { "*": "deny", "/data/runtime/task-evidence/task/**": "allow" } }, tools: { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false, "forge_root_*": false, "forge_advisor_*": true } });
-  const root = openCodeRoleConfig({ role: "root", profile, bridge: { command: "/node", args: ["bridge"] }, evidenceDirectory: "/data/runtime/task-evidence/task", directory: "/worktrees/task" }) as { mcp?: unknown; agent: Record<string, { permission: Record<string, unknown> }> };
+  const root = openCodeRoleConfig({ role: "root", profile, bridge: { command: "/node", args: ["bridge"], environment: { FORGE_ROOT_TOKEN: "token" } }, evidenceDirectory: "/data/runtime/task-evidence/task", directory: "/worktrees/task" }) as { mcp?: unknown; agent: Record<string, { permission: Record<string, unknown> }> };
   expect(root.mcp).toBeDefined();
   expect(root.agent["forge-root"]!.permission.external_directory).toEqual({ "*": "deny", "/data/runtime/task-evidence/task": "allow", "/data/runtime/task-evidence/task/**": "allow", "/worktrees/task": "allow", "/worktrees/task/**": "allow" });
   expect((openCodeRoleConfig({ role: "root", profile }) as { agent: Record<string, { permission: Record<string, unknown> }> }).agent["forge-root"]!.permission.external_directory).toBe("deny");

@@ -8,9 +8,10 @@ Accepted
 
 ## Context
 
-Forge needs a third local agent provider without treating undocumented terminal
-output as an API. `devin` was not installed on the Forge host when this decision
-was recorded, so the contract below is from Cognition's published reference.
+Forge needs a third local agent provider without treating terminal output as an
+API. Cognition's published reference defines the CLI and local MCP configuration
+contracts. Tests against Devin 3000.10.21 also establish the ATIF export fields
+that Forge uses for native session identity.
 
 ## Decision
 
@@ -20,10 +21,10 @@ The install command is `curl -fsSL https://cli.devin.ai/install.sh | bash`.
 Forge lists Devin CLI in its provider catalog before it is installed and reports
 whether the executable is available on the host.
 
-The first Worker turn uses the documented headless invocation:
+The first turn uses the documented headless invocation:
 
 ```sh
-devin --print --prompt-file <file> --model <model> \
+devin --print --prompt-file <file> --export <private-file> --model <model> \
   --permission-mode dangerous --respect-workspace-trust false
 ```
 
@@ -34,34 +35,64 @@ The flags are documented in Cognition's [Commands & Flags](https://docs.devin.ai
 an untrusted workspace. Devin documents model aliases such as `swe`, `opus`,
 and `gpt` at [Models](https://docs.devin.ai/cli/models).
 
-`--print` has no documented JSON/event output, session-create response, token
-usage output, or transcript location. After its first completed turn Forge runs
-the documented `devin list --format json` in the worktree and persists the
-newest returned session id in its private `session.json`; later turns add
-`--resume <session-id>`. Forge parses final text from its immutable per-turn
-stdout log, uses a separate `devin-<uuid>` identity only for harness routing,
-and reports unavailable tool/token detail honestly. The documented `--export`
-writes ATIF after each turn, but its schema and default location are not
-documented, so Forge does not parse it.
+`--print` has no documented event stream, token usage output, or transcript
+location. Each headless invocation writes `--export` to a private file in its
+session runtime directory. Devin 3000.10.21 writes ATIF-v1.7 with a
+`session_id` that matches the resumable session slug. Forge validates only that
+field. Later turns add `--resume <session-id>`. Forge never uses the
+directory-wide order from `devin list` to adopt a session. If `session.json` is
+missing, Forge rebuilds it from the current turn export or the warm-up export.
+The export remains the authoritative identity record.
 
-Forge passes no `--config`: while the command reference documents that flag, it
-does not document a config-file shape or a `subagents_enabled` key. This avoids
-inventing a configuration contract. Forge prepends the role prompt to each
-documented `--prompt-file` instead.
+Forge parses final text from its immutable per-turn stdout log and uses a
+separate `devin-<uuid>` identity for harness routing. Devin tool and token detail
+remain unavailable. Advisor `submit_report` is an exception because Forge owns
+that bridge call. The authenticated bridge atomically records the latest valid
+submission at the current assignment turn's private evidence path. Invalid
+submissions, warm-up turns, and display attachments cannot replace that file.
 
-The command reference documents MCP as persistent `devin mcp add` configuration,
-not a per-invocation MCP config flag. Forge rejects Coordinator and Advisor
-roles for Devin because it cannot safely bind their bridges for one task.
+Forge passes no `--config` because the installed CLI states that this flag
+overrides the default user config. Forge keeps the user's settings intact and
+adds only task bridge configuration through the project-local MCP file. Forge
+prepends the role prompt to each documented `--prompt-file`.
+
+Cognition documents the project-local MCP configuration shape in
+[MCP configuration](https://docs.devin.ai/cli/extensibility/mcp/overview).
+Forge writes `.devin/mcp_config.local.json` with invariant `forge_root` and
+`forge_advisor` server entries. Tests against Devin 3000.10.21 confirm
+`${VAR}` interpolation in MCP environment fields. This installed CLI probe is
+also the source for the ATIF-v1.7 export behavior described above.
+Every bridge process, on every provider, reads its binding path and token from
+environment variables; there is no command-line binding flag. The shared Git
+`info/exclude` ignores this local config path and its pending sibling file. Config repair
+preserves unrelated MCP entries and writes both Forge entries, so Coordinator
+and multiple Advisor sessions can share one worktree without a last-writer-wins
+binding path.
+
+Each invocation removes inherited Forge binding, token, and Advisor result
+variables before it adds the current role's credentials. Worker, warm-up, and
+display invocations receive no Advisor result path. Coordinator and Advisor
+bridge processes validate the token before MCP initialization. The Coordinator
+bridge also validates it before opening the Forge database. Existing
+per-request Coordinator identity checks remain the authoritative task and
+generation check.
 
 ## Consequences
 
-Devin Worker turns have the same durable claim, process ownership, recovery,
+Devin turns have the same durable claim, process ownership, recovery,
 stop, result, and log evidence lifecycle as other detached headless CLIs. A
 small `/bin/sh` wrapper records each CLI exit status in Forge's private turn
 directory; it is not a Devin CLI flag or part of the native CLI contract.
 Interactive display attachment opens `devin --resume <session-id> --model
 <model> --permission-mode dangerous --respect-workspace-trust false` without
-`--print` in a Herdr pane once the first completed turn has persisted a Devin
-session id; the documented `--resume` resumes that same session. Native
-tool/usage detail remains unavailable until Cognition documents a stable
-machine-readable contract.
+`--print` in a Herdr pane once a Devin session id is persisted; the documented
+`--resume` resumes that same session. Because Devin only assigns that id inside
+a turn, Forge runs one bounded no-op warm-up turn when a session is first
+displayed so the pane can attach before the first assignment rather than after
+it completes. Native tool/usage detail remains unavailable until Cognition
+documents a stable machine-readable contract.
+
+The bridge token is a soft same-user boundary. File permissions and private
+runtime directories prevent accidental cross-session use, but they do not
+isolate processes that already run as the same operating-system user. Forge's
+owner-controlled pilot trust model still applies.

@@ -16,6 +16,27 @@ import { runCommand } from "../src/platform/command-runner.js";
 import { nativeApp } from "./helpers/native-app.js";
 import { ArtifactStore } from "../src/platform/artifacts.js";
 import { TaskUsageSchema } from "../src/tasks/usage.js";
+import { writeRootBridgeBinding } from "../src/runtimes/task-harness.js";
+import { initializeAndList, runMcpProcess } from "./helpers/mcp-process.js";
+
+test("the Coordinator bridge process authenticates before MCP initialization", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "forge-root-bridge-auth-"));
+  const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+  database.close();
+  try {
+    const server = await writeRootBridgeBinding({ runtimeDirectory: join(directory, "runtime"), identity: { taskId: "task", sessionId: "root", generation: 1 }, databasePath: join(directory, "forge.sqlite"), artifactRoot: join(directory, "artifacts") });
+    const cleanEnvironment = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => key !== "FORGE_ROOT_TOKEN" && value !== undefined));
+    for (const token of [undefined, "00000000-0000-4000-8000-000000000000"]) {
+      const attempt = await runMcpProcess(server, { ...cleanEnvironment, FORGE_ROOT_BINDING: server.environment.FORGE_ROOT_BINDING!, ...(token ? { FORGE_ROOT_TOKEN: token } : {}) }, initializeAndList);
+      expect(attempt.responses).toEqual([]);
+      expect(attempt.stderr).toContain("authentication failed");
+    }
+    const accepted = await runMcpProcess(server, { ...cleanEnvironment, ...server.environment }, initializeAndList);
+    expect(accepted.responses).toMatchObject([{ result: { serverInfo: { name: "forge-root-bridge" } } }, { result: { tools: [{ name: "forge_root" }] } }]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("Coordinator image reads enforce task ownership and content integrity and return MCP image content", async () => {
   const value = await nativeApp();

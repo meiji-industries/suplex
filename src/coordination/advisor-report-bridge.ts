@@ -1,19 +1,20 @@
-import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createInterface, type Interface } from "node:readline";
 import { z } from "zod";
-import { AdvisorRoleSchema, advisorReportInputSchema, validateAdvisorSubmission } from "./advisor-report.js";
+import { AdvisorBridgeBindingSchema, advisorReportInputSchema, validateAdvisorSubmission, type AdvisorResult, type AdvisorRole } from "./advisor-report.js";
+import { ADVISOR_BRIDGE_BINDING_ENV, ADVISOR_BRIDGE_RESULT_ENV, ADVISOR_BRIDGE_TOKEN_ENV, authenticateBridgeToken, bridgeBindingPath } from "./bridge-auth.js";
 
-const AdvisorBridgeBindingSchema = z.object({ version: z.literal(1), role: AdvisorRoleSchema }).strict();
 const JsonRpcEnvelopeSchema = z.object({ jsonrpc: z.literal("2.0"), id: z.union([z.string(), z.number()]).optional(), method: z.string(), params: z.unknown().optional() }).strict();
 type Writable = { write(chunk: string): boolean };
 
-export function startAdvisorReportBridgeTransport(input: { role: z.infer<typeof AdvisorRoleSchema>; stdin: NodeJS.ReadableStream; stdout: Writable }): Interface {
+export function startAdvisorReportBridgeTransport(input: { role: AdvisorRole; stdin: NodeJS.ReadableStream; stdout: Writable; capture?: (result: AdvisorResult) => Promise<void> }): Interface {
   const lineReader = createInterface({ input: input.stdin, crlfDelay: Infinity });
   let initialized = false;
   const respond = (id: string | number, result: unknown): void => { input.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`); };
   const fail = (id: string | number | null, code: number, message: string): void => { input.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } })}\n`); };
-  lineReader.on("line", (line) => {
+  const handleLine = async (line: string): Promise<void> => {
     let request: z.infer<typeof JsonRpcEnvelopeSchema> | undefined;
     try {
       request = JsonRpcEnvelopeSchema.parse(JSON.parse(line));
@@ -45,21 +46,29 @@ export function startAdvisorReportBridgeTransport(input: { role: z.infer<typeof 
         respond(request.id, { content: [{ type: "text", text: outcome.invalidReason }], isError: true });
         return;
       }
+      await input.capture?.(outcome.result);
       respond(request.id, { content: [{ type: "text", text: JSON.stringify(outcome.result) }], structuredContent: outcome.result });
     } catch (error) {
       const id = typeof request?.id === "string" || typeof request?.id === "number" ? request.id : null;
       fail(id, -32600, error instanceof Error ? error.message : "Advisor report bridge failed");
     }
-  });
+  };
+  let queue = Promise.resolve();
+  lineReader.on("line", line => { queue = queue.then(() => handleLine(line)); });
   return lineReader;
 }
 
 async function runAdvisorReportBridge(): Promise<void> {
-  const bindingIndex = process.argv.indexOf("--binding");
-  const bindingPath = bindingIndex >= 0 ? process.argv[bindingIndex + 1] : undefined;
-  if (!bindingPath) throw new Error("Advisor report bridge requires --binding <path>");
+  const bindingPath = bridgeBindingPath(process.env, ADVISOR_BRIDGE_BINDING_ENV, "Advisor report");
   const binding = AdvisorBridgeBindingSchema.parse(JSON.parse(await readFile(bindingPath, "utf8")));
-  startAdvisorReportBridgeTransport({ role: binding.role, stdin: process.stdin, stdout: process.stdout });
+  authenticateBridgeToken(binding.token, process.env, ADVISOR_BRIDGE_TOKEN_ENV, "Advisor report");
+  const resultPath = process.env[ADVISOR_BRIDGE_RESULT_ENV];
+  const capture = resultPath ? async (result: AdvisorResult): Promise<void> => {
+    const pending = `${resultPath}.${randomUUID()}.pending`;
+    await writeFile(pending, JSON.stringify(result), { mode: 0o600 });
+    await rename(pending, resultPath);
+  } : undefined;
+  startAdvisorReportBridgeTransport({ role: binding.role, stdin: process.stdin, stdout: process.stdout, ...(capture ? { capture } : {}) });
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

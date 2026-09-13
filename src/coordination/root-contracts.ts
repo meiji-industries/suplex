@@ -132,6 +132,7 @@ export type RootImageResult = z.infer<typeof RootImageResultSchema>;
 
 export const RootBridgeConfigSchema = z.object({
   version: z.literal(1),
+  token: z.string().uuid(),
   root: RootIdentitySchema,
   databasePath: z.string().min(1).optional(),
   artifactRoot: z.string().min(1),

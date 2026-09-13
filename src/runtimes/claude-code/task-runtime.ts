@@ -80,7 +80,7 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
       const server = scope.role === "root"
         ? await writeRootBridgeBinding({ runtimeDirectory, identity: scope.identity, databasePath: this.databasePath, artifactRoot: this.options.artifactRoot })
         : await writeAdvisorReportBridgeBinding({ runtimeDirectory, role: scope.advisorRole });
-      await writeFile(join(runtimeDirectory, "mcp.json"), JSON.stringify({ mcpServers: { [scope.role === "root" ? "forge_root" : "forge_advisor"]: server } }), { mode: 0o600 });
+      await writeFile(join(runtimeDirectory, "mcp.json"), JSON.stringify({ mcpServers: { [scope.role === "root" ? "forge_root" : "forge_advisor"]: { command: server.command, args: server.args, env: server.environment } } }), { mode: 0o600 });
     }
     return nativeSessionId ?? randomUUID();
   }

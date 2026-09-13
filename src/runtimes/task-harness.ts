@@ -1,6 +1,8 @@
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import type { OpenCodePromptIntent, OpenCodePromptObservation } from "./opencode/session.js";
 import type { RootIdentity } from "../coordination/root-contracts.js";
 import type { PromptDispatchAttempt, TaskSession } from "../tasks/control.js";
@@ -9,6 +11,7 @@ import type { TaskUsage } from "../tasks/usage.js";
 import type { ModelPricingCatalog } from "../profiles/model-pricing.js";
 import type { NativeHistoryMessage } from "../tasks/history/contracts.js";
 import type { AdvisorRole, WorkflowId } from "../coordination/workflows.js";
+import { ADVISOR_BRIDGE_BINDING_ENV, ADVISOR_BRIDGE_TOKEN_ENV, BridgeTokenSchema, ROOT_BRIDGE_BINDING_ENV, ROOT_BRIDGE_TOKEN_ENV, TASK_BRIDGE_ENVIRONMENT_KEYS } from "../coordination/bridge-auth.js";
 
 // The prompt intent and observation vocabulary was designed against OpenCode
 // and is shared by every harness. Claude Code maps its own evidence onto it.
@@ -96,39 +99,74 @@ export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-/** Writes the Coordinator bridge binding and returns the MCP server command that serves it. */
-export async function writeRootBridgeBinding(input: { runtimeDirectory: string; identity: RootIdentity; databasePath: string; artifactRoot: string | undefined }): Promise<{ command: string; args: string[] }> {
-  await mkdir(input.runtimeDirectory, { recursive: true, mode: 0o700 });
-  const currentFile = fileURLToPath(import.meta.url);
-  const source = currentFile.endsWith(".ts");
-  const bindingPath = join(input.runtimeDirectory, "root.binding.json");
-  const server = {
-    command: process.execPath,
-    args: [
-      ...(source ? [join(dirname(currentFile), "..", "..", "node_modules", "tsx", "dist", "cli.mjs")] : []),
-      join(dirname(currentFile), "..", "coordination", source ? "root-bridge.ts" : "root-bridge.js"), "--binding", bindingPath,
-    ],
-  };
-  await writeFile(bindingPath, JSON.stringify({ version: 1, root: input.identity, databasePath: input.databasePath, artifactRoot: input.artifactRoot ?? join(dirname(input.databasePath), "artifacts"), server }), { mode: 0o600 });
-  await chmod(bindingPath, 0o600);
-  return server;
+export type TaskBridgeServer = { command: string; args: string[]; environment: Record<string, string> };
+
+export function taskBridgeEnvironment(server: TaskBridgeServer | undefined, inherited: NodeJS.ProcessEnv = process.env, additions: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const blocked = new Set<string>(TASK_BRIDGE_ENVIRONMENT_KEYS);
+  const clean = Object.fromEntries(Object.entries(inherited).filter(([key, value]) => !blocked.has(key) && value !== undefined));
+  return { ...clean, ...server?.environment, ...additions };
 }
 
-export async function writeAdvisorReportBridgeBinding(input: { runtimeDirectory: string; role: AdvisorRole }): Promise<{ command: string; args: string[] }> {
-  await mkdir(input.runtimeDirectory, { recursive: true, mode: 0o700 });
+export function advisorBridgeResultPath(runtimeDirectory: string, turnId: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(turnId)) throw new Error("Invalid Advisor turn identity");
+  return join(runtimeDirectory, `turn-${turnId}.advisor-report.json`);
+}
+
+function bridgeCommand(kind: "root" | "advisor"): { command: string; args: string[] } {
   const currentFile = fileURLToPath(import.meta.url);
   const source = currentFile.endsWith(".ts");
-  const bindingPath = join(input.runtimeDirectory, "advisor.binding.json");
-  const server = {
+  const script = kind === "root" ? "root-bridge" : "advisor-report-bridge";
+  return {
     command: process.execPath,
     args: [
       ...(source ? [join(dirname(currentFile), "..", "..", "node_modules", "tsx", "dist", "cli.mjs")] : []),
-      join(dirname(currentFile), "..", "coordination", source ? "advisor-report-bridge.ts" : "advisor-report-bridge.js"), "--binding", bindingPath,
+      join(dirname(currentFile), "..", "coordination", `${script}.${source ? "ts" : "js"}`),
     ],
   };
-  await writeFile(bindingPath, JSON.stringify({ version: 1, role: input.role }), { mode: 0o600 });
-  await chmod(bindingPath, 0o600);
-  return server;
+}
+
+const bridgeEnvironmentNames = {
+  root: { binding: ROOT_BRIDGE_BINDING_ENV, token: ROOT_BRIDGE_TOKEN_ENV },
+  advisor: { binding: ADVISOR_BRIDGE_BINDING_ENV, token: ADVISOR_BRIDGE_TOKEN_ENV },
+} as const;
+
+/** The bridge command with `${VAR}` placeholders, for hosts that interpolate their MCP environment (Devin's project-local config). */
+export function environmentBridgeServer(kind: "root" | "advisor"): TaskBridgeServer {
+  const names = bridgeEnvironmentNames[kind];
+  return { ...bridgeCommand(kind), environment: { [names.binding]: `\${${names.binding}}`, [names.token]: `\${${names.token}}` } };
+}
+
+// A binding rewrite keeps the existing token so bridges already launched from
+// this runtime directory keep authenticating; the identity is rewritten anyway.
+async function existingToken(path: string): Promise<string | null> {
+  try {
+    const parsed = z.object({ token: BridgeTokenSchema }).passthrough().safeParse(JSON.parse(await readFile(path, "utf8")));
+    return parsed.success ? parsed.data.token : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeBinding(kind: "root" | "advisor", runtimeDirectory: string, identity: object): Promise<TaskBridgeServer> {
+  await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
+  await chmod(runtimeDirectory, 0o700);
+  const path = join(runtimeDirectory, `${kind}.binding.json`);
+  const token = await existingToken(path) ?? randomUUID();
+  const pending = `${path}.${randomUUID()}.pending`;
+  await writeFile(pending, JSON.stringify({ ...identity, token }), { mode: 0o600 });
+  await rename(pending, path);
+  const names = bridgeEnvironmentNames[kind];
+  return { ...bridgeCommand(kind), environment: { [names.binding]: path, [names.token]: token } };
+}
+
+/** Writes the Coordinator bridge binding and returns the MCP server command that serves it. */
+export async function writeRootBridgeBinding(input: { runtimeDirectory: string; identity: RootIdentity; databasePath: string; artifactRoot: string | undefined }): Promise<TaskBridgeServer> {
+  const server = bridgeCommand("root");
+  return writeBinding("root", input.runtimeDirectory, { version: 1, root: input.identity, databasePath: input.databasePath, artifactRoot: input.artifactRoot ?? join(dirname(input.databasePath), "artifacts"), server });
+}
+
+export async function writeAdvisorReportBridgeBinding(input: { runtimeDirectory: string; role: AdvisorRole }): Promise<TaskBridgeServer> {
+  return writeBinding("advisor", input.runtimeDirectory, { version: 1, role: input.role, server: bridgeCommand("advisor") });
 }
 
 /** Routes each call to the harness selected by the task profile or the native session identity. */

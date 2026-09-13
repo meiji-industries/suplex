@@ -10,7 +10,6 @@ import {
   rootToolInputSchema,
   RootImageResultSchema,
   type RootImageResult,
-  type RootBridgeConfig,
   type RootIdentity,
   type RootTool,
   type WorkerAssignment,
@@ -26,6 +25,7 @@ import { ArtifactStore } from "../platform/artifacts.js";
 import { configureProcessLogSink, createDevLogFileSink } from "../platform/logging.js";
 import { taskEvidenceRoot } from "./workflow-evidence.js";
 import { startMcpStdioTransport } from "../shared/mcp-stdio.js";
+import { ROOT_BRIDGE_BINDING_ENV, ROOT_BRIDGE_TOKEN_ENV, authenticateBridgeToken, bridgeBindingPath } from "./bridge-auth.js";
 
 export class RootBridgeFailure extends Error {
   constructor(readonly code: "invalid_request" | "root_identity_mismatch" | "task_tool_busy", message: string) {
@@ -88,11 +88,6 @@ export class RootBridge {
   }
 }
 
-export function rootBridgeMcpConfig(config: RootBridgeConfig): { mcpServers: Record<string, { command: string; args: string[] }> } {
-  const valid = RootBridgeConfigSchema.parse(config);
-  return { mcpServers: { forge_root: valid.server } };
-}
-
 export function startRootBridgeTransport(input: {
   bridge: RootBridge;
   stdin: NodeJS.ReadableStream;
@@ -113,12 +108,11 @@ export function startRootBridgeTransport(input: {
 }
 
 async function runRootBridge(): Promise<void> {
-  const bindingIndex = process.argv.indexOf("--binding");
-  const bindingPath = bindingIndex >= 0 ? process.argv[bindingIndex + 1] : undefined;
-  if (!bindingPath) throw new Error("Coordinator bridge requires --binding <path>");
+  const bindingPath = bridgeBindingPath(process.env, ROOT_BRIDGE_BINDING_ENV, "Coordinator");
   const fileSink = createDevLogFileSink("worker", join(dirname(bindingPath), "logs"));
   configureProcessLogSink(line => { fileSink(line); process.stderr.write(line); });
   const config = RootBridgeConfigSchema.parse(JSON.parse(await readFile(bindingPath, "utf8")));
+  authenticateBridgeToken(config.token, process.env, ROOT_BRIDGE_TOKEN_ENV, "Coordinator");
   const databasePath = config.databasePath;
   if (!databasePath) throw new Error("Coordinator bridge binding has no server database path");
   const database = new ForgeDatabase(databasePath, { migrate: false });

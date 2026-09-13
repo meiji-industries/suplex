@@ -6,8 +6,8 @@ import { resolveDevinExecutable } from "../../platform/executable-resolver.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
 import { taskRolePrompt } from "../../tasks/execution/role-prompt.js";
 import { dispatchHeadless, headlessObservationPrelude, headlessSessionBusy, headlessTurnFiles, headlessTurnRunning, readHeadlessText, recoverHeadlessDispatch, stopHeadlessSession } from "../headless/turn-process.js";
-import { taskSessionRuntimeDirectory, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
-import type { TaskPanePort } from "../task-display.js";
+import { shellQuote, taskSessionRuntimeDirectory, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
+import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
 import { devinResultText } from "./transcript.js";
 
 type DevinSessionList = { id?: unknown; session_id?: unknown }[];
@@ -39,12 +39,16 @@ export async function devinSessionBusy(runtimeDirectory: string): Promise<boolea
   return headlessSessionBusy(runtimeDirectory);
 }
 
-/** Arguments are restricted to the documented non-interactive Devin CLI flags. */
-export function devinArguments(input: { scope: TaskScope; resumeSessionId: string | null; promptFile: string }): string[] {
+export function devinDisplayAttached(executable: string, sessionID: string | null, args: readonly string[]): boolean {
+  return args[0] === executable && args[args.indexOf("--resume") + 1] === sessionID;
+}
+
+/** Arguments are restricted to the documented Devin CLI flags. A null promptFile builds the interactive display invocation. */
+export function devinArguments(input: { scope: TaskScope; resumeSessionId: string | null; promptFile: string | null }): string[] {
   return [
-    "--print",
+    ...(input.promptFile === null ? [] : ["--print"]),
     ...(input.resumeSessionId ? ["--resume", input.resumeSessionId] : []),
-    "--prompt-file", input.promptFile,
+    ...(input.promptFile === null ? [] : ["--prompt-file", input.promptFile]),
     "--model", input.scope.profile.modelID,
     "--permission-mode", "dangerous",
     "--respect-workspace-trust", "false",
@@ -57,7 +61,7 @@ function rolePrompt(scope: TaskScope, intent: PromptIntent): string {
 }
 
 export class DevinTaskRuntime implements TaskHarness {
-  constructor(private readonly databasePath: string, _herdr: TaskPanePort, private readonly options: { executable?: string } = {}) {}
+  constructor(private readonly databasePath: string, private readonly herdr: TaskPanePort, private readonly options: { executable?: string } = {}) {}
 
   private runtimeDirectory(scope: Pick<TaskScope, "id">): string {
     return taskSessionRuntimeDirectory(this.databasePath, scope.id);
@@ -78,8 +82,14 @@ export class DevinTaskRuntime implements TaskHarness {
     return nativeSessionId ?? `devin-${randomUUID()}`;
   }
 
-  async attach(): Promise<string> {
-    throw new Error("Devin CLI display attachment is unavailable: Forge runs documented --print turns only.");
+  // Devin assigns its own session id, which observe() only persists after the
+  // first completed turn, so the display cannot attach before then.
+  async attach(input: { scope: TaskScope; nativeSessionId: string; paneId: string | null; rootPaneId?: string | null; persistPane: (paneId: string) => void }): Promise<string> {
+    const sessionId = await readDevinSessionId(this.runtimeDirectory(input.scope));
+    if (!sessionId) throw new Error("Devin session has not started; the display attaches after its first turn");
+    const executable = await this.executable();
+    const command = [executable, ...devinArguments({ scope: input.scope, resumeSessionId: sessionId, promptFile: null })].map(shellQuote).join(" ");
+    return attachTaskDisplay(this.herdr, { ...input, generation: sessionId, isAttached: args => devinDisplayAttached(executable, sessionId, args), command });
   }
 
   async observe(scope: TaskScope, intent: PromptIntent, attempt?: PromptDispatchAttempt | null): Promise<PromptObservation> {

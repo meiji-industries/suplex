@@ -59,5 +59,9 @@ Devin Worker turns have the same durable claim, process ownership, recovery,
 stop, result, and log evidence lifecycle as other detached headless CLIs. A
 small `/bin/sh` wrapper records each CLI exit status in Forge's private turn
 directory; it is not a Devin CLI flag or part of the native CLI contract.
-Interactive display attachment and native tool/usage detail are unavailable
-until Cognition documents a stable machine-readable contract.
+Interactive display attachment opens `devin --resume <session-id> --model
+<model> --permission-mode dangerous --respect-workspace-trust false` without
+`--print` in a Herdr pane once the first completed turn has persisted a Devin
+session id; the documented `--resume` resumes that same session. Native
+tool/usage detail remains unavailable until Cognition documents a stable
+machine-readable contract.

@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, test } from "vitest";
 import { taskRolePrompt } from "../src/tasks/execution/role-prompt.js";
-import { DevinTaskRuntime, devinArguments, devinSessionBusy, readDevinSessionId } from "../src/runtimes/devin/task-runtime.js";
+import type { HerdrClient, Pane, PaneProcessInfo } from "../src/integrations/herdr/client.js";
+import { DevinTaskRuntime, devinArguments, devinDisplayAttached, devinSessionBusy, readDevinSessionId } from "../src/runtimes/devin/task-runtime.js";
 import { createOpenCodePromptIntent } from "../src/runtimes/opencode/session.js";
 import { DEVIN_PROVIDER, profileHarness, sessionHarness, taskSessionRuntimeDirectory, type TaskScope } from "../src/runtimes/task-harness.js";
 
@@ -79,6 +80,40 @@ test("non-zero turns are errors and startup failures retain stderr", async () =>
   const observed = await eventually(failed);
   expect(observed).toMatchObject({ state: "error", reason: "native_startup_failed" });
   expect(await failed.runtime.resultText(failed.scope, observed)).toContain("Not logged in");
+});
+
+test("the display resumes the persisted Devin session in a Herdr pane only after the first turn", async () => {
+  const f = await fixture("complete");
+  const executable = join(f.root, "devin");
+  const commands: string[] = [];
+  const shell = (id: string): PaneProcessInfo => ({ pane_id: id, shell_pid: 10, foreground_process_group_id: 10, foreground_processes: [{ pid: 10, name: "zsh", argv: ["/bin/zsh"] }] });
+  const processes = new Map<string, PaneProcessInfo>([["pane", shell("pane")]]);
+  const displayArgv = [executable, "--resume", "assigned-session", "--model", "swe", "--permission-mode", "dangerous", "--respect-workspace-trust", "false"];
+  const herdr: Pick<HerdrClient, "getPane" | "getPaneProcessInfo" | "createWorkspace" | "splitPane" | "renamePane" | "runPaneCommand" | "reportPaneMetadata"> = {
+    async getPane(id): Promise<Pane> { return { paneId: id, cwd: f.scope.directory, tokens: { forge_binding_id: f.scope.id } }; },
+    async getPaneProcessInfo(id) { return processes.get(id)!; },
+    async createWorkspace() { throw new Error("No workspace expected"); }, async splitPane() { throw new Error("No split expected"); },
+    async renamePane() {}, async reportPaneMetadata() {},
+    async runPaneCommand(id, command) { commands.push(command); processes.set(id, { pane_id: id, shell_pid: 10, foreground_process_group_id: 11, foreground_processes: [{ pid: 11, name: "devin", argv: displayArgv }] }); },
+  };
+  const runtime = new DevinTaskRuntime(join(f.root, "forge.sqlite"), herdr, { executable });
+  await runtime.ensureSession(f.scope, f.sessionID);
+  const attach = () => runtime.attach({ scope: f.scope, nativeSessionId: f.sessionID, paneId: "pane", persistPane: () => {} });
+  await expect(attach()).rejects.toThrow("has not started");
+  await runtime.dispatch(f.scope, f.intent, async () => true);
+  expect(await eventually(f)).toMatchObject({ state: "completed" });
+  expect(await attach()).toBe("pane");
+  expect(commands).toHaveLength(1);
+  expect(commands[0]).toContain("'--resume' 'assigned-session'");
+  expect(commands[0]).toContain("'--model' 'swe'");
+  expect(commands[0]).not.toContain("'--print'");
+  expect(commands[0]).not.toContain("'--prompt-file'");
+  expect(await attach()).toBe("pane");
+  expect(commands).toHaveLength(1);
+  expect(devinDisplayAttached(executable, "assigned-session", displayArgv)).toBe(true);
+  expect(devinDisplayAttached(executable, "assigned-session", ["/other/devin", "--resume", "assigned-session"])).toBe(false);
+  expect(devinDisplayAttached(executable, "assigned-session", [executable, "--resume", "other-session"])).toBe(false);
+  expect(devinDisplayAttached(executable, "assigned-session", [executable, "--print", "--resume", "assigned-session"])).toBe(true);
 });
 
 test("Devin routing is unambiguous and worker-only", async () => {

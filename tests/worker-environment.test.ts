@@ -7,7 +7,7 @@ import { runCommand } from "../src/platform/command-runner.js";
 import { createGitCommandGuard } from "../src/coordination/worker-environment.js";
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const result = await runCommand({ command: "git", args, cwd, taskId: null, stepId: null });
+  const result = await runCommand({ command: process.env.FORGE_GIT_REAL_BIN || "git", args, cwd, taskId: null, stepId: null });
   if (result.exitCode !== 0) throw new Error(result.stderr || `git ${args.join(" ")} failed`);
   return result.stdout.trim();
 }

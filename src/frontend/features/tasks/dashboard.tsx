@@ -1,43 +1,38 @@
-import { Clock3, RefreshCw } from "lucide-react";
+import { CheckCircle2, CircleAlert, RefreshCw, Server, XCircle } from "lucide-react";
 import type { ReactElement } from "react";
 
+import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { HealthCheckSections, healthFreshnessLabel, useSystemHealth } from "../../components/app/system-health.js";
+import { connectionRoute, getSystemHealthLevel, HealthCheckSections, useSystemHealth } from "../../components/app/system-health.js";
+import { isOwnedHealthCheck, isRequiredHealthCheck } from "../../../platform/health-contract.js";
 import { SettingsLayout } from "../settings/settings-layout.js";
 import { UpdateSettings } from "../settings/update-settings.js";
 import { withCompany } from "../../lib/api.js";
-import { relativeTime } from "../../shell/view-shared.js";
 
 export function Dashboard(): ReactElement {
   const { currentCompany } = useCompanyContext();
-  const { snapshot, freshness, lastSuccessfulCheckAt, refreshing, refresh } = useSystemHealth();
+  const { snapshot, freshness, refreshing, refresh } = useSystemHealth();
   const companyId = currentCompany?.id ?? "";
-  const healthyCount = snapshot?.checks.filter((check) => check.status === "healthy").length ?? 0;
+  const healthyCount = snapshot?.checks.filter(check => check.status === "healthy").length ?? 0;
   const checkCount = snapshot?.checks.length ?? 0;
   const failingCount = checkCount - healthyCount;
-  const checked = healthFreshnessLabel(freshness, lastSuccessfulCheckAt);
-  const compactChecked = freshness === "checking" ? "Checking…" : freshness === "stale" ? `Stale · ${lastSuccessfulCheckAt ? relativeTime(lastSuccessfulCheckAt) : "unknown"}` : `Checked ${lastSuccessfulCheckAt ? relativeTime(lastSuccessfulCheckAt) : "unknown"}`;
+  const level = getSystemHealthLevel(snapshot, freshness);
 
-  return (
-    <SettingsLayout title="Host health" companyId={companyId} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/health", companyId)}>
-      <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 bg-muted/20 px-3 py-1.5 sm:px-4">
-        <div className="flex items-center gap-4 text-xs">
-          <span className="font-medium text-foreground">Health</span>
-          <span className="text-muted-foreground">{checkCount} checks</span>
-          <span className="text-emerald-700 dark:text-emerald-400">{healthyCount} healthy</span>
-          <span className={failingCount > 0 ? "text-destructive" : "text-muted-foreground"}>{failingCount} issues</span>
-        </div>
-        <div className="flex min-w-0 items-center gap-2">
-          {snapshot ? <a className="max-w-48 truncate text-[11px] text-muted-foreground hover:text-foreground" href={snapshot.reachableAddress}>{snapshot.reachableAddress.replace(/^https?:\/\//, "")}</a> : null}
-          <span aria-live="polite" data-health-freshness={freshness} title={checked} className={freshness === "stale" ? "flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400 sm:hidden" : "flex items-center gap-1.5 text-[11px] text-muted-foreground sm:hidden"}><Clock3 className="size-3" />{compactChecked}</span>
-          <span aria-live="polite" data-health-freshness={freshness} className={freshness === "stale" ? "hidden items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400 sm:flex" : "hidden items-center gap-1.5 text-[11px] text-muted-foreground sm:flex"}><Clock3 className="size-3" />{checked}</span>
-          <Button aria-label="Refresh" title="Refresh" variant="ghost" size="icon-xs" onClick={() => void refresh()} disabled={refreshing}><RefreshCw aria-hidden="true" className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /></Button>
-        </div>
+  return <SettingsLayout title="Host health" companyId={companyId} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/health", companyId)}>
+    <div className="flex flex-wrap items-center gap-3 border-b py-4">
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40"><Server className="size-4" /></div>
+      <div className="min-w-0 flex-1"><p className="break-all text-[13px] font-medium">{snapshot?.reachableAddress ?? window.location.origin}</p><p className="text-xs text-muted-foreground">Forge host · {connectionRoute(snapshot?.reachableAddress ?? window.location.origin)}</p></div>
+      <Button aria-label="Refresh" title="Refresh" variant="outline" size="sm" onClick={() => void refresh()} disabled={refreshing}><RefreshCw aria-hidden="true" className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} />{refreshing ? "Check in progress" : "Check again"}</Button>
+    </div>
+    <section aria-label="Host health overview" className="flex flex-wrap items-center justify-between gap-5 py-5">
+      <div className="min-w-0 flex-1"><div className="mb-3 flex flex-wrap items-center gap-3"><span className="flex items-baseline gap-2"><strong className="text-2xl font-semibold tabular-nums">{healthyCount}<span className="text-lg font-normal text-muted-foreground"> / {checkCount}</span></strong><span className="text-xs text-muted-foreground">checks healthy</span></span><Badge variant={level === "red" ? "destructive" : "outline"}>{level === "red" ? <XCircle /> : level === "amber" ? <CircleAlert /> : <CheckCircle2 />}{level === "red" ? "Host needs attention" : level === "amber" ? "Check the host" : "Healthy"}</Badge></div>
+        <div role="img" aria-label={`${healthyCount} healthy checks, ${failingCount} issues`} className="flex max-w-md gap-1">{snapshot?.checks.map(check => <span key={check.id} title={`${check.label}: ${check.status}`} className={check.status === "healthy" ? "h-2 flex-1 rounded-sm bg-emerald-600" : check.status === "warning" || !isRequiredHealthCheck(check.id) && !isOwnedHealthCheck(check.id) ? "h-2 flex-1 rounded-sm bg-amber-500" : "h-2 flex-1 rounded-sm bg-destructive"} />)}</div>
+        <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground"><span className="flex items-center gap-1.5"><CheckCircle2 className="size-3.5 text-emerald-600" />{healthyCount} healthy</span><span className="flex items-center gap-1.5"><CircleAlert className="size-3.5" />{failingCount} issues</span></div>
       </div>
+    </section>
       {snapshot?.herdr ? <div className="flex items-center justify-between border-b px-4 py-2 text-xs"><span>Herdr</span><span>{snapshot.herdr.reachable ? "Running" : "Not running"}</span></div> : null}
       <HealthCheckSections snapshot={snapshot} />
       <div id="updates" className="px-4 pt-5 lg:px-6"><UpdateSettings /></div>
-    </SettingsLayout>
-  );
+    </SettingsLayout>;
 }

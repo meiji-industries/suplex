@@ -11,7 +11,7 @@ import type { TaskHost } from "./tasks/host.js";
 import type { HermesAgentService } from "./identity/hermes-agents.js";
 import type { AgentDeliveryService } from "./delivery/agent-delivery.js";
 import type { ReadProviders } from "./profiles/provider-catalog.js";
-import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./platform/health.js";
+import { inspectHostHealth, inspectProviderChecks, type HealthSnapshot, type HostHealthDependencies } from "./platform/health.js";
 import { inspectUpdateAvailability, type UpdateAvailability } from "./platform/updates/update.js";
 import type { UpdateObservation } from "./platform/updates/self-update.js";
 import type { UpdateRestartResponse } from "./http/contracts/update.js";
@@ -22,6 +22,7 @@ import type { TaskTemplateService } from "./tasks/templates.js";
 import type { WorkflowRecordService } from "./coordination/workflow-records.js";
 import type { GithubTriggerService } from "./integrations/github/triggers.js";
 import { HealthSnapshotSchema } from "./platform/schemas.js";
+import type { ProviderHarnessKind } from "./platform/health-contract.js";
 import {
   CSRF_COOKIE_NAME,
   CSRF_HEADER_NAME,
@@ -34,7 +35,7 @@ import { isHermesRuntimeRequest } from "./http/hermes-runtime.js";
 import authRoutes from "./http/routes/auth.js";
 import authenticated from "./http/routes/authenticated.js";
 import assets from "./http/routes/assets.js";
-import health from "./http/routes/health.js";
+import health, { cachedHealthReader } from "./http/routes/health.js";
 import pages from "./http/routes/pages.js";
 import discovery from "./http/routes/discovery.js";
 import hermesPairing from "./http/routes/hermes-pairing.js";
@@ -122,7 +123,15 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
 export function registerAppRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
   const getHealth = dependencies.getHealth ?? (() => inspectHostHealth(dependencies.config, dependencies.health));
   const readUpdate = dependencies.readUpdate ?? (() => inspectUpdateAvailability());
-  const readHealth = async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth());
+  // The cached snapshot covers host checks only; provider checks are contextual
+  // and always probed fresh for the requested context.
+  const readBaseHealth = cachedHealthReader(async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth()), dependencies.healthNow);
+  const readHealth = async (force = false, context?: { providers: readonly ProviderHarnessKind[] }): Promise<HealthSnapshot> => {
+    const base = await readBaseHealth(force);
+    const providerChecks = await inspectProviderChecks(dependencies.health, context?.providers ?? []);
+    if (providerChecks.length === 0 && base.checks.every((check) => check.provider === undefined)) return base;
+    return { ...base, checks: [...base.checks.filter((check) => check.provider === undefined), ...providerChecks] };
+  };
   const { auth, projects: projectService, tasks: taskService, taskTemplates: templateService, database } = dependencies;
 
   void app.register(pages, {
@@ -132,7 +141,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
     ...(dependencies.frontendDevelopment ? { transformHtml: dependencies.frontendDevelopment.transformIndexHtml } : {}),
   });
   void app.register(discovery);
-  void app.register(health, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config, ...(dependencies.healthNow ? { now: dependencies.healthNow } : {}) });
+  void app.register(health, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), ...(projectService ? { projects: projectService } : {}), ...(dependencies.healthNow ? { now: dependencies.healthNow } : {}) });
   if (auth) {
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
     if (dependencies.hermes) void app.register(hermesPairing, { hermes: dependencies.hermes });

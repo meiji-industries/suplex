@@ -20,7 +20,7 @@
 - End a question in a title with "?". State what Forge does and what Forge keeps in the body.
 - Describe present status. Use the past for completed states.
 
-Approved imperative verbs: Accept, Add, Answer, Approve, Cancel, Check, Continue, Create, Delete, Describe, Discard, Keep, Open, Publish, Recreate, Reject, Repair, Report, Request, Resolve, Restart, Resume, Retry, Review, Revise, Save, Select, Send, Sign in, Start, Submit, Write.
+Approved imperative verbs: Accept, Add, Answer, Approve, Cancel, Check, Continue, Copy, Create, Delete, Describe, Discard, Keep, Open, Publish, Recreate, Reject, Repair, Report, Request, Resolve, Restart, Resume, Retry, Review, Revise, Save, Select, Send, Sign in, Start, Submit, Write.
 
 ## Glossary
 

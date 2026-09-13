@@ -24,9 +24,11 @@ export function activityShellKey(pathname: string): "activity" | undefined {
   if (pathname === "/projects" || pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
   return undefined;
 }
+import { SetupView } from "../features/settings/setup.js";
 
 function AppView(): ReactElement {
   const pathname = window.location.pathname;
+  if (pathname === "/setup") return <SetupView />;
   if (pathname === "/admin/profiles") {
     window.history.replaceState({}, "", "/admin/agents");
     return <AdminView />;

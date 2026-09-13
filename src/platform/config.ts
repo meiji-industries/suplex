@@ -53,7 +53,7 @@ function isTailscaleIpv4(address: string): boolean {
   return octets.length === 4 && octets[0] === 100 && octets[1] !== undefined && octets[1] >= 64 && octets[1] <= 127;
 }
 
-function isTailscaleAddress(address: string): boolean {
+export function isTailscaleAddress(address: string): boolean {
   const normalized = address.trim().toLowerCase();
   if (!normalized || normalized === "*" || normalized === "localhost") {
     return false;

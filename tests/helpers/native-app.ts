@@ -20,8 +20,10 @@ import type { TaskPanePort } from "../../src/runtimes/task-display.js";
 export const healthyHost: HostHealthDependencies = {
   database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
   artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
-  opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy", summary: "Configured", details: {} }),
+  git: async () => ({ id: "git", label: "Git", status: "healthy", summary: "Ready", details: {} }),
+  herdrReadiness: async () => ({ id: "herdr-readiness", label: "Herdr", status: "healthy", summary: "Ready", details: {} }),
   ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
+  provider: async (kind) => ({ id: kind === "claude-code" ? "provider:claude-code" : "provider:opencode", label: kind === "claude-code" ? "Claude Code" : "OpenCode", status: "healthy", summary: "Signed in", details: {}, provider: kind }),
 };
 
 const webAuthn: WebAuthnAdapter = {

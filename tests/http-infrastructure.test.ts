@@ -10,7 +10,6 @@ import { jsonRequired } from "../src/shared/json.js";
 const health: HostHealthDependencies = {
   database: async () => ({ id: "database", label: "Database", status: "healthy" as const, summary: "Ready", details: {} }),
   artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy" as const, summary: "Ready", details: {} }),
-  opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy" as const, summary: "Ready", details: {} }),
   ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy" as const, summary: "Ready", details: {} }),
 };
 

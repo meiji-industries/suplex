@@ -2,7 +2,10 @@ import { basename } from "node:path";
 import { spawn } from "node:child_process";
 
 import type { HealthCheck } from "../platform/health.js";
+import { providerCheckId, providerCheckLabel } from "../platform/health-contract.js";
+import { resolveClaudeExecutable, resolveOpenCodeExecutable } from "../platform/executable-resolver.js";
 import { GhAuthStatusSchema } from "../platform/schemas.js";
+import type { ProviderHarnessKind } from "../platform/health-contract.js";
 
 
 export type GithubFailure = "command-missing" | "auth-timeout" | "auth-format" | "unauthenticated" | "auth-failed";
@@ -94,7 +97,139 @@ export function checkGithubAuthentication(command: string, runner: CommandRunner
       label: "GitHub CLI authentication",
       status: authenticated ? "healthy" : "unhealthy",
       summary,
+      ...(!authenticated ? { remedy: failure === "command-missing" ? "brew install gh" : "gh auth login" } : {}),
       details: { command: safeCommand, authentication: authenticated ? "available" : "unavailable", failure: failure ?? "none" },
     };
+  };
+}
+
+export type ProviderProbeResult = { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean };
+export type ProviderProbeRunner = (command: string, args: readonly string[], options: { timeout: number }) => Promise<ProviderProbeResult>;
+
+/** Resolves on non-zero exits; rejects only when the process cannot run at all. */
+export const probeCommand: ProviderProbeRunner = (command, args, options) => new Promise((resolve, reject) => {
+  const child = spawn(command, [...args], { stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  let settled = false;
+  const timer = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    child.kill("SIGTERM");
+    resolve({ stdout, stderr, exitCode: null, timedOut: true });
+  }, options.timeout);
+  child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+  child.once("error", (error) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    reject(error);
+  });
+  child.once("close", (code) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    resolve({ stdout, stderr, exitCode: code, timedOut: false });
+  });
+});
+
+export type ProviderState = "absent" | "present" | "signed-out" | "signed-in" | "unknown";
+
+export interface ProviderReadinessOptions {
+  resolveExecutable?: () => Promise<string>;
+  runCommand?: ProviderProbeRunner;
+  platform?: NodeJS.Platform;
+}
+
+const stripAnsi = (value: string): string => value.replace(/\x1b\[[0-9;]*m/g, "");
+
+const PROVIDER_PROBES: Record<ProviderHarnessKind, {
+  resolve: () => Promise<string>;
+  installRemedy: (platform: NodeJS.Platform) => Pick<HealthCheck, "remedy" | "remedyKind">;
+  loginRemedy: string;
+  authArgs: readonly string[];
+  /** Classifies a completed probe; "present" means the tool ran but reported no usable sign-in signal. */
+  classify: (result: ProviderProbeResult) => { state: ProviderState; credentials?: number };
+}> = {
+  opencode: {
+    // Sources: `opencode auth --help`; https://opencode.ai install script (macOS/Linux); https://opencode.ai/docs (Windows).
+    resolve: () => resolveOpenCodeExecutable(),
+    installRemedy: (platform) => platform === "win32"
+      ? { remedy: "https://opencode.ai/docs", remedyKind: "link" }
+      : { remedy: "curl -fsSL https://opencode.ai/install | bash", remedyKind: "command" },
+    loginRemedy: "opencode auth login",
+    authArgs: ["auth", "list"],
+    classify: (result) => {
+      if (result.exitCode !== 0 || result.timedOut) return { state: "unknown" };
+      const count = /(\d+)\s+credentials?/.exec(stripAnsi(result.stdout))?.[1];
+      if (count === undefined) return { state: "present" };
+      const credentials = Number(count);
+      if (!Number.isSafeInteger(credentials)) return { state: "present" };
+      return credentials > 0 ? { state: "signed-in", credentials } : { state: "signed-out", credentials };
+    },
+  },
+  "claude-code": {
+    // Sources: `claude auth --help` (login/status subcommands); https://claude.ai/install.sh (macOS/Linux); https://code.claude.com/docs/en/setup (Windows).
+    resolve: () => resolveClaudeExecutable(),
+    installRemedy: (platform) => platform === "win32"
+      ? { remedy: "https://code.claude.com/docs/en/setup", remedyKind: "link" }
+      : { remedy: "curl -fsSL https://claude.ai/install.sh | bash", remedyKind: "command" },
+    loginRemedy: "claude auth login",
+    authArgs: ["auth", "status", "--json"],
+    classify: (result) => {
+      if (result.timedOut) return { state: "unknown" };
+      try {
+        const status: unknown = JSON.parse(result.stdout);
+        if (status && typeof status === "object" && "loggedIn" in status && typeof status.loggedIn === "boolean") {
+          return { state: status.loggedIn ? "signed-in" : "signed-out" };
+        }
+      } catch { /* Unrecognized status output is not proof of any sign-in state. */ }
+      return result.exitCode === 0 ? { state: "present" } : { state: "unknown" };
+    },
+  },
+};
+
+/** Readiness for one registered task runtime, probed fresh on every call. */
+export function createProviderReadinessCheck(kind: ProviderHarnessKind, options: ProviderReadinessOptions = {}): () => Promise<HealthCheck> {
+  const probe = PROVIDER_PROBES[kind];
+  const label = providerCheckLabel(kind);
+  const id = providerCheckId(kind);
+  const resolve = options.resolveExecutable ?? probe.resolve;
+  const runCommand = options.runCommand ?? probeCommand;
+  const platform = options.platform ?? process.platform;
+  const base = { id, label, provider: kind };
+  return async () => {
+    let executable: string;
+    try {
+      executable = await resolve();
+    } catch {
+      return { ...base, status: "unhealthy", summary: `${label} is not installed`, ...probe.installRemedy(platform), details: { state: "absent" satisfies ProviderState } };
+    }
+    let result: ProviderProbeResult;
+    try {
+      result = await runCommand(executable, probe.authArgs, { timeout: 5_000 });
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        return { ...base, status: "unhealthy", summary: `${label} is not installed`, ...probe.installRemedy(platform), details: { state: "absent" satisfies ProviderState } };
+      }
+      return { ...base, status: "warning", summary: `Forge could not check the ${label} sign-in`, details: { command: basename(executable), state: "unknown" satisfies ProviderState } };
+    }
+    const classified = probe.classify(result);
+    const details = { command: basename(executable), state: classified.state, ...(classified.credentials === undefined ? {} : { credentials: classified.credentials }) };
+    if (classified.state === "signed-in") return { ...base, status: "healthy", summary: `${label} is signed in. Model access is not tested.`, details };
+    if (classified.state === "signed-out") return { ...base, status: "unhealthy", summary: `${label} is not signed in`, remedy: probe.loginRemedy, remedyKind: "command", details };
+    if (classified.state === "present") return { ...base, status: "warning", summary: `${label} is installed. Forge could not check the sign-in.`, details };
+    return { ...base, status: "warning", summary: `Forge could not check the ${label} sign-in`, details };
+  };
+}
+
+/** One readiness probe per runtime kind registered in src/task-harness-registry.ts. */
+export function createProviderReadiness(options: ProviderReadinessOptions | undefined, kinds: readonly ProviderHarnessKind[]): (kind: ProviderHarnessKind) => Promise<HealthCheck> {
+  const checks = new Map(kinds.map((kind) => [kind, createProviderReadinessCheck(kind, options)]));
+  return async (kind) => {
+    const check = checks.get(kind);
+    if (!check) throw new Error(`No provider readiness check is registered for ${kind}`);
+    return check();
   };
 }

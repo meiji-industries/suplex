@@ -20,7 +20,6 @@ const newerRevision = "c".repeat(40);
 const health: HostHealthDependencies = {
   database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
   artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
-  opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy", summary: "Ready", details: {} }),
   ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
 };
 

@@ -10,8 +10,84 @@ const INVALID_TITLE = "The Forge URL is not valid";
 type Bounds = { width: number; height: number; x?: number; y?: number };
 type Preventable = { preventDefault(): void };
 
-const retryPage = (origin: string): string =>
-  `data:text/html,${encodeURIComponent(`<style>body{-webkit-app-region:drag;padding-top:env(titlebar-area-height,0px)}a{-webkit-app-region:no-drag}</style><h1>Forge is not available at ${origin}</h1><p><a href="${origin}">Retry</a></p><script>setTimeout(() => { location.href = ${JSON.stringify(origin)}; }, 5000);</script>`)}`;
+export function retryPage(origin: string): string {
+  const address = origin.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+  return `data:text/html,${encodeURIComponent(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to Forge</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: max(48px, env(titlebar-area-height, 0px)) 24px 32px; background: #0a0a0a; color: #e5e5e5; font: 13px/1.5 -apple-system, system-ui, sans-serif; -webkit-app-region: drag; }
+  main { width: min(100%, 560px); }
+  h1, h2, p { margin: 0; }
+  h1 { font-size: 14px; font-weight: 600; }
+  h2 { margin-top: 24px; font-size: 13px; font-weight: 600; }
+  p, small { color: #a3a3a3; font-size: 12px; }
+  h2 + p { margin-top: 6px; }
+  svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+  .connection { display: grid; grid-template-columns: minmax(0, 1fr) 72px minmax(0, 1fr); align-items: center; text-align: center; margin-bottom: 28px; }
+  .node { display: grid; justify-items: center; gap: 6px; min-width: 0; }
+  .node strong { font-size: 12px; font-weight: 500; }
+  .node small { font-size: 11px; overflow-wrap: anywhere; -webkit-app-region: no-drag; user-select: text; }
+  .icon { display: grid; place-items: center; width: 64px; height: 52px; border: 1px solid #303030; border-radius: 6px; background: #171717; margin-bottom: 2px; }
+  .broken { display: flex; align-items: center; gap: 5px; color: #fb7185; }
+  .broken::before, .broken::after { content: ""; flex: 1; border-top: 1px dashed currentColor; }
+  .broken svg { width: 18px; height: 18px; }
+  .notice { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid #4c2630; border-radius: 6px; color: #fda4af; }
+  .notice svg { flex: none; width: 16px; height: 16px; margin-top: 2px; }
+  .notice p { margin-top: 2px; color: #fda4af; }
+  .command { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding: 10px 12px; background: #171717; border: 1px solid #303030; border-radius: 6px; }
+  code { flex: 1; min-width: 0; font: 12px/1.5 ui-monospace, SFMono-Regular, monospace; overflow-wrap: anywhere; user-select: text; -webkit-app-region: no-drag; }
+  button, a { -webkit-app-region: no-drag; }
+  button, .retry { font: inherit; display: inline-flex; align-items: center; justify-content: center; min-height: 28px; padding: 0 10px; border: 1px solid #404040; border-radius: 5px; background: #171717; color: #e5e5e5; cursor: pointer; text-decoration: none; }
+  button:hover { background: #262626; }
+  button:focus-visible, a:focus-visible, code:focus-visible { outline: 2px solid #a3a3a3; outline-offset: 3px; }
+  #copy-status { min-height: 24px; padding-top: 4px; }
+  .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
+  .retry { background: #e5e5e5; border-color: #e5e5e5; color: #171717; height: 32px; padding: 0 12px; }
+  .retry:hover { background: #d4d4d4; }
+  footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid #262626; }
+  footer a { color: #d4d4d4; text-underline-offset: 3px; }
+  footer p { margin-top: 8px; }
+  @media (max-width: 480px) { body { padding-left: 18px; padding-right: 18px; } .connection { grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr); } }
+</style></head><body><main>
+  <div class="connection" role="img" aria-label="This Forge window cannot reach the Forge host">
+    <div class="node"><div class="icon"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M8 21h8m-4-5v5"/></svg></div><strong>This window</strong><small>Forge.app</small></div>
+    <div class="broken"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></svg></div>
+    <div class="node"><div class="icon"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/></svg></div><strong>Forge host</strong><small>${address}</small></div>
+  </div>
+  <section class="notice" aria-labelledby="connection-title"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4m0 4h.01"/></svg><div><h1 id="connection-title">Forge is not available</h1><p>This window cannot reach the Forge host.</p></div></section>
+  <h2>Start Forge on the host</h2><p>Open the Terminal on the server host. Run this command from the Forge folder, then retry.</p>
+  <div class="command"><code id="command" tabindex="0">pnpm run forge start</code><button id="copy" type="button">Copy</button></div>
+  <p id="copy-status" role="status" aria-live="polite"></p>
+  <div class="actions"><a class="retry" id="retry" href="${address}">Retry</a><p>Forge retries every 5 seconds.</p></div>
+  <footer><a href="https://github.com/meiji-industries/forge#set-up-an-installation">Open the install guide</a><p>To use another host, select Navigate &gt; Add a Forge URL.</p></footer>
+</main><script>
+  const command = document.getElementById("command");
+  const copy = document.getElementById("copy");
+  const feedback = document.getElementById("copy-status");
+  copy.addEventListener("click", async () => {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(command.textContent);
+      else {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(command);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        if (!document.execCommand("copy")) throw new Error("Copy failed");
+        selection.removeAllRanges();
+      }
+      copy.textContent = "Copied";
+      feedback.textContent = "Command copied.";
+      setTimeout(() => { copy.textContent = "Copy"; }, 1500);
+    } catch {
+      copy.textContent = "Copy";
+      feedback.textContent = "Copy failed. Select the command and copy it.";
+    }
+  });
+  setTimeout(() => { location.href = document.getElementById("retry").href; }, 5000);
+</script></body></html>`)}`;
+}
 
 /**
  * The whole desktop shell: one sandboxed window that attaches to an existing Forge origin.

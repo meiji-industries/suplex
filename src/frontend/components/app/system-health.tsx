@@ -1,16 +1,21 @@
-import { Activity, ChevronRight, CircleHelp, Database, GitBranch, HardDrive, RefreshCw, Terminal, type LucideIcon } from "lucide-react";
-import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { Activity, Bot, Check, CheckCircle2, ChevronRight, CircleAlert, Copy, Database, GitBranch, HardDrive, LayoutGrid, Network, Package, RefreshCw, ShieldCheck, Terminal, XCircle, type LucideIcon } from "lucide-react";
+import { createContext, useContext, useEffect, useId, useState, type ReactElement, type ReactNode } from "react";
 
 import type { HealthCheck, HealthSnapshot } from "../../../platform/health.js";
-import { isOwnedHealthCheck } from "../../../platform/health-contract.js";
+import { isOwnedHealthCheck, isRequiredHealthCheck, type HealthCheckId } from "../../../platform/health-contract.js";
+import { HealthSnapshotSchema } from "../../../platform/schemas.js";
+import { createHealthRefresher, healthContextQuery, type HealthContextSelector } from "../../lib/health-refresh.js";
 import { relativeTime } from "../../shell/view-shared.js";
 import { Button } from "../ui/button.js";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert.js";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion.js";
+import { Badge } from "../ui/badge.js";
 import { Collapsible } from "../ui/collapsible.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "../ui/dialog.js";
 import { StatusLight } from "./status-light.js";
 import { SidebarMenuButton } from "../ui/sidebar.js";
 
+export type { HealthContextSelector } from "../../lib/health-refresh.js";
 export type HealthFreshness = "checking" | "current" | "stale";
 export type SystemHealthLevel = "green" | "amber" | "red";
 
@@ -19,58 +24,89 @@ type SystemHealthContextValue = {
   freshness: HealthFreshness;
   lastSuccessfulCheckAt: string | undefined;
   refreshing: boolean;
-  refresh: () => Promise<void>;
+  refresh: (context?: HealthContextSelector) => Promise<void>;
+  /** Registers a visible health surface so visibility and focus signals re-check the host. */
+  watch: () => () => void;
 };
 
 const SystemHealthContext = createContext<SystemHealthContextValue | undefined>(undefined);
 
-const icons: Record<string, LucideIcon> = {
+const icons: Record<HealthCheckId, LucideIcon> = {
   database: Database,
   "artifact-root": HardDrive,
-  opencode: Terminal,
+  git: GitBranch,
+  "herdr-readiness": LayoutGrid,
   "gh-auth": GitBranch,
+  pnpm: Package,
+  tailscale: Network,
+  backup: ShieldCheck,
+  "provider:opencode": Terminal,
+  "provider:claude-code": Bot,
 };
+
+export function HealthCheckIcon({ check }: { check: HealthCheck }): ReactElement {
+  const Icon = icons[check.id];
+  return <Icon aria-hidden="true" className={check.status === "healthy" ? "size-4 shrink-0 text-emerald-700 dark:text-emerald-400" : check.status === "warning" || !isOwnedHealthCheck(check.id) && !isRequiredHealthCheck(check.id) ? "size-4 shrink-0 text-amber-700 dark:text-amber-400" : "size-4 shrink-0 text-destructive"} />;
+}
+
+export function healthCheckPurpose(id: HealthCheckId): string {
+  switch (id) {
+    case "database": return "Store your tasks";
+    case "artifact-root": return "Store task files";
+    case "git": return "Save code changes";
+    case "herdr-readiness": return "Open the agent terminals";
+    case "gh-auth": return "Publish pull requests";
+    case "pnpm": return "Update Forge";
+    case "tailscale": return "Reach this host";
+    case "backup": return "Recover your data";
+    case "provider:opencode": return "Run tasks with OpenCode";
+    case "provider:claude-code": return "Run tasks with Claude Code";
+  }
+}
 
 export function getSystemHealthLevel(snapshot: HealthSnapshot | undefined, freshness: HealthFreshness): SystemHealthLevel {
   const rollupChecks = snapshot?.checks.filter((check) => check.id !== "backup") ?? [];
-  if (snapshot && (!snapshot.ready || rollupChecks.some((check) => isOwnedHealthCheck(check.id) && check.status === "unhealthy"))) return "red";
+  if (snapshot && (!snapshot.ready || rollupChecks.some((check) => (isOwnedHealthCheck(check.id) || isRequiredHealthCheck(check.id)) && check.status === "unhealthy"))) return "red";
   if (!snapshot || freshness === "stale" || snapshot.checks.length === 0 || rollupChecks.some((check) => check.status !== "healthy")) return "amber";
   return "green";
 }
 
 export function healthFreshnessLabel(freshness: HealthFreshness, lastSuccessfulCheckAt?: string): string {
-  if (freshness === "checking") return "Checking health…";
+  if (freshness === "checking") return "Forge checks the host.";
+  if (freshness === "stale") return lastSuccessfulCheckAt ? `Forge could not check the host · Last successful check ${relativeTime(lastSuccessfulCheckAt)}` : "Forge could not check the host";
   if (!lastSuccessfulCheckAt) return "No successful health check";
-  return freshness === "stale" ? `Refresh failed · Last successful check ${relativeTime(lastSuccessfulCheckAt)}` : `Last successful check ${relativeTime(lastSuccessfulCheckAt)}`;
+  return `Last successful check ${relativeTime(lastSuccessfulCheckAt)}`;
 }
 
 export function SystemHealthProvider({ initialSnapshot, children }: { initialSnapshot: HealthSnapshot | undefined; children: ReactNode }): ReactElement {
-  const [snapshot, setSnapshot] = useState(initialSnapshot);
-  const [freshness, setFreshness] = useState<HealthFreshness>(initialSnapshot ? "current" : "checking");
-  const [lastSuccessfulCheckAt, setLastSuccessfulCheckAt] = useState(initialSnapshot?.generatedAt);
-  const [refreshing, setRefreshing] = useState(false);
-  const refresh = useCallback(async (): Promise<void> => {
-    setRefreshing(true);
-    setFreshness("checking");
-    try {
-      const response = await fetch("/api/health", { headers: { Accept: "application/json" } });
+  const [refresher] = useState(() => createHealthRefresher({
+    initialSnapshot,
+    read: async (context) => {
+      const query = healthContextQuery(context);
+      const response = await fetch(`/api/health${query ? `?${query}` : ""}`, { headers: { Accept: "application/json", "Cache-Control": "no-cache" } });
       if (!response.ok) throw new Error("Health request failed");
-      const nextSnapshot = await response.json() as HealthSnapshot;
-      setSnapshot(nextSnapshot);
-      setLastSuccessfulCheckAt(nextSnapshot.generatedAt);
-      setFreshness("current");
-    } catch {
-      setFreshness("stale");
-    } finally {
-      setRefreshing(false);
-    }
-  }, []);
+      return HealthSnapshotSchema.parse(await response.json());
+    },
+    onChange: (next) => setHealth(next),
+  }));
+  const [health, setHealth] = useState(refresher.state);
 
   useEffect(() => {
-    if (!initialSnapshot) void refresh();
-  }, [initialSnapshot, refresh]);
+    if (!initialSnapshot) void refresher.refresh();
+  }, [initialSnapshot, refresher]);
 
-  return <SystemHealthContext.Provider value={{ snapshot, freshness, lastSuccessfulCheckAt, refreshing, refresh }}>{children}</SystemHealthContext.Provider>;
+  useEffect(() => {
+    const onVisibility = (): void => { if (document.visibilityState === "visible") refresher.notifyVisible(); };
+    const onFocus = (): void => refresher.notifyVisible();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [refresher]);
+
+  return <SystemHealthContext.Provider value={{ ...health, refresh: refresher.refresh, watch: refresher.watch }}>{children}</SystemHealthContext.Provider>;
 }
 
 export function useSystemHealth(): SystemHealthContextValue {
@@ -81,75 +117,74 @@ export function useSystemHealth(): SystemHealthContextValue {
 
 export function SystemHealthAlert(): ReactElement | null {
   const health = useContext(SystemHealthContext);
-  const failed = health?.snapshot?.checks.find(check => isOwnedHealthCheck(check.id) && check.status === "unhealthy");
+  const failed = health?.snapshot?.checks.find(check => (isOwnedHealthCheck(check.id) || window.location.pathname !== "/setup" && isRequiredHealthCheck(check.id)) && check.status === "unhealthy");
   if (!failed) return null;
   return (
     <div data-system-health-alert className="border-b px-4 py-3 lg:px-6">
       <Alert variant="destructive">
         <Activity />
         <AlertTitle>{failed.label} not available</AlertTitle>
-        <AlertDescription>{failed.summary} <a href="/health">Open host health</a>.</AlertDescription>
+        <AlertDescription>{failed.summary} {isRequiredHealthCheck(failed.id) ? <a href="/setup">Repair the host</a> : <a href="/health">Open host health</a>}.</AlertDescription>
       </Alert>
     </div>
   );
 }
 
-function CheckStatusIndicator({ check }: { check: HealthCheck }): ReactElement {
+export function CheckStatusIndicator({ check }: { check: HealthCheck }): ReactElement {
   const healthy = check.status === "healthy";
-  const degraded = check.status === "warning" || (!healthy && !isOwnedHealthCheck(check.id));
+  const degraded = check.status === "warning" || (!healthy && !isOwnedHealthCheck(check.id) && !isRequiredHealthCheck(check.id));
   return (
-    <span className={healthy ? "flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400" : degraded ? "flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400" : "flex items-center gap-1.5 text-xs text-destructive"}>
-      <span className={healthy ? "size-1.5 rounded-full bg-emerald-500" : degraded ? "size-1.5 rounded-full bg-amber-500" : "size-1.5 rounded-full bg-rose-500"} />
-      {healthy ? "Healthy" : degraded ? "Degraded" : "Unavailable"}
-    </span>
+    <Badge variant={healthy ? "secondary" : degraded ? "outline" : "destructive"}>
+      {healthy ? <CheckCircle2 /> : degraded ? <CircleAlert /> : <XCircle />}
+      {healthy ? "Healthy" : degraded ? "Degraded" : "Not available"}
+    </Badge>
   );
 }
 
-function HealthRow({ check, compact = false }: { check: HealthCheck; compact?: boolean }): ReactElement {
-  const Icon = icons[check.id] ?? CircleHelp;
+export function HealthTechnicalDetails({ check }: { check: HealthCheck }): ReactElement {
+  return <Accordion><AccordionItem value="technical"><AccordionTrigger>Technical details</AccordionTrigger><AccordionContent>
+    {Object.keys(check.details).length > 0 ? <dl className="grid gap-1.5 text-xs sm:grid-cols-[max-content_minmax(0,1fr)] sm:gap-x-5">{Object.entries(check.details).map(([key, value]) => <div className="contents" key={key}><dt className="text-muted-foreground">{key}</dt><dd className="min-w-0 break-words text-foreground/80">{String(value)}</dd></div>)}</dl> : <p className="text-xs text-muted-foreground">No additional details.</p>}
+  </AccordionContent></AccordionItem></Accordion>;
+}
+
+export function HealthRow({ check, compact = false }: { check: HealthCheck; compact?: boolean }): ReactElement {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  useEffect(() => {
+    if (copyState !== "copied") return;
+    const timer = window.setTimeout(() => setCopyState("idle"), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
   return (
     <Collapsible.Root data-slot="health-row" data-status={check.status} className="group">
-      <Collapsible.Trigger className="flex min-h-9 w-full items-center gap-2.5 px-3 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring/50 sm:px-4">
-        <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 truncate text-[13px] font-medium text-foreground">{check.label}</span>
-        {compact ? <span className="flex-1" /> : <span className="hidden min-w-0 flex-1 truncate pl-2 text-xs text-muted-foreground sm:block">{check.summary}</span>}
+      <Collapsible.Trigger className="flex min-h-9 w-full items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring/50 sm:px-4">
+        <HealthCheckIcon check={check} />
+        <span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-medium text-foreground">{check.label}</span>{!compact ? <span className="block text-xs text-muted-foreground">{healthCheckPurpose(check.id)}</span> : null}</span>
         <CheckStatusIndicator check={check} />
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]:rotate-90" />
       </Collapsible.Trigger>
-      <Collapsible.Panel className="bg-muted/20 px-9 py-2.5 sm:px-11">
-        {compact ? <p className="mb-2 text-xs text-muted-foreground">{check.summary}</p> : null}
-        {Object.keys(check.details).length > 0 ? (
-          <dl className="grid gap-1.5 text-xs sm:grid-cols-[max-content_1fr] sm:gap-x-5">
-            {Object.entries(check.details).map(([key, value]) => (
-              <div className="contents" key={key}>
-                <dt className="text-muted-foreground">{key}</dt>
-                <dd className="truncate text-foreground/80">{String(value)}</dd>
-              </div>
-            ))}
-          </dl>
-        ) : <span className="text-xs text-muted-foreground">No additional details reported.</span>}
+      <Collapsible.Panel className="bg-muted/20 px-4 py-3 sm:px-11">
+        {compact ? <p className="mb-1 text-xs font-medium">{healthCheckPurpose(check.id)}</p> : null}
+        <p className="mb-3 text-xs text-muted-foreground">{check.summary}</p>
+        {check.remedy === "Open the Tailscale app and sign in" ? <Alert><Network /><AlertTitle>Sign in to Tailscale on the host</AlertTitle><AlertDescription>Open the Tailscale app and sign in. Then check the host again.</AlertDescription></Alert> : check.remedy && check.remedyKind === "link" ? <div className="space-y-2 rounded-md border bg-background p-3"><p className="text-xs font-medium">Open the instructions</p><p className="text-xs text-muted-foreground">Install instructions are on the official page. Then check again.</p><Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy} target="_blank" rel="noreferrer" />}>Open the instructions</Button></div> : check.remedy ? <div className="space-y-2 rounded-md border bg-background p-3"><p className="text-xs font-medium">Run on the Forge host</p><p className="text-xs text-muted-foreground">Open the Terminal on the host. Run this command, then check again.</p><div className="flex flex-wrap items-center gap-2"><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" aria-label="Copy the command" onClick={async () => { try { await navigator.clipboard.writeText(check.remedy ?? ""); setCopyState("copied"); } catch { setCopyState("failed"); } }}>{copyState === "copied" ? <Check /> : <Copy />}{copyState === "copied" ? "Copied" : "Copy"}</Button></div>{copyState === "failed" ? <p role="status" className="text-xs text-destructive">Forge cannot copy the command. Select the command and copy it manually.</p> : null}</div> : null}
+        <HealthTechnicalDetails check={check} />
       </Collapsible.Panel>
     </Collapsible.Root>
   );
 }
 
-export function HealthCheckSections({ snapshot, compact = false }: { snapshot: HealthSnapshot | undefined; compact?: boolean }): ReactElement {
+export function HealthCheckSections({ snapshot, compact = false, attentionOnly = false }: { snapshot: HealthSnapshot | undefined; compact?: boolean; attentionOnly?: boolean }): ReactElement {
   const sectionId = useId();
-  const ownedId = `${sectionId}-owned`;
-  const providerId = `${sectionId}-providers`;
-  const ownedChecks = useMemo(() => snapshot?.checks.filter((check) => isOwnedHealthCheck(check.id)) ?? [], [snapshot]);
-  const providerChecks = useMemo(() => snapshot?.checks.filter((check) => !isOwnedHealthCheck(check.id)) ?? [], [snapshot]);
-  if (!snapshot) return <div className="p-4 text-xs text-muted-foreground">Health data is unavailable.</div>;
+  if (!snapshot) return <div className="p-4 text-xs text-muted-foreground">Health data is not available.</div>;
+  const checks = snapshot.checks.filter((check) => !attentionOnly || check.status !== "healthy");
+  const groups = [
+    { title: "Owned services", checks: checks.filter(check => isOwnedHealthCheck(check.id)) },
+    { title: "Host tools", checks: checks.filter(check => isRequiredHealthCheck(check.id)) },
+    { title: "Provider access", checks: checks.filter(check => !isOwnedHealthCheck(check.id) && !isRequiredHealthCheck(check.id)) },
+  ];
   return (
-    <div>
-      <section aria-labelledby={ownedId}>
-        <div className="flex h-8 items-center justify-between px-3 sm:px-4"><h2 id={ownedId} className="text-[11px] font-semibold text-muted-foreground">Owned services</h2><span className="text-[11px] text-muted-foreground">{ownedChecks.length}</span></div>
-        <div>{ownedChecks.map((check) => <HealthRow check={check} compact={compact} key={check.id} />)}</div>
-      </section>
-      <section aria-labelledby={providerId} className="mt-5">
-        <div className="flex h-8 items-center justify-between px-3 sm:px-4"><h2 id={providerId} className="text-[11px] font-semibold text-muted-foreground">Provider access</h2><span className="text-[11px] text-muted-foreground">{providerChecks.length}</span></div>
-        <div>{providerChecks.map((check) => <HealthRow check={check} compact={compact} key={check.id} />)}</div>
-      </section>
+    <div className="space-y-4">
+      {groups.filter(group => group.checks.length > 0).map((group, index) => <section key={group.title} aria-labelledby={`${sectionId}-${index}`}><div className="flex h-8 items-center justify-between px-3 sm:px-4"><h2 id={`${sectionId}-${index}`} className="text-[11px] font-semibold text-muted-foreground">{group.title}</h2><span className="text-[11px] text-muted-foreground">{group.checks.length}</span></div><div>{group.checks.map(check => <HealthRow check={check} compact={compact} key={`${check.id}-${check.remedy ?? ""}`} />)}</div></section>)}
+      {checks.length === 0 ? <p className="p-4 text-xs text-muted-foreground">{attentionOnly ? "No checks need attention." : "No checks are available."}</p> : null}
     </div>
   );
 }
@@ -170,9 +205,14 @@ export function connectionRoute(origin: string): string {
 export function SystemHealthIndicator({ sidebar = false }: { sidebar?: boolean } = {}): ReactElement | null {
   const health = useContext(SystemHealthContext);
   const [open, setOpen] = useState(false);
+  const watch = health?.watch;
+  useEffect(() => {
+    if (!open || !watch) return undefined;
+    return watch();
+  }, [open, watch]);
   if (!health) return null;
   const level = getSystemHealthLevel(health.snapshot, health.freshness);
-  const label = level === "green" ? "Healthy" : level === "amber" ? "Degraded" : "Unavailable";
+  const label = level === "green" ? "Healthy" : level === "amber" ? "Degraded" : "Not available";
   const healthyCount = health.snapshot?.checks.filter((check) => check.status === "healthy").length ?? 0;
   const checkCount = health.snapshot?.checks.length ?? 0;
   return (

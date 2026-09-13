@@ -144,6 +144,10 @@ const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
     reply.header("Cache-Control", "no-store");
     return sendHtml(request, reply, renderHealthPage(await options.readHealth(), assetMode));
   });
+  app.get("/setup", async (request, reply) => {
+    if (!(await requirePageSession(request, reply))) return reply;
+    return sendHtml(request, reply, renderApplicationPage("setup", assetMode));
+  });
 };
 
 export default pages;

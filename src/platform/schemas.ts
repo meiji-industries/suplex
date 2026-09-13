@@ -92,6 +92,9 @@ export const HealthCheckSchema = z.object({
   label: identifier,
   status: z.enum(["healthy", "warning", "unhealthy"]),
   summary: z.string(),
+  remedy: z.string().optional(),
+  remedyKind: z.enum(["command", "link"]).optional(),
+  provider: z.enum(["opencode", "claude-code"]).optional(),
   details: z.record(z.string(), primitive),
 });
 

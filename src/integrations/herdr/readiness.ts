@@ -99,55 +99,78 @@ const execute: HerdrReadinessCommand = (input) => defaultRunCommand({
   expectNonZero: true,
 });
 
-async function commandOutput(runCommand: HerdrReadinessCommand, command: string, args: readonly string[]): Promise<string | undefined> {
+type ProbeOutcome = { kind: "ok"; stdout: string } | { kind: "missing" } | { kind: "ambiguous" };
+
+async function probe(runCommand: HerdrReadinessCommand, command: string, args: readonly string[]): Promise<ProbeOutcome> {
   try {
     const result = await runCommand({ command, args, timeout: 3_000 });
-    return result.exitCode === 0 && !result.timedOut ? result.stdout : undefined;
-  } catch {
-    return undefined;
+    return result.exitCode === 0 && !result.timedOut ? { kind: "ok", stdout: result.stdout } : { kind: "ambiguous" };
+  } catch (error) {
+    // Only a spawn ENOENT proves the CLI is absent. Timeouts and other failures are ambiguous.
+    return error && typeof error === "object" && "code" in error && error.code === "ENOENT" ? { kind: "missing" } : { kind: "ambiguous" };
   }
+}
+
+function herdrInstallRemedy(): Pick<HealthCheck, "remedy" | "remedyKind"> {
+  // Sources: https://herdr.dev install scripts, including the documented Windows PowerShell installer.
+  return process.platform === "win32"
+    ? { remedy: "https://herdr.dev", remedyKind: "link" }
+    : { remedy: "curl -fsSL https://herdr.dev/install.sh | sh" };
+}
+
+function check(status: HealthCheck["status"], summary: string, details: Record<string, string | number | boolean>, remedy?: Pick<HealthCheck, "remedy" | "remedyKind">): HealthCheck {
+  return { id: "herdr-readiness", label: "Herdr", status, summary, ...(remedy ?? {}), details };
 }
 
 export async function checkHerdrReadiness(options: HerdrReadinessOptions = {}): Promise<HealthCheck> {
   const command = options.command ?? "herdr";
   const runCommand = options.runCommand ?? execute;
   const listWorkspaces = options.listWorkspaces ?? (() => new CliHerdrClient().listWorkspaces());
-  const [versionOutput, statusOutput, apiReachable] = await Promise.all([
-    commandOutput(runCommand, command, ["--version"]),
-    commandOutput(runCommand, command, ["status", "server", "--json"]),
+  const [version, status, apiReachable] = await Promise.all([
+    probe(runCommand, command, ["--version"]),
+    probe(runCommand, command, ["status", "server", "--json"]),
     listWorkspaces().then(() => true, () => false),
   ]);
-  const clientVersion = versionOutput === undefined ? "unknown" : parseClientVersion(versionOutput);
-  const server = statusOutput === undefined ? undefined : parseServerStatus(statusOutput);
-  const diagnostic = server ?? unknownServerDiagnostic();
-  const complete = clientVersion !== "unknown"
-    && diagnostic.serverVersion !== "unknown"
-    && diagnostic.privateProtocol !== "unknown"
-    && diagnostic.privateProtocolCompatibility !== "unknown";
-  const available = apiReachable && complete && diagnostic.privateProtocolCompatibility === "compatible";
-  const status = !apiReachable ? "unhealthy" : available ? "healthy" : "warning";
-  const summary = !apiReachable
-    ? "Herdr API is not reachable. Check the Herdr server."
-    : diagnostic.privateProtocolCompatibility === "incompatible"
-      ? "Herdr API is reachable. Restart Herdr for terminal views."
-      : available
-        ? "Herdr API and terminal views are available"
-        : "Herdr API is reachable. Check terminal compatibility.";
 
-  return {
-    id: "herdr-readiness",
-    label: "Herdr readiness",
-    status,
-    summary,
-    details: {
-      apiReachable,
-      clientVersion,
-      serverVersion: diagnostic.serverVersion,
-      privateProtocol: diagnostic.privateProtocol,
-      privateProtocolCompatibility: diagnostic.privateProtocolCompatibility,
-      endpointCompatibility: diagnostic.endpointCompatibility,
-    },
+  if (version.kind === "missing") {
+    return check("unhealthy", "Herdr is not installed", { cliPresent: false, apiReachable }, herdrInstallRemedy());
+  }
+
+  const clientVersion = version.kind === "ok" ? parseClientVersion(version.stdout) : "unknown";
+  const server = status.kind === "ok" ? parseServerStatus(status.stdout) : undefined;
+  const diagnostic = server ?? unknownServerDiagnostic();
+  const details = {
+    apiReachable,
+    cliPresent: version.kind === "ok" ? true : "unknown",
+    clientVersion,
+    serverVersion: diagnostic.serverVersion,
+    privateProtocol: diagnostic.privateProtocol,
+    privateProtocolCompatibility: diagnostic.privateProtocolCompatibility,
+    endpointCompatibility: diagnostic.endpointCompatibility,
   };
+
+  if (!apiReachable) {
+    if (version.kind === "ambiguous" && status.kind !== "ok") {
+      return check("warning", "Forge could not check Herdr", { ...details, failure: "probe-ambiguous" });
+    }
+    // The CLI answered but the socket API did not: the server is not running.
+    return check("unhealthy", "Forge cannot reach Herdr", { ...details, failure: "api-unreachable" }, { remedy: "herdr" });
+  }
+
+  if (diagnostic.privateProtocolCompatibility === "incompatible") {
+    return check("warning", "Restart Herdr for terminal views", { ...details, failure: "protocol-incompatible" }, { remedy: "herdr server stop && herdr" });
+  }
+
+  if (status.kind !== "ok" || !server) {
+    // The API answered, so Herdr runs; only its status output is missing or unrecognized.
+    return check("warning", "Herdr diagnostics are incomplete", { ...details, failure: "diagnostics-incomplete" }, { remedy: "herdr status" });
+  }
+
+  if (clientVersion === "unknown") {
+    return check("warning", "Forge could not check Herdr", { ...details, failure: "probe-ambiguous" });
+  }
+
+  return check("healthy", "Herdr API and terminal views are available", details);
 }
 
 export function createHerdrReadinessCheck(options: HerdrReadinessOptions = {}): () => Promise<HealthCheck> {

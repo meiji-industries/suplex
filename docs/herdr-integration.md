@@ -16,10 +16,12 @@ The host health response reports the Herdr client version, server version, priva
 
 Herdr readiness can report these conditions:
 
+- `Herdr is not installed` means that Forge could not resolve the Herdr CLI.
+- `Forge cannot reach Herdr` means that the CLI answered but Forge could not list workspaces.
+- `Restart Herdr for terminal views` means that the API is reachable but its private terminal protocol is incompatible.
+- `Herdr diagnostics are incomplete` means that the API is reachable but its diagnostic output is missing or unrecognized.
+- `Forge could not check Herdr` means that a probe timed out or returned an ambiguous result.
 - `Herdr API and terminal views are available` means that the API is reachable and Herdr reports a compatible private terminal protocol.
-- `Herdr API is reachable. Restart Herdr for terminal views.` means that control requests can work while terminal observation is incompatible.
-- `Herdr API is reachable. Check terminal compatibility.` means that Forge could not prove private terminal compatibility from the Herdr status output.
-- `Herdr API is not reachable. Check the Herdr server.` means that Forge could not list workspaces.
 
 Herdr readiness does not block native task execution. A terminal observation error affects the display. It does not change task admission or task status.
 

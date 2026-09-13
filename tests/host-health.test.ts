@@ -25,5 +25,6 @@ test.each([
   const result = await checkGithubAuthentication("/private/bin/gh", async () => { throw error; })();
   expect(result.status).toBe("unhealthy");
   expect(result.details.failure).toBe(failure);
+  expect(result.remedy).toBe(failure === "command-missing" ? "brew install gh" : "gh auth login");
   expect(JSON.stringify(result)).not.toMatch(/secret|private/);
 });

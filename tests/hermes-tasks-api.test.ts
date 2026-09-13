@@ -290,7 +290,6 @@ beforeEach(async () => {
     health: {
       database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
       artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
-      opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy", summary: "Ready", details: {} }),
       ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
     },
   });
@@ -481,7 +480,6 @@ test("persisted paired authority has the same HTTP outcome after app recreation"
   app = createApp({ config, auth, projects, tasks, hermes, health: {
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
     artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
-    opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy", summary: "Ready", details: {} }),
     ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
   } });
   const after = await app.inject({ method: "GET", url: "/api/hermes/capabilities", headers: { Authorization: `Bearer ${agentCredential}` } });
@@ -1205,7 +1203,6 @@ test("real HTTP discovery applies current grants, ownership, pagination, and con
   app = createApp({ config, auth, projects, tasks, hermes, host: { async recover() { recoveryWakes++; } }, health: {
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
     artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
-    opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy", summary: "Ready", details: {} }),
     ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
   } });
   address = await app.listen({ host: "127.0.0.1", port: 0 });

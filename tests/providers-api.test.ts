@@ -9,9 +9,8 @@ import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/identity/auth-iden
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/platform/config.js";
 import { ForgeDatabase } from "../src/platform/database.js";
-import type { HostHealthDependencies } from "../src/platform/health.js";
+import { healthyHost } from "./helpers/native-app.js";
 
-const health: HostHealthDependencies = { database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }), artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }), opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy", summary: "Ready", details: {} }), ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }) };
 const webAuthn: WebAuthnAdapter = { async generateRegistrationOptions(input) { return { rp: { name: "Forge", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: "provider-api", pubKeyCredParams: [{ type: "public-key" as const, alg: -7 }], attestation: "none" as const }; }, async verifyRegistrationResponse(input) { return { verified: true, credential: { id: input.response.id, publicKey: Uint8Array.from([1]), counter: 0 } }; }, async generateAuthenticationOptions() { return { challenge: "provider-api", rpId: "localhost", allowCredentials: [], userVerification: "required" as const }; }, async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; } };
 
 function cookie(headers: OutgoingHttpHeaders, name: string): string {
@@ -25,7 +24,7 @@ test("provider API uses native configuration, not CLI health or Forge credential
   const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111" });
   const auth = new AuthService(database, config, { webAuthn });
   let failObservation = false;
-  const app = createApp({ config, auth, database, health, readProviders: async () => {
+  const app = createApp({ config, auth, database, health: healthyHost, readProviders: async () => {
     if (failObservation) throw new Error("native server failed");
     return { directory: root, observedAt: new Date().toISOString(), providers: [
       { id: "openai", label: "OpenAI", modelCount: 1, models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], status: "configured" },

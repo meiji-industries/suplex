@@ -1,6 +1,9 @@
 import type { ForgeConfig } from "../config.js";
 import type { ForgeDatabase } from "../database.js";
 import { createHostHealthDependencies } from "../host-health.js";
+import type { HealthCheck } from "../health.js";
+import { isOwnedHealthCheck, isRequiredHealthCheck } from "../health-contract.js";
+import { HARNESS_KINDS } from "../../runtimes/task-harness-registry.js";
 import { TaskControlStore } from "../../coordination/root-session-store.js";
 import { z } from "zod";
 
@@ -17,9 +20,15 @@ export async function runDoctor(config: ForgeConfig, database: ForgeDatabase): P
   const foreignKeys = database.authQuery(db => z.array(z.unknown()).parse(db.pragma("foreign_key_check")));
   checks.push({ status: foreignKeys.length ? "FAIL" : "PASS", name: "database references", detail: `${foreignKeys.length} invalid references` });
   const dependencies = createHostHealthDependencies(config, database);
-  for (const read of Object.values(dependencies)) {
+  const reads = Object.entries(dependencies).flatMap(([name, read]) => name === "provider" ? [] : [read as () => Promise<HealthCheck>]);
+  for (const kind of HARNESS_KINDS) reads.push(() => dependencies.provider(kind));
+  for (const read of reads) {
     const health = await read();
-    checks.push({ status: health.status === "healthy" ? "PASS" : health.id === "herdr-readiness" ? "WARN" : "FAIL", name: health.label, detail: health.summary });
+    checks.push({
+      status: health.status === "healthy" ? "PASS" : isOwnedHealthCheck(health.id) || isRequiredHealthCheck(health.id) ? "FAIL" : "WARN",
+      name: health.label,
+      detail: health.summary + (health.remedy ? ` (${health.remedy})` : ""),
+    });
   }
   const store = new TaskControlStore(database);
   const taskIds = database.authQuery(db => z.array(z.object({ id: z.string() })).parse(db.prepare("SELECT id FROM forge_tasks WHERE archived_at IS NULL").all()));

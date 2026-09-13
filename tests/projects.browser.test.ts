@@ -65,7 +65,6 @@ test("projects desktop flow creates a project and opens its configuration", asyn
   const app = createApp({ config, auth, projects, profiles: new AgentProfileService(database, auth), health: {
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
     artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
-    opencode: async () => ({ id: "opencode", label: "OpenCode", status: "healthy", summary: "Ready", details: {} }),
     ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
   } });
   await app.listen({ host: "127.0.0.1", port: 0 });

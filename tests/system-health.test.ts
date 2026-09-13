@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 
 import { getSystemHealthLevel } from "../src/frontend/components/app/system-health.js";
+import { REQUIRED_HEALTH_CHECK_IDS } from "../src/platform/health-contract.js";
 import type { HealthSnapshot } from "../src/platform/health.js";
 
 const snapshot: HealthSnapshot = {
@@ -16,4 +17,20 @@ const snapshot: HealthSnapshot = {
 test("backup verification does not degrade the rolled-up health level", () => {
   expect(getSystemHealthLevel(snapshot, "current")).toBe("green");
   expect(getSystemHealthLevel({ ...snapshot, checks: [...snapshot.checks, { id: "gh-auth", label: "GitHub CLI authentication", status: "unhealthy", summary: "Unavailable", details: {} }] }, "current")).toBe("amber");
+});
+
+test("a necessary tool failure makes system health red without changing owned readiness", () => {
+  for (const id of REQUIRED_HEALTH_CHECK_IDS) {
+    const unhealthy: HealthSnapshot = { ...snapshot, checks: [...snapshot.checks, { id, label: id, status: "unhealthy", summary: "Not available", details: {} }] };
+    expect(unhealthy.ready).toBe(true);
+    expect(getSystemHealthLevel(unhealthy, "current")).toBe("red");
+    expect(getSystemHealthLevel(unhealthy, "stale")).toBe("red");
+  }
+});
+
+test("provider failures never turn system health red", () => {
+  for (const [id, provider] of [["provider:opencode", "opencode"], ["provider:claude-code", "claude-code"]] as const) {
+    const unhealthy: HealthSnapshot = { ...snapshot, checks: [...snapshot.checks, { id, label: id, status: "unhealthy", summary: "Not signed in", details: {}, provider }] };
+    expect(getSystemHealthLevel(unhealthy, "current")).toBe("amber");
+  }
 });

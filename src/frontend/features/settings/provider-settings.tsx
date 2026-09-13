@@ -35,7 +35,7 @@ export function ProviderSettingsView(): ReactElement {
     <SettingsContent>
     <div className="mb-4 space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-      <h2 className="text-sm font-semibold">OpenCode and Claude Code on the Forge host</h2>
+      <h2 className="text-sm font-semibold">OpenCode, Claude Code, and Devin CLI on the Forge host</h2>
       <Button size="sm" variant="outline" disabled={view.status === "loading"} onClick={() => void load()}>Check configuration</Button>
       </div>
       <div className="space-y-1 text-xs text-muted-foreground">

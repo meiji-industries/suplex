@@ -150,7 +150,7 @@ export function AdminView(): ReactElement {
               ).catch(() => {
                 if (signal?.aborted) return { models: [] };
                 setError(
-                  "Forge cannot read the model configuration. Check OpenCode or Claude Code on the Forge host.",
+                   "Forge cannot read the model configuration. Check OpenCode, Claude Code, or Devin CLI on the Forge host.",
                 );
                 return { models: [] };
               })

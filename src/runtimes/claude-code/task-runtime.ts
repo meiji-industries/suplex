@@ -1,65 +1,27 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-import { z } from "zod";
 import { claudeAssistantText, claudeConfigDirectory, claudeExecution, claudeMessageEntries, ClaudeStreamInitSchema, ClaudeStreamResultSchema, claudeUnsettledToolIds, findClaudeTranscript, parseJsonLines, type ClaudeStreamResult } from "./transcript.js";
 import { resolveClaudeExecutable } from "../../platform/executable-resolver.js";
-import { compareProcessIdentity, inspectProcessOnce, stopOwnedProcesses, taskProcessEnvironment, sessionProcessEnvironment, executionProcessEnvironment, stopSessionProcesses, stopExecutionProcesses, type OwnedProcess } from "../../platform/process-manager.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
 import { shellQuote, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
 import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
 import { taskRolePrompt } from "../../tasks/execution/role-prompt.js";
-import { createGitCommandGuard, withWorktreeMiseTrust, type GitCommandGuard } from "../../coordination/worker-environment.js";
+import { createGitCommandGuard, type GitCommandGuard } from "../../coordination/worker-environment.js";
+import { dispatchHeadless, headlessObservationPrelude, headlessSessionBusy, headlessTurnFiles, headlessTurnRunning, readHeadlessText, readHeadlessTurnRecord, recoverHeadlessDispatch, stopHeadlessSession, type HeadlessTurnRecord } from "../headless/turn-process.js";
 
 // Claude Code has no server. Each prompt runs as one detached headless
 // `claude -p --resume` process whose stream-json output is the turn record;
 // the transcript Claude Code keeps under its config directory is the session.
 // The Herdr display is `claude --resume` on that same transcript.
 
-export const ClaudeTurnRecordSchema = z.object({
-  generation: z.string().uuid(),
-  turnId: z.string().min(1),
-  sessionID: z.string().min(1),
-  pid: z.number().int().positive(),
-  processIdentity: z.object({
-    command: z.string().min(1),
-    executable: z.string().min(1),
-    argv: z.array(z.string()),
-    processGroup: z.number().int().positive(),
-    startTime: z.string().min(1),
-    ownerUid: z.number().int().nonnegative(),
-  }).strict(),
-}).strict();
-export type ClaudeTurnRecord = z.infer<typeof ClaudeTurnRecordSchema>;
-
-function ownedTurn(record: ClaudeTurnRecord): OwnedProcess {
-  return { ...record.processIdentity, pid: record.pid, name: `claude-${record.generation}`, startedAt: record.processIdentity.startTime };
-}
-
-async function readJsonFile<T>(path: string, schema: { parse(input: unknown): T }): Promise<T | null> {
-  try { return schema.parse(JSON.parse(await readFile(path, "utf8"))); }
-  catch (error) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return null; throw error; }
-}
-
-async function readTextFile(path: string): Promise<string | null> {
-  try { return await readFile(path, "utf8"); }
-  catch (error) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return null; throw error; }
-}
-
-export async function readClaudeTurnRecord(path: string): Promise<ClaudeTurnRecord | null> {
-  return readJsonFile(path, ClaudeTurnRecordSchema);
-}
-
-export async function claudeTurnRunning(record: ClaudeTurnRecord): Promise<boolean> {
-  return compareProcessIdentity(ownedTurn(record), await inspectProcessOnce(record.pid)).kind === "exact_match";
-}
+export type ClaudeTurnRecord = HeadlessTurnRecord;
+export const readClaudeTurnRecord = readHeadlessTurnRecord;
+export const claudeTurnRunning = headlessTurnRunning;
 
 /** True while the latest dispatched turn of this session runtime is still executing. */
 export async function claudeSessionBusy(runtimeDirectory: string): Promise<boolean> {
-  const record = await readClaudeTurnRecord(join(runtimeDirectory, "turn.json"));
-  return record !== null && await claudeTurnRunning(record);
+  return headlessSessionBusy(runtimeDirectory);
 }
 
 export function claudeDisplayAttached(executable: string, sessionID: string | null, args: readonly string[]): boolean {
@@ -87,18 +49,6 @@ function streamResult(values: readonly unknown[]): ClaudeStreamResult | undefine
   return values.flatMap(value => { const parsed = ClaudeStreamResultSchema.safeParse(value); return parsed.success ? [parsed.data] : []; }).at(-1);
 }
 
-function turnFiles(runtimeDirectory: string, turnId: string) {
-  return { prompt: join(runtimeDirectory, `turn-${turnId}.prompt`), log: join(runtimeDirectory, `turn-${turnId}.jsonl`), stderr: join(runtimeDirectory, `turn-${turnId}.stderr.log`) };
-}
-
-async function waitForIdentity(pid: number) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const inspection = await inspectProcessOnce(pid);
-    if (inspection) return inspection;
-    await delay(50);
-  }
-  return undefined;
-}
 
 export class ClaudeCodeTaskRuntime implements TaskHarness {
   constructor(private readonly databasePath: string, private readonly herdr: TaskPanePort, private readonly options: { executable?: string; artifactRoot?: string; configDirectory?: string } = {}) {}
@@ -146,24 +96,10 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
     return attachTaskDisplay(this.herdr, { ...input, generation: input.nativeSessionId, isAttached: args => claudeDisplayAttached(executable, input.nativeSessionId, args), command });
   }
 
-  private async record(scope: TaskScope, intent: PromptIntent, attempt?: PromptDispatchAttempt | null): Promise<ClaudeTurnRecord | null> {
-    const runtimeDirectory = this.runtimeDirectory(scope);
-    const fenced = attempt ? await readClaudeTurnRecord(join(runtimeDirectory, `dispatch-${attempt.serverGeneration}.json`)) : null;
-    const latest = fenced ?? await readClaudeTurnRecord(join(runtimeDirectory, "turn.json"));
-    return latest?.turnId === intent.messageID ? latest : null;
-  }
-
   async observe(scope: TaskScope, intent: PromptIntent, attempt?: PromptDispatchAttempt | null): Promise<PromptObservation> {
-    const files = turnFiles(this.runtimeDirectory(scope), intent.messageID);
-    const record = await this.record(scope, intent, attempt);
-    const log = await readTextFile(files.log);
-    const base = { sessionID: intent.sessionID, messageID: intent.messageID, assistantMessageIDs: [] as string[] };
-    if (!record) {
-      const replayable = intent.dispatch === "not_submitted" || intent.dispatch === "rejected";
-      if (log === null) return { ...base, state: "unknown", admission: "not_observed", retry: replayable ? "allowed" : "forbidden", reason: replayable ? "message_not_observed" : "admission_ambiguous" };
-      return { ...base, state: "unknown", admission: "unknown", retry: "forbidden", reason: "dispatch_identity_missing", executionUncertain: { stoppedServerGeneration: attempt?.serverGeneration ?? "unknown" } };
-    }
-    if (record.sessionID !== intent.sessionID) return { ...base, state: "unknown", admission: "unknown", retry: "forbidden", reason: "session_identity_conflict" };
+    const prelude = await headlessObservationPrelude({ runtimeDirectory: this.runtimeDirectory(scope), intent, attempt });
+    if (prelude.early) return prelude.early;
+    const { log, record, base } = prelude;
     const values = parseJsonLines(log ?? "");
     const entries = claudeMessageEntries(values);
     const init = values.map(value => ClaudeStreamInitSchema.safeParse(value)).find(parsed => parsed.success)?.data;
@@ -187,66 +123,36 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
 
   async dispatch(scope: TaskScope, intent: PromptIntent, claim: (serverGeneration: string) => Promise<boolean>): Promise<PromptObservation> {
     const runtimeDirectory = this.runtimeDirectory(scope);
-    await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
     const before = await this.observe(scope, intent);
     if (before.retry !== "allowed") throw new Error("Claude Code prompt was not proven absent; replay is blocked");
     const executable = await this.executable();
     const resume = await this.transcript(intent.sessionID) !== null;
     const guard = await this.guard(scope);
-    const generation = randomUUID();
-    if (!await claim(generation)) throw new Error("Claude Code prompt replay claim was not acquired");
-    const files = turnFiles(runtimeDirectory, intent.messageID);
-    await writeFile(files.prompt, intent.prompt, { mode: 0o600 });
-    const [promptFile, log, stderr] = await Promise.all([open(files.prompt, "r"), open(files.log, "a", 0o600), open(files.stderr, "a", 0o600)]);
     const args = claudeArguments({ scope, sessionID: intent.sessionID, resume, print: true, runtimeDirectory });
-    let exited = false;
-    let child: ChildProcess;
-    try {
-      child = spawn(executable, args, { cwd: scope.directory, env: { ...withWorktreeMiseTrust(guard?.env ?? process.env, scope.directory), ...taskProcessEnvironment(scope.directory), ...sessionProcessEnvironment(runtimeDirectory), ...executionProcessEnvironment(runtimeDirectory, generation) }, detached: true, stdio: [promptFile.fd, log.fd, stderr.fd] });
-      child.once("exit", () => { exited = true; });
-      await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
-    } finally { await Promise.all([promptFile.close(), log.close(), stderr.close()]); }
-    if (!child.pid) throw new Error("Claude Code did not start");
-    child.unref();
-    const inspection = exited ? undefined : await waitForIdentity(child.pid);
-    if (inspection && (inspection.ownerUid === undefined || inspection.processGroup !== child.pid)) throw new Error("Claude Code process identity could not be established");
-    // A process that exited before inspection keeps a synthetic identity that no live pid can match.
-    const processIdentity = inspection
-      ? { command: inspection.command, executable: inspection.executable, argv: inspection.argv, processGroup: inspection.processGroup, startTime: inspection.startTime, ownerUid: inspection.ownerUid! }
-      : { command: executable, executable, argv: [executable, ...args], processGroup: child.pid, startTime: "exited-before-inspection", ownerUid: process.getuid?.() ?? 0 };
-    const record: ClaudeTurnRecord = { generation, turnId: intent.messageID, sessionID: intent.sessionID, pid: child.pid, processIdentity };
-    const pending = join(runtimeDirectory, `dispatch-${generation}.json.pending`);
-    await writeFile(pending, JSON.stringify(record), { mode: 0o600 });
-    await rename(pending, join(runtimeDirectory, `dispatch-${generation}.json`));
-    await writeFile(join(runtimeDirectory, "turn.json"), JSON.stringify(record), { mode: 0o600 });
-    return this.observe(scope, { ...intent, dispatch: "ambiguous" }, { serverGeneration: generation, claimedAt: new Date().toISOString() });
+    const record = await dispatchHeadless({ runtimeDirectory, scope, intent, executable, args, prompt: intent.prompt, environment: guard?.env, claim, label: "Claude Code" });
+    return this.observe(scope, { ...intent, dispatch: "ambiguous" }, { serverGeneration: record.generation, claimedAt: new Date().toISOString() });
   }
 
   async recoverDispatch(scope: TaskScope, intent: PromptIntent, attempt: PromptDispatchAttempt): Promise<PromptObservation> {
     PromptDispatchAttemptSchema.parse(attempt);
-    const record = await readClaudeTurnRecord(join(this.runtimeDirectory(scope), `dispatch-${attempt.serverGeneration}.json`));
-    if (record && await claudeTurnRunning(record)) await stopOwnedProcesses({ version: 1, processes: [ownedTurn(record)] });
-    await stopExecutionProcesses(this.runtimeDirectory(scope), attempt.serverGeneration);
+    await recoverHeadlessDispatch({ runtimeDirectory: this.runtimeDirectory(scope), attempt });
     return this.observe(scope, { ...intent, dispatch: "not_submitted" }, attempt);
   }
 
   async stop(scope: Pick<TaskScope, "id">, nativeSessionId: string | null): Promise<void> {
-    const record = await readClaudeTurnRecord(join(this.runtimeDirectory(scope), "turn.json"));
-    if (record && nativeSessionId !== null && record.sessionID !== nativeSessionId) return;
-    if (record && await claudeTurnRunning(record)) await stopOwnedProcesses({ version: 1, processes: [ownedTurn(record)] });
-    await stopSessionProcesses(this.runtimeDirectory(scope));
+    await stopHeadlessSession({ runtimeDirectory: this.runtimeDirectory(scope), nativeSessionId });
   }
 
   async resultText(scope: TaskScope, observation: PromptObservation): Promise<string> {
-    const files = turnFiles(this.runtimeDirectory(scope), observation.messageID);
-    const values = parseJsonLines(await readTextFile(files.log) ?? "");
+    const files = headlessTurnFiles(this.runtimeDirectory(scope), observation.messageID);
+    const values = parseJsonLines(await readHeadlessText(files.log) ?? "");
     const text = streamResult(values)?.result ?? claudeAssistantText(claudeMessageEntries(values));
-    return text || (await readTextFile(files.stderr) ?? "").trim().slice(-2_000);
+    return text || (await readHeadlessText(files.stderr) ?? "").trim().slice(-2_000);
   }
 
   async turnEvidence(scope: TaskScope, observation: PromptObservation): ReturnType<TaskHarness["turnEvidence"]> {
     try {
-      const log = await readTextFile(turnFiles(this.runtimeDirectory(scope), observation.messageID).log);
+      const log = await readHeadlessText(headlessTurnFiles(this.runtimeDirectory(scope), observation.messageID).log);
       if (log === null) throw new Error("The native turn log is missing");
       return { tools: claudeExecution(claudeMessageEntries(parseJsonLines(log))).tools, limit: null };
     } catch (error) {

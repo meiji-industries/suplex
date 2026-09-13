@@ -4,7 +4,7 @@
 [![Node](https://img.shields.io/badge/node-26.7.0-brightgreen)](package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-11.22.0-orange)](package.json)
 
-Forge runs repository tasks through OpenCode, Git, and GitHub. One continuing
+Forge runs repository tasks through OpenCode, Claude Code, Devin CLI, Git, and GitHub. One continuing
 Root session plans and reviews the work. A scoped Worker edits, verifies, and
 commits in the task worktree. Herdr displays those native sessions.
 

@@ -42,8 +42,9 @@ export interface TaskHarness {
   stop(scope: Pick<TaskScope, "id">, nativeSessionId: string | null): Promise<void>;
 }
 
-export type HarnessKind = "opencode" | "claude-code";
+export type HarnessKind = "opencode" | "claude-code" | "devin";
 export const CLAUDE_CODE_PROVIDER = "claude-code";
+export const DEVIN_PROVIDER = "devin";
 // ponytail: static alias list; Claude Code has no model listing command.
 export const CLAUDE_CODE_MODELS = [
   { id: "fable", label: "Fable (latest)" },
@@ -55,15 +56,17 @@ export const CLAUDE_CODE_MODELS = [
   { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
   { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
 ];
+// Devin resolves current family aliases. Its installed-model command is account scoped.
+export const DEVIN_MODELS = [{ id: "swe", label: "SWE (latest)" }, { id: "opus", label: "Opus (latest)" }, { id: "gpt", label: "GPT (latest)" }];
 
 export function profileHarness(providerID: string): HarnessKind {
-  return providerID === CLAUDE_CODE_PROVIDER ? "claude-code" : "opencode";
+  return providerID === CLAUDE_CODE_PROVIDER ? "claude-code" : providerID === DEVIN_PROVIDER ? "devin" : "opencode";
 }
 
-// ponytail: native ids are shaped differently (OpenCode "ses…", Claude Code a
-// UUID), so sessions carry no harness column. Add one if a third harness appears.
+// Forge reserves Devin identities with this prefix. Native IDs otherwise remain
+// backwards-compatible: OpenCode uses "ses…" and Claude Code uses UUIDs.
 export function sessionHarness(nativeSessionId: string): HarnessKind {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nativeSessionId) ? "claude-code" : "opencode";
+  return nativeSessionId.startsWith("devin-") ? "devin" : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nativeSessionId) ? "claude-code" : "opencode";
 }
 
 export function taskSessionRuntimeDirectory(databasePath: string, sessionId: string): string {
@@ -120,8 +123,8 @@ export async function writeAdvisorReportBridgeBinding(input: { runtimeDirectory:
 
 /** Routes each call to the harness selected by the task profile or the native session identity. */
 export class HarnessRouter implements TaskHarness {
-  constructor(private readonly harnesses: Record<HarnessKind, TaskHarness>) {}
-  private forScope(scope: Pick<TaskScope, "profile">): TaskHarness { return this.harnesses[profileHarness(scope.profile.providerID)]; }
+  constructor(private readonly harnesses: Partial<Record<HarnessKind, TaskHarness>>) {}
+  private forScope(scope: Pick<TaskScope, "profile">): TaskHarness { const harness = this.harnesses[profileHarness(scope.profile.providerID)]; if (!harness) throw new Error(`No task harness for ${scope.profile.providerID}`); return harness; }
   ensureSession(scope: TaskScope, nativeSessionId: string | null): Promise<string> { return this.forScope(scope).ensureSession(scope, nativeSessionId); }
   attach(input: Parameters<TaskHarness["attach"]>[0]): Promise<string> { return this.forScope(input.scope).attach(input); }
   observe(scope: TaskScope, intent: PromptIntent, attempt?: PromptDispatchAttempt | null): Promise<PromptObservation> { return this.forScope(scope).observe(scope, intent, attempt); }
@@ -130,7 +133,9 @@ export class HarnessRouter implements TaskHarness {
   resultText(scope: TaskScope, observation: PromptObservation): Promise<string> { return this.forScope(scope).resultText(scope, observation); }
   turnEvidence(scope: TaskScope, observation: PromptObservation): ReturnType<TaskHarness["turnEvidence"]> { return this.forScope(scope).turnEvidence(scope, observation); }
   stop(scope: Pick<TaskScope, "id">, nativeSessionId: string | null): Promise<void> {
-    return this.harnesses[nativeSessionId ? sessionHarness(nativeSessionId) : "opencode"].stop(scope, nativeSessionId);
+    const harness = this.harnesses[nativeSessionId ? sessionHarness(nativeSessionId) : "opencode"];
+    if (!harness) throw new Error("No task harness for session");
+    return harness.stop(scope, nativeSessionId);
   }
 }
 

@@ -86,7 +86,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     database.close();
     throw error;
   }
-  const history = new AnalyticsHistoryReader(join(dirname(config.databasePath), "runtime", "analytics"));
+  const history = new AnalyticsHistoryReader(config.databasePath, join(dirname(config.databasePath), "runtime", "analytics"));
   const analytics = new TaskAnalyticsCollector(tasks.repository, new TaskAnalyticsStore(database), (session, pricing) => history.read(session, pricing), error => app.log.warn({ err: error }, "Analytics observation failed"), () => history.readPricing());
   const triggerPoller = new GithubTriggerPoller(() => githubTriggers.processEnabledRules(), error => app.log.warn({ err: error }, "GitHub trigger poll failed"));
   app.addHook("onReady", async () => { triggerPoller.start(); });

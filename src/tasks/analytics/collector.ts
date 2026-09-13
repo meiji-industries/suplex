@@ -5,6 +5,7 @@ import { resolveOpenCodeExecutable } from "../../platform/executable-resolver.js
 import { ensureOpenCodeServer, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer } from "../../runtimes/opencode/server.js";
 import type { TaskSession } from "../control.js";
 import { sessionHarness } from "../../runtimes/task-harness.js";
+import { DevinSessionReader } from "../../runtimes/devin/session-reader.js";
 import type { TaskRepository } from "../repository.js";
 import type { TaskAnalyticsStore } from "./store.js";
 import { taskUsage, type TaskUsage } from "../usage.js";
@@ -68,11 +69,12 @@ export class TaskAnalyticsCollector {
 
 /** Reads shared native history: the OpenCode server here never prompts or resumes a session, and Claude Code transcripts are read as files. */
 export class AnalyticsHistoryReader {
-  constructor(private readonly directory: string, private readonly pricing: ModelPricingReader = new ModelsDevCatalogReader()) {}
-  async read(session: Pick<TaskSession, "nativeSessionId" | "kind">, pricing?: ModelPricingCatalog): Promise<TaskUsage[]> {
+  constructor(private readonly databasePath: string, private readonly directory: string, private readonly pricing: ModelPricingReader = new ModelsDevCatalogReader()) {}
+  async read(session: Pick<TaskSession, "id" | "nativeSessionId" | "kind">, pricing?: ModelPricingCatalog): Promise<TaskUsage[]> {
     const sessionId = session.nativeSessionId;
     if (!sessionId) throw new Error("Session is not available");
     if (sessionHarness(sessionId) === "claude-code") return claudeUsage(await readClaudeTranscript(sessionId, claudeConfigDirectory()), sessionId, session.kind, pricing);
+    if (sessionHarness(sessionId) === "devin") return (await new DevinSessionReader(this.databasePath).timeline(session, pricing)).usage;
     const server = await ensureOpenCodeServer({ runtimeDirectory: this.directory, executable: await resolveOpenCodeExecutable(), directory: process.cwd(), config: {} });
     return taskUsage(await openCodeServerClient(server).getMessages(sessionId), session.kind, pricing);
   }

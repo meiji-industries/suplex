@@ -3,6 +3,7 @@ import { cleanupRootControllerFixtures, fixture } from "./helpers/root-controlle
 import { ForgeDatabase } from "../src/platform/database.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
 import { RootController } from "../src/coordination/root-controller.js";
+import { RootBridge } from "../src/coordination/root-bridge.js";
 import { join } from "node:path";
 
 afterEach(cleanupRootControllerFixtures);
@@ -78,6 +79,20 @@ test("a profile change preserves the outgoing profile and repeated replacement h
   expect(prompt.match(/Fresh Worker handoff:/g)).toHaveLength(1);
   expect(f.store.workerReplacementReady(next.id)).toBe(false);
   expect(f.store.sessions("task")).toHaveLength(4);
+});
+
+test("a Coordinator-initiated replacement keeps the previous Worker profile", async () => {
+  const f = await assigned();
+  f.database.authTransaction(db => db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('switched', 'Switched', 'worker', 'switched', 'claude-code', 'claude-model', 'high', 'default', ?, ?)").run(new Date().toISOString(), new Date().toISOString()));
+  const switched = f.store.replaceWorker("task", { sessionId: f.old.id, workerProfileId: "switched", reason: "Human chose another agent" });
+  expect(switched.profile).toMatchObject({ profileId: "switched", provider: "claude-code" });
+  const configured = f.store.get("task").workerProfile;
+  const bridge = new RootBridge(f.identity(), f.controller);
+  await bridge.call({ kind: "replace_worker", sessionId: switched.id, reason: "Repeated partial returns", handoff: "Finish the behavior" });
+  const worker = f.store.currentSession("task", "worker")!;
+  expect(worker.id).not.toBe(switched.id);
+  expect(worker.profile).toEqual(switched.profile);
+  expect(f.store.get("task").workerProfile).toEqual(configured);
 });
 
 test("replacement of a previously stopped Worker requests a new native inspection", async () => {

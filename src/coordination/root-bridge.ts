@@ -73,7 +73,7 @@ export class RootBridge {
       case "read_worker_evidence":
         return this.adapter.readWorkerEvidence(this.root, { turnId: tool.turnId, toolId: tool.toolId, field: tool.field, position: tool.position, cursor: tool.cursor, maxCharacters: tool.maxCharacters });
       case "replace_worker":
-        return this.adapter.replaceWorker(this.root, { sessionId: tool.sessionId, reason: tool.reason, handoff: tool.handoff, workerProfileId: tool.workerProfileId });
+        return this.adapter.replaceWorker(this.root, { sessionId: tool.sessionId, reason: tool.reason, handoff: tool.handoff });
       case "delegate_worker":
         return this.adapter.delegateWorker(this.root, { plan: tool.plan, acceptanceCriteria: tool.acceptanceCriteria, instruction: tool.instruction, mode: tool.mode, purpose: tool.purpose, advisorTurnId: tool.advisorTurnId, candidateTurnIds: tool.candidateTurnIds, advisorSessionId: tool.advisorSessionId, candidateSessionIds: tool.candidateSessionIds });
       case "delegate_advisor":

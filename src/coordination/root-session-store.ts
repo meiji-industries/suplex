@@ -521,7 +521,6 @@ export class TaskControlStore {
   }
   replaceWorker(taskId: string, request: WorkerReplacementRequest): TaskSession { return replaceWorker(this.database, taskId, WorkerReplacementRequestSchema.parse(request)); }
   workerReplacementReady(sessionId: string): boolean { return workerReplacementReady(this.database, sessionId); }
-  workerProfiles(): TaskProfile[] { return this.database.authQuery(db => TaskProfileSchema.array().parse(db.prepare("SELECT id AS profileId, provider, model, reasoning_level AS reasoningLevel, service_tier AS serviceTier FROM forge_profiles WHERE role = 'worker' AND archived_at IS NULL ORDER BY name").all())); }
 
   cancel(taskId: string): void {
     this.database.authTransaction((db) => {

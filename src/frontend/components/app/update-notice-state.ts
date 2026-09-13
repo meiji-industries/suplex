@@ -35,9 +35,9 @@ function operationIsPending(status: UpdateOperationStatus["status"]): boolean {
 }
 
 function operationProgress(operation: UpdateOperationStatus): string {
-  if (operation.status === "preparing") return "Forge prepares the update.";
-  if (operation.status === "restarting") return "Forge restarts.";
-  return "Forge starts the update.";
+  if (operation.status === "preparing") return "Preparing the update…";
+  if (operation.status === "restarting") return "Restarting…";
+  return "Starting the update…";
 }
 
 export function readUpdateNoticeMemory(storage: UpdateNoticeStorage, userId: string): UpdateNoticeMemory {

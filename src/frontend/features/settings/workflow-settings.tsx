@@ -192,7 +192,7 @@ export function WorkflowSettingsView(): ReactElement {
             </FieldSet>
             <DialogFooter>
               <DialogClose disabled={busy} render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose>
-              {editor.kind === "edit" ? <Button type="submit" size="sm" disabled={busy}>{busy ? "Forge saves" : "Save workflow"}</Button> : <NewButton type="submit" disabled={busy}>{busy ? "Forge saves" : "New workflow"}</NewButton>}
+              {editor.kind === "edit" ? <Button type="submit" size="sm" disabled={busy}>{busy ? "Saving…" : "Save workflow"}</Button> : <NewButton type="submit" disabled={busy}>{busy ? "Creating…" : "New workflow"}</NewButton>}
             </DialogFooter>
           </FieldGroup>
         </form> : null}

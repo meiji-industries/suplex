@@ -118,7 +118,7 @@ export function SessionHistory({ taskId, sessionId, assistantLabel, poll }: { ta
     }}>
       {olderCursor ? <div className="mb-3 flex justify-center"><Button size="xs" variant="outline" disabled={reading} onClick={() => void read(olderCursor, "earlier")}>Open earlier messages</Button></div> : null}
       {!messages.length && !reading && !error ? <p className="text-xs text-muted-foreground">No messages yet.</p> : null}
-      {!messages.length && reading ? <p className="text-xs text-muted-foreground" aria-busy="true">Forge reads the session history.</p> : null}
+      {!messages.length && reading ? <p className="text-xs text-muted-foreground" aria-busy="true">Loading session history…</p> : null}
       <div className="grid gap-4">{messages.map(message => <article key={message.id} data-native-message-id={message.id} className="min-w-0 border-b pb-4 last:border-b-0">
         <header className="mb-2 flex items-center gap-2 text-xs"><span className="font-medium">{message.role === "user" ? "Instruction" : assistantLabel}</span>{message.createdAt !== null ? <time className="text-muted-foreground" dateTime={new Date(message.createdAt).toISOString()}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time> : null}</header>
         <div className="grid min-w-0 gap-2">{message.content.map(part => part.type === "text"

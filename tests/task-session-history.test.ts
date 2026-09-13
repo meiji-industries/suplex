@@ -1,6 +1,9 @@
+import { mkdir, utimes, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import * as commands from "../src/platform/command-runner.js";
 import * as executables from "../src/platform/executable-resolver.js";
+import { taskSessionRuntimeDirectory } from "../src/runtimes/task-harness.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -53,6 +56,25 @@ test("task history distinguishes an invalid cursor from an unavailable native re
     const unavailable = await value.app.inject({ url: `/api/tasks/${task.id}/sessions/${session.id}/history`, headers: value.headers });
     expect(unavailable.statusCode).toBe(503);
     expect(unavailable.json()).toEqual({ error: "Session history is not available" });
+  } finally { await value.close(); }
+});
+
+test("task history serves Devin turn logs whose file mtimes carry sub-millisecond precision", async () => {
+  const value = await nativeApp();
+  try {
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Devin history", description: "Read history", startImmediately: true, idempotencyKey: "devin-history" });
+    const store = value.tasks.repository.controls;
+    const reserved = store.claimRoot({ taskId: task.id });
+    const session = store.bindHarnessSession({ sessionId: reserved.id, generation: reserved.generation, nativeSessionId: "devin-71618050-0d31-428e-a547-d6c4a2eca88f" });
+    const directory = taskSessionRuntimeDirectory(value.config.databasePath, session.id);
+    await mkdir(directory, { recursive: true });
+    const turn = join(directory, "turn-msg_devin.jsonl");
+    await writeFile(turn, "Reviewed the change.\n");
+    await utimes(turn, 1_700_000_000.0005, 1_700_000_000.0005);
+
+    const response = await value.app.inject({ url: `/api/tasks/${task.id}/sessions/${session.id}/history`, headers: value.headers });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ messages: [{ id: "msg_devin", role: "assistant", createdAt: 1_700_000_000_000, content: [{ id: "msg_devin:text", type: "text", text: "Reviewed the change." }] }], olderCursor: null });
   } finally { await value.close(); }
 });
 

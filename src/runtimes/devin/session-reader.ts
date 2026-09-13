@@ -25,7 +25,7 @@ export class DevinSessionReader implements NativeSessionReader {
     return Promise.all(names.filter(name => /^turn-[A-Za-z0-9._:-]+\.jsonl$/.test(name)).map(async name => ({
       id: name.slice(5, -6),
       text: devinResultText(await readFile(join(directory, name), "utf8")),
-      updatedAt: (await stat(join(directory, name))).mtimeMs,
+      updatedAt: Math.trunc((await stat(join(directory, name))).mtimeMs),
     })));
   }
 

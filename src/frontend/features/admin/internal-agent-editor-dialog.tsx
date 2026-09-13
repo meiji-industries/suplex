@@ -61,7 +61,7 @@ export function InternalAgentDialog({
   agentReasoning: string;
   agentPriority: string;
   models: ApiModel[];
-  providerOptions: [string, string][];
+  providerOptions: { id: string; label: string; status: ApiModel["providerStatus"] }[];
   onOpenChange: (open: boolean) => void;
   onAgentNameChange: (value: string) => void;
   onAgentRoleChange: (value: "root" | "worker") => void;
@@ -173,9 +173,9 @@ export function InternalAgentDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {providerOptions.map(([id, label]) => (
-                    <SelectItem key={id} value={id}>
-                      {label}
+                  {providerOptions.map(({ id, label, status }) => (
+                    <SelectItem key={id} value={id} disabled={status === "missing"}>
+                      {status === "missing" ? `${label} (Missing)` : label}
                     </SelectItem>
                   ))}
                 </SelectContent>

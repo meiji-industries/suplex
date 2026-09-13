@@ -48,6 +48,7 @@ async function fixture(): Promise<Fixture> {
     directory: root, observedAt: new Date().toISOString(), providers: [
       { id: "openai", label: "OpenAI", status: "configured", modelCount: 1, models: [{ id: "shared-model", label: "OpenAI model" }] },
       { id: "opencode", label: "OpenCode Zen", status: "configured", modelCount: 1, models: [{ id: "shared-model", label: "Zen model" }] },
+      { id: "devin", label: "Devin CLI", status: "missing", modelCount: 1, models: [{ id: "swe-2", label: "SWE-2" }] },
     ],
   }) });
   const company = auth.createCompany("admin-1", "Acme");
@@ -122,8 +123,9 @@ test("reads provider-qualified models from OpenCode without a Forge catalog gate
   const value = await fixture();
   try {
     expect(await value.projects.listModels(value.adminId)).toEqual([
-      { id: "shared-model", provider: "openai", providerLabel: "OpenAI", displayName: "OpenAI model" },
-      { id: "shared-model", provider: "opencode", providerLabel: "OpenCode Zen", displayName: "Zen model" },
+      { id: "shared-model", provider: "openai", providerLabel: "OpenAI", providerStatus: "configured", displayName: "OpenAI model" },
+      { id: "shared-model", provider: "opencode", providerLabel: "OpenCode Zen", providerStatus: "configured", displayName: "Zen model" },
+      { id: "swe-2", provider: "devin", providerLabel: "Devin CLI", providerStatus: "missing", displayName: "SWE-2" },
     ]);
   } finally {
     await close(value);

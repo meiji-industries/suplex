@@ -17,6 +17,8 @@ was recorded, so the contract below is from Cognition's published reference.
 Forge resolves `devin` on `PATH`, then `~/.local/bin/devin` or
 `~/.devin/bin/devin`. `FORGE_DEVIN_COMMAND` pins an absolute executable path.
 The install command is `curl -fsSL https://cli.devin.ai/install.sh | bash`.
+Forge lists Devin CLI in its provider catalog before it is installed and reports
+whether the executable is available on the host.
 
 The first Worker turn uses the documented headless invocation:
 

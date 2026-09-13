@@ -56,8 +56,8 @@ export const CLAUDE_CODE_MODELS = [
   { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
   { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
 ];
-// Devin resolves current family aliases. Its installed-model command is account scoped.
-export const DEVIN_MODELS = [{ id: "swe", label: "SWE (latest)" }, { id: "opus", label: "Opus (latest)" }, { id: "gpt", label: "GPT (latest)" }];
+// Devin's documented aliases resolve current model families; its model listing is account scoped.
+export const DEVIN_MODELS = [{ id: "swe", label: "SWE (latest)" }, { id: "swe-2", label: "SWE-2" }, { id: "opus", label: "Opus (latest)" }, { id: "gpt", label: "GPT (latest)" }];
 
 export function profileHarness(providerID: string): HarnessKind {
   return providerID === CLAUDE_CODE_PROVIDER ? "claude-code" : providerID === DEVIN_PROVIDER ? "devin" : "opencode";

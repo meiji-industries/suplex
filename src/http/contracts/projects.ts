@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AgentProfileInputSchema, AgentProfilePatchSchema, AgentProfileSchema } from "../../profiles/agent-profile-contracts.js";
+import { ProviderSummarySchema } from "./providers.js";
 import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";
 
 const profileId = z.string().min(1).max(256);
@@ -45,7 +46,7 @@ export const ProfilePatchBodySchema = AgentProfilePatchSchema;
 export const ProfileListQuerySchema = z.object({ includeArchived: z.literal("true").optional() }).strict();
 export const ProfileResponseSchema = AgentProfileSchema.strip();
 export const ProfileListResponseSchema = z.object({ profiles: z.array(ProfileResponseSchema) });
-export const ModelResponseSchema = z.object({ id: z.string(), provider: z.string(), providerLabel: z.string(), displayName: z.string() });
+export const ModelResponseSchema = z.object({ id: z.string(), provider: z.string(), providerLabel: z.string(), providerStatus: ProviderSummarySchema.shape.status, displayName: z.string() });
 export const ModelListResponseSchema = z.object({ models: z.array(ModelResponseSchema) });
 export const TaskSourceQuerySchema = z.object({ kind: z.enum(["pull_request", "issue", "branch"]) });
 const PullRequestTaskSourceSchema = z.object({ kind: z.literal("pull_request"), number: z.number().int().positive(), url: z.string().url(), title: z.string(), body: z.string(), author: z.string(), headBranch: z.string(), baseBranch: z.string(), headSha: z.string(), updatedAt: z.string().optional(), isDraft: z.boolean() });

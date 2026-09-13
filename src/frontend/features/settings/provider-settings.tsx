@@ -44,10 +44,12 @@ export function ProviderSettingsView(): ReactElement {
       </div>
     </div>
     <SettingsDataTable label="Providers" columns={columns}>
-      <SettingsTableGroup label="Configured on the host" count={providers.length} columnCount={columns.length}>
+      <SettingsTableGroup label="Providers on the Forge host" count={providers.length} columnCount={columns.length}>
         {providers.map((provider) => <SettingsTableRow key={provider.id}>
           <SettingsTableCell>{provider.label}</SettingsTableCell>
-          <SettingsTableCell><Badge variant="secondary" aria-label={`${provider.label}: configured, not tested`}>Configured</Badge></SettingsTableCell>
+          <SettingsTableCell>{provider.status === "configured"
+            ? <Badge variant="secondary" aria-label={`${provider.label}: configured, not tested`}>Configured</Badge>
+            : <div className="space-y-1"><Badge variant="destructive" aria-label={`${provider.label}: not installed`}>Not installed</Badge><p className="text-xs text-muted-foreground">{provider.id === "devin" ? <>Run <code>curl -fsSL https://cli.devin.ai/install.sh | bash</code> or set <code>FORGE_DEVIN_COMMAND</code>.</> : <>Install it or set <code>FORGE_CLAUDE_COMMAND</code>.</>}</p></div>}</SettingsTableCell>
           <SettingsTableCell>{provider.modelCount}</SettingsTableCell>
           <SettingsTableCell>Not tested</SettingsTableCell>
         </SettingsTableRow>)}

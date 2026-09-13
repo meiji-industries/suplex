@@ -5,7 +5,7 @@ export const ProviderSummarySchema = z.object({
   label: z.string(),
   modelCount: z.number().int().nonnegative(),
   models: z.array(z.object({ id: z.string(), label: z.string() })),
-  status: z.literal("configured"),
+  status: z.enum(["configured", "missing"]),
 });
 export const ProviderListResponseSchema = z.object({
   directory: z.string(),

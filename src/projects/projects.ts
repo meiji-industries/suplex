@@ -30,6 +30,7 @@ export interface OpenCodeModelOption {
   id: string;
   provider: string;
   providerLabel: string;
+  providerStatus: "configured" | "missing";
   displayName: string;
 }
 
@@ -215,7 +216,7 @@ export class ProjectService {
   async listModels(actorUserId: string): Promise<OpenCodeModelOption[]> {
     this.user(actorUserId);
     const native = await this.readProviders();
-    return native.providers.flatMap((provider) => provider.models.map((model) => ({ id: model.id, provider: provider.id, providerLabel: provider.label, displayName: model.label })));
+    return native.providers.flatMap((provider) => provider.models.map((model) => ({ id: model.id, provider: provider.id, providerLabel: provider.label, providerStatus: provider.status, displayName: model.label })));
   }
 
   async getProjectRepositoryDefaults(actorUserId: string, projectId: string): Promise<{ setupCommand: string; verificationCommand: string }> {

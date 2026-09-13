@@ -36,11 +36,7 @@ export function AdminView(): ReactElement {
   const [hermesAgents, setHermesAgents] = useState<ApiHermesAgent[]>([]);
   const [companyProjects, setCompanyProjects] = useState<ApiProject[]>([]);
   const [models, setModels] = useState<ApiModel[]>([]);
-  const providerOptions = [
-    ...new Map(
-      models.map((model) => [model.provider, model.providerLabel]),
-    ).entries(),
-  ];
+  const providerOptions = [...new Map(models.map((model) => [model.provider, { id: model.provider, label: model.providerLabel, status: model.providerStatus }])).values()];
   const [displayName, setDisplayName] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [agentName, setAgentName] = useState("");

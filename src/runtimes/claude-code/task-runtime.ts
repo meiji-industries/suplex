@@ -40,7 +40,7 @@ export function claudeArguments(input: { scope: TaskScope; sessionID: string; re
     "--strict-mcp-config", "--mcp-config", scope.role !== "worker" ? join(input.runtimeDirectory, "mcp.json") : '{"mcpServers":{}}',
     ...(scope.role !== "worker" && scope.workflow !== "standard" && scope.evidenceRoot ? ["--add-dir", scope.evidenceRoot] : []),
     ...(scope.role !== "worker"
-      ? ["--tools", ROOT_TOOLS, "--allowedTools", scope.role === "root" ? "mcp__forge_root" : "mcp__forge_advisor__submit_report"]
+      ? ["--tools", ROOT_TOOLS, "--allowedTools", `${scope.role === "root" ? "mcp__forge_root" : "mcp__forge_advisor__submit_report"},WebFetch,WebSearch`]
       : ["--disallowedTools", "Agent,AskUserQuestion", "--dangerously-skip-permissions"]),
   ];
 }

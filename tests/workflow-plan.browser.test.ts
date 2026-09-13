@@ -20,6 +20,12 @@ test.each([1440, 900, 390])("workflow plans are prospective, connected, and inde
       await page.getByRole("heading", { name: `${workflow} workflow map`, level: 2, exact: true }).waitFor();
       const plan = page.locator(`[data-workflow-plan="${workflow}"]`);
       await plan.getByText("Workflow plan", { exact: true }).waitFor();
+      const planTrigger = plan.getByRole("button", { name: "Open or close the workflow plan" });
+      expect(await planTrigger.getAttribute("aria-expanded")).toBe("false");
+      await plan.getByRole("list", { name: /workflow stations/ }).waitFor({ state: "hidden" });
+      await planTrigger.click();
+      await plan.getByRole("list", { name: /workflow stations/ }).waitFor({ state: "visible" });
+      expect(await planTrigger.getAttribute("aria-expanded")).toBe("true");
        expect(await plan.getByRole("list", { name: /workflow stations/ }).getByRole("listitem").count()).toBeGreaterThan(2);
        expect(await plan.getByRole("list", { name: /workflow relationships/ }).getByRole("listitem").count()).toBeGreaterThan(2);
       expect(await plan.locator("svg path[data-workflow-edge]").count()).toBeGreaterThan(2);
@@ -74,13 +80,21 @@ test.each([1440, 900, 390])("workflow plans are prospective, connected, and inde
     for (const option of taskDeliveryTargetOptions) {
       const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: `${option.value} target map`, description: "Target fixture", idempotencyKey: `workflow-target-${option.value}-${width}`, startImmediately: false, workflow: "standard", deliveryTarget: option.value });
       await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
-      await page.locator('[data-workflow-plan="standard"]').getByText(option.label, { exact: true }).waitFor();
+      const targetPlan = page.locator('[data-workflow-plan="standard"]');
+      await targetPlan.getByRole("button", { name: "Open or close the workflow plan" }).click();
+      await targetPlan.getByText(option.label, { exact: true }).waitFor();
     }
     const standard = value.tasks.listTasks(value.userId).find(task => task.title === "standard workflow map")!;
     await page.route(`**/api/tasks/${standard.id}/execution`, route => route.fulfill({ json: { sessions: [{ id: "root", role: "root", generation: 1, available: true, limited: false, plan: [{ content: "Coordinator plan remains separate", status: "pending" }], tools: [] }] } }));
     await page.goto(`${value.base}/tasks/${standard.id}?company=${value.company.id}`);
      const trigger = page.getByRole("button", { name: "Open or close the workflow plan", exact: true });
+     await trigger.waitFor();
+     expect(await trigger.getAttribute("aria-expanded")).toBe("false");
+     await page.getByRole("list", { name: "Standard workflow stations" }).waitFor({ state: "hidden" });
      await trigger.focus();
+     await page.keyboard.press("Enter");
+     await page.getByRole("list", { name: "Standard workflow stations" }).waitFor({ state: "visible" });
+     expect(await trigger.getAttribute("aria-expanded")).toBe("true");
      await page.keyboard.press("Enter");
      await page.getByRole("list", { name: "Standard workflow stations" }).waitFor({ state: "hidden" });
      expect(await trigger.getAttribute("aria-expanded")).toBe("false");
@@ -91,9 +105,6 @@ test.each([1440, 900, 390])("workflow plans are prospective, connected, and inde
      await page.keyboard.press("Enter");
      await page.getByRole("list", { name: "Standard workflow stations" }).waitFor({ state: "hidden" });
      expect(await trigger.getAttribute("aria-expanded")).toBe("false");
-     await page.keyboard.press("Enter");
-     await page.getByRole("list", { name: "Standard workflow stations" }).waitFor({ state: "visible" });
-     expect(await trigger.getAttribute("aria-expanded")).toBe("true");
      expect(await page.getByText("Coordinator plan remains separate", { exact: true }).isVisible()).toBe(true);
     expect(value.errors).toEqual([]);
   } finally { await value.close(); }

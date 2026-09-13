@@ -23,7 +23,7 @@ function StationView({ task, station }: { task: Task; station: WorkflowStation }
 export function WorkflowPlan({ task }: { task: Task }) {
   const definition = workflowDefinition(task.workflow);
   const topology = workflowTopology(task.workflow, deliveryLabel(task));
-  return <section aria-label="Workflow plan" data-workflow-plan={task.workflow}><Plan defaultOpen>
+  return <section aria-label="Workflow plan" data-workflow-plan={task.workflow}><Plan>
     <PlanHeader><div><PlanTitle>Workflow plan</PlanTitle><PlanDescription>{definition.name}</PlanDescription></div><PlanAction><PlanTrigger label="Open or close the workflow plan" /></PlanAction></PlanHeader>
     <PlanContent><div className="min-w-0">
       <div className="workflow-topology relative w-full max-w-[760px]" style={{ height: topology.height }}>

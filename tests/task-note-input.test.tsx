@@ -42,6 +42,13 @@ function submit(field: HTMLTextAreaElement) {
   field.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
 
+function pressEnter(field: HTMLTextAreaElement, options: KeyboardEventInit = {}, isComposing = false) {
+  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter", ...options });
+  if (isComposing) Object.defineProperty(event, "isComposing", { value: true });
+  field.dispatchEvent(event);
+  return event;
+}
+
 function mount(props: { task?: Task; onChange?: (next: Task) => void; strict?: boolean } = {}) {
   const container = document.createElement("div");
   document.body.append(container);
@@ -60,6 +67,37 @@ afterEach(async () => {
 });
 
 beforeEach(() => api.readJson.mockReset());
+
+test("Shift+Enter keeps a multiline draft and Enter sends it once", async () => {
+  api.readJson.mockResolvedValue(task);
+  const view = mount();
+  await render(view.render);
+  const field = textarea(view.container);
+
+  await act(async () => {
+    setText(field, "First line");
+    expect(pressEnter(field, { shiftKey: true }).defaultPrevented).toBe(false);
+    setText(field, "First line\nSecond line");
+  });
+  expect(api.readJson).not.toHaveBeenCalled();
+  expect(field.value).toBe("First line\nSecond line");
+
+  await act(async () => { expect(pressEnter(field).defaultPrevented).toBe(true); await Promise.resolve(); });
+  expect(api.readJson).toHaveBeenCalledTimes(1);
+  expect(api.readJson).toHaveBeenCalledWith("/api/tasks/task-1/note", { method: "POST", body: JSON.stringify({ note: "First line\nSecond line" }) });
+});
+
+test("composition Enter does not submit the task note", async () => {
+  const view = mount();
+  await render(view.render);
+  const field = textarea(view.container);
+
+  await act(async () => {
+    setText(field, "Composing");
+    expect(pressEnter(field, {}, true).defaultPrevented).toBe(false);
+  });
+  expect(api.readJson).not.toHaveBeenCalled();
+});
 
 test("official PromptInput keeps an edit made during a delayed successful note submission", async () => {
   const accepted = deferred<Task>();

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { ExternalLink, GitBranch, GitMerge, GitPullRequest } from "lucide-react";
+import { GitBranch } from "lucide-react";
 import type { Task } from "../../../tasks/contracts.js";
 import { TaskActivityResponseSchema } from "../../../http/contracts/tasks.js";
 import { readJson } from "../../lib/api.js";
@@ -21,6 +21,7 @@ import { LivePaneDock } from "./task-chat/live-pane-dock.js";
 import { useTaskCosts } from "../analytics/lib/analytics.js";
 import { CostValue } from "../../components/app/cost-value.js";
 import { WorkflowHistory, WorkflowStatus } from "./workflow-history.js";
+import { TaskPullRequestCard } from "./pull-request-card.js";
 import { TaskWorktreeMenu } from "./task-worktree-menu.js";
 import { ADVISOR_LABELS, workflowDefinition, type AdvisorRole } from "../../../coordination/workflows.js";
 
@@ -70,7 +71,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
           <Markdown source={task.description} />
           {task.images.length ? <ul className="flex flex-wrap gap-2" aria-label="Task images">{task.images.map(item => <li key={item.artifactId}><button type="button" className="size-16 overflow-hidden rounded-md border bg-muted/30 focus-visible:outline" aria-label={`Open ${item.filename}`} onClick={() => setImage(item)}><img className="size-full object-cover" src={`/api/tasks/${task.id}/images/${item.artifactId}`} alt={item.filename} /></button></li>)}</ul> : null}
           {task.status !== "active" || task.pullRequest || task.humanQuestion ? <div data-task-current className="-mx-4 border-y px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10"><div className="mx-auto max-w-4xl space-y-3">
-            {task.pullRequest ? <a data-active-pull-request href={task.pullRequest.url} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-3 rounded-md border p-3 hover:bg-muted/30">{task.pullRequest.state === "merged" ? <GitMerge className="size-5 shrink-0 text-violet-500" /> : <GitPullRequest className="size-5 shrink-0 text-emerald-500" />}<span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{task.configuration.repository} #{task.pullRequest.number}</span></span><Badge variant="secondary">{task.pullRequest.state === "merged" ? "Merged" : task.pullRequest.state === "closed" ? "Closed" : "Open"}</Badge><ExternalLink className="size-3.5 shrink-0 text-muted-foreground" /></a> : task.status === "active" ? null : <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-muted-foreground">{task.status === "backlog" ? "The task is ready to start." : task.status === "delivered" ? "The delivery target is complete." : task.status === "cancelled" ? "The task is cancelled." : "Coordinator needs your answer."}</p>{editable ? <span className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setEdit(editTaskDraft(task))}>Edit task</Button><Button size="sm" disabled={busy} onClick={() => void act("start")}>Start task</Button></span> : null}</div>}
+            {task.pullRequest ? <TaskPullRequestCard task={task} /> : task.status === "active" ? null : <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-muted-foreground">{task.status === "backlog" ? "The task is ready to start." : task.status === "delivered" ? "The delivery target is complete." : task.status === "cancelled" ? "The task is cancelled." : "Coordinator needs your answer."}</p>{editable ? <span className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setEdit(editTaskDraft(task))}>Edit task</Button><Button size="sm" disabled={busy} onClick={() => void act("start")}>Start task</Button></span> : null}</div>}
             {task.humanQuestion ? <TaskQuestion key={task.humanQuestion.id} question={task.humanQuestion} busy={busy} onAnswer={answer => act("answer", { questionId: task.humanQuestion?.id, ...answer })} onLimitDecision={limitDecision => act("answer", { questionId: task.humanQuestion?.id, limitDecision })} /> : null}
           </div></div> : null}
           {task.workflow !== "standard" ? <WorkflowHistory task={task} activity={activity} /> : null}

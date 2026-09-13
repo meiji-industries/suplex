@@ -146,12 +146,14 @@ test("bounded open pull request queries remain unchanged", async () => {
 
 test("check observations retain actionable CI names and log links", () => {
   const observed = mapGithubPullRequestObservation({ number: 7, url: "https://github.com/owner/repo/pull/7", state: "OPEN", isDraft: false, headRefOid: "a".repeat(40), baseRefOid: "b".repeat(40), mergeable: "MERGEABLE", autoMergeRequest: null, reviewDecision: null, author: null, changedFiles: 1, additions: 1, deletions: 0, statusCheckRollup: [
-    { name: "unit", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/owner/repo/actions/runs/1" },
+    { name: "unit", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/owner/repo/actions/runs/1", workflowName: "CI", startedAt: "2026-09-13T04:57:33Z", completedAt: "2026-09-13T04:58:33Z" },
     { context: "deploy", state: "PENDING", targetUrl: "https://example.com/deploy" },
+    { name: "lint", status: "IN_PROGRESS", startedAt: "2026-09-13T04:57:33Z", completedAt: "0001-01-01T00:00:00Z" },
   ] });
-  expect(observed.checks).toEqual({ total: 2, pending: 1, failing: 1, successful: 0, runs: [
-    { name: "unit", status: "failing", conclusion: "FAILURE", url: "https://github.com/owner/repo/actions/runs/1" },
-    { name: "deploy", status: "pending", url: "https://example.com/deploy" },
+  expect(observed.checks).toEqual({ total: 3, pending: 2, failing: 1, successful: 0, runs: [
+    { name: "unit", status: "failing", conclusion: "FAILURE", url: "https://github.com/owner/repo/actions/runs/1", workflow: "CI", startedAt: "2026-09-13T04:57:33.000Z", completedAt: "2026-09-13T04:58:33.000Z" },
+    { name: "deploy", status: "pending", url: "https://example.com/deploy", workflow: null, startedAt: null, completedAt: null },
+    { name: "lint", status: "pending", url: null, workflow: null, startedAt: "2026-09-13T04:57:33.000Z", completedAt: null },
   ] });
 });
 

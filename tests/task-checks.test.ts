@@ -1,0 +1,26 @@
+import { expect, test } from "vitest";
+import { checkRunLabel, checkRunName, checkRunStatus, type CheckRun } from "../src/frontend/features/tasks/lib/task-checks.js";
+
+const run = (overrides: Partial<CheckRun>): CheckRun => ({ name: "build", status: "successful", url: null, ...overrides });
+
+test("check run status prefers the conclusion over the rollup status", () => {
+  expect(checkRunStatus(run({ status: "successful" }))).toBe("passed");
+  expect(checkRunStatus(run({ status: "failing" }))).toBe("failed");
+  expect(checkRunStatus(run({ status: "pending" }))).toBe("pending");
+  expect(checkRunStatus(run({ status: "successful", conclusion: "SKIPPED" }))).toBe("skipped");
+  expect(checkRunStatus(run({ status: "successful", conclusion: "NEUTRAL" }))).toBe("neutral");
+});
+
+test("check run names add the workflow unless the name already qualifies itself", () => {
+  expect(checkRunName(run({ workflow: "CI" }))).toBe("CI / build");
+  expect(checkRunName(run({ name: "Tests / DB-free", workflow: "CI" }))).toBe("Tests / DB-free");
+  expect(checkRunName(run({}))).toBe("build");
+});
+
+test("check run labels report duration only when both timestamps are present", () => {
+  expect(checkRunLabel(run({ startedAt: "2026-09-13T04:57:33Z", completedAt: "2026-09-13T04:58:33Z" }))).toBe("Passed in 1m");
+  expect(checkRunLabel(run({ status: "failing", startedAt: "2026-09-13T04:57:33Z", completedAt: "2026-09-13T04:58:11Z" }))).toBe("Failed in 38s");
+  expect(checkRunLabel(run({}))).toBe("Passed");
+  expect(checkRunLabel(run({ status: "pending", startedAt: "2026-09-13T04:57:33Z" }))).toBe("Pending");
+  expect(checkRunLabel(run({ conclusion: "SKIPPED" }))).toBe("Skipped");
+});

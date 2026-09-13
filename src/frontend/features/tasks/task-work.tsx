@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { CircleDashed } from "lucide-react";
 import type { Task } from "../../../tasks/contracts.js";
-import { type TaskActivityResponseSchema, TaskChecksResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema } from "../../../http/contracts/tasks.js";
+import { type TaskActivityResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema } from "../../../http/contracts/tasks.js";
+import { useTaskChecks } from "./lib/task-checks.js";
 import { readJson } from "../../lib/api.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Spinner } from "../../components/ui/spinner.js";
@@ -149,21 +150,6 @@ function TaskDiff({ task }: { task: Task }) {
 }
 
 function TaskChecks({ task }: { task: Task }) {
-  const [checks, setChecks] = useState<z.infer<typeof TaskChecksResponseSchema> | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let closed = false;
-    let reading = false;
-    const read = async () => {
-      if (closed || reading) return;
-      reading = true;
-      try { const value = TaskChecksResponseSchema.parse(await readJson(`/api/tasks/${task.id}/checks`)); if (!closed) { setChecks(value); setError(""); } }
-      catch (error) { if (!closed) setError(error instanceof Error ? error.message : "Checks are not available"); }
-      finally { reading = false; }
-    };
-    void read();
-    const timer = setInterval(() => void read(), 15000);
-    return () => { closed = true; clearInterval(timer); };
-  }, [task.id, task.updatedAt]);
+  const { checks, error } = useTaskChecks(task.id, task.updatedAt);
   return <section aria-label="GitHub checks" className="space-y-3 pt-3">{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : !checks ? <p className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading checks…</span></p> : !checks.runs.length ? <p className="text-xs text-muted-foreground">{checks.available ? "GitHub has no checks for this pull request." : "No pull request checks are available."}</p> : <TaskCheckResults runs={checks.runs} />}</section>;
 }

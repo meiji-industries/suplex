@@ -54,7 +54,7 @@ export interface GithubPullRequestObservation {
   mergeable: string | null;
   /** GitHub's merge-state rollup (CLEAN, BLOCKED, BEHIND, DIRTY, DRAFT, HAS_HOOKS, UNKNOWN, UNSTABLE). Unknown never means ready. */
   mergeStateStatus: string | null;
-  checks: { total: number; pending: number; failing: number; successful: number; runs: Array<{ name: string; status: "pending" | "failing" | "successful"; url: string | null; conclusion?: string }> };
+  checks: { total: number; pending: number; failing: number; successful: number; runs: Array<{ name: string; status: "pending" | "failing" | "successful"; url: string | null; conclusion?: string; workflow?: string | null; startedAt?: string | null; completedAt?: string | null }> };
   author?: { login: string; avatarUrl: string } | null;
   changedFiles?: number | null;
   additions?: number | null;
@@ -228,6 +228,12 @@ function normalizeGithubPull(value: unknown): GithubPullRequest {
   return { number: row.number, url: row.html_url, repository: headRepository, headBranch: row.head.ref, baseBranch: row.base.ref, headSha: row.head.sha, baseSha: row.base.sha, isDraft: row.draft, state, mergedAt: row.merged_at, isCrossRepository: headRepository !== row.base.repo.full_name.toLowerCase(), ...(row.title !== undefined ? { title: row.title } : {}), ...(row.body !== undefined ? { body: row.body ?? "" } : {}), ...(row.user ? { author: row.user.login } : {}), ...(row.updated_at ? { updatedAt: row.updated_at } : {}), ...(row.auto_merge ? { autoMergeEnabled: true } : {}) };
 }
 
+function checkTimestamp(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && parsed > 0 ? new Date(parsed).toISOString() : null;
+}
+
 function summarizeChecks(checks: z.infer<typeof PullViewResponseSchema>["statusCheckRollup"]): GithubPullRequestObservation["checks"] {
   const latest = new Map<string, { check: NonNullable<z.infer<typeof PullViewResponseSchema>["statusCheckRollup"]>[number]; completedAt: string | null }>();
   for (const [index, check] of (checks ?? []).entries()) {
@@ -246,7 +252,8 @@ function summarizeChecks(checks: z.infer<typeof PullViewResponseSchema>["statusC
     else status = check.conclusion === "SUCCESS" || check.conclusion === "NEUTRAL" || check.conclusion === "SKIPPED" ? "successful" : "failing";
     summary[status] += 1;
     const url = z.string().url().safeParse(check.detailsUrl ?? check.targetUrl);
-    summary.runs.push({ name, status, url: url.success ? url.data : null, ...(check.conclusion ? { conclusion: check.conclusion } : {}) });
+    const workflow = typeof check.workflowName === "string" && check.workflowName ? check.workflowName : null;
+    summary.runs.push({ name, status, url: url.success ? url.data : null, ...(check.conclusion ? { conclusion: check.conclusion } : {}), workflow, startedAt: checkTimestamp(check.startedAt), completedAt: checkTimestamp(check.completedAt) });
   }
   return summary;
 }

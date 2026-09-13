@@ -1,13 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Archive, GitPullRequest } from "lucide-react";
-import type { z } from "zod";
 import type { Task } from "../../../tasks/contracts.js";
-import { TaskChecksResponseSchema } from "../../../http/contracts/tasks.js";
-import { readJson } from "../../lib/api.js";
+import { useTaskChecks, type TaskChecks } from "./lib/task-checks.js";
 import { SidebarMenuAction } from "../../components/ui/sidebar.js";
 import { ArchiveTaskDialog } from "./archive-task-dialog.js";
 
-type Checks = z.infer<typeof TaskChecksResponseSchema>;
+type Checks = TaskChecks;
 export type PullRequestColor = "purple" | "red" | "yellow" | "green" | "grey";
 
 export function pullRequestColor(state: string, checks: Checks | null): PullRequestColor {
@@ -28,24 +26,8 @@ export function canQuickArchive(color: PullRequestColor, status: Task["status"],
 const colors = { purple: "text-purple-500", red: "text-red-500", yellow: "text-yellow-500", green: "text-green-500", grey: "text-muted-foreground" };
 
 export function RecentPullRequest({ taskId, state, headSha, status, archivedAt, onArchived, onError }: { taskId: string; state: string; headSha: string; status: Task["status"]; archivedAt: Task["archivedAt"]; onArchived: (task: Task) => void; onError: (error: string) => void }) {
-  const [checks, setChecks] = useState<Checks | null>(null);
+  const { checks } = useTaskChecks(state === "merged" ? null : taskId, `${state}:${headSha}`);
   const [archiveOpen, setArchiveOpen] = useState(false);
-  useEffect(() => {
-    setChecks(null);
-    if (state === "merged") return;
-    let closed = false;
-    let reading = false;
-    const load = async () => {
-      if (reading) return;
-      reading = true;
-      try { const result = TaskChecksResponseSchema.parse(await readJson(`/api/tasks/${taskId}/checks`)); if (!closed) setChecks(result); }
-      catch { if (!closed) setChecks(null); }
-      finally { reading = false; }
-    };
-    void load();
-    const timer = setInterval(() => void load(), 15000);
-    return () => { closed = true; clearInterval(timer); };
-  }, [taskId, state, headSha]);
   const color = pullRequestColor(state, checks);
   const label = color === "red" ? "CI failed" : color === "yellow" ? "CI in progress" : color === "purple" ? "Merged" : color === "green" ? "Ready or CI passed" : "No passing CI result";
   const canArchive = canQuickArchive(color, status, archivedAt);

@@ -130,7 +130,7 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
     const resume = await this.transcript(intent.sessionID, scope) !== null;
     const guard = await this.guard(scope);
     const args = claudeArguments({ scope, sessionID: intent.sessionID, resume, print: true, runtimeDirectory });
-    const record = await dispatchHeadless({ runtimeDirectory, scope, intent, executable, args, prompt: intent.prompt, environment: { ...guard?.env, ...instanceEnvironment(scope.profile.providerID, scope.profile.instanceHomeDirectory ?? null) }, claim, label: "Claude Code" });
+    const record = await dispatchHeadless({ runtimeDirectory, scope, intent, executable, args, prompt: intent.prompt, environment: { ...process.env, ...guard?.env, ...instanceEnvironment(scope.profile.providerID, scope.profile.instanceHomeDirectory ?? null) }, claim, label: "Claude Code" });
     return this.observe(scope, { ...intent, dispatch: "ambiguous" }, { serverGeneration: record.generation, claimedAt: new Date().toISOString() });
   }
 

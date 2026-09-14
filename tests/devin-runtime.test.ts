@@ -1,3 +1,5 @@
+// eslint-disable-next-line no-restricted-imports -- the regression owns and stops a long-running display process group.
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,7 +7,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, test } from "vitest";
 import { taskRolePrompt } from "../src/tasks/execution/role-prompt.js";
 import type { HerdrClient, Pane, PaneProcessInfo } from "../src/integrations/herdr/client.js";
-import { DevinTaskRuntime, devinArguments, devinDisplayAttached, devinSessionBusy, readDevinSessionId } from "../src/runtimes/devin/task-runtime.js";
+import { DevinTaskRuntime, devinArguments, devinSessionBusy, readDevinSessionId } from "../src/runtimes/devin/task-runtime.js";
+import { devinDisplayAttached, devinDisplayCommand } from "../src/runtimes/devin/display.js";
 import { createOpenCodePromptIntent } from "../src/runtimes/opencode/session.js";
 import { DEVIN_PROVIDER, advisorBridgeResultPath, profileHarness, sessionHarness, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, type TaskScope } from "../src/runtimes/task-harness.js";
 import { advisorReportFromTurn } from "../src/coordination/advisor-report.js";
@@ -15,12 +18,21 @@ import type { TaskSession } from "../src/tasks/control.js";
 import { runCommand } from "../src/platform/command-runner.js";
 
 const directories: string[] = [];
+const displayProcesses: { child: ChildProcess; processGroup: number }[] = [];
 async function git(cwd: string, args: string[]): Promise<string> {
   return (await runCommand({ taskId: null, stepId: null, command: "git", args, cwd })).stdout;
 }
 afterEach(async () => {
+  await Promise.all(displayProcesses.splice(0).map(({ child, processGroup }) => new Promise<void>(resolve => {
+    if (child.exitCode !== null || child.signalCode !== null) return resolve();
+    child.once("exit", () => resolve());
+    try { process.kill(-processGroup, "SIGTERM"); } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
+      resolve();
+    }
+  })));
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
-  for (const key of ["FORGE_ROOT_BINDING", "FORGE_ROOT_TOKEN", "FORGE_ADVISOR_BINDING", "FORGE_ADVISOR_TOKEN", "FORGE_ADVISOR_RESULT"]) delete process.env[key];
+  for (const key of ["FORGE_ROOT_BINDING", "FORGE_ROOT_TOKEN", "FORGE_ADVISOR_BINDING", "FORGE_ADVISOR_TOKEN", "FORGE_ADVISOR_RESULT", "FORGE_TEST_LOCK_ROOT", "FORGE_TEST_INVOCATIONS"]) delete process.env[key];
 });
 
 async function fixture(behaviour: "complete" | "hang" | "crash" | "startup_failure") {
@@ -105,7 +117,15 @@ test("non-zero turns are errors and startup failures retain stderr", async () =>
   expect(await failed.runtime.resultText(failed.scope, observed)).toContain("Not logged in");
 });
 
-test("the display attaches after a no-op warm-up materializes the Devin session", async () => {
+async function waitForText(read: () => string, text: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (read().includes(text)) return;
+    await delay(25);
+  }
+  throw new Error(`Timed out waiting for ${text}`);
+}
+
+test("the passive display follows two exclusively locked Devin turns without owning the native session", async () => {
   const f = await fixture("complete");
   process.env.FORGE_ROOT_BINDING = "/contaminated/root";
   process.env.FORGE_ROOT_TOKEN = "contaminated-root-token";
@@ -113,60 +133,115 @@ test("the display attaches after a no-op warm-up materializes the Devin session"
   process.env.FORGE_ADVISOR_TOKEN = "contaminated-advisor-token";
   process.env.FORGE_ADVISOR_RESULT = "/contaminated/result";
   const executable = join(f.root, "devin");
+  const lockRoot = join(f.root, "locks");
+  const invocationLog = join(f.root, "invocations.txt");
+  await mkdir(lockRoot);
+  await writeFile(executable, `#!/bin/sh
+print=false
+resume=
+prompt_file=
+export_file=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --print) print=true ;;
+    --resume) shift; resume=$1 ;;
+    --prompt-file) shift; prompt_file=$1 ;;
+    --export) shift; export_file=$1 ;;
+  esac
+  shift
+done
+session=\${resume:-assigned-session}
+if ! mkdir "$FORGE_TEST_LOCK_ROOT/$session" 2>/dev/null; then
+  printf '%s\n' "LOCKED:$session" >&2
+  exit 1
+fi
+cleanup() { rmdir "$FORGE_TEST_LOCK_ROOT/$session" 2>/dev/null || true; }
+trap cleanup EXIT
+trap 'exit 0' INT TERM
+if [ "$print" != true ]; then
+  printf '%s\n' "interactive:$session" >> "$FORGE_TEST_INVOCATIONS"
+  while :; do sleep 1; done
+fi
+printf '%s\n' "print:$session" >> "$FORGE_TEST_INVOCATIONS"
+printf '%s|%s|%s|%s|%s\n' "$FORGE_ROOT_BINDING" "$FORGE_ROOT_TOKEN" "$FORGE_ADVISOR_BINDING" "$FORGE_ADVISOR_TOKEN" "$FORGE_ADVISOR_RESULT" >> "$FORGE_TEST_BRIDGE_ENV"
+if grep -q 'Check the change' "$prompt_file"; then label=SECOND; else label=FIRST; fi
+printf '%s stdout\n' "$label"
+sleep 0.15
+printf '%s stderr\n' "$label" >&2
+sleep 0.15
+printf '%s\n' '{"schema_version":"ATIF-v1.7","session_id":"assigned-session"}' > "$export_file"
+`, { mode: 0o700 });
+  process.env.FORGE_TEST_LOCK_ROOT = lockRoot;
+  process.env.FORGE_TEST_INVOCATIONS = invocationLog;
   const commands: string[] = [];
+  const output = new Map<string, string>();
   const shell = (id: string): PaneProcessInfo => ({ pane_id: id, shell_pid: 10, foreground_process_group_id: 10, foreground_processes: [{ pid: 10, name: "zsh", argv: ["/bin/zsh"] }] });
   const processes = new Map<string, PaneProcessInfo>([["pane", shell("pane")]]);
-  const displayArgv = [executable, "--resume", "assigned-session", "--model", "swe", "--permission-mode", "dangerous", "--respect-workspace-trust", "false"];
+  const panes = new Set(["pane"]);
+  let nextPane = 1;
   const herdr: Pick<HerdrClient, "getPane" | "getPaneProcessInfo" | "createWorkspace" | "splitPane" | "renamePane" | "runPaneCommand" | "reportPaneMetadata"> = {
-    async getPane(id): Promise<Pane> { return { paneId: id, cwd: f.scope.directory, tokens: { forge_binding_id: f.scope.id } }; },
+    async getPane(id): Promise<Pane | null> { return panes.has(id) ? { paneId: id, cwd: f.scope.directory } : null; },
     async getPaneProcessInfo(id) { return processes.get(id)!; },
-    async createWorkspace() { throw new Error("No workspace expected"); }, async splitPane() { throw new Error("No split expected"); },
+    async createWorkspace() {
+      const paneId = `replacement-${nextPane++}`;
+      panes.add(paneId);
+      processes.set(paneId, shell(paneId));
+      return { workspace: { workspaceId: "workspace", label: "task" }, tab: { tabId: "tab", label: "task" }, rootPane: { paneId, cwd: f.scope.directory } };
+    },
+    async splitPane() {
+      const paneId = `replacement-${nextPane++}`;
+      panes.add(paneId);
+      processes.set(paneId, shell(paneId));
+      return { paneId, cwd: f.scope.directory };
+    },
     async renamePane() {}, async reportPaneMetadata() {},
-    async runPaneCommand(id, command) { commands.push(command); processes.set(id, { pane_id: id, shell_pid: 10, foreground_process_group_id: 11, foreground_processes: [{ pid: 11, name: "devin", argv: displayArgv }] }); },
+    async runPaneCommand(id, command) {
+      commands.push(command);
+      output.set(id, "");
+      const child = spawn("/bin/sh", ["-c", `exec ${command}`], { cwd: f.scope.directory, env: process.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      if (!child.pid) throw new Error("Display process did not start");
+      displayProcesses.push({ child, processGroup: child.pid });
+      child.stdout!.on("data", chunk => output.set(id, `${output.get(id) ?? ""}${String(chunk)}`));
+      child.stderr!.on("data", chunk => output.set(id, `${output.get(id) ?? ""}${String(chunk)}`));
+      const display = devinDisplayCommand(f.runtimeDirectory);
+      processes.set(id, { pane_id: id, shell_pid: 10, foreground_process_group_id: 11, foreground_processes: [{ pid: child.pid, name: "node", argv: [display.executable, ...display.args] }] });
+    },
   };
   const runtime = new DevinTaskRuntime(join(f.root, "forge.sqlite"), herdr, { executable });
   await runtime.ensureSession(f.scope, f.sessionID);
-  const attach = () => runtime.attach({ scope: f.scope, nativeSessionId: f.sessionID, paneId: "pane", persistPane: () => {} });
-  expect(await attach()).toBe("pane");
+  const attach = (paneId: string | null) => runtime.attach({ scope: f.scope, nativeSessionId: f.sessionID, paneId, persistPane: () => {} });
+  expect(await readFile(invocationLog, "utf8").catch(() => "")).toBe("");
+  expect(await attach("pane")).toBe("pane");
   expect(commands).toHaveLength(1);
-  expect(commands[0]).toContain("'--resume' 'assigned-session'");
-  expect(commands[0]).toContain("'--model' 'swe'");
-  expect(commands[0]).not.toContain("'--print'");
-  expect(commands[0]).not.toContain("'--prompt-file'");
-  expect(commands[0]).not.toContain("contaminated");
+  expect(commands[0]).toContain("'-u' 'FORGE_ROOT_BINDING'");
   expect(commands[0]).toContain("'-u' 'FORGE_ADVISOR_RESULT'");
-  const turns = () => readFile(join(f.root, "args.txt"), "utf8").then(content => content.split("--TURN--\n").filter(Boolean).map(turn => turn.trim().split("\n")));
-  expect(await turns()).toEqual([expect.arrayContaining(["--print", "--prompt-file", join(f.runtimeDirectory, "warmup.prompt")])]);
-  expect(await attach()).toBe("pane");
-  expect(await turns()).toHaveLength(1);
-  await unlink(join(f.runtimeDirectory, "session.json"));
-  expect(await attach()).toBe("pane");
-  expect(await readDevinSessionId(f.runtimeDirectory)).toBe("assigned-session");
-  expect(await turns()).toHaveLength(1);
-  await runtime.dispatch(f.scope, f.intent, async () => true);
-  expect(await eventually(f)).toMatchObject({ state: "completed" });
-  expect((await turns())[1]).toEqual(expect.arrayContaining(["--resume", "assigned-session"]));
-  expect((await readFile(join(f.root, "bridge-env.txt"), "utf8")).trim().split("\n")).toEqual(["||||", "||||"]);
-  expect(await attach()).toBe("pane");
+  expect(commands[0]).not.toContain("contaminated");
+  expect(await readFile(invocationLog, "utf8").catch(() => "")).toBe("");
+  await waitForText(() => output.get("pane") ?? "", "Waiting for Devin output");
+  expect(await attach("pane")).toBe("pane");
   expect(commands).toHaveLength(1);
-  expect((await readdir(f.runtimeDirectory)).filter(name => name.endsWith(".advisor-report.json"))).toEqual([]);
-  expect(devinDisplayAttached(executable, "assigned-session", displayArgv)).toBe(true);
-  expect(devinDisplayAttached(executable, "assigned-session", ["/other/devin", "--resume", "assigned-session"])).toBe(false);
-  expect(devinDisplayAttached(executable, "assigned-session", [executable, "--resume", "other-session"])).toBe(false);
-  expect(devinDisplayAttached(executable, "assigned-session", [executable, "--print", "--resume", "assigned-session"])).toBe(true);
-});
-
-test("a failed warm-up is not retried and the real turn still runs", async () => {
-  const f = await fixture("crash");
-  const runtime = new DevinTaskRuntime(join(f.root, "forge.sqlite"), {} as never, { executable: join(f.root, "devin") });
-  await runtime.ensureSession(f.scope, f.sessionID);
-  const attach = () => runtime.attach({ scope: f.scope, nativeSessionId: f.sessionID, paneId: null, persistPane: () => {} });
-  await expect(attach()).rejects.toThrow("warm-up");
-  await expect(attach()).rejects.toThrow("has not started");
-  const turns = (await readFile(join(f.root, "args.txt"), "utf8")).split("--TURN--\n").filter(Boolean);
-  expect(turns).toHaveLength(1);
   await runtime.dispatch(f.scope, f.intent, async () => true);
-  expect(await eventually(f)).toMatchObject({ state: "error", reason: "native_error" });
+  await waitForText(() => output.get("pane") ?? "", "FIRST stdout");
+  panes.delete("pane");
+  const replacement = await attach("pane");
+  expect(replacement).toBe("replacement-2");
+  await waitForText(() => output.get(replacement) ?? "", "FIRST stdout");
+  expect(await eventually(f)).toMatchObject({ state: "completed" });
+  await waitForText(() => output.get(replacement) ?? "", "FIRST stderr");
+  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: DEVIN_PROVIDER, modelID: "swe" }, agent: "forge-worker", variant: "low" });
+  await runtime.dispatch(f.scope, second, async () => true);
+  expect(await eventually(f, second)).toMatchObject({ state: "completed" });
+  await waitForText(() => output.get(replacement) ?? "", "SECOND stderr");
+  expect(output.get(replacement)?.match(/FIRST stdout/g)).toHaveLength(1);
+  expect(output.get(replacement)?.match(/FIRST stderr/g)).toHaveLength(1);
+  expect(output.get(replacement)?.match(/SECOND stdout/g)).toHaveLength(1);
+  expect(output.get(replacement)?.match(/SECOND stderr/g)).toHaveLength(1);
+  expect((await readFile(invocationLog, "utf8")).trim().split("\n")).toEqual(["print:assigned-session", "print:assigned-session"]);
+  expect((await readFile(join(f.root, "bridge-env.txt"), "utf8")).trim().split("\n")).toEqual(["||||", "||||"]);
+  const display = devinDisplayCommand(f.runtimeDirectory);
+  expect(devinDisplayAttached(f.runtimeDirectory, [display.executable, ...display.args])).toBe(true);
+  expect(devinDisplayAttached(join(f.root, "other-runtime"), [display.executable, ...display.args])).toBe(false);
+  expect(devinDisplayAttached(f.runtimeDirectory, [executable, "--resume", "assigned-session"])).toBe(false);
 });
 
 test("Devin routing is unambiguous and admits an authenticated Coordinator", async () => {

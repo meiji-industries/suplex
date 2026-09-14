@@ -41,7 +41,8 @@ session runtime directory. Devin 3000.10.21 writes ATIF-v1.7 with a
 `session_id` that matches the resumable session slug. Forge validates only that
 field. Later turns add `--resume <session-id>`. Forge never uses the
 directory-wide order from `devin list` to adopt a session. If `session.json` is
-missing, Forge rebuilds it from the current turn export or the warm-up export.
+missing, Forge rebuilds it from the current turn export or an old warm-up export
+created by a prior Forge version.
 The export remains the authoritative identity record.
 
 Forge parses final text from its immutable per-turn stdout log and uses a
@@ -49,7 +50,7 @@ separate `devin-<uuid>` identity for harness routing. Devin tool and token detai
 remain unavailable. Advisor `submit_report` is an exception because Forge owns
 that bridge call. The authenticated bridge atomically records the latest valid
 submission at the current assignment turn's private evidence path. Invalid
-submissions, warm-up turns, and display attachments cannot replace that file.
+submissions and display processes cannot replace that file.
 
 Forge passes no `--config` because the installed CLI states that this flag
 overrides the default user config. Forge keeps the user's settings intact and
@@ -70,8 +71,8 @@ and multiple Advisor sessions can share one worktree without a last-writer-wins
 binding path.
 
 Each invocation removes inherited Forge binding, token, and Advisor result
-variables before it adds the current role's credentials. Worker, warm-up, and
-display invocations receive no Advisor result path. Coordinator and Advisor
+variables before it adds the current role's credentials. Worker and display
+processes receive no Advisor result path. Coordinator and Advisor
 bridge processes validate the token before MCP initialization. The Coordinator
 bridge also validates it before opening the Forge database. Existing
 per-request Coordinator identity checks remain the authoritative task and
@@ -83,14 +84,23 @@ Devin turns have the same durable claim, process ownership, recovery,
 stop, result, and log evidence lifecycle as other detached headless CLIs. A
 small `/bin/sh` wrapper records each CLI exit status in Forge's private turn
 directory; it is not a Devin CLI flag or part of the native CLI contract.
-Interactive display attachment opens `devin --resume <session-id> --model
-<model> --permission-mode dangerous --respect-workspace-trust false` without
-`--print` in a Herdr pane once a Devin session id is persisted; the documented
-`--resume` resumes that same session. Because Devin only assigns that id inside
-a turn, Forge runs one bounded no-op warm-up turn when a session is first
-displayed so the pane can attach before the first assignment rather than after
-it completes. Native tool/usage detail remains unavailable until Cognition
-documents a stable machine-readable contract.
+Tests against Devin 3000.10.21 found that both interactive `--resume` and
+headless `--print --resume` exclusively own the native session. A headless turn
+fails to start while an interactive display owns the same session. Closing only
+the interactive process lets the same headless command succeed.
+
+The Herdr display therefore runs a Forge output viewer. The viewer reads only
+the private per-turn stdout and stderr files. It prints existing output, follows
+appends, and discovers later turns without reopening the pane. Before output
+exists, it prints a short waiting label. The runtime directory identifies the
+viewer and lets Forge distinguish displays for different tasks. The viewer does
+not invoke Devin, open an exported transcript, read a bridge binding, or own
+execution. Closing the viewer does not stop a turn.
+
+Forge rejected serial interactive and headless ownership because that design
+would make execution depend on the optional pane lifetime and recreate the
+attach and dispatch race. Native tool and usage detail remains unavailable
+until Cognition documents a stable machine-readable contract.
 
 The bridge token is a soft same-user boundary. File permissions and private
 runtime directories prevent accidental cross-session use, but they do not

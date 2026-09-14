@@ -5,13 +5,13 @@ import { z } from "zod";
 import { resolveDevinExecutable } from "../../platform/executable-resolver.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
 import { taskRolePrompt } from "../../tasks/execution/role-prompt.js";
-import { dispatchHeadless, headlessObservationPrelude, headlessSessionBusy, headlessTurnFiles, headlessTurnRunning, readHeadlessText, readHeadlessTurnRecord, recoverHeadlessDispatch, stopHeadlessSession, warmUpHeadlessSession } from "../headless/turn-process.js";
-import { advisorBridgeResultPath, shellQuote, taskBridgeEnvironment, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskBridgeServer, type TaskHarness, type TaskScope } from "../task-harness.js";
+import { dispatchHeadless, headlessObservationPrelude, headlessSessionBusy, headlessTurnFiles, headlessTurnRunning, readHeadlessText, readHeadlessTurnRecord, recoverHeadlessDispatch, stopHeadlessSession } from "../headless/turn-process.js";
+import { advisorBridgeResultPath, taskBridgeEnvironment, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskBridgeServer, type TaskHarness, type TaskScope } from "../task-harness.js";
 import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
 import { devinResultText } from "./transcript.js";
-import { TASK_BRIDGE_ENVIRONMENT_KEYS } from "../../coordination/bridge-auth.js";
 import { ensureDevinMcpConfig } from "./mcp-config.js";
 import { readDevinAdvisorEvidence } from "./advisor-evidence.js";
+import { devinDisplayAttached, devinDisplayCommand } from "./display.js";
 
 const DevinExportSchema = z.object({ session_id: z.string().trim().min(1) }).passthrough();
 
@@ -63,17 +63,13 @@ export async function devinSessionBusy(runtimeDirectory: string): Promise<boolea
   return headlessSessionBusy(runtimeDirectory);
 }
 
-export function devinDisplayAttached(executable: string, sessionID: string | null, args: readonly string[]): boolean {
-  return args[0] === executable && args[args.indexOf("--resume") + 1] === sessionID;
-}
-
-/** Arguments are restricted to the documented Devin CLI flags. A null promptFile builds the interactive display invocation. */
-export function devinArguments(input: { scope: TaskScope; resumeSessionId: string | null; promptFile: string | null; exportFile?: string }): string[] {
+/** Arguments are restricted to the documented Devin CLI flags. */
+export function devinArguments(input: { scope: TaskScope; resumeSessionId: string | null; promptFile: string; exportFile?: string }): string[] {
   return [
-    ...(input.promptFile === null ? [] : ["--print"]),
+    "--print",
     ...(input.resumeSessionId ? ["--resume", input.resumeSessionId] : []),
-    ...(input.promptFile === null ? [] : ["--prompt-file", input.promptFile]),
-    ...(input.promptFile === null ? [] : ["--export", input.exportFile ?? `${input.promptFile}.export.json`]),
+    "--prompt-file", input.promptFile,
+    "--export", input.exportFile ?? `${input.promptFile}.export.json`,
     "--model", input.scope.profile.modelID,
     "--permission-mode", "dangerous",
     "--respect-workspace-trust", "false",
@@ -109,16 +105,6 @@ export class DevinTaskRuntime implements TaskHarness {
     return bridge;
   }
 
-  private async paneCommand(scope: TaskScope, executable: string, args: string[], bridge: TaskBridgeServer | undefined): Promise<string> {
-    const clear = TASK_BRIDGE_ENVIRONMENT_KEYS.flatMap(key => ["-u", key]);
-    if (!bridge) return ["/usr/bin/env", ...clear, executable, ...args].map(shellQuote).join(" ");
-    const environmentPath = join(this.runtimeDirectory(scope), "display-bridge.env");
-    const contents = Object.entries(bridge.environment).map(([key, value]) => `${key}=${shellQuote(value)}`).join("\n");
-    await writeFile(environmentPath, `${contents}\n`, { mode: 0o600 });
-    await chmod(environmentPath, 0o600);
-    return ["/usr/bin/env", ...clear, "/bin/sh", "-c", "set -a; . \"$1\"; set +a; shift; exec \"$@\"", "forge-devin-environment", environmentPath, executable, ...args].map(shellQuote).join(" ");
-  }
-
   async ensureSession(scope: TaskScope, nativeSessionId: string | null): Promise<string> {
     await mkdir(this.runtimeDirectory(scope), { recursive: true, mode: 0o700 });
     await this.executable();
@@ -127,24 +113,10 @@ export class DevinTaskRuntime implements TaskHarness {
     return nativeSessionId ?? `devin-${randomUUID()}`;
   }
 
-  // Devin assigns its own session id inside a turn. A no-op warm-up turn
-  // materializes the session so the display attaches while the first
-  // assignment is still queued instead of after it completes.
   async attach(input: { scope: TaskScope; nativeSessionId: string; paneId: string | null; rootPaneId?: string | null; persistPane: (paneId: string) => void }): Promise<string> {
     const runtimeDirectory = this.runtimeDirectory(input.scope);
-    const executable = await this.executable();
-    const bridge = await this.prepare(input.scope);
-    const environment = taskBridgeEnvironment(bridge);
-    let sessionId = await recoverDevinSessionId(runtimeDirectory);
-    if (!sessionId) {
-      const promptFile = join(runtimeDirectory, "warmup.prompt");
-      const exportFile = join(runtimeDirectory, "warmup.export.json");
-      await warmUpHeadlessSession({ runtimeDirectory, taskId: input.scope.taskId, cwd: input.scope.directory, executable, args: devinArguments({ scope: input.scope, resumeSessionId: null, promptFile, exportFile }), promptFile, environment, label: "Devin" });
-      sessionId = await recoverDevinSessionId(runtimeDirectory);
-    }
-    if (!sessionId) throw new Error("Devin session has not started; the display attaches after its first turn");
-    const command = await this.paneCommand(input.scope, executable, devinArguments({ scope: input.scope, resumeSessionId: sessionId, promptFile: null }), bridge);
-    return attachTaskDisplay(this.herdr, { ...input, generation: sessionId, isAttached: args => devinDisplayAttached(executable, sessionId, args), command });
+    const display = devinDisplayCommand(runtimeDirectory);
+    return attachTaskDisplay(this.herdr, { ...input, generation: input.nativeSessionId, isAttached: args => devinDisplayAttached(runtimeDirectory, args), command: display.command });
   }
 
   async observe(scope: TaskScope, intent: PromptIntent, attempt?: PromptDispatchAttempt | null): Promise<PromptObservation> {

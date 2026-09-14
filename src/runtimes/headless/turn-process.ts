@@ -5,7 +5,6 @@ import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import { runCommand } from "../../platform/command-runner.js";
 import { withWorktreeMiseTrust } from "../../coordination/worker-environment.js";
 import { compareProcessIdentity, executionProcessEnvironment, inspectProcessOnce, sessionProcessEnvironment, stopExecutionProcesses, stopOwnedProcesses, stopSessionProcesses, taskProcessEnvironment, type OwnedProcess } from "../../platform/process-manager.js";
 import type { PromptDispatchAttempt } from "../../tasks/control.js";
@@ -125,31 +124,6 @@ export async function dispatchHeadless(input: { runtimeDirectory: string; scope:
   await rename(pending, join(input.runtimeDirectory, `dispatch-${generation}.json`));
   await writeFile(join(input.runtimeDirectory, "turn.json"), JSON.stringify(record), { mode: 0o600 });
   return record;
-}
-
-export const HEADLESS_WARMUP_TIMEOUT_MS = 120_000;
-export const HEADLESS_WARMUP_PROMPT = "Forge is preparing this session's live display. Reply with a brief acknowledgement and take no other action.";
-
-/**
- * A provider that only assigns its native session identity inside a turn
- * cannot attach its display until real work finishes. One bounded no-op turn
- * materializes the session while the task still shows as starting. The prompt
- * file doubles as the attempt marker: after a failure the real dispatch
- * surfaces the provider error instead of retrying a paid call on every wake.
- * Returns false when a recorded turn already owns session materialization.
- */
-export async function warmUpHeadlessSession(input: { runtimeDirectory: string; taskId: string; cwd: string; executable: string; args: string[]; promptFile: string; environment?: NodeJS.ProcessEnv; label: string; timeoutMs?: number }): Promise<boolean> {
-  if (await readHeadlessTurnRecord(join(input.runtimeDirectory, "turn.json")) !== null) return false;
-  if (await readHeadlessText(input.promptFile) !== null) return false;
-  await mkdir(input.runtimeDirectory, { recursive: true, mode: 0o700 });
-  await writeFile(input.promptFile, HEADLESS_WARMUP_PROMPT, { mode: 0o600 });
-  const result = await runCommand({
-    taskId: input.taskId, stepId: null, command: input.executable, args: input.args, cwd: input.cwd,
-    env: { ...withWorktreeMiseTrust(input.environment ?? process.env, input.cwd), ...taskProcessEnvironment(input.cwd), ...sessionProcessEnvironment(input.runtimeDirectory) },
-    timeout: input.timeoutMs ?? HEADLESS_WARMUP_TIMEOUT_MS, expectNonZero: true,
-  });
-  if (result.timedOut || result.exitCode !== 0) throw new Error(`${input.label} display warm-up turn failed`);
-  return true;
 }
 
 export async function recoverHeadlessDispatch(input: { runtimeDirectory: string; attempt: PromptDispatchAttempt }): Promise<void> {

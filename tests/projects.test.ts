@@ -46,9 +46,9 @@ async function fixture(): Promise<Fixture> {
   const auth = new AuthService(database, config);
   const projects = new ProjectService(database, auth, config, { localRepository, github, validateProjectConfiguration: true, readProviders: async () => ({
     directory: root, observedAt: new Date().toISOString(), providers: [
-      { id: "openai", label: "OpenAI", status: "configured", modelCount: 1, models: [{ id: "shared-model", label: "OpenAI model" }] },
-      { id: "opencode", label: "OpenCode Zen", status: "configured", modelCount: 1, models: [{ id: "shared-model", label: "Zen model" }] },
-      { id: "devin", label: "Devin CLI", status: "missing", modelCount: 1, models: [{ id: "swe-2", label: "SWE-2" }] },
+      { id: "openai", label: "OpenAI", status: "configured" as const, modelCount: 1, models: [{ id: "shared-model", label: "OpenAI model" }], connection: { status: "connected" as const, summary: "Signed in" } },
+      { id: "opencode", label: "OpenCode Zen", status: "configured" as const, modelCount: 1, models: [{ id: "shared-model", label: "Zen model" }], connection: { status: "connected" as const, summary: "Signed in" } },
+      { id: "devin", label: "Devin CLI", status: "missing" as const, modelCount: 1, models: [{ id: "swe-2", label: "SWE-2" }], connection: { status: "not-connected" as const, summary: "Not installed" } },
     ],
   }) });
   const company = auth.createCompany("admin-1", "Acme");

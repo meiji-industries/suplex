@@ -1,81 +1,166 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import type { ProviderListResponse } from "../../../http/contracts/providers.js";
 import type { z } from "zod";
-import type { ProviderInstanceListResponseSchema } from "../../../http/contracts/providers.js";
+import type { ProviderConnection, ProviderInstanceListResponseSchema, ProviderListResponse } from "../../../http/contracts/providers.js";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
+import { NewButton } from "../../components/ui/new-button.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog.js";
 import { Badge } from "../../components/ui/badge.js";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
+import { Field, FieldGroup, FieldLabel } from "../../components/ui/field.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { SettingsContent, SettingsLayout } from "./settings-layout.js";
-import { SettingsDataTable, SettingsTableCell, SettingsTableGroup, SettingsTableRow, type SettingsTableColumn } from "../../components/app/settings-table.js";
+import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, type SettingsTableColumn } from "../../components/app/settings-table.js";
+import { PaneTerminal } from "../tasks/task-chat/live-pane-terminal.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { readJson, withCompany } from "../../lib/api.js";
 
 const columns: SettingsTableColumn[] = [
-  { key: "provider", label: "Provider", width: 180 },
-  { key: "status", label: "Configuration", width: 150 },
-  { key: "models", label: "Models", width: 80 },
-  { key: "request", label: "Model request", width: 140 },
+  { key: "provider", label: "Provider", width: 170 },
+  { key: "scope", label: "Scope", width: 80 },
+  { key: "configuration", label: "Configuration", width: 150 },
+  { key: "models", label: "Models", width: 70 },
+  { key: "status", label: "Status", width: 110 },
+  { key: "actions", width: 150 },
 ];
 
 type ProviderView = { status: "loading" } | { status: "failed"; message: string } | { status: "loaded"; data: ProviderListResponse };
 type ProviderInstance = z.infer<typeof ProviderInstanceListResponseSchema>["instances"][number];
+type LoginSession = { paneId: string; label: string };
+
+function ConnectionBadge({ connection }: { connection: ProviderConnection }): ReactElement {
+  if (connection.status === "connected") return <Badge variant="secondary" title={connection.summary}>Connected</Badge>;
+  if (connection.status === "not-connected") return <Badge variant="destructive" title={connection.summary}>Not Connected</Badge>;
+  return <Badge variant="outline" title={connection.summary}>Unknown</Badge>;
+}
 
 export function ProviderSettingsView(): ReactElement {
   const { currentCompany } = useCompanyContext();
   const companyId = currentCompany?.id ?? "";
   const [view, setView] = useState<ProviderView>({ status: "loading" });
   const [instances, setInstances] = useState<ProviderInstance[]>([]);
+  const [addOpen, setAddOpen] = useState(false);
   const [label, setLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ProviderInstance | null>(null);
-  const load = useCallback(async () => {
-    setView({ status: "loading" });
+  const [login, setLogin] = useState<LoginSession | null>(null);
+  const [loginPending, setLoginPending] = useState<string | null>(null);
+  const load = useCallback(async (silent = false): Promise<void> => {
+    if (!silent) setView({ status: "loading" });
     try {
-        const [providers, instanceList] = await Promise.all([readJson<ProviderListResponse>("/api/admin/providers"), readJson<{ instances: ProviderInstance[] }>("/api/admin/provider-instances")]);
-        setInstances(instanceList.instances);
-        setView({ status: "loaded", data: providers });
-    } catch (error) {
-      setView({ status: "failed", message: error instanceof Error ? error.message : "Provider configuration is not available." });
+      const [providers, instanceList] = await Promise.all([readJson<ProviderListResponse>("/api/admin/providers"), readJson<{ instances: ProviderInstance[] }>("/api/admin/provider-instances")]);
+      setInstances(instanceList.instances);
+      setView({ status: "loaded", data: providers });
+    } catch (reason) {
+      if (!silent) setView({ status: "failed", message: reason instanceof Error ? reason.message : "Provider configuration is not available." });
     }
   }, []);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!login) return;
+    const timer = window.setInterval(() => { void load(true); }, 3_000);
+    return () => window.clearInterval(timer);
+  }, [login, load]);
   const providers = view.status === "loaded" ? view.data.providers : [];
-  const create = async (): Promise<void> => { if (!label.trim()) return; await readJson("/api/admin/provider-instances", { method: "POST", body: JSON.stringify({ provider: "claude-code", label }) }); setLabel(""); await load(); };
+  const create = async (): Promise<void> => {
+    if (!label.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      await readJson("/api/admin/provider-instances", { method: "POST", body: JSON.stringify({ provider: "claude-code", label }) });
+      setLabel("");
+      setAddOpen(false);
+      await load(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Forge could not add the provider.");
+    } finally {
+      setBusy(false);
+    }
+  };
   const remove = async (id: string): Promise<void> => { await readJson(`/api/admin/provider-instances/${encodeURIComponent(id)}`, { method: "DELETE" }); setDeleteTarget(null); await load(); };
+  const startLogin = async (key: string, rowLabel: string, url: string): Promise<void> => {
+    setLoginPending(key);
+    setError("");
+    try {
+      const session = await readJson<{ paneId: string }>(url, { method: "POST" });
+      setLogin({ paneId: session.paneId, label: rowLabel });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Forge could not open a sign-in pane.");
+    } finally {
+      setLoginPending(null);
+    }
+  };
+  const closeLogin = async (): Promise<void> => {
+    const session = login;
+    setLogin(null);
+    if (session) await readJson(`/api/admin/provider-login/${encodeURIComponent(session.paneId)}`, { method: "DELETE" }).catch(() => undefined);
+    await load(true);
+  };
+  const loginButton = (key: string, rowLabel: string, url: string): ReactElement => (
+    <Button size="sm" variant="outline" aria-label={`Login to ${rowLabel}`} disabled={loginPending !== null} onClick={() => void startLogin(key, rowLabel, url)}>{loginPending === key ? "Opening" : "Login"}</Button>
+  );
   return <SettingsLayout title="Providers" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/providers", companyId)}>
     <SettingsContent>
-     <div className="mb-4 space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-      <h2 className="text-sm font-semibold">OpenCode, Claude Code, and Devin CLI on the Forge host</h2>
+     <div className="mb-3 flex items-center justify-end gap-2">
       <Button size="sm" variant="outline" disabled={view.status === "loading"} onClick={() => void load()}>Check configuration</Button>
-      </div>
-       <div className="space-y-1 text-xs text-muted-foreground">
-        <p>To sign in, run <code>opencode auth login</code> or <code>claude auth login</code> on the Forge host.</p>
-        <p>A Claude Code login does not verify OpenCode access. This check does not send a model request.</p>
-       </div>
-       <div className="flex max-w-md gap-2"><Input value={label} onChange={event => setLabel(event.target.value)} placeholder="New Claude Code instance" /><Button size="sm" onClick={() => void create()} disabled={!label.trim()}>New instance</Button></div>
-    </div>
+      <NewButton onClick={() => { setError(""); setAddOpen(true); }}>Add Provider</NewButton>
+     </div>
+     {error ? <p role="alert" className="mb-3 text-xs text-destructive">{error}</p> : null}
     <SettingsDataTable label="Providers" columns={columns}>
-      <SettingsTableGroup label="Providers on the Forge host" count={providers.length} columnCount={columns.length}>
-        {providers.map((provider) => <SettingsTableRow key={provider.id}>
-          <SettingsTableCell>{provider.label}</SettingsTableCell>
+      <SettingsTableGroup label="System" count={providers.length} columnCount={columns.length}>
+        {providers.map((provider) => <SettingsTableRow key={`provider:${provider.id}`}>
+          <SettingsTableCell className="truncate font-medium">{provider.label}</SettingsTableCell>
+          <SettingsTableCell className="text-muted-foreground">System</SettingsTableCell>
           <SettingsTableCell>{provider.status === "configured"
-            ? <Badge variant="secondary" aria-label={`${provider.label}: configured, not tested`}>Configured</Badge>
-            : <div className="space-y-1"><Badge variant="destructive" aria-label={`${provider.label}: not installed`}>Not installed</Badge><p className="text-xs text-muted-foreground">{provider.id === "devin" ? <>Run <code>curl -fsSL https://cli.devin.ai/install.sh | bash</code> or set <code>FORGE_DEVIN_COMMAND</code>.</> : <>Install it or set <code>FORGE_CLAUDE_COMMAND</code>.</>}</p></div>}</SettingsTableCell>
+            ? <Badge variant="secondary">Configured</Badge>
+            : <div className="space-y-1"><Badge variant="destructive">Not installed</Badge><p className="text-xs text-muted-foreground">{provider.id === "devin" ? <>Set <code>FORGE_DEVIN_COMMAND</code>.</> : <>Set <code>FORGE_CLAUDE_COMMAND</code>.</>}</p></div>}</SettingsTableCell>
           <SettingsTableCell>{provider.modelCount}</SettingsTableCell>
-          <SettingsTableCell>Not tested</SettingsTableCell>
+          <SettingsTableCell><ConnectionBadge connection={provider.connection} /></SettingsTableCell>
+          <SettingsTableCell>{provider.connection.status !== "connected" ? loginButton(`provider:${provider.id}`, provider.label, `/api/admin/providers/${encodeURIComponent(provider.id)}/login`) : null}</SettingsTableCell>
         </SettingsTableRow>)}
       </SettingsTableGroup>
+      {instances.length ? <SettingsTableGroup label="Company" count={instances.length} columnCount={columns.length}>
+        {instances.map((instance) => <SettingsTableRow key={`instance:${instance.id}`}>
+          <SettingsTableCell className="truncate font-medium">{instance.label}</SettingsTableCell>
+          <SettingsTableCell className="text-muted-foreground">Company</SettingsTableCell>
+          <SettingsTableCell className="truncate text-muted-foreground" title={instance.homeDirectory}>{instance.provider}</SettingsTableCell>
+          <SettingsTableCell>{providers.find(provider => provider.id === instance.provider)?.modelCount ?? 0}</SettingsTableCell>
+          <SettingsTableCell><ConnectionBadge connection={instance.connection} /></SettingsTableCell>
+          <SettingsTableCell><div className="flex gap-1">
+            {instance.connection.status !== "connected" ? loginButton(`instance:${instance.id}`, instance.label, `/api/admin/provider-instances/${encodeURIComponent(instance.id)}/login`) : null}
+            <Button size="sm" variant="outline" onClick={() => setDeleteTarget(instance)}>Delete</Button>
+          </div></SettingsTableCell>
+        </SettingsTableRow>)}
+      </SettingsTableGroup> : null}
+      {view.status === "loaded" && providers.length === 0 && instances.length === 0 ? <SettingsTableEmpty columnCount={columns.length}>No providers were found.</SettingsTableEmpty> : null}
      </SettingsDataTable>
-     {instances.length ? <div className="mt-4 space-y-2 text-xs"><h3 className="font-semibold">Local instances</h3>{instances.map(instance => <div key={instance.id} className="flex flex-wrap items-center gap-2"><span>{instance.label}</span><Badge variant={instance.readiness.status === "healthy" ? "secondary" : instance.readiness.status === "unhealthy" ? "destructive" : "outline"}>{instance.readiness.summary}</Badge><code>CLAUDE_CONFIG_DIR='{instance.homeDirectory}' claude auth login</code><Button size="sm" variant="outline" onClick={() => setDeleteTarget(instance)}>Delete</Button></div>)}</div> : null}
      <AlertDialog open={deleteTarget !== null} onOpenChange={open => { if (!open) setDeleteTarget(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete {deleteTarget?.label}?</AlertDialogTitle><AlertDialogDescription>This deletes the local provider configuration. Agent profiles using it must be changed first.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => { if (deleteTarget) void remove(deleteTarget.id); }}>Delete instance</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+     <Dialog open={addOpen} onOpenChange={open => { if (busy) return; setAddOpen(open); if (!open) setLabel(""); }}>
+      <DialogContent showCloseButton={!busy}>
+       <DialogHeader><DialogTitle>Add Provider</DialogTitle><DialogDescription>Forge creates a local Claude Code instance with its own sign-in.</DialogDescription></DialogHeader>
+       <form onSubmit={event => { event.preventDefault(); void create(); }}>
+        <FieldGroup>
+         <Field><FieldLabel htmlFor="provider-instance-label">Name</FieldLabel><Input id="provider-instance-label" autoFocus disabled={busy} value={label} onChange={event => setLabel(event.target.value)} placeholder="Work laptop" required /></Field>
+         <DialogFooter><DialogClose disabled={busy} render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><NewButton type="submit" disabled={busy || !label.trim()}>Add Provider</NewButton></DialogFooter>
+        </FieldGroup>
+       </form>
+      </DialogContent>
+     </Dialog>
     <div className="mt-3 space-y-2 text-xs text-muted-foreground" role="status" aria-busy={view.status === "loading"}>
       {view.status === "loading" ? <span className="inline-flex items-center gap-2"><Spinner /><span>Please wait.</span></span> : null}
       {view.status === "failed" ? <p role="alert">{view.message}</p> : null}
-      {view.status === "loaded" && providers.length === 0 ? <p>No configured providers were found.</p> : null}
       {view.status === "loaded" ? <p className="break-words">Host directory: <code>{view.data.directory}</code></p> : null}
     </div>
     </SettingsContent>
+    {login ? <div className="fixed inset-x-0 bottom-0 z-50 flex h-64 flex-col border-t border-border bg-background" role="region" aria-label={`Sign-in terminal for ${login.label}`}>
+      <div className="flex h-9 shrink-0 items-center justify-between gap-2 px-4">
+        <span className="truncate text-xs font-medium">Login: {login.label}</span>
+        <Button size="sm" variant="outline" onClick={() => void closeLogin()}>Done</Button>
+      </div>
+      <div className="min-h-0 flex-1 px-2 pb-2">
+        <PaneTerminal path={`/api/admin/provider-login/${encodeURIComponent(login.paneId)}/terminal`} interactive paneId={login.paneId} label={`Sign-in pane for ${login.label}`} />
+      </div>
+    </div> : null}
   </SettingsLayout>;
 }

@@ -13,6 +13,7 @@ import { ProfileBodySchema, ProfilePatchBodySchema, ProfileResponseSchema, Profi
 import { ProviderListResponseSchema, type ProviderListResponse } from "../contracts/providers.js";
 import { ProviderInstanceCreateBodySchema, ProviderInstanceListResponseSchema, ProviderInstanceSchema, type ProviderInstance } from "../contracts/providers.js";
 import type { ProviderInstanceService } from "../../profiles/provider-instances.js";
+import { createProviderConnectionProbe, providerConnectionFromHealth } from "../../profiles/provider-connection.js";
 import { createProviderReadinessCheck } from "../../profiles/provider-readiness.js";
 import { readProviders as readHostProviders, type ReadProviders } from "../../profiles/provider-catalog.js";
 import { MAX_MIN_FREE_DISK_GB, readEnvironmentSettings, updateEnvironmentSettings } from "../../platform/environment-settings.js";
@@ -52,7 +53,7 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     auth.recordAuditEvent(request.forgeUser.id, "environment_settings_updated", undefined, undefined, { previousMinFreeDiskGb: String(previous.minFreeDiskGb), minFreeDiskGb: String(updated.minFreeDiskGb), previousDefaultBudgetUsd: String(previous.defaultBudgetUsd), defaultBudgetUsd: String(updated.defaultBudgetUsd), previousDefaultMaxTurns: String(previous.defaultMaxTurns), defaultMaxTurns: String(updated.defaultMaxTurns) });
     return reply.header("Cache-Control", "private, no-store").send(updated);
   });
-  const readProviders = options.readProviders ?? (() => readHostProviders({ directory: process.cwd() }));
+  const readProviders = options.readProviders ?? (() => readHostProviders({ directory: process.cwd(), connection: createProviderConnectionProbe() }));
   let providerObservation: Promise<ProviderListResponse> | undefined;
   typed.get("/api/admin/providers", { schema: { response: { 200: ProviderListResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
     if (!requireAdmin(request.forgeUser.role, reply)) return;
@@ -74,7 +75,10 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     typed.get("/api/admin/provider-instances", { schema: { response: { 200: ProviderInstanceListResponseSchema } } }, async request => {
       instanceObservation ??= Promise.resolve(options.providerInstances!.list(request.forgeUser.id)).finally(() => { instanceObservation = undefined; });
       const instances = await instanceObservation;
-      return { instances: await Promise.all(instances.map(async instance => ({ ...instance, readiness: await readiness(instance.homeDirectory) }))) };
+      return { instances: await Promise.all(instances.map(async instance => {
+        const check = await readiness(instance.homeDirectory);
+        return { ...instance, readiness: check, connection: providerConnectionFromHealth(check) };
+      })) };
     });
     typed.post("/api/admin/provider-instances", { schema: { body: ProviderInstanceCreateBodySchema, response: { 201: ProviderInstanceSchema } } }, async (request, reply) => reply.code(201).send(await options.providerInstances!.create(request.forgeUser.id, request.body)));
     typed.delete("/api/admin/provider-instances/:instanceId", { schema: { params: z.object({ instanceId: z.string() }), response: { 204: z.null() } } }, async (request, reply) => { await options.providerInstances!.delete(request.forgeUser.id, request.params.instanceId); return reply.code(204).send(null); });

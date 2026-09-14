@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveOpenCodeExecutable } from "../../platform/executable-resolver.js";
 import { ensureOpenCodeServer, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer } from "./server.js";
-import type { ProviderListResponse } from "../../http/contracts/providers.js";
+import type { ProviderObservation } from "../../http/contracts/providers.js";
 
 // A fresh, session-free server reads current native auth and configuration.
 // Disposing it cannot interrupt a task's server or refresh its credentials.
-export async function readOpenCodeProviders(input: { directory: string; executable?: string }): Promise<ProviderListResponse> {
+export async function readOpenCodeProviders(input: { directory: string; executable?: string }): Promise<ProviderObservation> {
   const executable = await resolveOpenCodeExecutable(input);
   const runtimeDirectory = await mkdtemp(join(tmpdir(), "forge-provider-observation-"));
   try {

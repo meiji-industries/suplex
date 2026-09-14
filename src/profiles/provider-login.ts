@@ -1,0 +1,95 @@
+import type { HerdrClient } from "../integrations/herdr/client.js";
+import { CLAUDE_EXECUTABLE, DEVIN_EXECUTABLE, OPENCODE_EXECUTABLE, resolveClaudeExecutable, resolveDevinExecutable, resolveOpenCodeExecutable, type ExecutableSpec } from "../platform/executable-resolver.js";
+import { profileHarness, type HarnessKind } from "../runtimes/task-harness.js";
+
+export type ProviderLoginPort = Pick<HerdrClient, "getPane" | "createWorkspace" | "runPaneCommand" | "closePane" | "closeWorkspace">;
+
+export const PROVIDER_LOGIN_WORKSPACE_LABEL = "forge-provider-login";
+
+const quoted = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+
+const LOGIN_EXECUTABLES: Record<HarnessKind, { spec: ExecutableSpec; resolve: () => Promise<string> }> = {
+  "claude-code": { spec: CLAUDE_EXECUTABLE, resolve: () => resolveClaudeExecutable() },
+  devin: { spec: DEVIN_EXECUTABLE, resolve: () => resolveDevinExecutable() },
+  opencode: { spec: OPENCODE_EXECUTABLE, resolve: () => resolveOpenCodeExecutable() },
+};
+
+export interface ProviderLoginCommandOptions {
+  resolveExecutable?: () => Promise<string>;
+}
+
+/**
+ * Interactive sign-in command for a provider; a local instance scopes Claude
+ * Code to its home directory. The executable resolves through Forge's
+ * executable resolver so the pane does not depend on the pane shell PATH;
+ * when resolution fails the command falls back to the bare binary name so the
+ * interactive pane stays usable.
+ */
+export async function providerLoginCommand(providerId: string, homeDirectory?: string | null, options: ProviderLoginCommandOptions = {}): Promise<string> {
+  const harness = profileHarness(providerId);
+  const entry = LOGIN_EXECUTABLES[harness];
+  const binary = await (options.resolveExecutable ?? entry.resolve)().then(quoted, () => entry.spec.binary);
+  const command = `${binary} auth login`;
+  return homeDirectory && harness === "claude-code" ? `CLAUDE_CONFIG_DIR=${quoted(homeDirectory)} ${command}` : command;
+}
+
+export interface ProviderLoginSession {
+  target: string;
+  paneId: string;
+  workspaceId: string;
+  label: string;
+}
+
+/**
+ * Interactive provider sign-ins run in a dedicated Herdr workspace. The registry
+ * is the authority for which panes the terminal route can attach to; a session
+ * whose pane disappeared from Herdr is forgotten and recreated on demand. Only
+ * one sign-in session runs at a time: starting a new login closes the previous
+ * session so Herdr is not left running orphaned forge-provider-login workspaces.
+ */
+export class ProviderLoginService {
+  private readonly sessions = new Map<string, ProviderLoginSession>();
+  private readonly byTarget = new Map<string, string>();
+
+  constructor(private readonly herdr: ProviderLoginPort) {}
+
+  async start(input: { target: string; label: string; command: string; cwd?: string }): Promise<ProviderLoginSession> {
+    const existingPane = this.byTarget.get(input.target);
+    const existing = existingPane ? this.sessions.get(existingPane) : undefined;
+    if (existing && await this.herdr.getPane(existing.paneId).then(pane => pane !== null, () => false)) return existing;
+    const { workspace, rootPane } = await this.herdr.createWorkspace({ label: PROVIDER_LOGIN_WORKSPACE_LABEL, cwd: input.cwd ?? process.cwd(), focus: false });
+    try {
+      await this.herdr.runPaneCommand(rootPane.paneId, input.command);
+    } catch (error) {
+      await this.herdr.closeWorkspace(workspace.workspaceId).catch(() => undefined);
+      throw error;
+    }
+    for (const session of [...this.sessions.values()]) await this.closeSession(session);
+    const session: ProviderLoginSession = { target: input.target, paneId: rootPane.paneId, workspaceId: workspace.workspaceId, label: input.label };
+    this.sessions.set(session.paneId, session);
+    this.byTarget.set(session.target, session.paneId);
+    return session;
+  }
+
+  get(paneId: string): ProviderLoginSession | undefined {
+    return this.sessions.get(paneId);
+  }
+
+  async close(paneId: string): Promise<boolean> {
+    const session = this.sessions.get(paneId);
+    if (!session) return false;
+    await this.closeSession(session);
+    return true;
+  }
+
+  private async closeSession(session: ProviderLoginSession): Promise<void> {
+    this.forget(session);
+    await this.herdr.closePane(session.paneId).catch(() => undefined);
+    await this.herdr.closeWorkspace(session.workspaceId).catch(() => undefined);
+  }
+
+  private forget(session: ProviderLoginSession): void {
+    this.sessions.delete(session.paneId);
+    if (this.byTarget.get(session.target) === session.paneId) this.byTarget.delete(session.target);
+  }
+}

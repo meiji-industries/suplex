@@ -54,7 +54,10 @@ export function terminalTheme(host: HTMLElement): ITheme {
 }
 
 export function LivePaneTerminal({ taskId, role, paneId }: { taskId: string; role: "root" | "worker" | "shell"; paneId: string | null }): JSX.Element {
-  const interactive = role === "shell";
+  return <PaneTerminal path={`/api/tasks/${encodeURIComponent(taskId)}/pane/${encodeURIComponent(role)}/terminal`} interactive={role === "shell"} paneId={paneId} label={`Live pane output for ${role}`} />;
+}
+
+export function PaneTerminal({ path, interactive, paneId, label }: { path: string; interactive: boolean; paneId: string | null; label: string }): JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const statusRef = useRef<TerminalStatus>(paneId || interactive ? "connecting" : "ended");
@@ -92,7 +95,7 @@ export function LivePaneTerminal({ taskId, role, paneId }: { taskId: string; rol
       const { cols, rows } = proposed;
       activeDimensions = { cols, rows };
       const scheme = location.protocol === "https:" ? "wss" : "ws";
-      const socket = new WebSocket(`${scheme}://${location.host}/api/tasks/${encodeURIComponent(taskId)}/pane/${encodeURIComponent(role)}/terminal?cols=${cols}&rows=${rows}`);
+      const socket = new WebSocket(`${scheme}://${location.host}${path}?cols=${cols}&rows=${rows}`);
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
       if (statusRef.current !== "live") setTerminalStatus(attempt === 0 ? "connecting" : "reconnecting");
@@ -172,9 +175,9 @@ export function LivePaneTerminal({ taskId, role, paneId }: { taskId: string; rol
     observer.observe(host);
     connect();
     return () => { disposed = true; window.clearTimeout(retry); window.clearTimeout(resizeTimer); observer.disconnect(); socketRef.current?.close(1000); socketRef.current = null; terminal.dispose(); };
-  }, [connection, interactive, paneId, role, taskId]);
+  }, [connection, interactive, paneId, path, label]);
   const reconnect = () => { setConnection((value) => value + 1); statusRef.current = "connecting"; setStatus("connecting"); };
   const jumpToBottom = () => { sendRef.current(JSON.stringify({ type: "scroll", direction: "down", lines: 10_000 })); setScrolledUp(false); hostRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea")?.focus(); };
   const overlay = status === "connecting" ? "Connection in progress" : status === "reconnecting" ? <ReconnectingStatus /> : status === "taken_over" ? "Another viewer took control" : status === "ended" ? (errorMessage ?? (paneId || interactive ? "Pane ended" : "No live pane")) : null;
-  return <div className="flex h-full min-h-0 flex-col"><div className="relative mt-1 min-h-0 flex-1 overflow-hidden bg-background p-2"><div aria-label={`Live pane output for ${role}`} className="h-full" ref={hostRef} />{overlay ? <div className="absolute inset-0 flex items-center justify-center gap-2 bg-background/85 text-sm text-foreground"><span>{overlay}</span>{errorMessage || status === "taken_over" ? <Button size="xs" onClick={reconnect}>{status === "taken_over" ? "Take control" : "Retry"}</Button> : null}</div> : null}{interactive && status === "live" && scrolledUp ? <Button aria-label="Jump to bottom" className="absolute bottom-3 right-3" size="icon-xs" variant="secondary" onClick={jumpToBottom}><ArrowDownToLine aria-hidden="true" /></Button> : null}</div></div>;
+  return <div className="flex h-full min-h-0 flex-col"><div className="relative mt-1 min-h-0 flex-1 overflow-hidden bg-background p-2"><div aria-label={label} className="h-full" ref={hostRef} />{overlay ? <div className="absolute inset-0 flex items-center justify-center gap-2 bg-background/85 text-sm text-foreground"><span>{overlay}</span>{errorMessage || status === "taken_over" ? <Button size="xs" onClick={reconnect}>{status === "taken_over" ? "Take control" : "Retry"}</Button> : null}</div> : null}{interactive && status === "live" && scrolledUp ? <Button aria-label="Jump to bottom" className="absolute bottom-3 right-3" size="icon-xs" variant="secondary" onClick={jumpToBottom}><ArrowDownToLine aria-hidden="true" /></Button> : null}</div></div>;
 }

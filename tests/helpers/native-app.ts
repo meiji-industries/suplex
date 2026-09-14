@@ -44,7 +44,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
     // The remote identity follows the directory name, so a fixture can hold more than one project.
     localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: `owner/${basename(input.repositoryPath)}`, clean: false, baseSha: "a".repeat(40) }; } },
     github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } },
-    readProviders: async () => ({ directory, observedAt: new Date().toISOString(), providers: [{ id: "openai", label: "OpenAI", status: "configured", modelCount: 2, models: [{ id: "gpt-5.6-sol", label: "Sol" }, { id: "gpt-5.6-luna", label: "Luna" }] }] }),
+    readProviders: async () => ({ directory, observedAt: new Date().toISOString(), providers: [{ id: "openai", label: "OpenAI", status: "configured" as const, modelCount: 2, models: [{ id: "gpt-5.6-sol", label: "Sol" }, { id: "gpt-5.6-luna", label: "Luna" }], connection: { status: "connected" as const, summary: "Signed in" } }] }),
   });
   const tasks = new TaskService(database, auth, projects, config, fixtureOptions.herdr ? { herdr: fixtureOptions.herdr } : {});
   const templates = new TaskTemplateService(database, auth, tasks);

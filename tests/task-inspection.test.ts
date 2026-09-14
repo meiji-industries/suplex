@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { runCommand } from "../src/platform/command-runner.js";
-import { readTaskChecks, readTaskDiff } from "../src/tasks/inspection.js";
+import { readTaskChecks, readTaskDiff, readTaskDiffSummary } from "../src/tasks/inspection.js";
 import { nativeApp } from "./helpers/native-app.js";
 import { commitGitFixture, initializeGitFixture } from "./helpers/git-fixture.js";
 
@@ -34,6 +34,33 @@ test("task diffs read actual Git changes without changing worktree state", async
     const missing = await value.app.inject({ url: "/api/tasks/missing/diff", headers: value.headers });
     expect(missing.statusCode).toBe(404);
     expect((await value.app.inject({ url: `/api/tasks/${task.id}/checks`, headers: value.headers })).json()).toEqual({ available: false, runs: [] });
+  } finally { await value.close(); }
+});
+
+test("the diff summary counts changed files without reading the patch", async () => {
+  const value = await nativeApp();
+  try {
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Count changes", description: "Count changed files", idempotencyKey: "inspect-diff-summary" });
+    expect(await readTaskDiffSummary(task)).toEqual({ available: false, files: 0 });
+    const route = await value.app.inject({ url: `/api/tasks/${task.id}/diff/summary`, headers: value.headers });
+    expect(route.statusCode).toBe(200);
+    expect(route.json()).toEqual({ available: false, files: 0 });
+    expect((await value.app.inject({ url: "/api/tasks/missing/diff/summary", headers: value.headers })).statusCode).toBe(404);
+
+    const cwd = value.project.repositoryPath;
+    await initializeGitFixture(cwd, "main");
+    await writeFile(join(cwd, "README.md"), "Before\n");
+    await writeFile(join(cwd, "NOTES.md"), "Keep\n");
+    const head = await commitGitFixture(cwd, "Initial", ["README.md", "NOTES.md"]);
+    await writeFile(join(cwd, "README.md"), "After\n");
+    await writeFile(join(cwd, "NOTES.md"), "Changed\n");
+    const current = { ...task, configuration: { ...task.configuration, baselineSha: head }, worktree: { path: cwd, branch: "main", baseSha: head, headSha: head, dirty: true } };
+    expect(await readTaskDiffSummary(current)).toEqual({ available: true, files: 2 });
+    await writeFile(join(cwd, "NEW.md"), "Added\n");
+    expect(await readTaskDiffSummary(current)).toEqual({ available: true, files: 2 });
+    await runCommand({ taskId: null, stepId: null, command: "git", args: ["-C", cwd, "add", "NEW.md"] });
+    expect(await readTaskDiffSummary(current)).toEqual({ available: true, files: 3 });
+    await expect(readTaskDiffSummary({ ...current, configuration: { ...current.configuration, baselineSha: "0".repeat(40) } })).rejects.toThrow("The worktree diff could not be read");
   } finally { await value.close(); }
 });
 

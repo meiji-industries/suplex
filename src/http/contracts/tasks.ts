@@ -49,6 +49,7 @@ export const TaskSessionHistoryParamsSchema = z.object({ taskId: z.string().min(
 export const TaskSessionHistoryQuerySchema = z.object({ before: z.string().min(1).max(512).optional() });
 
 export const TaskDiffResponseSchema = z.object({ available: z.boolean(), patch: z.string(), truncated: z.boolean() });
+export const TaskDiffSummaryResponseSchema = z.object({ available: z.boolean(), files: z.number().int().nonnegative() });
 export const TaskAgentStatusSchema = z.enum(["queued", "working", "retrying", "idle", "waiting_human", "stopped", "unknown"]);
 export const TaskAgentsResponseSchema = z.object({ agents: z.array(z.object({ id: z.string(), role: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable().optional(), label: z.string().optional(), paneId: z.string().nullable(), status: TaskAgentStatusSchema, statusChangedAt: z.string().datetime().nullable() })) });
 export const TaskChecksResponseSchema = z.object({

@@ -8,13 +8,13 @@ import type { TaskHost } from "../../tasks/host.js";
 import type { ForgeConfig } from "../../platform/config.js";
 import { readTaskAgentStatuses } from "../../tasks/agent-status.js";
 import { TaskAgentsResponseSchema, TaskArchiveBodySchema, TaskArchiveResponseSchema } from "../contracts/tasks.js";
-import { readTaskChecks, readTaskDiff } from "../../tasks/inspection.js";
+import { readTaskChecks, readTaskDiff, readTaskDiffSummary } from "../../tasks/inspection.js";
 import { readTaskExecution } from "../../tasks/execution/execution.js";
 import { readTaskSessionHistory } from "../../tasks/history/read.js";
 import { SessionHistoryCursorError } from "../../tasks/history/history.js";
 import { TaskTimelineResponseSchema } from "../../tasks/timeline/contracts.js";
 import { TaskExecutionResponseSchema } from "../../tasks/execution/contracts.js";
-import { TaskChecksResponseSchema, TaskDiffResponseSchema } from "../contracts/tasks.js";
+import { TaskChecksResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema } from "../contracts/tasks.js";
 import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { normalizeWorkflowInput, WorkflowInputFailure } from "../../coordination/workflows.js";
 import { MAX_TASK_REQUEST_BYTES, SessionHistoryPageSchema, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBlockedByBodySchema, TaskBodySchema, TaskDependenciesBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskSessionHistoryParamsSchema, TaskSessionHistoryQuerySchema, TaskWorkerReplacementBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
@@ -127,6 +127,11 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   typed.get("/api/tasks/:taskId/activity", { schema: { params: TaskIdParamsSchema, response: { 200: TaskActivityResponseSchema } } }, async (request, reply) => reply.header("Cache-Control", "private, no-store").send(tasks.getTaskActivity(request.forgeUser.id, request.params.taskId)));
   typed.get("/api/tasks/:taskId/diff", { schema: { params: TaskIdParamsSchema, response: { 200: TaskDiffResponseSchema } } }, async (request, reply) => {
     const result = await readTaskDiff(tasks.getTask(request.forgeUser.id, request.params.taskId));
+    tasks.getTask(request.forgeUser.id, request.params.taskId);
+    return reply.header("Cache-Control", "private, no-store").send(result);
+  });
+  typed.get("/api/tasks/:taskId/diff/summary", { schema: { params: TaskIdParamsSchema, response: { 200: TaskDiffSummaryResponseSchema } } }, async (request, reply) => {
+    const result = await readTaskDiffSummary(tasks.getTask(request.forgeUser.id, request.params.taskId));
     tasks.getTask(request.forgeUser.id, request.params.taskId);
     return reply.header("Cache-Control", "private, no-store").send(result);
   });

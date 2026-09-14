@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { CircleDashed } from "lucide-react";
 import type { Task } from "../../../tasks/contracts.js";
-import { type TaskActivityResponseSchema, TaskChecksResponseSchema, TaskDiffResponseSchema } from "../../../http/contracts/tasks.js";
+import { type TaskActivityResponseSchema, TaskChecksResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema } from "../../../http/contracts/tasks.js";
 import { readJson } from "../../lib/api.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Spinner } from "../../components/ui/spinner.js";
@@ -40,10 +40,11 @@ function humanMessage(prompt: string): string {
 export function TaskWork({ task, activity, onChange }: { task: Task; activity: TaskActivity; onChange: (task: Task) => void }) {
   const [tab, setTab] = useState("chat");
   const { execution, error: executionError } = useTaskExecution(task.id);
+  const diffSummary = useTaskDiffSummary(task);
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
     <TaskWorker key={task.id} task={task} activity={activity} onChange={onChange} />
     <TaskActivityTimeline taskId={task.id} />
-    <div className="max-w-full border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
+    <div className="max-w-full border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs{diffSummary?.available ? <span className="text-xs text-muted-foreground"> ({diffSummary.files})</span> : null}</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
     <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3" aria-label="Conversation">
       <WorkflowPlan key={task.id} task={task} />
       <RootPlan execution={execution} />
@@ -106,6 +107,25 @@ export function TaskNoteInput({ task, onChange }: { task: Task; onChange: (task:
       <PromptInputFooter><span className="mr-auto text-xs text-muted-foreground">{trimmed.length.toLocaleString()} / {MAX_TASK_NOTE_LENGTH.toLocaleString()}</span><PromptInputSubmit status={submitting ? "submitted" : "ready"} disabled={invalid || submitting} /></PromptInputFooter>
     </PromptInput></div>
   </section>;
+}
+
+function useTaskDiffSummary(task: Task) {
+  const [summary, setSummary] = useState<z.infer<typeof TaskDiffSummaryResponseSchema> | null>(null);
+  useEffect(() => {
+    let closed = false;
+    let reading = false;
+    const read = async () => {
+      if (closed || reading) return;
+      reading = true;
+      try { const value = TaskDiffSummaryResponseSchema.parse(await readJson(`/api/tasks/${task.id}/diff/summary`)); if (!closed) setSummary(value); }
+      catch { if (!closed) setSummary(null); }
+      finally { reading = false; }
+    };
+    void read();
+    const timer = setInterval(() => void read(), 5000);
+    return () => { closed = true; clearInterval(timer); };
+  }, [task.id, task.updatedAt]);
+  return summary;
 }
 
 function TaskDiff({ task }: { task: Task }) {

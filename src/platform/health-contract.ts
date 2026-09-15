@@ -5,6 +5,7 @@ export type ProviderHarnessKind = Extract<HarnessKind, "opencode" | "claude-code
 export const HEALTH_CHECK_IDS = [
   "database",
   "artifact-root",
+  "disk-space",
   "git",
   "herdr-readiness",
   "gh-auth",

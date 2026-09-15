@@ -38,6 +38,7 @@ test("doctor fails necessary checks, warns for optional checks, and prints their
   const dependencies = vi.spyOn(hostHealth, "createHostHealthDependencies").mockReturnValue({
     database: check("database", "warning"),
     artifactRoot: check("artifact-root", "healthy"),
+    diskSpace: check("disk-space", "warning"),
     git: check("git", "unhealthy", "xcode-select --install"),
     herdrReadiness: check("herdr-readiness", "unhealthy", "herdr"),
     ghAuth: check("gh-auth", "unhealthy", "gh auth login"),
@@ -49,7 +50,7 @@ test("doctor fails necessary checks, warns for optional checks, and prints their
   try {
     const checks = await runDoctor(createTestConfig("/tmp/forge-doctor-health-test"), database);
     expect(checks.filter(({ status }) => status === "FAIL").map(({ name }) => name)).toEqual(["database", "git", "herdr-readiness"]);
-    expect(checks.filter(({ status }) => status === "WARN").map(({ name }) => name)).toEqual(["gh-auth", "pnpm", "tailscale", "backup", "opencode", "claude-code"]);
+    expect(checks.filter(({ status }) => status === "WARN").map(({ name }) => name)).toEqual(["disk-space", "gh-auth", "pnpm", "tailscale", "backup", "opencode", "claude-code"]);
     expect(formatDoctor(checks)).toContain("FAIL herdr-readiness: Host check (herdr)\n");
     expect(formatDoctor(checks)).toContain("WARN gh-auth: Host check (gh auth login)\n");
   } finally {

@@ -34,3 +34,9 @@ test("provider failures never turn system health red", () => {
     expect(getSystemHealthLevel(unhealthy, "current")).toBe("amber");
   }
 });
+
+test("low disk space degrades health while owned readiness stays true", () => {
+  const lowDisk: HealthSnapshot = { ...snapshot, checks: [...snapshot.checks, { id: "disk-space", label: "Disk space", status: "warning", summary: "Low disk space", details: {} }] };
+  expect(lowDisk.ready).toBe(true);
+  expect(getSystemHealthLevel(lowDisk, "current")).toBe("amber");
+});

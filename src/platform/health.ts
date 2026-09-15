@@ -32,6 +32,7 @@ export interface HealthSnapshot {
 export interface HostHealthDependencies {
   database: () => Promise<HealthCheck>;
   artifactRoot: () => Promise<HealthCheck>;
+  diskSpace?: () => Promise<HealthCheck>;
   git?: () => Promise<HealthCheck>;
   herdrReadiness?: () => Promise<HealthCheck>;
   ghAuth: () => Promise<HealthCheck>;
@@ -68,6 +69,7 @@ export async function inspectHostHealth(config: ForgeConfig, dependencies: HostH
   const checks = await Promise.all([
     safelyCheck("database", "SQLite database", dependencies.database),
     safelyCheck("artifact-root", "Artifact root", dependencies.artifactRoot),
+    ...(dependencies.diskSpace ? [safelyCheck("disk-space", "Disk space", dependencies.diskSpace)] : []),
     ...(dependencies.git ? [safelyCheck("git", "Git", dependencies.git)] : []),
     ...(dependencies.herdrReadiness ? [safelyCheck("herdr-readiness", "Herdr", dependencies.herdrReadiness)] : []),
     safelyCheck("gh-auth", "GitHub CLI authentication", dependencies.ghAuth),

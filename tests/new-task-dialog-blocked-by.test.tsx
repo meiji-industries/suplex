@@ -7,13 +7,20 @@ import type { Task } from "../src/tasks/contracts.js";
 const api = vi.hoisted(() => ({ readJson: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../src/frontend/lib/api.js", () => api);
 
-vi.mock("../src/frontend/components/ui/dialog.js", () => ({
-  Dialog: ({ open, children }: { open: boolean; children: React.ReactNode }) => open ? <>{children}</> : null,
-  DialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
-}));
+vi.mock("../src/frontend/components/ui/dialog.js", async () => {
+  const React = await import("react");
+  const Context = React.createContext({ onOpenChange: (_open: boolean): void => undefined });
+  return {
+    Dialog: ({ open, onOpenChange, children }: { open: boolean; onOpenChange: (open: boolean) => void; children: React.ReactNode }) => open ? <Context.Provider value={{ onOpenChange }}>{children}</Context.Provider> : null,
+    DialogContent: ({ children, showCloseButton = true }: { children: React.ReactNode; showCloseButton?: boolean }) => {
+      const { onOpenChange } = React.useContext(Context);
+      return <div>{children}{showCloseButton ? <button type="button" aria-label="Close" onClick={() => onOpenChange(false)}>Close</button> : null}</div>;
+    },
+    DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
+  };
+});
 vi.mock("../src/frontend/components/ui/dropdown-menu.js", async () => {
   const React = await import("react");
   const Context = React.createContext({ open: false, setOpen: (_open: boolean): void => undefined });
@@ -51,8 +58,9 @@ const archived = { id: "task-archived", projectId: project.id, title: "Archived 
 const delivered = { id: "task-delivered", projectId: project.id, title: "Delivered task", status: "delivered", archivedAt: null };
 const cancelled = { id: "task-cancelled", projectId: project.id, title: "Cancelled task", status: "cancelled", archivedAt: null };
 
-function setText(field: HTMLInputElement, value: string) {
-  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, value);
+function setText(field: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  const prototype = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype, "value")?.set?.call(field, value);
   field.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
@@ -124,6 +132,27 @@ test("New task Blocked by picker filters, selects, clears, and posts its referen
   await act(async () => { button(view.container, "Backlog task").click(); setText(title, "Create dependent"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
   const postsWithReference = api.readJson.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST");
   expect(JSON.parse(postsWithReference[1]![1].body).blockedByTaskId).toBe("task-backlog");
+});
+
+test("closing the Blocked by picker preserves the new task dialog state", async () => {
+  const view = mount();
+  await flush();
+  const title = view.container.querySelector<HTMLInputElement>('[aria-label="Task title"]')!;
+  const description = view.container.querySelector<HTMLTextAreaElement>('[aria-label="Task description"]')!;
+  await act(async () => { setText(title, "Dependent task"); setText(description, "Wait for the prerequisite"); });
+  await act(async () => { button(view.container, "More options").click(); });
+  await act(async () => { button(view.container, "Blocked by...").click(); });
+  await flush();
+  await act(async () => { button(view.container, "Active prerequisite").click(); });
+  await act(async () => { button(view.container, "More options").click(); });
+  await act(async () => { button(view.container, "Blocked by...").click(); });
+  await flush();
+  expect(view.container.querySelector('[aria-label="Search tasks"]')).not.toBeNull();
+  await act(async () => { button(view.container, "Close").click(); });
+  expect(view.container.querySelector('[aria-label="Search tasks"]')).toBeNull();
+  expect(title.value).toBe("Dependent task");
+  expect(description.value).toBe("Wait for the prerequisite");
+  expect(view.container.textContent).toContain("Blocked by Active prerequisite");
 });
 
 test("More options is absent when editing a task", async () => {

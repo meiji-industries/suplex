@@ -85,7 +85,11 @@ export class TaskControlStore {
     return this.observeLifecycle(input.taskId);
   }
   start(taskId: string): TaskControl {
-    const changed = this.database.authImmediateTransaction((db) => { assertTaskPullRequestsAvailable(db, taskId); return db.prepare("UPDATE forge_task_controls SET status = 'active', wake_at = ?, updated_at = ? WHERE task_id = ? AND status IN ('backlog', 'active')").run(now(), now(), taskId).changes; });
+    const changed = this.database.authImmediateTransaction(db => {
+      const started = this.startInTransaction(db, taskId);
+      if (started === 1) db.prepare("UPDATE forge_tasks SET start_when_blocked_by_delivered = 0, updated_at = ? WHERE id = ?").run(now(), taskId);
+      return started;
+    });
     if (changed !== 1) throw new Error("task_not_startable");
     return this.observeLifecycle(taskId);
   }
@@ -150,9 +154,21 @@ export class TaskControlStore {
     return this.get(taskId);
   }
   markDelivered(taskId: string): TaskControl {
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.followUp', json('false')), status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(now(), taskId).changes);
+    const changed = this.database.authTransaction((db) => {
+      const delivered = db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.followUp', json('false')), status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(now(), taskId).changes;
+      if (delivered !== 1) return delivered;
+      const waiting = db.prepare("SELECT t.id FROM forge_tasks t JOIN forge_task_controls c ON c.task_id = t.id WHERE t.blocked_by_task_id = ? AND t.start_when_blocked_by_delivered = 1 AND t.archived_at IS NULL AND c.status = 'backlog'").all(taskId) as Array<{ id: string }>;
+      for (const dependent of waiting) {
+        if (this.startInTransaction(db, dependent.id) === 1) db.prepare("UPDATE forge_tasks SET start_when_blocked_by_delivered = 0, updated_at = ? WHERE id = ?").run(now(), dependent.id);
+      }
+      return delivered;
+    });
     if (changed !== 1) throw new Error("task_not_active");
     return this.observeLifecycle(taskId);
+  }
+  private startInTransaction(db: Database.Database, taskId: string): number {
+    assertTaskPullRequestsAvailable(db, taskId);
+    return db.prepare("UPDATE forge_task_controls SET status = 'active', wake_at = ?, updated_at = ? WHERE task_id = ? AND status IN ('backlog', 'active')").run(now(), now(), taskId).changes;
   }
   get(taskId: string): TaskControl {
     return this.database.authQuery((db) => { const row = db.prepare("SELECT * FROM forge_task_controls WHERE task_id = ?").get(taskId) as Row | undefined; if (!row) throw new Error(`Task control ${taskId} does not exist`); return control(row); });

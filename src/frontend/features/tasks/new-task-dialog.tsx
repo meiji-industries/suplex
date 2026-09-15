@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { FileText, FolderKanban } from "lucide-react";
+import { FileText, FolderKanban, MoreHorizontal, X } from "lucide-react";
 import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../../tasks/contracts.js";
 import { ADVISOR_LABELS, workflowDefinition, type AdvisorProfileIds, type AdvisorRole, type WorkflowId } from "../../../coordination/workflows.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate, ApiWorkflow } from "../../shell/view-shared.js";
@@ -69,6 +69,11 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const [source, setSource] = useState<TaskSourceSelector | undefined>(initialDraft?.source);
   const [sourceSummary, setSourceSummary] = useState<TaskSourceSummary | undefined>(initialDraft?.sourceSummary);
   const [images, setImages] = useState<NonNullable<TaskInput["images"]>>(initialDraft?.images ?? []);
+  const [blockedBy, setBlockedBy] = useState<Task["blockedBy"]>(null);
+  const [blockedByPickerOpen, setBlockedByPickerOpen] = useState(false);
+  const [blockedByTasks, setBlockedByTasks] = useState<Task[]>([]);
+  const [blockedByQuery, setBlockedByQuery] = useState("");
+  const [blockedByLoading, setBlockedByLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [readingImages, setReadingImages] = useState(false);
   const imageRead = useRef({ generation: 0, pending: false });
@@ -136,6 +141,15 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     return () => { cancelled = true; };
   }, [projectId, open]);
   useEffect(() => {
+    if (!blockedByPickerOpen || !projectId) return;
+    let cancelled = false;
+    setBlockedByLoading(true);
+    void readJson<{ tasks: Task[] }>(`/api/companies/${companyId}/tasks`).then(result => {
+      if (!cancelled) setBlockedByTasks(result.tasks.filter(task => task.projectId === projectId && task.status === "active" && !task.archivedAt));
+    }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : "Tasks are not available"); }).finally(() => { if (!cancelled) setBlockedByLoading(false); });
+    return () => { cancelled = true; };
+  }, [blockedByPickerOpen, projectId, companyId]);
+  useEffect(() => {
     if (editing || !open || !settingsLoaded || !projects.some(project => project.id === projectId)) return;
     // Repair forces target/tests; remember the draft's own general settings instead of the forced values.
     const general = repair && previousDelivery.current ? previousDelivery.current : { deliveryTarget, runProjectTests };
@@ -179,12 +193,12 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
         onCreated(saved);
         return;
       }
-      const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(source ? { source } : {}) };
+      const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(source ? { source } : {}), ...(blockedBy ? { blockedByTaskId: blockedBy.id } : {}) };
       const serialized = JSON.stringify(body);
       if (request.current?.body !== serialized) request.current = { body: serialized, key: crypto.randomUUID() };
       const task = await readJson<Task>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ ...body, idempotencyKey: request.current.key }) });
       request.current = null;
-      setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined);
+      setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined); setBlockedBy(null);
       onCreated(task);
     } catch (error) { setError(error instanceof Error ? error.message : "Forge could not save the task"); }
     finally { setBusy(false); }
@@ -208,13 +222,14 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   };
   const project = projects.find(project => project.id === projectId);
   const definition = workflowDefinition(workflow);
+  const matchingBlockedByTasks = blockedByTasks.filter(task => { const query = blockedByQuery.trim().toLowerCase(); return !query || task.title.toLowerCase().includes(query) || task.id.toLowerCase().includes(query); });
   return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}>
     <DialogContent className="max-h-[min(85vh,460px)] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto rounded-xl p-0 shadow-2xl sm:max-w-[936px]" showCloseButton={false}>
       <DialogHeader className="px-4 py-3 sm:px-5">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2"><Breadcrumb><BreadcrumbList className="gap-2 text-sm"><BreadcrumbItem>
           <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" aria-label="Project" disabled={busy || editing || !projects.length} />}>
             {project ? <EntityAvatar kind="project" id={project.id} name={project.name} size="xs" /> : <FolderKanban className="size-3.5 text-muted-foreground" />}<span className="max-w-40 truncate">{project?.name ?? "Project"}</span>
-          </DropdownMenuTrigger><DropdownMenuContent align="start">{projects.map(candidate => <DropdownMenuItem key={candidate.id} onClick={() => { setProjectId(candidate.id); setSource(undefined); setSourceSummary(undefined); }}><EntityAvatar kind="project" id={candidate.id} name={candidate.name} size="xs" /><span className="min-w-0 flex-1 truncate">{candidate.name}</span>{candidate.id === projectId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
+          </DropdownMenuTrigger><DropdownMenuContent align="start">{projects.map(candidate => <DropdownMenuItem key={candidate.id} onClick={() => { setProjectId(candidate.id); setSource(undefined); setSourceSummary(undefined); setBlockedBy(null); }}><EntityAvatar kind="project" id={candidate.id} name={candidate.name} size="xs" /><span className="min-w-0 flex-1 truncate">{candidate.name}</span>{candidate.id === projectId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
         </BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><DialogTitle className="font-normal">{editing ? "Edit task" : "New task"}</DialogTitle></BreadcrumbItem></BreadcrumbList></Breadcrumb>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
           <TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy || editing} pullRequestsOnly={repair} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
@@ -231,8 +246,10 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
         <div className="mt-auto flex flex-wrap items-end gap-2 px-5 pb-4">
           {editing ? null : <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} />}
           <TaskRoleSelector role="root" profiles={profiles} assignment={rootProfileId} defaultProfileId={project?.rootProfileId} busy={busy} onChange={setRootProfileId} />
-          <TaskRoleSelector role="worker" profiles={profiles} assignment={workerProfileId} defaultProfileId={project?.workerProfileId} busy={busy} onChange={setWorkerProfileId} />
-          {definition.advisorRoles.map(role => <TaskRoleSelector key={role} role="root" label={ADVISOR_LABELS[role]} profiles={profiles} assignment={advisorProfileIds[role] ?? ""} defaultProfileId={rootProfileId || project?.rootProfileId} busy={busy} onChange={profileId => setAdvisorProfileIds(current => ({ ...current, [role]: profileId || undefined }))} />)}
+           <TaskRoleSelector role="worker" profiles={profiles} assignment={workerProfileId} defaultProfileId={project?.workerProfileId} busy={busy} onChange={setWorkerProfileId} />
+           {definition.advisorRoles.map(role => <TaskRoleSelector key={role} role="root" label={ADVISOR_LABELS[role]} profiles={profiles} assignment={advisorProfileIds[role] ?? ""} defaultProfileId={rootProfileId || project?.rootProfileId} busy={busy} onChange={profileId => setAdvisorProfileIds(current => ({ ...current, [role]: profileId || undefined }))} />)}
+           {editing ? null : <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="icon-xs" aria-label="More options" disabled={busy || !projectId} />}><MoreHorizontal /></DropdownMenuTrigger><DropdownMenuContent><DropdownMenuItem onClick={() => { setBlockedByQuery(""); setBlockedByPickerOpen(true); }}>Blocked by...</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
+           {blockedBy ? <span className="flex items-center gap-1 text-xs" data-blocked-by-selection><span className="max-w-40 truncate">Blocked by {blockedBy.title}</span><Button type="button" variant="ghost" size="icon-xs" aria-label="Clear blocked by reference" disabled={busy} onClick={() => setBlockedBy(null)}><X /></Button></span> : null}
           <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">{repair ? <span className="text-xs text-muted-foreground" data-repair-note>{missingSource ? "Select a pull request source." : repairNote}</span> : null}<NewButton type="submit" disabled={busy || readingImages || !projectId || !title.trim() || missingSource} title={editing ? "Save task (⌘Enter)" : "New task (⌘Enter)"}>{busy ? (editing ? "Saving…" : "Creating…") : editing ? "Save task" : "New task"}</NewButton></DialogFooter>
         </div>
         <fieldset className="min-w-0 border-t border-border/70 bg-muted/30 px-5 py-3"><legend className="px-0 text-xs font-medium text-muted-foreground">Delivery &amp; checks</legend>
@@ -245,5 +262,12 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
         </fieldset>
       </form>
     </DialogContent>
+    <Dialog open={blockedByPickerOpen} onOpenChange={setBlockedByPickerOpen}>
+      <DialogContent className="max-h-[min(80vh,480px)] overflow-y-auto" showCloseButton={false}>
+        <DialogHeader><DialogTitle>Blocked by...</DialogTitle></DialogHeader>
+        <Input aria-label="Search active tasks" autoFocus placeholder="Search by title or ID" value={blockedByQuery} onChange={event => setBlockedByQuery(event.target.value)} />
+        <div className="flex flex-col gap-1">{blockedByLoading ? <span className="text-xs text-muted-foreground">Loading tasks...</span> : matchingBlockedByTasks.length ? matchingBlockedByTasks.map(task => <Button key={task.id} type="button" variant="ghost" onClick={() => { setBlockedBy({ id: task.id, title: task.title, status: task.status }); setBlockedByPickerOpen(false); }}>{task.title}<span className="text-muted-foreground">{task.id}</span></Button>) : <span className="text-xs text-muted-foreground">No active tasks in this project.</span>}</div>
+      </DialogContent>
+    </Dialog>
   </Dialog>;
 }

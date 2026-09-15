@@ -56,3 +56,42 @@ test("blocked-by rejects unavailable, self, and other-project tasks without muta
     expect(f.tasks.getTask(f.userId, dependent.task.id).blockedBy?.id).toBe(target.task.id);
   } finally { await f.close(); }
 });
+
+test("creation validates and persists a Blocked by reference", async () => {
+  const f = await nativeApp();
+  try {
+    const reference = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Reference", idempotencyKey: "creation-reference" });
+    const url = `/api/companies/${f.company.id}/tasks`;
+    const payload = { projectId: f.project.id, title: "Dependent", idempotencyKey: "creation-dependent", blockedByTaskId: reference.task.id };
+    const response = await f.app.inject({ method: "POST", url, headers: f.headers, payload });
+    expect(response.statusCode, response.body).toBe(201);
+    expect(TaskSchema.parse(response.json())).toMatchObject({ blockedBy: { id: reference.task.id, title: "Reference", status: "backlog" } });
+
+    const otherProjectId = "project_creation_other";
+    const now = new Date().toISOString();
+    f.database.authTransaction(db => db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(otherProjectId, f.company.id, "Other repository", `${f.project.repositoryPath}-creation-other`, `${f.project.worktreeRoot}-creation-other`, "owner/creation-other", "main", "pnpm install", "pnpm test", "profile_native_root", "profile_native_worker", now, now));
+    const other = await f.tasks.createTask(f.userId, f.company.id, { projectId: otherProjectId, title: "Other", idempotencyKey: "creation-other" });
+    for (const blockedByTaskId of ["task_missing", other.task.id]) {
+      const rejected = await f.app.inject({ method: "POST", url, headers: f.headers, payload: { ...payload, idempotencyKey: `creation-invalid-${blockedByTaskId}`, blockedByTaskId } });
+      expect(rejected.statusCode, rejected.body).toBe(404);
+    }
+    expect(f.tasks.listTasks(f.userId, f.company.id)).toHaveLength(3);
+  } finally { await f.close(); }
+});
+
+test("an immediate task waits for its Blocked by reference to deliver", async () => {
+  const f = await nativeApp();
+  try {
+    const reference = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Deliver first", idempotencyKey: "gate-reference", startImmediately: true });
+    const waiting = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Wait for delivery", idempotencyKey: "gate-waiting", startImmediately: true, blockedByTaskId: reference.task.id });
+    expect(waiting.task).toMatchObject({ status: "backlog", startWhenBlockedByDelivered: true, blockedBy: { id: reference.task.id } });
+
+    f.tasks.repository.controls.markDelivered(reference.task.id);
+    expect(f.tasks.getTask(f.userId, waiting.task.id)).toMatchObject({ status: "active", startWhenBlockedByDelivered: false });
+
+    const deliveredReference = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Already delivered", idempotencyKey: "gate-delivered-reference", startImmediately: true });
+    f.tasks.repository.controls.markDelivered(deliveredReference.task.id);
+    const immediate = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Start now", idempotencyKey: "gate-immediate", startImmediately: true, blockedByTaskId: deliveredReference.task.id });
+    expect(immediate.task).toMatchObject({ status: "active", startWhenBlockedByDelivered: false });
+  } finally { await f.close(); }
+});

@@ -395,8 +395,18 @@ export class TaskService {
           this.requireGithubTriggerAdmission(capturedDispatch);
           if (this.projectConfigurationSignature(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project configuration changed", 409);
         }
+        let startImmediately = request.startImmediately;
+        let startWhenBlockedByDelivered = false;
+        if (request.blockedByTaskId) {
+          const blocked = this.requireTask(authority, request.blockedByTaskId);
+          if (blocked.company_id !== companyId || blocked.project_id !== request.projectId) throw new TaskFailure("The blocked task is not available", 404);
+          if (request.startImmediately && this.repository.task(blocked).status !== "delivered") {
+            startImmediately = false;
+            startWhenBlockedByDelivered = true;
+          }
+        }
         // A copy commits with the source it was authorized against, and carries that provenance from its first row.
-        const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images, ...(copiedFromTaskId ? { copiedFromTaskId } : {}) });
+        const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images, startImmediately, startWhenBlockedByDelivered, ...(copiedFromTaskId ? { copiedFromTaskId } : {}) });
         if (capturedDispatch) new GithubTriggerDispatchRepository(this.database).linkTask(capturedDispatch.id, result.task.id);
         if (result.created) {
           if (request.dependsOn.length) this.applyDependencies(authority, companyId, result.task.id, request.dependsOn);

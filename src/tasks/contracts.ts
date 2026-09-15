@@ -39,6 +39,7 @@ export const TaskInputSchema = z.object({
   workflow: WorkflowIdSchema.default("standard"),
   advisorProfileIds: AdvisorProfileIdsSchema.default({}),
   dependsOn: z.array(id).max(MAX_TASK_DEPENDENCIES).default([]),
+  blockedByTaskId: id.optional(),
 }).strict();
 export type TaskInput = z.input<typeof TaskInputSchema>;
 export type TaskRequest = z.output<typeof TaskInputSchema>;
@@ -84,6 +85,7 @@ export const TaskSchema = z.object({
   pullRequest: PullRequestReferenceSchema.nullable(),
   humanQuestion: TaskHumanQuestionSchema.nullable(),
   blockedBy: TaskReferenceSchema.nullable(),
+  startWhenBlockedByDelivered: z.boolean().optional(),
   limits: TaskLimitsSchema.extend({ admittedTurns: z.number().int().nonnegative() }).strict(),
   wakeAt: z.string().nullable(),
   images: z.array(TaskImageSchema),

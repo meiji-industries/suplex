@@ -11,7 +11,7 @@ import { taskDependencies } from "./dependencies.js";
 export type TaskCreator = { kind: "user"; id: string } | { kind: "agent"; id: string };
 const RowSchema = z.object({
   id: z.string(), company_id: z.string(), project_id: z.string(), issue_number: z.number().nullable(), issue_code: z.string().nullable(),
-  title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(), blocked_by_task_id: z.string().nullable(),
+  title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(), blocked_by_task_id: z.string().nullable(), start_when_blocked_by_delivered: z.number(),
   blocked_task_id: z.string().nullable(), blocked_task_title: z.string().nullable(), blocked_task_status: z.string().nullable(),
   creator_user_id: z.string().nullable(), creator_agent_id: z.string().nullable(), copied_from_task_id: z.string().nullable(), command_revision: z.number(), created_at: z.string(), updated_at: z.string(), activity_updated_at: z.string(), status_changed_at: z.string(), archived_at: z.string().nullable(),
 });
@@ -77,6 +77,8 @@ export class TaskRepository {
     taskId: string; companyId: string; creator: TaskCreator; request: TaskRequest;
     requestHash: string; configuration: TaskConfiguration; rootProfile: TaskProfile; workerProfile: TaskProfile; advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>>;
     images: Array<{ filename: string; mimeType: string; bytes: Buffer }>;
+    startImmediately: boolean;
+    startWhenBlockedByDelivered: boolean;
     /** Provenance written with the row itself, so a copy is identifiable without a second write. */
     copiedFromTaskId?: string;
   }): { task: Task; created: boolean } {
@@ -87,11 +89,11 @@ export class TaskRepository {
         if (existing) return { task: this.task(existing), created: false };
         const time = new Date().toISOString();
         const configuration = TaskConfigurationSchema.parse(input.configuration);
-        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, creator_agent_id, copied_from_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, input.copiedFromTaskId ?? null, time, time);
+        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, blocked_by_task_id, start_when_blocked_by_delivered, creator_user_id, creator_agent_id, copied_from_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.request.blockedByTaskId ?? null, input.startWhenBlockedByDelivered ? 1 : 0, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, input.copiedFromTaskId ?? null, time, time);
         for (const image of input.images) written.push(this.artifacts.putArtifactSync(db, input.companyId, "task-image", { ...image, taskId: input.taskId }));
         this.controls.create({
-          taskId: input.taskId, startImmediately: input.request.startImmediately, objective: input.request.description ? `${input.request.title}\n\n${input.request.description}` : input.request.title, deliveryTarget: input.request.deliveryTarget,
+          taskId: input.taskId, startImmediately: input.startImmediately, objective: input.request.description ? `${input.request.title}\n\n${input.request.description}` : input.request.title, deliveryTarget: input.request.deliveryTarget,
           deliveryIntent: { repository: configuration.repository, headBranch: configuration.branch, baseBranch: configuration.baseBranch, baselineSha: configuration.baselineSha, pullRequestNumber: configuration.source?.kind === "pull_request" ? configuration.source.number : null },
           rootProfile: input.rootProfile, workerProfile: input.workerProfile, workflow: input.request.workflow, advisorProfiles: input.advisorProfiles,
         });
@@ -120,7 +122,8 @@ export class TaskRepository {
         ? { kind: "task_limit", id: control.humanQuestionId, text: control.humanQuestion, options: [], requiresCommandCleanup: false, pause: control.limitPause }
         : { kind: "question", id: control.humanQuestionId, text: control.humanQuestion, options: control.humanQuestionOptions ?? [], requiresCommandCleanup: control.recoveryTurnId !== null }
         : null,
-      blockedBy: row.blocked_task_id && row.blocked_task_title && row.blocked_task_status ? { id: row.blocked_task_id, title: row.blocked_task_title, status: row.blocked_task_status } : null,
+       blockedBy: row.blocked_task_id && row.blocked_task_title && row.blocked_task_status ? { id: row.blocked_task_id, title: row.blocked_task_title, status: row.blocked_task_status } : null,
+       startWhenBlockedByDelivered: row.start_when_blocked_by_delivered === 1,
       limits: { ...limitState.limits, admittedTurns: limitState.admittedTurns },
       wakeAt: control.wakeAt, images, createdAt: row.created_at, updatedAt: row.activity_updated_at, statusChangedAt: row.status_changed_at, archivedAt: row.archived_at,
     });

@@ -1,22 +1,39 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { claudeSessionBusy } from "./task-runtime.js";
-import { claudeConfigDirectory, claudeExecution, claudeHistoryMessages, claudeMessageEntries, claudeUsage, findClaudeTranscript, parseJsonLines } from "./transcript.js";
+import { claudeConfigDirectory, claudeExecution, claudeMessageEntries, claudeUsage, findClaudeTranscript, parseJsonLines } from "./transcript.js";
 import type { TaskSession } from "../../tasks/control.js";
 import { taskSessionRuntimeDirectory, type NativeSessionReader } from "../task-harness.js";
 import type { ModelPricingCatalog } from "../../profiles/model-pricing.js";
 import { providerInstanceDirectories } from "../../profiles/provider-instances.js";
+import { ClaudeLiveHistory } from "./live-history.js";
 
 export class ClaudeCodeSessionReader implements NativeSessionReader {
+  private readonly liveHistory = new Map<string, ClaudeLiveHistory>();
+  private readonly transcripts = new Map<string, string>();
   constructor(private readonly databasePath: string, private readonly configDirectory = claudeConfigDirectory()) {}
   private directory(session: TaskSession): string { return session.profile?.instanceHomeDirectory ?? this.configDirectory; }
   private async transcript(session: TaskSession): Promise<string | null> {
     const sessionID = this.sessionID(session);
+    const cached = this.transcripts.get(sessionID);
+    if (cached) {
+      try { await stat(cached); return cached; }
+      catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+        this.transcripts.delete(sessionID);
+      }
+    }
     const direct = await findClaudeTranscript(sessionID, this.directory(session));
-    if (direct) return direct;
+    if (direct) {
+      this.transcripts.set(sessionID, direct);
+      return direct;
+    }
     for (const directory of await providerInstanceDirectories(this.databasePath)) {
       const transcript = await findClaudeTranscript(sessionID, directory);
-      if (transcript) return transcript;
+      if (transcript) {
+        this.transcripts.set(sessionID, transcript);
+        return transcript;
+      }
     }
     return null;
   }
@@ -37,7 +54,12 @@ export class ClaudeCodeSessionReader implements NativeSessionReader {
 
   async history(session: TaskSession) {
     if (!session.nativeSessionId) return [];
-    return claudeHistoryMessages(await this.entries(session));
+    let reader = this.liveHistory.get(session.id);
+    if (!reader) {
+      reader = new ClaudeLiveHistory(taskSessionRuntimeDirectory(this.databasePath, session.id));
+      this.liveHistory.set(session.id, reader);
+    }
+    return reader.read(await this.transcript(session));
   }
 
   async execution(session: TaskSession) {

@@ -34,6 +34,7 @@ import { normalizeWorkflowInput, roleLabel, workflowDefinition, WorkflowInputFai
 import type { TaskLimitDecision } from "./limits/limits.js";
 import { CliHerdrClient } from "../integrations/herdr/client.js";
 import { ensureTaskShellPane, type TaskPanePort } from "../runtimes/task-display.js";
+import { profileHarness } from "../runtimes/task-harness.js";
 
 export class TaskFailure extends Error {
   constructor(readonly publicMessage: string, readonly statusCode = 400, readonly code = "task_failure", options?: { cause?: unknown }) {
@@ -600,7 +601,10 @@ export class TaskService {
   getTaskActivity(userId: string, taskId: string) {
     const task = this.getTask(userId, taskId);
     return {
-      sessions: this.repository.controls.sessions(taskId).map(session => ({ id: session.id, kind: session.kind, advisorRole: session.advisorRole, label: roleLabel(session), profileId: this.sessionProfile(task, session).profileId, generation: session.generation, nativeSessionId: session.nativeSessionId, paneId: session.paneId, current: session.current, replacement: session.replacement })),
+      sessions: this.repository.controls.sessions(taskId).map(session => {
+        const profile = this.sessionProfile(task, session);
+        return { id: session.id, kind: session.kind, advisorRole: session.advisorRole, label: roleLabel(session), profileId: profile.profileId, harness: profileHarness(profile.provider), generation: session.generation, nativeSessionId: session.nativeSessionId, paneId: session.paneId, current: session.current, replacement: session.replacement };
+      }),
       turns: this.repository.controls.turns(taskId).map(turn => ({ id: turn.id, sessionId: turn.sessionId, prompt: turn.promptText, status: turn.status, result: turn.terminalObservation })),
       shellPaneId: this.database.authQuery(db => (db.prepare("SELECT shell_pane_id AS id FROM forge_task_controls WHERE task_id = ?").get(taskId) as { id: string | null } | undefined)?.id ?? null),
     };

@@ -42,11 +42,11 @@ const taskPane: FastifyPluginAsync<TaskPaneRoutesOptions> = async (app, options)
       if (!session?.paneId) return socket.close(4404, "no attachment");
       paneId = session.paneId;
     }
-    const bridge = (options.openBridge ?? openHerdrTerminalBridge)({ paneId, cols: request.query.cols, rows: request.query.rows, mode: shell ? "control" : "observe", onEvent: event => {
+    const bridge = (options.openBridge ?? openHerdrTerminalBridge)({ paneId, ...(shell ? { cols: request.query.cols, rows: request.query.rows } : {}), mode: shell ? "control" : "observe", onEvent: event => {
       if (event.type === "frame") {
         socket.send(JSON.stringify({ type: "size", cols: event.frame.width, rows: event.frame.height }));
         socket.send(event.frame.bytes);
-      } else if (event.type === "closed") socket.close(event.reason.includes("taken over") ? TERMINAL_TAKEOVER_CLOSE_CODE : 1000, event.reason.slice(0, 100));
+      } else if (event.type === "closed") socket.close(event.reason.includes("taken over") ? TERMINAL_TAKEOVER_CLOSE_CODE : shell ? 1000 : 1012, event.reason.slice(0, 100));
       else socket.send(JSON.stringify({ type: "error", message: event.message }));
     } });
     const accessCheck = setInterval(() => {

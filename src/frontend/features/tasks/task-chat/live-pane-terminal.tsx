@@ -24,10 +24,6 @@ export function reconnectDelayMs(attempt: number): number {
   return [250, 500, 1_000, 2_000, 5_000][Math.min(attempt, 4)] ?? 5_000;
 }
 
-export function observerDimensionsChanged(current: { cols: number; rows: number } | undefined, next: { cols: number; rows: number }): boolean {
-  return !current || current.cols !== next.cols || current.rows !== next.rows;
-}
-
 export function observerViewport(dimensions: { cols: number; rows: number }): { cols: number; rows: number } {
   return {
     cols: Math.min(300, Math.max(20, Math.round(dimensions.cols))),
@@ -37,8 +33,16 @@ export function observerViewport(dimensions: { cols: number; rows: number }): { 
 
 export function terminalCloseStatus(code: number): TerminalStatus | null {
   if (code === 4498) return "taken_over";
-  if (code === 1000 || code === 4403 || code === 4404) return "ended";
+  if (code === 1000 || code === 4403) return "ended";
   return null;
+}
+
+export function terminalMessageStatus(current: TerminalStatus, message: "open" | "frame"): TerminalStatus {
+  return message === "frame" ? "live" : current;
+}
+
+export function viewportAtTail(viewport: Pick<HTMLElement, "clientHeight" | "scrollHeight" | "scrollTop">, tailScrollTop = viewport.scrollHeight - viewport.clientHeight): boolean {
+  return Math.abs(viewport.scrollTop - Math.max(0, tailScrollTop)) <= 1;
 }
 
 /** Converts a wheel delta into a Herdr scroll command; sub-pixel deltas are ignored. */
@@ -59,21 +63,26 @@ export function LivePaneTerminal({ taskId, role, paneId }: { taskId: string; rol
 
 export function PaneTerminal({ path, interactive, paneId, label }: { path: string; interactive: boolean; paneId: string | null; label: string }): JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const statusRef = useRef<TerminalStatus>(paneId || interactive ? "connecting" : "ended");
+  const followTailRef = useRef(true);
   const [status, setStatus] = useState<TerminalStatus>(paneId || interactive ? "connecting" : "ended");
   const [errorMessage, setErrorMessage] = useState<string>();
   const [scrolledUp, setScrolledUp] = useState(false);
   const [connection, setConnection] = useState(0);
   const sendRef = useRef<(message: string | ArrayBuffer) => void>(() => undefined);
+  const jumpToTailRef = useRef<() => void>(() => undefined);
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || (!paneId && !interactive)) { statusRef.current = "ended"; setStatus("ended"); return; }
+    const viewport = viewportRef.current;
+    if (!host || !viewport || (!paneId && !interactive)) { statusRef.current = "ended"; setStatus("ended"); return; }
     let disposed = false;
     let attempt = 0;
     let retry: number | undefined;
     let resizeTimer: number | undefined;
-    let activeDimensions: { cols: number; rows: number } | undefined;
+    followTailRef.current = true;
+    setScrolledUp(false);
     const terminal = new Terminal({ allowProposedApi: true, cursorBlink: interactive, cursorStyle: "block", disableStdin: !interactive, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: 12, lineHeight: 1.2, scrollback: 0, macOptionIsMeta: true, theme: terminalTheme(host) });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
@@ -83,6 +92,37 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
     terminal.open(host);
     try { const webgl = new WebglAddon(); terminal.loadAddon(webgl); webgl.onContextLoss(() => webgl.dispose()); } catch { /* DOM renderer fallback */ }
     const setTerminalStatus = (next: TerminalStatus): void => { statusRef.current = next; setStatus(next); };
+    const syncReadOnlySurface = (): void => {
+      if (interactive) return;
+      const screen = terminal.element?.querySelector<HTMLElement>(".xterm-screen");
+      if (!screen) return;
+      const bounds = screen.getBoundingClientRect();
+      if (bounds.width > 0) host.style.width = `${Math.ceil(bounds.width)}px`;
+      if (bounds.height > 0) host.style.height = `${Math.ceil(bounds.height)}px`;
+    };
+    const localTailScrollTop = (): number => {
+      const screen = terminal.element?.querySelector<HTMLElement>(".xterm-screen");
+      const screenHeight = screen?.getBoundingClientRect().height ?? 0;
+      if (screenHeight <= 0 || terminal.rows <= 0) return Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+      let tailRow = terminal.buffer.active.cursorY + 1;
+      for (let row = terminal.rows - 1; row >= tailRow; row--) {
+        if (terminal.buffer.active.getLine(row)?.translateToString(true).trim()) { tailRow = row + 1; break; }
+      }
+      const contentBottom = tailRow * (screenHeight / terminal.rows);
+      return Math.max(0, Math.min(viewport.scrollHeight - viewport.clientHeight, contentBottom - viewport.clientHeight));
+    };
+    const followTail = (): void => {
+      if (!followTailRef.current) return;
+      viewport.scrollTop = interactive ? viewport.scrollHeight : localTailScrollTop();
+      setScrolledUp(false);
+    };
+    const updateLocalScroll = (): void => {
+      if (interactive) return;
+      followTailRef.current = viewportAtTail(viewport, localTailScrollTop());
+      setScrolledUp(!followTailRef.current);
+    };
+    jumpToTailRef.current = () => { followTailRef.current = true; followTail(); };
+    viewport.addEventListener("scroll", updateLocalScroll);
     const send = (message: string | ArrayBuffer): void => {
       const socket = socketRef.current;
       if (socket && socket.readyState === WebSocket.OPEN) socket.send(message);
@@ -90,25 +130,44 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
     sendRef.current = send;
     const connect = (): void => {
       if (disposed) return;
-      const proposed = observerViewport(fit.proposeDimensions() ?? { cols: terminal.cols, rows: terminal.rows });
-      terminal.resize(proposed.cols, proposed.rows);
-      const { cols, rows } = proposed;
-      activeDimensions = { cols, rows };
+      const proposed = interactive ? observerViewport(fit.proposeDimensions() ?? { cols: terminal.cols, rows: terminal.rows }) : undefined;
+      if (proposed) terminal.resize(proposed.cols, proposed.rows);
       const scheme = location.protocol === "https:" ? "wss" : "ws";
-      const socket = new WebSocket(`${scheme}://${location.host}${path}?cols=${cols}&rows=${rows}`);
+      const query = proposed ? `?cols=${proposed.cols}&rows=${proposed.rows}` : "";
+      const socket = new WebSocket(`${scheme}://${location.host}${path}${query}`);
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
       if (statusRef.current !== "live") setTerminalStatus(attempt === 0 ? "connecting" : "reconnecting");
       socket.onmessage = (event) => {
         if (socket !== socketRef.current) return;
-        if (typeof event.data !== "string") { terminal.write(new Uint8Array(event.data as ArrayBuffer)); return; }
+        if (typeof event.data !== "string") {
+          const wasFollowing = followTailRef.current;
+          terminal.write(new Uint8Array(event.data as ArrayBuffer), () => {
+            if (disposed || socket !== socketRef.current) return;
+            syncReadOnlySurface();
+            if (wasFollowing) { followTailRef.current = true; followTail(); }
+            if (statusRef.current !== "live") setTerminalStatus(terminalMessageStatus(statusRef.current, "frame"));
+            attempt = 0;
+            setErrorMessage(undefined);
+          });
+          return;
+        }
         let message: { type?: string; cols?: number; rows?: number; reason?: string; message?: string };
         try { message = JSON.parse(event.data) as typeof message; }
         catch { setErrorMessage("Herdr sent an invalid terminal event."); setTerminalStatus("ended"); socket.close(1000); return; }
-        if (message.type === "open") { attempt = 0; setErrorMessage(undefined); setScrolledUp(false); setTerminalStatus("live"); }
-        else if (message.type === "size" && typeof message.cols === "number" && typeof message.rows === "number" && (terminal.cols !== message.cols || terminal.rows !== message.rows)) terminal.resize(message.cols, message.rows);
+        if (message.type === "open") { setErrorMessage(undefined); setTerminalStatus(terminalMessageStatus(statusRef.current, "open")); }
+        else if (message.type === "size" && typeof message.cols === "number" && typeof message.rows === "number" && Number.isInteger(message.cols) && Number.isInteger(message.rows) && message.cols > 0 && message.rows > 0 && message.cols <= 65_535 && message.rows <= 65_535 && (terminal.cols !== message.cols || terminal.rows !== message.rows)) {
+          const wasFollowing = followTailRef.current;
+          terminal.resize(message.cols, message.rows);
+          syncReadOnlySurface();
+          if (wasFollowing) requestAnimationFrame(followTail);
+        }
         else if (message.type === "closed") setTerminalStatus("ended");
-        else if (message.type === "error") { setErrorMessage(message.message?.trim() || "Herdr could not observe this pane."); setTerminalStatus("ended"); }
+        else if (message.type === "error") {
+          setErrorMessage(message.message?.trim() || "Herdr could not observe this pane.");
+          if (interactive) setTerminalStatus("ended");
+          else if (statusRef.current !== "live") setTerminalStatus("reconnecting");
+        }
       };
       socket.onclose = (event) => {
         if (disposed || socket !== socketRef.current) return;
@@ -146,6 +205,8 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
         }
         return false;
       });
+    } else {
+      terminal.attachCustomWheelEventHandler(() => false);
     }
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type === "keydown" && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && terminal.getSelection()) { void navigator.clipboard.writeText(terminal.getSelection()).catch(() => undefined); terminal.clearSelection(); return false; }
@@ -153,31 +214,30 @@ export function PaneTerminal({ path, interactive, paneId, label }: { path: strin
     });
     const observer = new ResizeObserver(() => { window.clearTimeout(resizeTimer); resizeTimer = window.setTimeout(() => {
       if (statusRef.current === "ended" || statusRef.current === "taken_over") return;
+      if (!interactive) {
+        const wasFollowing = followTailRef.current;
+        syncReadOnlySurface();
+        if (wasFollowing) requestAnimationFrame(followTail);
+        return;
+      }
       const proposed = fit.proposeDimensions();
       if (!proposed) return;
       const next = observerViewport(proposed);
-      if (!next || !observerDimensionsChanged(activeDimensions, next)) return;
-      if (interactive) {
-        activeDimensions = next;
-        terminal.resize(next.cols, next.rows);
-        send(JSON.stringify({ type: "resize", cols: next.cols, rows: next.rows }));
-        return;
-      }
-      window.clearTimeout(retry);
-      retry = undefined;
-      attempt = 0;
+      if (terminal.cols === next.cols && terminal.rows === next.rows) return;
       terminal.resize(next.cols, next.rows);
-      const previous = socketRef.current;
-      socketRef.current = null;
-      previous?.close(1000, "viewport changed");
-      connect();
+      send(JSON.stringify({ type: "resize", cols: next.cols, rows: next.rows }));
     }, 150); });
     observer.observe(host);
     connect();
-    return () => { disposed = true; window.clearTimeout(retry); window.clearTimeout(resizeTimer); observer.disconnect(); socketRef.current?.close(1000); socketRef.current = null; terminal.dispose(); };
+    return () => { disposed = true; window.clearTimeout(retry); window.clearTimeout(resizeTimer); observer.disconnect(); viewport.removeEventListener("scroll", updateLocalScroll); jumpToTailRef.current = () => undefined; socketRef.current?.close(1000); socketRef.current = null; terminal.dispose(); };
   }, [connection, interactive, paneId, path, label]);
   const reconnect = () => { setConnection((value) => value + 1); statusRef.current = "connecting"; setStatus("connecting"); };
-  const jumpToBottom = () => { sendRef.current(JSON.stringify({ type: "scroll", direction: "down", lines: 10_000 })); setScrolledUp(false); hostRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea")?.focus(); };
+  const jumpToBottom = () => {
+    if (interactive) sendRef.current(JSON.stringify({ type: "scroll", direction: "down", lines: 10_000 }));
+    else jumpToTailRef.current();
+    setScrolledUp(false);
+    hostRef.current?.querySelector<HTMLElement>(".xterm-helper-textarea")?.focus();
+  };
   const overlay = status === "connecting" ? "Connection in progress" : status === "reconnecting" ? <ReconnectingStatus /> : status === "taken_over" ? "Another viewer took control" : status === "ended" ? (errorMessage ?? (paneId || interactive ? "Pane ended" : "No live pane")) : null;
-  return <div className="flex h-full min-h-0 flex-col"><div className="relative mt-1 min-h-0 flex-1 overflow-hidden bg-background p-2"><div aria-label={label} className="h-full" ref={hostRef} />{overlay ? <div className="absolute inset-0 flex items-center justify-center gap-2 bg-background/85 text-sm text-foreground"><span>{overlay}</span>{errorMessage || status === "taken_over" ? <Button size="xs" onClick={reconnect}>{status === "taken_over" ? "Take control" : "Retry"}</Button> : null}</div> : null}{interactive && status === "live" && scrolledUp ? <Button aria-label="Jump to bottom" className="absolute bottom-3 right-3" size="icon-xs" variant="secondary" onClick={jumpToBottom}><ArrowDownToLine aria-hidden="true" /></Button> : null}</div></div>;
+  return <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col"><div className="relative mt-1 min-h-0 min-w-0 w-full flex-1 overflow-hidden bg-background p-2"><div className={interactive ? "h-full w-full overflow-hidden" : "h-full w-full max-w-full overflow-auto"} ref={viewportRef}><div aria-label={label} className="h-full" ref={hostRef} /></div>{overlay ? <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-background/85 text-sm text-foreground"><span>{overlay}</span>{errorMessage || status === "taken_over" ? <Button size="xs" onClick={reconnect}>{status === "taken_over" ? "Take control" : "Retry"}</Button> : null}</div> : null}{status === "live" && scrolledUp ? <div className="absolute bottom-3 right-3 z-10"><Button aria-label="Open latest output" size="icon-xs" variant="secondary" onClick={jumpToBottom}><ArrowDownToLine aria-hidden="true" /></Button></div> : null}</div></div>;
 }

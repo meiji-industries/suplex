@@ -10,6 +10,7 @@ import { CLAUDE_CODE_PROVIDER, HarnessRouter, profileHarness, sessionHarness, ta
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { findClaudeTranscript } from "../src/runtimes/claude-code/transcript.js";
 import { ClaudeCodeSessionReader } from "../src/runtimes/claude-code/session-reader.js";
+import { claudeDisplayCommand } from "../src/runtimes/claude-code/display.js";
 
 const directories: string[] = [];
 afterEach(async () => { delete process.env.FORGE_GH_COMMAND; await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -54,7 +55,7 @@ test("a headless turn is dispatched once, observed from its stream, and reported
   for (let attempt = 0; attempt < 50 && observed.state !== "completed"; attempt += 1) { await delay(100); observed = await f.runtime.observe(f.scope, f.intent, { serverGeneration: claims[0]!, claimedAt: new Date().toISOString() }); }
   expect((await readFile(join(f.root, "prompt.txt"), "utf8"))).toBe("Implement the change");
   const args = (await readFile(join(f.root, "args.txt"), "utf8")).trim().split("\n");
-  expect(args).toEqual(expect.arrayContaining(["-p", "--session-id", sessionID, "--model", "haiku", "--effort", "low", "--dangerously-skip-permissions"]));
+  expect(args).toEqual(expect.arrayContaining(["-p", "--include-partial-messages", "--session-id", sessionID, "--model", "haiku", "--effort", "low", "--dangerously-skip-permissions"]));
   expect(args).not.toContain("--resume");
   expect(observed).toMatchObject({ state: "completed", admission: "observed", retry: "forbidden", assistantMessageID: "a1", native: { providerID: "claude-code", modelID: "claude-haiku-4-5-20251001", finish: "success" } });
   expect(await f.runtime.resultText(f.scope, observed)).toBe("Reviewed the change.");
@@ -126,37 +127,59 @@ test("an unclaimed prompt is never spawned and a log without an identity is unce
   expect(await f.runtime.observe(f.scope, { ...f.intent, dispatch: "ambiguous" }, { serverGeneration: "b775df17-718a-4cb2-8e23-6912b8aa0d39", claimedAt: new Date().toISOString() })).toMatchObject({ state: "unknown", retry: "forbidden", reason: "dispatch_identity_missing", executionUncertain: {} });
 });
 
-test("the display resumes the transcript in a Herdr pane only after the session exists", async () => {
+test("the display follows turn logs in a Herdr pane before the first turn and reuses its process identity", async () => {
   const f = await fixture("complete");
   const fakeGh = join(f.root, "gh");
   await writeFile(fakeGh, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
   process.env.FORGE_GH_COMMAND = fakeGh;
   const rootScope: TaskScope = { ...f.scope, id: "session-root", role: "root", identity: { taskId: "task-claude", sessionId: "session-root", generation: 1 } };
   const commands: string[] = [];
+  const runtimeDirectory = taskSessionRuntimeDirectory(join(f.root, "forge.sqlite"), rootScope.id);
+  const display = claudeDisplayCommand(runtimeDirectory);
   const shell = (id: string): PaneProcessInfo => ({ pane_id: id, shell_pid: 10, foreground_process_group_id: 10, foreground_processes: [{ pid: 10, name: "zsh", argv: ["/bin/zsh"] }] });
   const processes = new Map<string, PaneProcessInfo>([["pane", shell("pane")]]);
   const herdr: Pick<HerdrClient, "getPane" | "getPaneProcessInfo" | "createWorkspace" | "splitPane" | "renamePane" | "runPaneCommand" | "reportPaneMetadata"> = {
-    async getPane(id): Promise<Pane> { return { paneId: id, cwd: f.worktree, tokens: { forge_binding_id: rootScope.id } }; },
+    async getPane(id): Promise<Pane> { return { paneId: id, cwd: f.worktree, tokens: {} }; },
     async getPaneProcessInfo(id) { return processes.get(id)!; },
     async createWorkspace() { throw new Error("No workspace expected"); }, async splitPane() { throw new Error("No split expected"); },
     async renamePane() {}, async reportPaneMetadata() {},
-    async runPaneCommand(id, command) { commands.push(command); processes.set(id, { pane_id: id, shell_pid: 10, foreground_process_group_id: 11, foreground_processes: [{ pid: 11, name: "claude", argv: [f.executable, "--resume", sessionID, "--model", "haiku"] }] }); },
+    async runPaneCommand(id, command) { commands.push(command); processes.set(id, { pane_id: id, shell_pid: 10, foreground_process_group_id: 11, foreground_processes: [{ pid: 11, name: "node", argv: [display.executable, ...display.args] }] }); },
   };
   const runtime = new ClaudeCodeTaskRuntime(join(f.root, "forge.sqlite"), herdr, { executable: f.executable, configDirectory: f.configDirectory });
   await runtime.ensureSession(rootScope, sessionID);
-  const rootMcp = JSON.parse(await readFile(join(taskSessionRuntimeDirectory(join(f.root, "forge.sqlite"), rootScope.id), "mcp.json"), "utf8")).mcpServers.forge_root;
+  const rootMcp = JSON.parse(await readFile(join(runtimeDirectory, "mcp.json"), "utf8")).mcpServers.forge_root;
   expect(rootMcp.env).toMatchObject({ FORGE_ROOT_BINDING: expect.stringContaining("root.binding.json"), FORGE_ROOT_TOKEN: expect.stringMatching(/^[0-9a-f-]{36}$/), FORGE_GH_COMMAND: fakeGh });
   const attach = () => runtime.attach({ scope: rootScope, nativeSessionId: sessionID, paneId: "pane", persistPane: () => {} });
-  await expect(attach()).rejects.toThrow("has not started");
-  await mkdir(join(f.configDirectory, "projects", "-worktree"), { recursive: true });
-  await writeFile(join(f.configDirectory, "projects", "-worktree", `${sessionID}.jsonl`), "");
   expect(await attach()).toBe("pane");
   expect(commands).toHaveLength(1);
-  expect(commands[0]).toContain(`'--resume' '${sessionID}'`);
-  expect(commands[0]).toContain("'--allowedTools' 'mcp__forge_root,WebFetch,WebSearch'");
-  expect(commands[0]).not.toContain("'-p'");
+  expect(commands[0]).toBe(display.command);
+  expect(commands[0]).toContain("'-u' 'FORGE_ROOT_TOKEN'");
+  expect(commands[0]).not.toContain("--resume");
+  expect(commands[0]).not.toContain(f.executable);
   expect(await attach()).toBe("pane");
   expect(commands).toHaveLength(1);
+});
+
+test("an old interactive Claude process is not reused or stopped as a display", async () => {
+  const f = await fixture("complete");
+  const scope = f.scope;
+  const runtimeDirectory = taskSessionRuntimeDirectory(join(f.root, "forge.sqlite"), scope.id);
+  const display = claudeDisplayCommand(runtimeDirectory);
+  const commands: { paneId: string; command: string }[] = [];
+  const herdr: Pick<HerdrClient, "getPane" | "getPaneProcessInfo" | "createWorkspace" | "splitPane" | "renamePane" | "runPaneCommand" | "reportPaneMetadata"> = {
+    async getPane(id): Promise<Pane> { return { paneId: id, cwd: f.worktree, tokens: id === "old" ? { forge_binding_id: scope.id } : {} }; },
+    async getPaneProcessInfo(id) {
+      if (id === "old") return { pane_id: id, shell_pid: 10, foreground_process_group_id: 11, foreground_processes: [{ pid: 11, name: "claude", argv: [f.executable, "--resume", sessionID] }] };
+      return { pane_id: id, shell_pid: 20, foreground_process_group_id: 20, foreground_processes: [{ pid: 20, name: "zsh", argv: ["/bin/zsh"] }] };
+    },
+    async createWorkspace() { throw new Error("No workspace expected"); },
+    async splitPane() { return { paneId: "new-display", cwd: f.worktree }; },
+    async renamePane() {}, async reportPaneMetadata() {},
+    async runPaneCommand(paneId, command) { commands.push({ paneId, command }); },
+  };
+  const runtime = new ClaudeCodeTaskRuntime(join(f.root, "forge.sqlite"), herdr, { executable: f.executable, configDirectory: f.configDirectory });
+  expect(await runtime.attach({ scope, nativeSessionId: sessionID, paneId: "old", rootPaneId: "root", persistPane: () => {} })).toBe("new-display");
+  expect(commands).toEqual([{ paneId: "new-display", command: display.command }]);
 });
 
 test("harness selection follows the profile provider and the native session identity", () => {

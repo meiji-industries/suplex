@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { resolveDevinExecutable as resolveDevinCli } from "../platform/executable-resolver.js";
+import { resolveCodexExecutable as resolveCodexCli, resolveDevinExecutable as resolveDevinCli } from "../platform/executable-resolver.js";
 import type { ProviderConnection } from "../http/contracts/providers.js";
 import { profileHarness, type HarnessKind } from "../runtimes/task-harness.js";
 import { createProviderReadinessCheck, probeCommand, type ProviderProbeResult, type ProviderProbeRunner } from "./provider-readiness.js";
@@ -28,25 +28,43 @@ export function classifyDevinAuthStatus(result: ProviderProbeResult): ProviderCo
   return { status: "unknown", summary: "Forge could not check the Devin CLI sign-in" };
 }
 
-export function createDevinConnectionCheck(options: { resolveExecutable?: () => Promise<string>; runCommand?: ProviderProbeRunner } = {}): () => Promise<ProviderConnection> {
-  const resolve = options.resolveExecutable ?? resolveDevinCli;
+/** `codex login status` prints "Logged in using …" and exits 0, or reports that no credentials exist. */
+export function classifyCodexLoginStatus(result: ProviderProbeResult): ProviderConnection {
+  const output = stripAnsi(`${result.stdout}\n${result.stderr}`);
+  const connected: ProviderConnection = { status: "connected", summary: "Codex CLI is signed in. Model access is not tested." };
+  if (/not logged in/i.test(output)) return { status: "not-connected", summary: "Codex CLI is not signed in" };
+  if (/logged in using/i.test(output)) return connected;
+  if (result.exitCode === 0) return connected;
+  if (result.timedOut) return { status: "unknown", summary: "The Codex CLI sign-in check timed out" };
+  return { status: "unknown", summary: "Forge could not check the Codex CLI sign-in" };
+}
+
+/** One sign-in probe for a CLI that answers a status subcommand. */
+function createCliLoginCheck(options: { label: string; resolve: () => Promise<string>; args: string[]; classify: (result: ProviderProbeResult) => ProviderConnection; runCommand?: ProviderProbeRunner }): () => Promise<ProviderConnection> {
   const run = options.runCommand ?? probeCommand;
+  const missing: ProviderConnection = { status: "not-connected", summary: `${options.label} is not installed` };
   return async () => {
     let executable: string;
     try {
-      executable = await resolve();
+      executable = await options.resolve();
     } catch {
-      return { status: "not-connected", summary: "Devin CLI is not installed" };
+      return missing;
     }
     try {
-      return classifyDevinAuthStatus(await run(executable, ["auth", "status"], { timeout: 5_000 }));
+      return options.classify(await run(executable, options.args, { timeout: 5_000 }));
     } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-        return { status: "not-connected", summary: "Devin CLI is not installed" };
-      }
-      return { status: "unknown", summary: "Forge could not check the Devin CLI sign-in" };
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return missing;
+      return { status: "unknown", summary: `Forge could not check the ${options.label} sign-in` };
     }
   };
+}
+
+export function createDevinConnectionCheck(options: { resolveExecutable?: () => Promise<string>; runCommand?: ProviderProbeRunner } = {}): () => Promise<ProviderConnection> {
+  return createCliLoginCheck({ label: "Devin CLI", resolve: options.resolveExecutable ?? resolveDevinCli, args: ["auth", "status"], classify: classifyDevinAuthStatus, ...(options.runCommand ? { runCommand: options.runCommand } : {}) });
+}
+
+export function createCodexConnectionCheck(options: { resolveExecutable?: () => Promise<string>; runCommand?: ProviderProbeRunner } = {}): () => Promise<ProviderConnection> {
+  return createCliLoginCheck({ label: "Codex CLI", resolve: options.resolveExecutable ?? resolveCodexCli, args: ["login", "status"], classify: classifyCodexLoginStatus, ...(options.runCommand ? { runCommand: options.runCommand } : {}) });
 }
 
 /** OpenCode stores credentials in `<XDG_DATA_HOME|~/.local/share>/opencode/auth.json`, keyed by provider id. */
@@ -86,6 +104,7 @@ export interface ProviderConnectionProbeOptions {
   env?: NodeJS.ProcessEnv;
   homeDirectory?: string;
   resolveDevinExecutable?: () => Promise<string>;
+  resolveCodexExecutable?: () => Promise<string>;
   readAuthFile?: ReadAuthFile;
 }
 
@@ -96,6 +115,7 @@ export function createProviderConnectionProbe(options: ProviderConnectionProbeOp
     opencode: async () => providerConnectionFromHealth(await createProviderReadinessCheck("opencode", readiness)()),
     "claude-code": async () => providerConnectionFromHealth(await createProviderReadinessCheck("claude-code", readiness)()),
     devin: createDevinConnectionCheck({ ...(options.runCommand ? { runCommand: options.runCommand } : {}), ...(options.resolveDevinExecutable ? { resolveExecutable: options.resolveDevinExecutable } : {}) }),
+    codex: createCodexConnectionCheck({ ...(options.runCommand ? { runCommand: options.runCommand } : {}), ...(options.resolveCodexExecutable ? { resolveExecutable: options.resolveCodexExecutable } : {}) }),
   };
   const pending = new Map<HarnessKind, Promise<ProviderConnection>>();
   const shared = (kind: HarnessKind): Promise<ProviderConnection> => {

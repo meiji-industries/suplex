@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { OpenCodeFailure } from "../src/runtimes/opencode/client.js";
 import { OpenCodeMessageEnvelopeSchema } from "../src/runtimes/opencode/contracts.js";
 import { TaskUsageSchema, taskUsage } from "../src/tasks/usage.js";
 import { TaskAnalyticsStore } from "../src/tasks/analytics/store.js";
@@ -81,6 +82,81 @@ test("collector captures final timings promptly after delivery instead of applyi
     expect(store.read(task.id).usage[0]?.completedAt).toBe(200);
     await collector.collect();
     expect(reads).toBe(1);
+    await collector.stop();
+  } finally { await value.close(); }
+});
+
+test("collector keeps missing OpenCode history stale without repeating warnings and recovers when history returns", async () => {
+  const value = await nativeApp();
+  try {
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Missing history", description: "Retain stale analytics", startImmediately: true, idempotencyKey: "missing-history" });
+    const controls = value.tasks.repository.controls;
+    const root = controls.claimRoot({ taskId: task.id });
+    controls.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "ses_missing" });
+    const store = new TaskAnalyticsStore(value.database);
+    const observedAt = new Date(Date.now() - 600_000).toISOString();
+    store.record(task.id, root.id, taskUsage([message(false)], "root"), observedAt);
+    const warnings: unknown[] = [];
+    let reads = 0;
+    let available = false;
+    const collector = new TaskAnalyticsCollector(value.tasks.repository, store, async () => {
+      reads += 1;
+      if (!available) throw new OpenCodeFailure("not_found", false, "OpenCode session was not found", 404);
+      return taskUsage([message()], "root");
+    }, error => warnings.push(error));
+
+    await collector.collect();
+    expect(reads).toBe(1);
+    expect(warnings).toEqual([]);
+    expect(store.read(task.id)).toMatchObject({
+      usage: [{ completedAt: null }],
+      sessions: [{ observedAt, errorAt: expect.any(String) }],
+    });
+    expect(controls.get(task.id).status).toBe("active");
+
+    await collector.collect();
+    expect(reads).toBe(1);
+    expect(warnings).toEqual([]);
+
+    const retryableAt = new Date(Date.now() - 300_001).toISOString();
+    value.database.authQuery(db => db.prepare("UPDATE forge_task_analytics_sessions SET error_at = ? WHERE session_id = ?").run(retryableAt, root.id));
+    await collector.collect();
+    expect(reads).toBe(2);
+    expect(warnings).toEqual([]);
+    expect(store.read(task.id)).toMatchObject({
+      usage: [{ completedAt: null }],
+      sessions: [{ observedAt, errorAt: expect.any(String) }],
+    });
+
+    value.database.authQuery(db => db.prepare("UPDATE forge_task_analytics_sessions SET error_at = ? WHERE session_id = ?").run(retryableAt, root.id));
+    available = true;
+    await collector.collect();
+    expect(reads).toBe(3);
+    expect(warnings).toEqual([]);
+    const recovered = store.read(task.id);
+    expect(recovered.usage).toMatchObject([{ completedAt: 200 }]);
+    expect(recovered.sessions).toMatchObject([{ errorAt: null }]);
+    expect(recovered.sessions[0]?.observedAt).not.toBe(observedAt);
+    await collector.stop();
+  } finally { await value.close(); }
+});
+
+test.each([
+  new OpenCodeFailure("server_unavailable", true, "OpenCode server returned 501", 501),
+  new OpenCodeFailure("unauthorized", false, "OpenCode rejected the request", 401),
+])("collector reports $code OpenCode failures", async failure => {
+  const value = await nativeApp();
+  try {
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Reported failure", description: "Report unexpected analytics failure", startImmediately: true, idempotencyKey: `reported-failure-${failure.status}` });
+    const controls = value.tasks.repository.controls;
+    const root = controls.claimRoot({ taskId: task.id });
+    controls.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "ses_failure" });
+    const store = new TaskAnalyticsStore(value.database);
+    const errors: unknown[] = [];
+    const collector = new TaskAnalyticsCollector(value.tasks.repository, store, async () => { throw failure; }, error => errors.push(error));
+    await collector.collect();
+    expect(errors).toEqual([failure]);
+    expect(store.read(task.id).sessions).toMatchObject([{ errorAt: expect.any(String) }]);
     await collector.stop();
   } finally { await value.close(); }
 });

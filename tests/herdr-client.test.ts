@@ -49,6 +49,42 @@ test("pane layout and sizing methods validate geometry and pass exact argv", asy
   ]);
 });
 
+test("read-only viewport snapshots use native rows and the widest meaningful Unicode content", async () => {
+  const ansi = `\x1b[31m${"x".repeat(90)}界\x1b[0m\r\nshort`;
+  const argv: string[][] = [];
+  const client = new CliHerdrClient("herdr", async (_file, args) => {
+    argv.push([...args]);
+    if (args[1] === "get") return { stdout: JSON.stringify({ id: "pane", result: { pane: { pane_id: "w1:p1", scroll: { offset_from_bottom: 0, max_offset_from_bottom: 0, viewport_rows: 49 } } } }) };
+    if (args[1] === "layout") return { stdout: JSON.stringify({ id: "layout", result: { layout: {
+      workspace_id: "w1", tab_id: "w1:t1", zoomed: false, focused_pane_id: "w1:p1",
+      area: { x: 0, y: 0, width: 80, height: 12 }, panes: [], splits: [],
+    } } }) };
+    if (args[1] === "read") return { stdout: ansi };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+
+  await expect(client.readPaneViewport("w1:p1")).resolves.toEqual({ ansi, cols: 92, rows: 49 });
+  expect(argv).toEqual(expect.arrayContaining([
+    ["pane", "get", "w1:p1"],
+    ["pane", "layout", "--pane", "w1:p1"],
+    ["pane", "read", "w1:p1", "--source", "visible", "--ansi"],
+  ]));
+});
+
+test("read-only viewport snapshots do not pad native rows from stale layout height", async () => {
+  const client = new CliHerdrClient("herdr", async (_file, args) => {
+    if (args[1] === "get") return { stdout: JSON.stringify({ id: "pane", result: { pane: { pane_id: "w1:p1", scroll: { offset_from_bottom: 0, max_offset_from_bottom: 0, viewport_rows: 25 } } } }) };
+    if (args[1] === "layout") return { stdout: JSON.stringify({ id: "layout", result: { layout: {
+      workspace_id: "w1", tab_id: "w1:t1", zoomed: false, focused_pane_id: "w1:p1",
+      area: { x: 0, y: 0, width: 120, height: 49 }, panes: [], splits: [],
+    } } }) };
+    if (args[1] === "read") return { stdout: "first\nsecond\nbottom" };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+
+  await expect(client.readPaneViewport("w1:p1")).resolves.toMatchObject({ rows: 25 });
+});
+
 
 
 

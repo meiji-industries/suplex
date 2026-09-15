@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { NativeHistoryMessage } from "../src/tasks/history/contracts.js";
 import { pageSessionHistory, SessionHistoryCursorError } from "../src/tasks/history/history.js";
-import { anchoredScrollTop, historyAtBottom, mergeNativeHistory, readLatestHistory, sessionHistoryLabels } from "../src/frontend/features/tasks/task-chat/session-history-state.js";
+import { anchoredScrollTop, historyAtBottom, mergeNativeHistory, readLatestHistory, readSnapshotHistory, reconcileLiveHistory, sessionHistoryLabels } from "../src/frontend/features/tasks/task-chat/session-history-state.js";
 
 const message = (id: string, text = id): NativeHistoryMessage => ({ id, role: "assistant", createdAt: null, content: [{ id: `${id}-text`, type: "text", text }] });
 
@@ -31,6 +31,34 @@ test("polling replaces evolving messages without dropping loaded history", () =>
 test("the authoritative page order places a newly visible streaming message correctly", () => {
   const current = [message("old"), message("latest")];
   expect(mergeNativeHistory(current, [message("streamed"), message("latest")], "latest").map(item => item.id)).toEqual(["old", "streamed", "latest"]);
+  expect(mergeNativeHistory([message("one"), message("tool", "running"), message("three")], [message("tool", "complete")], "latest").map(item => item.id)).toEqual(["one", "tool", "three"]);
+});
+
+test("live updates replace messages without moving older tool output", () => {
+  const current = { messages: [message("one"), message("tool", "running"), message("three")], order: ["one", "tool", "three"] };
+  const updated = reconcileLiveHistory(current, [message("tool", "complete")], ["one", "tool", "three"]);
+  expect(updated.messages.map(item => [item.id, item.content[0]])).toEqual([
+    ["one", expect.objectContaining({ text: "one" })],
+    ["tool", expect.objectContaining({ text: "complete" })],
+    ["three", expect.objectContaining({ text: "three" })],
+  ]);
+});
+
+test("an authoritative snapshot removes a superseded draft and keeps loaded older pages", () => {
+  const current = {
+    messages: [message("older"), message("prompt"), message("draft", "partial")],
+    order: ["prompt", "draft"],
+  };
+  const snapshot = reconcileLiveHistory(current, [message("prompt"), message("complete", "final")], ["prompt", "complete"]);
+  expect(snapshot.messages.map(item => item.id)).toEqual(["older", "prompt", "complete"]);
+  expect(snapshot.messages[2]?.content[0]).toEqual(expect.objectContaining({ text: "final" }));
+});
+
+test("replayed live updates remain deduplicated in authoritative order", () => {
+  const initial = { messages: [message("one")], order: ["one"] };
+  const first = reconcileLiveHistory(initial, [message("two", "partial")], ["one", "two"]);
+  const replayed = reconcileLiveHistory(first, [message("two", "partial")], ["one", "two"]);
+  expect(replayed.messages.map(item => item.id)).toEqual(["one", "two"]);
 });
 
 test("latest history bridges every page back to the loaded messages", async () => {
@@ -45,6 +73,22 @@ test("latest history bridges every page back to the loaded messages", async () =
   expect(cursors).toEqual([undefined, "60"]);
   expect(result.messages.map(item => item.id)).toEqual(Array.from({ length: 100 }, (_, index) => String(index)));
   expect(new Set(result.messages.map(item => item.id))).toHaveProperty("size", 100);
+});
+
+test("snapshot catchup uses the pushed head before a queued update", async () => {
+  const current = Array.from({ length: 40 }, (_, index) => message(String(index)));
+  const snapshot = { messages: Array.from({ length: 40 }, (_, index) => message(String(index + 60))), olderCursor: "60" };
+  const cursors: string[] = [];
+  const caughtUp = await readSnapshotHistory(current, snapshot, async before => {
+    cursors.push(before);
+    return { messages: Array.from({ length: 40 }, (_, index) => message(String(index + 20))), olderCursor: "20" };
+  });
+  expect(cursors).toEqual(["60"]);
+  const ordered = Array.from({ length: 100 }, (_, index) => String(index));
+  const afterSnapshot = reconcileLiveHistory({ messages: caughtUp.messages, order: current.map(item => item.id) }, snapshot.messages, ordered);
+  const afterQueuedUpdate = reconcileLiveHistory(afterSnapshot, [message("99", "complete"), message("100")], [...ordered, "100"]);
+  expect(afterQueuedUpdate.messages.map(item => item.id)).toEqual(Array.from({ length: 101 }, (_, index) => String(index)));
+  expect(afterQueuedUpdate.messages[99]?.content[0]).toEqual(expect.objectContaining({ text: "complete" }));
 });
 
 test("latest history exposes pagination after an initially empty response", async () => {

@@ -5,7 +5,7 @@ export const AgentProfileInputSchema = TaskProfileSchema.omit({ profileId: true,
   name: z.string().trim().min(1),
   role: TaskSessionKindSchema,
   avatarSeed: z.string().regex(/^[a-f0-9]{32}$/),
-  provider: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/).refine(value => !["codex", "claude"].includes(value), "Select an OpenCode provider"),
+  provider: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/).refine(value => value !== "claude", "Select an OpenCode provider"),
   model: z.string().trim().min(1).max(256).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/),
   providerInstanceId: z.string().min(1).nullable().optional(),
 }).strict();

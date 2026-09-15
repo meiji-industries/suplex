@@ -26,11 +26,11 @@ test("terminal observers are independent and close when the pane binding changes
     const user = value.auth.listUsers(value.userId)[0]!;
     app.decorateRequest("forgeUser", { getter: () => user });
     app.setValidatorCompiler(validatorCompiler);
-    const bridges: Array<{ emit: (event: BridgeEvent) => void; release: ReturnType<typeof vi.fn> }> = [];
+    const bridges: Array<{ emit: (event: BridgeEvent) => void; input: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn>; scroll: ReturnType<typeof vi.fn>; release: ReturnType<typeof vi.fn> }> = [];
     await app.register(taskPane, { tasks: value.tasks, config: value.config, openBridge: options => {
-      const bridge = { emit: options.onEvent, release: vi.fn() };
+      const bridge = { emit: options.onEvent, input: vi.fn(), resize: vi.fn(), scroll: vi.fn(), release: vi.fn() };
       bridges.push(bridge);
-      return { input: vi.fn(), resize: vi.fn(), scroll: vi.fn(), release: bridge.release };
+      return bridge;
     } });
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
     const connect = async () => {
@@ -58,6 +58,10 @@ test("terminal observers are independent and close when the pane binding changes
     second.client.send(JSON.stringify({ type: "resize", cols: 120, rows: 40 }));
     second.client.send(JSON.stringify({ type: "scroll", direction: "up", lines: 10 }));
     second.client.send(Buffer.from("unapproved instruction"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(bridges[1]!.input).not.toHaveBeenCalled();
+    expect(bridges[1]!.resize).not.toHaveBeenCalled();
+    expect(bridges[1]!.scroll).not.toHaveBeenCalled();
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/pane/root/input`, payload: { text: "bypass" } })).statusCode).toBe(404);
     const closed = new Promise<number>(resolve => second.client.once("close", code => resolve(code)));
     store.bindPane({ sessionId: root.id, generation: root.generation, paneId: "pane-replacement" });

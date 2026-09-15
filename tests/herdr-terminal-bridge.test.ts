@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { expect, test, vi } from "vitest";
 
-import { openHerdrTerminalBridge, parseBridgeRecord } from "../src/integrations/herdr/terminal-bridge.js";
+import { openHerdrTerminalBridge, parseBridgeRecord, type BridgeEvent } from "../src/integrations/herdr/terminal-bridge.js";
 
 test("parses Herdr terminal bridge records", () => {
   const frame = parseBridgeRecord('{"type":"terminal.frame","seq":1,"encoding":"ansi","full":true,"width":80,"height":24,"bytes":"G1s/MjAyNmgbWzJKG1sxOzFI"}');
@@ -13,30 +13,109 @@ test("parses Herdr terminal bridge records", () => {
   expect(parseBridgeRecord("not json")).toBeNull();
 });
 
-test("opens an observer with no command input and releases only that process", () => {
+test("opens an observer with no command input and releases only that process", async () => {
   const kill = vi.fn(() => true);
   const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill });
   const events: unknown[] = [];
   const spawn = vi.fn(() => child) as never;
-  const bridge = openHerdrTerminalBridge({ paneId: "pane", cols: 80, rows: 24, onEvent: (event) => events.push(event), spawn });
+  const bridge = openHerdrTerminalBridge({ paneId: "pane", onEvent: (event) => events.push(event), readViewport: async () => ({ ansi: "screen", cols: 80, rows: 24 }), spawn });
+  await Promise.resolve();
   expect(spawn).toHaveBeenCalledWith("herdr", ["terminal", "session", "observe", "pane", "--cols", "80", "--rows", "24"], expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }));
+  const eventCount = events.length;
   bridge.release();
   bridge.release();
   expect(kill).toHaveBeenCalledTimes(1);
   expect(kill).toHaveBeenCalledWith("SIGTERM");
   child.emit("exit", 0, null);
-  expect(events).toEqual([]);
+  expect(events).toHaveLength(eventCount);
 });
 
-test("reports child spawn errors without an unhandled process error", () => {
+test("read-only observation keeps native rows and replaces its child when later content becomes wider", async () => {
+  vi.useFakeTimers();
+  try {
+    const allChildren = Array.from({ length: 2 }, () => Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(() => true) }));
+    const children = [...allChildren];
+    const spawn = vi.fn(() => children.shift()!) as never;
+    const initialLines = Array.from({ length: 49 }, (_, index) => index === 48 ? "bottom reply" : index === 1 ? "a".repeat(80) : `row ${index + 1}`);
+    const snapshots = [
+      { ansi: `${initialLines.join("\n")}\n`, cols: 80, rows: 49 },
+      { ansi: `top\r\n${"b".repeat(139)}界\r\nnew bottom reply`, cols: 141, rows: 49 },
+    ];
+    const events: BridgeEvent[] = [];
+    const bridge = openHerdrTerminalBridge({
+      paneId: "pane",
+      onEvent: event => events.push(event),
+      readViewport: async () => snapshots.shift() ?? { ansi: "", cols: 141, rows: 49 },
+      observerRefreshMs: 1_000,
+      spawn,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawn).toHaveBeenCalledWith("herdr", ["terminal", "session", "observe", "pane", "--cols", "80", "--rows", "49"], expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }));
+    expect(events[0]).toMatchObject({ type: "frame", frame: { width: 80, height: 49 } });
+    expect(events[0]?.type === "frame" && events[0].frame?.bytes.toString()).toContain("bottom reply");
+    expect(events[0]?.type === "frame" && events[0].frame?.bytes.toString().match(/\r\n/g)?.length).toBe(48);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(spawn).toHaveBeenLastCalledWith("herdr", ["terminal", "session", "observe", "pane", "--cols", "141", "--rows", "49"], expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] }));
+    const latest = events.at(-1);
+    expect(latest).toMatchObject({ type: "frame", frame: { width: 141, height: 49 } });
+    expect(latest?.type === "frame" && latest.frame.bytes.toString()).toContain("new bottom reply");
+    const eventCount = events.length;
+    allChildren[0]!.stdout.write(`${JSON.stringify({ type: "terminal.frame", seq: 9, encoding: "ansi", full: false, width: 80, height: 49, bytes: Buffer.from("late old frame").toString("base64") })}\n`);
+    expect(events).toHaveLength(eventCount);
+
+    bridge.release();
+  } finally { vi.useRealTimers(); }
+});
+
+test("an unexpected observer exit recovers without closing the read-only bridge", async () => {
+  vi.useFakeTimers();
+  try {
+    const children = Array.from({ length: 2 }, () => Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(() => true) }));
+    const spawnMock = vi.fn(() => children.shift()!);
+    const events: unknown[] = [];
+    const bridge = openHerdrTerminalBridge({
+      paneId: "pane",
+      onEvent: event => events.push(event),
+      readViewport: async () => ({ ansi: "complete screen", cols: 120, rows: 49 }),
+      observerRefreshMs: 5_000,
+      spawn: spawnMock as never,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const first = spawnMock.mock.results[0]!.value;
+    first.emit("exit", 0, null);
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "closed" }));
+    bridge.release();
+  } finally { vi.useRealTimers(); }
+});
+
+test("release during asynchronous viewport discovery cannot spawn a late observer", async () => {
+  let resolveViewport: ((value: { ansi: string; cols: number; rows: number }) => void) | undefined;
+  const readViewport = () => new Promise<{ ansi: string; cols: number; rows: number }>(resolve => { resolveViewport = resolve; });
+  const spawn = vi.fn() as never;
+  const bridge = openHerdrTerminalBridge({ paneId: "pane", onEvent: vi.fn(), readViewport, spawn });
+
+  bridge.release();
+  resolveViewport?.({ ansi: "late", cols: 120, rows: 49 });
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(spawn).not.toHaveBeenCalled();
+});
+
+test("reports child spawn errors without ending recoverable observation", async () => {
   const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(() => true) });
   const events: unknown[] = [];
-  openHerdrTerminalBridge({ paneId: "pane", cols: 80, rows: 24, onEvent: event => events.push(event), spawn: (() => child) as never });
+  const bridge = openHerdrTerminalBridge({ paneId: "pane", onEvent: event => events.push(event), readViewport: async () => ({ ansi: "screen", cols: 80, rows: 24 }), spawn: (() => child) as never });
+  await Promise.resolve();
   child.emit("error", new Error("ENOENT"));
-  expect(events).toEqual([
-    { type: "error", message: "Herdr observer could not start: ENOENT" },
-    { type: "closed", reason: "spawn error" },
-  ]);
+  expect(events).toEqual(expect.arrayContaining([{ type: "error", message: "Herdr observer could not start: ENOENT" }]));
+  expect(events).not.toContainEqual(expect.objectContaining({ type: "closed" }));
+  bridge.release();
 });
 
 function controlFixture() {

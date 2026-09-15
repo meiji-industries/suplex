@@ -48,9 +48,10 @@ export interface TaskHarness {
   stop(scope: Pick<TaskScope, "id">, nativeSessionId: string | null): Promise<void>;
 }
 
-export type HarnessKind = "opencode" | "claude-code" | "devin";
+export type HarnessKind = "opencode" | "claude-code" | "devin" | "codex";
 export const CLAUDE_CODE_PROVIDER = "claude-code";
 export const DEVIN_PROVIDER = "devin";
+export const CODEX_PROVIDER = "codex";
 // ponytail: static alias list; Claude Code has no model listing command.
 export const CLAUDE_CODE_MODELS = [
   { id: "fable", label: "Fable (latest)" },
@@ -64,9 +65,17 @@ export const CLAUDE_CODE_MODELS = [
 ];
 // Devin's documented aliases resolve current model families; its model listing is account scoped.
 export const DEVIN_MODELS = [{ id: "swe", label: "SWE (latest)" }, { id: "swe-2", label: "SWE-2" }, { id: "opus", label: "Opus (latest)" }, { id: "gpt", label: "GPT (latest)" }];
+// ponytail: static alias list; Codex has no model listing command.
+export const CODEX_MODELS = [
+  { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
+  { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
+  { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+  { id: "gpt-6-astra", label: "GPT-6 Astra" },
+  { id: "gpt-5.5", label: "GPT-5.5" },
+];
 
 export function profileHarness(providerID: string): HarnessKind {
-  return providerID === CLAUDE_CODE_PROVIDER ? "claude-code" : providerID === DEVIN_PROVIDER ? "devin" : "opencode";
+  return providerID === CLAUDE_CODE_PROVIDER ? "claude-code" : providerID === DEVIN_PROVIDER ? "devin" : providerID === CODEX_PROVIDER ? "codex" : "opencode";
 }
 
 /** Provider-owned configuration directories are opt-in per harness. */
@@ -78,10 +87,13 @@ export function supportsProviderInstances(providerID: string): boolean {
   return profileHarness(providerID) === "claude-code";
 }
 
-// Forge reserves Devin identities with this prefix. Native IDs otherwise remain
-// backwards-compatible: OpenCode uses "ses…" and Claude Code uses UUIDs.
+// Forge reserves Devin and Codex identities with a prefix, because a Codex
+// thread id is itself a UUID. Native IDs otherwise remain backwards-compatible:
+// OpenCode uses "ses…" and Claude Code uses UUIDs.
 export function sessionHarness(nativeSessionId: string): HarnessKind {
-  return nativeSessionId.startsWith("devin-") ? "devin" : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nativeSessionId) ? "claude-code" : "opencode";
+  if (nativeSessionId.startsWith("devin-")) return "devin";
+  if (nativeSessionId.startsWith("codex-")) return "codex";
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nativeSessionId) ? "claude-code" : "opencode";
 }
 
 export function taskSessionRuntimeDirectory(databasePath: string, sessionId: string): string {

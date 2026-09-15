@@ -123,3 +123,35 @@ test("an absent Devin CLI reports not-connected", async () => {
   const probe = createProviderConnectionProbe();
   expect(await probe("devin")).toEqual({ status: "not-connected", summary: "Devin CLI is not installed" });
 });
+
+test("lists Codex CLI and its models whether or not its executable is installed", async () => {
+  vi.spyOn(openCodeProviders, "readOpenCodeProviders").mockResolvedValue({ directory: "/workspace", observedAt: "2026-09-15T00:00:00.000Z", providers: [] });
+  vi.spyOn(executables, "resolveClaudeExecutable").mockRejectedValue(new Error("missing"));
+  vi.spyOn(executables, "resolveDevinExecutable").mockRejectedValue(new Error("missing"));
+  const codex = vi.spyOn(executables, "resolveCodexExecutable").mockRejectedValue(new Error("missing"));
+
+  const missing = await readProviders({ directory: "/workspace" });
+  expect(missing.providers).toContainEqual(expect.objectContaining({ id: "codex", label: "Codex CLI", status: "missing", models: expect.arrayContaining([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }]) }));
+
+  codex.mockResolvedValue("/opt/codex/codex");
+  const configured = await readProviders({ directory: "/workspace" });
+  expect(configured.providers).toContainEqual(expect.objectContaining({ id: "codex", status: "configured" }));
+});
+
+test("Codex CLI login status output drives its connection state", async () => {
+  vi.spyOn(executables, "resolveCodexExecutable").mockResolvedValue("/bin/codex");
+  const runCommand = vi.fn(async () => probed("Logged in using ChatGPT"));
+  const connected = createProviderConnectionProbe({ runCommand });
+  expect(await connected("codex")).toEqual({ status: "connected", summary: expect.stringContaining("signed in") });
+  expect(runCommand).toHaveBeenCalledWith("/bin/codex", ["login", "status"], expect.objectContaining({ timeout: 5_000 }));
+
+  const signedOut = createProviderConnectionProbe({ runCommand: async () => ({ stdout: "", stderr: "Not logged in", exitCode: 1, timedOut: false }) });
+  expect(await signedOut("codex")).toEqual({ status: "not-connected", summary: "Codex CLI is not signed in" });
+  const timedOut = createProviderConnectionProbe({ runCommand: async () => ({ stdout: "", stderr: "", exitCode: null, timedOut: true }) });
+  expect(await timedOut("codex")).toMatchObject({ status: "unknown" });
+});
+
+test("an absent Codex CLI reports not-connected", async () => {
+  vi.spyOn(executables, "resolveCodexExecutable").mockRejectedValue(new Error("missing"));
+  expect(await createProviderConnectionProbe()("codex")).toEqual({ status: "not-connected", summary: "Codex CLI is not installed" });
+});

@@ -12,6 +12,12 @@ import { readTaskChecks, readTaskDiff, readTaskDiffSummary } from "../../tasks/i
 import { readTaskExecution } from "../../tasks/execution/execution.js";
 import { readTaskSessionHistory } from "../../tasks/history/read.js";
 import { SessionHistoryCursorError } from "../../tasks/history/history.js";
+import { pageSessionHistory } from "../../tasks/history/history.js";
+import { diffSessionHistory, pollSessionHistory } from "../../tasks/history/live.js";
+import type { NativeHistoryMessage, SessionHistoryLiveEvent } from "../../tasks/history/contracts.js";
+import type { TaskSession } from "../../tasks/control.js";
+import { nativeSessionReader } from "../../runtimes/task-harness-registry.js";
+import { originAllowed } from "./task-pane.js";
 import { TaskTimelineResponseSchema } from "../../tasks/timeline/contracts.js";
 import { TaskExecutionResponseSchema } from "../../tasks/execution/contracts.js";
 import { TaskChecksResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema } from "../contracts/tasks.js";
@@ -19,10 +25,19 @@ import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } f
 import { normalizeWorkflowInput, WorkflowInputFailure } from "../../coordination/workflows.js";
 import { MAX_TASK_REQUEST_BYTES, SessionHistoryPageSchema, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBlockedByBodySchema, TaskBodySchema, TaskDependenciesBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskSessionHistoryParamsSchema, TaskSessionHistoryQuerySchema, TaskWorkerReplacementBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
 
-export interface TaskRoutesOptions { tasks: TaskService; host?: Pick<TaskHost, "recover">; config?: Pick<ForgeConfig, "databasePath"> }
+export interface TaskRoutesOptions {
+  tasks: TaskService;
+  host?: Pick<TaskHost, "recover">;
+  config?: Pick<ForgeConfig, "databasePath" | "reachableAddress">;
+  readHistory?: (databasePath: string, session: TaskSession) => Promise<NativeHistoryMessage[]>;
+}
 
-const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, config }) => {
+const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, config, readHistory }) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
+  const liveConnections = new Set<() => void>();
+  app.addHook("onClose", async () => {
+    for (const close of [...liveConnections]) close();
+  });
   const taskResponse = { params: TaskIdParamsSchema, response: { 200: TaskResponseSchema } };
   const listQuery = z.object({ archived: z.enum(["true", "false"]).optional() });
   typed.get("/api/companies/:companyId/task-costs", { schema: { params: CompanyIdParamsSchema, response: { 200: TaskCostsResponseSchema } } }, async (request, reply) => {
@@ -61,6 +76,109 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
     }
     tasks.getTask(request.forgeUser.id, task.id);
     return reply.header("Cache-Control", "private, no-store").send(result);
+  });
+  typed.get("/api/tasks/:taskId/sessions/:sessionId/history/live", { websocket: true, schema: { params: TaskSessionHistoryParamsSchema } }, (socket, request) => {
+    let stopPolling = (): void => {};
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      stopPolling();
+      liveConnections.delete(release);
+      if (socket.readyState === 0 || socket.readyState === 1) socket.close(1012, "server closing");
+    };
+    socket.once("close", release);
+    socket.once("error", release);
+    socket.on("message", () => socket.close(1008, "read only"));
+    liveConnections.add(release);
+
+    const origin = Array.isArray(request.headers.origin) ? request.headers.origin[0] : request.headers.origin;
+    if (!originAllowed(origin, request.headers.host, config?.reachableAddress)) {
+      socket.close(4403, "origin");
+      return;
+    }
+    if (!config) {
+      socket.close(1013, "history unavailable");
+      return;
+    }
+    const currentSession = (): TaskSession | null => {
+      const task = tasks.getTask(request.forgeUser.id, request.params.taskId);
+      return tasks.repository.controls.sessions(task.id).find(candidate => candidate.id === request.params.sessionId) ?? null;
+    };
+    let session: TaskSession | null;
+    try { session = currentSession(); }
+    catch {
+      socket.close(4404, "not found");
+      return;
+    }
+    if (!session) {
+      socket.close(4404, "not found");
+      return;
+    }
+
+    let nativeIdentity = session.nativeSessionId;
+    let native = readHistory ? null : nativeSessionReader(config.databasePath, session);
+    const observe = (): Promise<NativeHistoryMessage[]> => {
+      const fresh = currentSession();
+      if (!fresh) throw new Error("Session is no longer available");
+      session = fresh;
+      if (readHistory) return readHistory(config.databasePath, fresh);
+      if (!native || nativeIdentity !== fresh.nativeSessionId) {
+        nativeIdentity = fresh.nativeSessionId;
+        native = nativeSessionReader(config.databasePath, fresh);
+      }
+      return native.history(fresh);
+    };
+    let previous: NativeHistoryMessage[] = [];
+    let sentSnapshot = false;
+    const send = (event: SessionHistoryLiveEvent): boolean => {
+      if (socket.readyState !== 1) return false;
+      const payload = JSON.stringify(event);
+      if (socket.bufferedAmount + Buffer.byteLength(payload) > 4 * 1024 * 1024) {
+        socket.close(1013, "client too slow");
+        return false;
+      }
+      try {
+        socket.send(payload);
+        return true;
+      } catch {
+        socket.close(1013, "delivery failed");
+        return false;
+      }
+    };
+    const recheck = (): boolean => {
+      try {
+        if (!currentSession()) {
+          socket.close(4404, "session removed");
+          return false;
+        }
+        return true;
+      } catch {
+        socket.close(4403, "access revoked");
+        return false;
+      }
+    };
+    stopPolling = pollSessionHistory({
+      read: observe,
+      intervalMs: session.current ? 500 : 2_000,
+      onHistory(messages, recovered) {
+        if (!recheck()) return;
+        if (!sentSnapshot || recovered) {
+          if (!send({ type: "snapshot", page: pageSessionHistory(messages), order: messages.map(message => message.id) })) return;
+          sentSnapshot = true;
+          previous = messages;
+          return;
+        }
+        const change = diffSessionHistory(previous, messages);
+        previous = messages;
+        if (change) send({ type: "update", ...change });
+      },
+      onError(error) {
+        if (!recheck()) return;
+        request.log.warn({ taskId: request.params.taskId, sessionId: request.params.sessionId, err: error }, "Live native session history read failed");
+        send({ type: "error", message: "Live output is not available. Forge will retry." });
+      },
+    });
   });
   typed.get("/api/tasks/:taskId/timeline", { schema: { params: TaskIdParamsSchema, response: { 200: TaskTimelineResponseSchema } } }, async (request, reply) => {
     return reply.header("Cache-Control", "private, no-store").send(await tasks.timeline(request.forgeUser.id, [request.params.taskId]));

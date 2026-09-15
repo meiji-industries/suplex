@@ -1,14 +1,8 @@
 import { expect, test } from "vitest";
 
-import { observerDimensionsChanged, observerViewport, reconnectDelayMs, terminalCloseStatus, wheelToScroll } from "../src/frontend/features/tasks/task-chat/live-pane-terminal.js";
+import { observerViewport, reconnectDelayMs, terminalCloseStatus, terminalMessageStatus, viewportAtTail, wheelToScroll } from "../src/frontend/features/tasks/task-chat/live-pane-terminal.js";
 
-test("live pane terminal reopens an observer only when its viewport changes", () => {
-  expect(observerDimensionsChanged(undefined, { cols: 80, rows: 24 })).toBe(true);
-  expect(observerDimensionsChanged({ cols: 80, rows: 24 }, { cols: 80, rows: 24 })).toBe(false);
-  expect(observerDimensionsChanged({ cols: 80, rows: 24 }, { cols: 100, rows: 30 })).toBe(true);
-});
-
-test("live pane terminal clamps observer dimensions to the route contract", () => {
+test("interactive terminal dimensions stay within the route contract", () => {
   expect(observerViewport({ cols: 2, rows: 1 })).toEqual({ cols: 20, rows: 5 });
   expect(observerViewport({ cols: 1_000, rows: 500 })).toEqual({ cols: 300, rows: 150 });
   expect(observerViewport({ cols: 80.4, rows: 23.6 })).toEqual({ cols: 80, rows: 24 });
@@ -22,9 +16,23 @@ test("live pane terminal caps reconnect backoff", () => {
 
 test("terminal authorization and attachment closures do not enter a reconnect loop", () => {
   expect(terminalCloseStatus(4403)).toBe("ended");
-  expect(terminalCloseStatus(4404)).toBe("ended");
+  expect(terminalCloseStatus(4404)).toBeNull();
   expect(terminalCloseStatus(1000)).toBe("ended");
   expect(terminalCloseStatus(1006)).toBeNull();
+});
+
+test("read-only terminals become live only after their initial frame", () => {
+  expect(terminalMessageStatus("connecting", "open")).toBe("connecting");
+  expect(terminalMessageStatus("connecting", "frame")).toBe("live");
+  expect(terminalMessageStatus("reconnecting", "open")).toBe("reconnecting");
+});
+
+test("local viewport tail detection tolerates sub-pixel layout rounding", () => {
+  expect(viewportAtTail({ clientHeight: 400, scrollHeight: 800, scrollTop: 400 })).toBe(true);
+  expect(viewportAtTail({ clientHeight: 400, scrollHeight: 800, scrollTop: 399.4 })).toBe(true);
+  expect(viewportAtTail({ clientHeight: 400, scrollHeight: 800, scrollTop: 350 })).toBe(false);
+  expect(viewportAtTail({ clientHeight: 400, scrollHeight: 800, scrollTop: 0 }, 0)).toBe(true);
+  expect(viewportAtTail({ clientHeight: 400, scrollHeight: 800, scrollTop: 40 }, 0)).toBe(false);
 });
 
 test("a takeover closure is reported as taken over, not ended", () => {

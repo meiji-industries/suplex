@@ -5,7 +5,9 @@ import { resolveOpenCodeExecutable } from "../../platform/executable-resolver.js
 import { ensureOpenCodeServer, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer } from "../../runtimes/opencode/server.js";
 import type { TaskSession } from "../control.js";
 import { sessionHarness } from "../../runtimes/task-harness.js";
+import { CodexSessionReader } from "../../runtimes/codex/session-reader.js";
 import { DevinSessionReader } from "../../runtimes/devin/session-reader.js";
+import { OpenCodeFailure } from "../../runtimes/opencode/client.js";
 import type { TaskRepository } from "../repository.js";
 import type { TaskAnalyticsStore } from "./store.js";
 import { taskUsage, type TaskUsage } from "../usage.js";
@@ -59,7 +61,7 @@ export class TaskAnalyticsCollector {
             this.store.record(task.id, session.id, await this.readUsage(session, await optionalPricing()), readStartedAt);
           } catch (error) {
             this.store.failed(task.id, session.id);
-            this.reportError(error);
+            if (!(error instanceof OpenCodeFailure && error.code === "not_found")) this.reportError(error);
           }
         }
       } catch (error) { this.reportError(error); }
@@ -75,6 +77,7 @@ export class AnalyticsHistoryReader {
     if (!sessionId) throw new Error("Session is not available");
     if (sessionHarness(sessionId) === "claude-code") return claudeUsage(await readClaudeTranscript(sessionId, claudeConfigDirectory()), sessionId, session.kind, pricing);
     if (sessionHarness(sessionId) === "devin") return (await new DevinSessionReader(this.databasePath).timeline(session, pricing)).usage;
+    if (sessionHarness(sessionId) === "codex") return (await new CodexSessionReader(this.databasePath).timeline(session, pricing)).usage;
     const server = await ensureOpenCodeServer({ runtimeDirectory: this.directory, executable: await resolveOpenCodeExecutable(), directory: process.cwd(), config: {} });
     return taskUsage(await openCodeServerClient(server).getMessages(sessionId), session.kind, pricing);
   }

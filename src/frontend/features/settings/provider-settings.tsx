@@ -114,7 +114,7 @@ export function ProviderSettingsView(): ReactElement {
           <SettingsTableCell className="text-muted-foreground">System</SettingsTableCell>
           <SettingsTableCell>{provider.status === "configured"
             ? <Badge variant="secondary">Configured</Badge>
-            : <div className="space-y-1"><Badge variant="destructive">Not installed</Badge><p className="text-xs text-muted-foreground">{provider.id === "devin" ? <>Set <code>FORGE_DEVIN_COMMAND</code>.</> : <>Set <code>FORGE_CLAUDE_COMMAND</code>.</>}</p></div>}</SettingsTableCell>
+            : <div className="space-y-1"><Badge variant="destructive">Not installed</Badge><p className="text-xs text-muted-foreground">Set <code>{{ devin: "FORGE_DEVIN_COMMAND", codex: "FORGE_CODEX_COMMAND" }[provider.id] ?? "FORGE_CLAUDE_COMMAND"}</code>.</p></div>}</SettingsTableCell>
           <SettingsTableCell>{provider.modelCount}</SettingsTableCell>
           <SettingsTableCell><ConnectionBadge connection={provider.connection} /></SettingsTableCell>
           <SettingsTableCell>{provider.connection.status !== "connected" ? loginButton(`provider:${provider.id}`, provider.label, `/api/admin/providers/${encodeURIComponent(provider.id)}/login`) : null}</SettingsTableCell>

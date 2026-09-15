@@ -51,7 +51,7 @@ test("provider API uses native configuration, not CLI health or Forge credential
     ] });
     expect(listed.headers["cache-control"]).toBe("private, no-store");
     expect(listed.body).not.toContain("healthy");
-    expect(listed.body).not.toContain("codex");
+    expect(listed.body).not.toContain("claude");
     expect((await app.inject({ method: "PUT", url: "/api/admin/providers/openrouter/credential", headers, payload: { apiKey: "not-a-real-key" } })).statusCode).toBe(404);
     expect((await app.inject({ method: "DELETE", url: "/api/admin/providers/openrouter/credential", headers })).statusCode).toBe(404);
     expect((await app.inject({ method: "POST", url: "/api/admin/providers/openrouter/test", headers })).statusCode).toBe(404);

@@ -1,5 +1,5 @@
 import type { HerdrClient } from "../integrations/herdr/client.js";
-import { CLAUDE_EXECUTABLE, DEVIN_EXECUTABLE, OPENCODE_EXECUTABLE, resolveClaudeExecutable, resolveDevinExecutable, resolveOpenCodeExecutable, type ExecutableSpec } from "../platform/executable-resolver.js";
+import { CLAUDE_EXECUTABLE, CODEX_EXECUTABLE, DEVIN_EXECUTABLE, OPENCODE_EXECUTABLE, resolveClaudeExecutable, resolveCodexExecutable, resolveDevinExecutable, resolveOpenCodeExecutable, type ExecutableSpec } from "../platform/executable-resolver.js";
 import { profileHarness, type HarnessKind } from "../runtimes/task-harness.js";
 
 export type ProviderLoginPort = Pick<HerdrClient, "getPane" | "createWorkspace" | "runPaneCommand" | "closePane" | "closeWorkspace">;
@@ -8,10 +8,11 @@ export const PROVIDER_LOGIN_WORKSPACE_LABEL = "forge-provider-login";
 
 const quoted = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
-const LOGIN_EXECUTABLES: Record<HarnessKind, { spec: ExecutableSpec; resolve: () => Promise<string> }> = {
-  "claude-code": { spec: CLAUDE_EXECUTABLE, resolve: () => resolveClaudeExecutable() },
-  devin: { spec: DEVIN_EXECUTABLE, resolve: () => resolveDevinExecutable() },
-  opencode: { spec: OPENCODE_EXECUTABLE, resolve: () => resolveOpenCodeExecutable() },
+const LOGIN_EXECUTABLES: Record<HarnessKind, { spec: ExecutableSpec; resolve: () => Promise<string>; loginArgs: string[] }> = {
+  "claude-code": { spec: CLAUDE_EXECUTABLE, resolve: () => resolveClaudeExecutable(), loginArgs: ["auth", "login"] },
+  devin: { spec: DEVIN_EXECUTABLE, resolve: () => resolveDevinExecutable(), loginArgs: ["auth", "login"] },
+  opencode: { spec: OPENCODE_EXECUTABLE, resolve: () => resolveOpenCodeExecutable(), loginArgs: ["auth", "login"] },
+  codex: { spec: CODEX_EXECUTABLE, resolve: () => resolveCodexExecutable(), loginArgs: ["login"] },
 };
 
 export interface ProviderLoginCommandOptions {
@@ -29,7 +30,7 @@ export async function providerLoginCommand(providerId: string, homeDirectory?: s
   const harness = profileHarness(providerId);
   const entry = LOGIN_EXECUTABLES[harness];
   const binary = await (options.resolveExecutable ?? entry.resolve)().then(quoted, () => entry.spec.binary);
-  const command = `${binary} auth login`;
+  const command = [binary, ...entry.loginArgs].join(" ");
   return homeDirectory && harness === "claude-code" ? `CLAUDE_CONFIG_DIR=${quoted(homeDirectory)} ${command}` : command;
 }
 

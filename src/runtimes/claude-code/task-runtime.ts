@@ -4,16 +4,17 @@ import { join } from "node:path";
 import { claudeAssistantText, claudeConfigDirectory, claudeExecution, claudeMessageEntries, ClaudeStreamInitSchema, ClaudeStreamResultSchema, claudeUnsettledToolIds, findClaudeTranscript, parseJsonLines, type ClaudeStreamResult } from "./transcript.js";
 import { resolveClaudeExecutable } from "../../platform/executable-resolver.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
-import { instanceEnvironment, shellQuote, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
+import { instanceEnvironment, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
 import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
 import { taskRolePrompt } from "../../tasks/execution/role-prompt.js";
 import { createGitCommandGuard, type GitCommandGuard } from "../../coordination/worker-environment.js";
 import { dispatchHeadless, headlessObservationPrelude, headlessSessionBusy, headlessTurnFiles, headlessTurnRunning, readHeadlessText, readHeadlessTurnRecord, recoverHeadlessDispatch, stopHeadlessSession, type HeadlessTurnRecord } from "../headless/turn-process.js";
+import { claudeDisplayAttached, claudeDisplayCommand } from "./display.js";
 
 // Claude Code has no server. Each prompt runs as one detached headless
 // `claude -p --resume` process whose stream-json output is the turn record;
 // the transcript Claude Code keeps under its config directory is the session.
-// The Herdr display is `claude --resume` on that same transcript.
+// The Herdr display follows those read-only turn records.
 
 export type ClaudeTurnRecord = HeadlessTurnRecord;
 export const readClaudeTurnRecord = readHeadlessTurnRecord;
@@ -24,16 +25,12 @@ export async function claudeSessionBusy(runtimeDirectory: string): Promise<boole
   return headlessSessionBusy(runtimeDirectory);
 }
 
-export function claudeDisplayAttached(executable: string, sessionID: string | null, args: readonly string[]): boolean {
-  return args[0] === executable && args[args.indexOf("--resume") + 1] === sessionID;
-}
-
 const ROOT_TOOLS = "Read,Glob,Grep,WebFetch,WebSearch,TodoWrite";
 
 export function claudeArguments(input: { scope: TaskScope; sessionID: string; resume: boolean; print: boolean; runtimeDirectory: string }): string[] {
   const { scope } = input;
   return [
-    ...(input.print ? ["-p", "--output-format", "stream-json", "--verbose", "--permission-prompts", "none"] : []),
+    ...(input.print ? ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-prompts", "none"] : []),
     input.resume ? "--resume" : "--session-id", input.sessionID,
     "--model", scope.profile.modelID, "--effort", scope.profile.reasoningEffort,
     "--append-system-prompt", taskRolePrompt(scope.role, { workflow: scope.workflow, ...(scope.role === "worker" ? { workerMode: scope.workerMode, purpose: scope.purpose } : {}) }),
@@ -86,15 +83,9 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
   }
 
   async attach(input: { scope: TaskScope; nativeSessionId: string; paneId: string | null; rootPaneId?: string | null; shellPaneId?: string | null; persistPane: (paneId: string) => void; persistShellPane?: (paneId: string) => void }): Promise<string> {
-    if (!await this.transcript(input.nativeSessionId, input.scope)) throw new Error("Claude Code session has not started; the display attaches after its first turn");
-    const executable = await this.executable();
-    const guard = await this.guard(input.scope);
-    // ponytail: the interactive display resumes the same transcript but does not
-    // refresh while a headless turn appends to it; reopen the pane to catch up.
-    const instance = instanceEnvironment(input.scope.profile.providerID, input.scope.profile.instanceHomeDirectory ?? null);
-    const environment = `${instance.CLAUDE_CONFIG_DIR ? `CLAUDE_CONFIG_DIR=${shellQuote(instance.CLAUDE_CONFIG_DIR)} ` : ""}${guard ? `PATH=${shellQuote(guard.directory)}:"$PATH" FORGE_GIT_REAL_BIN=${shellQuote(guard.env.FORGE_GIT_REAL_BIN ?? "")} FORGE_GH_REAL_BIN=${shellQuote(guard.env.FORGE_GH_REAL_BIN ?? "")} ` : ""}`;
-    const command = environment + [executable, ...claudeArguments({ scope: input.scope, sessionID: input.nativeSessionId, resume: true, print: false, runtimeDirectory: this.runtimeDirectory(input.scope) })].map(shellQuote).join(" ");
-    return attachTaskDisplay(this.herdr, { ...input, generation: input.nativeSessionId, isAttached: args => claudeDisplayAttached(executable, input.nativeSessionId, args), command });
+    const runtimeDirectory = this.runtimeDirectory(input.scope);
+    const display = claudeDisplayCommand(runtimeDirectory);
+    return attachTaskDisplay(this.herdr, { ...input, generation: input.nativeSessionId, isAttached: args => claudeDisplayAttached(runtimeDirectory, args), command: display.command });
   }
 
   async observe(scope: TaskScope, intent: PromptIntent, attempt?: PromptDispatchAttempt | null): Promise<PromptObservation> {

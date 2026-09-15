@@ -1,4 +1,5 @@
 import { runCommand, type CommandRunResult } from "../../platform/command-runner.js";
+import stringWidth from "string-width";
 import { z } from "zod";
 
 const PaneProcessInfoSchema = z.object({
@@ -115,6 +116,11 @@ export interface Pane {
   tokens?: Record<string, string>;
   agentSession?: string;
   [key: string]: unknown;
+}
+export interface ReadOnlyTerminalViewport {
+  ansi: string;
+  cols: number;
+  rows: number;
 }
 /**
  * Display-only pane hints for Herdr. Herdr does not persist this metadata across
@@ -408,6 +414,28 @@ export class CliHerdrClient implements HerdrClient {
     return this.optional(async () =>
       pane(value<Json>(await this.call(["pane", "get", idValue], true), "pane")),
     );
+  }
+  async readPaneViewport(idValue: string): Promise<ReadOnlyTerminalViewport> {
+    const [paneValue, layout, visible] = await Promise.all([
+      this.getPane(idValue),
+      this.getPaneLayout(idValue).catch(() => undefined),
+      this.runner(this.binary, ["pane", "read", idValue, "--source", "visible", "--ansi"], {
+        maxBuffer: 8 * 1024 * 1024,
+        expectNonZero: missingResourceResult,
+      }),
+    ]);
+    if (!paneValue) throw new HerdrFailure("pane_not_found", true, "Herdr resource is unavailable");
+
+    const scroll = z.object({ viewport_rows: z.number().int().positive().max(65_535) }).safeParse(paneValue.scroll);
+    const lines = visible.stdout.split(/\r?\n/);
+    if (lines.at(-1) === "") lines.pop();
+    const contentCols = lines.reduce((widest, line) => Math.max(widest, stringWidth(line)), 0);
+    const cols = Math.max(1, layout?.area.width ?? 0, contentCols);
+    const rows = scroll.success
+      ? Math.max(1, scroll.data.viewport_rows, lines.length)
+      : Math.max(1, layout?.area.height ?? 0, lines.length);
+    if (cols > 65_535 || rows > 65_535) throw new HerdrFailure("invalid_response", false, "Herdr terminal dimensions exceeded the protocol range");
+    return { ansi: visible.stdout, cols, rows };
   }
   async getPaneLayout(idValue: string): Promise<PaneLayout> {
     return PaneLayoutSchema.parse((await this.call(["pane", "layout", "--pane", idValue])).layout);

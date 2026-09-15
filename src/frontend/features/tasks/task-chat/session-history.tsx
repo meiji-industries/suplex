@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
-import { SessionHistoryPageSchema, type NativeHistoryMessage } from "../../../../tasks/history/contracts.js";
+import { SessionHistoryLiveEventSchema, SessionHistoryPageSchema, type NativeHistoryMessage, type SessionHistoryLiveEvent } from "../../../../tasks/history/contracts.js";
 import { readJson } from "../../../lib/api.js";
 import { Alert, AlertDescription } from "../../../components/ui/alert.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/app/markdown.js";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput, type ToolPart } from "../../../components/ai-elements/tool.js";
-import { anchoredScrollTop, historyAtBottom, mergeNativeHistory, readLatestHistory } from "./session-history-state.js";
+import { anchoredScrollTop, historyAtBottom, mergeNativeHistory, readSnapshotHistory, reconcileLiveHistory } from "./session-history-state.js";
 
 const toolStates = { pending: "input-streaming", running: "input-available", completed: "output-available", error: "output-error" } satisfies Record<Extract<NativeHistoryMessage["content"][number], { type: "tool" }>["status"], ToolPart["state"]>;
 const maximumVisibleToolText = 20_000;
@@ -28,69 +28,185 @@ function HistoryToolContent({ part }: { part: Extract<NativeHistoryMessage["cont
   </ToolContent>;
 }
 
-export function SessionHistory({ taskId, sessionId, assistantLabel, poll }: { taskId: string; sessionId: string; assistantLabel: string; poll: boolean }) {
+type LiveConnection =
+  | { kind: "connecting" }
+  | { kind: "live" }
+  | { kind: "stale"; message: string };
+
+const reconnectDelay = (attempt: number): number => Math.min(10_000, 1_000 * 2 ** attempt);
+
+export function SessionHistory({ taskId, sessionId }: { taskId: string; sessionId: string }) {
   const [messages, setMessages] = useState<NativeHistoryMessage[]>([]);
   const [olderCursor, setOlderCursor] = useState<string | null>(null);
-  const [error, setError] = useState("");
+  const [connection, setConnection] = useState<LiveConnection>({ kind: "connecting" });
   const [reading, setReading] = useState(false);
   const [following, setFollowing] = useState(true);
   const messagesRef = useRef<NativeHistoryMessage[]>([]);
+  const liveOrderRef = useRef<string[]>([]);
   const viewport = useRef<HTMLDivElement>(null);
-  const inFlight = useRef(false);
   const controller = useRef<AbortController | null>(null);
-  const requestIdentity = useRef(0);
-  const active = useRef(true);
+  const connectionGeneration = useRef(0);
   const initialized = useRef(false);
   const followingRef = useRef(true);
   const anchor = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const connectRef = useRef<() => void>(() => undefined);
+  const resizeFollowing = useRef(false);
+  const viewportSize = useRef<{ scrollHeight: number; clientHeight: number } | null>(null);
+  const followFrame = useRef<number | undefined>(undefined);
+  const releaseFollowFrame = useRef<number | undefined>(undefined);
 
-  const read = useCallback(async (before?: string, placement: "earlier" | "latest" = "latest", resetCursor = false) => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    const identity = ++requestIdentity.current;
-    setReading(true);
-    if (placement === "earlier" && viewport.current) anchor.current = { scrollHeight: viewport.current.scrollHeight, scrollTop: viewport.current.scrollTop };
-    const abort = new AbortController();
-    controller.current = abort;
-    try {
-      const loadPage = async (cursor?: string) => {
-        const query = cursor ? `?before=${encodeURIComponent(cursor)}` : "";
-        return SessionHistoryPageSchema.parse(await readJson(`/api/tasks/${encodeURIComponent(taskId)}/sessions/${encodeURIComponent(sessionId)}/history${query}`, { signal: abort.signal }));
-      };
-      const page = placement === "latest" ? await readLatestHistory(messagesRef.current, loadPage) : await loadPage(before);
-      if (!active.current || requestIdentity.current !== identity) return;
-      const hadMessages = messagesRef.current.length > 0;
-      const merged = placement === "latest" ? page.messages : mergeNativeHistory(messagesRef.current, page.messages, placement);
-      messagesRef.current = merged;
-      setMessages(merged);
-      if (placement === "earlier" || resetCursor || !initialized.current || !hadMessages) setOlderCursor(page.olderCursor);
-      initialized.current = true;
-      setError("");
-    } catch (error) {
-      anchor.current = null;
-      if (active.current && requestIdentity.current === identity && !abort.signal.aborted) setError(error instanceof Error ? error.message : "Session history is not available");
-    } finally {
-      if (requestIdentity.current === identity) {
-        if (controller.current === abort) controller.current = null;
-        inFlight.current = false;
-        if (active.current) setReading(false);
-      }
-    }
+  const followAfterResize = useCallback(() => {
+    const element = viewport.current;
+    if (!element || !followingRef.current) return;
+    resizeFollowing.current = true;
+    if (followFrame.current !== undefined) cancelAnimationFrame(followFrame.current);
+    if (releaseFollowFrame.current !== undefined) cancelAnimationFrame(releaseFollowFrame.current);
+    followFrame.current = requestAnimationFrame(() => {
+      element.scrollTop = element.scrollHeight;
+      viewportSize.current = { scrollHeight: element.scrollHeight, clientHeight: element.clientHeight };
+      releaseFollowFrame.current = requestAnimationFrame(() => { resizeFollowing.current = false; });
+    });
+  }, []);
+
+  const loadPage = useCallback(async (before: string | undefined, signal: AbortSignal) => {
+    const query = before ? `?before=${encodeURIComponent(before)}` : "";
+    const path = `/api/tasks/${encodeURIComponent(taskId)}/sessions/${encodeURIComponent(sessionId)}/history${query}`;
+    return SessionHistoryPageSchema.parse(await readJson(path, { signal }));
   }, [sessionId, taskId]);
 
   useEffect(() => {
-    active.current = true;
-    void read();
-    const timer = poll ? setInterval(() => void read(), 3_000) : null;
-    return () => {
-      active.current = false;
-      if (timer) clearInterval(timer);
-      controller.current?.abort();
-      controller.current = null;
-      requestIdentity.current += 1;
-      inFlight.current = false;
+    const generation = ++connectionGeneration.current;
+    const abort = new AbortController();
+    controller.current = abort;
+    let disposed = false;
+    let socket: WebSocket | null = null;
+    let retryTimer: number | undefined;
+    let retryAttempt = 0;
+    let eventQueue = Promise.resolve();
+
+    messagesRef.current = [];
+    liveOrderRef.current = [];
+    initialized.current = false;
+    followingRef.current = true;
+    setMessages([]);
+    setOlderCursor(null);
+    setFollowing(true);
+    setConnection({ kind: "connecting" });
+
+    const isCurrent = (source: WebSocket): boolean => !disposed && generation === connectionGeneration.current && source === socket;
+    const applyEvent = async (event: SessionHistoryLiveEvent, source: WebSocket): Promise<void> => {
+      if (!isCurrent(source)) return;
+      if (event.type === "error") {
+        setConnection({ kind: "stale", message: event.message });
+        return;
+      }
+
+      let current = { messages: messagesRef.current, order: liveOrderRef.current };
+      if (event.type === "snapshot" && initialized.current) {
+        try {
+          const caughtUp = await readSnapshotHistory(current.messages, event.page, before => loadPage(before, abort.signal));
+          if (!isCurrent(source)) return;
+          current = { messages: caughtUp.messages, order: current.order };
+        } catch (error) {
+          if (!abort.signal.aborted && isCurrent(source)) {
+            setConnection({ kind: "stale", message: error instanceof Error ? error.message : "Live output is not available." });
+            source.close();
+          }
+          return;
+        }
+      }
+
+      const next = event.type === "snapshot"
+        ? reconcileLiveHistory(current, event.page.messages, event.order)
+        : reconcileLiveHistory(current, event.messages, event.order, event.removedIds);
+      if (!isCurrent(source)) return;
+      messagesRef.current = next.messages;
+      liveOrderRef.current = next.order;
+      setMessages(next.messages);
+      if (!initialized.current && event.type === "snapshot") setOlderCursor(event.page.olderCursor);
+      initialized.current = true;
+      retryAttempt = 0;
+      setConnection({ kind: "live" });
     };
-  }, [poll, read]);
+
+    const connect = (): void => {
+      if (disposed) return;
+      setConnection(current => current.kind === "live" ? current : { kind: "connecting" });
+      const scheme = location.protocol === "https:" ? "wss" : "ws";
+      const path = `/api/tasks/${encodeURIComponent(taskId)}/sessions/${encodeURIComponent(sessionId)}/history/live`;
+      const nextSocket = new WebSocket(`${scheme}://${location.host}${path}`);
+      socket = nextSocket;
+      nextSocket.onmessage = messageEvent => {
+        if (!isCurrent(nextSocket)) return;
+        let raw: unknown;
+        try {
+          raw = typeof messageEvent.data === "string" ? JSON.parse(messageEvent.data) : undefined;
+        } catch {
+          setConnection({ kind: "stale", message: "Forge received an invalid live output event." });
+          nextSocket.close();
+          return;
+        }
+        const parsed = SessionHistoryLiveEventSchema.safeParse(raw);
+        if (!parsed.success) {
+          setConnection({ kind: "stale", message: "Forge received an invalid live output event." });
+          nextSocket.close();
+          return;
+        }
+        eventQueue = eventQueue.then(() => applyEvent(parsed.data, nextSocket));
+      };
+      nextSocket.onclose = () => {
+        if (!isCurrent(nextSocket)) return;
+        setConnection({ kind: "stale", message: "Live output is out of date. Forge will retry." });
+        retryTimer = window.setTimeout(connect, reconnectDelay(retryAttempt++));
+      };
+    };
+
+    connectRef.current = () => {
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      retryTimer = undefined;
+      if (socket) {
+        const previous = socket;
+        socket = null;
+        previous.close();
+      }
+      retryAttempt = 0;
+      connect();
+    };
+    connect();
+    return () => {
+      disposed = true;
+      connectionGeneration.current += 1;
+      abort.abort();
+      if (controller.current === abort) controller.current = null;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      socket?.close();
+      socket = null;
+      connectRef.current = () => undefined;
+    };
+  }, [loadPage, sessionId, taskId]);
+
+  const readEarlier = async (): Promise<void> => {
+    if (!olderCursor || reading || !controller.current) return;
+    const generation = connectionGeneration.current;
+    const abort = controller.current;
+    setReading(true);
+    try {
+      const page = await loadPage(olderCursor, abort.signal);
+      if (generation !== connectionGeneration.current || abort.signal.aborted) return;
+      if (viewport.current) anchor.current = { scrollHeight: viewport.current.scrollHeight, scrollTop: viewport.current.scrollTop };
+      const merged = mergeNativeHistory(messagesRef.current, page.messages, "earlier");
+      messagesRef.current = merged;
+      setMessages(merged);
+      setOlderCursor(page.olderCursor);
+    } catch (error) {
+      anchor.current = null;
+      if (generation === connectionGeneration.current && !abort.signal.aborted) {
+        setConnection({ kind: "stale", message: error instanceof Error ? error.message : "Earlier output is not available." });
+      }
+    } finally {
+      if (generation === connectionGeneration.current) setReading(false);
+    }
+  };
 
   useLayoutEffect(() => {
     const element = viewport.current;
@@ -101,7 +217,21 @@ export function SessionHistory({ taskId, sessionId, assistantLabel, poll }: { ta
       return;
     }
     if (followingRef.current) element.scrollTop = element.scrollHeight;
+    viewportSize.current = { scrollHeight: element.scrollHeight, clientHeight: element.clientHeight };
   }, [messages]);
+
+  useLayoutEffect(() => {
+    const element = viewport.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(followAfterResize);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      if (followFrame.current !== undefined) cancelAnimationFrame(followFrame.current);
+      if (releaseFollowFrame.current !== undefined) cancelAnimationFrame(releaseFollowFrame.current);
+      resizeFollowing.current = false;
+    };
+  }, [followAfterResize]);
 
   const jumpToLive = () => {
     followingRef.current = true;
@@ -110,17 +240,26 @@ export function SessionHistory({ taskId, sessionId, assistantLabel, poll }: { ta
   };
 
   return <div className="relative flex h-full min-h-0 flex-1 flex-col">
-    {error ? <div className="shrink-0 px-3 py-2"><Alert variant="destructive"><AlertDescription><span>{messages.length ? "Session history is out of date. " : ""}{error}</span> <Button size="xs" variant="outline" disabled={reading} onClick={() => void read(undefined, "latest", true)}>Retry</Button></AlertDescription></Alert></div> : null}
+    {connection.kind === "stale" ? <div className="shrink-0 px-3 py-2"><Alert variant="destructive"><AlertDescription><span>{connection.message}</span> <Button size="xs" variant="outline" onClick={() => connectRef.current()}>Retry</Button></AlertDescription></Alert></div> : null}
     <div ref={viewport} data-session-history className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-2" onScroll={event => {
+      const previousSize = viewportSize.current;
+      const nextSize = { scrollHeight: event.currentTarget.scrollHeight, clientHeight: event.currentTarget.clientHeight };
+      viewportSize.current = nextSize;
+      const sizeChanged = previousSize !== null && (previousSize.scrollHeight !== nextSize.scrollHeight || previousSize.clientHeight !== nextSize.clientHeight);
+      if (sizeChanged && followingRef.current) {
+        followAfterResize();
+        return;
+      }
+      if (resizeFollowing.current) return;
       const atBottom = historyAtBottom(event.currentTarget);
       followingRef.current = atBottom;
       setFollowing(atBottom);
     }}>
-      {olderCursor ? <div className="mb-3 flex justify-center"><Button size="xs" variant="outline" disabled={reading} onClick={() => void read(olderCursor, "earlier")}>Open earlier messages</Button></div> : null}
-      {!messages.length && !reading && !error ? <p className="text-xs text-muted-foreground">No messages yet.</p> : null}
-      {!messages.length && reading ? <p className="text-xs text-muted-foreground" aria-busy="true">Loading session history…</p> : null}
-      <div className="grid gap-4">{messages.map(message => <article key={message.id} data-native-message-id={message.id} className="min-w-0 border-b pb-4 last:border-b-0">
-        <header className="mb-2 flex items-center gap-2 text-xs"><span className="font-medium">{message.role === "user" ? "Instruction" : assistantLabel}</span>{message.createdAt !== null ? <time className="text-muted-foreground" dateTime={new Date(message.createdAt).toISOString()}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time> : null}</header>
+      {olderCursor ? <div className="mb-3 flex justify-center"><Button size="xs" variant="outline" disabled={reading} onClick={() => void readEarlier()}>Open earlier messages</Button></div> : null}
+      {!messages.length && connection.kind === "live" ? <p className="text-xs text-muted-foreground">No messages yet.</p> : null}
+      {!messages.length && connection.kind === "connecting" ? <p className="text-xs text-muted-foreground" aria-busy="true">Forge connects to live output.</p> : null}
+      <div className="grid gap-4">{messages.map(message => <article key={message.id} data-native-message-id={message.id} className={message.content.every(part => part.type === "tool") ? "min-w-0" : "min-w-0 border-b pb-4 last:border-b-0"}>
+        {message.role === "user" ? <header className="mb-2 text-xs font-medium">Instruction</header> : null}
         <div className="grid min-w-0 gap-2">{message.content.map(part => part.type === "text"
           ? <Markdown key={part.id} source={part.text} />
           : <Tool key={part.id}>

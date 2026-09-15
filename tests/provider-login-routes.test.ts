@@ -15,11 +15,13 @@ afterEach(() => vi.restoreAllMocks());
 test("providerLoginCommand embeds the resolved executable and falls back to the binary name", async () => {
   vi.spyOn(executables, "resolveClaudeExecutable").mockResolvedValue("/opt/claude cli/claude");
   vi.spyOn(executables, "resolveDevinExecutable").mockResolvedValue("/opt/devin/devin");
+  vi.spyOn(executables, "resolveCodexExecutable").mockResolvedValue("/opt/codex/codex");
   vi.spyOn(executables, "resolveOpenCodeExecutable").mockRejectedValue(new Error("missing"));
 
   expect(await providerLoginCommand("claude-code")).toBe("'/opt/claude cli/claude' auth login");
   expect(await providerLoginCommand("claude-code", "/home/work laptop")).toBe("CLAUDE_CONFIG_DIR='/home/work laptop' '/opt/claude cli/claude' auth login");
   expect(await providerLoginCommand("devin")).toBe("'/opt/devin/devin' auth login");
+  expect(await providerLoginCommand("codex")).toBe("'/opt/codex/codex' login");
   expect(await providerLoginCommand("openai")).toBe("opencode auth login");
   expect(await providerLoginCommand("openai", null, { resolveExecutable: async () => "/opt/opencode/opencode" })).toBe("'/opt/opencode/opencode' auth login");
 });

@@ -346,8 +346,8 @@ test("D3: the real adapter classifies 401, missing login, permission 403, rate l
   const restError = (status: number, message: string) => JSON.stringify({ message, documentation_url: "https://docs.github.com/rest", status: String(status) });
   const scripted = (failures: Record<string, { stdout?: string; stderr?: string; timedOut?: boolean }>) => {
     const commands: string[] = [];
-    const runner: GithubCommandRunner = async ({ command, args }) => {
-      const key = `${command} ${args.slice(0, 2).join(" ")}`;
+    const runner: GithubCommandRunner = async ({ args }) => {
+      const key = `gh ${args.slice(0, 2).join(" ")}`;
       commands.push(key);
       const failure = Object.entries(failures).find(([prefix]) => key.startsWith(prefix))?.[1];
       if (failure) throw Object.assign(new Error("gh failed"), { stdout: failure.stdout ?? "", stderr: failure.stderr ?? "", killed: failure.timedOut ?? false });

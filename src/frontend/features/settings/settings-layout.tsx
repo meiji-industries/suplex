@@ -1,43 +1,16 @@
-import { ArrowLeft, Building2, Cpu, FileText, HardDrive, KeyRound, Mail, Plug, ShieldCheck, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { useEffect, useId, useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarInput, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarTrigger, useSidebar } from "../../components/ui/sidebar.js";
-import { companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
+import type { ApiUser } from "../../lib/api.js";
 import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
 import { CompanySwitcher } from "../../shell/company-switcher.js";
 import { SystemHealthIndicator } from "../../components/app/system-health.js";
-
-type SettingsNavItem = { label: string; href: string; icon: LucideIcon };
-
-type SettingsNavGroup = { title: string; items: SettingsNavItem[] };
+import { buildSettingsGroups, type SettingsNavGroup } from "./settings-nav.js";
 
 function useSettingsGroups(companyId: string, user?: ApiUser): SettingsNavGroup[] {
-  return useMemo<SettingsNavGroup[]>(() => {
-    const companyItems: SettingsNavItem[] = [
-      { label: "Profile", href: withCompany("/profile", companyId), icon: UserRound },
-      { label: "Templates", href: withCompany("/templates", companyId), icon: FileText },
-      ...(user?.role === "admin" && companyId ? [{ label: "Workspace", href: companySettingsPath(companyId), icon: Building2 }] : []),
-    ];
-    return [
-      ...(user && companyItems.length ? [{ title: "Company", items: companyItems }] : []),
-      ...(user?.role === "admin" ? [{ title: "Administration", items: [
-        { label: "Users", href: withCompany("/admin", companyId), icon: Users },
-        { label: "Companies", href: withCompany("/admin/companies", companyId), icon: Building2 },
-        { label: "Invitations", href: withCompany("/admin/invitations", companyId), icon: Mail },
-        { label: "Passkeys", href: withCompany("/admin/passkeys", companyId), icon: KeyRound },
-        { label: "Providers", href: withCompany("/admin/providers", companyId), icon: Plug },
-        { label: "Agents", href: withCompany("/admin/agents", companyId), icon: Users },
-        { label: "Workflows", href: withCompany("/admin/workflows", companyId), icon: Workflow },
-        { label: "Triggers", href: withCompany("/admin/triggers", companyId), icon: Webhook },
-        { label: "Models", href: withCompany("/admin/models", companyId), icon: Cpu },
-        { label: "Environment", href: withCompany("/admin/environment", companyId), icon: HardDrive },
-      ]}] : []),
-      { title: "System", items: [
-        { label: "Host health", href: withCompany("/health", companyId), icon: ShieldCheck },
-      ]},
-    ];
-  }, [companyId, user?.role]);
+  return useMemo<SettingsNavGroup[]>(() => buildSettingsGroups(companyId, user), [companyId, user?.role]);
 }
 
 

@@ -60,10 +60,10 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => { document.body.replaceChildren(); }); });
 
-test("Add Blocked by reference opens the picker and selecting a task saves its id", async () => {
+test("None opens the picker and selecting a task saves its id", async () => {
   const view = mount();
   await view.render();
-  await act(async () => { button(view.container, "Add Blocked by reference").click(); });
+  await act(async () => { button(view.container, "None").click(); });
   await flush();
   expect(view.container.querySelector('[aria-label="Search tasks"]')).not.toBeNull();
   expect(view.container.textContent).toContain("Active prerequisite");
@@ -109,7 +109,7 @@ test("closing the picker leaves the current reference unchanged", async () => {
 test("a failed save shows the error message", async () => {
   const view = mount(activeTask, vi.fn().mockRejectedValue(new Error("Reference is not available")));
   await view.render();
-  await act(async () => { button(view.container, "Add Blocked by reference").click(); });
+  await act(async () => { button(view.container, "None").click(); });
   await flush();
   await act(async () => { button(view.container, "Active prerequisite").click(); await Promise.resolve(); });
   expect(view.save).toHaveBeenCalledWith("task-active");

@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { GitBranch } from "lucide-react";
+import { ChevronRight, ClipboardCopy } from "lucide-react";
+import { Collapsible } from "../../components/ui/collapsible.js";
 import type { Task } from "../../../tasks/contracts.js";
 import { TaskActivityResponseSchema } from "../../../http/contracts/tasks.js";
 import { readJson } from "../../lib/api.js";
@@ -26,6 +27,15 @@ import { TaskPullRequestCard } from "./pull-request-card.js";
 import { TaskWorktreeMenu } from "./task-worktree-menu.js";
 import { ADVISOR_LABELS, workflowDefinition, type AdvisorRole } from "../../../coordination/workflows.js";
 
+function CopyValue({ label, value, children }: { label: string; value: string; children: ReactElement }): ReactElement {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => { if (!copied) return; const timer = setTimeout(() => setCopied(false), 1_500); return () => clearTimeout(timer); }, [copied]);
+  return <span className="flex min-w-0 items-center gap-1.5">
+    <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" aria-label={copied ? `Copied ${label}` : `Copy ${label}`} title={copied ? "Copied" : "Copy"} onClick={() => { void navigator.clipboard.writeText(value).then(() => setCopied(true), () => setCopied(false)); }}><ClipboardCopy className="size-3.5" /></button>
+    {children}
+  </span>;
+}
+
 export function TaskBlockedByProperty({ task, save }: { task: Pick<Task, "id" | "companyId" | "projectId" | "status" | "blockedBy">; save: (blockedByTaskId: string | null) => Promise<void> }): ReactElement {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -38,7 +48,7 @@ export function TaskBlockedByProperty({ task, save }: { task: Pick<Task, "id" | 
     finally { setBusy(false); }
   };
   const openPicker = () => { setError(""); setPickerOpen(true); };
-  return <div className="space-y-1.5"><dt className="text-muted-foreground">Blocked by reference</dt><dd>{task.blockedBy ? <span className="flex flex-wrap items-center gap-2"><a className="underline-offset-2 hover:underline" href={`/tasks/${task.blockedBy.id}?company=${task.companyId}`} title={`${task.blockedBy.title} · ${task.blockedBy.status}`}>{task.blockedBy.title}</a><TaskStatus status={task.blockedBy.status} /><Button type="button" size="xs" variant="ghost" disabled={busy} onClick={openPicker}>Change reference</Button><Button type="button" size="xs" variant="ghost" disabled={busy} onClick={() => void submit(null)}>Clear reference</Button></span> : <Button type="button" size="xs" variant="ghost" disabled={busy} onClick={openPicker}>Add Blocked by reference</Button>}</dd>{error ? <dd role="alert" className="text-destructive">{error}</dd> : null}<BlockedByPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} companyId={task.companyId} projectId={task.projectId} excludeTaskId={task.id} onSelect={selected => void submit(selected.id)} onError={setError} /></div>;
+  return <div className="space-y-1.5"><dt className="text-muted-foreground">Blocked by</dt><dd>{task.blockedBy ? <span className="flex flex-wrap items-center gap-2"><a className="underline-offset-2 hover:underline" href={`/tasks/${task.blockedBy.id}?company=${task.companyId}`} title={`${task.blockedBy.title} · ${task.blockedBy.status}`}>{task.blockedBy.title}</a><TaskStatus status={task.blockedBy.status} /><Button type="button" size="xs" variant="ghost" disabled={busy} onClick={openPicker}>Change reference</Button><Button type="button" size="xs" variant="ghost" disabled={busy} onClick={() => void submit(null)}>Clear reference</Button></span> : <Button type="button" size="xs" variant="ghost" disabled={busy} onClick={openPicker}>None</Button>}</dd>{error ? <dd role="alert" className="text-destructive">{error}</dd> : null}<BlockedByPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} companyId={task.companyId} projectId={task.projectId} excludeTaskId={task.id} onSelect={selected => void submit(selected.id)} onError={setError} /></div>;
 }
 
 export function TaskDetailsPage({ task, project, onChange }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void }): ReactElement {
@@ -94,16 +104,21 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
             </Progress>
           </div>
           <TaskBlockedByProperty task={task} save={async blockedByTaskId => onChange(await readJson<Task>(`/api/tasks/${task.id}/blocked-by`, { method: "PATCH", body: JSON.stringify({ blockedByTaskId }) }))} />
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="break-words">{project?.name ?? task.configuration.repository}</dd></div>
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Workflow</dt><dd data-task-workflow>{workflowDefinition(task.workflow).name}</dd>{task.workflow !== "standard" ? <dd><WorkflowStatus task={task} /></dd> : null}</div>
+          <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="flex min-w-0 items-center gap-2">{project ? <EntityAvatar kind="project" id={project.id} name={project.name} size="xs" /> : null}<span className="truncate">{project?.name ?? task.configuration.repository}</span></dd></div>
           {([["root", "Coordinator", task.rootProfile], ["worker", "Worker", task.workerProfile], ...workflowDefinition(task.workflow).advisorRoles.map(role => [role, ADVISOR_LABELS[role], task.advisorProfiles[role as AdvisorRole] ?? task.rootProfile] as const)] as const).map(([role, label, profile]) => <div key={role} className="space-y-1.5"><dt className="text-muted-foreground">{label}</dt><dd className="flex items-center gap-2"><EntityAvatar kind="agent" id={profile.profileId} name={label} size="xs" /><span className="min-w-0"><span className="block truncate" title={`${profile.model} · ${profile.provider}`}>{profile.model}</span><span className="block text-[11px] text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></dd></div>)}
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Delivery</dt><dd>{taskDeliveryTargetOptions.find(option => option.value === task.deliveryTarget)?.label}</dd></div>
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Branch</dt><dd className="flex min-w-0 items-center gap-1.5"><GitBranch className="size-3.5 shrink-0" /><code className="truncate" title={task.configuration.branch}>{task.configuration.branch}</code></dd><dd className="text-muted-foreground">Base · {task.configuration.baseBranch}</dd></div>
-          {task.worktree ? <div className="space-y-1.5"><dt className="text-muted-foreground">Worktree</dt><dd className="truncate font-mono text-[11px]" title={task.worktree.path}>{task.worktree.path.split("/").pop()}</dd></div> : null}
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Run project tests</dt><dd>{task.configuration.runProjectTests ? "Enabled" : "Off"}</dd></div>
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Browser evidence</dt><dd>{task.configuration.visualEvidence === "off" ? "Off" : task.configuration.visualEvidence === "capture" ? "Capture" : "Necessary"}</dd></div>
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Updated</dt><dd>{adminDate(task.updatedAt)}</dd></div>
+          <div className="space-y-1.5"><dt className="text-muted-foreground">Branch</dt><dd><CopyValue label="branch" value={task.configuration.branch}><code className="truncate" title={task.configuration.branch}>{task.configuration.branch}</code></CopyValue></dd></div>
+          {task.worktree ? <div className="space-y-1.5"><dt className="text-muted-foreground">Worktree</dt><dd><CopyValue label="worktree path" value={task.worktree.path}><span className="truncate font-mono text-[11px]" title={task.worktree.path}>{task.worktree.path.split("/").pop()}</span></CopyValue></dd></div> : null}
+          <Collapsible.Root className="space-y-3">
+            <Collapsible.Trigger className="group flex items-center gap-1 text-muted-foreground hover:text-foreground"><ChevronRight className="size-3.5 transition-transform group-data-[panel-open]:rotate-90" />Properties</Collapsible.Trigger>
+            <Collapsible.Panel className="grid grid-cols-1 gap-5">
+              <div className="space-y-1.5"><dt className="text-muted-foreground">Workflow</dt><dd data-task-workflow>{workflowDefinition(task.workflow).name}</dd>{task.workflow !== "standard" ? <dd><WorkflowStatus task={task} /></dd> : null}</div>
+              <div className="space-y-1.5"><dt className="text-muted-foreground">Delivery</dt><dd>{taskDeliveryTargetOptions.find(option => option.value === task.deliveryTarget)?.label}</dd></div>
+              <div className="space-y-1.5"><dt className="text-muted-foreground">Run project tests</dt><dd>{task.configuration.runProjectTests ? "Enabled" : "Off"}</dd></div>
+              <div className="space-y-1.5"><dt className="text-muted-foreground">Browser evidence</dt><dd>{task.configuration.visualEvidence === "off" ? "Off" : task.configuration.visualEvidence === "capture" ? "Capture" : "Necessary"}</dd></div>
+              <div className="space-y-1.5"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>
+              <div className="space-y-1.5"><dt className="text-muted-foreground">Updated</dt><dd>{adminDate(task.updatedAt)}</dd></div>
+            </Collapsible.Panel>
+          </Collapsible.Root>
         </dl>
       </aside>
     </div>

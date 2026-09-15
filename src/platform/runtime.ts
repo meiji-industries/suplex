@@ -65,7 +65,7 @@ async function waitForProcessIdentity(pid: number, attempts = 10, delayMs = 50):
 }
 
 export function forgeProcessArguments(script: string): string[] {
-  return ["--import", "tsx", script];
+  return [script];
 }
 
 async function spawnForgeProcess(name: string, script: string, config: ForgeConfig, runtimeRoot: string, foreground: boolean): Promise<{ child: ChildProcess; owned: OwnedProcess }> {
@@ -210,7 +210,7 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
       } : {}),
     };
     await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
-    const server = await spawnForgeProcess("server", "src/server.ts", config, config.runtimeRoot, foreground);
+    const server = await spawnForgeProcess("server", "src/platform/updates/supervisor.ts", config, config.runtimeRoot, foreground);
     registry.processes.push(server.owned);
     await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
     if (config.tailscaleExposure === "serve") {

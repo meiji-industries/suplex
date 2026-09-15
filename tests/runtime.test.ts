@@ -45,9 +45,8 @@ test("probes the actual health page for startup readiness", () => {
   expect(readinessProbePath()).toBe("/health");
 });
 
-test("development children use tsx only as a TypeScript loader", () => {
-  expect(forgeProcessArguments("src/server.ts")).toEqual(["--import", "tsx", "src/server.ts"]);
-  expect(forgeProcessArguments("src/worker.ts")).toEqual(["--import", "tsx", "src/worker.ts"]);
+test("the stable runtime launches the dependency-free supervisor directly", () => {
+  expect(forgeProcessArguments("src/platform/updates/supervisor.ts")).toEqual(["src/platform/updates/supervisor.ts"]);
 });
 
 test("probes the local backend when Tailscale Serve owns HTTPS", () => {

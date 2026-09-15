@@ -7,12 +7,15 @@
     "build": "tsc -p tsconfig.json && cp src/connect.html dist/src/",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "pnpm build && electron .",
-    "dist": "pnpm build && electron-builder --mac --arm64 --publish never"
+    "dist": "pnpm build && electron-builder --config electron-builder.config.cjs --mac --arm64 --publish never"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
     "electron": "44.2.0",
     "electron-builder": "26.15.3",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9"
   }
 }

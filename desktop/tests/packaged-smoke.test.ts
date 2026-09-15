@@ -27,9 +27,11 @@ describe("packaged Forge.app", () => {
   beforeAll(() => {
     if (!existsSync(APP)) throw new Error(`Packaged application not found at ${APP}. Run pnpm desktop:dist before pnpm test:packaged.`);
   });
-  test("bundles only the desktop shell", () => {
+  test("bundles only the desktop app", () => {
     const paths = asarPaths(join(APP, "Contents", "Resources", "app.asar"));
-    expect(paths).toEqual(["dist/src/connect.html", "dist/src/forge-desktop.js", "dist/src/forge-target.js", "dist/src/main.js", "dist/src/target-store.js", "package.json"]);
+    expect(paths).toEqual(expect.arrayContaining(["dist/src/connect.html", "dist/src/desktop-updater.js", "dist/src/forge-desktop.js", "dist/src/forge-target.js", "dist/src/main.js", "dist/src/target-store.js", "node_modules/electron-updater/package.json", "package.json"]));
+    expect(paths.some((path) => path.startsWith("dist/src/") && /server|database|coordination|runtimes/.test(path))).toBe(false);
+    expect(paths.some((path) => path.includes("better-sqlite3"))).toBe(false);
   });
   test("contains no Forge backend, database, or better-sqlite3 binary", () => {
     const result = spawnSync("grep", ["-rl", "-e", "better_sqlite3", "-e", "better-sqlite3", "-e", "forge.sqlite", join(APP, "Contents")], { encoding: "utf8" });

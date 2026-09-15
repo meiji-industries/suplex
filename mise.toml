@@ -21,23 +21,23 @@ alias = "worktree"
 run = "mise install && pnpm exec playwright install chromium"
 
 [tasks.dev]
-description = "Run the Forge API, worker host, and Vite HMR in one process"
+description = "Run the Forge supervisor, API, worker host, and Vite HMR"
 env = { FORGE_PRETTY_LOGS = "1", FORGE_FRONTEND_DEV_SERVER = "1", FORGE_DEVELOPMENT_AUTO_LOGIN = "1" }
 run = '''
 export PATH="$(dirname "$(mise which node)"):$PATH"
 [ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
 export FORGE_PORT=${CONDUCTOR_PORT:-4111}
-exec tsx src/server.ts
+exec node src/platform/updates/supervisor.ts
 '''
 
 [tasks."dev:watch"]
-description = "Run the single-process stack with backend reloads"
-env = { FORGE_PRETTY_LOGS = "1", FORGE_FRONTEND_DEV_SERVER = "1", FORGE_DEVELOPMENT_AUTO_LOGIN = "1", FORGE_WATCH_MODE = "1" }
+description = "Run the Forge supervisor with backend reloads"
+env = { FORGE_PRETTY_LOGS = "1", FORGE_FRONTEND_DEV_SERVER = "1", FORGE_DEVELOPMENT_AUTO_LOGIN = "1" }
 run = '''
 export PATH="$(dirname "$(mise which node)"):$PATH"
 [ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
 export FORGE_PORT=${CONDUCTOR_PORT:-4111}
-exec tsx watch --clear-screen=false --exclude './src/frontend/**' src/server.ts
+exec node src/platform/updates/supervisor.ts --watch
 '''
 
 [tasks.down]
@@ -77,10 +77,10 @@ run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run test"
 run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run test:browser"
 
 [tasks."desktop:dev"]
-description = "Build the desktop shell and open it with Electron"
+description = "Build the desktop app and open it with Electron"
 run = "pnpm run desktop:dev"
 [tasks."desktop:build"]
-description = "Compile the desktop shell"
+description = "Compile the desktop app"
 run = "pnpm run desktop:build"
 [tasks."desktop:typecheck"]
 run = "pnpm run desktop:typecheck"

@@ -114,7 +114,7 @@ async function makeFixture(overrides: Parameters<typeof createTestConfig>[1] = {
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   const config = createTestConfig(root, { reachableAddress, ...overrides });
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
-  const app = createApp({ config, auth, health, getHealth: async () => ({ generatedAt: new Date().toISOString(), reachableAddress: config.reachableAddress, ready: true, checks: [] }), requestUpdateRestart: async (revision) => ({ accepted: true, operation: { operationId: "update-policy-operation", status: "pending", targetRevision: revision, acceptedAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }), launchUpdateRestart: async () => undefined });
+  const app = createApp({ config, auth, health, getHealth: async () => ({ generatedAt: new Date().toISOString(), reachableAddress: config.reachableAddress, ready: true, checks: [] }), readUpdate: async () => ({ status: { kind: "available" }, canRestart: true }), requestUpdateRestart: async () => ({ accepted: true, status: { kind: "applying", step: "fetch", message: "Forge checks the update." } }) });
   return { root, database, config, auth, app };
 }
 

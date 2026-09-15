@@ -13,9 +13,7 @@ import type { AgentDeliveryService } from "./delivery/agent-delivery.js";
 import type { ReadProviders } from "./profiles/provider-catalog.js";
 import type { ProviderLoginPort } from "./profiles/provider-login.js";
 import { inspectHostHealth, inspectProviderChecks, type HealthSnapshot, type HostHealthDependencies } from "./platform/health.js";
-import { inspectUpdateAvailability, type UpdateAvailability } from "./platform/updates/update.js";
-import type { UpdateObservation } from "./platform/updates/self-update.js";
-import type { UpdateRestartResponse } from "./http/contracts/update.js";
+import type { UpdateResponse, UpdateRestartResponse } from "./http/contracts/update.js";
 import type { AgentProfileService } from "./profiles/agent-profiles.js";
 import type { ProviderInstanceService } from "./profiles/provider-instances.js";
 import type { ProjectService } from "./projects/projects.js";
@@ -70,9 +68,8 @@ export interface AppDependencies {
   hermesGithub?: HermesGithubPort;
   readProviders?: ReadProviders;
   providerLoginHerdr?: ProviderLoginPort;
-  readUpdate?: (user: AuthUser) => Promise<UpdateAvailability | UpdateObservation>;
-  requestUpdateRestart?: (revision: string) => Promise<UpdateRestartResponse>;
-  launchUpdateRestart?: (operationId: string) => Promise<void>;
+  readUpdate?: (check: boolean, user: AuthUser) => Promise<UpdateResponse>;
+  requestUpdateRestart?: (user: AuthUser) => Promise<UpdateRestartResponse>;
   instanceId?: string;
   https?: { key: Buffer; cert: Buffer };
   frontendDevelopment?: {
@@ -127,7 +124,6 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
 
 export function registerAppRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
   const getHealth = dependencies.getHealth ?? (() => inspectHostHealth(dependencies.config, dependencies.health));
-  const readUpdate = dependencies.readUpdate ?? (() => inspectUpdateAvailability());
   // The cached snapshot covers host checks only; provider checks are contextual
   // and always probed fresh for the requested context.
   const readBaseHealth = cachedHealthReader(async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth()), dependencies.healthNow);
@@ -151,7 +147,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
     if (dependencies.hermes) void app.register(hermesPairing, { hermes: dependencies.hermes });
     if (dependencies.hermes && taskService) registerHermesTaskRoutes(app, { hermes: dependencies.hermes, tasks: taskService, ...(dependencies.host ? { host: dependencies.host } : {}), ...(dependencies.hermesGithub ? { github: dependencies.hermesGithub } : {}), ...(dependencies.agentDelivery ? { agentDelivery: dependencies.agentDelivery } : {}) });
-    void app.register(authenticated, { auth, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), ...(dependencies.providerInstances ? { providerInstances: dependencies.providerInstances } : {}), ...(dependencies.readProviderInstanceReadiness ? { readProviderInstanceReadiness: dependencies.readProviderInstanceReadiness } : {}), config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), ...(dependencies.providerLoginHerdr ? { providerLoginHerdr: dependencies.providerLoginHerdr } : {}), readUpdate, ...(dependencies.requestUpdateRestart ? { requestUpdateRestart: dependencies.requestUpdateRestart } : {}), ...(dependencies.launchUpdateRestart ? { launchUpdateRestart: dependencies.launchUpdateRestart } : {}), ...(dependencies.instanceId ? { instanceId: dependencies.instanceId } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(dependencies.host ? { host: dependencies.host } : {}), ...(database ? { database } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
+    void app.register(authenticated, { auth, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), ...(dependencies.providerInstances ? { providerInstances: dependencies.providerInstances } : {}), ...(dependencies.readProviderInstanceReadiness ? { readProviderInstanceReadiness: dependencies.readProviderInstanceReadiness } : {}), config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), ...(dependencies.providerLoginHerdr ? { providerLoginHerdr: dependencies.providerLoginHerdr } : {}), ...(dependencies.readUpdate ? { readUpdate: dependencies.readUpdate } : {}), ...(dependencies.requestUpdateRestart ? { requestUpdateRestart: dependencies.requestUpdateRestart } : {}), ...(dependencies.instanceId ? { instanceId: dependencies.instanceId } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(dependencies.host ? { host: dependencies.host } : {}), ...(database ? { database } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
     if (templateService) void app.register(taskTemplates, { auth, config: dependencies.config, templates: templateService });
     if (dependencies.workflows) void app.register(workflowRoutes, { auth, config: dependencies.config, workflows: dependencies.workflows });
     if (dependencies.githubTriggers) void app.register(githubTriggerRoutes, { auth, config: dependencies.config, triggers: dependencies.githubTriggers });

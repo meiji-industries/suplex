@@ -58,7 +58,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
   } satisfies GithubTriggerPort;
   const githubTriggers = new GithubTriggerService(database, auth, projects, workflows, githubTrigger, tasks);
   const wakes: string[] = [];
-  const app = createApp({ ...(fixtureOptions.logSink ? { logger: createFastifyLogger(fixtureOptions.logSink) } : {}), config, database, auth, profiles, projects, tasks, taskTemplates: templates, workflows, githubTriggers, hermes, health: healthyHost, readUpdate: async () => ({ available: false }), host: { async recover(id) { wakes.push(id); } } });
+  const app = createApp({ ...(fixtureOptions.logSink ? { logger: createFastifyLogger(fixtureOptions.logSink) } : {}), config, database, auth, profiles, projects, tasks, taskTemplates: templates, workflows, githubTriggers, hermes, health: healthyHost, readUpdate: async () => ({ status: { kind: "current" }, canRestart: false }), host: { async recover(id) { wakes.push(id); } } });
   const invitation = auth.ensureBootstrapInvitation();
   if (!invitation) throw new Error("Fresh database did not create an invitation");
   const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });

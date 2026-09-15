@@ -12,9 +12,7 @@ import type { TaskHost } from "../../tasks/host.js";
 import type { HermesAgentService } from "../../identity/hermes-agents.js";
 import type { ReadProviders } from "../../profiles/provider-catalog.js";
 import type { ProviderLoginPort } from "../../profiles/provider-login.js";
-import type { UpdateObservation } from "../../platform/updates/self-update.js";
-import type { UpdateAvailability } from "../../platform/updates/update.js";
-import type { UpdateRestartResponse } from "../contracts/update.js";
+import type { UpdateResponse, UpdateRestartResponse } from "../contracts/update.js";
 import { sessionUser } from "../session.js";
 import administration from "./administration.js";
 import avatars from "./avatars.js";
@@ -42,9 +40,8 @@ export interface AuthenticatedRoutesOptions {
   hermes?: HermesAgentService;
   readProviders?: ReadProviders;
   providerLoginHerdr?: ProviderLoginPort;
-  readUpdate?: (user: AuthUser) => Promise<UpdateAvailability | UpdateObservation>;
-  requestUpdateRestart?: (revision: string) => Promise<UpdateRestartResponse>;
-  launchUpdateRestart?: (operationId: string) => Promise<void>;
+  readUpdate?: (check: boolean, user: AuthUser) => Promise<UpdateResponse>;
+  requestUpdateRestart?: (user: AuthUser) => Promise<UpdateRestartResponse>;
   instanceId?: string;
 }
 
@@ -69,7 +66,7 @@ const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app
   if (options.tasks) await app.register(tasks, { tasks: options.tasks, ...(options.config ? { config: options.config } : {}), ...(options.host ? { host: options.host } : {}) });
   if (options.tasks) await app.register(taskPane, { tasks: options.tasks, ...(options.config ? { config: options.config } : {}) });
   if (options.tasks && options.database) await app.register(taskWorktree, { tasks: options.tasks, database: options.database, ...(options.config ? { config: options.config } : {}) });
-  if (options.readUpdate) await app.register(update, { readUpdate: options.readUpdate, ...(options.requestUpdateRestart ? { requestRestart: options.requestUpdateRestart } : {}), ...(options.launchUpdateRestart ? { launchRestart: options.launchUpdateRestart } : {}), ...(options.instanceId ? { instanceId: options.instanceId } : {}) });
+  if (options.readUpdate) await app.register(update, { readUpdate: options.readUpdate, ...(options.requestUpdateRestart ? { requestRestart: options.requestUpdateRestart } : {}), ...(options.instanceId ? { instanceId: options.instanceId } : {}) });
 };
 
 export default authenticated;

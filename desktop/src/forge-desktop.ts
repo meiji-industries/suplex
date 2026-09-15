@@ -1,8 +1,10 @@
 import { app, BrowserWindow, dialog, Menu, screen, shell } from "electron";
+import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { classifyNavigation, parseForgeTarget, resolveForgeTarget, type ForgeTarget } from "./forge-target";
 import { forgetTarget, readTargets, rememberTarget, type TargetRegistry } from "./target-store";
+import { createDesktopUpdater } from "./desktop-updater";
 
 const KEYCHAIN_ACCESS_GROUP = "6KY6743H52.dev.forge.desktop.webauthn"; // must match build/entitlements.mac.plist
 const INVALID_TITLE = "The Forge URL is not valid";
@@ -90,7 +92,7 @@ export function retryPage(origin: string): string {
 }
 
 /**
- * The whole desktop shell: one sandboxed window that attaches to an existing Forge origin.
+ * The desktop app is one sandboxed window that attaches to an existing Forge origin.
  * It never starts, stops, or signals anything; quitting only closes the window.
  */
 export async function runForgeDesktop(input: { readonly argv: readonly string[]; readonly environment: NodeJS.ProcessEnv }): Promise<void> {
@@ -99,6 +101,8 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
     return;
   }
   const probe = input.environment.FORGE_DESKTOP_PROBE === "1";
+  const packagedFeed = app.isPackaged && typeof process.resourcesPath === "string" && existsSync(join(process.resourcesPath, "app-update.yml"));
+  const desktopUpdater = createDesktopUpdater({ dialog, configured: packagedFeed });
   const connectPage = join(__dirname, "connect.html");
   const targetFile = (): string => join(app.getPath("userData"), "desktop.json");
   const stateFile = (): string => join(app.getPath("userData"), "window-state.json");
@@ -157,7 +161,7 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
       click: () => { if (window) void switchTo(window, target); },
     }));
     Menu.setApplicationMenu(Menu.buildFromTemplate([
-      { role: "appMenu" },
+      { label: "Forge", submenu: [{ role: "about" }, { type: "separator" }, { role: "services" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, desktopUpdater.menuItem(), { type: "separator" }, { role: "quit" }] },
       { role: "editMenu" },
       { role: "viewMenu" },
       { role: "windowMenu" },
@@ -270,5 +274,6 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
   await app.whenReady();
   app.configureWebAuthn({ touchID: { keychainAccessGroup: KEYCHAIN_ACCESS_GROUP, promptReason: "verify your identity on $1" } });
   rebuildMenu();
+  void desktopUpdater.check(false);
   await open();
 }

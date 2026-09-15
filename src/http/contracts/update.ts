@@ -1,35 +1,25 @@
 import { z } from "zod";
 
-export const UPDATE_OPERATION_TIMEOUT_MS = 12 * 60_000;
-
-export const UpdateOperationStatusSchema = z.object({
-  operationId: z.string().min(1),
-  status: z.enum(["pending", "preparing", "restarting", "succeeded", "failed"]),
-  targetRevision: z.string().min(1),
-  acceptedAt: z.string().min(1),
-  updatedAt: z.string().min(1),
-  message: z.string().min(1).optional(),
-  error: z.string().min(1).optional(),
-}).strict();
+export const UpdateStatusSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("idle") }).strict(),
+  z.object({ kind: z.literal("checking") }).strict(),
+  z.object({ kind: z.literal("current") }).strict(),
+  z.object({ kind: z.literal("available") }).strict(),
+  z.object({ kind: z.literal("applying"), step: z.enum(["fetch", "stop", "merge", "install", "build", "start"]), message: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("failed"), action: z.enum(["check", "apply"]), message: z.string().min(1), error: z.string().min(1) }).strict(),
+]).readonly();
 
 export const UpdateResponseSchema = z.object({
-  available: z.boolean(),
-  revision: z.string().min(1).optional(),
-  currentRevision: z.string().min(1).optional(),
+  status: UpdateStatusSchema,
+  currentRevision: z.string().regex(/^[0-9a-f]{40}$/).optional(),
+  availableRevision: z.string().regex(/^[0-9a-f]{40}$/).optional(),
   instanceId: z.string().min(1).optional(),
-  canRestart: z.boolean().optional(),
-  operation: UpdateOperationStatusSchema.optional(),
-});
+  canRestart: z.boolean(),
+}).strict();
 
-export const RestartUpdateBodySchema = z.object({
-  revision: z.string().trim().regex(/^[0-9a-f]{40}$/i),
-});
+export const UpdateQuerySchema = z.object({ check: z.literal("1").optional() }).strict();
+export const UpdateRestartResponseSchema = z.object({ accepted: z.literal(true), status: UpdateStatusSchema }).strict();
 
-export const UpdateRestartResponseSchema = z.object({
-  accepted: z.literal(true),
-  operation: UpdateOperationStatusSchema,
-});
-
+export type UpdateStatus = z.infer<typeof UpdateStatusSchema>;
 export type UpdateResponse = z.infer<typeof UpdateResponseSchema>;
-export type UpdateOperationStatus = z.infer<typeof UpdateOperationStatusSchema>;
 export type UpdateRestartResponse = z.infer<typeof UpdateRestartResponseSchema>;

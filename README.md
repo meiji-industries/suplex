@@ -87,7 +87,9 @@ mise run dev
 
 Reuse an existing stack when `dev:status` reports one. Frontend changes use Vite
 HMR. Backend changes require a restart under `mise run dev`. `mise run dev:watch`
-restarts the backend on changes. `mise run down` stops this checkout's stack.
+restarts the backend on changes. Both commands keep a stable supervisor alive so
+Forge can update without stopping native agent sessions. `mise run down` stops
+this checkout's stack.
 
 Loopback and tailnet requests receive the Operator administrator session.
 An empty development database receives a company, native profiles, and a project
@@ -142,6 +144,10 @@ The Navigate menu lists every Forge the app has opened: pick one to switch, use
 `--url` and `FORGE_DESKTOP_URL` override the remembered choice. The sidebar shows
 the host the window is on.
 
+The desktop app and Forge host update separately. The Check for Desktop Update
+menu item runs only in the Electron main process. Local builds have no update
+feed. See [docs/updates.md](docs/updates.md) for feed and signing requirements.
+
 Create a task with **Start immediately** selected to start Root without another
 click. Clear the option to keep the task in Backlog. Backlog tasks support title
 and description edits. Active tasks accept notes and question-specific answers.
@@ -154,6 +160,10 @@ pnpm run forge restart
 
 Lifecycle commands inspect recorded process identities before signaling them.
 They do not kill processes by broad name or port. `/health` reports host checks.
+After adopting this release, restart an older registry-owned installation once
+with `pnpm run forge restart`. For an existing `mise run dev` process, press
+Ctrl-C and run `mise run dev` once. Future host updates keep the stable
+supervisor, terminal, and native agent sessions active.
 
 ## Back up and restore
 

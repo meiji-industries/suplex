@@ -17,9 +17,9 @@ test("only the orchestration module imports electron", () => {
   }
 });
 
-test("the desktop package bundles no runtime dependencies and the server graph has no Electron", () => {
-  const desktop = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8")) as { dependencies?: unknown };
-  expect(desktop.dependencies).toBeUndefined();
+test("the desktop package owns only its updater runtime dependency and the server graph has no Electron", () => {
+  const desktop = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8")) as { dependencies?: Record<string, string> };
+  expect(desktop.dependencies).toEqual({ "electron-updater": "6.8.9" });
   const root = JSON.parse(readFileSync(join(__dirname, "..", "..", "package.json"), "utf8")) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };
   expect(Object.keys({ ...root.dependencies, ...root.devDependencies }).filter((name) => /electron/i.test(name))).toEqual([]);
 });

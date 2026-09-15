@@ -54,11 +54,19 @@ const fake = {
   dialog: { showErrorBox: (_title: string, _content: string): void => undefined, showMessageBox: async (_options: unknown): Promise<unknown> => undefined },
   screen: { getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }) },
 };
+const autoUpdater = Object.assign(new EventEmitter(), {
+  autoDownload: true,
+  autoInstallOnAppQuit: true,
+  checkForUpdates: async (): Promise<null> => null,
+  downloadUpdate: async (): Promise<string[]> => [],
+  quitAndInstall: (): void => undefined,
+});
 
 vi.mock("electron", () => fake);
+vi.mock("electron-updater", () => ({ autoUpdater }));
 
 let runForgeDesktop: typeof import("../src/forge-desktop")["runForgeDesktop"];
-beforeAll(async () => { ({ runForgeDesktop } = await import("../src/forge-desktop")); }); // lazy so the mock factory sees the fakes above
+beforeAll(async () => { ({ runForgeDesktop } = await import("../src/forge-desktop")); });
 
 const targetFile = join(fake.userData, "desktop.json");
 const openExternal = vi.spyOn(fake.shell, "openExternal");
@@ -74,6 +82,7 @@ const ORIGIN = "https://forge.tail1234.ts.net";
 
 beforeEach(() => {
   fake.app.removeAllListeners();
+  autoUpdater.removeAllListeners();
   fake.app.isPackaged = false;
   fake.FakeWindow.all = [];
   rmSync(targetFile, { force: true });

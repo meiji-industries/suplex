@@ -22,7 +22,7 @@ import { HermesAgentService } from "./identity/hermes-agents.js";
 import { AgentDeliveryService } from "./delivery/agent-delivery.js";
 import { DeliveryOperations } from "./delivery/operations.js";
 import { TaskHost } from "./tasks/host.js";
-import { createSelfUpdateService } from "./platform/updates/self-update.js";
+import { SupervisorUpdateClient } from "./platform/updates/update-client.js";
 import { TaskAnalyticsStore } from "./tasks/analytics/store.js";
 import { GithubTriggerService } from "./integrations/github/triggers.js";
 import { GithubTriggerPoller } from "./integrations/github/trigger-poller.js";
@@ -54,8 +54,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   const workflows = new WorkflowRecordService(database, auth);
   const githubTriggers = new GithubTriggerService(database, auth, projects, workflows, createGithubReleasePort(), tasks);
   const instanceId = randomUUID();
-  const selfUpdate = createSelfUpdateService({ config, instanceId, workingDirectory: process.cwd() });
-  await selfUpdate.initialize();
+  const updates = new SupervisorUpdateClient();
   const dependencies = {
     config,
     health: createHostHealthDependencies(config, database),
@@ -72,9 +71,8 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     database,
     host,
     logger: createFastifyLogger(options.logSink),
-    readUpdate: () => selfUpdate.readUpdate(),
-    requestUpdateRestart: (revision: string) => selfUpdate.acceptRestart(revision),
-    launchUpdateRestart: (operationId: string) => selfUpdate.launchRestart(operationId),
+    readUpdate: (check: boolean) => updates.read(check),
+    requestUpdateRestart: () => updates.apply(),
     instanceId,
   } satisfies Parameters<typeof createApp>[0];
   let app: FastifyInstance;
@@ -93,7 +91,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   const analytics = new TaskAnalyticsCollector(tasks.repository, new TaskAnalyticsStore(database), (session, pricing) => history.read(session, pricing), error => app.log.warn({ err: error }, "Analytics observation failed"), () => history.readPricing());
   const triggerPoller = new GithubTriggerPoller(() => githubTriggers.processEnabledRules(), error => app.log.warn({ err: error }, "GitHub trigger poll failed"));
   app.addHook("onReady", async () => { triggerPoller.start(); });
-  app.addHook("onClose", async () => { await triggerPoller.stop(); await analytics.stop(); await history.close(); });
+  app.addHook("onClose", async () => { updates.close(); await triggerPoller.stop(); await analytics.stop(); await history.close(); });
   analytics.start();
   host.start();
   return { app, database, host, instanceId };
@@ -104,12 +102,19 @@ export async function startServer(config: ForgeConfig = loadConfig()): Promise<v
   let closed = false;
   try {
     await server.app.listen({ host: config.bindAddress, port: config.port });
+    process.send?.({ kind: "ready", instanceId: server.instanceId });
     await new Promise<void>((resolve) => {
+      const messageHandler = (message: unknown): void => {
+        if (message && typeof message === "object" && "kind" in message && message.kind === "shutdown") void shutdown();
+      };
+      const disconnectHandler = (): void => { void shutdown(); };
       const shutdown = async (): Promise<void> => {
         if (closed) {
           return;
         }
         closed = true;
+        process.off("message", messageHandler);
+        process.off("disconnect", disconnectHandler);
         await server.app.close();
         await server.host.stop();
         server.database.close();
@@ -117,6 +122,8 @@ export async function startServer(config: ForgeConfig = loadConfig()): Promise<v
       };
       process.once("SIGTERM", () => void shutdown());
       process.once("SIGINT", () => void shutdown());
+      process.on("message", messageHandler);
+      process.once("disconnect", disconnectHandler);
     });
   } finally {
     if (!closed) {

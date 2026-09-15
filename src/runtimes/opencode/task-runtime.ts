@@ -4,7 +4,7 @@ import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveOpenCodeExecutable } from "../../platform/executable-resolver.js";
 import { ensureOpenCodeServer, OpenCodeServerReferenceSchema, openCodeAttachCommand, openCodeServerRunning, openCodeRoleConfig, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer, type OpenCodeServerReference } from "./server.js";
-import { reconcileOpenCodePrompt, replayOpenCodePrompt } from "./session.js";
+import { openCodeModel, reconcileOpenCodePrompt, replayOpenCodePrompt } from "./session.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
 import { taskSessionRuntimeDirectory, taskSessionTitle, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
 import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
@@ -47,9 +47,10 @@ export class OpenCodeTaskRuntime implements TaskHarness {
       if (bridgeStatus?.status !== "connected") throw new Error(`Forge ${scope.role === "root" ? "Coordinator" : "Advisor report"} bridge is unavailable: ${bridgeStatus?.error ?? bridgeStatus?.status ?? "not configured"}`);
     }
     if (nativeSessionId) return (await client.getSession(nativeSessionId, scope.directory)).id;
+    const model = openCodeModel(scope.profile.modelID);
     const native = await client.createSession({
       title: taskSessionTitle(scope), directory: scope.directory,
-      model: { providerID: scope.profile.providerID, id: scope.profile.modelID, variant: scope.profile.reasoningEffort },
+      model: { providerID: model.providerID, id: model.modelID, variant: scope.profile.reasoningEffort },
       agent: `forge-${scope.role}`,
     });
     return native.id;

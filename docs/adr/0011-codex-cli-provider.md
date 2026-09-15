@@ -114,7 +114,8 @@ invoke Codex, read a bridge binding, or own execution, so closing it does not
 stop a turn.
 
 `codex exec` never shows the interactive trust prompt, and
-`--skip-git-repo-check` lets a non-Git directory run. Health-check probing,
-`CODEX_HOME` provider instances, and `--output-last-message` are all omitted:
-the first matches Devin, the second waits for a second OpenAI login to be
-needed, and the third is redundant with the event stream.
+`--skip-git-repo-check` lets a non-Git directory run. Forge probes Codex
+readiness with `codex login status`, alongside OpenCode and Claude Code.
+`CODEX_HOME` provider instances and `--output-last-message` are both omitted:
+the first waits for a second OpenAI login to be needed, and the second is
+redundant with the event stream.

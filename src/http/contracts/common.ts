@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { PROVIDER_HARNESS_KINDS } from "../../platform/health-contract.js";
+
 export const IdSchema = z.string().min(1).max(256);
 export const CompanyIdParamsSchema = z.object({ companyId: IdSchema });
 export const ProjectIdParamsSchema = z.object({ projectId: IdSchema });
@@ -35,7 +37,7 @@ export const HealthSnapshotResponseSchema = z.object({
   generatedAt: z.string(),
   reachableAddress: z.string(),
   ready: z.boolean(),
-  checks: z.array(z.object({ id: z.string(), label: z.string(), status: z.enum(["healthy", "warning", "unhealthy"]), summary: z.string(), remedy: z.string().optional(), remedyKind: z.enum(["command", "link"]).optional(), provider: z.enum(["opencode", "claude-code"]).optional(), details: z.record(z.string(), z.unknown()) })),
+  checks: z.array(z.object({ id: z.string(), label: z.string(), status: z.enum(["healthy", "warning", "unhealthy"]), summary: z.string(), remedy: z.string().optional(), remedyKind: z.enum(["command", "link"]).optional(), provider: z.enum(PROVIDER_HARNESS_KINDS).optional(), details: z.record(z.string(), z.unknown()) })),
   herdr: z.object({ reachable: z.boolean(), socketPath: z.string() }).optional(),
 });
 

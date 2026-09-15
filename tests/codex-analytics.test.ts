@@ -28,13 +28,13 @@ test("analytics reads Codex usage and estimates its cost from the turn log", asy
   // The latest dispatch used a different model; turn-1 keeps the one it ran with.
   await dispatch("0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e", "turn-1", "gpt-5.6-sol");
   await dispatch("1f1e2d3c-4b5a-4968-8778-695a4b3c2d1e", "turn-2", "gpt-6-astra");
-  const pricing = new Map([[modelPricingKey("codex", "gpt-5.6-sol"), { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 }]]);
+  const pricing = new Map([[modelPricingKey("openai", "gpt-5.6-sol"), { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 }]]);
   const reader = new AnalyticsHistoryReader(databasePath, join(root, "runtime", "analytics"));
 
   const usage = await reader.read(session, pricing);
 
   expect(usage).toMatchObject([{
-    sessionId: session.nativeSessionId, messageId: "turn-1", turnId: "turn-1", provider: "codex", model: "gpt-5.6-sol",
+    sessionId: session.nativeSessionId, messageId: "turn-1", turnId: "turn-1", provider: "openai", model: "gpt-5.6-sol",
     failed: false, steps: 1, subsidized: true, source: "message",
     tokens: { input: 300, output: 30, reasoning: 20, cache: { read: 600, write: 100 } },
   }]);

@@ -35,7 +35,7 @@ export async function fixture(startImmediately = true) {
     db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief', 'text/plain', 1, ?, 'brief', ?)").run("a".repeat(64), stamp);
       insertNativeTaskRow(db);
   });
-  const profile = { profileId: "profile", provider: "openai", model: "gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
+  const profile = { profileId: "profile", provider: "opencode", model: "openai/gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
   const store = new TaskControlStore(database);
   store.create({ taskId: "task", startImmediately, objective: "Ship it", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: directory, branch: "task", baseSha: "a", headSha: "a", dirty: false } });
   const harness = new FakeTaskHarness();

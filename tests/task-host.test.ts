@@ -31,7 +31,7 @@ async function fixture() {
     db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.repositoryPath', ?, '$.worktreeRoot', ?, '$.startingSha', ?, '$.baselineSha', ?, '$.setupCommand', 'pnpm install', '$.verificationCommand', 'pnpm test') WHERE id = 'task'").run(repository, join(directory, "worktrees"), sha, sha);
   });
   const store = new TaskControlStore(database);
-  const profile = { profileId: "profile", provider: "openai", model: "gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
+  const profile = { profileId: "profile", provider: "opencode", model: "openai/gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
   store.create({ taskId: "task", startImmediately: true, objective: "Ship the objective", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", baselineSha: sha, pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
   const harness = new FakeTaskHarness();
   const controller = new RootController(store, harness);

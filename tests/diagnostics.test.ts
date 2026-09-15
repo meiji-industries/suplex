@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 
 import { formatDoctor, runDoctor } from "../src/platform/diagnostics/doctor.js";
 import * as hostHealth from "../src/platform/host-health.js";
-import type { HealthCheck } from "../src/platform/health.js";
+import { providerCheckId, type HealthCheck } from "../src/platform/health.js";
 import { inspectTask, formatTaskDiagnostic } from "../src/platform/diagnostics/task.js";
 import { ForgeDatabase } from "../src/platform/database.js";
 import { nativeApp } from "./helpers/native-app.js";
@@ -45,12 +45,12 @@ test("doctor fails necessary checks, warns for optional checks, and prints their
     pnpm: check("pnpm", "warning", "corepack enable"),
     tailscale: check("tailscale", "warning", "Open the Tailscale app and sign in"),
     backup: check("backup", "unhealthy"),
-    provider: async (kind) => ({ id: kind === "claude-code" ? "provider:claude-code" : "provider:opencode", label: kind, status: "unhealthy", summary: "Not signed in", remedy: "sign in", details: {}, provider: kind }),
+    provider: async (kind) => ({ id: providerCheckId(kind), label: kind, status: "unhealthy", summary: "Not signed in", remedy: "sign in", details: {}, provider: kind }),
   });
   try {
     const checks = await runDoctor(createTestConfig("/tmp/forge-doctor-health-test"), database);
     expect(checks.filter(({ status }) => status === "FAIL").map(({ name }) => name)).toEqual(["database", "git", "herdr-readiness"]);
-    expect(checks.filter(({ status }) => status === "WARN").map(({ name }) => name)).toEqual(["disk-space", "gh-auth", "pnpm", "tailscale", "backup", "opencode", "claude-code"]);
+    expect(checks.filter(({ status }) => status === "WARN").map(({ name }) => name)).toEqual(["disk-space", "gh-auth", "pnpm", "tailscale", "backup", "opencode", "claude-code", "codex"]);
     expect(formatDoctor(checks)).toContain("FAIL herdr-readiness: Host check (herdr)\n");
     expect(formatDoctor(checks)).toContain("WARN gh-auth: Host check (gh auth login)\n");
   } finally {

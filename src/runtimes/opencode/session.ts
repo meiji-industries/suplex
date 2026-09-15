@@ -28,6 +28,13 @@ export interface OpenCodePromptIntent {
 
 export type OpenCodePromptDispatch = "not_submitted" | "ambiguous" | "rejected";
 
+/** Splits a Forge OpenCode model id into the vendor and model OpenCode itself names. */
+export function openCodeModel(modelID: string): { providerID: string; modelID: string } {
+  const separator = modelID.indexOf("/");
+  if (separator < 1) throw new Error("OpenCode models are vendor-qualified, such as openai/gpt-5.6-sol");
+  return { providerID: modelID.slice(0, separator), modelID: modelID.slice(separator + 1) };
+}
+
 const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 let lastMessageTimestamp = 0;
 let messageCounter = 0;

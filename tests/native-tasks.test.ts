@@ -41,7 +41,7 @@ test("creation persists active intent without a planning projection or running h
   const f = await fixture();
   const result = await f.tasks.createTask("alice", "company", f.input);
   expect(result.created).toBe(true);
-  expect(result.task).toMatchObject({ status: "active", issueKey: "TEST-1", rootProfile: { provider: "openai" }, workerProfile: { reasoningLevel: "max" }, configuration: { setupCommand: "pnpm install", verificationCommand: "pnpm test" } });
+  expect(result.task).toMatchObject({ status: "active", issueKey: "TEST-1", rootProfile: { provider: "codex" }, workerProfile: { reasoningLevel: "max" }, configuration: { setupCommand: "pnpm install", verificationCommand: "pnpm test" } });
   expect(f.database.authQuery(db => db.prepare("SELECT name FROM sqlite_master WHERE name = 'forge_issue_projections'").all())).toEqual([]);
   f.database.close();
   const reopened = new ForgeDatabase(f.config.databasePath);
@@ -133,7 +133,7 @@ test("editing the objective checks backlog ownership in the same transaction as 
 test("editing a backlog task saves its profiles, workflow, delivery target and checks", async () => {
   const f = await fixture();
   const stamp = new Date().toISOString();
-  f.database.authTransaction(db => db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('profile_review', 'Review', 'root', 'review', 'anthropic', 'claude-opus-5', 'high', 'default', ?, ?)").run(stamp, stamp));
+  f.database.authTransaction(db => db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('profile_review', 'Review', 'root', 'review', 'claude-code', 'claude-opus-5', 'high', 'default', ?, ?)").run(stamp, stamp));
   const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false });
   const edited = f.tasks.updateTaskDetails("alice", task.id, {
     title: "Edited title", description: "Edited objective", rootProfileId: "profile_review", workerProfileId: "profile_native_worker",

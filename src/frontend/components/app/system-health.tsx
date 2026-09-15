@@ -1,4 +1,4 @@
-import { Activity, Bot, Check, CheckCircle2, ChevronRight, CircleAlert, Copy, Database, GitBranch, HardDrive, LayoutGrid, Network, Package, RefreshCw, ShieldCheck, Terminal, XCircle, type LucideIcon } from "lucide-react";
+import { Activity, Bot, Check, CheckCircle2, ChevronRight, CircleAlert, Copy, Database, GitBranch, HardDrive, LayoutGrid, Network, Package, RefreshCw, ShieldCheck, SquareTerminal, Terminal, XCircle, type LucideIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useId, useState, type ReactElement, type ReactNode } from "react";
 
 import type { HealthCheck, HealthSnapshot } from "../../../platform/health.js";
@@ -43,6 +43,7 @@ const icons: Record<HealthCheckId, LucideIcon> = {
   backup: ShieldCheck,
   "provider:opencode": Terminal,
   "provider:claude-code": Bot,
+  "provider:codex": SquareTerminal,
 };
 
 export function HealthCheckIcon({ check }: { check: HealthCheck }): ReactElement {
@@ -63,6 +64,7 @@ export function healthCheckPurpose(id: HealthCheckId): string {
     case "backup": return "Recover your data";
     case "provider:opencode": return "Run tasks with OpenCode";
     case "provider:claude-code": return "Run tasks with Claude Code";
+    case "provider:codex": return "Run tasks with Codex CLI";
   }
 }
 

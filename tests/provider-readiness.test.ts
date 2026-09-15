@@ -23,8 +23,9 @@ const enoent = (): Error => Object.assign(new Error("spawn /private/bin/opencode
 
 test("provider readiness covers exactly the registered harness kinds", async () => {
   const check = createProviderReadiness({ resolveExecutable: present() }, HARNESS_KINDS);
-  expect([...HARNESS_KINDS].sort()).toEqual(["claude-code", "opencode"]);
+  expect([...HARNESS_KINDS].sort()).toEqual(["claude-code", "codex", "opencode"]);
   await expect(check("claude-code")).resolves.toMatchObject({ provider: "claude-code" });
+  await expect(check("codex")).resolves.toMatchObject({ provider: "codex" });
   await expect(check("opencode")).resolves.toMatchObject({ provider: "opencode" });
 });
 
@@ -74,6 +75,25 @@ test("Claude Code reports absent, signed-out, signed-in, and indeterminate state
   expect(failed).toMatchObject({ status: "warning", summary: "Forge could not check the Claude Code sign-in", details: { state: "unknown" } });
 });
 
+test("Codex CLI reports absent, signed-out, signed-in, and indeterminate states", async () => {
+  const check = (options: ProviderReadinessOptions) => createProviderReadinessCheck("codex", options)();
+  const said = (stderr: string, exitCode: number): ProviderProbeResult => ({ stdout: "", stderr, exitCode, timedOut: false });
+
+  const missing = await check({ resolveExecutable: absent });
+  expect(missing).toMatchObject({ id: "provider:codex", provider: "codex", status: "unhealthy", summary: "Codex CLI is not installed", remedy: "npm install -g @openai/codex", remedyKind: "command", details: { state: "absent" } });
+
+  const signedOut = await check({ resolveExecutable: present("/private/bin/codex"), runCommand: probe(said("Not logged in\n", 1)) });
+  expect(signedOut).toMatchObject({ status: "unhealthy", summary: "Codex CLI is not signed in", remedy: "codex login", remedyKind: "command", details: { command: "codex", state: "signed-out" } });
+  expect(JSON.stringify(signedOut)).not.toMatch(/private/);
+
+  const signedIn = await check({ resolveExecutable: present("/private/bin/codex"), runCommand: probe(said("\x1b[1mLogged in using ChatGPT\x1b[0m\n", 0)) });
+  expect(signedIn).toMatchObject({ status: "healthy", summary: "Codex CLI is signed in. Model access is not tested.", details: { command: "codex", state: "signed-in" } });
+  expect(JSON.stringify(signedIn)).not.toMatch(/private/);
+
+  const indeterminate = await check({ resolveExecutable: present("/private/bin/codex"), runCommand: probe({ stdout: "", stderr: "", exitCode: null, timedOut: true }) });
+  expect(indeterminate).toMatchObject({ status: "warning", summary: "Forge could not check the Codex CLI sign-in", details: { state: "unknown" } });
+});
+
 test("provider checks probe their documented sign-in commands", async () => {
   const calls: string[][] = [];
   const runCommand: ProviderProbeRunner = async (_command, args) => {
@@ -90,6 +110,14 @@ test("provider checks probe their documented sign-in commands", async () => {
   };
   await createProviderReadinessCheck("claude-code", { resolveExecutable: present("/private/bin/claude"), runCommand: claudeProbe })();
   expect(calls).toEqual([["auth", "status", "--json"]]);
+
+  calls.length = 0;
+  const codexProbe: ProviderProbeRunner = async (_command, args) => {
+    calls.push([...args]);
+    return ok("Logged in using ChatGPT\n");
+  };
+  await createProviderReadinessCheck("codex", { resolveExecutable: present("/private/bin/codex"), runCommand: codexProbe })();
+  expect(calls).toEqual([["login", "status"]]);
 });
 
 test("Claude Code readiness passes the local instance environment to its probe", async () => {

@@ -133,7 +133,7 @@ export function WorkflowSettingsView(): ReactElement {
   const draft = editor.kind === "closed" ? null : editor.draft;
   const definition = draft ? workflowDefinition(draft.engine ?? "standard") : null;
   const profileSelect = (id: string, label: string, role: "root" | "worker", value: string | undefined, empty: string, onChange: (value: string | undefined) => void): ReactElement =>
-    <Field><FieldLabel htmlFor={id}>{label}</FieldLabel><Select disabled={busy} value={value ?? "default"} onValueChange={(next) => onChange(next === "default" || !next ? undefined : next)}><SelectTrigger id={id}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">{empty}</SelectItem>{profiles.filter((profile) => profile.role === role && (!profile.archivedAt || profile.id === value)).map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name} · {profile.provider}/{profile.model}</SelectItem>)}</SelectContent></Select></Field>;
+    <Field><FieldLabel htmlFor={id}>{label}</FieldLabel><Select disabled={busy} value={value ?? "default"} onValueChange={(next) => onChange(next === "default" || !next ? undefined : next)}><SelectTrigger id={id}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">{empty}</SelectItem>{profiles.filter((profile) => profile.role === role && (!profile.archivedAt || profile.id === value)).map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name} · {profile.model} · {profile.provider}</SelectItem>)}</SelectContent></Select></Field>;
 
   return <SettingsLayout title="Workflows" companyId={companyId} backHref={withCompany("/projects", companyId)} activeHref={withCompany("/admin/workflows", companyId)}>
     <section className="min-w-0 pt-3 lg:px-8">

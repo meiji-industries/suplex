@@ -36,7 +36,7 @@ database.authTransaction(db => {
   db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, created_at, updated_at) VALUES ('task', 'company', 'project', 'Native delivery proof', '', ?, 'native-proof', ?, 'user', ?, ?)").run(JSON.stringify(configuration), "a".repeat(64), stamp, stamp);
 });
 const store = new TaskControlStore(database);
-const profile = { profileId: "proof", provider: "openai", model: "gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
+const profile = { profileId: "proof", provider: "opencode", model: "openai/gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
 store.create({ taskId: "task", startImmediately: true, objective: `Delegate a Worker to create proof.txt containing exactly ${token} followed by a newline. Have it verify the content, run git diff --check, and commit only proof.txt. Review its result and read proof.txt yourself. Use forge_root observe for the current worktree HEAD, then request complete_local_work with that expectedHead. This is a local_worktree target. No GitHub or remote operation is needed. Do not ask a human for approval of this disposable proof.`, deliveryTarget: "local_worktree", deliveryIntent: { repository: "proof/local", headBranch: "proof", baseBranch: "main", baselineSha, pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: worktree, branch: "proof", baseSha: baselineSha, headSha: baselineSha, dirty: false } });
 const herdr = new CliHerdrClient();
 const controller = new RootController(store, new OpenCodeTaskRuntime(database.filename(), herdr));

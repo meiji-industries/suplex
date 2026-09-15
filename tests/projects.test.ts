@@ -46,9 +46,8 @@ async function fixture(): Promise<Fixture> {
   const auth = new AuthService(database, config);
   const projects = new ProjectService(database, auth, config, { localRepository, github, validateProjectConfiguration: true, readProviders: async () => ({
     directory: root, observedAt: new Date().toISOString(), providers: [
-      { id: "openai", label: "OpenAI", status: "configured" as const, modelCount: 1, models: [{ id: "shared-model", label: "OpenAI model" }], connection: { status: "connected" as const, summary: "Signed in" } },
-      { id: "opencode", label: "OpenCode Zen", status: "configured" as const, modelCount: 1, models: [{ id: "shared-model", label: "Zen model" }], connection: { status: "connected" as const, summary: "Signed in" } },
-      { id: "devin", label: "Devin CLI", status: "missing" as const, modelCount: 1, models: [{ id: "swe-2", label: "SWE-2" }], connection: { status: "not-connected" as const, summary: "Not installed" } },
+      { id: "opencode" as const, label: "OpenCode", status: "configured" as const, modelCount: 2, models: [{ id: "openai/shared-model", label: "OpenAI model (OpenAI)" }, { id: "opencode/shared-model", label: "Zen model (OpenCode Zen)" }], connection: { status: "connected" as const, summary: "Signed in" } },
+      { id: "devin" as const, label: "Devin CLI", status: "missing" as const, modelCount: 1, models: [{ id: "swe-2", label: "SWE-2" }], connection: { status: "not-connected" as const, summary: "Not installed" } },
     ],
   }) });
   const company = auth.createCompany("admin-1", "Acme");
@@ -123,8 +122,8 @@ test("reads provider-qualified models from OpenCode without a Forge catalog gate
   const value = await fixture();
   try {
     expect(await value.projects.listModels(value.adminId)).toEqual([
-      { id: "shared-model", provider: "openai", providerLabel: "OpenAI", providerStatus: "configured", displayName: "OpenAI model" },
-      { id: "shared-model", provider: "opencode", providerLabel: "OpenCode Zen", providerStatus: "configured", displayName: "Zen model" },
+      { id: "openai/shared-model", provider: "opencode", providerLabel: "OpenCode", providerStatus: "configured", displayName: "OpenAI model (OpenAI)" },
+      { id: "opencode/shared-model", provider: "opencode", providerLabel: "OpenCode", providerStatus: "configured", displayName: "Zen model (OpenCode Zen)" },
       { id: "swe-2", provider: "devin", providerLabel: "Devin CLI", providerStatus: "missing", displayName: "SWE-2" },
     ]);
   } finally {

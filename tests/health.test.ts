@@ -7,7 +7,7 @@ import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/platform/config.js";
 import { ForgeDatabase } from "../src/platform/database.js";
 import { checkArtifactRoot, checkDatabase, checkDiskSpace } from "../src/platform/host-health.js";
-import { inspectHostHealth, type HealthCheck } from "../src/platform/health.js";
+import { inspectHostHealth, providerCheckId, type HealthCheck } from "../src/platform/health.js";
 import { updateEnvironmentSettings } from "../src/platform/environment-settings.js";
 import { checkGithubAuthentication } from "../src/profiles/provider-readiness.js";
 import { cachedHealthReader } from "../src/http/routes/health.js";
@@ -31,8 +31,8 @@ test("host readiness reports owned-service health separately from provider authe
     pnpm: async () => check("pnpm", "unhealthy"),
     tailscale: async () => check("tailscale", "unhealthy"),
     backup: async () => check("backup", "healthy"),
-    provider: async (kind) => ({ ...check(kind === "claude-code" ? "provider:claude-code" : "provider:opencode", "unhealthy"), provider: kind }),
-  }, ["opencode", "claude-code", "opencode"]);
+    provider: async (kind) => ({ ...check(providerCheckId(kind), "unhealthy"), provider: kind }),
+  }, ["opencode", "claude-code", "codex", "opencode"]);
 
   expect(snapshot.ready).toBe(true);
   expect(
@@ -48,6 +48,7 @@ test("host readiness reports owned-service health separately from provider authe
       { id: "backup", status: "healthy" },
       { id: "provider:opencode", status: "unhealthy" },
       { id: "provider:claude-code", status: "unhealthy" },
+      { id: "provider:codex", status: "unhealthy" },
     ],
   );
 });

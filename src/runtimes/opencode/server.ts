@@ -6,6 +6,7 @@ import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { OpenCodeClient } from "./client.js";
+import { openCodeModel } from "./session.js";
 import { compareProcessIdentity, defaultProcessController, inspectProcessOnce, stopOwnedProcesses, taskProcessEnvironment, sessionProcessEnvironment, executionProcessEnvironment, type ProcessController } from "../../platform/process-manager.js";
 import type { TaskBridgeServer } from "../task-harness.js";
 
@@ -29,7 +30,7 @@ export const OpenCodeServerReferenceSchema = z.object({
 export type OpenCodeServerReference = z.infer<typeof OpenCodeServerReferenceSchema>;
 
 export interface OpenCodeProfile {
-  providerID: string;
+  /** Vendor-qualified, such as `openai/gpt-5.6-sol`. */
   modelID: string;
   reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max";
   serviceTier: "default" | "priority";
@@ -45,7 +46,8 @@ export function openCodeRoleConfig(input: {
   directory?: string;
 }): Record<string, unknown> {
   const { role, profile } = input;
-  const model = `${profile.providerID}/${profile.modelID}`;
+  const native = openCodeModel(profile.modelID);
+  const model = `${native.providerID}/${native.modelID}`;
   const allowed = input.evidenceDirectory ? [input.evidenceDirectory, ...(input.directory ? [input.directory] : [])] : [];
   const readOnlyExternal = allowed.length ? { "*": "deny", ...Object.fromEntries(allowed.flatMap(path => [[path, "allow"], [`${path}/**`, "allow"]])) } : "deny";
   const permission = role === "root"
@@ -69,8 +71,8 @@ export function openCodeRoleConfig(input: {
       },
     },
     provider: {
-      [profile.providerID]: { models: {
-        [profile.modelID]: { options: { reasoningEffort: profile.reasoningEffort, serviceTier: profile.serviceTier } },
+      [native.providerID]: { models: {
+        [native.modelID]: { options: { reasoningEffort: profile.reasoningEffort, serviceTier: profile.serviceTier } },
       } },
     },
     ...(input.bridge && role !== "worker" ? { mcp: { [role === "root" ? "forge_root" : "forge_advisor"]: { type: "local", command: [input.bridge.command, ...input.bridge.args], environment: input.bridge.environment, enabled: true } } } : {}),

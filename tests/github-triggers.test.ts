@@ -137,7 +137,7 @@ const irrelevantChanges = [
   ["profile update time", (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE forge_profiles SET updated_at = ? WHERE id = ?").run(new Date(Date.now() + 1_000).toISOString(), f.project.rootProfileId)); }],
   ["overridden workflow delivery target", (f: Awaited<ReturnType<typeof nativeApp>>, workflowId: string) => { f.workflows.update(f.userId, workflowId, { deliveryTarget: "merged" }); }],
   ["overridden project profile default", (f: Awaited<ReturnType<typeof nativeApp>>) => {
-    const alternate = f.profiles.create(f.userId, { name: "Alternate default", role: "root", avatarSeed: "f".repeat(32), provider: "openai", model: "gpt-5.6-luna", reasoningLevel: "medium", serviceTier: "default" });
+    const alternate = f.profiles.create(f.userId, { name: "Alternate default", role: "root", avatarSeed: "f".repeat(32), provider: "opencode", model: "openai/gpt-5.6-luna", reasoningLevel: "medium", serviceTier: "default" });
     f.database.authQuery(db => db.prepare("UPDATE forge_projects SET root_profile_id = ?, updated_at = ? WHERE id = ?").run(alternate.id, new Date().toISOString(), f.project.id));
   }],
 ] as const;

@@ -55,7 +55,7 @@ export async function fixture(workflow: WorkflowId, options: { deliveryTarget?: 
   });
   const worktree = await prepareTaskWorktree({ taskId: "task", repositoryPath: repo, worktreeRoot: worktrees, branch: "feature", startingSha: featureSha });
   await git(worktree.path, ["config", "user.email", "t@example.com"]); await git(worktree.path, ["config", "user.name", "T"]);
-  const profile = { profileId: "profile_root", provider: "openai", model: "gpt-5.6-sol", reasoningLevel: "medium", serviceTier: "default" } as const;
+  const profile = { profileId: "profile_root", provider: "opencode", model: "openai/gpt-5.6-sol", reasoningLevel: "medium", serviceTier: "default" } as const;
   const advisorProfiles = workflow === "refine_pull_request" ? { rater: profile } : workflow === "independent_review" ? { reviewer: profile } : {};
   const alive = async (): Promise<ProcessOwnerObservation> => ({ kind: "running", startTime: "test-process" });
   const store = new TaskControlStore(database, alive);

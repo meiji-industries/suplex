@@ -1,6 +1,3 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import * as executables from "../src/platform/executable-resolver.js";
 import * as openCodeProviders from "../src/runtimes/opencode/providers.js";
@@ -12,48 +9,37 @@ const probed = (stdout: string, exitCode = 0): ProviderProbeResult => ({ stdout,
 
 afterEach(() => vi.restoreAllMocks());
 
-test("lists Devin CLI and its models whether or not its executable is installed", async () => {
-  vi.spyOn(openCodeProviders, "readOpenCodeProviders").mockResolvedValue({ directory: "/workspace", observedAt: "2026-09-12T00:00:00.000Z", providers: [] });
+test("lists one row per agent tool with OpenCode's vendors folded into qualified model ids", async () => {
+  vi.spyOn(openCodeProviders, "readOpenCodeProviders").mockResolvedValue({ directory: "/workspace", observedAt: "2026-09-15T00:00:00.000Z", providers: [
+    { id: "openai", label: "OpenAI", modelCount: 1, models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], status: "configured" },
+    { id: "github-copilot", label: "GitHub Copilot", modelCount: 1, models: [{ id: "claude-fable-5", label: "Claude Fable 5" }], status: "configured" },
+  ] });
+  vi.spyOn(executables, "resolveOpenCodeExecutable").mockResolvedValue("/bin/opencode");
   vi.spyOn(executables, "resolveClaudeExecutable").mockRejectedValue(new Error("missing"));
-  const devin = vi.spyOn(executables, "resolveDevinExecutable").mockRejectedValue(new Error("missing"));
+  vi.spyOn(executables, "resolveDevinExecutable").mockRejectedValue(new Error("missing"));
+  vi.spyOn(executables, "resolveCodexExecutable").mockResolvedValue("/opt/codex/codex");
 
-  const missing = await readProviders({ directory: "/workspace" });
-  expect(missing.providers).toContainEqual(expect.objectContaining({ id: "devin", status: "missing", models: expect.arrayContaining([{ id: "swe-2", label: "SWE-2" }]) }));
-
-  devin.mockResolvedValue("/usr/local/bin/devin");
-  const configured = await readProviders({ directory: "/workspace" });
-  expect(configured.providers).toContainEqual(expect.objectContaining({ id: "devin", status: "configured" }));
+  const listed = await readProviders({ directory: "/workspace", connection: async id => ({ status: "connected", summary: `checked ${id}` }) });
+  expect(listed.providers.map(provider => [provider.id, provider.status, provider.modelCount])).toEqual([
+    ["claude-code", "missing", 8], ["codex", "configured", 5], ["devin", "missing", 4], ["opencode", "configured", 2],
+  ]);
+  expect(listed.providers.find(provider => provider.id === "opencode")?.models).toEqual([
+    { id: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol (OpenAI)" },
+    { id: "github-copilot/claude-fable-5", label: "Claude Fable 5 (GitHub Copilot)" },
+  ]);
+  expect(listed.providers.map(provider => provider.connection.summary)).toEqual(["checked claude-code", "checked codex", "checked devin", "checked opencode"]);
 });
 
-test("returns local CLI providers when the OpenCode observation fails", async () => {
+test("a failed OpenCode observation leaves its row empty and still reports the executable", async () => {
   vi.spyOn(openCodeProviders, "readOpenCodeProviders").mockRejectedValue(new Error("unavailable"));
+  vi.spyOn(executables, "resolveOpenCodeExecutable").mockResolvedValue("/bin/opencode");
   vi.spyOn(executables, "resolveClaudeExecutable").mockRejectedValue(new Error("missing"));
   vi.spyOn(executables, "resolveDevinExecutable").mockRejectedValue(new Error("missing"));
 
   const providers = await readProviders({ directory: "/workspace" });
-  expect(providers.providers).toEqual(expect.arrayContaining([
-    expect.objectContaining({ id: "claude-code", status: "missing" }),
-    expect.objectContaining({ id: "devin", status: "missing" }),
-  ]));
-});
-
-test("reports unknown sign-in when no connection probe is supplied", async () => {
-  vi.spyOn(openCodeProviders, "readOpenCodeProviders").mockRejectedValue(new Error("unavailable"));
-  vi.spyOn(executables, "resolveClaudeExecutable").mockRejectedValue(new Error("missing"));
-  vi.spyOn(executables, "resolveDevinExecutable").mockRejectedValue(new Error("missing"));
-
-  const result = await readProviders({ directory: "/workspace" });
-  expect(result.providers).toContainEqual(expect.objectContaining({ id: "claude-code", connection: expect.objectContaining({ status: "unknown" }) }));
-});
-
-test("attaches probed sign-in state to every provider row", async () => {
-  vi.spyOn(openCodeProviders, "readOpenCodeProviders").mockResolvedValue({ directory: "/workspace", observedAt: "2026-09-12T00:00:00.000Z", providers: [{ id: "openai", label: "OpenAI", modelCount: 1, models: [], status: "configured" }] });
-  vi.spyOn(executables, "resolveClaudeExecutable").mockResolvedValue("/bin/claude");
-  vi.spyOn(executables, "resolveDevinExecutable").mockRejectedValue(new Error("missing"));
-
-  const result = await readProviders({ directory: "/workspace", connection: async id => ({ status: id === "openai" ? "connected" : "not-connected", summary: `checked ${id}` }) });
-  expect(result.providers).toContainEqual(expect.objectContaining({ id: "openai", connection: { status: "connected", summary: "checked openai" } }));
-  expect(result.providers).toContainEqual(expect.objectContaining({ id: "devin", connection: { status: "not-connected", summary: "checked devin" } }));
+  expect(providers.providers).toContainEqual(expect.objectContaining({ id: "opencode", status: "configured", modelCount: 0, models: [] }));
+  expect(providers.providers).toContainEqual(expect.objectContaining({ id: "claude-code", status: "missing", connection: expect.objectContaining({ status: "unknown" }) }));
+  expect(providers.providers).toContainEqual(expect.objectContaining({ id: "devin", models: expect.arrayContaining([{ id: "swe-2", label: "SWE-2" }]) }));
 });
 
 test("provider connection probe maps Claude Code auth status", async () => {
@@ -65,47 +51,6 @@ test("provider connection probe maps Claude Code auth status", async () => {
 
   const signedOut = createProviderConnectionProbe({ runCommand: async () => probed(JSON.stringify({ loggedIn: false })) });
   expect(await signedOut("claude-code")).toMatchObject({ status: "not-connected" });
-});
-
-test("OpenCode-backed providers report their own stored credential", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-opencode-auth-"));
-  try {
-    await mkdir(join(root, "opencode"), { recursive: true });
-    await writeFile(join(root, "opencode", "auth.json"), JSON.stringify({ openai: { type: "api", key: "stored" } }));
-    vi.spyOn(executables, "resolveOpenCodeExecutable").mockResolvedValue("/bin/opencode");
-    const runCommand = vi.fn(async () => probed("1 credentials"));
-    const probe = createProviderConnectionProbe({ runCommand, env: { XDG_DATA_HOME: root } });
-    expect(await probe("openai")).toMatchObject({ status: "connected" });
-    expect(await probe("opencode")).toMatchObject({ status: "not-connected" });
-    expect(await probe("github-copilot")).toMatchObject({ status: "not-connected" });
-    // The auth file answers per provider; the shared auth-list probe is not needed.
-    expect(runCommand).not.toHaveBeenCalled();
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("a missing OpenCode auth file reports every provider not-connected", async () => {
-  const runCommand = vi.fn(async () => probed("0 credentials"));
-  const probe = createProviderConnectionProbe({ runCommand, env: { XDG_DATA_HOME: join(tmpdir(), "forge-no-such-data-home") } });
-  expect(await probe("openai")).toMatchObject({ status: "not-connected" });
-  expect(runCommand).not.toHaveBeenCalled();
-});
-
-test("OpenCode providers keep the shared probe result when the auth file cannot be read", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-opencode-auth-"));
-  try {
-    await mkdir(join(root, "opencode"), { recursive: true });
-    await writeFile(join(root, "opencode", "auth.json"), "not json");
-    vi.spyOn(executables, "resolveOpenCodeExecutable").mockResolvedValue("/bin/opencode");
-    const runCommand = vi.fn(async () => probed("2 credentials"));
-    const probe = createProviderConnectionProbe({ runCommand, env: { XDG_DATA_HOME: root } });
-    expect(await probe("openai")).toMatchObject({ status: "connected" });
-    expect(await probe("opencode")).toMatchObject({ status: "connected" });
-    expect(runCommand).toHaveBeenCalledTimes(1);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
 });
 
 test("Devin CLI auth status output drives its connection state", async () => {
@@ -122,20 +67,6 @@ test("an absent Devin CLI reports not-connected", async () => {
   vi.spyOn(executables, "resolveDevinExecutable").mockRejectedValue(new Error("missing"));
   const probe = createProviderConnectionProbe();
   expect(await probe("devin")).toEqual({ status: "not-connected", summary: "Devin CLI is not installed" });
-});
-
-test("lists Codex CLI and its models whether or not its executable is installed", async () => {
-  vi.spyOn(openCodeProviders, "readOpenCodeProviders").mockResolvedValue({ directory: "/workspace", observedAt: "2026-09-15T00:00:00.000Z", providers: [] });
-  vi.spyOn(executables, "resolveClaudeExecutable").mockRejectedValue(new Error("missing"));
-  vi.spyOn(executables, "resolveDevinExecutable").mockRejectedValue(new Error("missing"));
-  const codex = vi.spyOn(executables, "resolveCodexExecutable").mockRejectedValue(new Error("missing"));
-
-  const missing = await readProviders({ directory: "/workspace" });
-  expect(missing.providers).toContainEqual(expect.objectContaining({ id: "codex", label: "Codex CLI", status: "missing", models: expect.arrayContaining([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }]) }));
-
-  codex.mockResolvedValue("/opt/codex/codex");
-  const configured = await readProviders({ directory: "/workspace" });
-  expect(configured.providers).toContainEqual(expect.objectContaining({ id: "codex", status: "configured" }));
 });
 
 test("Codex CLI login status output drives its connection state", async () => {

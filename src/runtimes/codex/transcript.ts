@@ -127,7 +127,7 @@ export interface CodexTurn {
 /** One usage record per completed turn. Codex reports no cost, so listed prices estimate it. */
 export function codexUsage(turns: readonly CodexTurn[], sessionId: string, role: TaskUsage["role"], pricing?: ModelPricingCatalog): TaskUsage[] {
   return turns.flatMap(turn => {
-    const listed = pricing?.get(modelPricingKey("codex", turn.model));
+    const listed = pricing?.get(modelPricingKey("openai", turn.model));
     let completed = false;
     let reported: z.infer<typeof CodexUsageSchema> | undefined;
     for (const event of turn.events) if (event.type === "turn.completed") { completed = true; reported = event.usage ?? reported; }
@@ -143,7 +143,7 @@ export function codexUsage(turns: readonly CodexTurn[], sessionId: string, role:
     tokens.cache.write = native.cache_write_input_tokens;
     const estimate = listed ? estimateUsageCost(tokens, listed) : 0;
     return [TaskUsageSchema.parse({
-      sessionId, messageId: turn.id, turnId: turn.id, role, provider: "codex", model: turn.model, startedAt: turn.updatedAt, completedAt: turn.updatedAt,
+      sessionId, messageId: turn.id, turnId: turn.id, role, provider: "openai", model: turn.model, startedAt: turn.updatedAt, completedAt: turn.updatedAt,
       failed: codexFailure(turn.events) !== null, summary: false, steps: 1, cost: estimate, subsidized: estimate > 0, tokens, source: "message",
     })];
   });

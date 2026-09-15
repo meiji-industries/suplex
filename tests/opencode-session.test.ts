@@ -5,6 +5,7 @@ import {
   createOpenCodeMessageID,
   createOpenCodePromptIntent,
   correlatedAssistants,
+  openCodeModel,
   reconcileOpenCodePrompt,
   replayOpenCodePrompt,
   type OpenCodePromptReadPort,
@@ -462,4 +463,11 @@ test("native activity appearing during the idle confirmation prevents recovery",
 test("a failed tool receipt alone does not prove execution stopped", async () => {
   const reader = port({ messages: [{ info: user, parts: [{ type: "text", text: intent.prompt }] }, assistant({ id: "msg_tool", created: 4, completed: 5, finish: "tool-calls", parts: [{ type: "tool", callID: "call-1", tool: "bash", state: { status: "error", input: {}, error: "Command timed out", time: { start: 4, end: 5 } } }] }), assistant({ id: "msg_empty", created: 6 })] });
   expect(await reconcileOpenCodePrompt(reader, intent)).toMatchObject({ state: "running", unsettledTools: true, retry: "forbidden" });
+});
+
+test("a vendor-qualified model id reaches OpenCode as its own provider and bare model", () => {
+  expect(openCodeModel("openai/gpt-5.6-luna")).toEqual({ providerID: "openai", modelID: "gpt-5.6-luna" });
+  expect(openCodeModel("github-copilot/claude-fable-5/preview")).toEqual({ providerID: "github-copilot", modelID: "claude-fable-5/preview" });
+  expect(() => openCodeModel("gpt-5.6-luna")).toThrow(/vendor-qualified/);
+  expect(() => openCodeModel("/gpt-5.6-luna")).toThrow(/vendor-qualified/);
 });

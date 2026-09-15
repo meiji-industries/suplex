@@ -11,7 +11,7 @@ import { OpenCodeServerReferenceSchema, type OpenCodeServerReference } from "../
 test.each(["absent", "admitted", "tool_running", "tool_error", "busy", "bad_history", "bad_status"])("dispatch fencing retains the replacement server and reads native history when %s", async evidence => {
   const directory = await mkdtemp(join(tmpdir(), "forge-dispatch-fence-"));
   const sessionID = "ses_fence";
-  const scope: OpenCodeTaskScope = { id: "session-proof", taskId: "task-proof", directory, role: "worker", workerMode: "planned", purpose: "implementation", workflow: "standard", evidenceRoot: null, profile: { providerID: "openai", modelID: "test", reasoningEffort: "medium", serviceTier: "default" } };
+  const scope: OpenCodeTaskScope = { id: "session-proof", taskId: "task-proof", directory, role: "worker", workerMode: "planned", purpose: "implementation", workflow: "standard", evidenceRoot: null, profile: { providerID: "opencode", modelID: "openai/test", reasoningEffort: "medium", serviceTier: "default" } };
   const intent = createOpenCodePromptIntent({ sessionID, directory, prompt: "Do one operation", model: { providerID: "openai", modelID: "test" }, agent: "forge-worker", variant: "medium", dispatch: "ambiguous" });
   let posts = 0;
   const server = createServer((request, response) => {

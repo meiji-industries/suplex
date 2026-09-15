@@ -11,6 +11,7 @@ import { ProviderLoginService, providerLoginCommand, type ProviderLoginPort } fr
 import { json } from "../../shared/json.js";
 import { ErrorResponseSchema } from "../contracts/common.js";
 import { ProviderLoginResponseSchema } from "../contracts/providers.js";
+import { HarnessKindSchema, type HarnessKind } from "../../runtimes/harness-kind.js";
 import { originAllowed, TERMINAL_TAKEOVER_CLOSE_CODE } from "./task-pane.js";
 
 export interface ProviderLoginRoutesOptions {
@@ -20,7 +21,7 @@ export interface ProviderLoginRoutesOptions {
   herdr?: ProviderLoginPort;
   config?: ForgeConfig;
   openBridge?: typeof openHerdrTerminalBridge;
-  loginCommand?: (providerId: string, homeDirectory?: string | null) => Promise<string>;
+  loginCommand?: (providerId: HarnessKind, homeDirectory?: string | null) => Promise<string>;
 }
 
 const TerminalParams = z.object({ paneId: z.string().min(1) });
@@ -44,7 +45,7 @@ const providerLogin: FastifyPluginAsync<ProviderLoginRoutesOptions> = async (app
       return await reply.code(503).send({ error: "Forge could not open a sign-in pane. Check Herdr on the Forge host." });
     }
   };
-  typed.post("/api/admin/providers/:providerId/login", { schema: { params: z.object({ providerId: z.string().min(1) }), response: { 200: ProviderLoginResponseSchema, 403: ErrorResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
+  typed.post("/api/admin/providers/:providerId/login", { schema: { params: z.object({ providerId: HarnessKindSchema }), response: { 200: ProviderLoginResponseSchema, 400: ErrorResponseSchema, 403: ErrorResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
     if (!requireAdmin(request.forgeUser.role, reply)) return;
     return start(request, reply, { target: `provider:${request.params.providerId}`, label: request.params.providerId, command: await loginCommand(request.params.providerId) });
   });

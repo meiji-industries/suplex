@@ -45,9 +45,9 @@ async function fixture(workflow: WorkflowId, options: { image?: boolean } = {}) 
     insertNativeTaskRow(db, { directory: repo });
     if (options.image) artifacts.putArtifactSync(db, "company", "task-image", { filename: "design.png", mimeType: "image/png", bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47]), taskId: "task" });
   });
-  const root = { profileId: "profile_root", provider: "openai", model: "gpt-5.6-sol", reasoningLevel: "medium", serviceTier: "default" } as const;
-  const worker = { ...root, profileId: "profile_worker", model: "gpt-5.6-luna" };
-  const advisor = { ...root, profileId: "profile_advisor", model: "gpt-5.6-nova", reasoningLevel: "high" } as const;
+  const root = { profileId: "profile_root", provider: "opencode", model: "openai/gpt-5.6-sol", reasoningLevel: "medium", serviceTier: "default" } as const;
+  const worker = { ...root, profileId: "profile_worker", model: "openai/gpt-5.6-luna" };
+  const advisor = { ...root, profileId: "profile_advisor", model: "openai/gpt-5.6-nova", reasoningLevel: "high" } as const;
   const roles = workflow === "competing_plans" ? { planner_a: advisor, planner_b: root } : workflow === "independent_review" ? { reviewer: advisor } : workflow === "refine_pull_request" ? { rater: advisor } : {};
   const store = new TaskControlStore(database, async () => ({ kind: "running", startTime: "test-process" }));
   store.create({ taskId: "task", startImmediately: true, objective: "Ship it", deliveryTarget: workflow === "refine_pull_request" ? "merged" : "pull_request_draft", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", baselineSha: baseSha, pullRequestNumber: workflow === "refine_pull_request" ? 7 : null }, rootProfile: root, workerProfile: worker, workflow, advisorProfiles: roles, worktree: { path: repo, branch: "task", baseSha, headSha: baseSha, dirty: false } });
@@ -120,7 +120,7 @@ test("Direct build has no mandatory Coordinator plan in system, initial, or assi
   expect(prompt).toContain("Direct build: choose the implementation approach yourself");
   expect(prompt).not.toMatch(/Coordinator plan:|Do not take over task planning/);
   expect(assignmentInput(f, worker)).toMatchObject({ kind: "worker", mode: "direct", purpose: "implementation", range: { baseSha: f.baseSha, files: ["big.txt"] } });
-  expect(f.scopes.at(-1)).toMatchObject({ role: "worker", workerMode: "direct", purpose: "implementation", workflow: "direct_build", profile: { modelID: "gpt-5.6-luna" } });
+  expect(f.scopes.at(-1)).toMatchObject({ role: "worker", workerMode: "direct", purpose: "implementation", workflow: "direct_build", profile: { modelID: "openai/gpt-5.6-luna" } });
   expect(f.harness.dispatched.at(-1)?.agent).toBe("forge-worker");
   f.harness.evidence.set(f.harness.dispatched.at(-1)!.messageID, { tools: [{ id: "m:1", name: "bash", status: "completed", input: { command: "pnpm test" }, output: "1 passed", error: null }], limit: null });
   await f.finishDelegate("Implemented and tested.");
@@ -157,7 +157,7 @@ test("Plan A and Plan B are distinct sessions on the same range, Plan B never se
   const a = f.store.currentSession("task", "worker")!;
   expect(a.advisorRole).toBe("planner_a");
   expect(assignmentInput(f, a)).toMatchObject({ kind: "advisor", role: "planner_a", range: { baseSha: f.baseSha, files: ["big.txt"] } });
-  expect(f.scopes.at(-1)).toMatchObject({ role: "advisor", label: "Plan A", profile: { modelID: "gpt-5.6-nova", reasoningEffort: "high" }, evidenceRoot: join(f.directory, "evidence", "task") });
+  expect(f.scopes.at(-1)).toMatchObject({ role: "advisor", label: "Plan A", profile: { modelID: "openai/gpt-5.6-nova", reasoningEffort: "high" }, evidenceRoot: join(f.directory, "evidence", "task") });
   expect(f.harness.dispatched.at(-1)?.agent).toBe("forge-advisor");
   const promptA = f.store.turns("task").find(turn => turn.sessionId === a.id)!.promptText;
   expect(promptA).toContain("Role: Plan A");
@@ -174,7 +174,7 @@ test("Plan A and Plan B are distinct sessions on the same range, Plan B never se
   await f.controller.recover("task");
   const b = f.store.currentSession("task", "worker")!;
   expect(b.id).not.toBe(a.id);
-  expect(f.scopes.at(-1)).toMatchObject({ role: "advisor", label: "Plan B", profile: { modelID: "gpt-5.6-sol" } });
+  expect(f.scopes.at(-1)).toMatchObject({ role: "advisor", label: "Plan B", profile: { modelID: "openai/gpt-5.6-sol" } });
   const promptB = f.store.turns("task").find(turn => turn.sessionId === b.id)!.promptText;
   expect(promptB).not.toContain("PLAN-A-UNIQUE");
   expect(promptB).not.toMatch(/rating/i);
@@ -213,7 +213,7 @@ test.each([["A", "B"], ["B", "A"]] as const)("delegate_planners dispatches both 
   const bTurn = f.store.pendingTurns(b!.id)[0]!;
   const dispatched = f.harness.dispatched.filter(turn => turn.messageID === aTurn.id || turn.messageID === bTurn.id);
   expect(dispatched).toHaveLength(2);
-  expect(f.scopes.filter(scope => scope.role === "advisor").slice(-2)).toMatchObject([{ label: "Plan A", profile: { modelID: "gpt-5.6-nova" } }, { label: "Plan B", profile: { modelID: "gpt-5.6-sol" } }]);
+  expect(f.scopes.filter(scope => scope.role === "advisor").slice(-2)).toMatchObject([{ label: "Plan A", profile: { modelID: "openai/gpt-5.6-nova" } }, { label: "Plan B", profile: { modelID: "openai/gpt-5.6-sol" } }]);
   const wakes = () => f.store.pendingTurns(f.identity().sessionId);
   const byRole = { A: { turn: aTurn, text: json({ summary: "A-UNIQUE-FULL-REPORT" }) }, B: { turn: bTurn, text: json({ summary: "B-UNIQUE-FULL-REPORT" }) } };
   f.harness.finish(byRole[first].turn.id, "completed", byRole[first].text);
@@ -591,7 +591,7 @@ test("Reviewer requires the Coordinator brief, records approvals against its ran
   const prompt = f.store.turns("task").find(turn => turn.sessionId === reviewer.id)!.promptText;
   expect(prompt).toContain("Coordinator brief (plan and acceptance criteria):\nPlan: guard the dereference.");
   expect(prompt).toMatch(/artifact artifact_\w+ missing: ENOENT/);
-  expect(f.scopes.at(-1)).toMatchObject({ role: "advisor", label: "Reviewer", profile: { modelID: "gpt-5.6-nova" } });
+  expect(f.scopes.at(-1)).toMatchObject({ role: "advisor", label: "Reviewer", profile: { modelID: "openai/gpt-5.6-nova" } });
   await f.finishDelegate(json({ approved: false, blockingFindings: ["src/a.ts: unguarded"], verification: "missing", verificationSummary: "No Worker checks ran", summary: "Not yet" }));
   expect(f.store.get("task").workflowState.reviews.at(-1)).toMatchObject({ role: "reviewer", result: { approved: false, verification: "missing" } });
   await f.controller.delegateAdvisor(f.identity(), { role: "reviewer", brief: "Same plan." });
@@ -611,7 +611,7 @@ test("Reviewer requires the Coordinator brief, records approvals against its ran
 });
 
 test("advisor native configuration is read-only with only the report bridge and task evidence directory", () => {
-  const profile = { providerID: "openai", modelID: "gpt-5.6-nova", reasoningEffort: "high" as const, serviceTier: "default" as const };
+  const profile = { providerID: "opencode", modelID: "openai/gpt-5.6-nova", reasoningEffort: "high" as const, serviceTier: "default" as const };
   const config = openCodeRoleConfig({ role: "advisor", profile, bridge: { command: "/node", args: ["bridge"], environment: { FORGE_ADVISOR_TOKEN: "token" } }, evidenceDirectory: "/data/runtime/task-evidence/task" }) as { mcp?: unknown; agent: Record<string, { permission: Record<string, unknown>; tools: Record<string, boolean> }> };
   expect(config.mcp).toEqual({ forge_advisor: { type: "local", command: ["/node", "bridge"], environment: { FORGE_ADVISOR_TOKEN: "token" }, enabled: true } });
   expect(config.agent["forge-advisor"]).toMatchObject({ permission: { edit: "deny", bash: "deny", task: "deny", question: "deny", "forge_root_*": "deny", external_directory: { "*": "deny", "/data/runtime/task-evidence/task/**": "allow" } }, tools: { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false, "forge_root_*": false, "forge_advisor_*": true } });

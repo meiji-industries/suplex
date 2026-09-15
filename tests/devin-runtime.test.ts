@@ -10,7 +10,7 @@ import type { HerdrClient, Pane, PaneProcessInfo } from "../src/integrations/her
 import { DevinTaskRuntime, devinArguments, devinSessionBusy, readDevinSessionId } from "../src/runtimes/devin/task-runtime.js";
 import { devinDisplayAttached, devinDisplayCommand } from "../src/runtimes/devin/display.js";
 import { createOpenCodePromptIntent } from "../src/runtimes/opencode/session.js";
-import { DEVIN_PROVIDER, advisorBridgeResultPath, profileHarness, sessionHarness, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, type TaskScope } from "../src/runtimes/task-harness.js";
+import { advisorBridgeResultPath, profileHarness, sessionHarness, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, type TaskScope } from "../src/runtimes/task-harness.js";
 import { advisorReportFromTurn } from "../src/coordination/advisor-report.js";
 import { initializeAndList, runMcpProcess } from "./helpers/mcp-process.js";
 import { DevinSessionReader } from "../src/runtimes/devin/session-reader.js";
@@ -56,10 +56,10 @@ done
   process.env.FORGE_TEST_ARGS = join(root, "args.txt");
   process.env.FORGE_TEST_MISE = join(root, "mise.txt");
   process.env.FORGE_TEST_BRIDGE_ENV = join(root, "bridge-env.txt");
-  const scope: TaskScope = { id: "session-devin", taskId: "task-devin", directory: worktree, role: "worker", workerMode: "planned", purpose: "implementation", workflow: "standard", evidenceRoot: null, profile: { providerID: DEVIN_PROVIDER, modelID: "swe", reasoningEffort: "low", serviceTier: "default" } };
+  const scope: TaskScope = { id: "session-devin", taskId: "task-devin", directory: worktree, role: "worker", workerMode: "planned", purpose: "implementation", workflow: "standard", evidenceRoot: null, profile: { providerID: "devin", modelID: "swe", reasoningEffort: "low", serviceTier: "default" } };
   const sessionID = "devin-71618050-0d31-428e-a547-d6c4a2eca88f";
   const runtime = new DevinTaskRuntime(join(root, "forge.sqlite"), {} as never, { executable });
-  const intent = createOpenCodePromptIntent({ sessionID, directory: worktree, prompt: "Implement the change", model: { providerID: DEVIN_PROVIDER, modelID: "swe" }, agent: "forge-worker", variant: "low" });
+  const intent = createOpenCodePromptIntent({ sessionID, directory: worktree, prompt: "Implement the change", model: { providerID: "devin", modelID: "swe" }, agent: "forge-worker", variant: "low" });
   return { root, scope, runtime, intent, sessionID, runtimeDirectory: taskSessionRuntimeDirectory(join(root, "forge.sqlite"), scope.id) };
 }
 
@@ -84,7 +84,7 @@ test("Devin starts without resume, persists its assigned id, then resumes", asyn
   await unlink(join(f.runtimeDirectory, "session.json"));
   await f.runtime.ensureSession(f.scope, f.sessionID);
   expect(await readDevinSessionId(f.runtimeDirectory)).toBe("assigned-session");
-  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: DEVIN_PROVIDER, modelID: "swe" }, agent: "forge-worker", variant: "low" });
+  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: "devin", modelID: "swe" }, agent: "forge-worker", variant: "low" });
   await f.runtime.dispatch(f.scope, second, async () => true);
   expect(await eventually(f, second)).toMatchObject({ state: "completed" });
   const turns = (await readFile(join(f.root, "args.txt"), "utf8")).split("--TURN--\n").filter(Boolean).map(turn => turn.trim().split("\n"));
@@ -228,7 +228,7 @@ printf '%s\n' '{"schema_version":"ATIF-v1.7","session_id":"assigned-session"}' >
   await waitForText(() => output.get(replacement) ?? "", "FIRST stdout");
   expect(await eventually(f)).toMatchObject({ state: "completed" });
   await waitForText(() => output.get(replacement) ?? "", "FIRST stderr");
-  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: DEVIN_PROVIDER, modelID: "swe" }, agent: "forge-worker", variant: "low" });
+  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: "devin", modelID: "swe" }, agent: "forge-worker", variant: "low" });
   await runtime.dispatch(f.scope, second, async () => true);
   expect(await eventually(f, second)).toMatchObject({ state: "completed" });
   await waitForText(() => output.get(replacement) ?? "", "SECOND stderr");
@@ -246,7 +246,7 @@ printf '%s\n' '{"schema_version":"ATIF-v1.7","session_id":"assigned-session"}' >
 
 test("Devin routing is unambiguous and admits an authenticated Coordinator", async () => {
   const f = await fixture("complete");
-  expect(profileHarness(DEVIN_PROVIDER)).toBe("devin");
+  expect(profileHarness("devin")).toBe("devin");
   expect(sessionHarness(f.sessionID)).toBe("devin");
   expect(sessionHarness("71618050-0d31-428e-a547-d6c4a2eca88f")).toBe("claude-code");
   expect(sessionHarness("ses_abc")).toBe("opencode");
@@ -286,7 +286,7 @@ printf '%s\n' 'Plain completion prose.'
 printf '{"schema_version":"ATIF-v1.7","session_id":"%s"}\n' "$session_id" > "$export_path"
 `, { mode: 0o700 });
   const runtime = new DevinTaskRuntime(databasePath, {} as never, { executable, artifactRoot: join(root, "artifacts") });
-  const profile = { providerID: DEVIN_PROVIDER, modelID: "swe", reasoningEffort: "low", serviceTier: "default" } as const;
+  const profile = { providerID: "devin", modelID: "swe", reasoningEffort: "low", serviceTier: "default" } as const;
   const common = { taskId: "task", directory: worktree, profile, workflow: "competing_plans" as const, evidenceRoot: join(root, "evidence") };
   const rootScope: TaskScope = { ...common, id: "root-session", role: "root", identity: { taskId: "task", sessionId: "root-session", generation: 1 } };
   const advisorA: TaskScope = { ...common, id: "advisor-a", role: "advisor", advisorRole: "planner_a", label: "Plan A" };
@@ -308,9 +308,9 @@ printf '{"schema_version":"ATIF-v1.7","session_id":"%s"}\n' "$session_id" > "$ex
   expect(configText).not.toContain(firstRootBinding.token);
   expect(JSON.parse(await readFile(join(taskSessionRuntimeDirectory(databasePath, advisorA.id), "advisor.binding.json"), "utf8")).role).toBe("planner_a");
   expect(JSON.parse(await readFile(join(taskSessionRuntimeDirectory(databasePath, advisorB.id), "advisor.binding.json"), "utf8")).role).toBe("planner_b");
-  const intentA = createOpenCodePromptIntent({ sessionID: "devin-a", directory: worktree, prompt: "Write plan A", model: { providerID: DEVIN_PROVIDER, modelID: "swe" }, agent: "forge-advisor", variant: "low" });
-  const intentB = createOpenCodePromptIntent({ sessionID: "devin-b", directory: worktree, prompt: "Write plan B", model: { providerID: DEVIN_PROVIDER, modelID: "swe" }, agent: "forge-advisor", variant: "low" });
-  const rootIntent = createOpenCodePromptIntent({ sessionID: "devin-root", directory: worktree, prompt: "Coordinate", model: { providerID: DEVIN_PROVIDER, modelID: "swe" }, agent: "forge-root", variant: "low" });
+  const intentA = createOpenCodePromptIntent({ sessionID: "devin-a", directory: worktree, prompt: "Write plan A", model: { providerID: "devin", modelID: "swe" }, agent: "forge-advisor", variant: "low" });
+  const intentB = createOpenCodePromptIntent({ sessionID: "devin-b", directory: worktree, prompt: "Write plan B", model: { providerID: "devin", modelID: "swe" }, agent: "forge-advisor", variant: "low" });
+  const rootIntent = createOpenCodePromptIntent({ sessionID: "devin-root", directory: worktree, prompt: "Coordinate", model: { providerID: "devin", modelID: "swe" }, agent: "forge-root", variant: "low" });
   await Promise.all([runtime.dispatch(rootScope, rootIntent, async () => true), runtime.dispatch(advisorA, intentA, async () => true), runtime.dispatch(advisorB, intentB, async () => true)]);
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const [observedRoot, observedA, observedB] = await Promise.all([runtime.observe(rootScope, { ...rootIntent, dispatch: "ambiguous" }), runtime.observe(advisorA, { ...intentA, dispatch: "ambiguous" }), runtime.observe(advisorB, { ...intentB, dispatch: "ambiguous" })]);

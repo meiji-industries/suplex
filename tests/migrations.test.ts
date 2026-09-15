@@ -54,6 +54,28 @@ describe("timestamp migrations", () => {
     }
   });
 
+  test("qualifies OpenCode model ids and keeps the seeds of an installation with history", () => {
+    const folder = resolve(process.cwd(), "drizzle");
+    const database = new Database(":memory:");
+    try {
+      const migration = readMigrations(folder).find((candidate) => candidate.tag.includes("providers_are_harnesses"))!;
+      database.exec("CREATE TABLE forge_profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, provider TEXT NOT NULL, model TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE forge_tasks (id TEXT PRIMARY KEY);");
+      database.exec("INSERT INTO forge_profiles (id, name, provider, model, updated_at) VALUES ('profile_native_root', 'Root', 'openai', 'gpt-5.6-sol', 'then'), ('profile_native_worker', 'Worker', 'openai', 'gpt-5.6-luna', 'then'), ('profile_local', 'Local', 'claude-code', 'fable', 'then'); INSERT INTO forge_tasks (id) VALUES ('task-1');");
+
+      for (const statement of readFileSync(`${folder}/${migration.tag}.sql`, "utf8").split("--> statement-breakpoint")) {
+        if (statement.trim()) database.exec(statement);
+      }
+
+      expect(database.prepare("SELECT id, provider, model, updated_at FROM forge_profiles ORDER BY id").all()).toEqual([
+        { id: "profile_local", provider: "claude-code", model: "fable", updated_at: "then" },
+        { id: "profile_native_root", provider: "opencode", model: "openai/gpt-5.6-sol", updated_at: "then" },
+        { id: "profile_native_worker", provider: "opencode", model: "openai/gpt-5.6-luna", updated_at: "then" },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
   test("backfills nullable projection steps from legacy phases", () => {
     const folder = resolve(process.cwd(), "drizzle");
     const database = new Database(":memory:");
@@ -161,8 +183,8 @@ describe("timestamp migrations", () => {
       expect(database.pragma("foreign_keys", { simple: true })).toBe(1);
       expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(database.prepare("SELECT role, provider, model, reasoning_level, service_tier FROM forge_profiles ORDER BY role").all()).toEqual([
-        { role: "root", provider: "openai", model: "gpt-5.6-sol", reasoning_level: "medium", service_tier: "default" },
-        { role: "worker", provider: "openai", model: "gpt-5.6-luna", reasoning_level: "max", service_tier: "priority" },
+        { role: "root", provider: "codex", model: "gpt-5.6-sol", reasoning_level: "medium", service_tier: "default" },
+        { role: "worker", provider: "codex", model: "gpt-5.6-luna", reasoning_level: "max", service_tier: "priority" },
       ]);
       expect(database.prepare("SELECT name FROM sqlite_master WHERE name IN ('forge_issue_projections', 'forge_herdr_role_sessions', 'forge_model_catalog', 'forge_releases')").all()).toEqual([]);
       const now = new Date().toISOString();

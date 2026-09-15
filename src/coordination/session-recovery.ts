@@ -2,7 +2,7 @@ import { stopWorktreeProcesses } from "../tasks/archive/processes.js";
 import { StructuredLogger } from "../platform/logging.js";
 import { z } from "zod";
 import type { ModelPricingCatalog } from "../profiles/model-pricing.js";
-import { createOpenCodePromptIntent } from "../runtimes/opencode/session.js";
+import { createOpenCodePromptIntent, openCodeModel } from "../runtimes/opencode/session.js";
 import type { NativeSessionReader, PromptObservation, TaskHarness, TaskScope } from "../runtimes/task-harness.js";
 import type { TaskSession, TaskTurn } from "../tasks/control.js";
 import { observeTaskLimitUsage } from "../tasks/limits/limit-observer.js";
@@ -107,7 +107,7 @@ export async function recoverSession(dependencies: SessionRecoveryDependencies, 
         messageID: turn.id,
         directory: taskScope.directory,
         prompt: turn.promptText,
-        model: { providerID: taskScope.profile.providerID, modelID: taskScope.profile.modelID },
+        model: openCodeModel(taskScope.profile.modelID),
         agent: `forge-${taskScope.role}`,
         variant: taskScope.profile.reasoningEffort,
         dispatch: turn.status === "pending_prompt" ? "not_submitted" : "ambiguous",

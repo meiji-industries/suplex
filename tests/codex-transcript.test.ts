@@ -45,7 +45,7 @@ test("a started tool item with no completion stays unsettled", () => {
 test("usage subtracts the cache slices from input and reasoning from output", () => {
   const usage = codexUsage([{ id: "turn-1", model: "gpt-5.6-sol", events: parseCodexEvents(lines), updatedAt: 10 }], "codex-session", "worker");
   expect(usage).toHaveLength(1);
-  expect(usage[0]).toMatchObject({ provider: "codex", model: "gpt-5.6-sol", cost: 0, subsidized: false, failed: false, tokens: { input: 300, output: 30, reasoning: 20, cache: { read: 600, write: 100 } } });
+  expect(usage[0]).toMatchObject({ provider: "openai", model: "gpt-5.6-sol", cost: 0, subsidized: false, failed: false, tokens: { input: 300, output: 30, reasoning: 20, cache: { read: 600, write: 100 } } });
 });
 
 test("a turn without turn.completed reports no usage", () => {

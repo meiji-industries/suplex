@@ -85,14 +85,15 @@ _Avoid_: Integrator turn, mirrored release.
 
 **Agent profile**
 A named provider, model, reasoning level, and service tier selection. The
-provider is an OpenCode provider or `claude-code`, which runs the Claude Code
-CLI. Projects choose Coordinator and Worker defaults. Tasks capture the chosen
-settings.
-_Avoid_: CLI provider, separate Forge model catalog.
+provider is the agent tool that runs the turn: `opencode`, `claude-code`,
+`devin`, or `codex`. An OpenCode model names its vendor, as in
+`openai/gpt-5.6-sol`; Forge splits it only when it calls OpenCode. Projects
+choose Coordinator and Worker defaults. Tasks capture the chosen settings.
+_Avoid_: Vendor as provider, separate Forge model catalog.
 
 **Configured provider**
-A provider reported as connected by OpenCode, or Claude Code when its CLI is
-installed. This does not prove that a model request succeeds.
+An agent tool whose executable Forge resolved on the host. Its sign-in state is
+reported separately. Neither proves that a model request succeeds.
 _Avoid_: Verified inference, inherited Codex authentication.
 
 **Human question**

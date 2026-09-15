@@ -26,7 +26,7 @@ database.authTransaction((db) => {
   db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, created_at, updated_at) VALUES ('task', 'company', 'project', 'Task', 'Capability proof', ?, 'root-proof', ?, 'probe-user', ?, ?)").run(JSON.stringify(configuration), "b".repeat(64), stamp, stamp);
 });
 const store = new TaskControlStore(database);
-const profile = { profileId: "proof", provider: "openai", model: "gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
+const profile = { profileId: "proof", provider: "opencode", model: "openai/gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
 store.create({ startImmediately: true,
   taskId: "task", objective: "This is a capability probe only. Read README.md using the native read tool. Then call forge_root with kind ask_human and question equal to the exact line you read. Do not delegate Workers or request delivery operations. No GitHub action is needed.",
   deliveryTarget: "merged", deliveryIntent: { repository: "meiji-industries/forge", headBranch: `probe-${token}`, baseBranch: "main", baselineSha: "a", pullRequestNumber: null },

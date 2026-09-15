@@ -53,15 +53,16 @@ attaches to the same session that owns the work. Display failures do not stop it
 
 Projects choose repository paths, worktree roots, verification commands,
 delivery targets, and Root and Worker defaults. Templates reuse task intent.
-Agent profiles select models from the host's OpenCode configuration.
+An agent profile picks one of the four agent tools and one of its models.
+OpenCode models name their vendor, as in `openai/gpt-5.6-sol`.
 
 Claude Code profiles can use the global configuration or a local Forge-owned
 instance. A local instance has its own sign-in. The provider page shows the
 exact `CLAUDE_CONFIG_DIR='<directory>' claude auth login` command for it.
 
-OpenCode owns model-provider authentication. Forge's provider page reports
-configuration, not a successful inference request. GitHub operations use the
-host's existing GitHub CLI authentication.
+Each agent tool owns its own model authentication. Forge's provider page reports
+configuration and sign-in, not a successful inference request. GitHub operations
+use the host's existing GitHub CLI authentication.
 
 Hermes agents can create tasks within explicitly granted project scopes.
 Passkey users manage companies, projects, and work through the web application.

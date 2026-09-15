@@ -11,6 +11,7 @@ import type { ForgeDatabase } from "../platform/database.js";
 import { createGithubReleasePort, type GithubReleasePort } from "../integrations/github/delivery.js";
 import { TaskSourceService, type TaskSourceSelector } from "../tasks/sources.js";
 import { readProviders as readHostProviders, type ReadProviders } from "../profiles/provider-catalog.js";
+import type { HarnessKind } from "../runtimes/harness-kind.js";
 import { inferRepositoryCommands } from "./repository-commands.js";
 import {
   canonicalDirectory as inspectCanonicalDirectory,
@@ -26,9 +27,10 @@ import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../ht
 
 export { ProjectFailure, type ProjectFinding } from "./contracts.js";
 
-export interface OpenCodeModelOption {
+export interface AgentModelOption {
+  /** Vendor-qualified for OpenCode rows, such as `openai/gpt-5.6-sol`. */
   id: string;
-  provider: string;
+  provider: HarnessKind;
   providerLabel: string;
   providerStatus: "configured" | "missing";
   displayName: string;
@@ -213,7 +215,7 @@ export class ProjectService {
     this.readProviders = options.readProviders ?? (() => readHostProviders({ directory: process.cwd() }));
   }
 
-  async listModels(actorUserId: string): Promise<OpenCodeModelOption[]> {
+  async listModels(actorUserId: string): Promise<AgentModelOption[]> {
     this.user(actorUserId);
     const native = await this.readProviders();
     return native.providers.flatMap((provider) => provider.models.map((model) => ({ id: model.id, provider: provider.id, providerLabel: provider.label, providerStatus: provider.status, displayName: model.label })));

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { HEALTH_CHECK_IDS } from "./health-contract.js";
+import { HEALTH_CHECK_IDS, PROVIDER_HARNESS_KINDS } from "./health-contract.js";
 
 const primitive = z.union([z.string(), z.number(), z.boolean()]);
 
@@ -94,7 +94,7 @@ export const HealthCheckSchema = z.object({
   summary: z.string(),
   remedy: z.string().optional(),
   remedyKind: z.enum(["command", "link"]).optional(),
-  provider: z.enum(["opencode", "claude-code"]).optional(),
+  provider: z.enum(PROVIDER_HARNESS_KINDS).optional(),
   details: z.record(z.string(), primitive),
 });
 

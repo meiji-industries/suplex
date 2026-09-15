@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HARNESS_KIND_IDS, HarnessKindSchema } from "../runtimes/harness-kind.js";
 import type { HumanQuestionOptions } from "../coordination/human-question.js";
 import type { TaskLimitPause } from "./limits/limits.js";
 import type { AdvisorRole, WorkflowId, WorkflowInput, WorkflowState } from "../coordination/workflows.js";
@@ -10,7 +11,19 @@ export const TaskSessionLifecycleSchema = z.enum(["reserved", "live", "stopped",
 export const TaskTurnStatusSchema = z.enum(["pending_prompt", "prompted", "unknown", "completed", "cancelled"]);
 export const PromptDispatchAttemptSchema = z.object({ serverGeneration: z.string().uuid(), claimedAt: z.string().datetime() }).strict();
 export type PromptDispatchAttempt = z.infer<typeof PromptDispatchAttemptSchema>;
-export const TaskProfileSchema = z.object({ profileId: z.string().min(1), provider: z.string().min(1), model: z.string().min(1), reasoningLevel: z.enum(["low", "medium", "high", "xhigh", "max"]), serviceTier: z.enum(["default", "priority"]), instanceHomeDirectory: z.string().nullable().optional() }).strict();
+export const TaskProfileFieldsSchema = z.object({ profileId: z.string().min(1), provider: HarnessKindSchema, model: z.string().min(1), reasoningLevel: z.enum(["low", "medium", "high", "xhigh", "max"]), serviceTier: z.enum(["default", "priority"]), instanceHomeDirectory: z.string().nullable().optional() }).strict();
+
+// Stored task, session and trigger snapshots written before the
+// providers-as-harnesses migration carry the OpenCode vendor id as provider.
+export function upgradeLegacyTaskProfile(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  const { provider, model } = value as { provider?: unknown; model?: unknown };
+  if (typeof provider !== "string" || typeof model !== "string") return value;
+  if ((HARNESS_KIND_IDS as readonly string[]).includes(provider)) return value;
+  return { ...value, provider: "opencode", model: `${provider}/${model}` };
+}
+
+export const TaskProfileSchema = z.preprocess(upgradeLegacyTaskProfile, TaskProfileFieldsSchema);
 
 export const WorktreeReferenceSchema = z.object({
   path: z.string().min(1), branch: z.string().min(1), baseSha: z.string().min(1), headSha: z.string().min(1), dirty: z.boolean(),

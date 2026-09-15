@@ -2,27 +2,28 @@ import { expect, test } from "vitest";
 import { nativeApp } from "./helpers/native-app.js";
 import { stat } from "node:fs/promises";
 import { ProviderInstanceService } from "../src/profiles/provider-instances.js";
+import { TaskProfileSchema } from "../src/tasks/control.js";
 
-test("fresh installs have one Coordinator and one Worker with OpenCode settings", async () => {
+test("fresh installs have one Coordinator and one Worker with Codex CLI settings", async () => {
   const f = await nativeApp();
   try {
     expect(f.profiles.list(f.userId)).toMatchObject([
-      { id: "profile_native_root", role: "root", provider: "openai", serviceTier: "default" },
-      { id: "profile_native_worker", role: "worker", provider: "openai", reasoningLevel: "max", serviceTier: "priority" },
+      { id: "profile_native_root", role: "root", provider: "codex", model: "gpt-5.6-sol", serviceTier: "default" },
+      { id: "profile_native_worker", role: "worker", provider: "codex", model: "gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" },
     ]);
     expect(f.database.authQuery(db => db.prepare("PRAGMA foreign_key_check").all())).toEqual([]);
     expect(f.database.authQuery(db => db.prepare("SELECT name FROM sqlite_master WHERE name IN ('forge_models', 'forge_issue_projections', 'forge_engine_commands', 'worker_registrations')").all())).toEqual([]);
   } finally { await f.close(); }
 });
 
-test("agent API saves OpenCode provider settings and rejects old harness fields", async () => {
+test("agent API saves harness providers and rejects vendor providers and old fields", async () => {
   const f = await nativeApp();
   try {
     const url = "/api/admin/profiles/profile_native_worker";
-    const saved = await f.app.inject({ method: "PATCH", url, headers: f.headers, payload: { provider: "opencode", model: "gpt-5.6-luna", serviceTier: "priority" } });
+    const saved = await f.app.inject({ method: "PATCH", url, headers: f.headers, payload: { provider: "opencode", model: "openai/gpt-5.6-luna", serviceTier: "priority" } });
     expect(saved.statusCode, saved.body).toBe(200);
-    expect(saved.json()).toMatchObject({ role: "worker", provider: "opencode", model: "gpt-5.6-luna" });
-    for (const payload of [{ provider: "codex" }, { capacity: 2 }, { role: "builder" }, { servicePriority: "fast" }]) {
+    expect(saved.json()).toMatchObject({ role: "worker", provider: "opencode", model: "openai/gpt-5.6-luna" });
+    for (const payload of [{ provider: "openai" }, { capacity: 2 }, { role: "builder" }, { servicePriority: "fast" }]) {
       expect((await f.app.inject({ method: "PATCH", url, headers: f.headers, payload })).statusCode).toBe(400);
     }
     expect((await f.app.inject({ method: "GET", url: "/api/profiles", headers: f.headers })).json().profiles).toHaveLength(2);
@@ -76,4 +77,11 @@ test("task profile snapshots resolve the provider instance home directory", asyn
     expect(task.rootProfile.instanceHomeDirectory).toBe(instance.homeDirectory);
     expect(task.workerProfile.instanceHomeDirectory).toBeNull();
   } finally { await f.close(); }
+});
+
+test("stored profile snapshots upgrade an OpenCode vendor provider to a qualified model", () => {
+  expect(TaskProfileSchema.parse({ profileId: "profile", provider: "openai", model: "gpt-5.6-sol", reasoningLevel: "medium", serviceTier: "default" }))
+    .toMatchObject({ provider: "opencode", model: "openai/gpt-5.6-sol" });
+  expect(TaskProfileSchema.parse({ profileId: "profile", provider: "codex", model: "gpt-5.6-sol", reasoningLevel: "medium", serviceTier: "default" }))
+    .toMatchObject({ provider: "codex", model: "gpt-5.6-sol" });
 });

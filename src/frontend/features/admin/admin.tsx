@@ -45,7 +45,7 @@ export function AdminView(): ReactElement {
   const [agentRole, setAgentRole] = useState<"root" | "worker">("root");
   const [agentAvatarSeed, setAgentAvatarSeed] = useState("");
   const [agentModel, setAgentModel] = useState("gpt-5.6-sol");
-  const [agentProvider, setAgentProvider] = useState<string>("openai");
+  const [agentProvider, setAgentProvider] = useState<string>("codex");
   const [agentReasoning, setAgentReasoning] = useState("medium");
   const [agentPriority, setAgentPriority] = useState("default");
   const [agentInstanceId, setAgentInstanceId] = useState<string | null>(null);
@@ -240,7 +240,7 @@ export function AdminView(): ReactElement {
     setAgentName("");
     setAgentRole("root");
     setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", ""));
-    setAgentProvider("openai");
+    setAgentProvider("codex");
     setAgentModel("gpt-5.6-sol");
     setAgentReasoning("medium");
     setAgentPriority("default");

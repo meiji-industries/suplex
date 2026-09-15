@@ -11,7 +11,7 @@ import { CodexSessionReader } from "../src/runtimes/codex/session-reader.js";
 import { codexDisplayAttached, codexDisplayCommand } from "../src/runtimes/codex/display.js";
 import { CodexTaskRuntime, codexArguments, codexSessionBusy, readCodexThreadId } from "../src/runtimes/codex/task-runtime.js";
 import { createOpenCodePromptIntent } from "../src/runtimes/opencode/session.js";
-import { CODEX_PROVIDER, advisorBridgeResultPath, profileHarness, sessionHarness, taskSessionRuntimeDirectory, type TaskScope } from "../src/runtimes/task-harness.js";
+import { advisorBridgeResultPath, profileHarness, sessionHarness, taskSessionRuntimeDirectory, type TaskScope } from "../src/runtimes/task-harness.js";
 import { taskRolePrompt } from "../src/tasks/execution/role-prompt.js";
 import type { TaskSession } from "../src/tasks/control.js";
 
@@ -82,11 +82,11 @@ ${BEHAVIOURS[behaviour].join("\n")}
   process.env.FORGE_TEST_BRIDGE_ENV = join(root, "bridge-env.txt");
   process.env.FORGE_TEST_COUNT = join(root, "count.txt");
   const databasePath = join(root, "forge.sqlite");
-  const profile = { providerID: CODEX_PROVIDER, modelID: "gpt-5.6-sol", reasoningEffort: "low", serviceTier: "default" } as const;
+  const profile = { providerID: "codex", modelID: "gpt-5.6-sol", reasoningEffort: "low", serviceTier: "default" } as const;
   const scope: TaskScope = { id: "session-codex", taskId: "task-codex", directory: worktree, role: "worker", workerMode: "planned", purpose: "implementation", workflow: "standard", evidenceRoot: null, profile };
   const sessionID = `codex-${THREAD_ID}`;
   const runtime = new CodexTaskRuntime(databasePath, {} as never, { executable });
-  const intent = createOpenCodePromptIntent({ sessionID, directory: worktree, prompt: "Implement the change", model: { providerID: CODEX_PROVIDER, modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
+  const intent = createOpenCodePromptIntent({ sessionID, directory: worktree, prompt: "Implement the change", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
   return { root, databasePath, executable, scope, runtime, intent, sessionID, runtimeDirectory: taskSessionRuntimeDirectory(databasePath, scope.id) };
 }
 
@@ -103,7 +103,7 @@ const turns = async (root: string): Promise<string[][]> =>
   (await readFile(join(root, "args.txt"), "utf8")).split("--TURN--\n").filter(Boolean).map(turn => turn.trim().split("\n"));
 
 test("Codex routing is unambiguous against the other harness identities", () => {
-  expect(profileHarness(CODEX_PROVIDER)).toBe("codex");
+  expect(profileHarness("codex")).toBe("codex");
   expect(sessionHarness(`codex-${THREAD_ID}`)).toBe("codex");
   expect(sessionHarness(THREAD_ID)).toBe("claude-code");
   expect(sessionHarness("devin-abc")).toBe("devin");
@@ -111,7 +111,7 @@ test("Codex routing is unambiguous against the other harness identities", () => 
 });
 
 test("every policy rides on a config override and the bridge names its variables without values", () => {
-  const profile = { providerID: CODEX_PROVIDER, modelID: "gpt-5.6-sol", reasoningEffort: "low", serviceTier: "default" } as const;
+  const profile = { providerID: "codex", modelID: "gpt-5.6-sol", reasoningEffort: "low", serviceTier: "default" } as const;
   const rootScope: TaskScope = { id: "s", taskId: "t", directory: "/w", role: "root", identity: { taskId: "t", sessionId: "s", generation: 1 }, workflow: "standard", evidenceRoot: null, profile };
   const bridge = { command: "/usr/bin/node", args: ["/tmp/cli.mjs", "/tmp/root-bridge.ts"], environment: { FORGE_ROOT_BINDING: "/tmp/root.binding.json", FORGE_ROOT_TOKEN: "t-1", FORGE_GH_COMMAND: "/opt/gh" } };
 
@@ -145,7 +145,7 @@ test("a Worker starts without resume, persists the Codex thread id, then resumes
   expect(await eventually(f)).toMatchObject({ state: "completed", assistantMessageID: f.intent.messageID, native: { providerID: "codex", modelID: "gpt-5.6-sol", agent: "forge-worker" } });
   expect(await readCodexThreadId(f.runtimeDirectory)).toBe(THREAD_ID);
 
-  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: CODEX_PROVIDER, modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
+  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
   await f.runtime.dispatch(f.scope, second, async () => true);
   expect(await eventually(f, second)).toMatchObject({ state: "completed" });
 
@@ -243,13 +243,13 @@ test("an unresumable thread is forgotten once, so the next turn starts a fresh o
   expect(await eventually(f)).toMatchObject({ state: "completed" });
   expect(await readCodexThreadId(f.runtimeDirectory)).toBe(THREAD_ID);
 
-  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Continue", model: { providerID: CODEX_PROVIDER, modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
+  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Continue", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
   await f.runtime.dispatch(f.scope, second, async () => true);
   expect(await eventually(f, second)).toMatchObject({ state: "error", reason: "native_startup_failed" });
   expect(await readCodexThreadId(f.runtimeDirectory)).toBeNull();
   expect(await readdir(f.runtimeDirectory)).not.toContain("session.json");
 
-  const third = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Try again", model: { providerID: CODEX_PROVIDER, modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
+  const third = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Try again", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
   await f.runtime.dispatch(f.scope, third, async () => true);
   expect(await eventually(f, third)).toMatchObject({ state: "completed" });
   const [, resumed, fresh] = await turns(f.root);
@@ -274,7 +274,7 @@ test("a lost session record is rebuilt from the turn log so the thread still res
   expect(await eventually(f)).toMatchObject({ state: "completed" });
   await writeFile(join(f.runtimeDirectory, "session.json"), "{ not json");
 
-  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: CODEX_PROVIDER, modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
+  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
   await f.runtime.dispatch(f.scope, second, async () => true);
   expect(await eventually(f, second)).toMatchObject({ state: "completed" });
   expect((await turns(f.root))[1]!.slice(0, 3)).toEqual(["exec", "resume", THREAD_ID]);
@@ -341,7 +341,7 @@ test("turn evidence and the session reader report the same native tools", async 
   expect(ids).toContain("later:item_0");
   expect(await reader.history(session)).toMatchObject([{ role: "assistant", content: [{ type: "text", text: "Reviewed the change." }] }]);
   const timeline = await reader.timeline(session);
-  expect(timeline.usage).toMatchObject([{ provider: "codex", model: "gpt-5.6-sol", tokens: { input: 300, cache: { read: 600, write: 100 } } }]);
+  expect(timeline.usage).toMatchObject([{ provider: "openai", model: "gpt-5.6-sol", tokens: { input: 300, cache: { read: 600, write: 100 } } }]);
 });
 
 async function waitForText(read: () => string, text: string): Promise<void> {

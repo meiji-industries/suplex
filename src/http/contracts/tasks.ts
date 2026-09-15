@@ -1,5 +1,6 @@
 import { WorkerReplacementRequestSchema, WorkerReplacementSchema } from "../../coordination/worker-replacement-contracts.js";
 import { z } from "zod";
+import { HarnessKindSchema } from "../../runtimes/harness-kind.js";
 import { DeliveryTargetSchema as DeliveryTarget, TaskInputSchema, TaskSchema, VisualEvidenceSchema as VisualEvidence } from "../../tasks/contracts.js";
 import { TaskSessionKindSchema, TaskTurnStatusSchema } from "../../tasks/control.js";
 import { AdvisorProfileIdsSchema, AdvisorRoleSchema, WorkflowIdSchema } from "../../coordination/workflows.js";
@@ -40,7 +41,7 @@ export const TaskAnswerBodySchema = z.union([
 ]);
 export const TaskWorkerReplacementBodySchema = WorkerReplacementRequestSchema;
 export const TaskNoteBodySchema = z.object({ note: z.string().trim().min(1).max(20_000) }).strict(); // bound: task note transport limit
-export const TaskHarnessKindSchema = z.enum(["claude-code", "codex", "opencode", "devin"]);
+export const TaskHarnessKindSchema = HarnessKindSchema;
 export const TaskActivityResponseSchema = z.object({
   sessions: z.array(z.object({ id: z.string(), kind: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable(), label: z.string(), profileId: z.string(), harness: TaskHarnessKindSchema.optional(), generation: z.number(), nativeSessionId: z.string().nullable(), paneId: z.string().nullable(), current: z.boolean(), replacement: WorkerReplacementSchema.nullable().optional() })),
   turns: z.array(z.object({ id: z.string(), sessionId: z.string(), prompt: z.string(), status: TaskTurnStatusSchema, result: z.string().nullable() })),

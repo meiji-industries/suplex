@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/platform/config.js";
-import type { HealthCheck, HealthSnapshot } from "../src/platform/health.js";
+import { providerCheckId, type HealthCheck, type HealthSnapshot } from "../src/platform/health.js";
 import { REQUIRED_HEALTH_CHECK_IDS } from "../src/platform/health-contract.js";
 import { healthyHost, nativeApp } from "./helpers/native-app.js";
 
@@ -129,24 +129,24 @@ test("health API resolves authorized profile and project provider contexts", asy
       ...healthyHost,
       provider: async (kind) => {
         providerReads.push(kind);
-        return { id: kind === "claude-code" ? "provider:claude-code" : "provider:opencode", label: kind, status: "healthy", summary: "Signed in", details: {}, provider: kind };
+        return { id: providerCheckId(kind), label: kind, status: "healthy", summary: "Signed in", details: {}, provider: kind };
       },
     },
   });
   try {
-    // The seeded project uses OpenCode profiles for both roles: one check only.
+    // The seeded project uses Codex CLI profiles for both roles: one check only.
     const projectContext = await app.inject({ method: "GET", url: `/api/health?projectId=${fixture.project.id}`, headers: fixture.headers });
     expect(projectContext.statusCode).toBe(200);
-    expect(projectContext.json().checks.filter((check: HealthCheck) => check.provider !== undefined).map((check: HealthCheck) => check.id)).toEqual(["provider:opencode"]);
-    expect(providerReads).toEqual(["opencode"]);
+    expect(projectContext.json().checks.filter((check: HealthCheck) => check.provider !== undefined).map((check: HealthCheck) => check.id)).toEqual(["provider:codex"]);
+    expect(providerReads).toEqual(["codex"]);
 
     // Distinct Coordinator/Worker providers both appear.
     const claude = fixture.profiles.create(fixture.userId, { name: "Reviewer", role: "worker", avatarSeed: "a".repeat(32), provider: "claude-code", model: "claude-sonnet-5", reasoningLevel: "high", serviceTier: "default" });
     providerReads.length = 0;
     const both = await app.inject({ method: "GET", url: `/api/health?profileIds=${encodeURIComponent(`profile_native_root,${claude.id},profile_native_root`)}`, headers: fixture.headers });
     expect(both.statusCode).toBe(200);
-    expect(both.json().checks.filter((check: HealthCheck) => check.provider !== undefined).map((check: HealthCheck) => check.provider).sort()).toEqual(["claude-code", "opencode"]);
-    expect(providerReads.sort()).toEqual(["claude-code", "opencode"]);
+    expect(both.json().checks.filter((check: HealthCheck) => check.provider !== undefined).map((check: HealthCheck) => check.provider).sort()).toEqual(["claude-code", "codex"]);
+    expect(providerReads.sort()).toEqual(["claude-code", "codex"]);
 
     // Base requests carry no provider checks.
     const base = await app.inject({ method: "GET", url: "/api/health", headers: fixture.headers });
@@ -187,17 +187,17 @@ test("a tool installed after a failed check is healthy on the next forced reques
     projects: fixture.projects,
     health: {
       ...healthyHost,
-      provider: async (kind) => ({ id: kind === "claude-code" ? "provider:claude-code" : "provider:opencode", label: kind, status: installed ? "healthy" : "unhealthy", summary: installed ? "Signed in" : "Not installed", details: {}, provider: kind }),
+      provider: async (kind) => ({ id: providerCheckId(kind), label: kind, status: installed ? "healthy" : "unhealthy", summary: installed ? "Signed in" : "Not installed", details: {}, provider: kind }),
     },
   });
   try {
     const url = `/api/health?profileIds=profile_native_root`;
     const first = await app.inject({ method: "GET", url, headers: fixture.headers });
-    expect(first.json().checks.find((check: HealthCheck) => check.provider === "opencode")).toMatchObject({ status: "unhealthy" });
+    expect(first.json().checks.find((check: HealthCheck) => check.provider === "codex")).toMatchObject({ status: "unhealthy" });
     installed = true;
     // The forced request probes fresh state with no restart or reset.
     const second = await app.inject({ method: "GET", url, headers: { ...fixture.headers, "cache-control": "no-cache" } });
-    expect(second.json().checks.find((check: HealthCheck) => check.provider === "opencode")).toMatchObject({ status: "healthy" });
+    expect(second.json().checks.find((check: HealthCheck) => check.provider === "codex")).toMatchObject({ status: "healthy" });
   } finally {
     await app.close();
     await fixture.close();

@@ -22,8 +22,8 @@ test("providerLoginCommand embeds the resolved executable and falls back to the 
   expect(await providerLoginCommand("claude-code", "/home/work laptop")).toBe("CLAUDE_CONFIG_DIR='/home/work laptop' '/opt/claude cli/claude' auth login");
   expect(await providerLoginCommand("devin")).toBe("'/opt/devin/devin' auth login");
   expect(await providerLoginCommand("codex")).toBe("'/opt/codex/codex' login");
-  expect(await providerLoginCommand("openai")).toBe("opencode auth login");
-  expect(await providerLoginCommand("openai", null, { resolveExecutable: async () => "/opt/opencode/opencode" })).toBe("'/opt/opencode/opencode' auth login");
+  expect(await providerLoginCommand("opencode")).toBe("opencode auth login");
+  expect(await providerLoginCommand("opencode", null, { resolveExecutable: async () => "/opt/opencode/opencode" })).toBe("'/opt/opencode/opencode' auth login");
 });
 
 test("provider login terminal is admin-only, validates the pane, and bridges control input", async () => {

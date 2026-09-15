@@ -14,7 +14,7 @@ test("task activity reports the captured harness for every provider without depe
   const value = await nativeApp();
   try {
     const cases = [
-      { provider: "openai", harness: "opencode", paneId: null },
+      { provider: "opencode", harness: "opencode", paneId: null },
       { provider: "claude-code", harness: "claude-code", paneId: "pane-stale-claude" },
       { provider: "codex", harness: "codex", paneId: null },
       { provider: "devin", harness: "devin", paneId: "pane-stale-devin" },
@@ -35,7 +35,7 @@ test("task activity reports the captured harness for every provider without depe
       tasks.push({ id: task.id, harness: entry.harness, paneId: entry.paneId });
     }
 
-    value.profiles.update(value.userId, value.project.rootProfileId, { provider: "openai" });
+    value.profiles.update(value.userId, value.project.rootProfileId, { provider: "opencode" });
     for (const task of tasks) {
       const response = await value.app.inject({ url: `/api/tasks/${task.id}/activity`, headers: value.headers });
       expect(response.statusCode, response.body).toBe(200);

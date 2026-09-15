@@ -11,7 +11,7 @@ import { HarnessRouter, sessionHarness, type HarnessKind, type NativeSessionRead
 import type { TaskPanePort } from "./task-display.js";
 
 /** Runtime kinds whose readiness Forge currently probes. */
-export const HARNESS_KINDS = ["opencode", "claude-code"] as const satisfies readonly HarnessKind[];
+export const HARNESS_KINDS = ["opencode", "claude-code", "codex"] as const satisfies readonly HarnessKind[];
 
 /** One harness per supported agent CLI; the router selects by task profile. */
 export function createTaskHarness(databasePath: string, herdr: TaskPanePort, options: { artifactRoot?: string } = {}): TaskHarness {

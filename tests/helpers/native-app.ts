@@ -14,6 +14,7 @@ import { WorkflowRecordService } from "../../src/coordination/workflow-records.j
 import { HermesAgentService } from "../../src/identity/hermes-agents.js";
 import { GithubTriggerService } from "../../src/integrations/github/triggers.js";
 import type { GithubTriggerPort } from "../../src/integrations/github/trigger-inspection.js";
+import { providerCheckId, providerCheckLabel } from "../../src/platform/health-contract.js";
 import type { HostHealthDependencies } from "../../src/platform/health.js";
 import type { TaskPanePort } from "../../src/runtimes/task-display.js";
 
@@ -23,7 +24,7 @@ export const healthyHost: HostHealthDependencies = {
   git: async () => ({ id: "git", label: "Git", status: "healthy", summary: "Ready", details: {} }),
   herdrReadiness: async () => ({ id: "herdr-readiness", label: "Herdr", status: "healthy", summary: "Ready", details: {} }),
   ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
-  provider: async (kind) => ({ id: kind === "claude-code" ? "provider:claude-code" : "provider:opencode", label: kind === "claude-code" ? "Claude Code" : "OpenCode", status: "healthy", summary: "Signed in", details: {}, provider: kind }),
+  provider: async (kind) => ({ id: providerCheckId(kind), label: providerCheckLabel(kind), status: "healthy", summary: "Signed in", details: {}, provider: kind }),
 };
 
 const webAuthn: WebAuthnAdapter = {
@@ -44,7 +45,11 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
     // The remote identity follows the directory name, so a fixture can hold more than one project.
     localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: `owner/${basename(input.repositoryPath)}`, clean: false, baseSha: "a".repeat(40) }; } },
     github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } },
-    readProviders: async () => ({ directory, observedAt: new Date().toISOString(), providers: [{ id: "openai", label: "OpenAI", status: "configured" as const, modelCount: 2, models: [{ id: "gpt-5.6-sol", label: "Sol" }, { id: "gpt-5.6-luna", label: "Luna" }], connection: { status: "connected" as const, summary: "Signed in" } }] }),
+    readProviders: async () => ({ directory, observedAt: new Date().toISOString(), providers: [
+      { id: "opencode" as const, label: "OpenCode", status: "configured" as const, modelCount: 2, models: [{ id: "openai/gpt-5.6-sol", label: "Sol (OpenAI)" }, { id: "openai/gpt-5.6-luna", label: "Luna (OpenAI)" }], connection: { status: "connected" as const, summary: "Signed in" } },
+      { id: "codex" as const, label: "Codex CLI", status: "configured" as const, modelCount: 2, models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }, { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" }], connection: { status: "connected" as const, summary: "Signed in" } },
+      { id: "claude-code" as const, label: "Claude Code", status: "configured" as const, modelCount: 1, models: [{ id: "claude-sonnet-5", label: "Claude Sonnet 5" }], connection: { status: "connected" as const, summary: "Signed in" } },
+    ] }),
   });
   const tasks = new TaskService(database, auth, projects, config, fixtureOptions.herdr ? { herdr: fixtureOptions.herdr } : {});
   const templates = new TaskTemplateService(database, auth, tasks);

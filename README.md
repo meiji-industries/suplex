@@ -62,19 +62,24 @@ repositories, not hostile code or untrusted multi-tenant execution.
 
 ## Providers and defaults
 
-OpenCode owns provider credentials and its model catalog. Sign in with
-`opencode auth login` as the OS user that runs Forge. A Codex or Claude Code
-login does not establish OpenCode access.
+A provider is one of the four agent tools Forge runs: OpenCode, Claude Code,
+Devin CLI, and Codex CLI. Each owns its own sign-in. Sign in as the OS user that
+runs Forge; a Codex login does not establish OpenCode access.
 
-`/admin/providers` shows configured OpenCode providers without making a paid
-model request. **Configured** does not mean that inference was tested.
-Agent dialogs and project defaults use that same provider-qualified catalog.
-New installations seed OpenAI GPT-5.6 Sol with medium reasoning for Root and
-GPT-5.6 Luna with max reasoning and priority service for Worker.
+OpenCode reaches several model vendors, so its models carry the vendor in the
+id, such as `openai/gpt-5.6-sol`. The other three name their models directly.
+
+`/admin/providers` shows all four rows without making a paid model request.
+**Configured** means the executable is present, not that inference was tested.
+Agent dialogs and project defaults use that same catalog. New installations seed
+Codex CLI GPT-5.6 Sol with medium reasoning for Root and GPT-5.6 Luna with max
+reasoning and priority service for Worker. An installation with task history
+keeps its OpenCode profiles, converted to the vendor-qualified model id.
 
 Forge discovers OpenCode on its process PATH or at `~/.opencode/bin/opencode`.
-`FORGE_OPENCODE_COMMAND` can specify an absolute executable path. GitHub delivery
-uses the host's existing `gh` login. Forge does not copy either provider's
+`FORGE_OPENCODE_COMMAND`, `FORGE_CLAUDE_COMMAND`, `FORGE_DEVIN_COMMAND`, and
+`FORGE_CODEX_COMMAND` can each specify an absolute executable path. GitHub
+delivery uses the host's existing `gh` login. Forge does not copy any provider's
 credentials into task records.
 
 ## Develop locally

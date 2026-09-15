@@ -1,6 +1,6 @@
 import type { HerdrClient } from "../integrations/herdr/client.js";
 import { CLAUDE_EXECUTABLE, CODEX_EXECUTABLE, DEVIN_EXECUTABLE, OPENCODE_EXECUTABLE, resolveClaudeExecutable, resolveCodexExecutable, resolveDevinExecutable, resolveOpenCodeExecutable, type ExecutableSpec } from "../platform/executable-resolver.js";
-import { profileHarness, type HarnessKind } from "../runtimes/task-harness.js";
+import type { HarnessKind } from "../runtimes/harness-kind.js";
 
 export type ProviderLoginPort = Pick<HerdrClient, "getPane" | "createWorkspace" | "runPaneCommand" | "closePane" | "closeWorkspace">;
 
@@ -26,12 +26,11 @@ export interface ProviderLoginCommandOptions {
  * when resolution fails the command falls back to the bare binary name so the
  * interactive pane stays usable.
  */
-export async function providerLoginCommand(providerId: string, homeDirectory?: string | null, options: ProviderLoginCommandOptions = {}): Promise<string> {
-  const harness = profileHarness(providerId);
-  const entry = LOGIN_EXECUTABLES[harness];
+export async function providerLoginCommand(providerId: HarnessKind, homeDirectory?: string | null, options: ProviderLoginCommandOptions = {}): Promise<string> {
+  const entry = LOGIN_EXECUTABLES[providerId];
   const binary = await (options.resolveExecutable ?? entry.resolve)().then(quoted, () => entry.spec.binary);
   const command = [binary, ...entry.loginArgs].join(" ");
-  return homeDirectory && harness === "claude-code" ? `CLAUDE_CONFIG_DIR=${quoted(homeDirectory)} ${command}` : command;
+  return homeDirectory && providerId === "claude-code" ? `CLAUDE_CONFIG_DIR=${quoted(homeDirectory)} ${command}` : command;
 }
 
 export interface ProviderLoginSession {

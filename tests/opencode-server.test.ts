@@ -11,7 +11,7 @@ afterEach(async () => {
 });
 
 describe("OpenCode role configuration", () => {
-  const profile = { providerID: "openai", modelID: "gpt-5.6-luna", reasoningEffort: "max", serviceTier: "priority" } as const;
+  const profile = { modelID: "openai/gpt-5.6-luna", reasoningEffort: "max", serviceTier: "priority" } as const;
 
   it("denies Coordinator native mutations without resetting inherited MCP servers", () => {
     const config = openCodeRoleConfig({ role: "root", profile, bridge: { command: "/node", args: ["/forge/root-bridge.ts"], environment: { FORGE_ROOT_TOKEN: "token" } } });
@@ -31,6 +31,7 @@ describe("OpenCode role configuration", () => {
 
   it("lets Workers edit but not spawn native subagents or call the Coordinator bridge", () => {
     expect(openCodeRoleConfig({ role: "worker", profile })).toMatchObject({
+      model: "openai/gpt-5.6-luna",
       agent: { "forge-worker": { permission: { task: "deny" }, tools: { task: false, "forge_root_*": false } } },
       provider: { openai: { models: { "gpt-5.6-luna": { options: { reasoningEffort: "max", serviceTier: "priority" } } } } },
     });

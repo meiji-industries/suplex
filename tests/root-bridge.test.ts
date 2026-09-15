@@ -230,7 +230,7 @@ test("stdio bridge invokes the production controller against a durable task cont
       insertNativeTaskRow(db);
     });
     const store = new TaskControlStore(database);
-    const profile = { profileId: "profile", provider: "openai", model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
+    const profile = { profileId: "profile", provider: "opencode" as const, model: "openai/gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
     store.create({ startImmediately: true, taskId: "task", objective: "Ship it", deliveryTarget: "pull request", deliveryIntent: { repository: "owner/repo", headBranch: "main", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: repository, branch: "main", baseSha: "a", headSha: "a", dirty: false } });
     const session = store.claimRoot({ taskId: "task" });
     store.bindHarnessSession({ sessionId: session.id, generation: session.generation, nativeSessionId: "ses_root" });

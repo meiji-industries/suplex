@@ -88,7 +88,7 @@ test("task creation captures workflow and Advisor profiles and keeps pre-upgrade
     expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { ...legacy, workflow: "direct_build" } })).statusCode).toBe(409);
     expect(f.tasks.listTasks(f.userId)).toHaveLength(1);
 
-    const review = f.profiles.create(f.userId, { name: "Second opinion model", role: "root", avatarSeed: "f".repeat(32), provider: "openai", model: "gpt-5.6-luna", reasoningLevel: "high", serviceTier: "default" });
+    const review = f.profiles.create(f.userId, { name: "Second opinion model", role: "root", avatarSeed: "f".repeat(32), provider: "opencode", model: "openai/gpt-5.6-luna", reasoningLevel: "high", serviceTier: "default" });
     const planned = { projectId: f.project.id, title: "Combined", description: "Plan twice", idempotencyKey: "combined-1", workflow: "competing_plans", advisorProfileIds: { planner_b: review.id, planner_a: "profile_native_root" } };
     const first = await f.app.inject({ method: "POST", url, headers: f.headers, payload: planned });
     expect(first.statusCode, first.body).toBe(201);

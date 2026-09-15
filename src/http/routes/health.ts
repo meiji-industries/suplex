@@ -7,7 +7,6 @@ import type { ForgeConfig } from "../../platform/config.js";
 import type { HealthSnapshot } from "../../platform/health.js";
 import type { AgentProfileService } from "../../profiles/agent-profiles.js";
 import type { ProjectService } from "../../projects/projects.js";
-import { profileHarness } from "../../runtimes/task-harness.js";
 import type { ProviderHarnessKind } from "../../platform/health-contract.js";
 import { HARNESS_KINDS } from "../../runtimes/task-harness-registry.js";
 import { ErrorResponseSchema, HealthSnapshotResponseSchema } from "../contracts/common.js";
@@ -64,7 +63,7 @@ function resolveProviderContext(options: HealthRoutesOptions, user: AuthUser, qu
     })()
     : [...new Set(query.profileIds!.split(",").map((id) => id.trim()).filter((id) => id.length > 0))];
   if (query.profileIds !== undefined && profileIds.some((id) => !profiles.has(id))) throw new AuthFailure("Not found", 404);
-  const providers = [...new Set(profileIds.map((id) => profileHarness(profiles.get(id)!)).filter((provider): provider is (typeof HARNESS_KINDS)[number] => HARNESS_KINDS.includes(provider as (typeof HARNESS_KINDS)[number])))];
+  const providers = [...new Set(profileIds.map((id) => profiles.get(id)!).filter((provider): provider is (typeof HARNESS_KINDS)[number] => HARNESS_KINDS.includes(provider as (typeof HARNESS_KINDS)[number])))];
   return { providers };
 }
 

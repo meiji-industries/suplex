@@ -32,9 +32,8 @@ test("provider API uses native configuration, not CLI health or Forge credential
   const app = createApp({ config, auth, database, health: healthyHost, providerInstances, readProviderInstanceReadiness: async homeDirectory => ({ status: "healthy", summary: `Ready: ${homeDirectory}` }), readProviders: async () => {
     if (failObservation) throw new Error("native server failed");
     return { directory: root, observedAt: new Date().toISOString(), providers: [
-      { id: "openai", label: "OpenAI", modelCount: 1, models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], status: "configured", connection: { status: "connected", summary: "Signed in" } },
-      { id: "opencode", label: "OpenCode Zen", modelCount: 1, models: [{ id: "gpt-5.6-luna", label: "GPT-5.6 Luna" }], status: "configured", connection: { status: "connected", summary: "Signed in" } },
-      { id: "devin", label: "Devin CLI", modelCount: 1, models: [{ id: "swe-2", label: "SWE-2" }], status: "missing", connection: { status: "not-connected", summary: "Not installed" } },
+      { id: "opencode" as const, label: "OpenCode", modelCount: 2, models: [{ id: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol (OpenAI)" }, { id: "opencode/gpt-5.6-luna", label: "GPT-5.6 Luna (OpenCode Zen)" }], status: "configured" as const, connection: { status: "connected" as const, summary: "Signed in" } },
+      { id: "devin" as const, label: "Devin CLI", modelCount: 1, models: [{ id: "swe-2", label: "SWE-2" }], status: "missing" as const, connection: { status: "not-connected" as const, summary: "Not installed" } },
     ] };
   } });
   try {
@@ -45,8 +44,7 @@ test("provider API uses native configuration, not CLI health or Forge credential
     const headers = { cookie: `${SESSION_COOKIE_NAME}=${session}; ${CSRF_COOKIE_NAME}=${csrf}`, origin: config.reachableAddress, "x-csrf-v1": csrf };
     const listed = await app.inject({ method: "GET", url: "/api/admin/providers", headers });
     expect(listed.json()).toMatchObject({ providers: [
-      { id: "openai", status: "configured", connection: { status: "connected" } },
-      { id: "opencode", status: "configured", connection: { status: "connected" } },
+      { id: "opencode", status: "configured", modelCount: 2, connection: { status: "connected" } },
       { id: "devin", status: "missing", connection: { status: "not-connected" } },
     ] });
     expect(listed.headers["cache-control"]).toBe("private, no-store");
@@ -119,9 +117,11 @@ test("provider login endpoints create, reuse, and close Herdr sign-in panes", as
     expect(herdr.closeWorkspace).toHaveBeenCalledWith("ws-login-1");
     expect((await app.inject({ method: "DELETE", url: "/api/admin/provider-login/pane-login-1", headers })).statusCode).toBe(404);
 
-    await app.inject({ method: "POST", url: "/api/admin/providers/openai/login", headers });
+    await app.inject({ method: "POST", url: "/api/admin/providers/opencode/login", headers });
     // OpenCode resolution failed, so the pane keeps a best-effort bare command.
     expect(herdr.runPaneCommand).toHaveBeenLastCalledWith("pane-login-3", "opencode auth login");
+    // A vendor is not an agent tool, so it has no sign-in of its own.
+    expect((await app.inject({ method: "POST", url: "/api/admin/providers/openai/login", headers })).statusCode).toBe(400);
 
     const created = await app.inject({ method: "POST", url: "/api/admin/provider-instances", headers, payload: { provider: "claude-code", label: "Work" } });
     const instance = created.json();

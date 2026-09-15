@@ -3,7 +3,7 @@ import type { PaneProcessInfo } from "../src/integrations/herdr/client.js";
 import type { TaskScope } from "../src/runtimes/task-harness.js";
 import { attachTaskDisplay, type TaskPanePort } from "../src/runtimes/task-display.js";
 
-const profile = { providerID: "openai", modelID: "gpt-5.6-sol", reasoningEffort: "medium", serviceTier: "priority" } as const;
+const profile = { providerID: "opencode", modelID: "openai/gpt-5.6-sol", reasoningEffort: "medium", serviceTier: "priority" } as const;
 const scopes: { scope: TaskScope; role: string }[] = [
   { scope: { id: "root-session", taskId: "task-123", directory: "/repo", workflow: "standard", evidenceRoot: null, profile, role: "root", identity: { taskId: "task-123", sessionId: "root-session", generation: 1 } }, role: "Coordinator" },
   { scope: { id: "worker-session", taskId: "task-123", directory: "/repo", workflow: "standard", evidenceRoot: null, profile, role: "worker", workerMode: "planned", purpose: "implementation" }, role: "Worker" },
@@ -52,8 +52,8 @@ test.each(scopes)("refreshes lost metadata on a matching $role display", async (
       forge_server_generation: "generation",
       forge_task: "task-123",
       forge_role: role,
-      forge_model: "gpt-5.6-sol",
-      forge_provider: "openai",
+      forge_model: "openai/gpt-5.6-sol",
+      forge_provider: "opencode",
     },
   });
   expect(f.herdr.runPaneCommand).not.toHaveBeenCalled();

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 
 import type { HealthCheck } from "../platform/health.js";
 import { providerCheckId, providerCheckLabel } from "../platform/health-contract.js";
-import { resolveClaudeExecutable, resolveOpenCodeExecutable } from "../platform/executable-resolver.js";
+import { resolveClaudeExecutable, resolveCodexExecutable, resolveOpenCodeExecutable } from "../platform/executable-resolver.js";
 import { GhAuthStatusSchema } from "../platform/schemas.js";
 import type { ProviderHarnessKind } from "../platform/health-contract.js";
 
@@ -187,6 +187,20 @@ const PROVIDER_PROBES: Record<ProviderHarnessKind, {
         }
       } catch { /* Unrecognized status output is not proof of any sign-in state. */ }
       return result.exitCode === 0 ? { state: "present" } : { state: "unknown" };
+    },
+  },
+  codex: {
+    // Sources: `codex login status` on codex-cli 0.154.0 prints "Logged in using ChatGPT" (exit 0) or "Not logged in" (exit 1); https://www.npmjs.com/package/@openai/codex.
+    resolve: () => resolveCodexExecutable(),
+    installRemedy: () => ({ remedy: "npm install -g @openai/codex", remedyKind: "command" }),
+    loginRemedy: "codex login",
+    authArgs: ["login", "status"],
+    classify: (result) => {
+      const output = stripAnsi(`${result.stdout}\n${result.stderr}`);
+      if (/not logged in/i.test(output)) return { state: "signed-out" };
+      if (/logged in using/i.test(output)) return { state: "signed-in" };
+      if (result.timedOut) return { state: "unknown" };
+      return result.exitCode === 0 ? { state: "signed-in" } : { state: "unknown" };
     },
   },
 };

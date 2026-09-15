@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { HARNESS_KIND_IDS, type HarnessKind } from "./harness-kind.js";
 import { StructuredLogger } from "../platform/logging.js";
 import { resolveGhExecutable } from "../platform/executable-resolver.js";
 import type { OpenCodePromptIntent, OpenCodePromptObservation } from "./opencode/session.js";
@@ -48,10 +49,8 @@ export interface TaskHarness {
   stop(scope: Pick<TaskScope, "id">, nativeSessionId: string | null): Promise<void>;
 }
 
-export type HarnessKind = "opencode" | "claude-code" | "devin" | "codex";
+export type { HarnessKind };
 export const CLAUDE_CODE_PROVIDER = "claude-code";
-export const DEVIN_PROVIDER = "devin";
-export const CODEX_PROVIDER = "codex";
 // ponytail: static alias list; Claude Code has no model listing command.
 export const CLAUDE_CODE_MODELS = [
   { id: "fable", label: "Fable (latest)" },
@@ -74,17 +73,18 @@ export const CODEX_MODELS = [
   { id: "gpt-5.5", label: "GPT-5.5" },
 ];
 
+/** A profile provider is already a harness kind; a snapshot that escaped the migration ran on OpenCode. */
 export function profileHarness(providerID: string): HarnessKind {
-  return providerID === CLAUDE_CODE_PROVIDER ? "claude-code" : providerID === DEVIN_PROVIDER ? "devin" : providerID === CODEX_PROVIDER ? "codex" : "opencode";
+  return (HARNESS_KIND_IDS as readonly string[]).includes(providerID) ? providerID as HarnessKind : "opencode";
 }
 
 /** Provider-owned configuration directories are opt-in per harness. */
 export function instanceEnvironment(providerID: string, homeDirectory: string | null): NodeJS.ProcessEnv {
-  return providerID === CLAUDE_CODE_PROVIDER && homeDirectory ? { CLAUDE_CONFIG_DIR: homeDirectory } : {};
+  return providerID === "claude-code" && homeDirectory ? { CLAUDE_CONFIG_DIR: homeDirectory } : {};
 }
 
 export function supportsProviderInstances(providerID: string): boolean {
-  return profileHarness(providerID) === "claude-code";
+  return providerID === "claude-code";
 }
 
 // Forge reserves Devin and Codex identities with a prefix, because a Codex

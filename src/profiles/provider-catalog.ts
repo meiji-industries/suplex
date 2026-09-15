@@ -1,31 +1,35 @@
-import { resolveClaudeExecutable, resolveCodexExecutable, resolveDevinExecutable } from "../platform/executable-resolver.js";
-import type { ProviderListResponse, ProviderObservation } from "../http/contracts/providers.js";
+import { resolveClaudeExecutable, resolveCodexExecutable, resolveDevinExecutable, resolveOpenCodeExecutable } from "../platform/executable-resolver.js";
+import type { ProviderListResponse, ProviderObservation, ProviderSummary } from "../http/contracts/providers.js";
 import { readOpenCodeProviders } from "../runtimes/opencode/providers.js";
-import { CLAUDE_CODE_MODELS, CLAUDE_CODE_PROVIDER, CODEX_MODELS, CODEX_PROVIDER, DEVIN_MODELS, DEVIN_PROVIDER } from "../runtimes/task-harness.js";
+import { CLAUDE_CODE_MODELS, CODEX_MODELS, DEVIN_MODELS } from "../runtimes/task-harness.js";
+import type { HarnessKind } from "../runtimes/harness-kind.js";
 import type { ProviderConnectionProbe } from "./provider-connection.js";
 
 export type ReadProviders = () => Promise<ProviderListResponse>;
 
-/** OpenCode providers plus local agent CLIs. Neither observation sends a model request. */
+/**
+ * One row per agent tool. OpenCode's own vendors are folded into its row as
+ * vendor-qualified model ids, because Forge selects OpenCode as the harness and
+ * names the vendor inside the model. Neither observation sends a model request.
+ */
 export async function readProviders(input: { directory: string; connection?: ProviderConnectionProbe }): Promise<ProviderListResponse> {
-  const cliProviders = await Promise.all([
-    { resolve: resolveClaudeExecutable, id: CLAUDE_CODE_PROVIDER, label: "Claude Code", models: CLAUDE_CODE_MODELS },
-    { resolve: resolveDevinExecutable, id: DEVIN_PROVIDER, label: "Devin CLI", models: DEVIN_MODELS },
-    { resolve: resolveCodexExecutable, id: CODEX_PROVIDER, label: "Codex CLI", models: CODEX_MODELS },
-  ].map(async provider => {
-    const status = await provider.resolve().then(() => "configured" as const, () => "missing" as const);
-    return { id: provider.id, label: provider.label, modelCount: provider.models.length, models: provider.models, status };
-  }));
-  const configured = cliProviders.flat();
   let native: ProviderObservation;
   try { native = await readOpenCodeProviders(input); }
   catch {
     native = { directory: input.directory, observedAt: new Date().toISOString(), providers: [] };
   }
+  const openCodeModels = native.providers.flatMap(vendor => vendor.models.map(model => ({ id: `${vendor.id}/${model.id}`, label: `${model.label} (${vendor.label})` })));
+  const rows: { resolve: () => Promise<string>; id: HarnessKind; label: string; models: { id: string; label: string }[] }[] = [
+    { resolve: resolveOpenCodeExecutable, id: "opencode", label: "OpenCode", models: openCodeModels },
+    { resolve: resolveClaudeExecutable, id: "claude-code", label: "Claude Code", models: CLAUDE_CODE_MODELS },
+    { resolve: resolveDevinExecutable, id: "devin", label: "Devin CLI", models: DEVIN_MODELS },
+    { resolve: resolveCodexExecutable, id: "codex", label: "Codex CLI", models: CODEX_MODELS },
+  ];
   const probe = input.connection;
-  const providers = await Promise.all([...native.providers, ...configured].map(async provider => ({
-    ...provider,
-    connection: probe ? await probe(provider.id) : { status: "unknown" as const, summary: "Forge did not check the sign-in." },
+  const providers: ProviderSummary[] = await Promise.all(rows.map(async row => ({
+    id: row.id, label: row.label, modelCount: row.models.length, models: row.models,
+    status: await row.resolve().then(() => "configured" as const, () => "missing" as const),
+    connection: probe ? await probe(row.id) : { status: "unknown" as const, summary: "Forge did not check the sign-in." },
   })));
   return { ...native, providers: providers.sort((a, b) => a.label.localeCompare(b.label)) };
 }

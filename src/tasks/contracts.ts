@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { HumanQuestionOptionsSchema } from "../coordination/human-question.js";
-import { TaskControlStatusSchema, TaskProfileSchema, WorktreeReferenceSchema, PullRequestReferenceSchema } from "./control.js";
+import { TaskControlStatusSchema, TaskProfileFieldsSchema, WorktreeReferenceSchema, PullRequestReferenceSchema } from "./control.js";
 import { MAX_TASK_IMAGES, MAX_TASK_IMAGE_BASE64_LENGTH } from "./limits/attachment-limits.js";
 import { AdvisorProfileIdsSchema, AdvisorRoleSchema, PublicWorkflowStateSchema, WorkflowIdSchema } from "../coordination/workflows.js";
 import { TaskLimitPauseSchema, TaskLimitsSchema } from "./limits/limits.js";
@@ -74,10 +74,10 @@ export const TaskSchema = z.object({
   title: z.string(), description: z.string(),
   status: TaskControlStatusSchema,
   deliveryTarget: DeliveryTargetSchema,
-  rootProfile: TaskProfileSchema,
-  workerProfile: TaskProfileSchema,
+  rootProfile: TaskProfileFieldsSchema,
+  workerProfile: TaskProfileFieldsSchema,
   workflow: WorkflowIdSchema,
-  advisorProfiles: z.partialRecord(AdvisorRoleSchema, TaskProfileSchema),
+  advisorProfiles: z.partialRecord(AdvisorRoleSchema, TaskProfileFieldsSchema),
   workflowState: PublicWorkflowStateSchema,
   dependsOn: z.array(id).default([]),
   configuration: TaskConfigurationSchema,

@@ -1,4 +1,5 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { SquareTerminal } from "lucide-react";
 import type { TaskActivity } from "../task-work.js";
 import { LivePaneTerminal } from "./live-pane-terminal.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs.js";
@@ -9,6 +10,7 @@ import { sessionHistoryLabels } from "./session-history-state.js";
 const storageKey = "forge.live-pane-height";
 const clampHeight = (height: number) => Math.min(720, Math.max(160, height));
 const shellTabId = "shell";
+const sessionTabClassName = "h-9 flex-none rounded-none border-x-0 border-y-0 border-r border-transparent px-3 text-xs group-data-[variant=line]/tabs-list:data-active:border-border dark:group-data-[variant=line]/tabs-list:data-active:border-border group-data-[variant=line]/tabs-list:data-active:bg-background dark:group-data-[variant=line]/tabs-list:data-active:bg-background dark:group-data-[variant=line]/tabs-list:data-active:text-foreground after:top-0 after:bottom-auto after:bg-primary data-active:after:opacity-100";
 
 function readHeight(): number {
   try { const saved = window.localStorage.getItem(storageKey); const value = saved?.trim() ? Number(saved) : 320; return Number.isFinite(value) ? clampHeight(value) : 320; }
@@ -57,16 +59,25 @@ export function LivePaneDock({ taskId, activity }: { taskId: string; activity: T
   return <section data-live-pane-dock className="dark sticky bottom-0 z-10 mt-auto flex w-full max-w-full shrink-0 flex-col overflow-hidden bg-background text-foreground" aria-label="Live agent output" style={{ height, maxHeight: "75dvh", colorScheme: "dark" }}>
     <div role="slider" tabIndex={0} aria-label="Resize live agent output" aria-orientation="vertical" aria-valuemin={160} aria-valuemax={720} aria-valuenow={height} aria-valuetext={`${height} pixels`} className="flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center border-t focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" title="Drag to resize live output" onKeyDown={adjustResize} onPointerDown={startResize} onPointerMove={updateResize} onPointerUp={endResize} onPointerCancel={endResize}><span aria-hidden="true" className="h-px w-8 bg-muted-foreground" /></div>
     <Tabs className="min-h-0 min-w-0 flex-1 gap-0" value={selectedTab} onValueChange={value => { setSelectedSessionId(String(value)); setView("terminal"); }}>
-      <div className="min-w-0 shrink-0 overflow-x-auto border-b px-1" aria-label="Sessions"><TabsList variant="line">{shell ? <TabsTrigger value={shellTabId}>Shell</TabsTrigger> : null}{sessions.map(session => <TabsTrigger key={session.id} value={session.id}>{labels.get(session.id) ?? roleLabel(session)}</TabsTrigger>)}</TabsList></div>
+      <div className="flex min-w-0 shrink-0 items-stretch border-b border-border bg-muted/40" aria-label="Sessions">
+        <div className="min-w-0 flex-1 overflow-x-auto">
+          <TabsList variant="line" className="h-9 gap-0 rounded-none p-0">
+            {shell ? <TabsTrigger value={shellTabId} className={sessionTabClassName}><SquareTerminal className="size-3.5" /><span className="max-w-40 truncate">Shell</span></TabsTrigger> : null}
+            {sessions.map(session => <TabsTrigger key={session.id} value={session.id} className={sessionTabClassName}><SquareTerminal className="size-3.5" /><span className="max-w-40 truncate">{labels.get(session.id) ?? roleLabel(session)}</span></TabsTrigger>)}
+          </TabsList>
+        </div>
+        {selectedTab !== shellTabId && selected ? <div className="flex shrink-0 items-center border-l border-border px-1" aria-label="Session output">
+          <button type="button" className="h-7 rounded-sm px-2 text-xs text-muted-foreground hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" aria-pressed={view === "history" || (view === "terminal" && (!selected.current || !selected.paneId))} onClick={() => setView("history")}>History</button>
+          <button type="button" className="h-7 rounded-sm px-2 text-xs text-muted-foreground hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50" aria-pressed={view === "terminal" && selected.current && !!selected.paneId} disabled={!selected.current || !selected.paneId} onClick={() => setView("terminal")}>Terminal</button>
+        </div> : null}
+      </div>
       {shell ? <TabsContent className="mt-0 flex min-h-0 min-w-0 overflow-hidden" value={shellTabId}>
         <LivePaneTerminal taskId={taskId} role="shell" paneId={activity.shellPaneId} />
       </TabsContent> : null}
       {sessions.map(session => <TabsContent key={session.id} className="mt-0 flex min-h-0 min-w-0 overflow-hidden" value={session.id}>
-        <Tabs className="min-h-0 min-w-0 flex-1 gap-0" value={view === "terminal" && (!session.current || !session.paneId) ? "history" : view} onValueChange={value => setView(String(value))}>
-          <div className="flex shrink-0 justify-end border-b px-2" aria-label="Session output"><TabsList variant="line"><TabsTrigger value="history">History</TabsTrigger><TabsTrigger value="terminal" disabled={!session.current || !session.paneId}>Terminal</TabsTrigger></TabsList></div>
-          <TabsContent className="mt-0 flex min-h-0 max-h-full overflow-hidden" value="history"><SessionHistory taskId={taskId} sessionId={session.id} assistantLabel={labels.get(session.id) ?? roleLabel(session)} poll={session.current} /></TabsContent>
-          <TabsContent className="mt-0 min-h-0 overflow-hidden" value="terminal">{session.current && session.paneId ? <LivePaneTerminal taskId={taskId} role={session.kind} paneId={session.paneId} /> : null}</TabsContent>
-        </Tabs>
+        {view === "terminal" && session.current && session.paneId
+          ? <LivePaneTerminal taskId={taskId} role={session.kind} paneId={session.paneId} />
+          : <SessionHistory taskId={taskId} sessionId={session.id} assistantLabel={labels.get(session.id) ?? roleLabel(session)} poll={session.current} />}
       </TabsContent>)}
     </Tabs>
   </section>;

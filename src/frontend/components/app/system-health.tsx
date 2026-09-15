@@ -142,7 +142,7 @@ export function CheckStatusIndicator({ check }: { check: HealthCheck }): ReactEl
   return (
     <Badge variant={healthy ? "secondary" : degraded ? "outline" : "destructive"}>
       {healthy ? <CheckCircle2 /> : degraded ? <CircleAlert /> : <XCircle />}
-      {healthy ? "Healthy" : degraded ? "Degraded" : "Not available"}
+      {healthy ? "Healthy" : degraded ? "Degraded" : "Offline"}
     </Badge>
   );
 }
@@ -218,7 +218,7 @@ export function SystemHealthIndicator({ sidebar = false }: { sidebar?: boolean }
   }, [open, watch]);
   if (!health) return null;
   const level = getSystemHealthLevel(health.snapshot, health.freshness);
-  const label = level === "green" ? "Healthy" : level === "amber" ? "Degraded" : "Not available";
+  const label = level === "green" ? "Healthy" : level === "amber" ? "Degraded" : "Offline";
   const healthyCount = health.snapshot?.checks.filter((check) => check.status === "healthy").length ?? 0;
   const checkCount = health.snapshot?.checks.length ?? 0;
   return (

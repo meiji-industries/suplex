@@ -145,7 +145,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     let cancelled = false;
     setBlockedByLoading(true);
     void readJson<{ tasks: Task[] }>(`/api/companies/${companyId}/tasks`).then(result => {
-      if (!cancelled) setBlockedByTasks(result.tasks.filter(task => task.projectId === projectId && task.status === "active" && !task.archivedAt));
+      if (!cancelled) setBlockedByTasks(result.tasks.filter(task => task.projectId === projectId && (task.status === "active" || task.status === "backlog") && !task.archivedAt));
     }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : "Tasks are not available"); }).finally(() => { if (!cancelled) setBlockedByLoading(false); });
     return () => { cancelled = true; };
   }, [blockedByPickerOpen, projectId, companyId]);
@@ -265,8 +265,8 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     <Dialog open={blockedByPickerOpen} onOpenChange={setBlockedByPickerOpen}>
       <DialogContent className="max-h-[min(80vh,480px)] overflow-y-auto" showCloseButton={false}>
         <DialogHeader><DialogTitle>Blocked by...</DialogTitle></DialogHeader>
-        <Input aria-label="Search active tasks" autoFocus placeholder="Search by title or ID" value={blockedByQuery} onChange={event => setBlockedByQuery(event.target.value)} />
-        <div className="flex flex-col gap-1">{blockedByLoading ? <span className="text-xs text-muted-foreground">Loading tasks...</span> : matchingBlockedByTasks.length ? matchingBlockedByTasks.map(task => <Button key={task.id} type="button" variant="ghost" onClick={() => { setBlockedBy({ id: task.id, title: task.title, status: task.status }); setBlockedByPickerOpen(false); }}>{task.title}<span className="text-muted-foreground">{task.id}</span></Button>) : <span className="text-xs text-muted-foreground">No active tasks in this project.</span>}</div>
+        <Input aria-label="Search tasks" autoFocus placeholder="Search by title or ID" value={blockedByQuery} onChange={event => setBlockedByQuery(event.target.value)} />
+        <div className="flex flex-col gap-1">{blockedByLoading ? <span className="text-xs text-muted-foreground">Loading tasks...</span> : matchingBlockedByTasks.length ? matchingBlockedByTasks.map(task => <Button key={task.id} type="button" variant="ghost" onClick={() => { setBlockedBy({ id: task.id, title: task.title, status: task.status }); setBlockedByPickerOpen(false); }}>{task.title}<span className="text-muted-foreground">{task.id}</span></Button>) : <span className="text-xs text-muted-foreground">No matching active or backlog tasks.</span>}</div>
       </DialogContent>
     </Dialog>
   </Dialog>;

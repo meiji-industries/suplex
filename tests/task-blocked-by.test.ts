@@ -95,3 +95,21 @@ test("an immediate task waits for its Blocked by reference to deliver", async ()
     expect(immediate.task).toMatchObject({ status: "active", startWhenBlockedByDelivered: false });
   } finally { await f.close(); }
 });
+
+test("a chain of immediate tasks starts one dependency at a time", async () => {
+  const f = await nativeApp();
+  try {
+    const first = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "A", idempotencyKey: "chain-task-a", startImmediately: true });
+    const second = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "B", idempotencyKey: "chain-task-b", startImmediately: true, blockedByTaskId: first.task.id });
+    const third = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "C", idempotencyKey: "chain-task-c", startImmediately: true, blockedByTaskId: second.task.id });
+    expect(second.task).toMatchObject({ status: "backlog", startWhenBlockedByDelivered: true });
+    expect(third.task).toMatchObject({ status: "backlog", startWhenBlockedByDelivered: true });
+
+    f.tasks.repository.controls.markDelivered(first.task.id);
+    expect(f.tasks.getTask(f.userId, second.task.id)).toMatchObject({ status: "active", startWhenBlockedByDelivered: false });
+    expect(f.tasks.getTask(f.userId, third.task.id)).toMatchObject({ status: "backlog", startWhenBlockedByDelivered: true });
+
+    f.tasks.repository.controls.markDelivered(second.task.id);
+    expect(f.tasks.getTask(f.userId, third.task.id)).toMatchObject({ status: "active", startWhenBlockedByDelivered: false });
+  } finally { await f.close(); }
+});

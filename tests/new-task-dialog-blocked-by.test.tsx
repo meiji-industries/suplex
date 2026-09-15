@@ -48,6 +48,8 @@ const active = { id: "task-active", projectId: project.id, title: "Active prereq
 const otherProject = { id: "task-other-project", projectId: "project-2", title: "Other project", status: "active", archivedAt: null };
 const backlog = { id: "task-backlog", projectId: project.id, title: "Backlog task", status: "backlog", archivedAt: null };
 const archived = { id: "task-archived", projectId: project.id, title: "Archived task", status: "active", archivedAt: "2026-01-01T00:00:00.000Z" };
+const delivered = { id: "task-delivered", projectId: project.id, title: "Delivered task", status: "delivered", archivedAt: null };
+const cancelled = { id: "task-cancelled", projectId: project.id, title: "Cancelled task", status: "cancelled", archivedAt: null };
 
 function setText(field: HTMLInputElement, value: string) {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, value);
@@ -81,7 +83,7 @@ beforeEach(() => {
     if (url === "/api/profiles") return { profiles: [profile, worker] };
     if (url === "/api/workflows?includeArchived=true") return { workflows: [workflow] };
     if (url === "/api/projects/project-1/task-templates") return { templates: [] };
-    if (url === "/api/companies/company-1/tasks") return { tasks: [active, otherProject, backlog, archived] };
+    if (url === "/api/companies/company-1/tasks") return { tasks: [active, otherProject, backlog, archived, delivered, cancelled] };
     throw new Error(`Unexpected request: ${url}`);
   });
 });
@@ -96,10 +98,12 @@ test("New task Blocked by picker filters, selects, clears, and posts its referen
   await act(async () => { button(view.container, "Blocked by...").click(); });
   await flush();
   expect(view.container.textContent).toContain("Active prerequisite");
+  expect(view.container.textContent).toContain("Backlog task");
   expect(view.container.textContent).not.toContain("Other project");
-  expect(view.container.textContent).not.toContain("Backlog task");
   expect(view.container.textContent).not.toContain("Archived task");
-  const search = view.container.querySelector<HTMLInputElement>('[aria-label="Search active tasks"]')!;
+  expect(view.container.textContent).not.toContain("Delivered task");
+  expect(view.container.textContent).not.toContain("Cancelled task");
+  const search = view.container.querySelector<HTMLInputElement>('[aria-label="Search tasks"]')!;
   await act(async () => { setText(search, "prerequisite"); });
   expect(view.container.textContent).toContain("Active prerequisite");
   await act(async () => { setText(search, "task-active"); });
@@ -117,9 +121,9 @@ test("New task Blocked by picker filters, selects, clears, and posts its referen
 
   await act(async () => { button(view.container, "More options").click(); button(view.container, "Blocked by...").click(); });
   await flush();
-  await act(async () => { button(view.container, "Active prerequisite").click(); setText(title, "Create dependent"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
+  await act(async () => { button(view.container, "Backlog task").click(); setText(title, "Create dependent"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
   const postsWithReference = api.readJson.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST");
-  expect(JSON.parse(postsWithReference[1]![1].body).blockedByTaskId).toBe("task-active");
+  expect(JSON.parse(postsWithReference[1]![1].body).blockedByTaskId).toBe("task-backlog");
 });
 
 test("More options is absent when editing a task", async () => {
@@ -128,13 +132,13 @@ test("More options is absent when editing a task", async () => {
   expect(view.container.querySelector('[aria-label="More options"]')).toBeNull();
 });
 
-test("the picker reports an empty active-task result", async () => {
+test("the picker reports an empty task result", async () => {
   const view = mount();
   await flush();
   await act(async () => { button(view.container, "More options").click(); });
   await act(async () => { button(view.container, "Blocked by...").click(); });
   await flush();
-  const search = view.container.querySelector<HTMLInputElement>('[aria-label="Search active tasks"]')!;
+  const search = view.container.querySelector<HTMLInputElement>('[aria-label="Search tasks"]')!;
   await act(async () => { setText(search, "nothing"); });
-  expect(view.container.textContent).toContain("No active tasks in this project.");
+  expect(view.container.textContent).toContain("No matching active or backlog tasks.");
 });

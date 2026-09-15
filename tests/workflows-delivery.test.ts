@@ -13,6 +13,99 @@ import { cleanupDeliveryFixtures, failing, fixture, git, pending, rater, reviewe
 
 afterEach(cleanupDeliveryFixtures);
 
+test("pending checks persist across restart and suppress idle Coordinator turns without pane metadata", { timeout: 60_000 }, async () => {
+  const f = await fixture("refine_pull_request");
+  f.github.checks = pending;
+  f.github.mergeStateStatus = "UNKNOWN";
+
+  const observation = await f.request("observe_checks");
+  f.endRootTurn();
+  await f.controller.recover("task");
+  const turnsBefore = f.rootTurns().length;
+  const dispatchesBefore = f.harness.dispatched.length;
+
+  const reopened = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
+  const store = new TaskControlStore(reopened, f.alive);
+  const delivery = new DeliveryOperations(store, f.port);
+  const controller = new RootController(store, f.harness, delivery, undefined, { root: join(f.directory, "evidence") }, f.reader);
+  const host = new TaskHost(reopened, { controller, delivery });
+  try {
+    for (const paneId of [null, "recreated-pane"] as const) {
+      reopened.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = ? WHERE id = ?").run(paneId, f.identity().sessionId));
+      store.wakeIdleRoot("task");
+      await host.recover("task");
+      await host.recover("task");
+    }
+
+    expect(f.rootTurns()).toHaveLength(turnsBefore);
+    expect(f.harness.dispatched).toHaveLength(dispatchesBefore);
+    expect(store.get("task").workflowState.deliveryWait).toMatchObject({ headSha: f.featureSha, reason: "checks" });
+    expect(observation).toMatchObject({
+      checkSummary: "0 successful, 1 pending, 0 failing",
+      wait: { headSha: f.featureSha, reason: "checks" },
+      next: DELIVERY_WAIT_NEXT,
+    });
+  } finally {
+    await host.stop();
+    reopened.close();
+  }
+});
+
+test.each([
+  { label: "all checks pass", checks: successful, remoteHead: null },
+  { label: "a check fails", checks: failing, remoteHead: null },
+  { label: "the remote head changes", checks: pending, remoteHead: "f".repeat(40) },
+])("a pending-check wait resumes once when $label", { timeout: 60_000 }, async ({ checks, remoteHead }) => {
+  const f = await fixture("refine_pull_request");
+  f.github.checks = pending;
+  f.github.mergeStateStatus = "UNKNOWN";
+  await f.request("observe_checks");
+  const turnsBefore = f.rootTurns().length;
+
+  f.github.checks = checks;
+  if (remoteHead) f.github.headSha = remoteHead;
+  expect(await f.delivery.observeDeliveryWait("task")).toBe("changed");
+  expect(await f.delivery.observeDeliveryWait("task")).toBe("none");
+  expect(f.rootTurns()).toHaveLength(turnsBefore + 1);
+  expect(f.store.get("task").workflowState.deliveryWait).toBeNull();
+});
+
+test("settled, failed, mixed failed-and-pending, closed, and different-head checks stay actionable", { timeout: 60_000 }, async () => {
+  const f = await fixture("refine_pull_request");
+  const noChecks = { total: 0, pending: 0, failing: 0, successful: 0, runs: [] };
+  const failedAndPending = {
+    total: 2,
+    pending: 1,
+    failing: 1,
+    successful: 0,
+    runs: [
+      { name: "unit", status: "failing" as const, url: "https://ci.example/run/1", conclusion: "FAILURE" },
+      { name: "integration", status: "pending" as const, url: null },
+    ],
+  };
+
+  for (const checks of [noChecks, successful, failing, failedAndPending]) {
+    f.github.checks = checks;
+    const observation = await f.request("observe_checks");
+    expect(observation).not.toHaveProperty("wait");
+    expect(f.store.get("task").workflowState.deliveryWait).toBeNull();
+  }
+
+  f.github.state = "closed";
+  f.github.checks = pending;
+  expect(await f.request("observe_checks")).not.toHaveProperty("wait");
+  expect(f.store.get("task").workflowState.deliveryWait).toBeNull();
+
+  f.github.state = "open";
+  f.github.checks = pending;
+  f.github.headSha = "f".repeat(40);
+  expect(await f.request("observe_checks")).toMatchObject({
+    checkSummary: "0 successful, 1 pending, 0 failing",
+    note: "The pull request head differs from the local head. Push the reviewed head before observing its checks.",
+  });
+  expect(f.store.get("task").workflowState.deliveryWait).toBeNull();
+});
+
 test("range equivalence uses the complete patch digest when bases differ", () => {
   const base = { baseSha: "a".repeat(40), headSha: "b".repeat(40), files: ["src.ts"], commits: ["b".repeat(40)], patchDigest: "c".repeat(64) };
   expect(rangeDifferences(base, base)).toEqual([]);
@@ -63,8 +156,8 @@ test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI
   expect(f.store.get("task").status).toBe("active");
   await f.request("request_review");
   expect(f.github.isDraft).toBe(false);
-  expect(await f.request("observe_checks")).toMatchObject({ checkSummary: "0 successful, 1 pending, 0 failing" });
-  expect(f.store.get("task").workflowState.deliveryWait).toBeNull();
+  expect(await f.request("observe_checks")).toMatchObject({ checkSummary: "0 successful, 1 pending, 0 failing", wait: { reason: "checks" }, next: DELIVERY_WAIT_NEXT });
+  expect(f.store.get("task").workflowState.deliveryWait?.reason).toBe("checks");
   f.github.onMerge = () => "queue";
   await expect(f.request("merge_pull_request")).resolves.toMatchObject({ kind: "merge_requested", wait: { headSha: head9, reason: "merge_queue" }, next: DELIVERY_WAIT_NEXT });
   expect(Date.parse(f.store.get("task").wakeAt!) - Date.now()).toBeGreaterThan(20_000);
@@ -107,8 +200,8 @@ test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI
   f.github.onPush = () => { f.github.checks = pending; f.github.mergeStateStatus = "UNKNOWN"; };
   expect(await f.request("push_branch")).toMatchObject({ kind: "pushed", headSha: head9b });
   expect(f.calls.filter(call => call.startsWith("push"))).toEqual([`push:${head9}`, `push:${head9b}`]);
-  expect(await f.request("observe_checks")).toMatchObject({ checkSummary: "0 successful, 1 pending, 0 failing" });
-  expect(f.store.get("task").workflowState.deliveryWait).toBeNull();
+  expect(await f.request("observe_checks")).toMatchObject({ checkSummary: "0 successful, 1 pending, 0 failing", wait: { reason: "checks" }, next: DELIVERY_WAIT_NEXT });
+  expect(f.store.get("task").workflowState.deliveryWait?.reason).toBe("checks");
   await expect(f.request("merge_pull_request")).resolves.toMatchObject({ kind: "merge_requested", wait: { reason: "merge_queue" } });
   f.github.checks = successful; f.github.mergeStateStatus = "CLEAN";
   expect(await f.delivery.observeDeliveryWait("task")).toBe("changed");

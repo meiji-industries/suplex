@@ -563,16 +563,19 @@ describe("Coordinator delivery operations", () => {
     expect(value.store.get("task").status).toBe("delivered");
   });
 
-  it("reports optional pending checks without creating a local eligibility wait", async () => {
+  it("schedules optional pending checks without blocking a GitHub-approved merge", async () => {
     const value = await fixture();
-    value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET workflow = 'direct_build' WHERE task_id = 'task'").run());
     const fake = github(value.local);
     const observed = await fake.port.observePullRequest!({ repository: "owner/repo", branch: value.local.branch });
     fake.setObserved({ ...observed, checks: { total: 1, pending: 1, failing: 0, successful: 0, runs: [{ name: "optional", status: "pending", url: null }] } });
-    const result = await new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "observe_checks");
-    expect(result).toMatchObject({ checkSummary: "0 successful, 1 pending, 0 failing" });
-    expect(result).not.toHaveProperty("wait");
-    expect(value.store.get("task").workflowState.deliveryWait).toBeNull();
+    const delivery = new DeliveryOperations(value.store, fake.port);
+    const result = await delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "observe_checks");
+    expect(result).toMatchObject({ checkSummary: "0 successful, 1 pending, 0 failing", wait: { reason: "checks" } });
+    expect(value.store.get("task").workflowState.deliveryWait?.reason).toBe("checks");
+
+    await delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review);
+    expect(fake.calls).toContain("merge");
+    expect(value.store.get("task").status).toBe("delivered");
   });
 
   it.each(["pull_request_draft", "pull_request_ready"])("adopts an existing ready PR for the %s target", async (target) => {

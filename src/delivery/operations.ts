@@ -309,6 +309,16 @@ export class DeliveryOperations {
     const observed = await this.checks(control, repository, local.branch);
     const summary = { ...observed, checkSummary: checkSummary(observed) };
     if (observed.headSha !== local.headSha) return { ...summary, note: "The pull request head differs from the local head. Push the reviewed head before observing its checks." };
+    if (observed.state === "open" && observed.checks.pending > 0 && observed.checks.failing === 0) {
+      const fingerprint = deliveryWaitFingerprint(observed);
+      const current = this.store.get(control.taskId).workflowState.deliveryWait;
+      const wait = current?.reason === "checks" && current.headSha === observed.headSha && current.fingerprint === fingerprint
+        ? current
+        : { headSha: observed.headSha, fingerprint, since: new Date().toISOString(), reason: "checks" as const };
+      this.store.updateWorkflowState(control.taskId, state => ({ ...state, deliveryWait: wait }));
+      this.store.scheduleWake(control.taskId, new Date(Date.now() + 30_000).toISOString());
+      return { ...summary, wait, next: DELIVERY_WAIT_NEXT };
+    }
     return summary;
   }
 

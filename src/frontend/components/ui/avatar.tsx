@@ -20,7 +20,7 @@ function Avatar({
       data-size={size}
       data-shape={shape}
       className={cn(
-        "group/avatar relative flex size-8 shrink-0 select-none after:absolute after:inset-0 after:border after:border-border after:mix-blend-darken data-[shape=circle]:rounded-full data-[shape=circle]:after:rounded-full data-[shape=square]:rounded-md data-[shape=square]:after:rounded-md data-[size=lg]:size-10 data-[size=sm]:size-6 data-[size=xs]:size-4 dark:after:mix-blend-lighten",
+        "group/avatar relative flex size-8 shrink-0 select-none after:absolute after:inset-0 after:border after:border-border after:mix-blend-darken data-[shape=circle]:rounded-full data-[shape=circle]:after:rounded-full data-[shape=square]:rounded-[min(var(--radius-md),20%)] data-[shape=square]:after:rounded-[min(var(--radius-md),20%)] data-[size=lg]:size-10 data-[size=sm]:size-6 data-[size=xs]:size-4 dark:after:mix-blend-lighten",
         className
       )}
       {...props}
@@ -33,7 +33,7 @@ function AvatarImage({ className, ...props }: AvatarPrimitive.Image.Props) {
     <AvatarPrimitive.Image
       data-slot="avatar-image"
       className={cn(
-        "aspect-square size-full object-cover group-data-[shape=circle]/avatar:rounded-full group-data-[shape=square]/avatar:rounded-md",
+        "aspect-square size-full object-cover group-data-[shape=circle]/avatar:rounded-full group-data-[shape=square]/avatar:rounded-[min(var(--radius-md),20%)]",
         className
       )}
       {...props}
@@ -49,7 +49,7 @@ function AvatarFallback({
     <AvatarPrimitive.Fallback
       data-slot="avatar-fallback"
       className={cn(
-        "flex size-full items-center justify-center bg-muted text-sm text-muted-foreground group-data-[shape=circle]/avatar:rounded-full group-data-[shape=square]/avatar:rounded-md group-data-[size=sm]/avatar:text-xs group-data-[size=xs]/avatar:text-[8px]",
+        "flex size-full items-center justify-center bg-muted text-sm text-muted-foreground group-data-[shape=circle]/avatar:rounded-full group-data-[shape=square]/avatar:rounded-[min(var(--radius-md),20%)] group-data-[size=sm]/avatar:text-xs group-data-[size=xs]/avatar:text-[8px]",
         className
       )}
       {...props}

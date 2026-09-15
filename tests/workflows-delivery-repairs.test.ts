@@ -2,7 +2,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { ForgeDatabase } from "../src/platform/database.js";
-import { DeliveryOperations, type DeliveryGithubPort } from "../src/delivery/operations.js";
+import { DELIVERY_WAIT_NEXT, DeliveryOperations, type DeliveryGithubPort } from "../src/delivery/operations.js";
 import { createGithubReleasePort, GithubReleaseFailure, type GithubCommandRunner } from "../src/integrations/github/delivery.js";
 import { RootController } from "../src/coordination/root-controller.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
@@ -377,7 +377,7 @@ test("D3: the real adapter classifies 401, missing login, permission 403, rate l
     await rateNine(f);
     f.github.isDraft = false; f.github.checks = pending;
     await f.request("push_branch");
-    expect(await f.request("observe_checks")).not.toHaveProperty("wait");
+    expect(await f.request("observe_checks")).toMatchObject({ wait: { reason: "checks" }, next: DELIVERY_WAIT_NEXT });
     f.github.onMerge = () => "queue";
     expect(await f.request("merge_pull_request")).toMatchObject({ wait: { reason: "merge_queue" } });
     const { runner, commands } = scripted({ "gh pr view": failure });

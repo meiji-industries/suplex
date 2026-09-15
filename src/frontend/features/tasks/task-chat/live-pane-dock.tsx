@@ -26,7 +26,7 @@ function SessionAvatars({ profileId, label, harness }: { profileId: string; labe
   const provider = harness ? providerIcons[harness] : null;
   return <AvatarGroup>
     <EntityAvatar kind="agent" id={profileId} name={label} size="xs" />
-    {provider ? <Avatar size="xs" title={provider.label}><AvatarImage src={provider.src} alt={`${provider.label} provider`} /><AvatarFallback>{provider.fallback}</AvatarFallback></Avatar> : null}
+    {provider ? <Avatar size="xs" className="bg-background" title={provider.label}><AvatarImage src={provider.src} alt={`${provider.label} provider`} /><AvatarFallback>{provider.fallback}</AvatarFallback></Avatar> : null}
   </AvatarGroup>;
 }
 

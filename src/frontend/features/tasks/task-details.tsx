@@ -20,6 +20,7 @@ import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
 import { LivePaneDock } from "./task-chat/live-pane-dock.js";
 import { useTaskCosts } from "../analytics/lib/analytics.js";
 import { CostValue } from "../../components/app/cost-value.js";
+import { Progress, ProgressLabel, ProgressValue } from "../../components/ui/progress.js";
 import { WorkflowHistory, WorkflowStatus } from "./workflow-history.js";
 import { TaskPullRequestCard } from "./pull-request-card.js";
 import { TaskWorktreeMenu } from "./task-worktree-menu.js";
@@ -80,11 +81,18 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
         </div></div>
       </div>
       <aside aria-label="Task properties" className="min-w-0 border-t px-4 py-5 lg:border-l lg:border-t-0">
-        <h3 className="mb-4 text-xs font-medium">Properties</h3>
         <dl className="grid grid-cols-1 gap-5 text-xs">
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Estimated cost (USD)</dt><dd title={costTitle}>{cost ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} /> : <span title={costTitle}>Not available</span>}{cost?.partial ? " · Partial usage" : ""}</dd></div>
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Task limits</dt><dd>{task.limits.budgetUsd === 0 ? "No budget limit" : `$${task.limits.budgetUsd.toFixed(2)}`} · {task.limits.maxTurns === 0 ? "No turn limit" : `${task.limits.admittedTurns} of ${task.limits.maxTurns} turns`}</dd></div>
           <div className="space-y-1.5"><dt className="text-muted-foreground">Status</dt><dd className="flex items-center gap-2"><TaskStatus status={task.status} pullRequestState={task.pullRequest?.state} />{task.archivedAt ? <Badge variant="outline">Archived</Badge> : null}</dd></div>
+          <div className="space-y-3">
+            <Progress className="gap-y-1.5" title={costTitle} aria-label="Estimated cost" value={task.limits.budgetUsd ? Math.min(100, ((cost?.cost ?? 0) / task.limits.budgetUsd) * 100) : null}>
+              <ProgressLabel className="text-xs font-normal text-muted-foreground">Cost</ProgressLabel>
+              <ProgressValue className="text-xs">{() => <>{cost ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} /> : "Not available"}{task.limits.budgetUsd ? ` of $${task.limits.budgetUsd.toFixed(2)}` : ""}</>}</ProgressValue>
+            </Progress>
+            <Progress className="gap-y-1.5" aria-label="Turns" value={task.limits.maxTurns ? Math.min(100, (task.limits.admittedTurns / task.limits.maxTurns) * 100) : null}>
+              <ProgressLabel className="text-xs font-normal text-muted-foreground">Turns</ProgressLabel>
+              <ProgressValue className="text-xs">{() => task.limits.maxTurns ? `${task.limits.admittedTurns} of ${task.limits.maxTurns}` : `${task.limits.admittedTurns}`}</ProgressValue>
+            </Progress>
+          </div>
           <TaskBlockedByProperty task={task} save={async blockedByTaskId => onChange(await readJson<Task>(`/api/tasks/${task.id}/blocked-by`, { method: "PATCH", body: JSON.stringify({ blockedByTaskId }) }))} />
           <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="break-words">{project?.name ?? task.configuration.repository}</dd></div>
           <div className="space-y-1.5"><dt className="text-muted-foreground">Workflow</dt><dd data-task-workflow>{workflowDefinition(task.workflow).name}</dd>{task.workflow !== "standard" ? <dd><WorkflowStatus task={task} /></dd> : null}</div>

@@ -2,8 +2,22 @@ import { afterEach, expect, test } from "vitest";
 import { cleanupRootControllerFixtures, fixture, ageDispatch } from "./helpers/root-controller-fixture.js";
 import { RootController } from "../src/coordination/root-controller.js";
 import { TaskControlStore, type ProcessOwnerObservation } from "../src/coordination/root-session-store.js";
+import { GithubReleaseFailure } from "../src/integrations/github/failure.js";
 
 afterEach(cleanupRootControllerFixtures);
+
+test("observe retains task state when GitHub is unavailable", async () => {
+  const value = await fixture();
+  const root = value.controller.prepareRoot("task");
+  const delivery = {
+    observe: async () => { throw new GithubReleaseFailure("provider-unavailable", "GitHub is offline"); },
+    execute: async () => { throw new Error("not used"); },
+    currentRange: async () => { throw new Error("not used"); },
+  };
+  const controller = new RootController(value.store, value.harness, delivery);
+  const observed = await controller.observe({ taskId: "task", sessionId: root.id, generation: root.generation });
+  expect(observed).toMatchObject({ control: { taskId: "task" }, worker: null, worktree: expect.anything(), results: {}, github: { available: false, code: "provider-unavailable", message: "GitHub is offline" } });
+});
 
 test("session claims recover from PID reuse without stealing a live or uncertain owner", async () => {
   const value = await fixture();

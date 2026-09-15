@@ -12,7 +12,7 @@ import { findClaudeTranscript } from "../src/runtimes/claude-code/transcript.js"
 import { ClaudeCodeSessionReader } from "../src/runtimes/claude-code/session-reader.js";
 
 const directories: string[] = [];
-afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => { delete process.env.FORGE_GH_COMMAND; await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 const sessionID = "71618050-0d31-428e-a547-d6c4a2eca88f";
 
@@ -128,6 +128,9 @@ test("an unclaimed prompt is never spawned and a log without an identity is unce
 
 test("the display resumes the transcript in a Herdr pane only after the session exists", async () => {
   const f = await fixture("complete");
+  const fakeGh = join(f.root, "gh");
+  await writeFile(fakeGh, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  process.env.FORGE_GH_COMMAND = fakeGh;
   const rootScope: TaskScope = { ...f.scope, id: "session-root", role: "root", identity: { taskId: "task-claude", sessionId: "session-root", generation: 1 } };
   const commands: string[] = [];
   const shell = (id: string): PaneProcessInfo => ({ pane_id: id, shell_pid: 10, foreground_process_group_id: 10, foreground_processes: [{ pid: 10, name: "zsh", argv: ["/bin/zsh"] }] });
@@ -142,7 +145,7 @@ test("the display resumes the transcript in a Herdr pane only after the session 
   const runtime = new ClaudeCodeTaskRuntime(join(f.root, "forge.sqlite"), herdr, { executable: f.executable, configDirectory: f.configDirectory });
   await runtime.ensureSession(rootScope, sessionID);
   const rootMcp = JSON.parse(await readFile(join(taskSessionRuntimeDirectory(join(f.root, "forge.sqlite"), rootScope.id), "mcp.json"), "utf8")).mcpServers.forge_root;
-  expect(rootMcp.env).toMatchObject({ FORGE_ROOT_BINDING: expect.stringContaining("root.binding.json"), FORGE_ROOT_TOKEN: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+  expect(rootMcp.env).toMatchObject({ FORGE_ROOT_BINDING: expect.stringContaining("root.binding.json"), FORGE_ROOT_TOKEN: expect.stringMatching(/^[0-9a-f-]{36}$/), FORGE_GH_COMMAND: fakeGh });
   const attach = () => runtime.attach({ scope: rootScope, nativeSessionId: sessionID, paneId: "pane", persistPane: () => {} });
   await expect(attach()).rejects.toThrow("has not started");
   await mkdir(join(f.configDirectory, "projects", "-worktree"), { recursive: true });

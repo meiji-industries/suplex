@@ -3,6 +3,8 @@ import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { StructuredLogger } from "../platform/logging.js";
+import { resolveGhExecutable } from "../platform/executable-resolver.js";
 import type { OpenCodePromptIntent, OpenCodePromptObservation } from "./opencode/session.js";
 import type { RootIdentity } from "../coordination/root-contracts.js";
 import type { PromptDispatchAttempt, TaskSession } from "../tasks/control.js";
@@ -129,11 +131,24 @@ const bridgeEnvironmentNames = {
   root: { binding: ROOT_BRIDGE_BINDING_ENV, token: ROOT_BRIDGE_TOKEN_ENV },
   advisor: { binding: ADVISOR_BRIDGE_BINDING_ENV, token: ADVISOR_BRIDGE_TOKEN_ENV },
 } as const;
+const bridgeLogger = new StructuredLogger();
+let ghResolutionFailureLogged = false;
 
 /** The bridge command with `${VAR}` placeholders, for hosts that interpolate their MCP environment (Devin's project-local config). */
-export function environmentBridgeServer(kind: "root" | "advisor"): TaskBridgeServer {
+export function environmentBridgeServer(kind: "root" | "advisor", ghCommand: string | null): TaskBridgeServer {
   const names = bridgeEnvironmentNames[kind];
-  return { ...bridgeCommand(kind), environment: { [names.binding]: `\${${names.binding}}`, [names.token]: `\${${names.token}}` } };
+  return { ...bridgeCommand(kind), environment: { [names.binding]: `\${${names.binding}}`, [names.token]: `\${${names.token}}`, ...(ghCommand ? { FORGE_GH_COMMAND: ghCommand } : {}) } };
+}
+
+export async function resolvedGhCommand(): Promise<string | null> {
+  try { return await resolveGhExecutable(); }
+  catch (error) {
+    if (!ghResolutionFailureLogged) {
+      ghResolutionFailureLogged = true;
+      bridgeLogger.warn("GitHub CLI could not be resolved for task bridges", {}, { error: error instanceof Error ? error.message : String(error) });
+    }
+    return null;
+  }
 }
 
 // A binding rewrite keeps the existing token so bridges already launched from
@@ -156,7 +171,8 @@ async function writeBinding(kind: "root" | "advisor", runtimeDirectory: string, 
   await writeFile(pending, JSON.stringify({ ...identity, token }), { mode: 0o600 });
   await rename(pending, path);
   const names = bridgeEnvironmentNames[kind];
-  return { ...bridgeCommand(kind), environment: { [names.binding]: path, [names.token]: token } };
+  const ghCommand = await resolvedGhCommand();
+  return { ...bridgeCommand(kind), environment: { [names.binding]: path, [names.token]: token, ...(ghCommand ? { FORGE_GH_COMMAND: ghCommand } : {}) } };
 }
 
 /** Writes the Coordinator bridge binding and returns the MCP server command that serves it. */

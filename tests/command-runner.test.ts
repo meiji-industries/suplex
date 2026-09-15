@@ -49,6 +49,14 @@ test("logs completed commands at info", async () => {
   expect(records()).toEqual([expect.objectContaining({ level: 30, message: expect.stringMatching(/^Command completed:/) })]);
 });
 
+test("retains spawn failures and child signals", async () => {
+  const missing = await runCommand({ taskId: null, stepId: null, command: "/definitely/missing/forge-command", args: [] });
+  expect(missing).toMatchObject({ exitCode: null, spawnError: { code: "ENOENT" }, timedOut: false });
+
+  const killed = await runCommand({ taskId: null, stepId: null, command: process.execPath, args: ["-e", "process.kill(process.pid, 'SIGKILL')"] });
+  expect(killed).toMatchObject({ exitCode: null, signal: "SIGKILL" });
+});
+
 test("truncates stream tails while retaining full 256 KiB output", { timeout: 15_000 }, async () => {
   const bytesPerStream = 256 * 1024;
   const script = `
@@ -107,7 +115,7 @@ test.skipIf(process.platform === "win32")("timeout escalates when the owned chil
   expect(result.durationMs).toBeLessThan(3_000);
   expect(records()).toEqual([expect.objectContaining({
     level: 50,
-    message: expect.stringMatching(/\(exit signal, timed out\)$/),
+    message: expect.stringMatching(/\(exit SIGKILL, timed out\)$/),
   })]);
 });
 

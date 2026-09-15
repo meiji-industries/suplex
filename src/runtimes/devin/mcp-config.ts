@@ -3,7 +3,7 @@ import { appendFile, chmod, mkdir, readFile, rename, writeFile } from "node:fs/p
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import { runCommand } from "../../platform/command-runner.js";
-import { environmentBridgeServer } from "../task-harness.js";
+import { environmentBridgeServer, resolvedGhCommand } from "../task-harness.js";
 
 const DevinMcpConfigSchema = z.object({
   mcpServers: z.record(z.string(), z.unknown()).optional(),
@@ -54,8 +54,9 @@ export async function ensureDevinMcpConfig(directory: string): Promise<string> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await chmod(dirname(path), 0o700);
   const current = await readConfig(path);
-  const root = environmentBridgeServer("root");
-  const advisor = environmentBridgeServer("advisor");
+  const ghCommand = await resolvedGhCommand();
+  const root = environmentBridgeServer("root", ghCommand);
+  const advisor = environmentBridgeServer("advisor", ghCommand);
   const next = {
     ...current,
     mcpServers: {

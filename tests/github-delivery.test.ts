@@ -129,6 +129,43 @@ test("GitHub outages are not interpreted as missing branches", async () => {
   await expect(port.getBranchHead({ repository: "owner/repo", branch: "task" })).rejects.toThrow("connection refused");
 });
 
+test("a missing GitHub executable reports its path and code", async () => {
+  const command = "/definitely/missing/gh";
+  const port = createGithubReleasePort({ ghCommand: command });
+  await expect(port.getBranchHead({ repository: "owner/repo", branch: "task" })).rejects.toMatchObject({ code: "executable-missing", message: expect.stringContaining(`${command} could not start (ENOENT)`) });
+});
+
+test("transient GitHub observations retry through a third attempt", async () => {
+  let observations = 0;
+  const port = createGithubReleasePort({ retryPausesMs: [0, 0], runner: async input => {
+    if (input.args.some(value => value.includes("/merge"))) throw Object.assign(new Error("not mergeable"), { stdout: JSON.stringify({ message: "not mergeable", status: "405" }), stderr: "HTTP 405" });
+    if (input.args[0] === "pr" && input.args[1] === "view") {
+      observations += 1;
+      if (observations < 3) throw Object.assign(new Error("offline"), { stderr: "offline" });
+      return { stdout: JSON.stringify({ id: "PR_7", headRefOid: "a".repeat(40), baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" }), stderr: "" };
+    }
+    if (input.args[0] === "pr" && input.args[1] === "checks") return { stdout: "[]", stderr: "" };
+    if (input.args.some(value => value.includes("/rules/branches/main"))) return { stdout: "[]", stderr: "" };
+    return { stdout: JSON.stringify({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }), stderr: "" };
+  } });
+  await expect(port.mergePullRequestDirect!({ repository: "owner/repo", number: 7, headSha: "a".repeat(40) })).resolves.toMatchObject({ merged: false, disposition: "blocked" });
+  expect(observations).toBe(3);
+});
+
+test("transient GitHub observations stop after the configured retries", async () => {
+  let observations = 0;
+  const port = createGithubReleasePort({ retryPausesMs: [0], runner: async input => {
+    if (input.args.some(value => value.includes("/merge"))) throw Object.assign(new Error("not mergeable"), { stdout: JSON.stringify({ message: "not mergeable", status: "405" }), stderr: "HTTP 405" });
+    if (input.args[0] === "pr" && input.args[1] === "view") {
+      observations += 1;
+      throw Object.assign(new Error("offline"), { stderr: "offline" });
+    }
+    return { stdout: JSON.stringify({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }), stderr: "" };
+  } });
+  await expect(port.mergePullRequestDirect!({ repository: "owner/repo", number: 7, headSha: "a".repeat(40) })).rejects.toMatchObject({ code: "provider-unavailable" });
+  expect(observations).toBe(2);
+});
+
 test("an explicit GitHub 404 is an absent branch", async () => {
   const port = createGithubReleasePort({ runner: async () => { throw Object.assign(new Error("Not found"), { stderr: "gh: Not Found (HTTP 404)" }); } });
   await expect(port.getBranchHead({ repository: "owner/repo", branch: "task" })).resolves.toBeNull();

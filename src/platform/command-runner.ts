@@ -20,6 +20,8 @@ export type CommandRunResult = {
   command: string;
   cwd?: string;
   exitCode: number | null;
+  signal: string | null;
+  spawnError: { code: string; message: string } | null;
   durationMs: number;
   stdout: string;
   stderr: string;
@@ -130,7 +132,9 @@ function display(command: string, args: readonly string[]): string {
   return [command, ...args].map((value) => /\s/.test(value) ? JSON.stringify(value) : value).join(" ");
 }
 
-async function waitForClose(closed: Promise<number | null>, timeout: number): Promise<number | null | "timeout"> {
+type CommandClose = { code: number | null; signal: string | null };
+
+async function waitForClose(closed: Promise<CommandClose>, timeout: number): Promise<CommandClose | "timeout"> {
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<"timeout">((resolve) => {
     timer = setTimeout(() => resolve("timeout"), timeout);
@@ -177,12 +181,17 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
   let stdout = "";
   let stderr = "";
   let timedOut = false;
+  let spawnError: { code: string; message: string } | null = null;
   const detached = process.platform !== "win32";
   const child = spawn(input.command, [...input.args], {
     cwd: input.cwd,
     env: input.env,
     detached,
     stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.once("error", (error) => {
+    const code = "code" in error && typeof error.code === "string" ? error.code : "UNKNOWN";
+    spawnError = { code, message: error.message };
   });
   const append = (stream: "stdout" | "stderr", chunk: Buffer): void => {
     const text = chunk.toString("utf8");
@@ -205,8 +214,8 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
 
   const closeController = new AbortController();
   const closed = once(child, "close", { signal: closeController.signal }).then(
-    ([code]) => typeof code === "number" ? code : null,
-    () => null,
+    ([code, signal]) => ({ code: typeof code === "number" ? code : null, signal: typeof signal === "string" ? signal : null }),
+    () => ({ code: null, signal: null }),
   );
 
   const terminate = async (): Promise<OwnedProcess | undefined> => {
@@ -259,7 +268,7 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
     return owned;
   };
 
-  let exitCode: number | null;
+  let close: CommandClose = { code: null, signal: null };
   let cleanupUnproven = false;
   try {
     if (input.timeout) {
@@ -271,17 +280,17 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
         const terminated = groupStopped ? await waitForClose(closed, POST_TERMINATION_CLOSE_MS) : "timeout";
         if (terminated === "timeout") {
           cleanupUnproven = true;
-          exitCode = null;
+          close = { code: null, signal: null };
           closeController.abort();
           stopReading(true);
         } else {
-          exitCode = terminated;
+          close = terminated;
         }
       } else {
-        exitCode = outcome;
+        close = outcome;
       }
     } else {
-      exitCode = await closed;
+      close = await closed;
     }
   } catch (error) {
     closeController.abort();
@@ -297,7 +306,9 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
   const result: CommandRunResult = {
     command: String(redact(command)),
     ...(input.cwd ? { cwd: String(redact(input.cwd)) } : {}),
-    exitCode: timedOut ? null : exitCode,
+    exitCode: timedOut || spawnError ? null : close.code,
+    signal: close.signal,
+    spawnError,
     durationMs: Date.now() - started,
     stdout: String(redact(stdout)),
     stderr: String(redact(stderr)),
@@ -319,7 +330,8 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
   if (result.exitCode === 0 && !result.timedOut) logger.info(`Command completed: ${result.command}`, context);
   else {
     const stderrTail = tail(result.stderr).trim().split("\n").slice(-3).join("\n");
-    const message = `Command failed: ${result.command} (exit ${result.exitCode ?? "signal"}${result.timedOut ? ", timed out" : ""})`;
+    const terminal = result.exitCode ?? result.spawnError?.code ?? result.signal ?? "unknown";
+    const message = `Command failed: ${result.command} (exit ${terminal}${result.timedOut ? ", timed out" : ""})`;
     const details = { ...context, ...(stderrTail ? { error: stderrTail } : {}) };
     const expectedNonZero = input.expectedExitCodes?.includes(result.exitCode ?? NaN)
       || (typeof input.expectNonZero === "function" ? input.expectNonZero(result) : input.expectNonZero);

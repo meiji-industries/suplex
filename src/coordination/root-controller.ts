@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { ArtifactStore } from "../platform/artifacts.js";
 import { DeliveryOperationFailure, DeliveryOperations } from "../delivery/operations.js";
+import { GithubReleaseFailure } from "../integrations/github/failure.js";
 import type { RootBridgeAdapter } from "./root-bridge.js";
 import type { AdvisorRequest, DeliveryOperation, DeliveryReview, PullRequestBody, PullRequestTitle, RootIdentity, RootImageResult, WorkerAssignment, WorkerEvidenceRequest } from "./root-contracts.js";
 import type { TaskControlStore } from "./root-session-store.js";
@@ -84,7 +85,13 @@ export class RootController implements RootBridgeAdapter {
   async observe(root: RootIdentity): Promise<unknown> {
     this.store.assertCurrentRoot(root);
     const control = this.store.get(root.taskId);
-    const pullRequest = await this.delivery.observe(root.taskId);
+    let pullRequest = control.pullRequest;
+    let github: { available: boolean; code?: string; message?: string; retry?: string } = { available: true };
+    try { pullRequest = await this.delivery.observe(root.taskId); }
+    catch (error) {
+      if (!(error instanceof GithubReleaseFailure || error instanceof DeliveryOperationFailure)) throw error;
+      github = { available: false, code: error.code, message: error.message, retry: "Forge re-observes on its normal cadence; continue local review and repair. Ask a human only for authentication or a missing executable." };
+    }
     const worktree = control.worktree ? await observeWorktree(control.worktree.path) : null;
     const workers = this.store.currentDelegates(root.taskId);
     const worker = this.store.currentSession(root.taskId, "worker");
@@ -94,7 +101,7 @@ export class RootController implements RootBridgeAdapter {
     }));
     const workerResult = worker ? results[worker.id] ?? null : null;
     const acceptedAssignment = worker?.advisorRole === null ? this.acceptedWorkerAssignment(root.taskId, worker) : null;
-    return { control: { ...this.store.get(root.taskId), workflowState: publicWorkflowState(this.store.get(root.taskId).workflowState) }, context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, acceptedAssignment, workerResult, workers, results, worktree, pullRequest };
+    return { control: { ...this.store.get(root.taskId), workflowState: publicWorkflowState(this.store.get(root.taskId).workflowState) }, context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, acceptedAssignment, workerResult, workers, results, worktree, pullRequest, github };
   }
 
   private acceptedWorkerAssignment(taskId: string, worker: TaskSession): AcceptedWorkerAssignment | null {

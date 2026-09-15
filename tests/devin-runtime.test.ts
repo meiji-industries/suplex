@@ -32,7 +32,7 @@ afterEach(async () => {
     }
   })));
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
-  for (const key of ["FORGE_ROOT_BINDING", "FORGE_ROOT_TOKEN", "FORGE_ADVISOR_BINDING", "FORGE_ADVISOR_TOKEN", "FORGE_ADVISOR_RESULT", "FORGE_TEST_LOCK_ROOT", "FORGE_TEST_INVOCATIONS"]) delete process.env[key];
+  for (const key of ["FORGE_ROOT_BINDING", "FORGE_ROOT_TOKEN", "FORGE_ADVISOR_BINDING", "FORGE_ADVISOR_TOKEN", "FORGE_ADVISOR_RESULT", "FORGE_GH_COMMAND", "FORGE_TEST_LOCK_ROOT", "FORGE_TEST_INVOCATIONS"]) delete process.env[key];
 });
 
 async function fixture(behaviour: "complete" | "hang" | "crash" | "startup_failure") {
@@ -261,6 +261,9 @@ test("Devin routing is unambiguous and admits an authenticated Coordinator", asy
 test("root and concurrent Advisor sessions converge on one ignored invariant Devin config", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-devin-linked-worktree-"));
   directories.push(root);
+  const fakeGh = join(root, "gh");
+  await writeFile(fakeGh, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  process.env.FORGE_GH_COMMAND = fakeGh;
   const repository = join(root, "repository");
   const worktree = join(root, "worktree");
   await git(root, ["init", "-b", "main", repository]);
@@ -299,8 +302,9 @@ printf '{"schema_version":"ATIF-v1.7","session_id":"%s"}\n' "$session_id" > "$ex
   expect(config.customSetting).toBe(true);
   expect(config.mcpServers.custom).toEqual({ command: "/custom" });
   expect(Object.keys(config.mcpServers)).toEqual(["custom", "forge_root", "forge_advisor"]);
-  expect(config.mcpServers.forge_root.env).toEqual({ FORGE_ROOT_BINDING: "${FORGE_ROOT_BINDING}", FORGE_ROOT_TOKEN: "${FORGE_ROOT_TOKEN}" });
-  expect(config.mcpServers.forge_advisor.env).toEqual({ FORGE_ADVISOR_BINDING: "${FORGE_ADVISOR_BINDING}", FORGE_ADVISOR_TOKEN: "${FORGE_ADVISOR_TOKEN}" });
+  expect(config.mcpServers.forge_root.env).toMatchObject({ FORGE_ROOT_BINDING: "${FORGE_ROOT_BINDING}", FORGE_ROOT_TOKEN: "${FORGE_ROOT_TOKEN}", FORGE_GH_COMMAND: fakeGh });
+  expect(config.mcpServers.forge_advisor.env).toMatchObject({ FORGE_ADVISOR_BINDING: "${FORGE_ADVISOR_BINDING}", FORGE_ADVISOR_TOKEN: "${FORGE_ADVISOR_TOKEN}", FORGE_GH_COMMAND: fakeGh });
+  expect(config.mcpServers.forge_root.env.FORGE_GH_COMMAND).toBe(config.mcpServers.forge_advisor.env.FORGE_GH_COMMAND);
   expect(configText).not.toContain(firstRootBinding.token);
   expect(JSON.parse(await readFile(join(taskSessionRuntimeDirectory(databasePath, advisorA.id), "advisor.binding.json"), "utf8")).role).toBe("planner_a");
   expect(JSON.parse(await readFile(join(taskSessionRuntimeDirectory(databasePath, advisorB.id), "advisor.binding.json"), "utf8")).role).toBe("planner_b");

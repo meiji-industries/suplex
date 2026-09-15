@@ -12,11 +12,14 @@ export interface ExecutableSpec {
   envVar: string;
   /** Standard install locations relative to the home directory. */
   homePaths: string[][];
+  /** Absolute system install locations checked after PATH. */
+  fallbackPaths?: string[];
 }
 
 export const OPENCODE_EXECUTABLE: ExecutableSpec = { label: "OpenCode", binary: "opencode", envVar: "FORGE_OPENCODE_COMMAND", homePaths: [[".opencode", "bin", "opencode"]] };
 export const CLAUDE_EXECUTABLE: ExecutableSpec = { label: "Claude Code", binary: "claude", envVar: "FORGE_CLAUDE_COMMAND", homePaths: [[".local", "bin", "claude"], [".claude", "local", "claude"]] };
 export const DEVIN_EXECUTABLE: ExecutableSpec = { label: "Devin CLI", binary: "devin", envVar: "FORGE_DEVIN_COMMAND", homePaths: [[".local", "bin", "devin"], [".devin", "bin", "devin"]] };
+export const GH_EXECUTABLE: ExecutableSpec = { label: "GitHub CLI", binary: "gh", envVar: "FORGE_GH_COMMAND", homePaths: [], fallbackPaths: ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"] };
 
 async function executableFile(path: string): Promise<boolean> {
   try {
@@ -45,6 +48,7 @@ export async function resolveExecutable(spec: ExecutableSpec, input: ResolveExec
   const home = input.homeDirectory ?? homedir();
   const candidates = [
     ...(env.PATH ?? "").split(delimiter).filter(isAbsolute).map((directory) => join(directory, spec.binary)),
+    ...(spec.fallbackPaths ?? []),
     ...spec.homePaths.map((segments) => join(home, ...segments)),
   ];
   for (const candidate of candidates) if (await executableFile(candidate)) return candidate;
@@ -54,3 +58,4 @@ export async function resolveExecutable(spec: ExecutableSpec, input: ResolveExec
 export const resolveOpenCodeExecutable = (input: ResolveExecutableInput = {}): Promise<string> => resolveExecutable(OPENCODE_EXECUTABLE, input);
 export const resolveClaudeExecutable = (input: ResolveExecutableInput = {}): Promise<string> => resolveExecutable(CLAUDE_EXECUTABLE, input);
 export const resolveDevinExecutable = (input: ResolveExecutableInput = {}): Promise<string> => resolveExecutable(DEVIN_EXECUTABLE, input);
+export const resolveGhExecutable = (input: ResolveExecutableInput = {}): Promise<string> => resolveExecutable(GH_EXECUTABLE, input);

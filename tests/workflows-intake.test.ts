@@ -257,16 +257,29 @@ test("prompt assignments explain the Screenshots setting", () => {
   expect(composeWorkerAssignment({ mode: "planned", purpose: "implementation", plan: "Make the update", acceptanceCriteria: [], instruction: "Implement the plan.", visualEvidence: "required" })).toContain("Screenshots are necessary for this task");
 });
 
-test("Coordinator prompts reuse relevant checks and Advisor prompts assess implementation-turn source evidence", () => {
-  const control = { objective: "Add one type import", deliveryTarget: "pull_request_draft", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", pullRequestNumber: null }, workflow: "independent_review" as const };
+test("Coordinator and Rater prompts accept equivalent current-source CI evidence", () => {
+  const control = { objective: "Add one type import", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", pullRequestNumber: 7 }, workflow: "refine_pull_request" as const };
   const context = { configuration: { visualEvidence: "off" as const, runProjectTests: true, verificationCommand: "pnpm test" }, images: [] };
   const coordinator = initialCoordinatorPrompt(control, context);
   expect(coordinator).toContain("When runProjectTests is true, the configured project checks are required before delivery");
   expect(coordinator).toContain("affected checks during development");
   expect(coordinator).toContain("Reuse successful check evidence");
+  expect(coordinator).toContain("Equivalent successful remote CI on the reviewed source can satisfy configured project checks");
+  expect(coordinator).toContain("a green badge alone does not establish coverage");
+  expect(coordinator).toContain("runProjectTests=true and a configured verificationCommand each name required coverage");
+  expect(coordinator).toContain("Neither requires repeating the checks locally");
+  expect(coordinator).toContain("Preserve any separately explicit requirement for local or environment-specific verification");
+  expect(coordinator).toContain("Missing Worker turns or local receipts alone do not mean verification is missing");
   expect(coordinator).not.toMatch(/every Worker assignment.*configured verification command/i);
 
-  const advisor = composeAdvisorAssignment({ role: "reviewer", objective: control.objective, configuration: { runProjectTests: true, verificationCommand: "pnpm test" }, visualEvidence: "off", images: [], repository: "owner/repo", headBranch: "task", baseBranch: "main", pullRequestNumber: null, range, evidenceDirectory: "/tmp/evidence", attachments: [], brief: "Plan and criteria", priorFindings: null, repairEvidence: null });
+  const advisor = composeAdvisorAssignment({ role: "rater", objective: control.objective, configuration: { runProjectTests: true, verificationCommand: "pnpm test" }, visualEvidence: "off", images: [], repository: "owner/repo", headBranch: "task", baseBranch: "main", pullRequestNumber: 7, range, evidenceDirectory: "/tmp/evidence", attachments: [], brief: "Plan and criteria", priorFindings: null, repairEvidence: null });
+  expect(advisor).toContain("Equivalent successful remote CI on the reviewed source can satisfy configured project checks");
+  expect(advisor).toContain("CI jobs, commands, and results");
+  expect(advisor).toContain("relevant source, and the applicable environment and configuration");
+  expect(advisor).toContain("If coverage is missing, failed, or invalidated by relevant source, dependencies, or configuration");
+  expect(advisor).toContain("Keep a passing current-source assessment while its evidence remains valid");
+  expect(advisor).not.toContain("necessary local verification supports merge");
+  expect(advisor).not.toContain("missing/failed necessary local checks");
   expect(advisor).toContain("implementation or historical turns");
   expect(advisor).toContain("actual native command inputs and outputs");
   expect(advisor).toContain("Git source-state evidence");

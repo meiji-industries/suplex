@@ -64,7 +64,7 @@ Forge writes `.devin/mcp_config.local.json` with invariant `forge_root` and
 `${VAR}` interpolation in MCP environment fields. This installed CLI probe is
 also the source for the ATIF-v1.7 export behavior described above.
 Every bridge process, on every provider, reads its binding path and token from
-environment variables; there is no command-line binding flag. The shared Git
+environment variables; there is no command-line binding flag. Bridge configuration carries Forge's resolved GitHub CLI path as FORGE_GH_COMMAND. The shared Git
 `info/exclude` ignores this local config path and its pending sibling file. Config repair
 preserves unrelated MCP entries and writes both Forge entries, so Coordinator
 and multiple Advisor sessions can share one worktree without a last-writer-wins

@@ -18,7 +18,7 @@ async function fixture(withWorktree = true) {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(() => (data) => JSON.stringify(data));
   installHttpErrorHandlers(app);
-  const runCommand = vi.fn(async () => ({ command: "code /worktrees/task", exitCode: 0, durationMs: 1, stdout: "", stderr: "", entries: [], startedAt: "2026-09-01T00:00:00.000Z", finishedAt: "2026-09-01T00:00:00.001Z", timedOut: false }));
+  const runCommand = vi.fn(async () => ({ command: "code /worktrees/task", exitCode: 0, signal: null, spawnError: null, durationMs: 1, stdout: "", stderr: "", entries: [], startedAt: "2026-09-01T00:00:00.000Z", finishedAt: "2026-09-01T00:00:00.001Z", timedOut: false }));
   const launchers = () => [{ id: "finder" as const, label: "Finder", command: "/usr/bin/open", args: (path: string) => [path] }, { id: "terminal" as const, label: "Terminal", command: "terminal", args: () => [], cwd: (path: string) => path }];
   const editorLauncher = () => ({ id: "editor" as const, label: "Editor", command: "/usr/local/bin/code", args: (path: string) => [path] });
   await app.register(taskWorktree, { tasks, database, runCommand, config: native.config, launchers, editorLauncher });

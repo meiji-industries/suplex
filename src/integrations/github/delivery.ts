@@ -3,6 +3,7 @@ import type { PullRequestReference } from "../../tasks/control.js";
 import { GithubIssueSchema, GithubIssueCommentSchema, issueFields, type GithubIssue, type GithubIssueDetails } from "./issues.js";
 
 import { z } from "zod";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { runCommand } from "../../platform/command-runner.js";
 import { redact } from "../../platform/logging.js";
@@ -114,7 +115,7 @@ export type GithubAcceptancePort = Pick<GithubReleasePort, "getBranchHead" | "ge
 };
 export type GithubReleaseAdapter = GithubReleasePort & GithubAcceptancePort;
 
-export type GithubCommandResult = { stdout: string; stderr: string };
+export type GithubCommandResult = { stdout: string; stderr: string; command?: string; exitCode?: number | null; signal?: string | null; spawnError?: { code: string; message: string } | null };
 export interface GithubCommandSpec {
   command: string;
   args: string[];
@@ -128,6 +129,8 @@ export interface GithubReleasePortOptions {
   ghCommand?: string;
   gitCommand?: string;
   runner?: GithubCommandRunner;
+  /** Pauses before each observation retry after a provider-unavailable failure. Tests pass [] for no waiting. */
+  retryPausesMs?: readonly number[];
   /** Optional Activity coordinates when the adapter is used directly by a task step. */
   taskId?: string | null;
   stepId?: string | null;
@@ -302,8 +305,14 @@ function diagnostic(error: GithubCommandFailure): string {
   return redactProviderSummary(text);
 }
 
+const PROVIDER_TOKEN_PATTERN = /\b(?:gh[pousr]_[A-Za-z0-9_]{6,}|github_pat_[A-Za-z0-9_]{6,})\b/g;
+
 function redactProviderSummary(summary: string): string {
-  return String(redact(summary.split("\n")[0]?.slice(0, 200) ?? "")).replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{6,}|github_pat_[A-Za-z0-9_]{6,})\b/g, "[redacted]");
+  return String(redact(summary.split("\n")[0]?.slice(0, 200) ?? "")).replace(PROVIDER_TOKEN_PATTERN, "[redacted]");
+}
+
+function redactProviderTail(value: string): string {
+  return String(redact(value.trim().split("\n").slice(-3).join("\n").slice(-200))).replace(PROVIDER_TOKEN_PATTERN, "[redacted]");
 }
 
 /** Rate limiting needs evidence: HTTP 429, or a 403 whose message says so. A bare 403 is an access problem. */
@@ -327,32 +336,40 @@ function isForbidden(error: GithubCommandFailure): boolean {
 
 function classifyCommandFailure(error: unknown, operation: string): GithubReleaseFailure {
   if (!(error instanceof GithubCommandFailure)) return providerFailure("provider-unavailable", operation);
+  const command = error.result.command ?? "gh";
+  const stderr = error.result.stderr.trim() ? redactProviderTail(error.result.stderr) : diagnostic(error);
+  const detail = stderr ? `: ${stderr}` : "";
+  if (error.result.spawnError?.code === "ENOENT") return providerFailure("executable-missing", `${operation} failed: ${command} could not start (ENOENT)${detail}`);
   if (isRateLimited(error)) return providerFailure("provider-rate-limited", diagnostic(error) || "GitHub limited requests");
   if (operation === "authentication" || isUnauthenticated(error)) return providerFailure("authentication-required", `GitHub CLI authentication is unavailable: ${diagnostic(error) || "sign in with gh auth login"}`);
   if (isForbidden(error)) return providerFailure("authentication-required", `GitHub denied access to this repository or token permission: ${diagnostic(error) || "HTTP 403"}`);
+  if (error.result.signal) return providerFailure("provider-unavailable", `${operation} failed: ${command} was killed by ${error.result.signal}${detail}`);
   if (error.timedOut) return providerFailure("provider-unavailable", `${operation} timed out`);
-  return new GithubReleaseFailure("provider-unavailable", error.result.stderr || error.result.stdout || operation);
+  if (!error.result.stderr && !error.result.stdout) return providerFailure("provider-unavailable", `${operation} failed: ${command} exited ${error.result.exitCode ?? "without an exit code"} with no output`);
+  return providerFailure("provider-unavailable", stderr || `${operation} failed: ${command} exited ${error.result.exitCode ?? "without an exit code"}`);
 }
 
 const defaultRunner: GithubCommandRunner = async ({ command, args, cwd, timeout, maxBuffer: _maxBuffer }) => {
   try {
     const result = await runCommand({ taskId: null, stepId: null, command, args, ...(cwd ? { cwd } : {}), timeout });
     if (result.exitCode === 0 && !result.timedOut) return { stdout: result.stdout, stderr: bounded(result.stderr) };
-    throw Object.assign(new Error(`${command} exited with status ${result.exitCode ?? "unknown"}`), { stdout: result.stdout, stderr: result.stderr, killed: result.timedOut, signal: result.timedOut ? "SIGTERM" : undefined });
+    throw new GithubCommandFailure({ stdout: result.stdout, stderr: bounded(result.stderr), command, exitCode: result.exitCode, signal: result.signal, spawnError: result.spawnError }, result.timedOut);
   } catch (error) {
+    if (error instanceof GithubCommandFailure) throw error;
     const failure = error as { stdout?: string; stderr?: string; killed?: boolean; signal?: string };
-    throw new GithubCommandFailure({ stdout: failure.stdout ?? "", stderr: bounded(failure.stderr ?? "") }, Boolean(failure.killed || failure.signal === "SIGTERM"));
+    throw new GithubCommandFailure({ stdout: failure.stdout ?? "", stderr: bounded(failure.stderr ?? ""), command, signal: failure.signal ?? null }, Boolean(failure.killed || failure.signal === "SIGTERM"));
   }
 };
 
 export function createGithubReleasePort(options: GithubReleasePortOptions = {}): Required<GithubReleaseAdapter> & GithubTriggerPort {
   const ghCommand = options.ghCommand ?? process.env.FORGE_GH_COMMAND ?? "gh";
   const gitCommand = options.gitCommand ?? "git";
+  const retryPausesMs = options.retryPausesMs ?? [2_000, 6_000];
   const runner = options.runner ?? (options.taskId && options.stepId
     ? async ({ command, args, cwd, timeout, maxBuffer: _maxBuffer }) => {
       const result = await runCommand({ taskId: options.taskId!, stepId: options.stepId!, command, args, ...(cwd ? { cwd } : {}), timeout });
       if (result.exitCode === 0 && !result.timedOut) return { stdout: result.stdout, stderr: bounded(result.stderr) };
-      throw new GithubCommandFailure({ stdout: result.stdout, stderr: bounded(result.stderr) }, result.timedOut);
+      throw new GithubCommandFailure({ stdout: result.stdout, stderr: bounded(result.stderr), command, exitCode: result.exitCode, signal: result.signal, spawnError: result.spawnError }, result.timedOut);
     }
     : defaultRunner);
   const run = async (command: string, args: string[], commandOptions: { cwd?: string; timeout?: number; maxBuffer?: number } = {}): Promise<GithubCommandResult> => {
@@ -360,8 +377,9 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       return await runner({ command, args, ...(commandOptions.cwd ? { cwd: commandOptions.cwd } : {}), timeout: commandOptions.timeout ?? 20_000, maxBuffer: commandOptions.maxBuffer ?? MAX_OUTPUT });
     } catch (error) {
       if (error instanceof GithubCommandFailure) throw error;
-      const result = error as { stdout?: unknown; stderr?: unknown };
-      throw new GithubCommandFailure({ stdout: typeof result.stdout === "string" ? result.stdout : "", stderr: bounded(typeof result.stderr === "string" ? result.stderr : String(error)) });
+      const result = error as { stdout?: unknown; stderr?: unknown; exitCode?: unknown; signal?: unknown; spawnError?: unknown };
+      const spawnError = result.spawnError && typeof result.spawnError === "object" && "code" in result.spawnError && "message" in result.spawnError && typeof result.spawnError.code === "string" && typeof result.spawnError.message === "string" ? { code: result.spawnError.code, message: result.spawnError.message } : null;
+      throw new GithubCommandFailure({ stdout: typeof result.stdout === "string" ? result.stdout : "", stderr: bounded(typeof result.stderr === "string" ? result.stderr : String(error)), command, exitCode: typeof result.exitCode === "number" ? result.exitCode : null, signal: typeof result.signal === "string" ? result.signal : null, spawnError });
     }
   };
   const runGh = (args: string[], commandOptions: { cwd?: string; timeout?: number; maxBuffer?: number } = {}) => run(ghCommand, args, commandOptions);
@@ -398,10 +416,13 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
   };
   const pull = (value: unknown): GithubPullRequest => normalizeGithubPull(value);
   const retryTransientObservation = async <T>(observe: () => Promise<T>): Promise<T> => {
-    try { return await observe(); }
-    catch (error) {
-      if (!(error instanceof GithubReleaseFailure) || error.code !== "provider-unavailable") throw error;
-      return observe();
+    for (let attempt = 0; ; attempt += 1) {
+      try { return await observe(); }
+      catch (error) {
+        const pause = retryPausesMs[attempt];
+        if (pause === undefined || !(error instanceof GithubReleaseFailure) || error.code !== "provider-unavailable") throw error;
+        await delay(pause);
+      }
     }
   };
   const requiredChecks = async (repository: string, number: number): Promise<z.infer<typeof RequiredCheckSchema>[]> => {

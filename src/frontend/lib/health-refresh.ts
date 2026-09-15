@@ -25,17 +25,19 @@ export interface HealthRefreshState {
 
 export interface HealthRefresherOptions {
   initialSnapshot?: HealthSnapshot | undefined;
-  read: (context: HealthContextSelector) => Promise<HealthSnapshot>;
+  read: (context: HealthContextSelector, force: boolean) => Promise<HealthSnapshot>;
   onChange?: (state: HealthRefreshState) => void;
 }
 
 export interface HealthRefresher {
   readonly state: HealthRefreshState;
-  refresh(context?: HealthContextSelector): Promise<void>;
+  refresh(context?: HealthContextSelector, force?: boolean): Promise<void>;
   /** Registers a visible health surface; notifyVisible re-checks while any watcher is registered. */
   watch(): () => void;
   /** Call when the window becomes visible or focused. */
   notifyVisible(): void;
+  /** Refreshes every minute while the supplied visibility check permits it. */
+  startPolling(isVisible: () => boolean): () => void;
 }
 
 /**
@@ -61,7 +63,7 @@ export function createHealthRefresher(options: HealthRefresherOptions): HealthRe
     options.onChange?.(state);
   };
 
-  const refresh = (context?: HealthContextSelector): Promise<void> => {
+  const refresh = (context?: HealthContextSelector, force = true): Promise<void> => {
     const key = healthContextKey(context);
     if (key !== currentKey) {
       currentKey = key;
@@ -74,7 +76,7 @@ export function createHealthRefresher(options: HealthRefresherOptions): HealthRe
     }
     if (pending && pending.key === key) return pending.promise;
     set({ refreshing: true, freshness: "checking" });
-    const promise = options.read(context).then((next) => {
+    const promise = options.read(context, force).then((next) => {
       if (currentKey === key) set({ snapshot: next, lastSuccessfulCheckAt: next.generatedAt, freshness: "current" });
     }).catch(() => {
       if (currentKey === key) set({ freshness: "stale" });
@@ -94,5 +96,9 @@ export function createHealthRefresher(options: HealthRefresherOptions): HealthRe
       return () => { watchers = Math.max(0, watchers - 1); };
     },
     notifyVisible: () => { if (watchers > 0) void refresh(currentContext); },
+    startPolling: (isVisible) => {
+      const timer = setInterval(() => { if (isVisible()) void refresh(currentContext, false); }, 60_000);
+      return () => clearInterval(timer);
+    },
   };
 }

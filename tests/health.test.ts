@@ -6,8 +6,9 @@ import { expect, test, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/platform/config.js";
 import { ForgeDatabase } from "../src/platform/database.js";
-import { checkArtifactRoot, checkDatabase } from "../src/platform/host-health.js";
+import { checkArtifactRoot, checkDatabase, checkDiskSpace } from "../src/platform/host-health.js";
 import { inspectHostHealth, type HealthCheck } from "../src/platform/health.js";
+import { updateEnvironmentSettings } from "../src/platform/environment-settings.js";
 import { checkGithubAuthentication } from "../src/profiles/provider-readiness.js";
 import { cachedHealthReader } from "../src/http/routes/health.js";
 import { healthyHost } from "./helpers/native-app.js";
@@ -76,6 +77,50 @@ test("host readiness is false when an owned service is unavailable", async () =>
   });
 
   expect(snapshot.ready).toBe(false);
+});
+
+test("disk space warns below its current configured minimum without affecting readiness", async () => {
+  const config = createTestConfig("/tmp/forge-disk-space-test");
+  const database = new ForgeDatabase(":memory:");
+  updateEnvironmentSettings(database, { minFreeDiskGb: 5, defaultBudgetUsd: 15, defaultMaxTurns: 40 });
+  const diskSpace = checkDiskSpace(config, database, async (root) => ({ bavail: root === config.worktreeRoot ? 6 : 4, bsize: 1024 ** 3 }));
+  try {
+    const disk = await diskSpace();
+    expect(disk).toMatchObject({ id: "disk-space", status: "warning", details: { freeBytes: 4 * 1024 ** 3, minFreeBytes: 5 * 1024 ** 3 } });
+    const snapshot = await inspectHostHealth(config, {
+      database: async () => check("database", "healthy"),
+      artifactRoot: async () => check("artifact-root", "healthy"),
+      diskSpace,
+      ghAuth: async () => check("gh-auth", "healthy"),
+    });
+    expect(snapshot.ready).toBe(true);
+  } finally { database.close(); }
+});
+
+test("disk space is healthy at or above the minimum, disabled at zero, and re-reads changed settings", async () => {
+  const config = createTestConfig("/tmp/forge-disk-space-settings-test");
+  const database = new ForgeDatabase(":memory:");
+  let freeGb = 5;
+  const diskSpace = checkDiskSpace(config, database, async () => ({ bavail: freeGb, bsize: 1024 ** 3 }));
+  try {
+    updateEnvironmentSettings(database, { minFreeDiskGb: 5, defaultBudgetUsd: 15, defaultMaxTurns: 40 });
+    expect((await diskSpace()).status).toBe("healthy");
+    updateEnvironmentSettings(database, { minFreeDiskGb: 6, defaultBudgetUsd: 15, defaultMaxTurns: 40 });
+    expect((await diskSpace()).status).toBe("warning");
+    freeGb = 7;
+    expect((await diskSpace()).status).toBe("healthy");
+    updateEnvironmentSettings(database, { minFreeDiskGb: 0, defaultBudgetUsd: 15, defaultMaxTurns: 40 });
+    expect((await diskSpace()).status).toBe("healthy");
+  } finally { database.close(); }
+});
+
+test("disk space warns when its filesystem cannot be read", async () => {
+  const config = createTestConfig("/tmp/forge-disk-space-failure-test");
+  const database = new ForgeDatabase(":memory:");
+  const diskSpace = checkDiskSpace(config, database, async () => { throw new Error("statfs failed"); });
+  try {
+    expect(await diskSpace()).toMatchObject({ id: "disk-space", status: "warning", summary: "Free disk space could not be read" });
+  } finally { database.close(); }
 });
 
 test("the API health probe is cached for ten seconds", async () => {

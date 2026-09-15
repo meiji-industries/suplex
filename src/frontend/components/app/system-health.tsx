@@ -34,6 +34,7 @@ const SystemHealthContext = createContext<SystemHealthContextValue | undefined>(
 const icons: Record<HealthCheckId, LucideIcon> = {
   database: Database,
   "artifact-root": HardDrive,
+  "disk-space": HardDrive,
   git: GitBranch,
   "herdr-readiness": LayoutGrid,
   "gh-auth": GitBranch,
@@ -53,6 +54,7 @@ export function healthCheckPurpose(id: HealthCheckId): string {
   switch (id) {
     case "database": return "Store your tasks";
     case "artifact-root": return "Store task files";
+    case "disk-space": return "Keep room for Forge";
     case "git": return "Save code changes";
     case "herdr-readiness": return "Open the agent terminals";
     case "gh-auth": return "Publish pull requests";
@@ -81,9 +83,9 @@ export function healthFreshnessLabel(freshness: HealthFreshness, lastSuccessfulC
 export function SystemHealthProvider({ initialSnapshot, children }: { initialSnapshot: HealthSnapshot | undefined; children: ReactNode }): ReactElement {
   const [refresher] = useState(() => createHealthRefresher({
     initialSnapshot,
-    read: async (context) => {
+    read: async (context, force) => {
       const query = healthContextQuery(context);
-      const response = await fetch(`/api/health${query ? `?${query}` : ""}`, { headers: { Accept: "application/json", "Cache-Control": "no-cache" } });
+      const response = await fetch(`/api/health${query ? `?${query}` : ""}`, { headers: force ? { Accept: "application/json", "Cache-Control": "no-cache" } : { Accept: "application/json" } });
       if (!response.ok) throw new Error("Health request failed");
       return HealthSnapshotSchema.parse(await response.json());
     },
@@ -105,6 +107,8 @@ export function SystemHealthProvider({ initialSnapshot, children }: { initialSna
       window.removeEventListener("focus", onFocus);
     };
   }, [refresher]);
+
+  useEffect(() => refresher.startPolling(() => document.visibilityState === "visible"), [refresher]);
 
   return <SystemHealthContext.Provider value={{ ...health, refresh: refresher.refresh, watch: refresher.watch }}>{children}</SystemHealthContext.Provider>;
 }

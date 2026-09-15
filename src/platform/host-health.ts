@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { isTailscaleAddress, type ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import type { HealthCheck } from "./health.js";
+import { readEnvironmentSettings } from "./environment-settings.js";
 import { checkGithubAuthentication, commandFailure, createProviderReadiness, runCommand, type CommandRunner } from "../profiles/provider-readiness.js";
 import { checkBackupHealth } from "./backup.js";
 import { parseTailscaleHostname } from "./tailscale.js";
@@ -145,10 +146,33 @@ export async function checkArtifactRoot(root: string): Promise<HealthCheck> {
   }
 }
 
+type FilesystemReader = (root: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }>;
+
+export function checkDiskSpace(config: ForgeConfig, database: ForgeDatabase, readFilesystem: FilesystemReader = statfs): () => Promise<HealthCheck> {
+  return async () => {
+    try {
+      const minFreeBytes = readEnvironmentSettings(database).minFreeDiskGb * 1024 ** 3;
+      const filesystems = await Promise.all([readFilesystem(config.worktreeRoot), readFilesystem(config.artifactRoot)]);
+      const freeBytes = Math.min(...filesystems.map((filesystem) => Number(filesystem.bavail) * Number(filesystem.bsize)));
+      const healthy = minFreeBytes === 0 || freeBytes >= minFreeBytes;
+      return {
+        id: "disk-space",
+        label: "Disk space",
+        status: healthy ? "healthy" : "warning",
+        summary: healthy ? "Free disk space meets the configured minimum" : `${(freeBytes / 1024 ** 3).toFixed(2)} GB free; minimum is ${(minFreeBytes / 1024 ** 3).toFixed(2)} GB`,
+        details: { freeBytes, minFreeBytes },
+      };
+    } catch {
+      return { id: "disk-space", label: "Disk space", status: "warning", summary: "Free disk space could not be read", details: {} };
+    }
+  };
+}
+
 export function createHostHealthDependencies(config: ForgeConfig, database: ForgeDatabase, providers: readonly ProviderHarnessKind[] = HARNESS_KINDS) {
   return {
     database: () => checkDatabase(database),
     artifactRoot: () => checkArtifactRoot(config.artifactRoot),
+    diskSpace: checkDiskSpace(config, database),
     git: checkGit(process.env.FORGE_GIT_BIN ?? "git"),
     herdrReadiness: createHerdrReadinessCheck(),
     ghAuth: checkGithubAuthentication(process.env.FORGE_GH_COMMAND ?? "gh"),

@@ -87,3 +87,22 @@ test("visibility and focus re-check only while a health surface is watching", as
   refresher.notifyVisible();
   expect(read).toHaveBeenCalledTimes(1);
 });
+
+test("periodic refresh uses the cached read while visible and stops after cleanup", async () => {
+  vi.useFakeTimers();
+  let visible = true;
+  const read = vi.fn(async () => snapshot("2026-09-08T00:00:00.000Z"));
+  const refresher = createHealthRefresher({ read });
+  const stop = refresher.startPolling(() => visible);
+  try {
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(read).toHaveBeenCalledWith(undefined, false);
+    visible = false;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(read).toHaveBeenCalledTimes(1);
+    stop();
+    visible = true;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(read).toHaveBeenCalledTimes(1);
+  } finally { vi.useRealTimers(); }
+});

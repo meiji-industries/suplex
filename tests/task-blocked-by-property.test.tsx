@@ -1,11 +1,37 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Task } from "../src/tasks/contracts.js";
+
+const api = vi.hoisted(() => ({ readJson: vi.fn() }));
+vi.mock("../src/frontend/lib/api.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), readJson: api.readJson }));
+
+vi.mock("../src/frontend/components/ui/dialog.js", async () => {
+  const React = await import("react");
+  const Context = React.createContext({ onOpenChange: (_open: boolean): void => undefined });
+  return {
+    Dialog: ({ open, onOpenChange, children }: { open: boolean; onOpenChange: (open: boolean) => void; children: React.ReactNode }) => open ? <Context.Provider value={{ onOpenChange }}>{children}</Context.Provider> : null,
+    DialogContent: ({ children, showCloseButton = true }: { children: React.ReactNode; showCloseButton?: boolean }) => {
+      const { onOpenChange } = React.useContext(Context);
+      return <div>{children}{showCloseButton ? <button type="button" aria-label="Close" onClick={() => onOpenChange(false)}>Close</button> : null}</div>;
+    },
+    DialogDescription: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
+  };
+});
+
 import { TaskBlockedByProperty } from "../src/frontend/features/tasks/task-details.js";
 
-const activeTask: Pick<Task, "companyId" | "status" | "blockedBy"> = { companyId: "company-1", status: "active", blockedBy: null };
+const self = { id: "task-self", projectId: "project-1", title: "This task", status: "active", archivedAt: null };
+const active = { id: "task-active", projectId: "project-1", title: "Active prerequisite", status: "active", archivedAt: null };
+const backlog = { id: "task-backlog", projectId: "project-1", title: "Backlog task", status: "backlog", archivedAt: null };
+const delivered = { id: "task-delivered", projectId: "project-1", title: "Delivered task", status: "delivered", archivedAt: null };
+const otherProject = { id: "task-other-project", projectId: "project-2", title: "Other project", status: "active", archivedAt: null };
+
+const activeTask: Pick<Task, "id" | "companyId" | "projectId" | "status" | "blockedBy"> = { id: "task-self", companyId: "company-1", projectId: "project-1", status: "active", blockedBy: null };
 
 function mount(task = activeTask, save = vi.fn<(blockedByTaskId: string | null) => Promise<void>>().mockResolvedValue(undefined)) {
   const container = document.createElement("div");
@@ -15,41 +41,51 @@ function mount(task = activeTask, save = vi.fn<(blockedByTaskId: string | null) 
 }
 
 function button(container: HTMLElement, name: string) {
-  const value = Array.from(container.querySelectorAll("button")).find(candidate => candidate.textContent === name);
+  const value = Array.from(container.querySelectorAll("button")).find(candidate => candidate.getAttribute("aria-label") === name || candidate.textContent?.includes(name));
   if (!value) throw new Error(`Button not found: ${name}`);
   return value;
 }
 
-function input(container: HTMLElement) {
-  const value = container.querySelector<HTMLInputElement>('input[aria-label="Blocked by reference task ID"]');
-  if (!value) throw new Error("Blocked by reference input was not rendered");
-  return value;
+async function flush() {
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 }
 
-function setText(field: HTMLInputElement, value: string) {
-  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, value);
-  field.dispatchEvent(new Event("input", { bubbles: true }));
-}
-
+beforeEach(() => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  api.readJson.mockReset();
+  api.readJson.mockImplementation(async (url: string) => {
+    if (url === "/api/companies/company-1/tasks") return { tasks: [self, active, backlog, delivered, otherProject] };
+    throw new Error(`Unexpected request: ${url}`);
+  });
+});
 afterEach(async () => { await act(async () => { document.body.replaceChildren(); }); });
 
-test("an active task can set a Blocked by reference", async () => {
+test("Add Blocked by reference opens the picker and selecting a task saves its id", async () => {
   const view = mount();
   await view.render();
   await act(async () => { button(view.container, "Add Blocked by reference").click(); });
-  const field = input(view.container);
-  await act(async () => { setText(field, "task-prerequisite"); field.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
-  expect(view.save).toHaveBeenCalledWith("task-prerequisite");
+  await flush();
+  expect(view.container.querySelector('[aria-label="Search tasks"]')).not.toBeNull();
+  expect(view.container.textContent).toContain("Active prerequisite");
+  expect(view.container.textContent).toContain("Backlog task");
+  expect(view.container.textContent).not.toContain("Delivered task");
+  expect(view.container.textContent).not.toContain("Other project");
+  expect(view.container.textContent).not.toContain("This task");
+  await act(async () => { button(view.container, "Active prerequisite").click(); await Promise.resolve(); });
+  expect(view.save).toHaveBeenCalledWith("task-active");
+  expect(view.container.querySelector('[aria-label="Search tasks"]')).toBeNull();
 });
 
-test("Change reference begins with the current reference and saves a replacement", async () => {
+test("Change reference opens the picker without the current task and saves the selection", async () => {
   const view = mount({ ...activeTask, blockedBy: { id: "task-first", title: "First prerequisite", status: "backlog" } });
   await view.render();
   await act(async () => { button(view.container, "Change reference").click(); });
-  const field = input(view.container);
-  expect(field.value).toBe("task-first");
-  await act(async () => { setText(field, "task-second"); field.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
-  expect(view.save).toHaveBeenCalledWith("task-second");
+  await flush();
+  expect(view.container.querySelector('[aria-label="Search tasks"]')).not.toBeNull();
+  expect(view.container.textContent).toContain("First prerequisite");
+  expect(view.container.textContent).not.toContain("This task");
+  await act(async () => { button(view.container, "Backlog task").click(); await Promise.resolve(); });
+  expect(view.save).toHaveBeenCalledWith("task-backlog");
 });
 
 test("Clear reference clears the current Blocked by reference", async () => {
@@ -59,21 +95,23 @@ test("Clear reference clears the current Blocked by reference", async () => {
   expect(view.save).toHaveBeenCalledWith(null);
 });
 
-test("Cancel leaves the current reference unchanged", async () => {
+test("closing the picker leaves the current reference unchanged", async () => {
   const view = mount({ ...activeTask, blockedBy: { id: "task-first", title: "First prerequisite", status: "backlog" } });
   await view.render();
   await act(async () => { button(view.container, "Change reference").click(); });
-  await act(async () => { button(view.container, "Cancel").click(); });
+  await flush();
+  await act(async () => { button(view.container, "Close").click(); });
   expect(view.save).not.toHaveBeenCalled();
+  expect(view.container.querySelector('[aria-label="Search tasks"]')).toBeNull();
   expect(view.container.textContent).toContain("First prerequisite");
 });
 
-test("a failed save keeps the Blocked by reference value visible", async () => {
+test("a failed save shows the error message", async () => {
   const view = mount(activeTask, vi.fn().mockRejectedValue(new Error("Reference is not available")));
   await view.render();
   await act(async () => { button(view.container, "Add Blocked by reference").click(); });
-  const field = input(view.container);
-  await act(async () => { setText(field, "task-missing"); field.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
-  expect(input(view.container).value).toBe("task-missing");
+  await flush();
+  await act(async () => { button(view.container, "Active prerequisite").click(); await Promise.resolve(); });
+  expect(view.save).toHaveBeenCalledWith("task-active");
   expect(view.container.textContent).toContain("Reference is not available");
 });

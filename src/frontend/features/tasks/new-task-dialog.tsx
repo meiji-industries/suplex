@@ -18,6 +18,7 @@ import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbSeparator } from 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group.js";
 import { TaskSourcePicker, prefillForTaskSource, type TaskSourceSelector, type TaskSourceSummary } from "./task-source-picker.js";
+import { BlockedByPickerDialog } from "./blocked-by-picker.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
 import { readNewTaskMemory, writeNewTaskMemory, type NewTaskMemory } from "./new-task-memory.js";
 import { TaskRoleSelector } from "./task-role-selectors.js";
@@ -71,9 +72,6 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const [images, setImages] = useState<NonNullable<TaskInput["images"]>>(initialDraft?.images ?? []);
   const [blockedBy, setBlockedBy] = useState<Task["blockedBy"]>(null);
   const [blockedByPickerOpen, setBlockedByPickerOpen] = useState(false);
-  const [blockedByTasks, setBlockedByTasks] = useState<Task[]>([]);
-  const [blockedByQuery, setBlockedByQuery] = useState("");
-  const [blockedByLoading, setBlockedByLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [readingImages, setReadingImages] = useState(false);
   const imageRead = useRef({ generation: 0, pending: false });
@@ -140,15 +138,6 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     void readJson<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`).then(result => { if (!cancelled) setTemplates(result.templates); }).catch(error => { if (!cancelled) setError(String(error)); });
     return () => { cancelled = true; };
   }, [projectId, open]);
-  useEffect(() => {
-    if (!blockedByPickerOpen || !projectId) return;
-    let cancelled = false;
-    setBlockedByLoading(true);
-    void readJson<{ tasks: Task[] }>(`/api/companies/${companyId}/tasks`).then(result => {
-      if (!cancelled) setBlockedByTasks(result.tasks.filter(task => task.projectId === projectId && (task.status === "active" || task.status === "backlog") && !task.archivedAt));
-    }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : "Tasks are not available"); }).finally(() => { if (!cancelled) setBlockedByLoading(false); });
-    return () => { cancelled = true; };
-  }, [blockedByPickerOpen, projectId, companyId]);
   useEffect(() => {
     if (editing || !open || !settingsLoaded || !projects.some(project => project.id === projectId)) return;
     // Repair forces target/tests; remember the draft's own general settings instead of the forced values.
@@ -222,7 +211,6 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   };
   const project = projects.find(project => project.id === projectId);
   const definition = workflowDefinition(workflow);
-  const matchingBlockedByTasks = blockedByTasks.filter(task => { const query = blockedByQuery.trim().toLowerCase(); return !query || task.title.toLowerCase().includes(query) || task.id.toLowerCase().includes(query); });
   return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}>
     <DialogContent className="max-h-[min(85vh,460px)] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto rounded-xl p-0 shadow-2xl sm:max-w-[936px]" showCloseButton={false}>
       <DialogHeader className="px-4 py-3 sm:px-5">
@@ -248,7 +236,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
           <TaskRoleSelector role="root" profiles={profiles} assignment={rootProfileId} defaultProfileId={project?.rootProfileId} busy={busy} onChange={setRootProfileId} />
            <TaskRoleSelector role="worker" profiles={profiles} assignment={workerProfileId} defaultProfileId={project?.workerProfileId} busy={busy} onChange={setWorkerProfileId} />
            {definition.advisorRoles.map(role => <TaskRoleSelector key={role} role="root" label={ADVISOR_LABELS[role]} profiles={profiles} assignment={advisorProfileIds[role] ?? ""} defaultProfileId={rootProfileId || project?.rootProfileId} busy={busy} onChange={profileId => setAdvisorProfileIds(current => ({ ...current, [role]: profileId || undefined }))} />)}
-           {editing ? null : <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="icon-xs" aria-label="More options" disabled={busy || !projectId} />}><MoreHorizontal /></DropdownMenuTrigger><DropdownMenuContent><DropdownMenuItem onClick={() => { setBlockedByQuery(""); setBlockedByPickerOpen(true); }}>Blocked by...</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
+           {editing ? null : <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="icon-xs" aria-label="More options" disabled={busy || !projectId} />}><MoreHorizontal /></DropdownMenuTrigger><DropdownMenuContent><DropdownMenuItem onClick={() => setBlockedByPickerOpen(true)}>Blocked by...</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
            {blockedBy ? <span className="flex items-center gap-1 text-xs" data-blocked-by-selection><span className="max-w-40 truncate">Blocked by {blockedBy.title}</span><Button type="button" variant="ghost" size="icon-xs" aria-label="Clear blocked by reference" disabled={busy} onClick={() => setBlockedBy(null)}><X /></Button></span> : null}
           <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">{repair ? <span className="text-xs text-muted-foreground" data-repair-note>{missingSource ? "Select a pull request source." : repairNote}</span> : null}<NewButton type="submit" disabled={busy || readingImages || !projectId || !title.trim() || missingSource} title={editing ? "Save task (⌘Enter)" : "New task (⌘Enter)"}>{busy ? (editing ? "Saving…" : "Creating…") : editing ? "Save task" : "New task"}</NewButton></DialogFooter>
         </div>
@@ -262,12 +250,6 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
         </fieldset>
       </form>
     </DialogContent>
-    <Dialog open={blockedByPickerOpen} onOpenChange={setBlockedByPickerOpen}>
-      <DialogContent className="max-h-[min(80vh,480px)] overflow-y-auto">
-        <DialogHeader><DialogTitle>Blocked by...</DialogTitle></DialogHeader>
-        <Input aria-label="Search tasks" autoFocus placeholder="Search by title or ID" value={blockedByQuery} onChange={event => setBlockedByQuery(event.target.value)} />
-        <div className="flex flex-col gap-1">{blockedByLoading ? <span className="text-xs text-muted-foreground">Loading tasks...</span> : matchingBlockedByTasks.length ? matchingBlockedByTasks.map(task => <Button key={task.id} type="button" variant="ghost" onClick={() => { setBlockedBy({ id: task.id, title: task.title, status: task.status }); setBlockedByPickerOpen(false); }}>{task.title}<span className="text-muted-foreground">{task.id}</span></Button>) : <span className="text-xs text-muted-foreground">No matching active or backlog tasks.</span>}</div>
-      </DialogContent>
-    </Dialog>
+    <BlockedByPickerDialog open={blockedByPickerOpen} onOpenChange={setBlockedByPickerOpen} companyId={companyId} projectId={projectId} onSelect={setBlockedBy} onError={setError} />
   </Dialog>;
 }

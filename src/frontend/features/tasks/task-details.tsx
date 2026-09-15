@@ -5,7 +5,7 @@ import { TaskActivityResponseSchema } from "../../../http/contracts/tasks.js";
 import { readJson } from "../../lib/api.js";
 import { adminDate, type ApiProject } from "../../shell/view-shared.js";
 import { Button } from "../../components/ui/button.js";
-import { Input } from "../../components/ui/input.js";
+import { BlockedByPickerDialog } from "./blocked-by-picker.js";
 import { TaskQuestion } from "./task-question.js";
 import { NewTaskDialog } from "./new-task-dialog.js";
 import { editTaskDraft, type NewTaskDraft } from "./lib/duplicate-task-prefill.js";
@@ -25,18 +25,19 @@ import { TaskPullRequestCard } from "./pull-request-card.js";
 import { TaskWorktreeMenu } from "./task-worktree-menu.js";
 import { ADVISOR_LABELS, workflowDefinition, type AdvisorRole } from "../../../coordination/workflows.js";
 
-export function TaskBlockedByProperty({ task, save }: { task: Pick<Task, "companyId" | "status" | "blockedBy">; save: (blockedByTaskId: string | null) => Promise<void> }): ReactElement {
-  const [blockedByTaskId, setBlockedByTaskId] = useState<string | null>(null);
+export function TaskBlockedByProperty({ task, save }: { task: Pick<Task, "id" | "companyId" | "projectId" | "status" | "blockedBy">; save: (blockedByTaskId: string | null) => Promise<void> }): ReactElement {
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const submit = async (blockedByTaskId: string | null) => {
     if (busy) return;
     setBusy(true); setError("");
-    try { await save(blockedByTaskId); setBlockedByTaskId(null); }
+    try { await save(blockedByTaskId); }
     catch (error) { setError(error instanceof Error ? error.message : "The Blocked by reference could not be saved"); }
     finally { setBusy(false); }
   };
-  return <div className="space-y-1.5"><dt className="text-muted-foreground">Blocked by reference</dt><dd>{blockedByTaskId !== null ? <form className="flex flex-wrap gap-2" onSubmit={event => { event.preventDefault(); void submit(blockedByTaskId.trim() || null); }}><Input aria-label="Blocked by reference task ID" value={blockedByTaskId} onChange={event => setBlockedByTaskId(event.target.value)} placeholder="Task ID" /><Button type="submit" size="xs" disabled={busy}>Save reference</Button><Button type="button" size="xs" variant="outline" disabled={busy} onClick={() => { setBlockedByTaskId(null); setError(""); }}>Cancel</Button></form> : task.blockedBy ? <span className="flex flex-wrap items-center gap-2"><a className="underline-offset-2 hover:underline" href={`/tasks/${task.blockedBy.id}?company=${task.companyId}`} title={`${task.blockedBy.title} · ${task.blockedBy.status}`}>{task.blockedBy.title}</a><TaskStatus status={task.blockedBy.status} /><Button type="button" size="xs" variant="ghost" disabled={busy} onClick={() => { setBlockedByTaskId(task.blockedBy!.id); setError(""); }}>Change reference</Button><Button type="button" size="xs" variant="ghost" disabled={busy} onClick={() => void submit(null)}>Clear reference</Button></span> : <Button type="button" size="xs" variant="ghost" disabled={busy} onClick={() => { setBlockedByTaskId(""); setError(""); }}>Add Blocked by reference</Button>}</dd>{error ? <dd role="alert" className="text-destructive">{error}</dd> : null}</div>;
+  const openPicker = () => { setError(""); setPickerOpen(true); };
+  return <div className="space-y-1.5"><dt className="text-muted-foreground">Blocked by reference</dt><dd>{task.blockedBy ? <span className="flex flex-wrap items-center gap-2"><a className="underline-offset-2 hover:underline" href={`/tasks/${task.blockedBy.id}?company=${task.companyId}`} title={`${task.blockedBy.title} · ${task.blockedBy.status}`}>{task.blockedBy.title}</a><TaskStatus status={task.blockedBy.status} /><Button type="button" size="xs" variant="ghost" disabled={busy} onClick={openPicker}>Change reference</Button><Button type="button" size="xs" variant="ghost" disabled={busy} onClick={() => void submit(null)}>Clear reference</Button></span> : <Button type="button" size="xs" variant="ghost" disabled={busy} onClick={openPicker}>Add Blocked by reference</Button>}</dd>{error ? <dd role="alert" className="text-destructive">{error}</dd> : null}<BlockedByPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} companyId={task.companyId} projectId={task.projectId} excludeTaskId={task.id} onSelect={selected => void submit(selected.id)} onError={setError} /></div>;
 }
 
 export function TaskDetailsPage({ task, project, onChange }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void }): ReactElement {

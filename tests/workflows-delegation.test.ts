@@ -52,11 +52,11 @@ async function fixture(workflow: WorkflowId, options: { image?: boolean } = {}) 
   const store = new TaskControlStore(database, async () => ({ kind: "running", startTime: "test-process" }));
   store.create({ taskId: "task", startImmediately: true, objective: "Ship it", deliveryTarget: workflow === "refine_pull_request" ? "merged" : "pull_request_draft", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", baselineSha: baseSha, pullRequestNumber: workflow === "refine_pull_request" ? 7 : null }, rootProfile: root, workerProfile: worker, workflow, advisorProfiles: roles, worktree: { path: repo, branch: "task", baseSha, headSha: baseSha, dirty: false } });
   // The fake delivery observes real Git; tests can move the intended base or make observation fail.
-  const source = { base: baseSha, failure: null as Error | null };
+  const source = { base: baseSha, baseBranch: "main", failure: null as Error | null };
   const delivery: TaskDelivery = {
     observe: async () => null,
     execute: async (_root, operation) => { if (operation !== "inspect_delivery_diff") throw new Error("not in this fixture"); return inspectDeliveryDiff(repo, source.base, (await git(repo, ["rev-parse", "HEAD"])).stdout.trim()); },
-    currentRange: async () => { if (source.failure) throw source.failure; const head = (await git(repo, ["rev-parse", "HEAD"])).stdout.trim(); const clean = (await git(repo, ["status", "--porcelain"])).stdout.trim() === ""; return { ...await inspectDeliveryDiff(repo, source.base, head), clean }; },
+    currentRange: async () => { if (source.failure) throw source.failure; const head = (await git(repo, ["rev-parse", "HEAD"])).stdout.trim(); const clean = (await git(repo, ["status", "--porcelain"])).stdout.trim() === ""; return { ...await inspectDeliveryDiff(repo, source.base, head), baseBranch: source.baseBranch, clean }; },
   };
   const harness = new FakeTaskHarness();
   const reader = () => ({
@@ -471,6 +471,18 @@ test("Worker and Rater reuse separate conversations with immutable turn inputs a
   f.store.cancel("task");
   await f.controller.recover("task");
   expect(f.harness.stopped).toEqual(expect.arrayContaining([firstRaterNativeSessionId, firstWorkerNativeSessionId]));
+});
+
+test("a Rater assignment names the current base branch observed from a retargeted pinned pull request", async () => {
+  const f = await fixture("refine_pull_request");
+  f.source.baseBranch = "release";
+
+  await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
+
+  const raterSession = f.store.currentSession("task", "worker")!;
+  const turn = assignmentTurn(f, raterSession)!;
+  expect(turn.promptText).toContain("pull request #7 (task into release).");
+  expect(turn.promptText).not.toContain("pull request #7 (task into main).");
 });
 
 test("Rater results keep their launch range, invalid or stale reports record null, and duplicates or crashes cannot add records or wakes", async () => {

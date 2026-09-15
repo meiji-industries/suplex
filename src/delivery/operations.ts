@@ -66,9 +66,9 @@ export class DeliveryOperations {
       return "finished";
     }
     if (wait.reason === "observation") {
-      const base = await this.github.getBranchHead({ repository, branch: control.deliveryIntent.baseBranch });
-      if (base === null) return "unchanged";
-      const prompt = `GitHub evidence is available again (the head of ${control.deliveryIntent.baseBranch}). Retry the delivery operation with your current review; no source change is needed.`;
+      const base = await this.resolveDeliveryBase(control);
+      if (base.sha === null) return "unchanged";
+      const prompt = `GitHub evidence is available again (the head of ${base.branch}). Retry the delivery operation with your current review; no source change is needed.`;
       return this.store.resumeDeliveryWait(taskId, wait, prompt) ? "changed" : "none";
     }
     const fingerprint = deliveryWaitFingerprint(observed);
@@ -87,12 +87,12 @@ export class DeliveryOperations {
   }
 
   /** The current GitHub-base-to-local-head range with the tree state; workflow delegation pins Advisor and Worker inputs to it. */
-  async currentRange(taskId: string): Promise<DeliveryReview & { clean: boolean }> {
+  async currentRange(taskId: string): Promise<DeliveryReview & { baseBranch: string; clean: boolean }> {
     const control = this.store.get(taskId);
     if (!control.worktree) throw new DeliveryOperationFailure("worktree_missing", "The task has no worktree");
     const local = await this.github.inspectLocalRevision({ cwd: control.worktree.path });
     const diff = await this.deliveryDiff(control, local.headSha);
-    return { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest, clean: local.clean };
+    return { baseBranch: diff.baseBranch, baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest, clean: local.clean };
   }
 
   async execute(root: RootIdentity, operation: DeliveryOperation, expectedHead?: string, review?: DeliveryReview, pullRequestTitle?: PullRequestTitle, pullRequestBody?: PullRequestBody, options: { recheck?: () => void } = {}): Promise<unknown> {
@@ -123,7 +123,7 @@ export class DeliveryOperations {
       let diff;
       try { diff = await this.deliveryDiff(refreshed, local.headSha); }
       catch (error) {
-        if (operation === "merge_pull_request" && refreshed.pullRequest && this.observationUnavailable(error)) return this.observationWait(refreshed, local.headSha, `the head of ${refreshed.deliveryIntent.baseBranch}`);
+        if (operation === "merge_pull_request" && refreshed.pullRequest && this.observationUnavailable(error)) return this.observationWait(refreshed, local.headSha, "the current delivery base");
         throw error;
       }
       actual = { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest };
@@ -176,10 +176,22 @@ export class DeliveryOperations {
     recheck();
   }
 
+  private async resolveDeliveryBase(control: TaskControl): Promise<{ branch: string; sha: string | null }> {
+    let branch = control.deliveryIntent.baseBranch;
+    const pinnedNumber = control.deliveryIntent.pullRequestNumber;
+    if (pinnedNumber !== null) {
+      const pull = await this.github.getPullRequest({ repository: control.deliveryIntent.repository, number: pinnedNumber });
+      if (!matchesDeliveryIntent(control, pull)) throw new DeliveryOperationFailure("pull_request_ambiguous", "The pinned pull request no longer matches this task intent");
+      branch = pull.baseBranch;
+    }
+    const sha = await this.github.getBranchHead({ repository: control.deliveryIntent.repository, branch });
+    return { branch, sha };
+  }
+
   private async deliveryDiff(control: TaskControl, headSha: string) {
-    const baseSha = await this.github.getBranchHead({ repository: control.deliveryIntent.repository, branch: control.deliveryIntent.baseBranch });
-    if (!baseSha) throw new DeliveryOperationFailure("observation_unavailable", `GitHub did not return the head of ${control.deliveryIntent.baseBranch}. Forge cannot compute the delivery range until that observation is available; no source change is needed.`);
-    return inspectDeliveryDiff(control.worktree!.path, baseSha, headSha);
+    const base = await this.resolveDeliveryBase(control);
+    if (!base.sha) throw new DeliveryOperationFailure("observation_unavailable", `GitHub did not return the head of ${base.branch}. Forge cannot compute the delivery range until that observation is available; no source change is needed.`);
+    return { ...await inspectDeliveryDiff(control.worktree!.path, base.sha, headSha), baseBranch: base.branch };
   }
 
   private observationUnavailable(error: unknown): boolean {
@@ -342,12 +354,12 @@ export class DeliveryOperations {
     if (!expectedHead || expectedHead !== observed.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed after the Coordinator reviewed it");
     const trigger = await this.inspectTriggerPolicy(control, { expectedHead, protectedPaths: true });
     if (trigger || control.workflow !== "standard") {
-      let base: string | null;
-      try { base = await this.github.getBranchHead({ repository, branch: control.deliveryIntent.baseBranch }); }
-      catch (error) { if (this.observationUnavailable(error)) return this.observationWait(control, observed.headSha!, `the head of ${control.deliveryIntent.baseBranch}`); throw error; }
-      if (base === null) return this.observationWait(control, observed.headSha!, `the head of ${control.deliveryIntent.baseBranch}`);
+      let base: { branch: string; sha: string | null };
+      try { base = await this.resolveDeliveryBase(control); }
+      catch (error) { if (this.observationUnavailable(error)) return this.observationWait(control, observed.headSha!, "the current delivery base"); throw error; }
+      if (base.sha === null) return this.observationWait(control, observed.headSha!, `the head of ${base.branch}`);
       // Concrete harm prevented: merging content the accepted review never covered. Evidence: Git integration result on the current authoritative base.
-      const equivalent = await reviewEquivalence(control.worktree!.path, actual, base);
+      const equivalent = await reviewEquivalence(control.worktree!.path, actual, base.sha);
       if (!equivalent.ok) throw new DeliveryOperationFailure("delivery_review_required", `${equivalent.reason}${freshReviewHint(control.workflow)}`);
     }
     await this.finalRecheck(control, actual, recheck);
@@ -395,10 +407,10 @@ export class DeliveryOperations {
     return { policy, pull };
   }
 
-  /** A merge result is adopted only for the requested repository and number, the captured number when one exists, the intended branches, and the same repository. */
+  /** A merge result is adopted only for the requested repository and number, the captured number when one exists, the intended head, and the same repository. */
   private assertMergeResultIdentity(control: TaskControl, repository: string, requested: number, final: GithubPullRequest): void {
     const captured = control.pullRequest?.number ?? control.deliveryIntent.pullRequestNumber;
-    if (final.repository !== repository || final.number !== requested || (captured !== null && final.number !== captured) || !matchesDeliveryIntent(control, final)) {
+    if (final.repository !== repository || final.number !== requested || (captured !== null && final.number !== captured) || final.headBranch !== control.deliveryIntent.headBranch || final.isCrossRepository) {
       throw new DeliveryOperationFailure("pull_request_ambiguous", `GitHub returned ${final.repository}#${final.number} (${final.headBranch} into ${final.baseBranch}${final.isCrossRepository ? ", cross-repository" : ""}) for the merge request of ${repository}#${requested}; the result does not identify this task's pull request.`);
     }
   }
@@ -433,12 +445,15 @@ export class DeliveryOperations {
     const accepted = control.workflowState.acceptedDelivery;
     if (!accepted) return { ok: false, code: "workflow_review_required", reason: "No accepted delivery decision exists for this pull request yet. Complete the workflow's review and request delivery." };
     if (pull.headSha !== accepted.headSha) return { ok: false, code: "head_diverged", reason: `The pull request head ${pull.headSha.slice(0, 12)} is not the accepted head ${accepted.headSha.slice(0, 12)}.` };
-    let remoteBase: string | null;
-    try { remoteBase = await this.github.getBranchHead({ repository: control.deliveryIntent.repository, branch: control.deliveryIntent.baseBranch }); }
-    catch { return { ok: false, code: "observation_unavailable", reason: `GitHub did not return the head of ${control.deliveryIntent.baseBranch}; Forge will observe it again.` }; }
-    if (remoteBase === null) return { ok: false, code: "observation_unavailable", reason: `GitHub did not return the head of ${control.deliveryIntent.baseBranch}; Forge will observe it again.` };
+    let remoteBase: { branch: string; sha: string | null };
+    try { remoteBase = await this.resolveDeliveryBase(control); }
+    catch (error) {
+      if (!this.observationUnavailable(error)) throw error;
+      return { ok: false, code: "observation_unavailable", reason: "GitHub did not return the current delivery base; Forge will observe it again." };
+    }
+    if (remoteBase.sha === null) return { ok: false, code: "observation_unavailable", reason: `GitHub did not return the head of ${remoteBase.branch}; Forge will observe it again.` };
     if (!control.worktree) return { ok: false, code: "worktree_missing", reason: "The task has no observed worktree to confirm the reviewed source." };
-    const equivalent = await reviewEquivalence(control.worktree.path, accepted, remoteBase);
+    const equivalent = await reviewEquivalence(control.worktree.path, accepted, remoteBase.sha);
     if (!equivalent.ok) return { ok: false, code: "delivery_review_required", reason: `${equivalent.reason}${freshReviewHint(control.workflow)}` };
     return this.commitCompletion(control, accepted, pull.number, { requireAccepted: true, recheck });
   }

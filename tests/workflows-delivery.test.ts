@@ -297,11 +297,11 @@ test("changed heads, dirty trees, active delegates, newer negative reviews, dive
   await expect(f.request("push_branch")).rejects.toMatchObject({ message: expect.stringMatching(/rejected|push failed/) });
   expect(await git(f.worktree.path, ["log", "--oneline"])).toContain("late.ts");
   expect(await git(f.bare, ["log", "--oneline", "refs/heads/feature"])).toContain("external");
-  // Wrong repository, retargeted pull request, closed pull request.
+  // Wrong repository and closed pull request. A pinned pull request may be retargeted, but its live base must exist.
   f.github.remote = "someone/else";
   await expect(f.request("push_branch")).rejects.toMatchObject({ code: "head_diverged", message: expect.stringContaining("remote") });
   f.github.remote = "owner/repo"; f.github.baseBranch = "release";
-  await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "pull_request_ambiguous", message: expect.stringContaining("no longer matches") });
+  await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "observation_unavailable", message: expect.stringContaining("release") });
   f.github.baseBranch = "main"; f.github.state = "closed";
   await expect(f.request("create_or_adopt_pull_request")).rejects.toMatchObject({ code: "pull_request_closed" });
   expect(f.calls).not.toContain("create");

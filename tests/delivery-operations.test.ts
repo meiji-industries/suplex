@@ -323,6 +323,26 @@ describe("Coordinator delivery operations", () => {
     expect(value.store.get("task").status).toBe("active");
     value.database.close();
   });
+  it("follows an explicitly pinned pull request after GitHub retargets it", async () => {
+    const value = await fixture();
+    try {
+      value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 7, '$.baseBranch', 'deleted-stack-parent') WHERE task_id = 'task'").run());
+      const fake = github(value.local, "stale-pr-base-sha");
+      const pull = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
+      const branches: string[] = [];
+      fake.port.getPullRequest = async () => ({ ...pull, baseBranch: "main" });
+      fake.port.getBranchHead = async ({ branch }) => {
+        branches.push(branch);
+        if (branch === "deleted-stack-parent") throw new Error("The deleted captured base must not be read");
+        return value.local.headSha;
+      };
+      const delivery = new DeliveryOperations(value.store, fake.port);
+
+      await expect(delivery.observe("task")).resolves.toMatchObject({ number: 7 });
+      await expect(delivery.currentRange("task")).resolves.toMatchObject({ baseBranch: "main", baseSha: value.local.headSha });
+      expect(branches).toEqual(["main"]);
+    } finally { value.database.close(); }
+  });
   it("replaces a cached retargeted pull request with the current intent match", async () => {
     const value = await fixture();
     try {

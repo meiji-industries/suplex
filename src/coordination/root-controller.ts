@@ -222,7 +222,7 @@ export class RootController implements RootBridgeAdapter {
     const previousTurnIndex = previous ? turns.findIndex(turn => turn.id === previous.turnId) : -1;
     const repairEvidence = previous ? workerTurns.filter(({ turn }) => turns.indexOf(turn) > previousTurnIndex).map(({ turn, parsed }) => `Turn ${turn.id}: ${parsed.text ?? "(no text)"}`) : null;
     const prompt = composeAdvisorAssignment({
-      role: request.role, objective: control.objective, configuration: context.configuration, visualEvidence: context.configuration.visualEvidence, images, repository: control.deliveryIntent.repository, headBranch: control.deliveryIntent.headBranch, baseBranch: control.deliveryIntent.baseBranch,
+      role: request.role, objective: control.objective, configuration: context.configuration, visualEvidence: context.configuration.visualEvidence, images, repository: control.deliveryIntent.repository, headBranch: control.deliveryIntent.headBranch, baseBranch: observedSource.baseBranch,
       pullRequestNumber: control.deliveryIntent.pullRequestNumber, range, evidenceDirectory: evidence.directory, attachments, brief: request.brief ?? null,
       priorFindings: previous?.result?.blockingFindings ?? null, repairEvidence,
     });
@@ -242,21 +242,21 @@ export class RootController implements RootBridgeAdapter {
     if (!observedSource.clean) throw new DeliveryOperationFailure("worktree_dirty", "The worktree has uncommitted changes. Commit or discard them before requesting planners; planners inspect committed source only.");
     const { context, images, workerTurns, evidence, attachments } = await prepareAdvisorEvidence({ store: this.store, delivery: this.delivery, artifacts: this.artifacts, evidenceRoot: this.evidence?.root, control, range: observedSource.range, sessions, turns });
     const pairId = randomUUID();
-    const planners = (["planner_a", "planner_b"] as const).map(role => ({ role, prompt: composeAdvisorAssignment({ role, objective: control.objective, configuration: context.configuration, visualEvidence: context.configuration.visualEvidence, images, repository: control.deliveryIntent.repository, headBranch: control.deliveryIntent.headBranch, baseBranch: control.deliveryIntent.baseBranch, pullRequestNumber: control.deliveryIntent.pullRequestNumber, range: observedSource.range, evidenceDirectory: evidence.directory, attachments, brief: null, priorFindings: null, repairEvidence: null }), input: { kind: "advisor" as const, role, range: observedSource.range, evidenceDirectory: evidence.directory, evidenceSha256: evidence.sha256, verificationTurnIds: workerTurns.map(({ turn }) => turn.id), plannerPairId: pairId } }));
+    const planners = (["planner_a", "planner_b"] as const).map(role => ({ role, prompt: composeAdvisorAssignment({ role, objective: control.objective, configuration: context.configuration, visualEvidence: context.configuration.visualEvidence, images, repository: control.deliveryIntent.repository, headBranch: control.deliveryIntent.headBranch, baseBranch: observedSource.baseBranch, pullRequestNumber: control.deliveryIntent.pullRequestNumber, range: observedSource.range, evidenceDirectory: evidence.directory, attachments, brief: null, priorFindings: null, repairEvidence: null }), input: { kind: "advisor" as const, role, range: observedSource.range, evidenceDirectory: evidence.directory, evidenceSha256: evidence.sha256, verificationTurnIds: workerTurns.map(({ turn }) => turn.id), plannerPairId: pairId } }));
     const pair = this.store.launchPlannerPair({ taskId: root.taskId, rootSessionId: root.sessionId, rootGeneration: root.generation, pairId, planners: planners as [{ role: "planner_a"; prompt: string; input: Extract<WorkflowInput, { kind: "advisor" }> }, { role: "planner_b"; prompt: string; input: Extract<WorkflowInput, { kind: "advisor" }> }] });
     const launches = await Promise.allSettled(pair.map(session => recoverSession(this.recoveryDependencies(), session)));
     return { planners: pair, evidenceDirectory: evidence.directory, launches: launches.map(result => result.status), next: "End this Coordinator turn now. Forge will send one combined planning result after both Plan A and Plan B have terminal reports. Do not poll or wait inside this turn." };
   }
 
   /** The live range plus whether the worktree is clean; callers decide what an unclean tree means for them. */
-  private async currentRange(taskId: string): Promise<{ range: ReviewRange; clean: boolean }> {
+  private async currentRange(taskId: string): Promise<{ range: ReviewRange; baseBranch: string; clean: boolean }> {
     const observed = await this.delivery.currentRange(taskId);
-    return { range: { baseSha: observed.baseSha, headSha: observed.headSha, files: observed.files, commits: observed.commits, patchDigest: observed.patchDigest }, clean: observed.clean };
+    return { range: { baseSha: observed.baseSha, headSha: observed.headSha, files: observed.files, commits: observed.commits, patchDigest: observed.patchDigest }, baseBranch: observed.baseBranch, clean: observed.clean };
   }
 
   /** Compares the live committed source with a pinned range; any observation failure is a concrete reason, never an approval. */
   private async sourceStillMatches(taskId: string, pinned: ReviewRange, activity: string): Promise<{ ok: true; range: ReviewRange } | { ok: false; reason: string; range: ReviewRange | null; clean: boolean | null }> {
-    let observed: { range: ReviewRange; clean: boolean };
+    let observed: { range: ReviewRange; baseBranch: string; clean: boolean };
     try { observed = await this.currentRange(taskId); }
     catch (error) { return { ok: false, reason: `The source could not be observed after the ${activity}: ${error instanceof Error ? error.message : String(error)}`, range: null, clean: null }; }
     if (!observed.clean) return { ok: false, reason: `The worktree has uncommitted changes after the ${activity}; the pinned range ${pinned.baseSha.slice(0, 12)}..${pinned.headSha.slice(0, 12)} cannot be confirmed`, range: observed.range, clean: false };

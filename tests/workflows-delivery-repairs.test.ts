@@ -705,7 +705,7 @@ test("F2d/F2e: adoption of an already published head is guarded the same way, an
   expect(p.store.get("task")).toMatchObject({ status: "delivered", workflowState: { completion: { kind: "workflow", reviewedHead: head, pullRequestNumber: null } } });
 });
 
-test("F3a/F3b: a merge result on another head is external, and a result with another identity is refused without adoption", { timeout: 120_000 }, async () => {
+test("F3a/F3b: a merge result on another head is external, another identity is refused, and base-only retargeting is accepted", { timeout: 120_000 }, async () => {
   const f = await fixture("refine_pull_request");
   await rateNine(f);
   f.github.isDraft = false; f.github.checks = successful;
@@ -719,7 +719,7 @@ test("F3a/F3b: a merge result on another head is external, and a result with ano
   expect(task.workflowState.reviews.map(record => record.range.headSha)).toEqual([f.featureSha]);
   expect(f.calls.filter(call => call.startsWith("merge"))).toEqual([`merge:${f.featureSha}`]);
 
-  for (const variant of ["repository", "number", "branch", "cross"] as const) {
+  for (const variant of ["repository", "number", "cross"] as const) {
     const g = await fixture("refine_pull_request");
     await rateNine(g);
     g.github.isDraft = false; g.github.checks = successful;
@@ -728,7 +728,6 @@ test("F3a/F3b: a merge result on another head is external, and a result with ano
     g.port.mergePullRequest = async input => {
       await merge(input);
       if (variant === "repository") g.github.repository = "someone/else";
-      if (variant === "branch") g.github.baseBranch = "release";
       if (variant === "cross") g.github.crossRepository = true;
       if (variant === "number") g.port.getPullRequest = async input => ({ ...await get(input), number: 8, url: "https://github.com/owner/repo/pull/8" });
     };
@@ -737,6 +736,15 @@ test("F3a/F3b: a merge result on another head is external, and a result with ano
     expect(state).toMatchObject({ status: "active", pullRequest: { number: 7, repository: "owner/repo", state: "open" }, workflowState: { completion: null } });
     expect(g.calls.filter(call => call.startsWith("merge"))).toEqual([`merge:${g.featureSha}`]);
   }
+
+  const retargeted = await fixture("refine_pull_request");
+  await rateNine(retargeted);
+  retargeted.github.isDraft = false; retargeted.github.checks = successful;
+  await retargeted.request("push_branch");
+  const merge = retargeted.port.mergePullRequest;
+  retargeted.port.mergePullRequest = async input => { await merge(input); retargeted.github.baseBranch = "release"; };
+  await expect(retargeted.request("merge_pull_request")).resolves.toMatchObject({ state: "merged", number: 7 });
+  expect(retargeted.store.get("task")).toMatchObject({ status: "delivered", workflowState: { completion: { kind: "workflow", reviewedHead: retargeted.featureSha } } });
 });
 
 test("F3c/F3d: a matching squash-style merge completes the reviewed head, and cancellation during the merge request records a mismatched head as external", { timeout: 90_000 }, async () => {

@@ -39,7 +39,8 @@
     "desktop:dist": "pnpm --filter forge-desktop dist",
     "desktop:build": "pnpm --filter forge-desktop build",
     "desktop:typecheck": "pnpm --filter forge-desktop typecheck",
-    "desktop:test": "vitest run --project unit desktop/tests"
+    "desktop:test": "vitest run --project unit desktop/tests",
+    "desktop:dist:signed": "pnpm --filter forge-desktop dist:signed"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

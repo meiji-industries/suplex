@@ -7,7 +7,9 @@
     "build": "tsc -p tsconfig.json && cp src/connect.html dist/src/",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "pnpm build && electron .",
-    "dist": "pnpm build && electron-builder --config electron-builder.config.cjs --mac --arm64 --publish never"
+    "dist": "pnpm build && electron-builder --config electron-builder.config.cjs --mac --arm64 --publish never",
+    "dist:signed": "op run --env-file signing.env -- pnpm dist",
+    "verify:signed": "spctl --assess --type execute -vv release/mac-arm64/Forge.app && xcrun stapler validate release/Forge-*-arm64.dmg"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

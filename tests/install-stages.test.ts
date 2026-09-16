@@ -91,6 +91,27 @@ test("developer tools fail when the Apple installer never finishes", async () =>
   expect(outcome).toMatchObject({ ok: false, reason: expect.stringContaining("30 minutes") });
 });
 
+test("developer tools accept the Xcode license through the administrator dialog", async () => {
+  let accepted = false;
+  const outcome = await stage("developer-tools").run(context({
+    run: async (command) => {
+      if (command === "osascript") { accepted = true; return { exitCode: 0, stdout: "", stderr: "" }; }
+      if (command === "git") return accepted ? { exitCode: 0, stdout: "git version 2.50.1 (Apple Git-155)", stderr: "" } : { exitCode: 69, stdout: "You have not agreed to the Xcode and Apple SDKs license.", stderr: "" };
+      return { exitCode: 0, stdout: "/Library/Developer/CommandLineTools", stderr: "" };
+    },
+  }));
+  expect(outcome).toEqual({ ok: true, reason: "git version 2.50.1 (Apple Git-155) after accepting the Xcode license" });
+});
+
+test("developer tools fail with a remedy when the license dialog is cancelled", async () => {
+  const outcome = await stage("developer-tools").run(context({
+    run: async (command) => command === "osascript"
+      ? { exitCode: 1, stdout: "", stderr: "User canceled." }
+      : command === "git" ? { exitCode: 69, stdout: "You have not agreed to the Xcode and Apple SDKs license.", stderr: "" } : { exitCode: 0, stdout: "", stderr: "" },
+  }));
+  expect(outcome).toMatchObject({ ok: false, reason: expect.stringContaining("User canceled"), remedy: expect.stringContaining("xcodebuild -license accept") });
+});
+
 test("developer tools fail fast when macOS says they are installed but git does not work", async () => {
   let waits = 0;
   const outcome = await stage("developer-tools").run(context({

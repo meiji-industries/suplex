@@ -74,6 +74,13 @@ const developerTools: InstallStage = {
       return { ok: true, skipped: true, reason: `${git.stdout.trim()} already installed` };
     }
     if (git.exitCode !== 0) context.progress(`git --version failed: ${git.stderr.trim() || `exit ${git.exitCode}`}`);
+    if (/agreed to the Xcode/.test(`${git.stdout}${git.stderr}`)) {
+      context.progress("Accepting the Xcode license; macOS asks for an administrator password");
+      const accepted = await context.run("osascript", ["-e", 'do shell script "xcodebuild -license accept" with administrator privileges']);
+      const retry = accepted.exitCode === 0 ? await context.run("git", ["--version"]) : accepted;
+      if (retry.exitCode === 0) return { ok: true, reason: `${retry.stdout.trim()} after accepting the Xcode license` };
+      return { ok: false, reason: `git needs the Xcode license accepted: ${(accepted.stderr || retry.stderr).trim() || "the password dialog was cancelled"}`, remedy: "Open Terminal, run: sudo xcodebuild -license accept, then try again." };
+    }
     context.progress("Asking macOS to install the Apple developer tools");
     const request = await context.run("xcode-select", ["--install"]);
     // xcode-select exits non-zero when the installer is already open; the poll below decides the outcome either way.

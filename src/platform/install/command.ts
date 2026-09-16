@@ -65,8 +65,8 @@ export async function runInstallCommand(args: readonly string[], context = creat
     return 1;
   }
   const stage = installStage(name);
-  // Command output shares stdout with the single JSON frame, so the command runner logs to stderr instead.
-  setCommandRunnerLogger(new StructuredLogger((line) => process.stderr.write(line)));
+  // Command output shares stdout with the single JSON frame, so runner logs go to stderr as the message alone; the progress view shows every line.
+  setCommandRunnerLogger(new StructuredLogger((line) => { let message = line; try { message = `${(JSON.parse(line) as { message?: string }).message ?? line.trim()}\n`; } catch {} process.stderr.write(message); }));
   const failure = (reason: string): StageOutcome => ({ ok: false, reason });
   const outcome = stage
     ? await stage.run(context).catch((error: unknown) => failure(error instanceof Error ? error.message : "The stage stopped with an unknown error."))

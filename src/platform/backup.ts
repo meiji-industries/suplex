@@ -285,6 +285,6 @@ export async function checkBackupHealth(config: ForgeConfig, now: () => number =
       details: { verifiedAt: verifiedAt || "never", ageMs, errors: value.errors?.join(", ") ?? "" },
     };
   } catch {
-    return { id: "backup", label: "Backup verification", status: "unhealthy", summary: "No verified backup is recorded", details: { verifiedAt: "never", ageMs: -1, errors: "missing-status" } };
+    return { id: "backup", label: "Backup verification", status: "warning", summary: "No backup has been made yet", remedy: "Run pnpm run forge backup <archive> and verify it", details: { verifiedAt: "never", ageMs: -1, errors: "missing-status" } };
   }
 }

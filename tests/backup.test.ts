@@ -51,9 +51,9 @@ test("backup health warns for an optional backup one millisecond past the maximu
   });
 });
 
-test("backup health is unhealthy when no verification is recorded", async () => {
+test("backup health is a warning when no backup has been made yet", async () => {
   expect(await backupHealth()).toMatchObject({
-    status: "unhealthy",
+    status: "warning",
     details: { verifiedAt: "never", ageMs: -1, errors: "missing-status" },
   });
 });

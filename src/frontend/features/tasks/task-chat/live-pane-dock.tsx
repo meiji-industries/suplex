@@ -3,8 +3,9 @@ import { SquareTerminal } from "lucide-react";
 import type { TaskActivity } from "../task-work.js";
 import { LivePaneTerminal } from "./live-pane-terminal.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs.js";
-import { Avatar, AvatarFallback, AvatarGroup, AvatarImage } from "../../../components/ui/avatar.js";
+import { Avatar, AvatarFallback, AvatarGroup } from "../../../components/ui/avatar.js";
 import { EntityAvatar } from "../../../components/app/entity-avatar.js";
+import { ProviderIcon, providerIcons } from "../../../components/app/provider-icons.js";
 import { roleLabel } from "../../../../coordination/workflows.js";
 import { SessionHistory } from "./session-history.js";
 import { sessionHistoryLabels } from "./session-history-state.js";
@@ -14,19 +15,12 @@ const clampHeight = (height: number) => Math.min(720, Math.max(160, height));
 const shellTabId = "shell";
 type AgentOutputView = "live" | "mirror";
 type SessionHarness = NonNullable<TaskActivity["sessions"][number]["harness"]>;
-const providerIcons = {
-  "claude-code": { label: "Claude Code", fallback: "CC", src: new URL("./provider-icons/claude-code.svg", import.meta.url).href },
-  codex: { label: "Codex", fallback: "CX", src: new URL("./provider-icons/codex.svg", import.meta.url).href },
-  opencode: { label: "OpenCode", fallback: "OC", src: new URL("./provider-icons/opencode.svg", import.meta.url).href },
-  devin: { label: "Devin", fallback: "DV", src: new URL("./provider-icons/devin.svg", import.meta.url).href },
-} satisfies Record<SessionHarness, { label: string; fallback: string; src: string }>;
 const sessionTabClassName = "h-9 flex-none rounded-none border-x-0 border-y-0 border-r border-transparent px-3 text-xs group-data-[variant=line]/tabs-list:data-active:border-border dark:group-data-[variant=line]/tabs-list:data-active:border-border group-data-[variant=line]/tabs-list:data-active:bg-background dark:group-data-[variant=line]/tabs-list:data-active:bg-background dark:group-data-[variant=line]/tabs-list:data-active:text-foreground after:top-0 after:bottom-auto after:bg-primary data-active:after:opacity-100";
 
 function SessionAvatars({ profileId, label, harness }: { profileId: string; label: string; harness?: SessionHarness }) {
-  const provider = harness ? providerIcons[harness] : null;
   return <AvatarGroup>
     <EntityAvatar kind="agent" id={profileId} name={label} size="xs" />
-    {provider ? <Avatar size="xs" className="bg-background" title={provider.label}><AvatarImage src={provider.src} alt={`${provider.label} provider`} /><AvatarFallback>{provider.fallback}</AvatarFallback></Avatar> : null}
+    {harness ? <Avatar size="xs" shape="square" title={providerIcons[harness].label}><AvatarFallback><ProviderIcon provider={harness} /></AvatarFallback></Avatar> : null}
   </AvatarGroup>;
 }
 

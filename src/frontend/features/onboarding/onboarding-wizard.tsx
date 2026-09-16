@@ -1,33 +1,35 @@
-import { ArrowLeft, ArrowRight, Copy, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { ArrowLeft, Check, Copy, PartyPopper, RefreshCw } from "lucide-react";
+import { useEffect, useState, type ReactElement } from "react";
 
 import { CheckStatusIndicator, HealthCheckIcon, healthCheckPurpose, useSystemHealth } from "../../components/app/system-health.js";
-import { EntityAvatar } from "../../components/app/entity-avatar.js";
+import { ProviderIcon } from "../../components/app/provider-icons.js";
+import { AvatarEditor } from "../../components/app/entity-avatar.js";
 import { StatusLight } from "../../components/app/status-light.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "../../components/ui/card.js";
-import { Field, FieldGroup, FieldLabel } from "../../components/ui/field.js";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "../../components/ui/field.js";
 import { Input } from "../../components/ui/input.js";
+import { Spinner } from "../../components/ui/spinner.js";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip.js";
+import { Skeleton } from "../../components/ui/skeleton.js";
 import { NewButton } from "../../components/ui/new-button.js";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
-import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarTrigger } from "../../components/ui/sidebar.js";
-import { Timeline, TimelineContent, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "../../components/ui/timeline.js";
+import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarTrigger, useSidebar } from "../../components/ui/sidebar.js";
+import { Stepper, StepperIndicator, StepperItem, StepperNav, StepperSeparator, StepperTitle, StepperTrigger } from "../../components/ui/stepper.js";
 import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { CompanySwitcher } from "../../shell/company-switcher.js";
 import { navigate } from "../../shell/navigation-state.js";
-import { withCompany, readJson } from "../../lib/api.js";
+import { withCompany } from "../../lib/api.js";
+import { InternalAgentsManager } from "../admin/internal-agents-manager.js";
+import { ProjectCards } from "../projects/project-cards.js";
 import { CreateProjectDialog } from "../projects/create-project-dialog.js";
-import { setupChecklist } from "../settings/setup.js";
 import { ProviderLoginTerminal, useProviderLogin } from "../settings/provider-login.js";
-import { ONBOARDING_STEPS, connectedProviders, defaultAgentModels, onboardingSettingsPath, stepComplete, useOnboardingData, type OnboardingData, type OnboardingStepId, type RoleModelChoice } from "./onboarding.js";
+import { ONBOARDING_TOOL_CHECKS, ONBOARDING_STEPS, connectedProviders, stepComplete, useOnboardingData, type OnboardingData, type OnboardingStepId } from "./onboarding.js";
 
 const providerCommands = { opencode: "FORGE_OPENCODE_COMMAND", devin: "FORGE_DEVIN_COMMAND", codex: "FORGE_CODEX_COMMAND", "claude-code": "FORGE_CLAUDE_COMMAND" } as const;
-const reasoningLevels = ["low", "medium", "high", "xhigh", "max"] as const;
 
-type AgentChoice = { profileId?: string | undefined; choice?: RoleModelChoice | undefined };
 
 function stepFromUrl(state: OnboardingData["state"]): OnboardingStepId {
   const requested = new URLSearchParams(window.location.search).get("step");
@@ -37,17 +39,47 @@ function stepFromUrl(state: OnboardingData["state"]): OnboardingStepId {
 
 function OnboardingSidebar({ companyId, current, state }: { companyId: string; current: OnboardingStepId; state: OnboardingData["state"] }): ReactElement {
   const currentIndex = ONBOARDING_STEPS.findIndex(step => step.id === current);
-  return <Sidebar variant="inset" collapsible="offcanvas"><SidebarHeader className="titlebar-drag titlebar-top"><div className="flex items-center gap-2"><SidebarTrigger className="md:hidden" /><CompanySwitcher /></div></SidebarHeader><SidebarContent><Timeline value={currentIndex + 1}>{ONBOARDING_STEPS.map((step, index) => {
-    const enabled = ONBOARDING_STEPS.slice(0, index).every(previous => stepComplete(state, previous.id));
-    return <TimelineItem key={step.id} step={index + 1}><TimelineSeparator /><TimelineIndicator /><TimelineHeader><TimelineTitle><button type="button" disabled={!enabled} onClick={() => navigate(withCompany(`/onboarding?step=${step.id}`, companyId))}>{step.label}</button></TimelineTitle></TimelineHeader><TimelineContent><p className="text-xs text-muted-foreground">{step.description}</p></TimelineContent></TimelineItem>;
-  })}</Timeline></SidebarContent><SidebarFooter><SidebarMenu><SidebarMenuItem><SidebarMenuButton render={<a href={withCompany("/tasks", companyId)} />}><ArrowLeft />Back to app</SidebarMenuButton></SidebarMenuItem></SidebarMenu></SidebarFooter></Sidebar>;
+  const { setOpenMobile } = useSidebar();
+  return (
+    <Sidebar variant="inset" collapsible="offcanvas">
+      <SidebarHeader className="titlebar-drag titlebar-top">
+        <div className="flex items-center gap-1">
+          <div className="min-w-0 flex-1"><CompanySwitcher /></div>
+          <span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span>
+        </div>
+      </SidebarHeader>
+      <SidebarContent>
+        <div className="my-auto px-6 py-8">
+          <Stepper orientation="vertical" value={currentIndex + 1} aria-label="Onboarding steps" onValueChange={value => {
+            const step = ONBOARDING_STEPS[value - 1];
+            if (step) { navigate(withCompany(`/onboarding?step=${step.id}`, companyId)); setOpenMobile(false); }
+          }}>
+            <StepperNav>
+              {ONBOARDING_STEPS.map((step, index) => (
+                <StepperItem key={step.id} step={index + 1} disabled={!ONBOARDING_STEPS.slice(0, index).every(previous => stepComplete(state, previous.id))}>
+                  <StepperTrigger aria-controls={`stepper-panel-${index + 1}`} aria-current={step.id === current ? "step" : undefined}>
+                    <span className="grid w-52 grid-cols-[1.5rem_1fr] items-start gap-3 text-left">
+                      <StepperIndicator>{index + 1}</StepperIndicator>
+                      <span className="pt-1"><StepperTitle>{step.label}</StepperTitle></span>
+                    </span>
+                  </StepperTrigger>
+                  {index < ONBOARDING_STEPS.length - 1 ? <div className="flex w-6 self-start justify-center"><StepperSeparator /></div> : null}
+                </StepperItem>
+              ))}
+            </StepperNav>
+          </Stepper>
+        </div>
+      </SidebarContent>
+      <SidebarFooter><SidebarMenu><SidebarMenuItem><SidebarMenuButton render={<a href={withCompany("/tasks", companyId)} />}><ArrowLeft />Back to app</SidebarMenuButton></SidebarMenuItem></SidebarMenu></SidebarFooter>
+    </Sidebar>
+  );
 }
 
 export function OnboardingView(): ReactElement {
   const { currentCompany, renameCompany, setCompanyIssueCode, reloadCompanies } = useCompanyContext();
   const companyId = currentCompany?.id ?? "";
-  const { state, reload } = useOnboardingData(currentCompany);
-  const { refresh } = useSystemHealth();
+  const { state, reload, loading, error: loadError } = useOnboardingData(currentCompany);
+  const { refresh, freshness, refreshing } = useSystemHealth();
   const connected = connectedProviders(state.providers);
   const current = stepFromUrl(state);
   const currentIndex = ONBOARDING_STEPS.findIndex(step => step.id === current);
@@ -55,16 +87,7 @@ export function OnboardingView(): ReactElement {
   const [code, setCode] = useState(currentCompany?.issueCode ?? "FORGE");
   const [error, setError] = useState("");
   const [projectsOpen, setProjectsOpen] = useState(false);
-  const defaults = useMemo(() => defaultAgentModels(connected), [connected]);
-  const profileFor = (role: "root" | "worker"): AgentChoice => {
-    const profile = state.profiles.find(candidate => candidate.role === role && candidate.archivedAt === null);
-    if (profile && connected.some(provider => provider.id === profile.provider)) return { profileId: profile.id, choice: { provider: profile.provider, model: profile.model, reasoningLevel: profile.reasoningLevel as RoleModelChoice["reasoningLevel"] } };
-    return profile ? { profileId: profile.id, choice: role === "root" ? defaults?.coordinator : defaults?.worker } : { choice: role === "root" ? defaults?.coordinator : defaults?.worker };
-  };
-  const [coordinator, setCoordinator] = useState<AgentChoice>();
-  const [worker, setWorker] = useState<AgentChoice>();
   useEffect(() => { setName(currentCompany?.name || "My Company"); setCode(currentCompany?.issueCode ?? "FORGE"); }, [currentCompany?.id]);
-  useEffect(() => { setCoordinator(profileFor("root")); setWorker(profileFor("worker")); }, [state.profiles, connected.length]);
   const { login, loginPending, startLogin, closeLogin } = useProviderLogin({ reload });
   const go = (id: OnboardingStepId): void => navigate(withCompany(`/onboarding?step=${id}`, companyId));
   const continueStep = async (): Promise<void> => {
@@ -76,25 +99,87 @@ export function OnboardingView(): ReactElement {
         if (code !== currentCompany.issueCode) await setCompanyIssueCode(currentCompany.id, code);
         await reloadCompanies();
       }
-      if (current === "agents") {
-        for (const agent of [coordinator, worker]) {
-          if (!agent?.profileId || !agent.choice) continue;
-          const profile = state.profiles.find(candidate => candidate.id === agent.profileId);
-          if (profile && (profile.provider !== agent.choice.provider || profile.model !== agent.choice.model || profile.reasoningLevel !== agent.choice.reasoningLevel)) await readJson(`/api/admin/profiles/${encodeURIComponent(agent.profileId)}`, { method: "PATCH", body: JSON.stringify(agent.choice) });
-        }
-        await reload();
-      }
       if (currentIndex < ONBOARDING_STEPS.length - 1) go(ONBOARDING_STEPS[currentIndex + 1]!.id);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Forge could not save the onboarding step."); }
   };
-  const agentRow = (label: string, agent: AgentChoice | undefined, setAgent: (agent: AgentChoice) => void): ReactElement => <div className="flex flex-wrap items-center gap-2 border-b py-3"><span className="w-24 text-[13px] font-medium">{label}</span>{agent?.choice ? <><Select value={agent.choice.provider} onValueChange={provider => { const selected = connected.find(item => item.id === provider); if (selected) setAgent({ ...agent, choice: { ...agent.choice!, provider: selected.id, model: selected.models[0]?.id ?? "" } }); }}><SelectTrigger size="sm"><SelectValue /></SelectTrigger><SelectContent>{connected.map(provider => <SelectItem key={provider.id} value={provider.id}>{provider.label}</SelectItem>)}</SelectContent></Select><Select value={agent.choice.model} onValueChange={model => setAgent({ ...agent, choice: { ...agent.choice!, model: model ?? "" } })}><SelectTrigger size="sm"><SelectValue /></SelectTrigger><SelectContent>{connected.find(provider => provider.id === agent.choice?.provider)?.models.map(model => <SelectItem key={model.id} value={model.id}>{model.label}</SelectItem>)}</SelectContent></Select><Select value={agent.choice.reasoningLevel} onValueChange={reasoningLevel => { if (reasoningLevel) setAgent({ ...agent, choice: { ...agent.choice!, reasoningLevel: reasoningLevel as RoleModelChoice["reasoningLevel"] } }); }}><SelectTrigger size="sm"><SelectValue /></SelectTrigger><SelectContent>{reasoningLevels.map(level => <SelectItem key={level} value={level}>{level}</SelectItem>)}</SelectContent></Select></> : <a className="text-xs text-primary underline" href={withCompany("/admin/agents", companyId)}>No {label} profile exists. Open Agents settings.</a>}</div>;
-  const body = current === "company" ? <FieldGroup><Field><FieldLabel htmlFor="onboarding-name">Company name</FieldLabel><Input id="onboarding-name" value={name} onChange={event => setName(event.target.value)} /></Field><Field><FieldLabel htmlFor="onboarding-code">Company code</FieldLabel><Input id="onboarding-code" maxLength={10} pattern="[A-Z][A-Z0-9]{1,9}" value={code} onChange={event => setCode(event.target.value.toUpperCase())} /></Field></FieldGroup>
-    : current === "tools" ? <div className="space-y-3">{setupChecklist({ checks: state.checks }).filter(check => check.id === "git" || check.id === "herdr-readiness").map(check => <div key={check.id} className="border-b pb-3"><div className="flex items-center gap-3"><HealthCheckIcon check={check} /><span className="flex-1"><span className="block text-[13px] font-medium">{check.label}</span><span className="text-xs text-muted-foreground">{healthCheckPurpose(check.id)}</span></span><CheckStatusIndicator check={check} /></div>{check.status !== "healthy" && check.remedy ? <div className="mt-2 flex gap-2">{check.remedyKind === "command" ? <><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" onClick={() => void navigator.clipboard.writeText(check.remedy!)}><Copy />Copy</Button></> : <Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy ?? "#"} target="_blank" rel="noreferrer" />}>Open the instructions</Button>}</div> : null}</div>)}<Button size="sm" variant="outline" onClick={() => void refresh()}><RefreshCw />Check again</Button></div>
-    : current === "providers" ? <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2">{state.providers.map(provider => <Card key={provider.id} size="sm"><CardHeader><CardTitle>{provider.label}</CardTitle><CardAction>{provider.status === "missing" ? <><StatusLight level="red" label="Not installed" /><Badge variant="outline">Not installed</Badge></> : provider.connection.status === "connected" ? <><StatusLight level="green" label="Connected" /><Badge variant="secondary">Connected</Badge></> : <><StatusLight level="amber" label="Sign-in necessary" /><Badge variant="outline">Sign-in necessary</Badge></>}</CardAction></CardHeader><CardContent className="space-y-2 text-xs text-muted-foreground"><p>{provider.modelCount} models</p><p>{provider.connection.summary}</p>{provider.status === "missing" ? <p>Set <code>{providerCommands[provider.id]}</code> on the host.</p> : provider.connection.status !== "connected" ? <Button size="sm" variant="outline" disabled={loginPending !== null} onClick={() => void startLogin(`provider:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/login`).catch(reason => setError(reason instanceof Error ? reason.message : "Forge could not open a sign-in pane."))}>Sign in</Button> : null}</CardContent></Card>)}</div><Button size="sm" variant="outline" onClick={() => void reload()}><RefreshCw />Check again</Button></div>
-    : current === "agents" ? <div>{agentRow("Coordinator", coordinator, setCoordinator)}{agentRow("Worker", worker, setWorker)}</div>
-    : current === "projects" ? <div className="space-y-3"><NewButton onClick={() => setProjectsOpen(true)}>Add a project</NewButton>{state.projects.length ? <div>{state.projects.map(project => <div key={project.id} className="flex items-center gap-3 border-b py-2"><EntityAvatar kind="project" id={project.id} name={project.name} seed={project.name} size="sm" /><span className="min-w-0 flex-1 text-[13px]">{project.name}</span><span className="text-xs text-muted-foreground">{project.repository} · {project.baseBranch}</span></div>)}</div> : <div className="rounded-md border border-dashed p-6 text-center"><p className="text-[13px]">No projects yet.</p><p className="mt-1 text-xs text-muted-foreground">Forge needs one connected GitHub repository before you can create a task.</p></div>}<CreateProjectDialog open={projectsOpen} onOpenChange={setProjectsOpen} companyId={companyId} companyStatus={currentCompany?.status} onCreated={reload} reloadCompanies={reloadCompanies} /></div>
-    : <ul className="space-y-1 text-xs text-muted-foreground"><li>{currentCompany?.name} · {currentCompany?.issueCode ?? "No company code"}</li><li>{connected.length} connected providers</li><li>Coordinator: {coordinator?.choice?.model ?? "Not configured"}</li><li>Worker: {worker?.choice?.model ?? "Not configured"}</li><li>{state.projects.length} projects</li></ul>;
+  const body = current === "company" ? <FieldGroup>
+    <Field><FieldLabel htmlFor="onboarding-name">Company name</FieldLabel><Input id="onboarding-name" value={name} onChange={event => setName(event.target.value)} /></Field>
+    {currentCompany ? <Field><FieldLabel>Avatar</FieldLabel><AvatarEditor kind="company" id={currentCompany.id} name={currentCompany.name} seed={currentCompany.name} /></Field> : null}
+    <Field><FieldLabel htmlFor="onboarding-code">Company code</FieldLabel><Input id="onboarding-code" maxLength={10} pattern="[A-Z][A-Z0-9]{1,9}" value={code} onChange={event => setCode(event.target.value.toUpperCase())} /></Field>
+  </FieldGroup>
+    : current === "tools" ? <div className="space-y-3" aria-busy={freshness === "checking" && state.checks.length === 0}>
+      {ONBOARDING_TOOL_CHECKS.map(id => {
+        const check = state.checks.find(check => check.id === id);
+        const loading = !check && freshness === "checking";
+        return <div key={id} className="border-b pb-3">
+          <div className="flex items-center gap-3">
+            {check ? <HealthCheckIcon check={check} /> : <div className="size-4 shrink-0">{loading ? <Skeleton className="h-full w-full" /> : null}</div>}
+            <div className="min-w-0 flex-1">
+              <span className="text-[13px] font-medium">{id === "git" ? "Git" : id === "gh-auth" ? "GitHub" : "Herdr"}</span>{" "}
+              <span className="text-xs text-muted-foreground">{id === "git" ? "for source control" : id === "gh-auth" ? "for branches, pull requests, and merges" : "runs your agents in the background"}</span>
+              <div className="text-xs text-muted-foreground">
+                {loading ? <div aria-label="Check in progress">
+                  {id !== "herdr-readiness" ? <Skeleton className="h-4 w-32" /> : null}
+                  {id === "gh-auth" ? <Skeleton className="h-4 w-44" /> : null}
+                </div> : !check ? "Check not available. Select Check again." : id === "gh-auth" ? check.status === "healthy" ? <>
+                  <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />CLI tools installed</span>
+                  <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />{check.details.logins ? `Signed in as ${check.details.logins}` : "Signed in"}</span>
+                </> : check.summary : id === "herdr-readiness" ? null : check.status === "healthy" ? <span className="flex items-center gap-1"><Check aria-hidden="true" className="size-3" />CLI tools installed</span> : healthCheckPurpose(id)}
+              </div>
+            </div>
+            {check ? <CheckStatusIndicator check={check} healthyLabel="Done" /> : loading ? <Skeleton className="h-5 w-16 shrink-0" /> : <Badge variant="outline">Not available</Badge>}
+          </div>
+          {check && check.status !== "healthy" && check.remedy ? <div className="mt-2 flex gap-2">
+            {check.remedyKind === "command" ? <><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" onClick={() => void navigator.clipboard.writeText(check.remedy!)}><Copy />Copy</Button></> : <Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy ?? "#"} target="_blank" rel="noreferrer" />}>Open the instructions</Button>}
+          </div> : null}
+        </div>;
+      })}
+    </div>
+    : current === "providers" ? <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2" aria-busy={loading} aria-label="Providers">{loading && state.providers.length === 0 ? [0, 1, 2, 3].map(index => <Card key={index} size="sm" aria-label="Provider check in progress"><CardHeader><CardTitle><Skeleton className="h-5 w-20" /></CardTitle><CardAction><Skeleton className="h-5 w-20" /></CardAction></CardHeader><CardContent><Skeleton className="h-4 w-16" /><div className="space-y-1"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-3/4" /></div><Skeleton className="h-8 w-full" /></CardContent></Card>) : state.providers.map(provider => <Card key={provider.id} size="sm"><CardHeader><CardTitle><span className="flex items-center gap-2"><ProviderIcon provider={provider.id} />{provider.label}</span></CardTitle><CardAction>{provider.status === "missing" ? <><StatusLight level="red" label="Not installed" /><Badge variant="outline">Not installed</Badge></> : provider.connection.status === "connected" ? <><StatusLight level="green" label="Connected" /><Badge variant="secondary">Connected</Badge></> : <><StatusLight level="amber" label="Needs auth" /><Badge variant="outline">Needs auth</Badge></>}</CardAction></CardHeader><CardContent className="space-y-2 text-xs text-muted-foreground"><div><Tooltip><TooltipTrigger><span className="cursor-help underline decoration-dashed underline-offset-4">{provider.modelCount} models available</span></TooltipTrigger><TooltipContent side="bottom" align="start"><ul className="max-h-60 overflow-y-auto font-mono text-xs">{provider.models.length ? provider.models.map(model => <li key={model.id} className="break-all">{model.id}</li>) : <li>No models available</li>}</ul></TooltipContent></Tooltip></div>{provider.connection.status === "connected" ? <p className="flex items-start gap-1"><Check aria-hidden="true" className="mt-0.5 size-3 shrink-0" /><span className="min-w-0 break-words">{provider.connection.account ? `Signed in as ${provider.connection.account}` : "Signed in"}</span></p> : provider.id === "opencode" && provider.connection.status === "not-connected" && provider.status !== "missing" ? null : <p>{provider.connection.summary}</p>}{provider.status === "missing" ? <p>Set <code>{providerCommands[provider.id]}</code> on the host.</p> : provider.connection.status !== "connected" ? <Button size="sm" disabled={loginPending !== null} onClick={() => void startLogin(`provider:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/login`).catch(reason => setError(reason instanceof Error ? reason.message : "Forge could not open a sign-in pane."))}>Sign in</Button> : null}</CardContent></Card>)}</div></div>
+    : current === "agents" ? <InternalAgentsManager agents={state.profiles} onSaved={reload} />
+    : current === "projects" ? <div className="space-y-3">{state.projects.length ? <div className="grid gap-3"><ProjectCards projects={state.projects} agents={state.profiles} onSaved={reload} /></div> : <div className="rounded-md border border-dashed p-6 text-center"><p className="text-[13px]">No projects yet.</p><p className="mt-1 text-xs text-muted-foreground">Forge needs one connected GitHub repository before you can create a task.</p></div>}<NewButton onClick={() => setProjectsOpen(true)}>Add a project</NewButton><CreateProjectDialog open={projectsOpen} onOpenChange={setProjectsOpen} companyId={companyId} companyStatus={currentCompany?.status} onCreated={reload} reloadCompanies={reloadCompanies} /></div>
+    : <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center" aria-live="polite">
+      <PartyPopper aria-hidden="true" className="size-12 text-amber-500" />
+      <h2 className="text-xl font-semibold">You are all set!</h2>
+      <p className="text-sm text-muted-foreground">Create your first task and put your agents to work.</p>
+    </div>;
   const continueDisabled = current === "company" ? !name.trim() || !code.trim() : current === "providers" ? connected.length === 0 : current === "projects" ? state.projects.length === 0 : false;
-  const heading = current === "company" ? "Name the company" : current === "tools" ? "Check the host tools" : current === "providers" ? "Connect a provider" : current === "agents" ? "Select the agent models" : current === "projects" ? "Add a project" : "Onboarding complete";
-  return <ApplicationFrame title="Onboarding" sidebar={<OnboardingSidebar companyId={companyId} current={current} state={state} />}><div className="min-w-0"><div className="max-w-2xl px-4 py-5 lg:px-6"><h1 className="text-base font-medium">{heading}</h1><div className="mt-5">{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}{body}</div>{current === "done" ? <div className="mt-5 flex gap-2"><Button size="sm" nativeButton={false} render={<a href={withCompany("/tasks", companyId)} />}>Open the tasks</Button><Button size="sm" variant="outline" nativeButton={false} render={<a href={onboardingSettingsPath(companyId)} />}>Open the settings</Button></div> : null}</div>{current !== "done" ? <footer className="flex max-w-2xl items-center justify-between border-t px-4 py-4 lg:px-6">{currentIndex > 0 ? <Button size="sm" variant="outline" onClick={() => go(ONBOARDING_STEPS[currentIndex - 1]!.id)}>Back</Button> : <span />}<Button size="sm" disabled={continueDisabled} onClick={() => void continueStep()}>Continue<ArrowRight /></Button></footer> : null}</div><ProviderLoginTerminal login={login} onClose={() => void closeLogin()} /></ApplicationFrame>;
+  const heading = current === "company" ? "Set up your company" : current === "tools" ? "Check the host tools" : current === "providers" ? "Connect your accounts" : current === "agents" ? "Select the agent models" : current === "projects" ? "Add a project" : "Onboarding complete";
+  const description = current === "company" ? "What is your startup, agency, or company called?"
+    : current === "tools" ? "Forge uses tools on your machine to get work done for you"
+    : current === "providers" ? "Connect your existing subscriptions and models to your new Forge agents"
+    : current === "agents" ? "The Coordinator plans each task. The Worker builds the changes."
+    : current === "projects" ? "Connect a GitHub repository for your first task."
+    : "Review the setup, then open the tasks.";
+  const checking = current === "tools" ? refreshing : loading;
+  const visibleError = error || loadError || (current === "tools" && freshness === "stale" ? "Forge could not check the host. Select Check again." : "");
+  return (
+    <ApplicationFrame title="Onboarding" sidebar={<OnboardingSidebar companyId={companyId} current={current} state={state} />}>
+      <div className="flex min-w-0 flex-1 p-3 sm:p-6">
+        <section id={`stepper-panel-${currentIndex + 1}`} role="tabpanel" aria-labelledby={`stepper-tab-${currentIndex + 1}`} className="flex min-w-0 flex-1 rounded-md border bg-card px-5 py-8 sm:px-10 sm:py-14 lg:py-20">
+          <div className={`mx-auto flex w-full flex-col gap-8 lg:min-h-[32rem] ${current === "agents" ? "max-w-6xl" : current === "providers" ? "max-w-xl" : "max-w-md"}`}>
+            {current !== "done" ? <div className="space-y-2" aria-live="polite">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-xl font-semibold">{heading}</h2>
+                <Button size="icon-sm" variant="ghost" aria-label={checking ? "Check in progress" : "Check again"} title={checking ? "Check in progress" : "Check again"} disabled={checking} onClick={() => void (current === "tools" ? refresh() : reload())}>
+                  {checking ? <Spinner /> : <RefreshCw />}
+                </Button>
+              </div>
+              <FieldDescription>{description}</FieldDescription>
+            </div> : null}
+            {visibleError ? <Alert variant="destructive"><AlertDescription>{visibleError}</AlertDescription></Alert> : null}
+            {body}
+            <footer className="mt-auto grid gap-2 pt-8">
+              {current === "done" ? <>
+                <Button nativeButton={false} render={<a href={withCompany("/tasks", companyId)} />}>Finished</Button>
+              </> : <>
+                <Button disabled={continueDisabled} onClick={() => void continueStep()}>Continue</Button>
+              </>}
+            </footer>
+          </div>
+        </section>
+      </div>
+      <ProviderLoginTerminal login={login} onClose={() => void closeLogin()} />
+    </ApplicationFrame>
+  );
 }

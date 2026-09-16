@@ -81,6 +81,7 @@ export const GhAuthStatusSchema = z.object({
   hosts: z.record(z.string(), z.array(z.object({
     state: z.string(),
     active: z.boolean(),
+    login: z.string().optional(),
   }))),
 });
 

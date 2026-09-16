@@ -136,13 +136,13 @@ export function SystemHealthAlert(): ReactElement | null {
   );
 }
 
-export function CheckStatusIndicator({ check }: { check: HealthCheck }): ReactElement {
+export function CheckStatusIndicator({ check, healthyLabel = "Healthy" }: { check: HealthCheck; healthyLabel?: string }): ReactElement {
   const healthy = check.status === "healthy";
   const degraded = check.status === "warning" || (!healthy && !isOwnedHealthCheck(check.id) && !isRequiredHealthCheck(check.id));
   return (
     <Badge variant={healthy ? "secondary" : degraded ? "outline" : "destructive"}>
       {healthy ? <CheckCircle2 /> : degraded ? <CircleAlert /> : <XCircle />}
-      {healthy ? "Healthy" : degraded ? "Degraded" : "Offline"}
+      {healthy ? healthyLabel : degraded ? "Degraded" : "Offline"}
     </Badge>
   );
 }

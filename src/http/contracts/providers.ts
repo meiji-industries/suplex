@@ -4,6 +4,7 @@ import { HarnessKindSchema } from "../../runtimes/harness-kind.js";
 export const ProviderConnectionSchema = z.object({
   status: z.enum(["connected", "not-connected", "unknown"]),
   summary: z.string(),
+  account: z.string().optional(),
 });
 export type ProviderConnection = z.infer<typeof ProviderConnectionSchema>;
 

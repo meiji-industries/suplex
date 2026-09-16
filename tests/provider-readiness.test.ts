@@ -8,6 +8,7 @@ import {
   type ProviderReadinessOptions,
 } from "../src/profiles/provider-readiness.js";
 import { HARNESS_KINDS } from "../src/runtimes/task-harness-registry.js";
+import { providerConnectionFromHealth } from "../src/profiles/provider-connection.js";
 
 const absent = async (): Promise<string> => { throw new Error("Install the tool"); };
 const missingExecutable = async (): Promise<string> => { throw Object.assign(new Error("spawn /private/bin/opencode ENOENT"), { code: "ENOENT" }); };
@@ -73,6 +74,18 @@ test("Claude Code reports absent, signed-out, signed-in, and indeterminate state
 
   const failed = await check({ resolveExecutable: present("/private/bin/claude"), runCommand: probe({ stdout: "", stderr: "boom", exitCode: 2, timedOut: false }) });
   expect(failed).toMatchObject({ status: "warning", summary: "Forge could not check the Claude Code sign-in", details: { state: "unknown" } });
+});
+
+test("provider listings can request the authenticated Claude account without exposing other auth fields", async () => {
+  for (const loggedIn of [true, false]) {
+    const check = await createProviderReadinessCheck("claude-code", {
+      resolveExecutable: present("claude"), includeAccount: true,
+      runCommand: probe(ok(JSON.stringify({ loggedIn, email: "person@example.com", orgId: "private-org", token: "secret-value" }))),
+    })();
+    const connection = providerConnectionFromHealth(check);
+    expect(connection.account).toBe(loggedIn ? "person@example.com" : undefined);
+    expect(JSON.stringify(check)).not.toMatch(/private-org|secret-value/);
+  }
 });
 
 test("Codex CLI reports absent, signed-out, signed-in, and indeterminate states", async () => {

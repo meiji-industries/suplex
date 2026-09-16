@@ -133,7 +133,7 @@ export function InternalAgentsSection({
   onPatchAgent,
   onDuplicateAgent,
 }: {
-  agents: ApiProfile[];
+  agents: readonly ApiProfile[];
   sortedAgents: ApiProfile[];
   archiveTarget: ApiProfile | null;
   onArchiveTargetChange: Dispatch<SetStateAction<ApiProfile | null>>;

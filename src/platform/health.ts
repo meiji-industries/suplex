@@ -72,7 +72,7 @@ export async function inspectHostHealth(config: ForgeConfig, dependencies: HostH
     ...(dependencies.diskSpace ? [safelyCheck("disk-space", "Disk space", dependencies.diskSpace)] : []),
     ...(dependencies.git ? [safelyCheck("git", "Git", dependencies.git)] : []),
     ...(dependencies.herdrReadiness ? [safelyCheck("herdr-readiness", "Herdr", dependencies.herdrReadiness)] : []),
-    safelyCheck("gh-auth", "GitHub CLI authentication", dependencies.ghAuth),
+    safelyCheck("gh-auth", "GitHub CLI", dependencies.ghAuth),
     ...(dependencies.pnpm ? [safelyCheck("pnpm", "pnpm", dependencies.pnpm)] : []),
     ...(dependencies.tailscale ? [safelyCheck("tailscale", "Tailscale", dependencies.tailscale)] : []),
     ...(dependencies.backup ? [safelyCheck("backup", "Backup verification", dependencies.backup)] : []),

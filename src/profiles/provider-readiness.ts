@@ -69,14 +69,20 @@ export function checkGithubAuthentication(command: string, runner: CommandRunner
     const safeCommand = basename(command);
     let failure: GithubFailure | undefined;
     let authenticated = false;
+    let accounts: string[] = [];
+    let logins = "";
     try {
       const result = await runner(command, ["auth", "status", "--json", "hosts"], { timeout: 3_000, maxBuffer: 16 * 1024 });
       const parsed = GhAuthStatusSchema.safeParse(JSON.parse(result.stdout));
       if (!parsed.success) {
         failure = "auth-format";
       } else {
-        const accounts = Object.values(parsed.data.hosts).flat();
-        authenticated = accounts.some((account) => account.active && account.state === "success");
+        const activeAccounts = Object.entries(parsed.data.hosts).flatMap(([host, entries]) => entries
+          .filter(account => account.active && account.state === "success")
+          .map(account => ({ host, login: account.login })));
+        authenticated = activeAccounts.length > 0;
+        accounts = activeAccounts.filter(account => account.login).map(account => `@${account.login} (${account.host})`);
+        logins = activeAccounts.filter(account => account.login).map(account => `@${account.login}`).join(", ");
         if (!authenticated) failure = "unauthenticated";
       }
     } catch (error) {
@@ -84,21 +90,21 @@ export function checkGithubAuthentication(command: string, runner: CommandRunner
       if (!failure) failure = "auth-failed";
     }
     const summary = authenticated
-      ? "GitHub CLI authentication is available"
+      ? accounts.length > 0 ? `GitHub CLI is installed. Signed in as ${accounts.join(", ")}.` : "GitHub CLI is installed and authenticated."
       : failure === "command-missing"
         ? "GitHub CLI is not installed"
         : failure === "auth-timeout"
           ? "GitHub CLI auth status timed out"
           : failure === "auth-format"
             ? "GitHub CLI auth status returned an unexpected format"
-            : "GitHub CLI authentication is unavailable";
+            : "GitHub CLI is installed. Authentication is not available.";
     return {
       id: "gh-auth",
-      label: "GitHub CLI authentication",
+      label: "GitHub CLI",
       status: authenticated ? "healthy" : "unhealthy",
       summary,
       ...(!authenticated ? { remedy: failure === "command-missing" ? "brew install gh" : "gh auth login" } : {}),
-      details: { command: safeCommand, authentication: authenticated ? "available" : "unavailable", failure: failure ?? "none" },
+      details: { command: safeCommand, authentication: authenticated ? "available" : "unavailable", failure: failure ?? "none", ...(logins ? { logins } : {}) },
     };
   };
 }
@@ -137,6 +143,7 @@ export const probeCommand: ProviderProbeRunner = (command, args, options) => new
 export type ProviderState = "absent" | "present" | "signed-out" | "signed-in" | "unknown";
 
 export interface ProviderReadinessOptions {
+  includeAccount?: boolean;
   resolveExecutable?: () => Promise<string>;
   runCommand?: ProviderProbeRunner;
   platform?: NodeJS.Platform;
@@ -151,7 +158,7 @@ const PROVIDER_PROBES: Record<ProviderHarnessKind, {
   loginRemedy: string;
   authArgs: readonly string[];
   /** Classifies a completed probe; "present" means the tool ran but reported no usable sign-in signal. */
-  classify: (result: ProviderProbeResult) => { state: ProviderState; credentials?: number };
+  classify: (result: ProviderProbeResult) => { state: ProviderState; credentials?: number; account?: string };
 }> = {
   opencode: {
     // Sources: `opencode auth --help`; https://opencode.ai install script (macOS/Linux); https://opencode.ai/docs (Windows).
@@ -183,7 +190,7 @@ const PROVIDER_PROBES: Record<ProviderHarnessKind, {
       try {
         const status: unknown = JSON.parse(result.stdout);
         if (status && typeof status === "object" && "loggedIn" in status && typeof status.loggedIn === "boolean") {
-          return { state: status.loggedIn ? "signed-in" : "signed-out" };
+          return { state: status.loggedIn ? "signed-in" : "signed-out", ...(status.loggedIn && "email" in status && typeof status.email === "string" && status.email.trim() ? { account: status.email.trim() } : {}) };
         }
       } catch { /* Unrecognized status output is not proof of any sign-in state. */ }
       return result.exitCode === 0 ? { state: "present" } : { state: "unknown" };
@@ -231,7 +238,7 @@ export function createProviderReadinessCheck(kind: ProviderHarnessKind, options:
       return { ...base, status: "warning", summary: `Forge could not check the ${label} sign-in`, details: { command: basename(executable), state: "unknown" satisfies ProviderState } };
     }
     const classified = probe.classify(result);
-    const details = { command: basename(executable), state: classified.state, ...(classified.credentials === undefined ? {} : { credentials: classified.credentials }) };
+    const details = { command: basename(executable), state: classified.state, ...(classified.credentials === undefined ? {} : { credentials: classified.credentials }), ...(options.includeAccount && classified.account ? { account: classified.account } : {}) };
     if (classified.state === "signed-in") return { ...base, status: "healthy", summary: `${label} is signed in. Model access is not tested.`, details };
     if (classified.state === "signed-out") return { ...base, status: "unhealthy", summary: `${label} is not signed in`, remedy: probe.loginRemedy, remedyKind: "command", details };
     if (classified.state === "present") return { ...base, status: "warning", summary: `${label} is installed. Forge could not check the sign-in.`, details };

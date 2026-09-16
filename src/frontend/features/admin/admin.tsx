@@ -18,16 +18,13 @@ import { CompaniesSection } from "./companies-section.js";
 import { InvitationsSection } from "./invitations-section.js";
 import { ModelsSection } from "./models-section.js";
 import { PasskeysSection } from "./passkeys-section.js";
-import { InternalAgentsSection } from "./internal-agents-section.js";
-import { InternalAgentDialog } from "./internal-agent-editor-dialog.js";
+import { InternalAgentsManager } from "./internal-agents-manager.js";
 import { HermesAgentsSection } from "./hermes-agents-section.js";
 import { HermesAvatarDialog } from "./hermes-avatar-dialog.js";
 import { HermesNewAgentDialog } from "./hermes-new-agent-dialog.js";
 import { HermesPairingCodeDialog } from "./hermes-pairing-code-dialog.js";
 import { HermesProjectGrantsDialog } from "./hermes-project-grants-dialog.js";
 import { createHermesActions } from "./hermes-actions.js";
-import type { ProviderInstanceSchema } from "../../../http/contracts/providers.js";
-import type { z } from "zod";
 
 export function AdminView(): ReactElement {
   const { user, companies, currentCompany, loading } = useCompanyContext();
@@ -38,21 +35,8 @@ export function AdminView(): ReactElement {
   const [hermesAgents, setHermesAgents] = useState<ApiHermesAgent[]>([]);
   const [companyProjects, setCompanyProjects] = useState<ApiProject[]>([]);
   const [models, setModels] = useState<ApiModel[]>([]);
-  const providerOptions = [...new Map(models.map((model) => [model.provider, { id: model.provider, label: model.providerLabel, status: model.providerStatus }])).values()];
   const [displayName, setDisplayName] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [agentName, setAgentName] = useState("");
-  const [agentRole, setAgentRole] = useState<"root" | "worker">("root");
-  const [agentAvatarSeed, setAgentAvatarSeed] = useState("");
-  const [agentModel, setAgentModel] = useState("gpt-5.6-sol");
-  const [agentProvider, setAgentProvider] = useState<string>("codex");
-  const [agentReasoning, setAgentReasoning] = useState("medium");
-  const [agentPriority, setAgentPriority] = useState("default");
-  const [agentInstanceId, setAgentInstanceId] = useState<string | null>(null);
-  const [providerInstances, setProviderInstances] = useState<z.infer<typeof ProviderInstanceSchema>[]>([]);
-  const [agentOpen, setAgentOpen] = useState(false);
-  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
-  const [archiveTarget, setArchiveTarget] = useState<ApiProfile | null>(null);
   const [inviteToken, setInviteToken] = useState("");
   const [inviteExpiresAt, setInviteExpiresAt] = useState("");
   const [copied, setCopied] = useState(false);
@@ -106,7 +90,6 @@ export function AdminView(): ReactElement {
           invitationList,
           credentialList,
           agentList,
-          instanceList,
           hermesList,
           projectList,
           modelList,
@@ -132,7 +115,6 @@ export function AdminView(): ReactElement {
                 options,
               )
             : { profiles: [] },
-          isAgents ? readJson<{ instances: z.infer<typeof ProviderInstanceSchema>[] }>("/api/admin/provider-instances", options).catch(() => ({ instances: [] })) : { instances: [] },
           isAgents
             ? readJson<{ agents: ApiHermesAgent[] }>(
                 `/api/admin/hermes-agents${currentCompany ? `?companyId=${encodeURIComponent(currentCompany.id)}` : ""}`,
@@ -145,7 +127,7 @@ export function AdminView(): ReactElement {
                 options,
               ).catch(() => ({ projects: [] }))
             : Promise.resolve({ projects: [] }),
-          isAgents || isModels
+          isModels
             ? readJson<{ models: ApiModel[] }>(
                 "/api/admin/models",
                 options,
@@ -163,7 +145,6 @@ export function AdminView(): ReactElement {
         setInvitations(invitationList.invitations);
         setCredentials(credentialList.credentials);
         setAgents(agentList.profiles);
-        setProviderInstances(instanceList.instances);
         setHermesAgents(hermesList.agents);
         setCompanyProjects(projectList.projects);
         const projectIds = new Set(
@@ -235,89 +216,6 @@ export function AdminView(): ReactElement {
       setError("Unable to copy invitation");
     }
   };
-  const openNewAgent = (): void => {
-    setEditingAgentId(null);
-    setAgentName("");
-    setAgentRole("root");
-    setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", ""));
-    setAgentProvider("codex");
-    setAgentModel("gpt-5.6-sol");
-    setAgentReasoning("medium");
-    setAgentPriority("default");
-    setAgentInstanceId(null);
-    setAgentOpen(true);
-  };
-  const openEditAgent = (agent: ApiProfile): void => {
-    setEditingAgentId(agent.id);
-    setAgentName(agent.name);
-    setAgentRole(agent.role);
-    setAgentAvatarSeed(agent.avatarSeed);
-    setAgentProvider(agent.provider);
-    setAgentModel(agent.model);
-    setAgentReasoning(agent.reasoningLevel);
-    setAgentPriority(agent.serviceTier);
-    setAgentInstanceId(agent.providerInstanceId ?? null);
-    setAgentOpen(true);
-  };
-  const saveAgent = async (): Promise<void> => {
-    const editing = editingAgentId !== null;
-    try {
-      await readJson(
-        editing
-          ? `/api/admin/profiles/${encodeURIComponent(editingAgentId)}`
-          : "/api/admin/profiles",
-        {
-          method: editing ? "PATCH" : "POST",
-          body: JSON.stringify({
-            name: agentName,
-            role: agentRole,
-            avatarSeed: agentAvatarSeed,
-            provider: agentProvider,
-            model: agentModel,
-            reasoningLevel: agentReasoning,
-            serviceTier: agentPriority,
-            providerInstanceId: agentInstanceId,
-          }),
-        },
-      );
-      setAgentOpen(false);
-      setEditingAgentId(null);
-      await reload();
-    } catch {
-      setError(editing ? "Unable to update agent" : "Unable to add agent");
-    }
-  };
-  const patchAgent = async (
-    agent: ApiProfile,
-    body: Record<string, unknown>,
-    fallback: string,
-  ): Promise<void> => {
-    try {
-      await readJson(`/api/admin/profiles/${encodeURIComponent(agent.id)}`, {
-        method: "PATCH",
-        body: JSON.stringify(body),
-      });
-      setError("");
-      await reload();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : fallback);
-    }
-  };
-  const duplicateAgent = async (agent: ApiProfile): Promise<void> => {
-    try {
-      await readJson(
-        `/api/admin/profiles/${encodeURIComponent(agent.id)}/duplicate`,
-        { method: "POST", body: "{}" },
-      );
-      setError("");
-      await reload();
-    } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Unable to duplicate agent",
-      );
-    }
-  };
-
   const {
     openNewHermesAgent,
     createHermesAgent,
@@ -416,10 +314,6 @@ export function AdminView(): ReactElement {
     }
   };
 
-  const sortedAgents = [...agents].sort(
-    (left, right) =>
-      Number(Boolean(left.archivedAt)) - Number(Boolean(right.archivedAt)),
-  );
   const viewTitle = isAgents
     ? "Agents"
     : isModels
@@ -500,16 +394,7 @@ export function AdminView(): ReactElement {
 
         {isAgents ? (
           <div className="space-y-12">
-            <InternalAgentsSection
-              agents={agents}
-              sortedAgents={sortedAgents}
-              archiveTarget={archiveTarget}
-              onArchiveTargetChange={setArchiveTarget}
-              onOpenNewAgent={openNewAgent}
-              onOpenEditAgent={openEditAgent}
-              onPatchAgent={patchAgent}
-              onDuplicateAgent={duplicateAgent}
-            />
+            <InternalAgentsManager agents={agents} onSaved={reload} />
             <HermesAgentsSection
               agents={hermesAgents}
               projects={companyProjects}
@@ -521,34 +406,6 @@ export function AdminView(): ReactElement {
               onEditAvatar={setHermesAvatarTarget}
               onRevokeAgent={revokeHermesAgent}
               onClearPendingAction={() => setPendingAction("")}
-            />
-            <InternalAgentDialog
-              open={agentOpen}
-              editingAgentId={editingAgentId}
-              agentName={agentName}
-              agentRole={agentRole}
-              agentAvatarSeed={agentAvatarSeed}
-              agentModel={agentModel}
-              agentProvider={agentProvider}
-              agentReasoning={agentReasoning}
-              agentPriority={agentPriority}
-              agentInstanceId={agentInstanceId}
-              instances={providerInstances}
-              models={models}
-              providerOptions={providerOptions}
-              onOpenChange={(open) => {
-                setAgentOpen(open);
-                if (!open) setEditingAgentId(null);
-              }}
-              onAgentNameChange={setAgentName}
-              onAgentRoleChange={setAgentRole}
-              onAgentAvatarSeedChange={setAgentAvatarSeed}
-              onAgentModelChange={setAgentModel}
-              onAgentProviderChange={setAgentProvider}
-              onAgentReasoningChange={setAgentReasoning}
-              onAgentPriorityChange={setAgentPriority}
-              onAgentInstanceIdChange={setAgentInstanceId}
-              onSave={saveAgent}
             />
             <HermesAvatarDialog
               target={hermesAvatarTarget}

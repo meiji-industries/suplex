@@ -35,7 +35,7 @@ export function ProjectSettingsDialog({
   onSaved,
 }: {
   project: ApiProject | undefined;
-  agents: ApiProfile[];
+  agents: readonly ApiProfile[];
   onOpenChange: (open: boolean) => void;
   onSaved: () => Promise<void>;
 }): ReactElement {

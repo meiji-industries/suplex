@@ -8,10 +8,11 @@ export type ProviderConnectionProbe = (providerId: HarnessKind) => Promise<Provi
 const stripAnsi = (value: string): string => value.replace(/\x1b\[[0-9;]*m/g, "");
 
 /** Maps a health-check outcome onto the provider sign-in vocabulary. */
-export function providerConnectionFromHealth(check: { status: "healthy" | "warning" | "unhealthy"; summary: string }): ProviderConnection {
+export function providerConnectionFromHealth(check: { status: "healthy" | "warning" | "unhealthy"; summary: string; details?: Record<string, string | number | boolean> }): ProviderConnection {
   return {
     status: check.status === "healthy" ? "connected" : check.status === "unhealthy" ? "not-connected" : "unknown",
     summary: check.summary,
+    ...(check.status === "healthy" && typeof check.details?.account === "string" ? { account: check.details.account } : {}),
   };
 }
 
@@ -59,7 +60,7 @@ export function createProviderConnectionProbe(options: ProviderConnectionProbeOp
   const readiness = { ...(options.runCommand ? { runCommand: options.runCommand } : {}), ...(options.env ? { env: options.env } : {}) };
   const checks: Record<HarnessKind, () => Promise<ProviderConnection>> = {
     opencode: async () => providerConnectionFromHealth(await createProviderReadinessCheck("opencode", readiness)()),
-    "claude-code": async () => providerConnectionFromHealth(await createProviderReadinessCheck("claude-code", readiness)()),
+    "claude-code": async () => providerConnectionFromHealth(await createProviderReadinessCheck("claude-code", { ...readiness, includeAccount: true })()),
     devin: createDevinConnectionCheck({ ...(options.runCommand ? { runCommand: options.runCommand } : {}), ...(options.resolveDevinExecutable ? { resolveExecutable: options.resolveDevinExecutable } : {}) }),
     codex: async () => providerConnectionFromHealth(await createProviderReadinessCheck("codex", readiness)()),
   };

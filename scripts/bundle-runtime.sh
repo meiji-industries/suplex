@@ -9,6 +9,11 @@ node_root=$(mise where node)
   exit 1
 }
 
+# `mise run` hands its tasks whatever node is first on PATH, which is not always the pinned one.
+# Every pnpm command below has to see the pinned node or the native modules it installs get the wrong ABI.
+PATH="$node_root/bin:$PATH"
+export PATH
+
 # The deploy below marks this workspace's node_modules as a production install, after which the next
 # root pnpm command offers to purge it. These two installs put the dev install back; the first covers
 # a previous run that was interrupted before the second.

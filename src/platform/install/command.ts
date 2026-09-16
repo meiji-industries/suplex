@@ -43,7 +43,8 @@ export function createInstallContext(): InstallContext {
     freeBytes,
     herdrReadiness: () => checkHerdrReadiness(),
     doctor: async (config) => {
-      const database = new ForgeDatabase(config.databasePath, { readOnly: true });
+      // A read-only handle reports the database as unwritable, which doctor grades as a failure, so the installer opens it the way Forge will.
+      const database = new ForgeDatabase(config.databasePath);
       try {
         return await runDoctor(config, database);
       } finally {

@@ -7,10 +7,10 @@
   <true/>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
   <true/>
-  <!-- Touch ID passkeys; must match KEYCHAIN_ACCESS_GROUP in src/forge-desktop.ts. -->
-  <key>keychain-access-groups</key>
-  <array>
-    <string>6KY6743H52.dev.forge.desktop.webauthn</string>
-  </array>
+  <!--
+    Do not add keychain-access-groups here without a provisioning profile: on a Developer ID build
+    AMFI kills the process at launch. Touch ID passkeys (KEYCHAIN_ACCESS_GROUP in src/forge-desktop.ts)
+    stay unavailable until the app ships with a profile that grants the group.
+  -->
 </dict>
 </plist>

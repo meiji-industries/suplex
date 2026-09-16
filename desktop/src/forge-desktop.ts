@@ -6,7 +6,7 @@ import { classifyNavigation, parseForgeTarget, resolveForgeTarget, type ForgeTar
 import { forgetTarget, readTargets, rememberTarget, type TargetRegistry } from "./target-store";
 import { createDesktopUpdater } from "./desktop-updater";
 
-const KEYCHAIN_ACCESS_GROUP = "6KY6743H52.dev.forge.desktop.webauthn"; // must match build/entitlements.mac.plist
+const KEYCHAIN_ACCESS_GROUP = "6KY6743H52.dev.forge.desktop.webauthn"; // inert until build/entitlements.mac.plist grants it via a provisioning profile
 const INVALID_TITLE = "The Forge URL is not valid";
 
 type Bounds = { width: number; height: number; x?: number; y?: number };

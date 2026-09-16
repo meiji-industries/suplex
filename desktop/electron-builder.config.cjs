@@ -10,6 +10,7 @@ module.exports = {
   productName: "Forge",
   directories: { output: "release" },
   files: ["dist/src/**"],
+  extraResources: [{ from: "runtime", to: "runtime" }],
   publish: feed ? [{ provider: "generic", url: feed }] : null,
   dmg: { sign: true },
   mac: {

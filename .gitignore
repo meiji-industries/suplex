@@ -8,6 +8,7 @@ playwright-report/
 test-results/
 desktop/dist/
 desktop/release/
+desktop/runtime/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

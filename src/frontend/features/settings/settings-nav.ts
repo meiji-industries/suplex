@@ -9,13 +9,13 @@ export type SettingsNavGroup = { title: string; items: SettingsNavItem[] };
 export function buildSettingsGroups(companyId: string, user?: ApiUser): SettingsNavGroup[] {
   const admin = user?.role === "admin";
   const companyItems: SettingsNavItem[] = [
-    ...(admin ? [{ label: "Onboarding", href: withCompany("/admin/onboarding", companyId), icon: ListChecks }] : []),
     { label: "Profile", href: withCompany("/profile", companyId), icon: UserRound },
     { label: "Templates", href: withCompany("/templates", companyId), icon: FileText },
     ...(admin && companyId ? [{ label: "Workspace", href: companySettingsPath(companyId), icon: Building2 }] : []),
     ...(admin ? [
       { label: "Workflows", href: withCompany("/admin/workflows", companyId), icon: Workflow },
       { label: "Triggers", href: withCompany("/admin/triggers", companyId), icon: Webhook },
+      { label: "Onboarding", href: withCompany("/admin/onboarding", companyId), icon: ListChecks },
     ] : []),
   ];
   return [

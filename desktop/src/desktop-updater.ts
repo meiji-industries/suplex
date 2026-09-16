@@ -58,7 +58,7 @@ export class DesktopUpdater {
   }
 
   private async offerRestart(info: UpdateInfo): Promise<void> {
-    const answer = await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: `Forge desktop app ${info.version} was downloaded.`, detail: "Restart the desktop app to apply the update. The Forge host stays active.", buttons: ["Restart Forge", "Continue"], defaultId: 0, cancelId: 1 });
+    const answer = await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: `Forge desktop app ${info.version} was downloaded.`, detail: "Restart the desktop app to apply the update. A Forge host started by this app restarts too; an independent host is not changed.", buttons: ["Restart Forge", "Continue"], defaultId: 0, cancelId: 1 });
     if (answer.response === 0) this.updater.quitAndInstall(false, true);
   }
 

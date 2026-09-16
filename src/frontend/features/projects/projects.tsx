@@ -1,4 +1,6 @@
+import { FolderGit2 } from "lucide-react";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../../components/ui/empty.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { ApplicationFrame } from "../../shell/application-frame.js";
@@ -60,7 +62,14 @@ export function ProjectsView(): ReactElement {
             <div className="grid gap-3">
               {!loadError && loadedCompanyId !== companyId ? <div className="flex items-center gap-2 py-8 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading projects…</span></div> : null}
               <ProjectCards projects={visibleProjects} agents={agents} onSaved={reload} />
-              {!loading && loadedCompanyId === companyId && visibleProjects.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">No projects configured.</div> : null}
+              {!loading && loadedCompanyId === companyId && visibleProjects.length === 0 ? <Empty>
+                <EmptyHeader>
+                  <EmptyMedia variant="icon"><FolderGit2 aria-hidden="true" /></EmptyMedia>
+                  <EmptyTitle>No projects yet</EmptyTitle>
+                  <EmptyDescription>Add a repository to create your first project.</EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent><NewButton disabled={currentCompany.status !== "active"} onClick={() => setCreateOpen(true)}>Create your first project</NewButton></EmptyContent>
+              </Empty> : null}
             </div>
           ) : loading ? <p className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading companies…</span></p> : <p className="text-xs text-muted-foreground">{companyError ? "Unable to load companies" : user?.role === "admin" ? "Add a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
           {loadError ? <div className="mt-3 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{loadError}</AlertDescription></Alert></div> : null}

@@ -73,6 +73,17 @@ test("a missing health snapshot does not gate application pages", async () => {
   } finally { await app.close(); }
 });
 
+test("the launch route opens onboarding only before the first project", async () => {
+  const fixture = await nativeApp();
+  try {
+    expect((await fixture.app.inject({ method: "GET", url: "/", headers: fixture.headers })).headers.location).toBe("/tasks");
+    fixture.database.authQuery(db => db.prepare("DELETE FROM forge_projects WHERE id = ?").run(fixture.project.id));
+    expect((await fixture.app.inject({ method: "GET", url: "/", headers: fixture.headers })).headers.location).toBe("/onboarding");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("page and health API sessions are checked before any host health is read", async () => {
   const fixture = await nativeApp();
   let reads = 0;

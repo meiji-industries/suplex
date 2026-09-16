@@ -43,15 +43,25 @@ blockmap at the same base URL. The DMG is useful for manual installation but is
 not the updater payload. Keep the application version newer than every published
 version.
 
+After `mise run desktop:dist:signed`, publish with `mise run desktop:publish`.
+Both tasks fetch their Apple signing and R2 values through the Forge 1Password
+service account. The publisher verifies the signed app and stapled DMG, uploads
+immutable versioned artifacts to `stable/mac/arm64`, checks their public URLs,
+then uploads `latest-mac.yml` last with `no-cache`.
+
+`mise run release:major`, `release:minor`, and `release:patch` run the full
+release pipeline: verify a clean checkout, fetch the service account, bump both
+package versions, sign/notarize, commit, tag, push, then publish. The manifest
+is published last.
+
 A distributable macOS update requires a consistent Developer ID signature on the
 existing application and the downloaded ZIP. Electron Builder can discover an
 installed signing identity during a local build. Production distribution
 normally also requires hardened runtime, notarization, and stapling. The
-repository does not configure the feed contents, publication, notarization, or
-a release server. End-to-end installation cannot be verified without those
-external inputs.
+repository configures the feed layout and publication command, but signing,
+notarization, credentials, and a real update still require the external inputs.
 
 Automatic checks stay silent when no feed is configured. A manual check explains
 that desktop app updates are not configured. When an update exists, Forge asks
-before download and asks again before restarting the desktop app. The Forge
-host stays active.
+before download and asks again before restarting the desktop app. A bundled host
+started by Forge.app restarts with it; an independent host remains untouched.

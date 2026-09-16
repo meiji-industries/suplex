@@ -41,6 +41,7 @@ test("manual check offers download and explicit restart", async () => {
   await vi.waitFor(() => expect(updater.downloadUpdate).toHaveBeenCalledOnce());
   updater.emit("update-downloaded", { version: "1.2.3" });
   await vi.waitFor(() => expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true));
+  expect(showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ detail: "Restart the desktop app to apply the update. A Forge host started by this app restarts too; an independent host is not changed." }));
 });
 
 test("an emitted and rejected error produces one accurate dialog", async () => {

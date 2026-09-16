@@ -2,7 +2,7 @@ import { ChartNoAxesGantt, CirclePlus, Columns3, ClipboardList, EllipsisVertical
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { BarChart3 } from "lucide-react";
 
-import { buttonVariants } from "../components/ui/button.js";
+import { Button, buttonVariants } from "../components/ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu.js";
 import { Input } from "../components/ui/input.js";
@@ -68,12 +68,10 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
   return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Forge" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><CirclePlus />New task <kbd className="ml-auto text-[11px] text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-[11px] text-muted-foreground">⌘K or / search. G then T or B navigates. C starts a new task.</p></DialogContent></Dialog></>;
 }
 
-function SecondaryNavigation({ close }: { close?: () => void }): ReactElement {
+function SecondaryNavigation(): ReactElement {
   const context = useOptionalCompanyContext();
-  const companyId = context?.currentCompany?.id;
   if (!context?.user) return <></>;
-  const settingsHref = context.user.role === "admin" && companyId ? companySettingsPath(companyId) : withCompany("/profile", companyId);
-  return <SidebarGroup className="mt-auto"><SidebarGroupContent><SidebarMenu><SidebarMenuItem><SystemHealthIndicator sidebar /></SidebarMenuItem><SidebarMenuItem><SidebarMenuButton render={<a href={settingsHref} onClick={close}><Settings />Settings</a>} isActive={isActive(settingsHref)} /></SidebarMenuItem></SidebarMenu></SidebarGroupContent></SidebarGroup>;
+  return <SidebarGroup className="mt-auto"><SidebarGroupContent><SidebarMenu><SidebarMenuItem><SystemHealthIndicator sidebar /></SidebarMenuItem></SidebarMenu></SidebarGroupContent></SidebarGroup>;
 }
 
 function UserMenu(): ReactElement | null {
@@ -88,6 +86,8 @@ async function signOut(): Promise<void> { try { await fetch("/api/auth/sign-out"
 
 export function AppSidebar(): ReactElement {
   const context = useOptionalCompanyContext();
+  const companyId = context?.currentCompany?.id;
+  const settingsHref = context?.user?.role === "admin" && companyId ? companySettingsPath(companyId) : withCompany("/profile", companyId);
   const { setOpenMobile } = useSidebar();
   const close = (): void => setOpenMobile(false);
   useEffect(() => {
@@ -117,8 +117,8 @@ export function AppSidebar(): ReactElement {
   }, [context?.currentCompany?.id, context?.currentCompany?.status]);
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
-      <SidebarHeader className="titlebar-drag titlebar-top"><div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div></SidebarHeader>
-      <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} /><SecondaryNavigation close={close} /></SidebarContent>
+      <SidebarHeader className="titlebar-drag titlebar-top"><div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div>{context?.user ? <Button variant="ghost" size="icon-sm" nativeButton={false} render={<a href={settingsHref} onClick={close} aria-label="Settings" title="Settings" />}><Settings /></Button> : null}<span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div></SidebarHeader>
+      <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} /><SecondaryNavigation /></SidebarContent>
       <NavigationSearch close={close} />
       <SidebarFooter><UserMenu /></SidebarFooter>
     </Sidebar>

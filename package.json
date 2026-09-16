@@ -1,6 +1,6 @@
 {
   "name": "forge",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.22.0",
@@ -40,7 +40,8 @@
     "desktop:build": "pnpm --filter forge-desktop build",
     "desktop:typecheck": "pnpm --filter forge-desktop typecheck",
     "desktop:test": "vitest run --project unit desktop/tests",
-    "desktop:dist:signed": "pnpm --filter forge-desktop dist:signed"
+    "desktop:dist:signed": "pnpm --filter forge-desktop dist:signed",
+    "desktop:publish": "bash scripts/publish-desktop-release.sh"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

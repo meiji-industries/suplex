@@ -92,14 +92,80 @@ run = "pnpm run desktop:dist"
 [tasks."desktop:dist:signed"]
 description = "Bundle the server runtime, then package, sign, notarize, and staple the arm64 DMG for distribution; Apple credentials come from the 1Password Forge vault (.env.production)"
 run = '''
-if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
-  f="$HOME/.config/forge/op-service-account-token"
-  [ -r "$f" ] || { echo "Set OP_SERVICE_ACCOUNT_TOKEN or save the 1Password service account token to $f" >&2; exit 1; }
-  export OP_SERVICE_ACCOUNT_TOKEN="$(cat "$f")"
-fi
+source scripts/onepassword.sh
+onepassword_setup_service_account
 pnpm run desktop:dist:signed
 shasum -a 256 desktop/release/Forge-*-arm64.dmg
 '''
+[tasks."_1password:setup"]
+hide = true
+description = "Fetch or verify the Forge 1Password service account"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+'''
+[tasks."desktop:publish"]
+description = "Publish the signed desktop release with R2 credentials from 1Password"
+run = '''
+source scripts/onepassword.sh
+onepassword_setup_service_account
+op run --env-file desktop/release.env -- pnpm run desktop:publish
+'''
+[tasks."_release:bump"]
+hide = true
+run = '''
+node --input-type=module <<'NODE'
+import { readFile, writeFile } from "node:fs/promises";
+
+const files = ["package.json", "desktop/package.json"];
+const packages = await Promise.all(files.map(async (file) => ({ file, value: JSON.parse(await readFile(file, "utf8")) })));
+const current = packages[0].value.version;
+if (!packages.every(({ value }) => value.version === current)) throw new Error("Desktop and runtime versions must match before release.");
+const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(current);
+if (!match) throw new Error(`Expected a semantic version, got ${current}.`);
+const [major, minor, patch] = match.slice(1).map(Number);
+const next = process.env.RELEASE_BUMP === "major" ? `${major + 1}.0.0`
+  : process.env.RELEASE_BUMP === "minor" ? `${major}.${minor + 1}.0`
+  : process.env.RELEASE_BUMP === "patch" ? `${major}.${minor}.${patch + 1}`
+  : (() => { throw new Error("RELEASE_BUMP must be major, minor, or patch."); })();
+await Promise.all(packages.map(({ file, value }) => writeFile(file, `${JSON.stringify({ ...value, version: next }, null, 2)}\n`)));
+console.log(`${current} -> ${next}`);
+NODE
+'''
+[tasks."_release:check"]
+hide = true
+description = "Verify the checkout is ready for a desktop release"
+run = '''
+git --no-pager diff --check
+[[ -z "$(git status --porcelain)" ]] || { echo "Commit or remove working-tree changes before releasing." >&2; exit 1; }
+root_version="$(node -p "require('./package.json').version")"
+desktop_version="$(node -p "require('./desktop/package.json').version")"
+[[ "$root_version" == "$desktop_version" ]] || { echo "Desktop and runtime versions must match before release." >&2; exit 1; }
+'''
+[tasks."_release:commit"]
+hide = true
+description = "Commit, tag, and push the released desktop version"
+run = '''
+version="$(node -p "require('./package.json').version")"
+git add package.json desktop/package.json
+git commit -m "release: v$version"
+git tag "v$version"
+git push
+git push origin "v$version"
+'''
+[tasks."_release:run"]
+hide = true
+description = "Run the desktop release pipeline"
+run = "mise run _release:check && mise run _1password:setup && mise run _release:bump && mise run desktop:dist:signed && mise run _release:commit && mise run desktop:publish"
+[tasks."release:major"]
+description = "Bump, sign, notarize, commit, tag, push, and publish the next major desktop release"
+run = "RELEASE_BUMP=major mise run _release:run"
+[tasks."release:minor"]
+description = "Bump, sign, notarize, commit, tag, push, and publish the next minor desktop release"
+run = "RELEASE_BUMP=minor mise run _release:run"
+[tasks."release:patch"]
+description = "Bump, sign, notarize, commit, tag, push, and publish the next patch desktop release"
+run = "RELEASE_BUMP=patch mise run _release:run"
 [tasks."desktop:open"]
 description = "Open the installed Forge.app at this checkout's dev stack (http://localhost:<port>)"
 run = '''

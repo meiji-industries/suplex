@@ -138,6 +138,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
   void app.register(pages, {
     readHealth,
     ...(auth ? { auth } : {}),
+    ...(projectService ? { projects: projectService } : {}),
     config: dependencies.config,
     ...(dependencies.frontendDevelopment ? { transformHtml: dependencies.frontendDevelopment.transformIndexHtml } : {}),
   });

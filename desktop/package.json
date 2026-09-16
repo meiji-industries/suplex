@@ -1,5 +1,6 @@
 {
   "name": "forge-desktop",
+  "productName": "Forge",
   "private": true,
   "version": "0.1.0",
   "main": "dist/src/main.js",

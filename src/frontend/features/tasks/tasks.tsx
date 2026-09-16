@@ -42,7 +42,7 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const currentScope = useRef(scope);
   currentScope.current = scope;
   const reload = useCallback(async () => {
-    if (!companyId) return;
+    if (!companyId) { setLoaded(true); return; }
     const [result, task, projectResult] = await Promise.all([
       readJson<{ tasks: Task[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks?archived=${archived}`),
       selectedId ? readJson<Task>(`/api/tasks/${encodeURIComponent(selectedId)}`) : Promise.resolve(null),

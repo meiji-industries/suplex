@@ -102,18 +102,35 @@ for this checkout.
 
 ## Set up an installation
 
+The simplest install is the desktop app: open `Forge-<version>-arm64.dmg`,
+drag Forge to Applications, and choose **Run Forge on this Mac**. The app
+ships the server, its dependencies, and Node 26.7.0 inside the bundle. It
+checks the Mac, installs Apple's developer tools (for git) and Herdr if they
+are missing, prepares a database under `~/Library/Application Support/Forge`,
+and starts Forge on `127.0.0.1`. No git, Homebrew, GitHub account, or
+Tailscale is needed for a local install. See the [Desktop app](#desktop-app)
+section below.
+
+To run Forge on a host from a checkout instead:
+
 ```sh
 corepack enable
 pnpm install --frozen-lockfile
 pnpm run build
-pnpm run forge setup
+pnpm run forge setup          # Tailscale access; add --local for a 127.0.0.1-only host
 pnpm run forge start
 ```
 
-Setup writes protected local configuration and prints a one-time passkey
-enrollment URL. The service supports Tailscale Serve HTTPS or a direct Tailscale
-HTTP bind. It rejects public and LAN bindings. Local administration and passkey
-recovery use `pnpm run forge recover`.
+Setup writes protected local configuration. In Tailscale mode it prints a
+one-time passkey enrollment URL; the service supports Tailscale Serve HTTPS or
+a direct Tailscale HTTP bind and rejects public and LAN bindings. In local mode
+(`FORGE_ACCESS_MODE=local`) the service binds only `127.0.0.1` and every
+request from the loopback host is the built-in Operator administrator. Local
+administration and passkey recovery use `pnpm run forge recover`.
+
+`pnpm run forge install --manifest` lists the install stages the desktop app
+runs, and `pnpm run forge install --stage <name> --json` runs one of them. Each
+stage is idempotent and prints one JSON frame on its last stdout line.
 
 Configure companies, projects, and native profiles in the web application.
 Project creation copies a GitHub repository into the configured repository root.
@@ -139,19 +156,32 @@ carry no identity header and see the passkey sign-in instead.
 
 ### Desktop app
 
-`desktop/` is a sandboxed Electron window that loads an existing Forge server.
-It owns no server, database, or agent process; quitting it changes nothing on
-the host. `mise run desktop:dev` opens it from source, `mise run desktop:dist`
-packages `desktop/release/Forge-<version>-arm64.dmg`, and `mise run desktop:open`
-or `forge desktop` opens the installed app at this host's `http://localhost:<port>`.
-The Navigate menu lists every Forge the app has opened: pick one to switch, use
-"Add a Forge URL" for a new one, and "Forget this Forge" to drop the current one.
-`--url` and `FORGE_DESKTOP_URL` override the remembered choice. The sidebar shows
-the host the window is on.
+`desktop/` is a sandboxed Electron window that either runs Forge on this Mac
+or connects to a Forge host elsewhere. On first launch it offers those two
+choices. **Run Forge on this Mac** runs the install stages from the bundled
+runtime under `Contents/Resources/runtime`, shows each stage's progress and
+log, and then starts the bundled server on `127.0.0.1` every time the app
+opens; quitting the app stops that server. Data, the env file, logs, and the
+install record live under `~/Library/Application Support/Forge`; delete that
+directory to start over. If a Forge from a checkout is already answering on
+the chosen port, the app uses it instead of starting its own and leaves it
+running on quit. **Connect to a Forge host** takes a URL, tests it, and
+installs nothing.
 
-The desktop app and Forge host update separately. The Check for Desktop Update
-menu item runs only in the Electron main process. Local builds have no update
-feed. See [docs/updates.md](docs/updates.md) for feed and signing requirements.
+`mise run desktop:dev` opens the app from source, `mise run desktop:dist`
+bundles the runtime and packages `desktop/release/Forge-<version>-arm64.dmg`,
+`mise run desktop:dist:signed` also signs, notarizes, and staples it with the
+credentials in 1Password, and `mise run desktop:open` or `forge desktop` opens
+the installed app at this host's `http://localhost:<port>`. The Navigate menu
+lists every Forge the app has opened: pick one to switch, use "Add a Forge
+URL" for a new one, and "Forget this Forge" to drop the current one. `--url`
+and `FORGE_DESKTOP_URL` override the remembered choice. The sidebar shows the
+host the window is on.
+
+A bundled server updates only with a new Forge.app; its self-update is
+disabled. The Check for Desktop Update menu item runs only in the Electron
+main process. Local builds have no update feed. See
+[docs/updates.md](docs/updates.md) for feed and signing requirements.
 
 Create a task with **Start immediately** selected to start Root without another
 click. Clear the option to keep the task in Backlog. Backlog tasks support title

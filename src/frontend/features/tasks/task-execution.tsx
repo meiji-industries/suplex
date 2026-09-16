@@ -55,7 +55,7 @@ export function TaskTools({ execution, error }: { execution: TaskExecution | nul
       {!session.available ? <p className="text-xs text-muted-foreground">Agent activity is not available for this session.</p> : !session.tools.length ? <p className="text-xs text-muted-foreground">No tool calls yet.</p> : null}
       {session.limited ? <p className="mb-2 text-xs text-muted-foreground">This view includes the latest 100 messages. Open the live pane for the full session.</p> : null}
       {session.tools.map(tool => <Tool key={tool.id} defaultOpen={tool.status === "error"}>
-        <ToolHeader type="dynamic-tool" toolName={tool.name} state={toolStates[tool.status]} />
+        <ToolHeader type="dynamic-tool" toolName={tool.name} input={tool.input} state={toolStates[tool.status]} />
         <ToolContent><ToolInput input={tool.input} /><ToolOutput output={tool.output} errorText={tool.error ?? undefined} /></ToolContent>
       </Tool>)}
     </section>)}

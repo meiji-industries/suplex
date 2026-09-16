@@ -258,12 +258,12 @@ export function SessionHistory({ taskId, sessionId }: { taskId: string; sessionI
       {olderCursor ? <div className="mb-3 flex justify-center"><Button size="xs" variant="outline" disabled={reading} onClick={() => void readEarlier()}>Open earlier messages</Button></div> : null}
       {!messages.length && connection.kind === "live" ? <p className="text-xs text-muted-foreground">No messages yet.</p> : null}
       {!messages.length && connection.kind === "connecting" ? <p className="text-xs text-muted-foreground" aria-busy="true">Forge connects to live output.</p> : null}
-      <div className="grid gap-4">{messages.map(message => <article key={message.id} data-native-message-id={message.id} className={message.content.every(part => part.type === "tool") ? "min-w-0" : "min-w-0 border-b pb-4 last:border-b-0"}>
+      <div className="grid gap-4">{messages.map(message => <article key={message.id} data-native-message-id={message.id} className="min-w-0">
         {message.role === "user" ? <header className="mb-2 text-xs font-medium">Instruction</header> : null}
         <div className="grid min-w-0 gap-2">{message.content.map(part => part.type === "text"
           ? <Markdown key={part.id} source={part.text} />
           : <Tool key={part.id}>
-            <ToolHeader type="dynamic-tool" toolName={part.name} state={toolStates[part.status]} />
+            <ToolHeader type="dynamic-tool" toolName={part.name} input={part.input} state={toolStates[part.status]} />
             <HistoryToolContent part={part} />
           </Tool>)}</div>
       </article>)}</div>

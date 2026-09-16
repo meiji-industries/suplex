@@ -1,6 +1,5 @@
 "use client";
 
-import { Badge } from "../ui/badge.js";
 import { Collapsible as BaseCollapsible } from "@base-ui/react/collapsible";
 
 const Collapsible = BaseCollapsible.Root;
@@ -10,9 +9,10 @@ import { cn } from "../../lib/utils.js";
 import type { DynamicToolUIPart, ToolUIPart } from "ai";
 import {
   CheckCircleIcon,
-  ChevronDownIcon,
   CircleIcon,
   ClockIcon,
+  PlusIcon,
+  TerminalIcon,
   WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
@@ -25,7 +25,7 @@ export type ToolProps = Omit<ComponentProps<typeof Collapsible>, "className"> & 
 
 export const Tool = ({ className, ...props }: ToolProps) => (
   <Collapsible
-    className={cn("group not-prose mb-4 w-full rounded-md border", className)}
+    className={cn("group not-prose w-full min-w-0", className)}
     {...props}
   />
 );
@@ -34,6 +34,7 @@ export type ToolPart = ToolUIPart | DynamicToolUIPart;
 
 export type ToolHeaderProps = {
   title?: string;
+  input?: ToolPart["input"];
   className?: string;
 } & (
   | { type: ToolUIPart["type"]; state: ToolUIPart["state"]; toolName?: never }
@@ -55,25 +56,32 @@ const statusLabels: Record<ToolPart["state"], string> = {
 };
 
 const statusIcons: Record<ToolPart["state"], ReactNode> = {
-  "approval-requested": <ClockIcon className="size-4 text-yellow-600" />,
-  "approval-responded": <CheckCircleIcon className="size-4 text-blue-600" />,
-  "input-available": <ClockIcon className="size-4 animate-pulse" />,
-  "input-streaming": <CircleIcon className="size-4" />,
-  "output-available": <CheckCircleIcon className="size-4 text-green-600" />,
-  "output-denied": <XCircleIcon className="size-4 text-orange-600" />,
-  "output-error": <XCircleIcon className="size-4 text-red-600" />,
+  "approval-requested": <ClockIcon className="size-3 text-yellow-600" />,
+  "approval-responded": <CheckCircleIcon className="size-3 text-blue-600" />,
+  "input-available": <ClockIcon className="size-3 animate-pulse" />,
+  "input-streaming": <CircleIcon className="size-3" />,
+  "output-available": <CheckCircleIcon className="size-3 text-green-600" />,
+  "output-denied": <XCircleIcon className="size-3 text-orange-600" />,
+  "output-error": <XCircleIcon className="size-3 text-red-600" />,
 };
 
-export const getStatusBadge = (status: ToolPart["state"]) => (
-  <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
-    {statusIcons[status]}
-    {statusLabels[status]}
-  </Badge>
-);
+const shellTools = new Set(["bash", "shell", "terminal", "exec", "run"]);
+
+/** One-line preview of a tool input: the first string field, else compact JSON. */
+export const summarizeToolInput = (input: ToolPart["input"]): string => {
+  if (typeof input === "string") return input;
+  if (input && typeof input === "object") {
+    const text = Object.values(input as Record<string, unknown>).find((value): value is string => typeof value === "string" && value.trim().length > 0);
+    if (text) return text.replace(/\s+/g, " ").trim();
+    return JSON.stringify(input);
+  }
+  return "";
+};
 
 export const ToolHeader = ({
   className,
   title,
+  input,
   type,
   state,
   toolName,
@@ -81,21 +89,28 @@ export const ToolHeader = ({
 }: ToolHeaderProps) => {
   const derivedName =
     type === "dynamic-tool" ? toolName : type.split("-").slice(1).join("-");
+  const name = title ?? derivedName;
+  const Icon = shellTools.has(name.toLowerCase()) ? TerminalIcon : WrenchIcon;
+  const summary = summarizeToolInput(input);
 
   return (
     <CollapsibleTrigger
       className={cn(
-        "flex w-full items-center justify-between gap-4 p-3",
+        "group/collapsible -mx-1.5 flex max-w-full items-center gap-2 rounded-sm px-1.5 py-1 text-left hover:bg-muted/50",
         className
       )}
+      title={summary || undefined}
       {...props}
     >
-      <div className="flex items-center gap-2">
-        <WrenchIcon className="size-4 text-muted-foreground" />
-        <span className="font-medium text-sm">{title ?? derivedName}</span>
-        {getStatusBadge(state)}
-      </div>
-      <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" />
+      <span className="relative shrink-0">
+        <Icon className="size-3 text-muted-foreground group-hover/collapsible:opacity-0" />
+        <PlusIcon className="absolute inset-0 m-auto hidden size-3 text-muted-foreground group-hover/collapsible:block group-data-[panel-open]:rotate-45" />
+      </span>
+      <span className="shrink-0 text-sm">{name}</span>
+      {summary ? (
+        <span className="truncate rounded-md bg-muted px-1 py-0.5 font-mono text-xs font-medium text-muted-foreground">{summary}</span>
+      ) : null}
+      {state !== "output-available" ? <span className="shrink-0" title={statusLabels[state]} aria-label={statusLabels[state]}>{statusIcons[state]}</span> : null}
     </CollapsibleTrigger>
   );
 };
@@ -105,7 +120,7 @@ export type ToolContentProps = Omit<ComponentProps<typeof CollapsibleContent>, "
 export const ToolContent = ({ className, ...props }: ToolContentProps) => (
   <CollapsibleContent
     className={cn(
-      "data-[closed]:fade-out-0 data-[closed]:slide-out-to-top-2 data-[open]:slide-in-from-top-2 space-y-4 p-4 text-popover-foreground outline-none data-[closed]:animate-out data-[open]:animate-in",
+      "data-[closed]:fade-out-0 data-[closed]:slide-out-to-top-2 data-[open]:slide-in-from-top-2 space-y-3 py-2 pl-5 text-popover-foreground outline-none data-[closed]:animate-out data-[open]:animate-in",
       className
     )}
     {...props}

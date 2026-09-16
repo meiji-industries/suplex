@@ -116,6 +116,25 @@ test("Coordinator resumes the same native session without reposting its prompt",
   expect(value.harness.dispatched[0]?.messageID).toMatch(/^msg_/);
 });
 
+test.each([
+  { provider: "opencode", model: "openai/gpt-5.6-luna", expected: { providerID: "openai", modelID: "gpt-5.6-luna" } },
+  { provider: "claude-code", model: "opus", expected: { providerID: "claude-code", modelID: "opus" } },
+  { provider: "devin", model: "swe-2", expected: { providerID: "devin", modelID: "swe-2" } },
+  { provider: "codex", model: "gpt-5.6-sol", expected: { providerID: "codex", modelID: "gpt-5.6-sol" } },
+] as const)("recovery preserves the $provider model and dispatches its queued prompt once", async ({ provider, model, expected }) => {
+  const value = await fixture();
+  const profile = { profileId: "profile", provider, model, reasoningLevel: "max", serviceTier: "priority" };
+  value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET root_profile_json = ?, worker_profile_json = ? WHERE task_id = ?").run(JSON.stringify(profile), JSON.stringify(profile), "task"));
+  const root = value.controller.prepareRoot("task");
+  const turn = value.store.pendingTurns(root.id)[0]!;
+
+  await value.controller.recover("task");
+  await value.controller.recover("task");
+
+  expect(value.harness.dispatched).toHaveLength(1);
+  expect(value.harness.dispatched[0]).toMatchObject({ messageID: turn.id, model: expected });
+});
+
 test("a queued human note recovers without pane metadata or duplicate native dispatch", async () => {
   const value = await fixture();
   const root = value.store.claimRoot({ taskId: "task" });

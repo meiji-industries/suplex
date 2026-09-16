@@ -1,10 +1,14 @@
-import { app, BrowserWindow, dialog, Menu, screen, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, shell } from "electron";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { classifyNavigation, parseForgeTarget, resolveForgeTarget, type ForgeTarget } from "./forge-target";
 import { forgetTarget, readTargets, rememberTarget, type TargetRegistry } from "./target-store";
 import { createDesktopUpdater } from "./desktop-updater";
+import { DEFAULT_PORT, next, readInstallRecord, resolveBoot, runtimeRoot, runtimeStamp, writeInstallRecord, type BootEvent, type BootState } from "./boot";
+import { createInstaller, type InstallEvent, type InstallStage, type Installer } from "./installer";
+import { createLocalRuntime, healthy, type LocalRuntime } from "./local-runtime";
+import type { DesktopMessage, DesktopSnapshot } from "./preload";
 
 const KEYCHAIN_ACCESS_GROUP = "6KY6743H52.dev.forge.desktop.webauthn"; // must match build/entitlements.mac.plist
 const INVALID_TITLE = "The Forge URL is not valid";
@@ -92,8 +96,8 @@ export function retryPage(origin: string): string {
 }
 
 /**
- * The desktop app is one sandboxed window that attaches to an existing Forge origin.
- * It never starts, stops, or signals anything; quitting only closes the window.
+ * The desktop app is one sandboxed window. It either supervises the packaged Forge on this Mac,
+ * or attaches to a Forge origin somebody else runs, which it never starts, stops, or signals.
  */
 export async function runForgeDesktop(input: { readonly argv: readonly string[]; readonly environment: NodeJS.ProcessEnv }): Promise<void> {
   if (!app.requestSingleInstanceLock()) {
@@ -106,9 +110,21 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
   const connectPage = join(__dirname, "connect.html");
   const targetFile = (): string => join(app.getPath("userData"), "desktop.json");
   const stateFile = (): string => join(app.getPath("userData"), "window-state.json");
+  const installFile = (): string => join(app.getPath("userData"), "install.json");
+  const logsDirectory = (): string => join(app.getPath("userData"), "logs");
+  const runtimeDirectory = runtimeRoot(input.environment, typeof process.resourcesPath === "string" ? process.resourcesPath : "");
   let window: BrowserWindow | undefined;
   let origin: string | null = null;
   let registry: TargetRegistry = { current: null, targets: [] };
+  let state: BootState = { name: "resolve" };
+  /** The origin of the server this app supervises, so its failures never show the remote host's retry page. */
+  let localOrigin: string | null = null;
+  let server: LocalRuntime | undefined;
+  let adopted = false;
+  let installer: Installer | undefined;
+  let quitting = false;
+  const progress: { stages: readonly InstallStage[]; finished: { stage: string; skipped: boolean; elapsedMs: number }[]; current: string | null; log: string[] } =
+    { stages: [], finished: [], current: null, log: [] };
 
   const fail = (message: string): void => {
     if (probe) process.stderr.write(`${INVALID_TITLE}: ${message}\n`);
@@ -153,6 +169,116 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
     if (origin) registry = await forgetTarget(targetFile(), origin);
     if (window) await showConnectPage(window);
   };
+  const showPage = async (win: BrowserWindow, page: string): Promise<void> => {
+    origin = null;
+    await win.loadFile(join(__dirname, "pages", page));
+  };
+  const tail = async (file: string): Promise<string[]> =>
+    (await readFile(file, "utf8").catch(() => "")).split("\n").filter((line) => line.trim() !== "").slice(-200);
+  const snapshot = (): DesktopSnapshot => ({
+    state: state.name,
+    stages: progress.stages,
+    finished: progress.finished,
+    current: progress.current,
+    log: progress.log,
+    failure: state.name === "failed" ? state.failure : null,
+    dataPath: app.getPath("userData").replace(app.getPath("home"), "~"),
+  });
+  const go = (event: BootEvent): void => {
+    const previous = state;
+    state = next(state, event);
+    if (state !== previous) void enter();
+  };
+  const emit = (event: InstallEvent): void => {
+    if (event.name === "stages") progress.stages = event.stages;
+    if (event.name === "stage-started") progress.current = event.stage;
+    if (event.name === "stage-finished") { progress.finished.push({ stage: event.stage, skipped: event.skipped, elapsedMs: event.elapsedMs }); progress.current = null; }
+    if (event.name === "log") { progress.log.push(event.line); if (progress.log.length > 500) progress.log.splice(0, progress.log.length - 500); }
+    if (event.name === "failed") go({ name: "failed", failure: { from: "installing", title: event.title, reason: event.reason, remedy: event.remedy, stage: event.stage, log: [...progress.log] } });
+    if (window && !window.isDestroyed()) window.webContents.send("forge:event", event);
+  };
+  const runInstall = async (from: string | null): Promise<void> => {
+    progress.stages = [];
+    progress.finished = [];
+    progress.current = null;
+    progress.log = [];
+    const record = await readInstallRecord(installFile());
+    installer = createInstaller({ runtimeRoot: runtimeDirectory, userData: app.getPath("userData"), base: input.environment, port: record?.port ?? DEFAULT_PORT });
+    const outcome = await installer.run(from, emit);
+    if (outcome === "cancelled") { state = { name: "choosing" }; await enter(); return; }
+    if (outcome !== "complete") return;
+    await writeInstallRecord(installFile(), { completedAt: new Date().toISOString(), runtimeStamp: (await runtimeStamp(runtimeDirectory)) ?? "", port: record?.port ?? DEFAULT_PORT });
+    go({ name: "installed" });
+  };
+  const startLocal = async (): Promise<void> => {
+    const record = await readInstallRecord(installFile());
+    const port = record?.port ?? DEFAULT_PORT;
+    server = createLocalRuntime({ runtimeRoot: runtimeDirectory, userData: app.getPath("userData"), port, base: input.environment });
+    try {
+      const started = await server.start();
+      adopted = started.adopted;
+      if (record && started.port !== record.port) await writeInstallRecord(installFile(), { ...record, port: started.port });
+      go({ name: "connected", url: `http://127.0.0.1:${started.port}/` });
+    } catch (error) {
+      go({ name: "failed", failure: { from: "starting", title: "Start Forge on this Mac", reason: (error as Error).message, remedy: "Open the logs for the server's own words, then retry.", stage: null, log: await tail(join(logsDirectory(), "server.log")) } });
+    }
+  };
+  const connectRemote = async (win: BrowserWindow, value: string, report: boolean): Promise<void> => {
+    let target: ForgeTarget;
+    try {
+      target = parseForgeTarget(value);
+    } catch (error) {
+      if (report) fail((error as Error).message);
+      else await showConnectPage(win);
+      return;
+    }
+    localOrigin = null;
+    await switchTo(win, target);
+    state = { name: "connected", url: target.url };
+  };
+  /** Performs the state it was given; every page load in the boot sequence happens here. */
+  const enter = async (): Promise<void> => {
+    const win = window;
+    if (!win || win.isDestroyed()) return;
+    switch (state.name) {
+      case "bootstrap-needed":
+        await showPage(win, "choice.html");
+        state = next(state, { name: "shown" });
+        return;
+      case "choosing":
+        await showPage(win, "choice.html");
+        return;
+      case "installing": {
+        const from = state.from;
+        await showPage(win, "install.html");
+        void runInstall(from);
+        return;
+      }
+      case "ready":
+        await showPage(win, "ready.html");
+        return;
+      case "starting":
+        await showPage(win, "connecting.html");
+        void startLocal();
+        return;
+      case "connecting-remote": {
+        const url = state.url;
+        if (url === null) await showConnectPage(win); else await connectRemote(win, url, false);
+        return;
+      }
+      case "connected": {
+        localOrigin = new URL(state.url).origin;
+        rebuildMenu();
+        await load(win, parseForgeTarget(state.url));
+        return;
+      }
+      case "failed":
+        await showPage(win, "failed.html");
+        return;
+      default:
+        return;
+    }
+  };
   const rebuildMenu = (): void => {
     const targets: Electron.MenuItemConstructorOptions[] = registry.targets.map((target) => ({
       label: new URL(target.origin).host,
@@ -172,7 +298,7 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
         ...targets,
         ...(targets.length > 0 ? [{ type: "separator" as const }] : []),
         { label: "Add a Forge URL", click: () => { if (window) void showConnectPage(window); } },
-        { label: "Forget this Forge", enabled: origin !== null, click: () => { void forgetCurrent(); } },
+        { label: "Forget this Forge", enabled: origin !== null && origin !== localOrigin, click: () => { void forgetCurrent(); } },
       ] },
     ]));
   };
@@ -194,7 +320,7 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
       titleBarStyle: "hidden", // the page keeps clear of the traffic lights through env(titlebar-area-x)
       titleBarOverlay: true,
       trafficLightPosition: { x: 16, y: 12 },
-      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false, preload: join(__dirname, "preload.js") },
     });
     window = win;
     let debounce: NodeJS.Timeout | undefined;
@@ -214,11 +340,7 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
         const submitted = new URL(url).searchParams.get("url");
         if (submitted === null) return;
         event.preventDefault();
-        try {
-          void switchTo(win, parseForgeTarget(submitted));
-        } catch (error) {
-          fail((error as Error).message);
-        }
+        void connectRemote(win, submitted, true);
         return;
       }
       const decision = classifyNavigation(url, origin);
@@ -228,8 +350,15 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
     };
     win.webContents.on("will-navigate", guard);
     win.webContents.on("will-redirect", guard);
-    win.webContents.on("did-fail-load", (_event, _code, _description, validatedUrl, mainFrame) => {
-      if (mainFrame && origin && !validatedUrl.startsWith("data:") && !validatedUrl.startsWith("file:")) void win.loadURL(retryPage(origin));
+    win.webContents.on("did-fail-load", (_event, _code, description, validatedUrl, mainFrame) => {
+      if (!mainFrame || !origin || validatedUrl.startsWith("data:") || validatedUrl.startsWith("file:")) return;
+      if (origin === localOrigin) {
+        void tail(join(logsDirectory(), "server.log")).then((log) => {
+          go({ name: "failed", failure: { from: "starting", title: "Start Forge on this Mac", reason: `Forge on this Mac stopped answering (${description}).`, remedy: "Retry starts it again.", stage: null, log } });
+        });
+        return;
+      }
+      void win.loadURL(retryPage(origin));
     });
     return win;
   };
@@ -244,14 +373,22 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
     let resolved: ReturnType<typeof resolveForgeTarget>;
     try {
       registry = await readTargets(targetFile());
-      resolved = resolveForgeTarget({ argv: input.argv, environment: input.environment, persisted: registry.current?.url ?? null });
+      resolved = resolveForgeTarget({ argv: input.argv, environment: input.environment, persisted: null });
     } catch (error) {
       fail((error as Error).message);
       app.exit(1);
       return;
     }
     const win = await createWindow();
-    if (resolved) await switchTo(win, resolved.target); else await showConnectPage(win);
+    if (resolved) {
+      await switchTo(win, resolved.target);
+      state = { name: "connected", url: resolved.target.url };
+    } else if (probe) {
+      await showConnectPage(win);
+    } else {
+      state = resolveBoot({ record: await readInstallRecord(installFile()), stamp: await runtimeStamp(runtimeDirectory), remote: registry.current?.url ?? null });
+      await enter();
+    }
     if (probe) await runProbe(win);
   };
   /** A second launch (for example `open -a Forge --args --url …`) may carry a target; otherwise it just focuses the window. */
@@ -267,6 +404,40 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
     if (requested && window) await switchTo(window, requested);
   };
 
+  ipcMain.removeHandler("forge:desktop");
+  ipcMain.handle("forge:desktop", async (event: Electron.IpcMainInvokeEvent, message: DesktopMessage): Promise<unknown> => {
+    if (event.senderFrame?.url.startsWith("file:") !== true) return null; // only this app's own pages drive the boot sequence
+    switch (message.action) {
+      case "snapshot": return snapshot();
+      case "choose": go({ name: "choose", mode: message.mode }); return null;
+      case "cancel": installer?.cancel(); return null;
+      case "retry": go({ name: "retry" }); return null;
+      case "launch": go({ name: "launch" }); return null;
+      case "back": go({ name: "back" }); return null;
+      case "open-logs": await shell.openPath(logsDirectory()); return null;
+      case "copy-output": {
+        const failure = state.name === "failed" ? state.failure : null;
+        clipboard.writeText(failure ? [failure.title, failure.reason, failure.remedy ?? "", ...failure.log].join("\n") : progress.log.join("\n"));
+        return null;
+      }
+      case "test-connection": {
+        let target: ForgeTarget;
+        try {
+          target = parseForgeTarget(message.url);
+        } catch (error) {
+          return { ok: false, reason: (error as Error).message };
+        }
+        return (await healthy(target.origin)) ? { ok: true, reason: null } : { ok: false, reason: `No Forge answered at ${target.origin}/health.` };
+      }
+      default: return null;
+    }
+  });
+  app.on("before-quit", (event) => {
+    if (quitting || server === undefined || adopted) return; // an adopted server outlives this window
+    quitting = true;
+    event.preventDefault();
+    void server.stop().finally(() => { app.quit(); });
+  });
   app.on("second-instance", (_event, argv) => { void openWith(argv); });
   app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
   app.on("activate", () => { void open(); });

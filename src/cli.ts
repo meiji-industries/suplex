@@ -10,6 +10,7 @@ import { readProcessRegistry, stopOwnedProcesses } from "./platform/process-mana
 import { startForge } from "./platform/runtime.js";
 import { StructuredLogger } from "./platform/logging.js";
 import { runSetup } from "./platform/setup.js";
+import { runInstallCommand } from "./platform/install/command.js";
 import { BackupService } from "./platform/backup.js";
 import { formatDoctor, runDoctor } from "./platform/diagnostics/doctor.js";
 import { formatTaskDiagnostic, inspectTask, writeTaskBundle } from "./platform/diagnostics/task.js";
@@ -42,7 +43,13 @@ async function stopForge(config: ReturnType<typeof loadConfig>): Promise<void> {
 
 async function main(): Promise<void> {
   if (command === "setup" || command === "onboard") {
-    await runSetup();
+    await runSetup(commandArgs.includes("--local") ? { local: true } : {});
+    return;
+  }
+  if (command === "install") {
+    // Install sets up a local Forge, so the stages read a local configuration even before they write the environment file.
+    process.env.FORGE_ACCESS_MODE ??= "local";
+    process.exitCode = await runInstallCommand(commandArgs);
     return;
   }
   if (command === "logs") {
@@ -73,7 +80,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "help") {
-    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|migrate|task|doctor|mcp|start|stop|restart|logs> [--foreground]\n");
+    process.stdout.write("Usage: pnpm run forge <setup [--local]|install|recover|backup|verify-backup|restore|migrate|task|doctor|mcp|start|stop|restart|logs> [--foreground]\n");
     return;
   }
   const config = loadConfig();

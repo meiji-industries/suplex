@@ -5,7 +5,7 @@ import { HEALTH_CHECK_IDS, PROVIDER_HARNESS_KINDS } from "./health-contract.js";
 const primitive = z.union([z.string(), z.number(), z.boolean()]);
 
 export const ForgeEnvironmentSchema = z.object({
-  FORGE_ACCESS_MODE: z.literal("tailscale").optional(),
+  FORGE_ACCESS_MODE: z.enum(["tailscale", "local"]).optional(),
   FORGE_TAILSCALE_EXPOSURE: z.enum(["direct", "serve"]).optional(),
   FORGE_TAILSCALE_ADDRESS: z.string().min(1).optional(),
   FORGE_BIND_ADDRESS: z.string().min(1).optional(),
@@ -21,7 +21,7 @@ export const ForgeEnvironmentSchema = z.object({
 }).passthrough();
 
 export const ForgeConfigSchema = z.object({
-  accessMode: z.literal("tailscale"),
+  accessMode: z.enum(["tailscale", "local"]),
   tailscaleExposure: z.enum(["direct", "serve"]),
   bindAddress: z.string().min(1),
   reachableAddress: z.string().url(),

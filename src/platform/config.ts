@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 
 import { ForgeConfigSchema, ForgeEnvironmentSchema } from "./schemas.js";
 
-export type AccessMode = "tailscale";
+export type AccessMode = "tailscale" | "local";
 export type TailscaleExposure = "direct" | "serve";
 
 export interface ForgeConfig {
@@ -124,26 +124,26 @@ function installationId(dataRoot: string, environment: { FORGE_INSTALLATION_ID?:
   return generated;
 }
 
-export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeConfig {
-  assertSupportedNodeRuntime();
-  const environmentFile = environment.FORGE_ENV_FILE ?? (environment === process.env ? ".forge/forge.env" : undefined);
-  const fileEnvironment = environmentFile ? readEnvironmentFile(environmentFile) : {};
-  const configuredEnvironment: NodeJS.ProcessEnv = { ...fileEnvironment, ...environment };
-  const parsedEnvironment = ForgeEnvironmentSchema.safeParse(configuredEnvironment);
-  if (!parsedEnvironment.success) {
-    throw new UnsafeBindingError(`Forge environment is invalid: ${parsedEnvironment.error.issues[0]?.message ?? "unknown error"}`);
-  }
-  const accessMode = parsedEnvironment.data.FORGE_ACCESS_MODE ?? "tailscale";
-  if (accessMode !== "tailscale") {
-    throw new UnsafeBindingError(`Forge only supports Tailscale-only access; received ${accessMode}`);
-  }
+type Binding = { tailscaleExposure: TailscaleExposure; bindAddress: string; reachableHost: string; scheme: "http" | "https" };
 
-  const tailscaleExposure = parsedEnvironment.data.FORGE_TAILSCALE_EXPOSURE ?? "direct";
+type ForgeEnvironment = ReturnType<typeof ForgeEnvironmentSchema.parse>;
+
+/** Loopback is the whole boundary in local mode, so the Tailscale settings are ignored rather than validated. */
+function localBinding(environment: ForgeEnvironment): Binding {
+  const bindAddress = environment.FORGE_BIND_ADDRESS?.trim() || "127.0.0.1";
+  if (bindAddress !== "127.0.0.1" && bindAddress !== "::1") {
+    throw new UnsafeBindingError(`Local access binds loopback only; received ${bindAddress}`);
+  }
+  return { tailscaleExposure: "direct", bindAddress, reachableHost: bindAddress, scheme: "http" };
+}
+
+function tailscaleBinding(environment: ForgeEnvironment): Binding {
+  const tailscaleExposure = environment.FORGE_TAILSCALE_EXPOSURE ?? "direct";
   if (tailscaleExposure !== "direct" && tailscaleExposure !== "serve") {
     throw new UnsafeBindingError(`FORGE_TAILSCALE_EXPOSURE must be direct or serve; received ${tailscaleExposure}`);
   }
-  const configuredAddress = parsedEnvironment.data.FORGE_TAILSCALE_ADDRESS?.trim();
-  const bindAddress = parsedEnvironment.data.FORGE_BIND_ADDRESS?.trim() || configuredAddress;
+  const configuredAddress = environment.FORGE_TAILSCALE_ADDRESS?.trim();
+  const bindAddress = environment.FORGE_BIND_ADDRESS?.trim() || configuredAddress;
   if (!bindAddress) {
     throw new UnsafeBindingError("FORGE_TAILSCALE_ADDRESS is required for Tailscale-only startup");
   }
@@ -154,14 +154,27 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
   if (configuredAddress && !isTailscaleAddress(configuredAddress)) {
     throw new UnsafeBindingError(`Refusing non-Tailscale reachable address: ${configuredAddress}`);
   }
-
   if (tailscaleExposure === "serve" && !configuredAddress) {
     throw new UnsafeBindingError("FORGE_TAILSCALE_ADDRESS is required when Tailscale Serve HTTPS is enabled");
   }
+  return { tailscaleExposure, bindAddress, reachableHost: configuredAddress ?? bindAddress, scheme: tailscaleExposure === "serve" ? "https" : "http" };
+}
+
+export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeConfig {
+  assertSupportedNodeRuntime();
+  const environmentFile = environment.FORGE_ENV_FILE ?? (environment === process.env ? ".forge/forge.env" : undefined);
+  const fileEnvironment = environmentFile ? readEnvironmentFile(environmentFile) : {};
+  const configuredEnvironment: NodeJS.ProcessEnv = { ...fileEnvironment, ...environment };
+  const parsedEnvironment = ForgeEnvironmentSchema.safeParse(configuredEnvironment);
+  if (!parsedEnvironment.success) {
+    throw new UnsafeBindingError(`Forge environment is invalid: ${parsedEnvironment.error.issues[0]?.message ?? "unknown error"}`);
+  }
+  const accessMode = parsedEnvironment.data.FORGE_ACCESS_MODE ?? "tailscale";
+  const { tailscaleExposure, bindAddress, reachableHost, scheme } = accessMode === "local"
+    ? localBinding(parsedEnvironment.data)
+    : tailscaleBinding(parsedEnvironment.data);
   const port = parsePort(parsedEnvironment.data.FORGE_PORT);
   const dataRoot = resolve(parsedEnvironment.data.FORGE_DATA_ROOT ?? ".forge/data");
-  const reachableHost = configuredAddress ?? bindAddress;
-  const scheme = tailscaleExposure === "serve" ? "https" : "http";
   const stableInstallationId = installationId(dataRoot, parsedEnvironment.data, environment === process.env);
   return ForgeConfigSchema.parse({
     accessMode,

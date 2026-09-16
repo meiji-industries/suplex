@@ -26,11 +26,11 @@ export function BlockedByPickerDialog({ open, onOpenChange, companyId, projectId
   }, [open, projectId, companyId, excludeTaskId, onError]);
   const matchingTasks = tasks.filter(task => { const search = query.trim().toLowerCase(); return !search || task.title.toLowerCase().includes(search) || task.id.toLowerCase().includes(search); });
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="max-h-[min(80vh,480px)] overflow-y-auto">
+    <DialogContent className="max-h-[min(80vh,480px)] grid-cols-[minmax(0,1fr)] overflow-y-auto overflow-x-hidden [&>*]:min-w-0">
       <DialogHeader><DialogTitle>Blocked by...</DialogTitle></DialogHeader>
       {current ? <div className="flex min-w-0 items-center gap-2 rounded-md border px-2 py-1.5 text-xs"><TaskTitleLink task={current} companyId={companyId} className="min-w-0 flex-1" /><Button type="button" size="xs" variant="ghost" className="shrink-0" onClick={() => { onClear?.(); onOpenChange(false); }}>Clear</Button></div> : null}
       <Input aria-label="Search tasks" autoFocus placeholder="Search by title or ID" value={query} onChange={event => setQuery(event.target.value)} />
-      <div className="flex flex-col gap-1">{loading ? <span className="text-xs text-muted-foreground">Loading tasks...</span> : matchingTasks.length ? matchingTasks.map(task => <Button key={task.id} type="button" variant="ghost" className="w-full min-w-0 justify-start gap-2" onClick={() => { onSelect({ id: task.id, title: task.title, status: task.status }); onOpenChange(false); }}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="min-w-0 flex-1 truncate text-left">{task.title}</span><span className="shrink-0 text-muted-foreground">{task.id}</span></Button>) : <span className="text-xs text-muted-foreground">No matching active or backlog tasks.</span>}</div>
+      <div className="flex min-w-0 flex-col gap-1">{loading ? <span className="text-xs text-muted-foreground">Loading tasks...</span> : matchingTasks.length ? matchingTasks.map(task => <Button key={task.id} type="button" variant="ghost" className="w-full min-w-0 justify-start gap-2 overflow-hidden" onClick={() => { onSelect({ id: task.id, title: task.title, status: task.status }); onOpenChange(false); }}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="min-w-0 flex-1 truncate text-left">{task.title}</span><span className="shrink-0 text-muted-foreground">{task.id}</span></Button>) : <span className="text-xs text-muted-foreground">No matching active or backlog tasks.</span>}</div>
     </DialogContent>
   </Dialog>;
 }

@@ -2,6 +2,7 @@ import { useId } from "react";
 import { CheckCircle2, CircleDashed, CircleDotDashed, CircleHelp, CircleSlash } from "lucide-react";
 import type { PullRequestReference, TaskControlStatus } from "../../../tasks/control.js";
 import { Badge } from "../../components/ui/badge.js";
+import { withCompany } from "../../lib/api.js";
 
 export const taskStatusLabels = { backlog: "Backlog", active: "Active", waiting_human: "Answer necessary", cancelled: "Cancelled", delivered: "Delivered" } satisfies Record<TaskControlStatus, string>;
 const appearances = {
@@ -26,4 +27,9 @@ export function TaskStatusIcon({ status, pullRequestState }: TaskStatusProps) {
 
 export function TaskStatus({ status, pullRequestState }: TaskStatusProps) {
   return <Badge variant={status === "waiting_human" ? "destructive" : "secondary"}><TaskStatusIcon status={status} pullRequestState={pullRequestState} />{taskStatusLabels[status]}</Badge>;
+}
+
+/** Status icon beside a task title, linking to the task. */
+export function TaskTitleLink({ task, companyId, className = "" }: { task: { id: string; title: string; status: TaskControlStatus; pullRequest?: PullRequestReference | null }; companyId: string; className?: string }) {
+  return <a className={`flex min-w-0 items-center gap-1.5 underline-offset-2 hover:underline ${className}`} href={withCompany(`/tasks/${task.id}`, companyId)} title={`${task.title} · ${taskStatusLabels[task.status]}`}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="truncate">{task.title}</span></a>;
 }

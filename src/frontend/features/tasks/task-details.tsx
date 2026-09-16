@@ -15,7 +15,7 @@ import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Markdown } from "../../components/app/markdown.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
-import { TaskStatus, TaskTitleLink } from "./task-status.js";
+import { TaskStatus, TaskStatusIcon, taskStatusLabels } from "./task-status.js";
 import { TaskWork, type TaskActivity } from "./task-work.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
 import { LivePaneDock } from "./task-chat/live-pane-dock.js";
@@ -48,7 +48,7 @@ export function TaskBlockedByProperty({ task, save }: { task: Pick<Task, "id" | 
     finally { setBusy(false); }
   };
   const openPicker = () => { setError(""); setPickerOpen(true); };
-  return <div className="space-y-1.5"><dt className="text-muted-foreground">Blocked by</dt><dd>{task.blockedBy ? <span className="flex flex-wrap items-center gap-2"><TaskTitleLink task={task.blockedBy} companyId={task.companyId} /><Button type="button" size="xs" variant="ghost" disabled={busy} onClick={openPicker}>Change reference</Button><Button type="button" size="xs" variant="ghost" disabled={busy} onClick={() => void submit(null)}>Clear reference</Button></span> : <Button type="button" size="xs" variant="ghost" disabled={busy} onClick={openPicker}>None</Button>}</dd>{error ? <dd role="alert" className="text-destructive">{error}</dd> : null}<BlockedByPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} companyId={task.companyId} projectId={task.projectId} excludeTaskId={task.id} onSelect={selected => void submit(selected.id)} onError={setError} /></div>;
+  return <div className="space-y-1.5"><dt className="text-muted-foreground">Blocked by</dt><dd>{task.blockedBy ? <button type="button" className="flex min-w-0 items-center gap-1.5 text-left underline-offset-2 hover:underline disabled:opacity-50" disabled={busy} title={`${task.blockedBy.title} · ${taskStatusLabels[task.blockedBy.status]}`} onClick={openPicker}><TaskStatusIcon status={task.blockedBy.status} /><span className="truncate">{task.blockedBy.title}</span></button> : <Button type="button" size="xs" variant="ghost" disabled={busy} onClick={openPicker}>None</Button>}</dd>{error ? <dd role="alert" className="text-destructive">{error}</dd> : null}<BlockedByPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} companyId={task.companyId} projectId={task.projectId} excludeTaskId={task.id} current={task.blockedBy} onSelect={selected => void submit(selected.id)} onClear={() => void submit(null)} onError={setError} /></div>;
 }
 
 export function TaskDetailsPage({ task, project, onChange }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void }): ReactElement {

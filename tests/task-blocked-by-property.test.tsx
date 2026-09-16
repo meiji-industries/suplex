@@ -76,29 +76,32 @@ test("None opens the picker and selecting a task saves its id", async () => {
   expect(view.container.querySelector('[aria-label="Search tasks"]')).toBeNull();
 });
 
-test("Change reference opens the picker without the current task and saves the selection", async () => {
+test("the current reference opens the picker, links to its task, and saves a replacement", async () => {
   const view = mount({ ...activeTask, blockedBy: { id: "task-first", title: "First prerequisite", status: "backlog" } });
   await view.render();
-  await act(async () => { button(view.container, "Change reference").click(); });
+  await act(async () => { button(view.container, "First prerequisite").click(); });
   await flush();
   expect(view.container.querySelector('[aria-label="Search tasks"]')).not.toBeNull();
-  expect(view.container.textContent).toContain("First prerequisite");
+  expect(view.container.querySelector('a[href="/tasks/task-first?company=company-1"]')?.textContent).toContain("First prerequisite");
   expect(view.container.textContent).not.toContain("This task");
   await act(async () => { button(view.container, "Backlog task").click(); await Promise.resolve(); });
   expect(view.save).toHaveBeenCalledWith("task-backlog");
 });
 
-test("Clear reference clears the current Blocked by reference", async () => {
+test("Clear in the picker clears the current Blocked by reference", async () => {
   const view = mount({ ...activeTask, blockedBy: { id: "task-first", title: "First prerequisite", status: "backlog" } });
   await view.render();
-  await act(async () => { button(view.container, "Clear reference").click(); await Promise.resolve(); });
+  await act(async () => { button(view.container, "First prerequisite").click(); });
+  await flush();
+  await act(async () => { button(view.container, "Clear").click(); await Promise.resolve(); });
   expect(view.save).toHaveBeenCalledWith(null);
+  expect(view.container.querySelector('[aria-label="Search tasks"]')).toBeNull();
 });
 
 test("closing the picker leaves the current reference unchanged", async () => {
   const view = mount({ ...activeTask, blockedBy: { id: "task-first", title: "First prerequisite", status: "backlog" } });
   await view.render();
-  await act(async () => { button(view.container, "Change reference").click(); });
+  await act(async () => { button(view.container, "First prerequisite").click(); });
   await flush();
   await act(async () => { button(view.container, "Close").click(); });
   expect(view.save).not.toHaveBeenCalled();

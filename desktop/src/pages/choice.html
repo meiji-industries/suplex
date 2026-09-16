@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Set up Forge</title>
+<link rel="stylesheet" href="pages.css">
+<style>
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+  .card { display: grid; gap: 8px; align-content: start; padding: 16px; border: 1px solid #303030; border-radius: 8px; background: #141414; cursor: pointer; }
+  .card:hover { border-color: #404040; }
+  .card:has(input:checked) { border-color: #e5e5e5; background: #171717; }
+  .card input { -webkit-appearance: none; appearance: none; position: absolute; opacity: 0; }
+  .card strong { font-size: 13px; font-weight: 600; }
+  footer { margin-top: 24px; }
+  @media (max-width: 720px) { .cards { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Set up Forge</h1>
+  <form class="cards" id="modes">
+    <label class="card"><input type="radio" name="mode" value="local" checked><strong>Run Forge on this Mac</strong><p>Installs Herdr and Apple's developer tools if they are missing, then starts a private Forge on this computer. Works offline.</p></label>
+    <label class="card"><input type="radio" name="mode" value="remote"><strong>Connect to a Forge host</strong><p>Use a Forge that is already running elsewhere. Nothing is installed on this Mac.</p></label>
+  </form>
+  <div class="actions"><button class="primary" id="continue" type="button">Continue</button></div>
+  <footer><p id="data-path">Data will live in ~/Library/Application Support/Forge.</p></footer>
+</main>
+<script>
+  const modes = document.getElementById("modes");
+  const chosen = () => modes.elements.mode.value;
+  const go = () => { document.getElementById("continue").disabled = true; window.forgeDesktop.choose(chosen()); };
+  document.getElementById("continue").addEventListener("click", go);
+  modes.addEventListener("submit", (event) => { event.preventDefault(); go(); });
+  modes.addEventListener("dblclick", go);
+  window.forgeDesktop.snapshot().then((snapshot) => {
+    document.getElementById("data-path").textContent = `Data will live in ${snapshot.dataPath}.`;
+  });
+</script>
+</body>
+</html>

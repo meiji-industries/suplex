@@ -91,6 +91,20 @@ test("developer tools fail when the Apple installer never finishes", async () =>
   expect(outcome).toMatchObject({ ok: false, reason: expect.stringContaining("30 minutes") });
 });
 
+test("developer tools fail fast when macOS says they are installed but git does not work", async () => {
+  let waits = 0;
+  const outcome = await stage("developer-tools").run(context({
+    run: async (command, args) => command === "git"
+      ? { exitCode: 1, stdout: "", stderr: "xcrun: error: invalid active developer path" }
+      : args[0] === "--install"
+        ? { exitCode: 1, stdout: "", stderr: "xcode-select: note: Command line tools are already installed." }
+        : { exitCode: 0, stdout: "/Library/Developer/CommandLineTools", stderr: "" },
+    wait: async () => { waits += 1; },
+  }));
+  expect(waits).toBe(0);
+  expect(outcome).toMatchObject({ ok: false, reason: expect.stringContaining("invalid active developer path"), remedy: expect.stringContaining("xcode-select --install") });
+});
+
 test("herdr skips itself when the CLI is installed and the server answers", async () => {
   const commands: string[] = [];
   const outcome = await stage("herdr").run(context({

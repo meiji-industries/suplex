@@ -73,10 +73,14 @@ const developerTools: InstallStage = {
     if (git.exitCode === 0 && tools.exitCode === 0) {
       return { ok: true, skipped: true, reason: `${git.stdout.trim()} already installed` };
     }
+    if (git.exitCode !== 0) context.progress(`git --version failed: ${git.stderr.trim() || `exit ${git.exitCode}`}`);
     context.progress("Asking macOS to install the Apple developer tools");
     const request = await context.run("xcode-select", ["--install"]);
     // xcode-select exits non-zero when the installer is already open; the poll below decides the outcome either way.
     if (request.exitCode !== 0) context.progress(request.stderr.trim() || `xcode-select --install exited ${request.exitCode}`);
+    if (/already installed/.test(`${request.stdout}${request.stderr}`)) {
+      return { ok: false, reason: `macOS says the developer tools are installed, but git does not work: ${git.stderr.trim() || `exit ${git.exitCode}`}`, remedy: "Open Terminal and run: sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install, finish the dialog, then try again." };
+    }
     for (let elapsed = 0; elapsed < DEVELOPER_TOOLS_TIMEOUT_MS; elapsed += 5_000) {
       await context.wait(5_000);
       const retry = await context.run("git", ["--version"]);

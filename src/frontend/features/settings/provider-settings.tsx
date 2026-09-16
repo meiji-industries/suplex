@@ -11,9 +11,9 @@ import { Field, FieldGroup, FieldLabel } from "../../components/ui/field.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { SettingsContent, SettingsLayout } from "./settings-layout.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, type SettingsTableColumn } from "../../components/app/settings-table.js";
-import { PaneTerminal } from "../tasks/task-chat/live-pane-terminal.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { readJson, withCompany } from "../../lib/api.js";
+import { ProviderLoginTerminal, useProviderLogin } from "./provider-login.js";
 
 const columns: SettingsTableColumn[] = [
   { key: "provider", label: "Provider", width: 170 },
@@ -26,7 +26,6 @@ const columns: SettingsTableColumn[] = [
 
 type ProviderView = { status: "loading" } | { status: "failed"; message: string } | { status: "loaded"; data: ProviderListResponse };
 type ProviderInstance = z.infer<typeof ProviderInstanceListResponseSchema>["instances"][number];
-type LoginSession = { paneId: string; label: string };
 
 function ConnectionBadge({ connection }: { connection: ProviderConnection }): ReactElement {
   if (connection.status === "connected") return <Badge variant="secondary" title={connection.summary}>Connected</Badge>;
@@ -56,12 +55,8 @@ export function ProviderSettingsView(): ReactElement {
       if (!silent) setView({ status: "failed", message: reason instanceof Error ? reason.message : "Provider configuration is not available." });
     }
   }, []);
+  const { login, loginPending, startLogin, closeLogin } = useProviderLogin({ reload: load });
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => {
-    if (!login) return;
-    const timer = window.setInterval(() => { void load(true); }, 3_000);
-    return () => window.clearInterval(timer);
-  }, [login, load]);
   const providers = view.status === "loaded" ? view.data.providers : [];
   const create = async (): Promise<void> => {
     if (!label.trim()) return;
@@ -79,26 +74,8 @@ export function ProviderSettingsView(): ReactElement {
     }
   };
   const remove = async (id: string): Promise<void> => { await readJson(`/api/admin/provider-instances/${encodeURIComponent(id)}`, { method: "DELETE" }); setDeleteTarget(null); await load(); };
-  const startLogin = async (key: string, rowLabel: string, url: string): Promise<void> => {
-    setLoginPending(key);
-    setError("");
-    try {
-      const session = await readJson<{ paneId: string }>(url, { method: "POST" });
-      setLogin({ paneId: session.paneId, label: rowLabel });
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Forge could not open a sign-in pane.");
-    } finally {
-      setLoginPending(null);
-    }
-  };
-  const closeLogin = async (): Promise<void> => {
-    const session = login;
-    setLogin(null);
-    if (session) await readJson(`/api/admin/provider-login/${encodeURIComponent(session.paneId)}`, { method: "DELETE" }).catch(() => undefined);
-    await load(true);
-  };
   const loginButton = (key: string, rowLabel: string, url: string): ReactElement => (
-    <Button size="sm" variant="outline" aria-label={`Login to ${rowLabel}`} disabled={loginPending !== null} onClick={() => void startLogin(key, rowLabel, url)}>{loginPending === key ? "Opening" : "Login"}</Button>
+    <Button size="sm" variant="outline" aria-label={`Login to ${rowLabel}`} disabled={loginPending !== null} onClick={() => void startLogin(key, rowLabel, url).catch(reason => setError(reason instanceof Error ? reason.message : "Forge could not open a sign-in pane."))}>{loginPending === key ? "Opening" : "Login"}</Button>
   );
   return <SettingsLayout title="Providers" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/providers", companyId)}>
     <SettingsContent>
@@ -153,14 +130,6 @@ export function ProviderSettingsView(): ReactElement {
       {view.status === "loaded" ? <p className="break-words">Host directory: <code>{view.data.directory}</code></p> : null}
     </div>
     </SettingsContent>
-    {login ? <div className="fixed inset-x-0 bottom-0 z-50 flex h-64 flex-col border-t border-border bg-background" role="region" aria-label={`Sign-in terminal for ${login.label}`}>
-      <div className="flex h-9 shrink-0 items-center justify-between gap-2 px-4">
-        <span className="truncate text-xs font-medium">Login: {login.label}</span>
-        <Button size="sm" variant="outline" onClick={() => void closeLogin()}>Done</Button>
-      </div>
-      <div className="min-h-0 flex-1 px-2 pb-2">
-        <PaneTerminal path={`/api/admin/provider-login/${encodeURIComponent(login.paneId)}/terminal`} interactive paneId={login.paneId} label={`Sign-in pane for ${login.label}`} />
-      </div>
-    </div> : null}
+    <ProviderLoginTerminal login={login} onClose={() => void closeLogin()} />
   </SettingsLayout>;
 }

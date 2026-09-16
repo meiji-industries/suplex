@@ -11,6 +11,7 @@ module.exports = {
   directories: { output: "release" },
   files: ["dist/src/**"],
   publish: feed ? [{ provider: "generic", url: feed }] : null,
+  dmg: { sign: true },
   mac: {
     target: [{ target: "dmg", arch: ["arm64"] }, { target: "zip", arch: ["arm64"] }],
     hardenedRuntime: true,

@@ -29,7 +29,7 @@ describe("packaged Forge.app", () => {
   });
   test("bundles only the desktop app", () => {
     const paths = asarPaths(join(APP, "Contents", "Resources", "app.asar"));
-    expect(paths).toEqual(expect.arrayContaining(["dist/src/connect.html", "dist/src/desktop-updater.js", "dist/src/forge-desktop.js", "dist/src/forge-target.js", "dist/src/main.js", "dist/src/target-store.js", "node_modules/electron-updater/package.json", "package.json"]));
+    expect(paths).toEqual(expect.arrayContaining(["dist/src/boot.js", "dist/src/connect.html", "dist/src/desktop-updater.js", "dist/src/forge-desktop.js", "dist/src/forge-target.js", "dist/src/installer.js", "dist/src/local-runtime.js", "dist/src/main.js", "dist/src/pages/choice.html", "dist/src/pages/failed.html", "dist/src/pages/install.html", "dist/src/pages/pages.css", "dist/src/pages/ready.html", "dist/src/preload.js", "dist/src/target-store.js", "node_modules/electron-updater/package.json", "package.json"]));
     expect(paths.some((path) => path.startsWith("dist/src/") && /server|database|coordination|runtimes/.test(path))).toBe(false);
     expect(paths.some((path) => path.includes("better-sqlite3"))).toBe(false);
   });

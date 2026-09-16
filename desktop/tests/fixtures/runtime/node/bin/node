@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stands in for the Node binary C2 ships inside the bundle.
+command -v node >/dev/null 2>&1 || export PATH="$HOME/.local/share/mise/shims:$PATH"
+exec node "$@"

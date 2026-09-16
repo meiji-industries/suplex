@@ -1,14 +1,18 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { healthy } from "../src/local-runtime";
+import type { DesktopMessage, DesktopSnapshot } from "../src/preload";
 
 const userData = mkdtempSync(join(tmpdir(), "forge-desktop-shell-"));
 class FakeWebContents extends EventEmitter {
   url = "";
   windowOpenHandler: ((details: { url: string }) => { action: string }) | undefined;
   session = { cookies: { get: async (): Promise<unknown[]> => [] } };
+  sent: unknown[] = [];
+  send(_channel: string, payload: unknown): void { this.sent.push(payload); }
   setWindowOpenHandler(handler: (details: { url: string }) => { action: string }): void { this.windowOpenHandler = handler; }
   async loadURL(url: string): Promise<void> { this.url = url; }
   getURL(): string { return this.url; }
@@ -29,7 +33,7 @@ class FakeWindow extends EventEmitter {
   focus(): void { this.focused += 1; }
   getBounds(): { width: number; height: number; x: number; y: number } { return { width: 1200, height: 800, x: 0, y: 0 }; }
   loadURL(url: string): Promise<void> { return this.webContents.loadURL(url); }
-  async loadFile(file: string): Promise<void> { this.webContents.url = `file://${file}`; }
+  async loadFile(file: string): Promise<void> { this.webContents.url = `file://${file}`; this.webContents.emit("did-finish-load"); }
   close(): void { this.destroyed = true; this.emit("closed"); }
 }
 const app = Object.assign(new EventEmitter(), {
@@ -44,13 +48,22 @@ const app = Object.assign(new EventEmitter(), {
   configureWebAuthn: (): void => undefined,
   setAboutPanelOptions: (): void => undefined,
 });
+const ipcMain = {
+  handlers: new Map<string, (event: unknown, message: DesktopMessage) => Promise<unknown>>(),
+  handle(channel: string, handler: (event: unknown, message: DesktopMessage) => Promise<unknown>): void { ipcMain.handlers.set(channel, handler); },
+  removeHandler(channel: string): void { ipcMain.handlers.delete(channel); },
+};
+/** Drives one of the onboarding pages the way the preload does. */
+const desktop = async (message: DesktopMessage): Promise<unknown> => ipcMain.handlers.get("forge:desktop")!({ senderFrame: { url: "file:///pages/choice.html" } }, message);
 const fake = {
   userData,
   FakeWindow,
   app,
   BrowserWindow: FakeWindow,
   Menu: { buildFromTemplate: (template: unknown): unknown => template, setApplicationMenu: (_menu: unknown): void => undefined },
-  shell: { openExternal: async (_url: string): Promise<void> => undefined },
+  ipcMain,
+  clipboard: { writeText: (_text: string): void => undefined },
+  shell: { openExternal: async (_url: string): Promise<void> => undefined, openPath: async (_path: string): Promise<string> => "" },
   dialog: { showErrorBox: (_title: string, _content: string): void => undefined, showMessageBox: async (_options: unknown): Promise<unknown> => undefined },
   screen: { getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }) },
 };
@@ -90,11 +103,11 @@ beforeEach(() => {
 });
 
 describe("window", () => {
-  test("is sandboxed, isolated, without Node or a preload, and loads the exact target", async () => {
+  test("is sandboxed, isolated, without Node integration, and loads the exact target", async () => {
     await runForgeDesktop({ argv: ["--url", `${ORIGIN}/auth?invite=abc`], environment: {} });
     const [win] = fake.FakeWindow.all;
     expect(fake.FakeWindow.all).toHaveLength(1);
-    expect(win?.options.webPreferences).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false });
+    expect(win?.options.webPreferences).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false, preload: expect.stringMatching(/preload\.js$/) });
     expect(win?.options).toMatchObject({ titleBarStyle: "hidden", titleBarOverlay: true, trafficLightPosition: { x: 16, y: 12 } });
     expect(win?.webContents.url).toBe(`${ORIGIN}/auth?invite=abc`);
     expect(JSON.parse(readFileSync(targetFile, "utf8")), "an argument launch is remembered as an origin").toEqual({ current: `${ORIGIN}/`, targets: [`${ORIGIN}/`] });
@@ -230,10 +243,10 @@ describe("target sources", () => {
     expect(exit).toHaveBeenCalledWith(1);
   });
 
-  test("a corrupt persisted target is deleted and the connection page appears", async () => {
+  test("a corrupt persisted target is deleted and the choice screen appears", async () => {
     writeFileSync(targetFile, "{corrupt");
     await runForgeDesktop({ argv: [], environment: {} });
-    expect(fake.FakeWindow.all[0]!.webContents.url).toMatch(/^file:.*connect\.html$/);
+    expect(fake.FakeWindow.all[0]!.webContents.url).toMatch(/^file:.*pages\/choice\.html$/);
     expect(existsSync(targetFile)).toBe(false);
     expect(exit).not.toHaveBeenCalled();
   });
@@ -241,6 +254,8 @@ describe("target sources", () => {
   test("the connection page submission is validated, persisted as an origin, and loaded", async () => {
     await runForgeDesktop({ argv: [], environment: {} });
     const win = fake.FakeWindow.all[0]!;
+    await desktop({ action: "choose", mode: "remote" });
+    await vi.waitFor(() => expect(win.webContents.url).toMatch(/connect\.html$/));
     const page = win.webContents.url;
     expect(existsSync(targetFile)).toBe(false);
     const bad = preventable();
@@ -257,5 +272,66 @@ describe("target sources", () => {
     win.webContents.emit("will-navigate", later, "https://github.com/x");
     expect(later.preventDefault).toHaveBeenCalled();
     expect(openExternal).toHaveBeenCalledWith("https://github.com/x");
+  });
+});
+
+describe("local install", () => {
+  const FIXTURE = join(__dirname, "fixtures", "runtime");
+  const installFile = join(fake.userData, "install.json");
+  const settings = (value: Record<string, unknown>): void => {
+    mkdirSync(join(fake.userData, "data"), { recursive: true });
+    writeFileSync(join(fake.userData, "data", "fixture.json"), JSON.stringify(value));
+  };
+  const start = async (): Promise<FakeWindow> => {
+    await runForgeDesktop({ argv: [], environment: { FORGE_DESKTOP_RUNTIME_ROOT: FIXTURE, HOME: process.env.HOME, USER: process.env.USER } });
+    return fake.FakeWindow.all[0]!;
+  };
+  const onPage = async (win: FakeWindow, page: string, timeout = 20_000): Promise<void> => {
+    await vi.waitFor(() => expect(win.webContents.url).toMatch(new RegExp(`pages/${page}\\.html$`)), { timeout });
+  };
+
+  beforeEach(() => {
+    rmSync(installFile, { force: true });
+    rmSync(join(fake.userData, "data"), { recursive: true, force: true });
+    rmSync(join(fake.userData, "logs"), { recursive: true, force: true });
+  });
+
+  test("choice, install, ready, launch, then the window is on the server this app started", async () => {
+    const win = await start();
+    await onPage(win, "choice");
+    expect(((await desktop({ action: "snapshot" })) as DesktopSnapshot).state).toBe("choosing");
+    await desktop({ action: "choose", mode: "local" });
+    await onPage(win, "install");
+    await onPage(win, "ready");
+    const record = JSON.parse(readFileSync(installFile, "utf8")) as { runtimeStamp: string; port: number };
+    expect(record).toMatchObject({ runtimeStamp: "0.0.0-fixture", port: 4111 });
+    writeFileSync(installFile, JSON.stringify({ ...record, port: 0 })); // port 0 takes a free one, so the walk never adopts a Forge this machine is already running
+    await desktop({ action: "launch" });
+    await onPage(win, "connecting");
+    await vi.waitFor(() => expect(win.webContents.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/), { timeout: 20_000 });
+    const origin = new URL(win.webContents.url).origin;
+    expect(await healthy(origin)).toBe(true);
+    expect(JSON.parse(readFileSync(installFile, "utf8")).port, "the chosen port is remembered").toBe(Number(new URL(origin).port));
+    expect(readFileSync(join(fake.userData, "logs", "server.log"), "utf8")).toContain("fixture supervisor listening");
+    const quit = preventable();
+    fake.app.emit("before-quit", quit);
+    expect(quit.preventDefault).toHaveBeenCalled();
+    await vi.waitFor(async () => { expect(await healthy(origin)).toBe(false); }, { timeout: 10_000 });
+  });
+
+  test("a failed stage latches until Retry, which reruns from that stage", async () => {
+    settings({ failStage: "herdr", reason: "curl exited 22", remedy: "Check the network connection and retry." });
+    const win = await start();
+    await desktop({ action: "choose", mode: "local" });
+    await onPage(win, "failed");
+    const snapshot = (await desktop({ action: "snapshot" })) as DesktopSnapshot;
+    expect(snapshot.failure).toMatchObject({ from: "installing", stage: "herdr", title: "Install Herdr terminals", reason: "curl exited 22", remedy: "Check the network connection and retry." });
+    expect(snapshot.failure?.log).toContain("herdr could not finish");
+    await desktop({ action: "launch" });
+    expect(((await desktop({ action: "snapshot" })) as DesktopSnapshot).state, "the failure is latched").toBe("failed");
+    settings({});
+    await desktop({ action: "retry" });
+    await onPage(win, "ready");
+    expect(existsSync(installFile)).toBe(true);
   });
 });

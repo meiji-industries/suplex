@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Installing Forge</title>
+<link rel="stylesheet" href="pages.css">
+<style>
+  .bar { margin-top: 12px; height: 4px; border-radius: 2px; background: #262626; overflow: hidden; }
+  .bar div { height: 100%; width: 0; background: #e5e5e5; transition: width 200ms linear; }
+  ol { list-style: none; margin: 20px 0 0; padding: 0; display: grid; gap: 8px; }
+  li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px; color: #737373; }
+  li.done, li.running { color: #e5e5e5; }
+  li time { color: #737373; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .mark { display: grid; place-items: center; width: 16px; height: 16px; }
+  .mark::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #404040; }
+  li.done .mark::before { content: "✓"; width: auto; height: auto; background: none; color: #4ade80; font-size: 12px; }
+  li.running .mark::before { width: 12px; height: 12px; border: 1.5px solid #404040; border-top-color: #e5e5e5; border-radius: 50%; background: none; animation: spin 700ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="stage">Setting up Forge</h1>
+  <p id="count"></p>
+  <div class="bar"><div id="fill"></div></div>
+  <ol id="steps"></ol>
+  <details class="log"><summary>Show log</summary><pre id="log"></pre></details>
+  <div class="actions"><button id="cancel" type="button">Cancel</button></div>
+</main>
+<script>
+  const LOG_LINES = 500;
+  const state = { stages: [], finished: new Map(), current: null, log: [] };
+  const elapsed = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`;
+
+  function render() {
+    const total = state.stages.length;
+    const done = state.finished.size;
+    const running = state.stages.find((stage) => stage.name === state.current);
+    document.getElementById("stage").textContent = running ? running.title : done === total && total > 0 ? "Finishing" : "Setting up Forge";
+    document.getElementById("count").textContent = total === 0 ? "" : `${Math.min(done + (running ? 1 : 0), total)} of ${total} steps`;
+    document.getElementById("fill").style.width = total === 0 ? "0%" : `${((done + (running ? 0.5 : 0)) / total) * 100}%`;
+    const steps = document.getElementById("steps");
+    steps.replaceChildren(...state.stages.map((stage) => {
+      const finished = state.finished.get(stage.name);
+      const row = document.createElement("li");
+      row.className = finished ? "done" : stage.name === state.current ? "running" : "";
+      const mark = document.createElement("span");
+      mark.className = "mark";
+      const title = document.createElement("span");
+      title.textContent = finished && finished.skipped ? `${stage.title} — already done` : stage.title;
+      const time = document.createElement("time");
+      time.textContent = finished ? elapsed(finished.elapsedMs) : "";
+      row.append(mark, title, time);
+      return row;
+    }));
+    const log = document.getElementById("log");
+    log.textContent = state.log.join("\n");
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function apply(event) {
+    if (event.name === "stages") state.stages = event.stages;
+    if (event.name === "stage-started") state.current = event.stage;
+    if (event.name === "stage-finished") { state.finished.set(event.stage, event); state.current = null; }
+    if (event.name === "log") { state.log.push(event.line); if (state.log.length > LOG_LINES) state.log.splice(0, state.log.length - LOG_LINES); }
+    render();
+  }
+
+  let live = false;
+  const pending = [];
+  window.forgeDesktop.on((event) => { if (live) apply(event); else pending.push(event); });
+  document.getElementById("cancel").addEventListener("click", () => {
+    document.getElementById("cancel").disabled = true;
+    window.forgeDesktop.cancel();
+  });
+  window.forgeDesktop.snapshot().then((snapshot) => {
+    state.stages = snapshot.stages;
+    state.current = snapshot.current;
+    state.log = snapshot.log.slice(-LOG_LINES);
+    for (const entry of snapshot.finished) state.finished.set(entry.stage, entry);
+    live = true;
+    for (const event of pending) apply(event);
+    render();
+  });
+</script>
+</body>
+</html>

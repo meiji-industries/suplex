@@ -1,0 +1,19 @@
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: #0a0a0a; color: #e5e5e5; font: 13px/1.5 -apple-system, system-ui, sans-serif; -webkit-app-region: drag; padding: max(48px, env(titlebar-area-height, 0px)) 0 32px; }
+main { width: 67vw; margin: 0 auto; }
+h1, h2, p { margin: 0; }
+h1 { font-size: 14px; font-weight: 600; }
+h2 { font-size: 13px; font-weight: 600; }
+p, small { color: #a3a3a3; font-size: 12px; }
+button, a, input, code, pre, details, label { -webkit-app-region: no-drag; }
+button { font: inherit; display: inline-flex; align-items: center; justify-content: center; min-height: 28px; padding: 0 12px; border: 1px solid #404040; border-radius: 5px; background: #171717; color: #e5e5e5; cursor: pointer; }
+button:hover:not(:disabled) { background: #262626; }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: #e5e5e5; border-color: #e5e5e5; color: #171717; min-height: 32px; }
+button.primary:hover:not(:disabled) { background: #d4d4d4; }
+button:focus-visible, a:focus-visible, label:focus-within { outline: 2px solid #a3a3a3; outline-offset: 3px; }
+.actions { display: flex; align-items: center; gap: 12px; margin-top: 24px; }
+.log { margin-top: 20px; border: 1px solid #262626; border-radius: 6px; background: #111; }
+.log summary { padding: 8px 12px; cursor: pointer; color: #a3a3a3; font-size: 12px; }
+.log pre { margin: 0; padding: 0 12px 12px; max-height: 240px; overflow: auto; font: 11px/1.6 ui-monospace, SFMono-Regular, monospace; color: #a3a3a3; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+@media (max-width: 720px) { main { width: auto; margin: 0 24px; } }
